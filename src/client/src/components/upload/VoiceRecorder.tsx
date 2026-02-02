@@ -13,6 +13,19 @@ import StopIcon from '@mui/icons-material/Stop';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import DeleteIcon from '@mui/icons-material/Delete';
+import HttpsIcon from '@mui/icons-material/Https';
+
+const isIOS = (): boolean => {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
+const isSecureContext = (): boolean => {
+  return window.isSecureContext ||
+    window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
+};
 
 interface VoiceRecorderProps {
   onRecorded: (blob: Blob) => void;
@@ -33,6 +46,7 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -49,15 +63,38 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
   const startRecording = async () => {
     setLoading(true);
     setError(null);
+    setPermissionDenied(false);
     chunksRef.current = [];
+
+    // Check for secure context (HTTPS required for getUserMedia)
+    if (!isSecureContext()) {
+      setError('Microphone access requires HTTPS. Please use a secure connection.');
+      setLoading(false);
+      return;
+    }
+
+    // Check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Microphone API is not supported in this browser.');
+      setLoading(false);
+      return;
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4',
-      });
+      // Determine supported MIME type
+      let mimeType = 'audio/webm';
+      if (!MediaRecorder.isTypeSupported('audio/webm')) {
+        if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/wav')) {
+          mimeType = 'audio/wav';
+        }
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -92,15 +129,35 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     } catch (err) {
       console.error('Microphone error:', err);
       if (err instanceof Error) {
-        if (err.name === 'NotAllowedError') {
-          setError('Microphone access denied. Please allow microphone access in your browser settings.');
-        } else if (err.name === 'NotFoundError') {
-          setError('No microphone found on this device.');
-        } else {
-          setError(`Microphone error: ${err.message}`);
+        switch (err.name) {
+          case 'NotAllowedError':
+          case 'PermissionDeniedError':
+            setPermissionDenied(true);
+            if (isIOS()) {
+              setError('Microphone access denied. Go to Settings > Safari > Microphone and allow access for this website.');
+            } else {
+              setError('Microphone access denied. Please allow microphone access in your browser settings and refresh the page.');
+            }
+            break;
+          case 'NotFoundError':
+          case 'DevicesNotFoundError':
+            setError('No microphone found on this device.');
+            break;
+          case 'NotReadableError':
+          case 'TrackStartError':
+            setError('Microphone is in use by another application. Please close other apps using the microphone.');
+            break;
+          case 'AbortError':
+            setError('Microphone access was interrupted. Please try again.');
+            break;
+          case 'SecurityError':
+            setError('Microphone access blocked due to security settings. HTTPS is required.');
+            break;
+          default:
+            setError(`Microphone error: ${err.message}`);
         }
       } else {
-        setError('Failed to access microphone');
+        setError('Failed to access microphone. Please check your permissions.');
       }
     } finally {
       setLoading(false);
@@ -175,15 +232,37 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     };
   }, [audioUrl]);
 
+  const handleRetryPermission = () => {
+    setError(null);
+    setPermissionDenied(false);
+    startRecording();
+  };
+
   if (error) {
     return (
       <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ mb: 2, textAlign: 'left' }}>
           {error}
         </Alert>
-        <Button variant="outlined" onClick={handleCancel}>
-          Close
-        </Button>
+        {!isSecureContext() && (
+          <Box sx={{ mb: 2, p: 2, bgcolor: 'warning.lighter', borderRadius: 1 }}>
+            <HttpsIcon sx={{ fontSize: 40, color: 'warning.main', mb: 1 }} />
+            <Typography variant="body2" color="text.secondary">
+              Microphone access requires a secure HTTPS connection.
+              {isIOS() && ' On iOS, you can also try adding this site to your Home Screen.'}
+            </Typography>
+          </Box>
+        )}
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+          {permissionDenied && (
+            <Button variant="outlined" onClick={handleRetryPermission}>
+              Try Again
+            </Button>
+          )}
+          <Button variant="contained" onClick={handleCancel}>
+            Close
+          </Button>
+        </Box>
       </Box>
     );
   }

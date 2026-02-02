@@ -5,80 +5,170 @@ import {
   IconButton,
   CircularProgress,
   Alert,
+  Typography,
 } from '@mui/material';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import FlipCameraIosIcon from '@mui/icons-material/FlipCameraIos';
 import CloseIcon from '@mui/icons-material/Close';
+import HttpsIcon from '@mui/icons-material/Https';
 
 interface CameraCaptureProps {
   onCapture: (blob: Blob) => void;
   onCancel: () => void;
 }
 
+const isIOS = (): boolean => {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
+const isSecureContext = (): boolean => {
+  return window.isSecureContext ||
+    window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
+};
+
 const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+
+  const stopStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => {
+        track.stop();
+      });
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
 
   const startCamera = useCallback(async () => {
     setLoading(true);
     setError(null);
 
-    // Stop existing stream
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
+    // Check for secure context (HTTPS required for getUserMedia)
+    if (!isSecureContext()) {
+      setError('Camera access requires HTTPS. Please use a secure connection.');
+      setLoading(false);
+      return;
     }
 
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-      });
+    // Check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Camera API is not supported in this browser.');
+      setLoading(false);
+      return;
+    }
 
-      setStream(mediaStream);
+    // Stop existing stream
+    stopStream();
+
+    try {
+      // iOS Safari needs simpler constraints
+      const constraints: MediaStreamConstraints = isIOS()
+        ? {
+            video: { facingMode },
+            audio: false,
+          }
+        : {
+            video: {
+              facingMode,
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          };
+
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = mediaStream;
 
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
-        await videoRef.current.play();
+        // iOS Safari needs explicit play() call
+        try {
+          await videoRef.current.play();
+        } catch (playError) {
+          console.warn('Video play() failed, will retry on user interaction:', playError);
+        }
       }
     } catch (err) {
       console.error('Camera error:', err);
+      stopStream();
+
       if (err instanceof Error) {
-        if (err.name === 'NotAllowedError') {
-          setError('Camera access denied. Please allow camera access in your browser settings.');
-        } else if (err.name === 'NotFoundError') {
-          setError('No camera found on this device.');
-        } else {
-          setError(`Camera error: ${err.message}`);
+        switch (err.name) {
+          case 'NotAllowedError':
+          case 'PermissionDeniedError':
+            setPermissionDenied(true);
+            if (isIOS()) {
+              setError('Camera access denied. Go to Settings > Safari > Camera and allow access for this website.');
+            } else {
+              setError('Camera access denied. Please allow camera access in your browser settings and refresh the page.');
+            }
+            break;
+          case 'NotFoundError':
+          case 'DevicesNotFoundError':
+            setError('No camera found on this device.');
+            break;
+          case 'NotReadableError':
+          case 'TrackStartError':
+            setError('Camera is in use by another application. Please close other apps using the camera.');
+            break;
+          case 'OverconstrainedError':
+            // Try again with simpler constraints
+            try {
+              const simpleStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false,
+              });
+              streamRef.current = simpleStream;
+              if (videoRef.current) {
+                videoRef.current.srcObject = simpleStream;
+                await videoRef.current.play();
+              }
+              setLoading(false);
+              return;
+            } catch {
+              setError('Camera settings not supported. Please try a different browser.');
+            }
+            break;
+          case 'AbortError':
+            setError('Camera access was interrupted. Please try again.');
+            break;
+          case 'SecurityError':
+            setError('Camera access blocked due to security settings. HTTPS is required.');
+            break;
+          default:
+            setError(`Camera error: ${err.message}`);
         }
       } else {
-        setError('Failed to access camera');
+        setError('Failed to access camera. Please check your permissions.');
       }
     } finally {
       setLoading(false);
     }
-  }, [facingMode, stream]);
+  }, [facingMode, stopStream]);
 
   useEffect(() => {
     startCamera();
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
+      stopStream();
     };
   }, []);
 
+  // Handle facingMode change
   useEffect(() => {
-    if (!loading && !capturedImage) {
+    if (!loading && !capturedImage && !error) {
       startCamera();
     }
   }, [facingMode]);
@@ -96,17 +186,14 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
 
     if (!ctx) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
     ctx.drawImage(video, 0, 0);
 
     const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
     setCapturedImage(dataUrl);
 
-    // Stop camera stream after capture
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-    }
+    stopStream();
   };
 
   const handleRetake = () => {
@@ -129,21 +216,41 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
   };
 
   const handleCancel = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-    }
+    stopStream();
     onCancel();
+  };
+
+  const handleRetryPermission = () => {
+    setError(null);
+    setPermissionDenied(false);
+    startCamera();
   };
 
   if (error) {
     return (
-      <Box sx={{ p: 2, textAlign: 'center' }}>
-        <Alert severity="error" sx={{ mb: 2 }}>
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Alert severity="error" sx={{ mb: 2, textAlign: 'left' }}>
           {error}
         </Alert>
-        <Button variant="outlined" onClick={handleCancel}>
-          Close
-        </Button>
+        {!isSecureContext() && (
+          <Box sx={{ mb: 2, p: 2, bgcolor: 'warning.lighter', borderRadius: 1 }}>
+            <HttpsIcon sx={{ fontSize: 40, color: 'warning.main', mb: 1 }} />
+            <Typography variant="body2" color="text.secondary">
+              Camera access requires a secure HTTPS connection.
+              {isIOS() && ' On iOS, you can also try adding this site to your Home Screen.'}
+            </Typography>
+          </Box>
+        )}
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+          {permissionDenied && (
+            <Button variant="outlined" onClick={handleRetryPermission}>
+              Try Again
+            </Button>
+          )}
+          <Button variant="contained" onClick={handleCancel}>
+            Close
+          </Button>
+        </Box>
       </Box>
     );
   }
@@ -161,12 +268,17 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
             right: 0,
             bottom: 0,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             bgcolor: 'grey.900',
+            zIndex: 10,
           }}
         >
-          <CircularProgress />
+          <CircularProgress sx={{ color: 'white', mb: 2 }} />
+          <Typography variant="body2" sx={{ color: 'grey.400' }}>
+            {isIOS() ? 'Allow camera access when prompted...' : 'Starting camera...'}
+          </Typography>
         </Box>
       )}
 
@@ -200,6 +312,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
               autoPlay
               playsInline
               muted
+              webkit-playsinline="true"
               style={{
                 width: '100%',
                 height: '100%',
@@ -214,6 +327,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
                 right: 8,
                 color: 'white',
                 bgcolor: 'rgba(0,0,0,0.5)',
+                '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' },
               }}
             >
               <CloseIcon />
@@ -226,6 +340,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
                 left: 8,
                 color: 'white',
                 bgcolor: 'rgba(0,0,0,0.5)',
+                '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' },
               }}
             >
               <FlipCameraIosIcon />
@@ -240,6 +355,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
                 width: 64,
                 height: 64,
                 '&:hover': { bgcolor: 'grey.200' },
+                '&:disabled': { bgcolor: 'grey.500' },
               }}
             >
               <CameraAltIcon sx={{ fontSize: 32, color: 'grey.800' }} />
