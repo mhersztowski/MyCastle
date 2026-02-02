@@ -1,0 +1,79 @@
+export interface DirModel {
+    type: "dir";
+    id: string;
+    name: string;
+    description: string;
+    components: DirComponentModel[];
+    files: FileModel[];
+}
+
+export interface DirComponentModel {
+    type: string;
+}
+
+export interface DirTestComponentModel extends DirComponentModel {
+    type: "dir_test";
+    name: string;
+    description: string;
+}
+
+export interface FileModel {
+    type: "file";
+    id: string;
+    name: string;
+    description: string;
+    components: FileComponentModel[];
+}
+
+export interface FileComponentModel {
+    type: string;
+}
+
+export interface FileTestComponentModel extends FileComponentModel {
+    type: "file_test";
+    name: string;
+    description: string;
+}
+
+export interface FileJsonComponentModel extends FileComponentModel {
+    type: "file_json";
+    schemaPath: string;
+    objectType: string;
+    visible: boolean;
+}
+
+export interface ProjectModel {
+    type:   "project";
+    name: string;
+    description: string;
+    tasks: TaskModel[];
+    components: ProjectComponentModel[];
+}
+
+export interface ProjectComponentModel {
+    type: string;
+}
+
+export interface ProjectTestComponentModel extends ProjectComponentModel {
+    type: "project_test";
+    name: string;
+    description: string;
+}
+
+export interface TaskModel {
+    type: "task";
+    name: string;
+    description: string;
+    duration : number;
+    components: TaskComponentModel[];
+}
+
+export interface TaskComponentModel {
+    type: string;
+}
+
+export interface TaskTestComponentModel extends TaskComponentModel {
+    type: "task_test";
+    name: string;
+    description: string;
+}

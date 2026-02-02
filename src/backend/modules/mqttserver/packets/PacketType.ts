@@ -1,0 +1,10 @@
+export enum PacketType {
+  FILE_READ = 'file_read',
+  FILE_WRITE = 'file_write',
+  FILE_DELETE = 'file_delete',
+  FILE_LIST = 'file_list',
+  FILE_WRITE_BINARY = 'file_write_binary',
+  FILE_READ_BINARY = 'file_read_binary',
+  RESPONSE = 'response',
+  ERROR = 'error',
+}
