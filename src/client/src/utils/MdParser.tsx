@@ -5,6 +5,7 @@ import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkRehype from "remark-rehype";
+import rehypeRaw from "rehype-raw";
 import rehypeSlug from "rehype-slug";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
@@ -59,6 +60,7 @@ function CardLink({ href, children }: CardLinkProps) {
   function transformMdastToHast(mdastTree: MdastRoot): HastRoot {
     return unified()
       .use(remarkRehype, { allowDangerousHtml: true })
+      .use(rehypeRaw) // Parse raw HTML in markdown into proper HAST nodes
       .use(rehypeSlug) // Generuje ID dla nagłówków (dla anchor links)
       .use(rehypeKatex) // Renderowanie matematyki LaTeX
       .use(rehypeHighlight) // Podświetlanie składni kodu
@@ -84,20 +86,24 @@ function CardLink({ href, children }: CardLinkProps) {
           return <CardLink {...props} />;
         }
 
-        console.log("props.href:", props);
         // Sprawdź czy to link wewnętrzny (bez protokołu lub zaczyna się od /)
         if (props.href && !props.href.startsWith('http') && !props.href.startsWith('https') && !props.href.startsWith('mailto:')) {
           // Obsługa anchor linków (zaczynających się od #)
           if (props.href.startsWith('#')) {
             return <a href={props.href} {...props} />;
           }
-          
-          // Jeśli link nie zaczyna się od /, dodaj /html/ na początku
-          let cleanHref = props.href;
-          if (!props.href.startsWith('/')) {
-            cleanHref = `/html/${props.href}`;
+
+          // Relatywne linki - otwórz w odpowiednim widoku
+          let path = props.href;
+          if (path.startsWith('/')) {
+            path = path.substring(1);
           }
-          return <Link to={cleanHref} {...props} />;
+
+          // Określ typ pliku i wybierz odpowiedni widok
+          const isMdFile = path.endsWith('.md');
+          const targetPath = isMdFile ? `/viewer/md/${path}` : `/editor/simple/${path}`;
+
+          return <Link to={targetPath} {...props} />;
         }
         // Linki zewnętrzne używają zwykłego <a>
         return <a {...props} />;

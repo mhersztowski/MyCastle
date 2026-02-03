@@ -130,17 +130,45 @@ const MdViewerPage: React.FC = () => {
                 borderCollapse: 'collapse',
                 width: '100%',
                 my: 2,
+                tableLayout: 'fixed',
               },
               '& th, & td': {
                 border: '1px solid #ddd',
                 padding: '8px',
                 textAlign: 'left',
+                verticalAlign: 'top',
+                boxSizing: 'border-box',
               },
               '& th': {
                 backgroundColor: '#f6f8fa',
+                fontWeight: 600,
+              },
+              // Allow inline styles to override text-align
+              '& th[style*="text-align"], & td[style*="text-align"]': {
+                textAlign: 'inherit',
               },
               '& img': {
                 maxWidth: '100%',
+                height: 'auto',
+                borderRadius: '8px',
+              },
+              '& img[style*="float: left"]': {
+                marginRight: '16px',
+                marginBottom: '8px',
+              },
+              '& img[style*="float: right"]': {
+                marginLeft: '16px',
+                marginBottom: '8px',
+              },
+              '& img[style*="display: inline-block"]': {
+                verticalAlign: 'top',
+                marginRight: '8px',
+              },
+              // Clear floats after content
+              '& p::after, & h1::after, & h2::after, & h3::after': {
+                content: '""',
+                display: 'table',
+                clear: 'both',
               },
               '& blockquote': {
                 borderLeft: '4px solid #ddd',

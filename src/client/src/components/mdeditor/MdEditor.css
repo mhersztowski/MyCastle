@@ -1,0 +1,438 @@
+.md-editor-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+}
+
+.md-editor-content .ProseMirror {
+  min-height: 100%;
+  padding: 1rem;
+  line-height: 1.6;
+}
+
+.md-editor-content .ProseMirror:focus {
+  outline: none;
+}
+
+/* Placeholder */
+.md-editor-content .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+}
+
+/* Headings */
+.md-editor-content .ProseMirror h1 {
+  font-size: 2em;
+  font-weight: 700;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.2;
+}
+
+.md-editor-content .ProseMirror h2 {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.3;
+}
+
+.md-editor-content .ProseMirror h3 {
+  font-size: 1.25em;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+.md-editor-content .ProseMirror h4 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Paragraphs */
+.md-editor-content .ProseMirror p {
+  margin-bottom: 0.75rem;
+}
+
+/* Links */
+.md-editor-content .ProseMirror a,
+.md-editor-content .md-editor-link {
+  color: #1976d2;
+  text-decoration: underline;
+  cursor: text;
+}
+
+.md-editor-content .ProseMirror a:hover,
+.md-editor-content .md-editor-link:hover {
+  color: #1565c0;
+  background-color: rgba(25, 118, 210, 0.08);
+  border-radius: 2px;
+}
+
+/* Code */
+.md-editor-content .ProseMirror code {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 0.2em 0.4em;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+
+/* Code Block */
+.md-editor-content .ProseMirror pre,
+.md-editor-content .md-editor-code-block {
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+
+.md-editor-content .ProseMirror pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Blockquote */
+.md-editor-content .ProseMirror blockquote {
+  border-left: 4px solid #1976d2;
+  margin: 1rem 0;
+  padding-left: 1rem;
+  color: #666;
+  font-style: italic;
+}
+
+/* Lists */
+.md-editor-content .ProseMirror ul,
+.md-editor-content .ProseMirror ol {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.md-editor-content .ProseMirror li {
+  margin: 0.25rem 0;
+}
+
+.md-editor-content .ProseMirror li p {
+  margin: 0;
+}
+
+/* Task List */
+.md-editor-content .ProseMirror ul[data-type="taskList"],
+.md-editor-content .md-editor-task-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.md-editor-content .ProseMirror ul[data-type="taskList"] li,
+.md-editor-content .md-editor-task-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.md-editor-content .ProseMirror ul[data-type="taskList"] li > label,
+.md-editor-content .md-editor-task-list li > label {
+  flex: 0 0 auto;
+  margin-top: 0.25rem;
+}
+
+.md-editor-content .ProseMirror ul[data-type="taskList"] li > div,
+.md-editor-content .md-editor-task-list li > div {
+  flex: 1 1 auto;
+}
+
+.md-editor-content .ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #1976d2;
+}
+
+/* Highlight */
+.md-editor-content .ProseMirror mark {
+  background-color: #fff59d;
+  padding: 0.1em 0.2em;
+  border-radius: 2px;
+}
+
+/* Horizontal Rule */
+.md-editor-content .ProseMirror hr {
+  border: none;
+  border-top: 2px solid #e0e0e0;
+  margin: 1.5rem 0;
+}
+
+/* Images */
+.md-editor-content .ProseMirror img,
+.md-editor-content .md-editor-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.md-editor-content .ProseMirror img.ProseMirror-selectednode {
+  outline: 3px solid #1976d2;
+}
+
+/* Tables */
+.md-editor-content .ProseMirror table,
+.md-editor-content .md-editor-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  table-layout: fixed;
+  overflow: hidden;
+}
+
+.md-editor-content .ProseMirror table td,
+.md-editor-content .ProseMirror table th {
+  border: 1px solid #ddd;
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.md-editor-content .ProseMirror table th {
+  background-color: #f5f5f5;
+  font-weight: 600;
+  text-align: left;
+}
+
+.md-editor-content .ProseMirror table .selectedCell:after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(25, 118, 210, 0.1);
+  pointer-events: none;
+}
+
+/* Table resize handle */
+.md-editor-content .ProseMirror .tableWrapper {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.md-editor-content .ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: #1976d2;
+  pointer-events: none;
+}
+
+/* Table column resize cursor */
+.md-editor-content .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* Table cells with width */
+.md-editor-content .ProseMirror table td[style*="width"],
+.md-editor-content .ProseMirror table th[style*="width"] {
+  /* Preserve width styles */
+}
+
+/* Syntax highlighting (lowlight) */
+.md-editor-content .ProseMirror pre .hljs-comment,
+.md-editor-content .ProseMirror pre .hljs-quote {
+  color: #6a9955;
+}
+
+.md-editor-content .ProseMirror pre .hljs-variable,
+.md-editor-content .ProseMirror pre .hljs-template-variable,
+.md-editor-content .ProseMirror pre .hljs-attr,
+.md-editor-content .ProseMirror pre .hljs-tag,
+.md-editor-content .ProseMirror pre .hljs-name,
+.md-editor-content .ProseMirror pre .hljs-selector-id,
+.md-editor-content .ProseMirror pre .hljs-selector-class,
+.md-editor-content .ProseMirror pre .hljs-regexp,
+.md-editor-content .ProseMirror pre .hljs-deletion {
+  color: #f44747;
+}
+
+.md-editor-content .ProseMirror pre .hljs-number,
+.md-editor-content .ProseMirror pre .hljs-built_in,
+.md-editor-content .ProseMirror pre .hljs-literal,
+.md-editor-content .ProseMirror pre .hljs-type,
+.md-editor-content .ProseMirror pre .hljs-params,
+.md-editor-content .ProseMirror pre .hljs-meta,
+.md-editor-content .ProseMirror pre .hljs-link {
+  color: #b5cea8;
+}
+
+.md-editor-content .ProseMirror pre .hljs-string,
+.md-editor-content .ProseMirror pre .hljs-symbol,
+.md-editor-content .ProseMirror pre .hljs-bullet,
+.md-editor-content .ProseMirror pre .hljs-addition {
+  color: #ce9178;
+}
+
+.md-editor-content .ProseMirror pre .hljs-title,
+.md-editor-content .ProseMirror pre .hljs-section {
+  color: #dcdcaa;
+}
+
+.md-editor-content .ProseMirror pre .hljs-keyword,
+.md-editor-content .ProseMirror pre .hljs-selector-tag {
+  color: #569cd6;
+}
+
+/* Selection */
+.md-editor-content .ProseMirror ::selection {
+  background-color: rgba(25, 118, 210, 0.2);
+}
+
+/* Drag handle placeholder */
+.md-editor-content .ProseMirror .is-empty::before {
+  color: #adb5bd;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Math Block Styles */
+.md-editor-content .ProseMirror .math-block-wrapper {
+  margin: 1rem 0;
+}
+
+.md-editor-content .ProseMirror .math-block {
+  text-align: center;
+  padding: 16px;
+  background-color: #fafafa;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.md-editor-content .ProseMirror .math-block:hover {
+  background-color: #f5f5f5;
+  border-color: #bdbdbd;
+}
+
+.md-editor-content .ProseMirror .math-block.selected {
+  background-color: rgba(25, 118, 210, 0.05);
+  border: 2px solid #1976d2;
+}
+
+.md-editor-content .ProseMirror .math-block .katex-display {
+  margin: 0;
+}
+
+/* Inline Math Styles */
+.md-editor-content .ProseMirror .inline-math-wrapper {
+  display: inline;
+}
+
+.md-editor-content .ProseMirror .inline-math {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.md-editor-content .ProseMirror .inline-math:hover {
+  background-color: rgba(25, 118, 210, 0.1);
+}
+
+.md-editor-content .ProseMirror .inline-math.selected {
+  background-color: rgba(25, 118, 210, 0.2);
+}
+
+.md-editor-content .ProseMirror .inline-math-input {
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+
+/* Math block input */
+.md-editor-content .ProseMirror .math-block-input {
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+
+/* KaTeX overrides for dark mode support */
+.md-editor-content .ProseMirror .katex {
+  font-size: 1.1em;
+}
+
+.md-editor-content .ProseMirror .katex .katex-html {
+  white-space: normal;
+}
+
+/* Math error styling */
+.md-editor-content .ProseMirror .math-error {
+  color: #f44336;
+  font-family: monospace;
+  background-color: rgba(244, 67, 54, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+/* Image Node Styles */
+.md-editor-content .ProseMirror .image-node-wrapper {
+  /* Allow inline styles to control display */
+}
+
+.md-editor-content .ProseMirror .image-node-wrapper img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.md-editor-content .ProseMirror .image-node-wrapper.ProseMirror-selectednode img {
+  outline: 3px solid #1976d2;
+}
+
+/* Clear floats after floated images */
+.md-editor-content .ProseMirror p::after,
+.md-editor-content .ProseMirror h1::after,
+.md-editor-content .ProseMirror h2::after,
+.md-editor-content .ProseMirror h3::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+/* Text Alignment */
+.md-editor-content .ProseMirror [style*="text-align: left"],
+.md-editor-content .ProseMirror .text-left {
+  text-align: left;
+}
+
+.md-editor-content .ProseMirror [style*="text-align: center"],
+.md-editor-content .ProseMirror .text-center {
+  text-align: center;
+}
+
+.md-editor-content .ProseMirror [style*="text-align: right"],
+.md-editor-content .ProseMirror .text-right {
+  text-align: right;
+}
+
+.md-editor-content .ProseMirror [style*="text-align: justify"],
+.md-editor-content .ProseMirror .text-justify {
+  text-align: justify;
+}
+
+/* Table cell alignment */
+.md-editor-content .ProseMirror table td[style*="text-align"],
+.md-editor-content .ProseMirror table th[style*="text-align"] {
+  /* Allow inline styles to override */
+}

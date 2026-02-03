@@ -48,15 +48,19 @@ Aplikacja frontend
           - wygladem przypomina przycisk z ikoną typu np Person
           - majacy props: editable, id (id np z PersonModel)
           - gdy editable po kliknieciu wywołujacy modal z możliwością wyboru
+      - ObjectSearch - widok przeszukujący opiekty w DataSource na podstawie ich właściwości (możliwośc dodania warunków and, or, not),
+      zwracający liste
 - składa się z następujących stron
     - /filesystem/save - formularz zapisujący dane do pliku
     - /filesystem/list - widok podzielony z lewej drzewo danych po pliknieciu 
     - /calendar - widok kalendarza
+    - /todolist - widok z taskami do zrobienia
     - /components - widok demonstrujący reużywalne komponenty UI te z katalogów person, project, task
     - /editor/simple/{path} - wydok na bełny ekran edytora mona do edycji plików 
       z filesystem: json, md
     - /viewer/md/{path} - renderowanie zawartości plików md
     pobierz dane i wyswietl, po prawej widok wczytanych danych
+    - /objectviewer - oparty na podstawie ObjectSearch wyświetlający listę objektów
 
 ## Directory Structure
 - `src/backend/`: Backend source code (TypeScript)

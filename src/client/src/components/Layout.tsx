@@ -20,6 +20,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ChecklistIcon from '@mui/icons-material/Checklist';
+import ManageSearchIcon from '@mui/icons-material/ManageSearch';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import CastleIcon from '@mui/icons-material/Castle';
 
@@ -49,6 +50,11 @@ const menuItems = [
     text: 'To-Do List',
     icon: <ChecklistIcon />,
     path: '/todolist',
+  },
+  {
+    text: 'Object Viewer',
+    icon: <ManageSearchIcon />,
+    path: '/objectviewer',
   },
   {
     text: 'Components',

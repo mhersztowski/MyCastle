@@ -22,6 +22,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import FolderIcon from '@mui/icons-material/Folder';
 import DescriptionIcon from '@mui/icons-material/Description';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import { useMqtt, DirectoryTree, FileData as MqttFileData, BinaryFileData } from '../../modules/mqttclient';
 import { useFilesystem } from '../../modules/filesystem';
 import { DirData } from '../../modules/filesystem/data/DirData';
@@ -103,6 +104,13 @@ const FileListPage: React.FC = () => {
     const filePath = selectedFile?.path || selectedBinaryFile?.path;
     if (filePath && isEditableFile(filePath)) {
       window.open(`/editor/simple/${filePath}`, '_blank');
+    }
+  };
+
+  const openInNotionEditor = () => {
+    const filePath = selectedFile?.path || selectedBinaryFile?.path;
+    if (filePath && isMarkdownFile(filePath)) {
+      window.open(`/editor/md/${filePath}`, '_blank');
     }
   };
 
@@ -225,17 +233,31 @@ const FileListPage: React.FC = () => {
               </Tooltip>
             )}
             {currentFilePath && isMarkdownFile(currentFilePath) && (
-              <Tooltip title="Open in Viewer (new window)">
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<VisibilityIcon />}
-                  endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
-                  onClick={openInViewer}
-                >
-                  View
-                </Button>
-              </Tooltip>
+              <>
+                <Tooltip title="Edit in Notion-like editor (new window)">
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="primary"
+                    startIcon={<AutoStoriesIcon />}
+                    endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                    onClick={openInNotionEditor}
+                  >
+                    Notion
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Open in Viewer (new window)">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<VisibilityIcon />}
+                    endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                    onClick={openInViewer}
+                  >
+                    View
+                  </Button>
+                </Tooltip>
+              </>
             )}
           </Box>
         )}
