@@ -5,6 +5,7 @@ export enum PacketType {
   FILE_LIST = 'file_list',
   FILE_WRITE_BINARY = 'file_write_binary',
   FILE_READ_BINARY = 'file_read_binary',
+  DIRINFO_SYNC = 'dirinfo_sync',
   RESPONSE = 'response',
   ERROR = 'error',
 }

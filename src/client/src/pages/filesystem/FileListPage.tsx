@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Paper,
@@ -22,7 +22,10 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import FolderIcon from '@mui/icons-material/Folder';
 import DescriptionIcon from '@mui/icons-material/Description';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
-import { useMqtt, DirectoryTree, FileData, BinaryFileData } from '../../modules/mqttclient';
+import { useMqtt, DirectoryTree, FileData as MqttFileData, BinaryFileData } from '../../modules/mqttclient';
+import { useFilesystem } from '../../modules/filesystem';
+import { DirData } from '../../modules/filesystem/data/DirData';
+import { FileData as FilesystemFileData } from '../../modules/filesystem/data/FileData';
 import FileTreeView from '../../components/FileTreeView';
 import FileViewer from '../../components/FileViewer';
 import { FileUploadModal } from '../../components/upload';
@@ -47,15 +50,50 @@ const isEditableFile = (path: string): boolean => {
   return !isBinaryFile(path);
 };
 
+// Convert DirData to DirectoryTree format for FileTreeView
+const convertDirDataToTree = (dirData: DirData): DirectoryTree => {
+  const children: DirectoryTree[] = [];
+
+  // Add subdirectories
+  for (const subDir of dirData.getDirs()) {
+    children.push(convertDirDataToTree(subDir));
+  }
+
+  // Add files
+  for (const file of dirData.getFiles()) {
+    children.push({
+      name: file.getName(),
+      path: file.getPath(),
+      type: 'file',
+    });
+  }
+
+  return {
+    name: dirData.getName(),
+    path: dirData.getPath(),
+    type: 'directory',
+    children: children.length > 0 ? children : undefined,
+  };
+};
+
+// Convert filesystem FileData to MqttFileData format for FileViewer
+const convertToMqttFileData = (fileData: FilesystemFileData): MqttFileData => {
+  return {
+    path: fileData.getPath(),
+    content: fileData.toString(),
+    lastModified: new Date().toISOString(), // FileData doesn't store lastModified
+  };
+};
+
 const FileListPage: React.FC = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-  const { listDirectory, readFile, readBinaryFile, isConnected, isConnecting } = useMqtt();
-  const [tree, setTree] = useState<DirectoryTree | null>(null);
-  const [selectedFile, setSelectedFile] = useState<FileData | null>(null);
+  const { readBinaryFile, isConnected, isConnecting } = useMqtt();
+  const { rootDir, isLoading, isDataLoaded, error: fsError, loadAllData } = useFilesystem();
+
+  const [selectedFile, setSelectedFile] = useState<MqttFileData | null>(null);
   const [selectedBinaryFile, setSelectedBinaryFile] = useState<BinaryFileData | null>(null);
-  const [loading, setLoading] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState(0);
@@ -75,20 +113,10 @@ const FileListPage: React.FC = () => {
     }
   };
 
-  const loadTree = async () => {
-    if (!isConnected) return;
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      const result = await listDirectory();
-      setTree(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load directory');
-    } finally {
-      setLoading(false);
-    }
+  const handleRefresh = async () => {
+    setSelectedFile(null);
+    setSelectedBinaryFile(null);
+    await loadAllData();
   };
 
   const handleFileSelect = async (path: string) => {
@@ -99,11 +127,19 @@ const FileListPage: React.FC = () => {
 
     try {
       if (isBinaryFile(path)) {
+        // Binary files still need to be loaded via MQTT
         const binaryData = await readBinaryFile(path);
         setSelectedBinaryFile(binaryData);
       } else {
-        const fileData = await readFile(path);
-        setSelectedFile(fileData);
+        // Text files are already loaded in filesystem
+        if (rootDir) {
+          const fileData = rootDir.getFileByPath(path);
+          if (fileData) {
+            setSelectedFile(convertToMqttFileData(fileData));
+          } else {
+            setError(`File not found: ${path}`);
+          }
+        }
       }
       if (isMobile) {
         setMobileTab(1);
@@ -118,12 +154,6 @@ const FileListPage: React.FC = () => {
   const handleMobileTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setMobileTab(newValue);
   };
-
-  useEffect(() => {
-    if (isConnected) {
-      loadTree();
-    }
-  }, [isConnected]);
 
   if (isConnecting) {
     return (
@@ -143,6 +173,11 @@ const FileListPage: React.FC = () => {
       </Box>
     );
   }
+
+  // Convert DirData to DirectoryTree for FileTreeView
+  const tree = rootDir ? convertDirDataToTree(rootDir) : null;
+  const loading = isLoading && !isDataLoaded;
+  const displayError = error || fsError;
 
   const treePanel = (
     <Box sx={{ height: '100%', overflow: 'auto', p: isMobile ? 1 : 2 }}>
@@ -249,15 +284,15 @@ const FileListPage: React.FC = () => {
           </Button>
         )}
         <Tooltip title="Refresh">
-          <IconButton onClick={loadTree} disabled={loading}>
+          <IconButton onClick={handleRefresh} disabled={loading}>
             <RefreshIcon />
           </IconButton>
         </Tooltip>
       </Box>
 
-      {error && (
+      {displayError && (
         <Alert severity="error" sx={{ mb: isMobile ? 1 : 2 }} onClose={() => setError(null)}>
-          {error}
+          {displayError}
         </Alert>
       )}
 
@@ -310,7 +345,7 @@ const FileListPage: React.FC = () => {
       <FileUploadModal
         open={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
-        onSuccess={() => loadTree()}
+        onSuccess={() => handleRefresh()}
       />
     </Box>
   );

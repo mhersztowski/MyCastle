@@ -22,13 +22,43 @@ export interface DirectoryTree {
   children?: DirectoryTree[];
 }
 
+// Dirinfo structures for metadata caching
+export interface DirinfoFileComponent {
+  type: string;
+  schemaPath?: string;
+  ref?: string;
+  objectType?: string;
+  visible?: boolean;
+  id?: string;
+}
+
+export interface DirinfoFile {
+  type: string;
+  id?: string;
+  name: string;
+  kind: string;
+  description?: string;
+  components?: DirinfoFileComponent[];
+}
+
+export interface DirinfoData {
+  type: 'dir';
+  id?: string;
+  name?: string;
+  description?: string;
+  files?: DirinfoFile[];
+  components?: Array<{ type: string; id?: string }>;
+}
+
 export class FileSystem {
   private rootDir: string;
   private cache: Map<string, FileData>;
+  private dirinfoCache: Map<string, DirinfoData>; // key is directory path
 
   constructor(rootDir: string) {
     this.rootDir = path.resolve(rootDir);
     this.cache = new Map();
+    this.dirinfoCache = new Map();
   }
 
   async initialize(): Promise<void> {
@@ -219,5 +249,84 @@ export class FileSystem {
     const absolutePath = this.getAbsolutePath(filePath);
     const relativePath = this.getRelativePath(absolutePath);
     this.cache.delete(relativePath);
+  }
+
+  // Sync dirinfo.json data to cache
+  async syncDirinfo(dirinfoPath: string): Promise<DirinfoData> {
+    const absolutePath = this.getAbsolutePath(dirinfoPath);
+    const relativePath = this.getRelativePath(absolutePath);
+
+    // Read and parse dirinfo.json
+    const content = await fs.readFile(absolutePath, 'utf-8');
+    const dirinfo = JSON.parse(content) as DirinfoData;
+
+    // Get directory path (remove /dirinfo.json from end)
+    const dirPath = path.dirname(relativePath);
+
+    // Store in cache
+    this.dirinfoCache.set(dirPath, dirinfo);
+
+    console.log(`Synced dirinfo for: ${dirPath}`, {
+      filesCount: dirinfo.files?.length || 0,
+      componentsCount: dirinfo.components?.length || 0,
+    });
+
+    return dirinfo;
+  }
+
+  // Get dirinfo for a directory
+  getDirinfo(dirPath: string): DirinfoData | undefined {
+    return this.dirinfoCache.get(dirPath);
+  }
+
+  // Get schema path for a file from dirinfo
+  getFileSchemaPath(filePath: string): string | null {
+    const dirPath = path.dirname(filePath);
+    const fileName = path.basename(filePath);
+    const dirinfo = this.dirinfoCache.get(dirPath);
+
+    if (!dirinfo?.files) return null;
+
+    const fileEntry = dirinfo.files.find(f => f.name === fileName);
+    if (!fileEntry?.components) return null;
+
+    const jsonComponent = fileEntry.components.find(c => c.type === 'file_json');
+    if (!jsonComponent) return null;
+
+    return jsonComponent.schemaPath || jsonComponent.ref || null;
+  }
+
+  // Get all cached dirinfo data
+  getAllDirinfo(): Map<string, DirinfoData> {
+    return new Map(this.dirinfoCache);
+  }
+
+  // Load all dirinfo.json files from the filesystem
+  async loadAllDirinfo(): Promise<void> {
+    await this.scanForDirinfo(this.rootDir);
+  }
+
+  private async scanForDirinfo(dirPath: string): Promise<void> {
+    try {
+      const entries = await fs.readdir(dirPath);
+
+      for (const entry of entries) {
+        const entryPath = path.join(dirPath, entry);
+        const stats = await fs.stat(entryPath);
+
+        if (stats.isDirectory()) {
+          await this.scanForDirinfo(entryPath);
+        } else if (entry === 'dirinfo.json') {
+          const relativePath = this.getRelativePath(entryPath);
+          try {
+            await this.syncDirinfo(relativePath);
+          } catch (err) {
+            console.warn(`Failed to load dirinfo: ${relativePath}`, err);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to scan directory: ${dirPath}`, err);
+    }
   }
 }

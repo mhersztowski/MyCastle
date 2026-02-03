@@ -2,6 +2,208 @@ import Ajv, { ErrorObject } from "ajv";
 import addFormats from "ajv-formats";
 import jsonSourceMap from "json-source-map";
 
+// JSON Schema type definition
+export type JsonSchema = {
+  type?: string | string[];
+  properties?: Record<string, JsonSchema>;
+  items?: JsonSchema;
+  required?: string[];
+  default?: unknown;
+  example?: unknown;
+  examples?: unknown[];
+  enum?: unknown[];
+  const?: unknown;
+  $ref?: string;
+  $schema?: string;
+  allOf?: JsonSchema[];
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
+  format?: string;
+  title?: string;
+  description?: string;
+};
+
+// UUID generator
+export const generateUUID = (): string => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
+// Resolve $ref within a schema
+const resolveRef = (schema: JsonSchema, refPath: string): JsonSchema | null => {
+  const parts = refPath.split('.');
+  let current: unknown = schema;
+
+  for (const part of parts) {
+    if (current && typeof current === 'object' && part in current) {
+      current = (current as Record<string, unknown>)[part];
+    } else {
+      return null;
+    }
+  }
+
+  return current as JsonSchema;
+};
+
+// Resolve $ref from multiple loaded schemas
+export const resolveRefFromSchemas = (ref: string, loadedSchemas: Map<string, object>): JsonSchema | null => {
+  // Handle local refs like #/definitions/Something
+  if (ref.startsWith('#/')) {
+    const refPath = ref.replace(/^#\//, '').replace(/\//g, '.');
+    for (const [, schema] of loadedSchemas) {
+      const resolved = resolveRef(schema as JsonSchema, refPath);
+      if (resolved) return resolved;
+    }
+  }
+
+  // Handle external refs
+  for (const [path, schema] of loadedSchemas) {
+    if (ref === path || ref.endsWith(path)) {
+      return schema as JsonSchema;
+    }
+  }
+
+  return null;
+};
+
+// Generate a template object from a JSON schema
+export const generateTemplateFromSchema = (
+  schema: JsonSchema,
+  loadedSchemas: Map<string, object>,
+  visited: Set<string> = new Set()
+): unknown => {
+  // Handle $ref
+  if (schema.$ref) {
+    const refPath = schema.$ref.replace(/^#\//, '').replace(/\//g, '.');
+
+    // Check for circular reference
+    if (visited.has(schema.$ref)) {
+      return null;
+    }
+    visited.add(schema.$ref);
+
+    // Try to find referenced schema
+    for (const [, loadedSchema] of loadedSchemas) {
+      const resolved = resolveRef(loadedSchema as JsonSchema, refPath);
+      if (resolved) {
+        return generateTemplateFromSchema(resolved, loadedSchemas, visited);
+      }
+    }
+    return null;
+  }
+
+  // Handle allOf - merge all schemas
+  if (schema.allOf) {
+    const merged: JsonSchema = { type: 'object', properties: {}, required: [] };
+    for (const subSchema of schema.allOf) {
+      const resolved = subSchema.$ref
+        ? resolveRefFromSchemas(subSchema.$ref, loadedSchemas)
+        : subSchema;
+      if (resolved) {
+        if (resolved.properties) {
+          merged.properties = { ...merged.properties, ...resolved.properties };
+        }
+        if (resolved.required) {
+          merged.required = [...(merged.required || []), ...resolved.required];
+        }
+      }
+    }
+    return generateTemplateFromSchema(merged, loadedSchemas, visited);
+  }
+
+  // Handle const
+  if (schema.const !== undefined) {
+    return schema.const;
+  }
+
+  // Handle enum
+  if (schema.enum && schema.enum.length > 0) {
+    return schema.default ?? schema.enum[0];
+  }
+
+  // Handle default value
+  if (schema.default !== undefined) {
+    return schema.default;
+  }
+
+  // Handle example
+  if (schema.example !== undefined) {
+    return schema.example;
+  }
+  if (schema.examples && schema.examples.length > 0) {
+    return schema.examples[0];
+  }
+
+  // Get the type (could be string or array)
+  const type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+
+  switch (type) {
+    case 'object': {
+      const obj: Record<string, unknown> = {};
+      const required = schema.required || [];
+
+      if (schema.properties) {
+        // First add required properties
+        for (const key of required) {
+          if (schema.properties[key]) {
+            obj[key] = generateTemplateFromSchema(schema.properties[key], loadedSchemas, new Set(visited));
+          }
+        }
+        // Then add optional properties
+        for (const [key, propSchema] of Object.entries(schema.properties)) {
+          if (!required.includes(key)) {
+            obj[key] = generateTemplateFromSchema(propSchema, loadedSchemas, new Set(visited));
+          }
+        }
+      }
+      return obj;
+    }
+
+    case 'array': {
+      if (schema.items) {
+        const item = generateTemplateFromSchema(schema.items, loadedSchemas, new Set(visited));
+        return item !== null ? [item] : [];
+      }
+      return [];
+    }
+
+    case 'string': {
+      if (schema.format === 'uuid') {
+        return generateUUID();
+      }
+      if (schema.format === 'date') {
+        return new Date().toISOString().split('T')[0];
+      }
+      if (schema.format === 'date-time') {
+        return new Date().toISOString();
+      }
+      if (schema.format === 'uri' || schema.format === 'url') {
+        return 'https://example.com';
+      }
+      if (schema.format === 'email') {
+        return 'user@example.com';
+      }
+      return '';
+    }
+
+    case 'number':
+    case 'integer':
+      return 0;
+
+    case 'boolean':
+      return false;
+
+    case 'null':
+      return null;
+
+    default:
+      return null;
+  }
+};
+
 export interface SourcePosition {
   line: number;
   column: number;

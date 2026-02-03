@@ -4,8 +4,10 @@ import { Box, AppBar, Toolbar, Typography, Button, CircularProgress, Alert } fro
 import { Save as SaveIcon, ArrowBack as ArrowBackIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import Editor, { Monaco } from '@monaco-editor/react';
 import { useMqtt } from '../../modules/mqttclient/MqttContext';
+import { useFilesystem } from '../../modules/filesystem/FilesystemContext';
 import type { editor } from 'monaco-editor';
-import { EditorActionsToolbar, markdownActionsConfig } from '../../components/editor';
+import { EditorActionsToolbar, markdownActionsConfig, JsonActionsToolbar } from '../../components/editor';
+import { DirectoryTree } from '../../modules/mqttclient';
 import { JsonSchemaUtils, ValidationError } from '../../utils/JsonSchemaUtils';
 import ValidationErrorModal from '../../components/ValidationErrorModal';
 
@@ -64,10 +66,41 @@ const resolveRefPath = (ref: string, basePath: string): string => {
   return `${baseDir}/${ref}`;
 };
 
+// Interface for dirinfo.json structure
+interface DirinfoFile {
+  type: string;
+  name: string;
+  kind: string;
+  components?: Array<{
+    type: string;
+    schemaPath?: string;
+    ref?: string;
+  }>;
+}
+
+interface Dirinfo {
+  type: 'dir';
+  files?: DirinfoFile[];
+}
+
+// Extract schema path from dirinfo.json for a given file
+const getSchemaFromDirinfo = (dirinfo: Dirinfo, fileName: string): string | null => {
+  if (!dirinfo.files) return null;
+
+  const fileEntry = dirinfo.files.find(f => f.name === fileName);
+  if (!fileEntry || !fileEntry.components) return null;
+
+  const jsonComponent = fileEntry.components.find(c => c.type === 'file_json');
+  if (!jsonComponent) return null;
+
+  return jsonComponent.schemaPath || jsonComponent.ref || null;
+};
+
 const SimpleEditorPage: React.FC = () => {
   const { '*': filePath } = useParams();
   const navigate = useNavigate();
-  const { readFile, writeFile, isConnected } = useMqtt();
+  const { readFile, writeFile, listDirectory, syncDirinfo: syncDirinfoMqtt, isConnected } = useMqtt();
+  const { syncDirinfo: syncDirinfoFilesystem } = useFilesystem();
   const monacoRef = useRef<Monaco | null>(null);
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
 
@@ -80,10 +113,30 @@ const SimpleEditorPage: React.FC = () => {
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
   const [showValidationModal, setShowValidationModal] = useState(false);
   const [loadedSchemas, setLoadedSchemas] = useState<Map<string, object>>(new Map());
+  const [directoryTree, setDirectoryTree] = useState<DirectoryTree | null>(null);
+  const [_dirinfo, setDirinfo] = useState<Dirinfo | null>(null);
+  const [dirinfoSchemaPath, setDirinfoSchemaPath] = useState<string | null>(null);
 
   const path = filePath || '';
   const language = getLanguageFromPath(path);
   const hasChanges = content !== originalContent;
+
+  // Load dirinfo.json from the same directory
+  const loadDirinfo = useCallback(async (filePath: string): Promise<{ dirinfo: Dirinfo | null; schemaPath: string | null }> => {
+    const fileName = filePath.split('/').pop() || '';
+    const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+    const dirinfoPath = dirPath ? `${dirPath}/dirinfo.json` : 'dirinfo.json';
+
+    try {
+      const dirinfoFile = await readFile(dirinfoPath);
+      const parsed = JSON.parse(dirinfoFile.content) as Dirinfo;
+      const schemaPath = getSchemaFromDirinfo(parsed, fileName);
+      return { dirinfo: parsed, schemaPath };
+    } catch {
+      // dirinfo.json doesn't exist or is invalid
+      return { dirinfo: null, schemaPath: null };
+    }
+  }, [readFile]);
 
   const loadSchemaWithRefs = useCallback(async (
     schemaPath: string,
@@ -108,7 +161,7 @@ const SimpleEditorPage: React.FC = () => {
     }
   }, []);
 
-  const configureJsonSchema = useCallback(async (fileContent: string, filePath: string, monaco: Monaco) => {
+  const configureJsonSchema = useCallback(async (fileContent: string, filePath: string, monaco: Monaco, dirinfoSchema?: string | null) => {
     if (!monaco || language !== 'json') return;
 
     let schemaPath = extractSchemaPath(fileContent);
@@ -118,6 +171,12 @@ const SimpleEditorPage: React.FC = () => {
       schemaPath = 'data/schema/dir.json';
     }
 
+    // Use schema from dirinfo.json if no schema in file
+    if (!schemaPath && dirinfoSchema) {
+      schemaPath = dirinfoSchema;
+      setDirinfoSchemaPath(dirinfoSchema);
+    }
+
     if (!schemaPath) {
       monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
         validate: true,
@@ -125,6 +184,7 @@ const SimpleEditorPage: React.FC = () => {
         enableSchemaRequest: false,
       });
       setLoadedSchemas(new Map());
+      setDirinfoSchemaPath(null);
       return;
     }
 
@@ -173,12 +233,23 @@ const SimpleEditorPage: React.FC = () => {
         setLoading(true);
         setError(null);
         setSchemaLoaded(false);
+        setDirinfo(null);
+        setDirinfoSchemaPath(null);
+
         const file = await readFile(path);
         setContent(file.content);
         setOriginalContent(file.content);
 
+        // Load dirinfo.json for schema lookup (for non-dirinfo JSON files)
+        let dirinfoSchema: string | null = null;
+        if (language === 'json' && !path.endsWith('dirinfo.json')) {
+          const { dirinfo: loadedDirinfo, schemaPath } = await loadDirinfo(path);
+          setDirinfo(loadedDirinfo);
+          dirinfoSchema = schemaPath;
+        }
+
         if (monacoRef.current && language === 'json') {
-          await configureJsonSchema(file.content, path, monacoRef.current);
+          await configureJsonSchema(file.content, path, monacoRef.current, dirinfoSchema);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load file');
@@ -188,7 +259,7 @@ const SimpleEditorPage: React.FC = () => {
     };
 
     loadFile();
-  }, [isConnected, path, readFile]);
+  }, [isConnected, path, readFile, loadDirinfo]);
 
   const getMainSchemaPath = useCallback((): string | null => {
     let schemaPath = extractSchemaPath(content);
@@ -198,12 +269,17 @@ const SimpleEditorPage: React.FC = () => {
       schemaPath = 'data/schema/dir.json';
     }
 
+    // Use schema from dirinfo.json if available
+    if (!schemaPath && dirinfoSchemaPath) {
+      schemaPath = dirinfoSchemaPath;
+    }
+
     if (!schemaPath) return null;
 
     return schemaPath.startsWith('data/')
       ? schemaPath
       : `data/${schemaPath}`;
-  }, [content, path]);
+  }, [content, path, dirinfoSchemaPath]);
 
   const getMainSchema = useCallback((): object | undefined => {
     const fullSchemaPath = getMainSchemaPath();
@@ -234,6 +310,29 @@ const SimpleEditorPage: React.FC = () => {
       await writeFile(path, content);
       setOriginalContent(content);
       setShowValidationModal(false);
+
+      // Sync dirinfo.json to backend and frontend filesystem
+      if (path.endsWith('dirinfo.json')) {
+        // Sync to backend metadata cache
+        try {
+          await syncDirinfoMqtt(path);
+          console.log('Dirinfo synced to backend:', path);
+        } catch (syncErr) {
+          console.warn('Failed to sync dirinfo to backend:', syncErr);
+        }
+
+        // Sync to frontend filesystem (updates FileData components)
+        try {
+          const success = syncDirinfoFilesystem(path, content);
+          if (success) {
+            console.log('Dirinfo synced to frontend filesystem:', path);
+          } else {
+            console.warn('Failed to sync dirinfo to frontend filesystem:', path);
+          }
+        } catch (syncErr) {
+          console.warn('Failed to sync dirinfo to frontend:', syncErr);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save file');
     } finally {
@@ -302,9 +401,19 @@ const SimpleEditorPage: React.FC = () => {
     setEditorInstance(editorRef);
 
     if (content && language === 'json') {
-      await configureJsonSchema(content, path, monaco);
+      await configureJsonSchema(content, path, monaco, dirinfoSchemaPath);
     }
   };
+
+  const handleLoadDirectory = useCallback(async () => {
+    if (!isConnected) return;
+    try {
+      const tree = await listDirectory();
+      setDirectoryTree(tree);
+    } catch (err) {
+      console.error('Failed to load directory tree:', err);
+    }
+  }, [isConnected, listDirectory]);
 
   return (
     <Box
@@ -373,6 +482,14 @@ const SimpleEditorPage: React.FC = () => {
         <EditorActionsToolbar
           config={markdownActionsConfig}
           editor={editorInstance}
+        />
+      )}
+
+      {language === 'json' && (
+        <JsonActionsToolbar
+          editor={editorInstance}
+          directoryTree={directoryTree}
+          onLoadDirectory={handleLoadDirectory}
         />
       )}
 

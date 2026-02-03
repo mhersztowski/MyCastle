@@ -28,12 +28,31 @@ Aplikacja frontend
     - filesystem - moduł odpowiedzialny za obsługę funkcjonalności filesystem
         - data/ - klasy danych runtime (DirData, FileData)
         - models/ - interfejsy modeli danych JSON (DirModel, FileModel, ProjectModel, TaskModel)
-        - components/ - klasy metadanych plików (FileComponent, DirComponent, FileJsonComponent)
+        - nodes - klasy wewnętrznego stanu modeli np TaskNode
+          - zawirają pola jak w models ale z uzupełnieniem w wewnętrzny stan aplikacji
+          - implementują często używaną funkcjonalność
+        - components/ - klasy danych plików json te bardziej zagnieżdżone (FileComponent, DirComponent, FileJsonComponent)
         - FilesystemService - serwis do operacji I/O
         - FilesystemContext - React Context do zarządzania stanem
+    - definiuje następujące reużywalne komponenty react
+      - dane z następujących model: 
+        - PersonModel z pliku /data/data/persons
+        - TaskModel z pliku /data/data/tasks
+        - ProjectModel z pliku /data/data/projects
+      - natępujące typy model
+        - Label
+          - wygladem przypomina przycisk z ikoną typu np Person
+          - nie edytowalny
+          - majacy props: (id np z PersonModel)
+        - Picker np. PersonPicker
+          - wygladem przypomina przycisk z ikoną typu np Person
+          - majacy props: editable, id (id np z PersonModel)
+          - gdy editable po kliknieciu wywołujacy modal z możliwością wyboru
 - składa się z następujących stron
     - /filesystem/save - formularz zapisujący dane do pliku
     - /filesystem/list - widok podzielony z lewej drzewo danych po pliknieciu 
+    - /calendar - widok kalendarza
+    - /components - widok demonstrujący reużywalne komponenty UI te z katalogów person, project, task
     - /editor/simple/{path} - wydok na bełny ekran edytora mona do edycji plików 
       z filesystem: json, md
     - /viewer/md/{path} - renderowanie zawartości plików md
@@ -49,9 +68,13 @@ Aplikacja frontend
   - `src/modules/filesystem/`: Filesystem module
     - `data/`: Data classes (DirData, FileData)
     - `models/`: Model interfaces (DirModel, FileModel, ProjectModel, TaskModel)
-    - `components/`: Metadata components (FileComponent, DirComponent, FileJsonComponent)
+    - `nodes/` : nodes class extend models of additional states and functions
+    - `components/`: components class (FileComponent, DirComponent, FileJsonComponent)
   - `src/pages/filesystem/`: Filesystem pages (save, list)
   - `src/components/`: Reusable UI components
+    - `person/` - components of PersonModel
+    - `project/` components of ProjectModel
+    - `task/` - components of TaskModel
 - `tests/`: Automated tests
 - `docs/`: Project documentation
 - `configs/`: Configuration files (YAML, JSON, .env, etc.)

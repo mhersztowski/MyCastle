@@ -142,6 +142,13 @@ export class MqttServer {
           break;
         }
 
+        case PacketType.DIRINFO_SYNC: {
+          const payload = data.payload as { path: string };
+          const dirinfo = await this.fileSystem.syncDirinfo(payload.path);
+          responseData = dirinfo;
+          break;
+        }
+
         default:
           throw new Error(`Unknown packet type: ${data.type}`);
       }

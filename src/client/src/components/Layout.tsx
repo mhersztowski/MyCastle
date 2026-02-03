@@ -18,6 +18,9 @@ import MenuIcon from '@mui/icons-material/Menu';
 import FolderIcon from '@mui/icons-material/Folder';
 import SaveIcon from '@mui/icons-material/Save';
 import ListAltIcon from '@mui/icons-material/ListAlt';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
+import ChecklistIcon from '@mui/icons-material/Checklist';
+import WidgetsIcon from '@mui/icons-material/Widgets';
 import CastleIcon from '@mui/icons-material/Castle';
 
 const drawerWidth = 240;
@@ -36,6 +39,21 @@ const menuItems = [
     text: 'Save File',
     icon: <SaveIcon />,
     path: '/filesystem/save',
+  },
+  {
+    text: 'Calendar',
+    icon: <CalendarMonthIcon />,
+    path: '/calendar',
+  },
+  {
+    text: 'To-Do List',
+    icon: <ChecklistIcon />,
+    path: '/todolist',
+  },
+  {
+    text: 'Components',
+    icon: <WidgetsIcon />,
+    path: '/components',
   },
 ];
 

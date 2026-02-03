@@ -8,6 +8,30 @@ const TOPICS = {
   RESPONSE: 'mycastle/response',
 };
 
+// Normalize path to use forward slashes (Windows paths use backslashes)
+const normalizePath = (path: string): string => path.replace(/\\/g, '/');
+
+// Normalize paths in DirectoryTree to use forward slashes
+const normalizeDirectoryTree = (tree: DirectoryTree): DirectoryTree => {
+  return {
+    ...tree,
+    path: normalizePath(tree.path),
+    children: tree.children?.map(normalizeDirectoryTree),
+  };
+};
+
+// Normalize path in FileData
+const normalizeFileData = (data: FileData): FileData => ({
+  ...data,
+  path: normalizePath(data.path),
+});
+
+// Normalize path in BinaryFileData
+const normalizeBinaryFileData = (data: BinaryFileData): BinaryFileData => ({
+  ...data,
+  path: normalizePath(data.path),
+});
+
 type PendingRequest = {
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
@@ -129,11 +153,13 @@ export class MqttClient {
   }
 
   async readFile(path: string): Promise<FileData> {
-    return this.sendRequest<FileData>(PacketType.FILE_READ, { path });
+    const data = await this.sendRequest<FileData>(PacketType.FILE_READ, { path });
+    return normalizeFileData(data);
   }
 
   async writeFile(path: string, content: string): Promise<FileData> {
-    return this.sendRequest<FileData>(PacketType.FILE_WRITE, { path, content });
+    const data = await this.sendRequest<FileData>(PacketType.FILE_WRITE, { path, content });
+    return normalizeFileData(data);
   }
 
   async deleteFile(path: string): Promise<{ success: boolean }> {
@@ -141,15 +167,22 @@ export class MqttClient {
   }
 
   async listDirectory(path: string = ''): Promise<DirectoryTree> {
-    return this.sendRequest<DirectoryTree>(PacketType.FILE_LIST, { path });
+    const tree = await this.sendRequest<DirectoryTree>(PacketType.FILE_LIST, { path });
+    return normalizeDirectoryTree(tree);
   }
 
   async writeBinaryFile(path: string, data: string, mimeType: string): Promise<BinaryFileData> {
-    return this.sendRequest<BinaryFileData>(PacketType.FILE_WRITE_BINARY, { path, data, mimeType });
+    const result = await this.sendRequest<BinaryFileData>(PacketType.FILE_WRITE_BINARY, { path, data, mimeType });
+    return normalizeBinaryFileData(result);
   }
 
   async readBinaryFile(path: string): Promise<BinaryFileData> {
-    return this.sendRequest<BinaryFileData>(PacketType.FILE_READ_BINARY, { path });
+    const data = await this.sendRequest<BinaryFileData>(PacketType.FILE_READ_BINARY, { path });
+    return normalizeBinaryFileData(data);
+  }
+
+  async syncDirinfo(path: string): Promise<unknown> {
+    return this.sendRequest<unknown>(PacketType.DIRINFO_SYNC, { path });
   }
 
   async uploadFile(

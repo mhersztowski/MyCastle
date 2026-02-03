@@ -504,16 +504,21 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
             </TabPanel>
 
             {/* File name input */}
-            {file && (
-              <TextField
-                fullWidth
-                label="File Name"
-                value={fileName}
-                onChange={(e) => setFileName(e.target.value)}
-                size="small"
-                sx={{ mt: 2 }}
-              />
-            )}
+            <TextField
+              fullWidth
+              label="File Name"
+              value={fileName}
+              onChange={(e) => setFileName(e.target.value)}
+              size="small"
+              sx={{ mt: 2 }}
+              placeholder={file ? 'Enter file name...' : 'Select a file first or enter custom name'}
+              helperText={
+                fileName
+                  ? `Will be saved as: ${selectedDirectory ? `${selectedDirectory}/` : ''}${fileName}`
+                  : 'You can change the file name before uploading'
+              }
+              error={!!file && !fileName}
+            />
 
             {/* Upload progress */}
             {uploading && (

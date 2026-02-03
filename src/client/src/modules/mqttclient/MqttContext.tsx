@@ -14,6 +14,7 @@ interface MqttContextValue {
   listDirectory: (path?: string) => Promise<DirectoryTree>;
   uploadFile: (path: string, file: File | Blob, onProgress?: (progress: number) => void) => Promise<BinaryFileData>;
   readBinaryFile: (path: string) => Promise<BinaryFileData>;
+  syncDirinfo: (path: string) => Promise<unknown>;
 }
 
 const MqttContext = createContext<MqttContextValue | null>(null);
@@ -102,6 +103,13 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
     return mqttClient.readBinaryFile(path);
   }, [isConnected]);
 
+  const syncDirinfo = useCallback(async (path: string): Promise<unknown> => {
+    if (!isConnected) {
+      throw new Error('Not connected');
+    }
+    return mqttClient.syncDirinfo(path);
+  }, [isConnected]);
+
   useEffect(() => {
     connect();
     return () => {
@@ -121,6 +129,7 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
     listDirectory,
     uploadFile,
     readBinaryFile,
+    syncDirinfo,
   };
 
   return <MqttContext.Provider value={value}>{children}</MqttContext.Provider>;
