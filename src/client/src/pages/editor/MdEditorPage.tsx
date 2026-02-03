@@ -102,7 +102,12 @@ const MdEditorPage: React.FC = () => {
   }
 
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'grey.50' }}>
+    <Box sx={{
+      height: 'var(--app-height, 100vh)',
+      display: 'flex',
+      flexDirection: 'column',
+      bgcolor: 'grey.50',
+    }}>
       {/* Header */}
       <Paper
         elevation={1}
@@ -113,6 +118,7 @@ const MdEditorPage: React.FC = () => {
           px: 2,
           py: 1,
           borderRadius: 0,
+          flexShrink: 0, // Prevent header from being compressed
         }}
       >
         <Tooltip title="Back">
@@ -157,7 +163,7 @@ const MdEditorPage: React.FC = () => {
       )}
 
       {/* Editor */}
-      <Box sx={{ flexGrow: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flexGrow: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexGrow: 1 }}>
             <CircularProgress />

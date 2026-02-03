@@ -12,6 +12,7 @@ import {
   Slider,
   ToggleButtonGroup,
   ToggleButton,
+  Divider,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -20,6 +21,8 @@ import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft';
 import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
 import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
 import ViewStreamIcon from '@mui/icons-material/ViewStream';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import MediaPickerDialog from '../components/MediaPickerDialog';
 
 type ImageAlign = 'left' | 'center' | 'right' | 'inline';
 
@@ -33,6 +36,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
   const [editWidth, setEditWidth] = useState(node.attrs.width || '');
   const [editAlign, setEditAlign] = useState<ImageAlign>(node.attrs.align || 'center');
   const [imageError, setImageError] = useState(false);
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const srcInputRef = useRef<HTMLInputElement>(null);
   const initializedRef = useRef(false);
 
@@ -110,6 +114,17 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
     }
   };
 
+  const handleImagePicked = (imageUrl: string, imagePath: string) => {
+    setEditSrc(imageUrl);
+    // Auto-set alt text from filename if empty
+    if (!editAlt) {
+      const filename = imagePath.split('/').pop() || '';
+      const nameWithoutExt = filename.replace(/\.[^.]+$/, '');
+      setEditAlt(nameWithoutExt);
+    }
+    setImageError(false);
+  };
+
   // Parse width value for slider
   const getWidthPercent = (): number => {
     if (!editWidth) return 100;
@@ -146,16 +161,33 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <TextField
-              inputRef={srcInputRef}
-              label="URL obrazka"
-              value={editSrc}
-              onChange={(e) => setEditSrc(e.target.value)}
-              onKeyDown={handleKeyDown}
-              size="small"
-              fullWidth
-              placeholder="https://example.com/image.jpg"
-            />
+            {/* URL input with browse button */}
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                inputRef={srcInputRef}
+                label="URL obrazka"
+                value={editSrc}
+                onChange={(e) => setEditSrc(e.target.value)}
+                onKeyDown={handleKeyDown}
+                size="small"
+                fullWidth
+                placeholder="https://example.com/image.jpg lub wybierz z plików"
+              />
+              <Button
+                variant="outlined"
+                onClick={() => setImagePickerOpen(true)}
+                startIcon={<FolderOpenIcon />}
+                sx={{ whiteSpace: 'nowrap' }}
+              >
+                Przeglądaj
+              </Button>
+            </Box>
+
+            <Divider>
+              <Typography variant="caption" color="text.secondary">
+                lub
+              </Typography>
+            </Divider>
 
             <TextField
               label="Tekst alternatywny (alt)"
@@ -294,6 +326,14 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
             </Box>
           </Box>
         </Paper>
+
+        {/* Image Picker Dialog */}
+        <MediaPickerDialog
+          open={imagePickerOpen}
+          onClose={() => setImagePickerOpen(false)}
+          onSelect={handleImagePicked}
+          initialMediaType="image"
+        />
       </NodeViewWrapper>
     );
   }

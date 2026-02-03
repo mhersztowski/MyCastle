@@ -28,7 +28,8 @@ html, body {
 
 #root {
   height: var(--app-height);
-  overflow: hidden;
+  overflow: auto;
+  /* Allow scrolling within the app */
 }
 
 /* Prevent text selection callout on long press (optional - can be annoying) */

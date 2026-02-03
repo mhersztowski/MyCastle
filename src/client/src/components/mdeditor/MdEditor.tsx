@@ -13,9 +13,11 @@ import { Table, TableRow } from '@tiptap/extension-table';
 import { CustomTableCell } from './extensions/CustomTableCell';
 import { CustomTableHeader } from './extensions/CustomTableHeader';
 import { common, createLowlight } from 'lowlight';
-import { Box, IconButton, Paper, Divider, Popper, TextField, Button, Tooltip } from '@mui/material';
+import { Box, IconButton, Paper, Divider, Popper, TextField, Button, Tooltip, Fab, Collapse, useMediaQuery, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
+import EditIcon from '@mui/icons-material/Edit';
+import CloseIcon from '@mui/icons-material/Close';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
 import FormatItalicIcon from '@mui/icons-material/FormatItalic';
 import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
@@ -27,6 +29,10 @@ import MdEditorToolbar from './MdEditorToolbar';
 import SlashCommands from './extensions/SlashCommands';
 import { InlineMath, MathBlock } from './extensions/MathExtension';
 import { EditableImage } from './extensions/ImageExtension';
+import { AudioEmbed } from './extensions/AudioExtension';
+import { VideoEmbed } from './extensions/VideoExtension';
+import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
+import { ColumnLayout, Column } from './extensions/ColumnExtension';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
 import 'katex/dist/katex.min.css';
 import './MdEditor.css';
@@ -48,11 +54,18 @@ const MdEditor: React.FC<MdEditorProps> = ({
   editable = true,
   autoFocus = false,
 }) => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
   const initialContentRef = useRef(initialContent);
   const isInitializedRef = useRef(false);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
   const [bubbleMenuAnchor, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
+
+  // Toolbar visibility for mobile
+  const [toolbarVisible, setToolbarVisible] = useState(!isMobile);
+  const lastScrollTop = useRef(0);
 
   // Link editing state
   const [linkPopupAnchor, setLinkPopupAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -115,6 +128,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
       SlashCommands,
       InlineMath,
       MathBlock,
+      ComponentEmbed,
+      AudioEmbed,
+      VideoEmbed,
+      ColumnLayout,
+      Column,
     ],
     content: '',
     editable,
@@ -420,13 +438,74 @@ const MdEditor: React.FC<MdEditorProps> = ({
     };
   }, []);
 
+  // Handle scroll to auto-hide toolbar on mobile
+  const handleScroll = useCallback(() => {
+    if (!isMobile || !contentWrapperRef.current) return;
+
+    const scrollTop = contentWrapperRef.current.scrollTop;
+    const scrollDelta = scrollTop - lastScrollTop.current;
+
+    // Hide toolbar when scrolling down, show when scrolling up
+    if (scrollDelta > 10 && toolbarVisible) {
+      setToolbarVisible(false);
+    } else if (scrollDelta < -10 && !toolbarVisible) {
+      setToolbarVisible(true);
+    }
+
+    lastScrollTop.current = scrollTop;
+  }, [isMobile, toolbarVisible]);
+
+  // Update toolbar visibility when switching between mobile/desktop
+  useEffect(() => {
+    setToolbarVisible(!isMobile);
+  }, [isMobile]);
+
   if (!editor) {
     return null;
   }
 
   return (
-    <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <MdEditorToolbar editor={editor} onSave={handleSave} />
+    <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {/* Collapsible toolbar for mobile */}
+      <Collapse in={toolbarVisible} timeout={200}>
+        <MdEditorToolbar editor={editor} onSave={handleSave} />
+      </Collapse>
+
+      {/* FAB to show toolbar when hidden on mobile */}
+      {isMobile && !toolbarVisible && (
+        <Fab
+          size="small"
+          color="primary"
+          onClick={() => setToolbarVisible(true)}
+          sx={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            zIndex: 20,
+          }}
+        >
+          <EditIcon />
+        </Fab>
+      )}
+
+      {/* Close button when toolbar is visible on mobile */}
+      {isMobile && toolbarVisible && (
+        <IconButton
+          size="small"
+          onClick={() => setToolbarVisible(false)}
+          sx={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            zIndex: 20,
+            bgcolor: 'background.paper',
+            boxShadow: 1,
+            '&:hover': { bgcolor: 'grey.100' },
+          }}
+        >
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      )}
 
       {/* Bubble Menu - appears on text selection */}
       <Popper
@@ -596,6 +675,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
         className="md-editor-content-wrapper"
         onMouseOver={handleEditorMouseOver}
         onMouseOut={handleEditorMouseOut}
+        onScroll={handleScroll}
         sx={{
           flexGrow: 1,
           overflow: 'auto',

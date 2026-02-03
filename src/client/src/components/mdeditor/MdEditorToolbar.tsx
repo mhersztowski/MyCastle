@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Editor } from '@tiptap/react';
 import {
   Box,
@@ -9,6 +9,9 @@ import {
   MenuItem,
   FormControl,
   Button,
+  Menu,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
 import FormatItalicIcon from '@mui/icons-material/FormatItalic';
@@ -21,16 +24,23 @@ import ChecklistIcon from '@mui/icons-material/Checklist';
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import LinkIcon from '@mui/icons-material/Link';
 import ImageIcon from '@mui/icons-material/Image';
+import AudiotrackIcon from '@mui/icons-material/Audiotrack';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import HighlightIcon from '@mui/icons-material/Highlight';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import SaveIcon from '@mui/icons-material/Save';
 import FunctionsIcon from '@mui/icons-material/Functions';
+import AddIcon from '@mui/icons-material/Add';
+import PersonIcon from '@mui/icons-material/Person';
+import TaskIcon from '@mui/icons-material/Task';
+import FolderIcon from '@mui/icons-material/Folder';
 import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft';
 import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
 import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
 import FormatAlignJustifyIcon from '@mui/icons-material/FormatAlignJustify';
 import TableSizePicker from './components/TableSizePicker';
+import ColumnPicker from './components/ColumnPicker';
 import EmojiPicker from './components/EmojiPicker';
 
 interface MdEditorToolbarProps {
@@ -39,6 +49,22 @@ interface MdEditorToolbarProps {
 }
 
 const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => {
+  const [insertMenuAnchor, setInsertMenuAnchor] = useState<null | HTMLElement>(null);
+  const insertMenuOpen = Boolean(insertMenuAnchor);
+
+  const handleInsertMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setInsertMenuAnchor(event.currentTarget);
+  };
+
+  const handleInsertMenuClose = () => {
+    setInsertMenuAnchor(null);
+  };
+
+  const insertComponent = useCallback((type: 'person' | 'task' | 'project') => {
+    editor.chain().focus().insertComponentEmbed(type, '').run();
+    handleInsertMenuClose();
+  }, [editor]);
+
   const setLink = useCallback(() => {
     const previousUrl = editor.getAttributes('link').href;
     const url = window.prompt('URL', previousUrl);
@@ -63,8 +89,26 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
     }).run();
   }, [editor]);
 
+  const addAudio = useCallback(() => {
+    // Insert audio with empty src - opens in edit mode
+    editor.chain().focus().setAudio({
+      src: '',
+    }).run();
+  }, [editor]);
+
+  const addVideo = useCallback(() => {
+    // Insert video with empty src - opens in edit mode
+    editor.chain().focus().setVideo({
+      src: '',
+    }).run();
+  }, [editor]);
+
   const insertTable = useCallback((rows: number, cols: number) => {
     editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+  }, [editor]);
+
+  const insertColumns = useCallback((columnCount: 2 | 3) => {
+    editor.chain().focus().setColumns(columnCount).run();
   }, [editor]);
 
   const insertEmoji = useCallback((char: string) => {
@@ -99,6 +143,10 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
         borderColor: 'divider',
         flexWrap: 'wrap',
         bgcolor: 'background.paper',
+        flexShrink: 0, // Prevent toolbar from being compressed
+        minHeight: 48, // Ensure minimum height
+        position: 'relative',
+        zIndex: 10,
       }}
     >
       {/* Undo/Redo */}
@@ -222,7 +270,7 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
 
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
-      {/* Link & Image */}
+      {/* Link & Media */}
       <Tooltip title="Link">
         <IconButton
           size="small"
@@ -235,6 +283,16 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
       <Tooltip title="Image">
         <IconButton size="small" onClick={addImage}>
           <ImageIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title="Audio">
+        <IconButton size="small" onClick={addAudio} color="secondary">
+          <AudiotrackIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title="Video">
+        <IconButton size="small" onClick={addVideo} color="error">
+          <VideocamIcon fontSize="small" />
         </IconButton>
       </Tooltip>
 
@@ -291,6 +349,7 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
         </IconButton>
       </Tooltip>
       <TableSizePicker onSelect={insertTable} />
+      <ColumnPicker onSelect={insertColumns} />
       <Tooltip title="Horizontal rule">
         <IconButton size="small" onClick={() => editor.chain().focus().setHorizontalRule().run()}>
           <HorizontalRuleIcon fontSize="small" />
@@ -302,6 +361,41 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
         </IconButton>
       </Tooltip>
       <EmojiPicker onSelect={insertEmoji} />
+
+      <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+
+      {/* Insert menu (for mobile - alternative to slash commands) */}
+      <Tooltip title="Insert component">
+        <IconButton size="small" onClick={handleInsertMenuOpen}>
+          <AddIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Menu
+        anchorEl={insertMenuAnchor}
+        open={insertMenuOpen}
+        onClose={handleInsertMenuClose}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        <MenuItem onClick={() => insertComponent('person')}>
+          <ListItemIcon>
+            <PersonIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Person</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => insertComponent('task')}>
+          <ListItemIcon>
+            <TaskIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Task</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => insertComponent('project')}>
+          <ListItemIcon>
+            <FolderIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Project</ListItemText>
+        </MenuItem>
+      </Menu>
 
       {/* Save button */}
       {onSave && (

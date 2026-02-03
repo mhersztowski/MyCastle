@@ -27,7 +27,12 @@ import CodeIcon from '@mui/icons-material/Code';
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import TableChartIcon from '@mui/icons-material/TableChart';
 import ImageIcon from '@mui/icons-material/Image';
+import AudiotrackIcon from '@mui/icons-material/Audiotrack';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import FunctionsIcon from '@mui/icons-material/Functions';
+import PersonIcon from '@mui/icons-material/Person';
+import TaskIcon from '@mui/icons-material/Task';
+import FolderIcon from '@mui/icons-material/Folder';
 
 interface CommandItem {
   title: string;
@@ -186,6 +191,36 @@ const commands: CommandItem[] = [
     },
   },
   {
+    title: 'Audio',
+    description: 'Insert audio file',
+    icon: <AudiotrackIcon color="secondary" />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .setAudio({
+          src: '',
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Video',
+    description: 'Insert video file',
+    icon: <VideocamIcon color="error" />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .setVideo({
+          src: '',
+        })
+        .run();
+    },
+  },
+  {
     title: 'Math Block',
     description: 'Display math equation (LaTeX)',
     icon: <FunctionsIcon />,
@@ -208,6 +243,45 @@ const commands: CommandItem[] = [
         .focus()
         .deleteRange(range)
         .insertInlineMath('x^2')
+        .run();
+    },
+  },
+  {
+    title: 'Person',
+    description: 'Embed a person reference',
+    icon: <PersonIcon />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertComponentEmbed('person', '')
+        .run();
+    },
+  },
+  {
+    title: 'Task',
+    description: 'Embed a task reference',
+    icon: <TaskIcon />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertComponentEmbed('task', '')
+        .run();
+    },
+  },
+  {
+    title: 'Project',
+    description: 'Embed a project reference',
+    icon: <FolderIcon />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertComponentEmbed('project', '')
         .run();
     },
   },
@@ -354,6 +428,27 @@ const suggestionConfig: Omit<SuggestionOptions, 'editor'> = {
           interactive: true,
           trigger: 'manual',
           placement: 'bottom-start',
+          // iOS Safari fixes
+          touch: true,
+          hideOnClick: false,
+          popperOptions: {
+            strategy: 'fixed',
+            modifiers: [
+              {
+                name: 'flip',
+                options: {
+                  fallbackPlacements: ['top-start', 'bottom-end', 'top-end'],
+                },
+              },
+              {
+                name: 'preventOverflow',
+                options: {
+                  boundary: 'viewport',
+                  padding: 8,
+                },
+              },
+            ],
+          },
         });
       },
 

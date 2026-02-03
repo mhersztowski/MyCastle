@@ -1,6 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'http';
 import { FileSystem, BinaryFileData } from '../filesystem/FileSystem';
 import * as path from 'path';
+import * as url from 'url';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -9,6 +10,24 @@ interface UploadResult {
   data?: BinaryFileData;
   error?: string;
 }
+
+const MIME_TYPES: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.bmp': 'image/bmp',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.webm': 'audio/webm',
+  '.ogg': 'audio/ogg',
+  '.mp4': 'video/mp4',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+};
 
 export class HttpUploadServer {
   private server: Server;
@@ -23,7 +42,7 @@ export class HttpUploadServer {
 
   private setCorsHeaders(res: ServerResponse): void {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-File-Path, X-Mime-Type');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
@@ -42,8 +61,58 @@ export class HttpUploadServer {
       return;
     }
 
+    // Handle file serving: GET /files/path/to/file.jpg
+    if (req.method === 'GET' && req.url?.startsWith('/files/')) {
+      await this.handleFileServe(req, res);
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private async handleFileServe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      // Extract file path from URL (remove /files/ prefix)
+      const parsedUrl = url.parse(req.url || '', true);
+      const filePath = decodeURIComponent((parsedUrl.pathname || '').replace(/^\/files\//, ''));
+
+      if (!filePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing file path' }));
+        return;
+      }
+
+      // Security: Only allow files from data/public directory
+      const normalizedPath = path.normalize(filePath).replace(/\\/g, '/');
+      if (!normalizedPath.startsWith('data/public/') && normalizedPath !== 'data/public') {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Access denied: only files from data/public are allowed' }));
+        return;
+      }
+
+      // Read the file
+      const fileData = await this.fileSystem.readBinaryFile(filePath);
+
+      // Get the correct mime type
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeType = MIME_TYPES[ext] || fileData.mimeType || 'application/octet-stream';
+
+      // Decode base64 to buffer
+      const buffer = Buffer.from(fileData.data, 'base64');
+
+      // Set caching headers
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Length', buffer.length);
+
+      res.writeHead(200);
+      res.end(buffer);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'File not found';
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
   }
 
   private async handleUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {

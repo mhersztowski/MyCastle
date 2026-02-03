@@ -436,3 +436,246 @@
 .md-editor-content .ProseMirror table th[style*="text-align"] {
   /* Allow inline styles to override */
 }
+
+/* Audio Styles */
+.md-editor-content .ProseMirror audio,
+.md-editor-content .md-editor-audio {
+  display: block;
+  width: 100%;
+  margin: 1rem 0;
+  border-radius: 8px;
+}
+
+.md-editor-content .ProseMirror .audio-node-wrapper {
+  margin: 1rem 0;
+}
+
+/* Video Styles */
+.md-editor-content .ProseMirror video,
+.md-editor-content .md-editor-video {
+  display: block;
+  max-width: 100%;
+  margin: 1rem auto;
+  border-radius: 8px;
+}
+
+.md-editor-content .ProseMirror .video-node-wrapper {
+  margin: 1rem 0;
+}
+
+.md-editor-content .ProseMirror video.ProseMirror-selectednode {
+  outline: 3px solid #f44336;
+}
+
+/* Column Layout Styles */
+.md-editor-content .ProseMirror .column-layout-wrapper {
+  margin: 1rem 0;
+}
+
+.md-editor-content .ProseMirror .column-layout-box {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: border-color 0.2s ease;
+  /* Required for absolute positioning of resize handles */
+}
+
+.md-editor-content .ProseMirror .column-layout-box:hover {
+  border-color: #1976d2;
+  border-style: dashed;
+}
+
+/* Toolbar */
+.md-editor-content .ProseMirror .column-layout-toolbar {
+  position: absolute;
+  top: -32px;
+  right: 8px;
+  display: none;
+  gap: 4px;
+  z-index: 20;
+  background: white;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  padding: 4px;
+}
+
+.md-editor-content .ProseMirror .column-layout-box:hover .column-layout-toolbar {
+  display: flex;
+}
+
+.md-editor-content .ProseMirror .column-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  color: #666;
+  transition: all 0.15s ease;
+}
+
+.md-editor-content .ProseMirror .column-btn:hover {
+  background: #f5f5f5;
+  color: #1976d2;
+}
+
+.md-editor-content .ProseMirror .column-btn-remove:hover {
+  color: #d32f2f;
+}
+
+/* Preset buttons container */
+.md-editor-content .ProseMirror .column-presets {
+  display: flex;
+  gap: 2px;
+  margin-right: 4px;
+  padding-right: 4px;
+  border-right: 1px solid #e0e0e0;
+}
+
+/* Preset button */
+.md-editor-content .ProseMirror .column-preset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  padding: 4px;
+  transition: all 0.15s ease;
+  color: #999;
+}
+
+.md-editor-content .ProseMirror .column-preset-btn:hover {
+  border-color: #1976d2;
+  background: #f5f5f5;
+  color: #1976d2;
+}
+
+.md-editor-content .ProseMirror .column-preset-btn.active {
+  border-color: #1976d2;
+  background: rgba(25, 118, 210, 0.1);
+  color: #1976d2;
+}
+
+.md-editor-content .ProseMirror .column-preset-btn svg {
+  display: block;
+}
+
+/* Content area - flex container for columns */
+.md-editor-content .ProseMirror .column-layout-content {
+  display: flex !important;
+  min-height: 80px;
+  align-items: stretch;
+}
+
+/* Column node styling */
+.md-editor-content .ProseMirror .column-node {
+  min-height: 60px;
+  border-right: 1px solid #e0e0e0;
+}
+
+/* Last column doesn't need right border */
+.md-editor-content .ProseMirror .column-layout-content > .column-node:last-child {
+  border-right: none;
+}
+
+/* Column content styling */
+.md-editor-content .ProseMirror .column-node > p:first-child {
+  margin-top: 0;
+}
+
+.md-editor-content .ProseMirror .column-node > p:last-child {
+  margin-bottom: 0;
+}
+
+/* Focus indicator for column */
+.md-editor-content .ProseMirror .column-node:focus-within {
+  background-color: rgba(25, 118, 210, 0.04);
+}
+
+/* Note: Resize handles removed - column widths are fixed */
+
+/* Responsive columns - stack on mobile */
+@media (max-width: 768px) {
+  .md-editor-content .ProseMirror .column-layout-content {
+    flex-direction: column !important;
+  }
+
+  .md-editor-content .ProseMirror .column-node {
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .md-editor-content .ProseMirror .column-layout-content > .column-node:last-child {
+    border-bottom: none;
+  }
+
+  /* Adjust toolbar position on mobile */
+  .md-editor-content .ProseMirror .column-layout-toolbar {
+    top: -28px;
+    right: 4px;
+    padding: 2px;
+  }
+
+  .md-editor-content .ProseMirror .column-btn {
+    width: 24px;
+    height: 24px;
+  }
+}
+
+/* Tablet - keep all columns in row */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .md-editor-content .ProseMirror .column-layout-content {
+    flex-wrap: nowrap;
+  }
+}
+
+/* HTML rendered columns (from markdown) */
+.md-editor-columns {
+  display: flex;
+  gap: 0;
+  margin: 1rem 0;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
+
+.md-editor-columns > [data-column] {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid #e0e0e0;
+}
+
+.md-editor-columns > [data-column]:last-child {
+  border-right: none;
+}
+
+/* Responsive markdown columns */
+@media (max-width: 768px) {
+  .md-editor-columns {
+    flex-direction: column;
+  }
+
+  .md-editor-columns > [data-column] {
+    width: 100% !important;
+    border-right: none;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .md-editor-columns > [data-column]:last-child {
+    border-bottom: none;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .md-editor-columns {
+    flex-wrap: nowrap;
+  }
+}

@@ -33,6 +33,37 @@ function escapeMathForHtml(content: string): string {
   return JSON.stringify({ result, mathBlocks, mathInlines });
 }
 
+// Helper to escape component embeds to protect them from showdown
+function escapeComponentEmbedsForHtml(content: string): string {
+  const componentEmbeds: { type: string; id: string }[] = [];
+
+  // Replace @[type:id] syntax with placeholders
+  // Matches: @[person:uuid-123], @[task:abc], @[project:xyz], @[person:] (empty id)
+  const result = content.replace(/@\[(person|task|project):([^\]]*)\]/g, (_, type, id) => {
+    componentEmbeds.push({ type, id: id.trim() });
+    return `%%COMPONENTEMBED_${componentEmbeds.length - 1}%%`;
+  });
+
+  return JSON.stringify({ result, componentEmbeds });
+}
+
+// Helper to restore component embeds after showdown conversion
+function restoreComponentEmbedsFromHtml(html: string, componentEmbeds: { type: string; id: string }[]): string {
+  let result = html;
+
+  componentEmbeds.forEach((embed, index) => {
+    // Use zero-width space inside span to ensure Tiptap recognizes it as a node
+    const htmlTag = `<span data-type="component-embed" data-component-type="${embed.type}" data-component-id="${embed.id}">\u200B</span>`;
+    const placeholder = `%%COMPONENTEMBED_${index}%%`;
+
+    // Replace all occurrences of the placeholder with the HTML tag
+    // This handles placeholders inside paragraphs, standalone, or wrapped
+    result = result.split(placeholder).join(htmlTag);
+  });
+
+  return result;
+}
+
 // Helper to restore math content after showdown conversion
 function restoreMathFromHtml(html: string, mathData: { mathBlocks: string[]; mathInlines: string[] }): string {
   let result = html;
@@ -89,6 +120,200 @@ turndownService.addRule('taskListItems', {
 turndownService.addRule('highlight', {
   filter: 'mark',
   replacement: (content) => `==${content}==`,
+});
+
+// Audio rule - handles both NodeView wrappers and plain audio elements from renderHTML
+turndownService.addRule('audioNodeView', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    // Match NodeView wrapper elements
+    if (element.classList?.contains('audio-node-wrapper')) return true;
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const audio = element.querySelector('audio');
+      if (audio) return true;
+    }
+    // Match plain audio elements (from renderHTML output)
+    if (element.nodeName === 'AUDIO') return true;
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    // Get the audio element - either from wrapper or direct
+    const audio = element.nodeName === 'AUDIO'
+      ? element as HTMLAudioElement
+      : (element.querySelector('audio') as HTMLAudioElement);
+    if (!audio) return '';
+
+    const src = audio.getAttribute('src') || '';
+    const title = audio.getAttribute('data-title') || audio.getAttribute('title') || '';
+    const controls = audio.hasAttribute('controls');
+    const autoplay = audio.hasAttribute('autoplay');
+    const loop = audio.hasAttribute('loop');
+
+    // Skip empty audio
+    if (!src) return '';
+
+    // Build HTML audio tag with all attributes
+    const attrs: string[] = [`src="${src}"`];
+    if (title) attrs.push(`data-title="${title}"`);
+    if (controls) attrs.push('controls');
+    if (autoplay) attrs.push('autoplay');
+    if (loop) attrs.push('loop');
+
+    return `\n<audio ${attrs.join(' ')}></audio>\n`;
+  },
+});
+
+// Video rule - handles both NodeView wrappers and plain video elements from renderHTML
+turndownService.addRule('videoNodeView', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    // Match NodeView wrapper elements
+    if (element.classList?.contains('video-node-wrapper')) return true;
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const video = element.querySelector('video');
+      if (video) return true;
+    }
+    // Match plain video elements (from renderHTML output)
+    if (element.nodeName === 'VIDEO') return true;
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    // Get the video element - either from wrapper or direct
+    const video = element.nodeName === 'VIDEO'
+      ? element as HTMLVideoElement
+      : (element.querySelector('video') as HTMLVideoElement);
+    if (!video) return '';
+
+    const src = video.getAttribute('src') || '';
+    const title = video.getAttribute('data-title') || video.getAttribute('title') || '';
+    const poster = video.getAttribute('poster') || '';
+    const controls = video.hasAttribute('controls');
+    const autoplay = video.hasAttribute('autoplay');
+    const loop = video.hasAttribute('loop');
+    const muted = video.hasAttribute('muted');
+    const style = video.getAttribute('style') || '';
+
+    // Skip empty video
+    if (!src) return '';
+
+    // Extract width from style
+    const widthMatch = style.match(/width:\s*(\d+%?)/);
+    const width = widthMatch ? widthMatch[1] : null;
+
+    // Extract alignment from style (default center for video)
+    // renderHTML outputs: left = "margin-left: 0; margin-right: auto"
+    //                     right = "margin-left: auto; margin-right: 0"
+    //                     center = "margin-left: auto; margin-right: auto"
+    let align = 'center';
+    const hasMarginLeftAuto = style.includes('margin-left: auto');
+    const hasMarginRightAuto = style.includes('margin-right: auto');
+    const hasMarginLeft0 = style.includes('margin-left: 0');
+    const hasMarginRight0 = style.includes('margin-right: 0');
+
+    if (hasMarginLeft0 && hasMarginRightAuto) align = 'left';
+    else if (hasMarginLeftAuto && hasMarginRight0) align = 'right';
+
+    // Build HTML video tag with all attributes
+    const attrs: string[] = [`src="${src}"`];
+    if (title) attrs.push(`data-title="${title}"`);
+    if (poster) attrs.push(`poster="${poster}"`);
+    if (controls) attrs.push('controls');
+    if (autoplay) attrs.push('autoplay');
+    if (loop) attrs.push('loop');
+    if (muted) attrs.push('muted');
+
+    // Build style - replicate the same format as renderHTML for consistency
+    const styleParts: string[] = [];
+    if (width) styleParts.push(`width: ${width}`);
+    if (align === 'left') {
+      styleParts.push('margin-left: 0', 'margin-right: auto');
+    } else if (align === 'right') {
+      styleParts.push('margin-left: auto', 'margin-right: 0');
+    } else {
+      styleParts.push('margin-left: auto', 'margin-right: auto');
+    }
+    styleParts.push('display: block');
+
+    attrs.push(`style="${styleParts.join('; ')}"`);
+
+    return `\n<video ${attrs.join(' ')}></video>\n`;
+  },
+});
+
+// Helper to pre-process column content - convert math blocks to markdown syntax before turndown
+function preprocessColumnContent(html: string): string {
+  // Convert math blocks to $$...$$ syntax before turndown processes them
+  let result = html;
+
+  // Match math block divs and convert to markdown
+  result = result.replace(
+    /<div[^>]*data-type="math-block"[^>]*data-latex="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
+    (_, encodedLatex) => {
+      const latex = decodeURIComponent(encodedLatex || '');
+      return latex ? `\n$$${latex}$$\n` : '';
+    }
+  );
+
+  // Match inline math spans and convert to markdown
+  result = result.replace(
+    /<span[^>]*data-type="inline-math"[^>]*data-latex="([^"]*)"[^>]*>[\s\S]*?<\/span>/gi,
+    (_, encodedLatex) => {
+      const latex = decodeURIComponent(encodedLatex || '');
+      return latex ? `$${latex}$` : '';
+    }
+  );
+
+  return result;
+}
+
+// Column layout rule - handles the column layout container
+// Save content as markdown for better portability and viewer compatibility
+turndownService.addRule('columnLayout', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    // Match NodeView wrapper elements
+    if (element.classList?.contains('column-layout-wrapper')) return true;
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const layout = element.querySelector('[data-column-layout]');
+      if (layout) return true;
+    }
+    // Match direct column layout div
+    if (element.hasAttribute('data-column-layout')) return true;
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    // Get the column layout element - either from wrapper or direct
+    const layout = element.hasAttribute('data-column-layout')
+      ? element
+      : (element.querySelector('[data-column-layout]') as HTMLElement);
+
+    if (!layout) return '';
+
+    // Find all column divs
+    const columns = layout.querySelectorAll('[data-column]');
+    if (columns.length === 0) return '';
+
+    let result = '\n<div data-column-layout class="md-editor-columns">\n';
+
+    columns.forEach((column) => {
+      const colElement = column as HTMLElement;
+      const width = colElement.getAttribute('data-width') || colElement.style.width || '';
+
+      // Pre-process math blocks before turndown (turndown has issues with empty divs)
+      const preprocessedHtml = preprocessColumnContent(colElement.innerHTML);
+
+      // Convert inner content to markdown
+      const columnMarkdown = turndownService.turndown(preprocessedHtml).trim();
+
+      result += `<div data-column${width ? ` style="width: ${width}"` : ''}>\n\n${columnMarkdown}\n\n</div>\n`;
+    });
+
+    result += '</div>\n';
+    return result;
+  },
 });
 
 // Image rule - handles both NodeView wrappers and plain img elements from renderHTML
@@ -311,19 +536,102 @@ turndownService.addRule('inlineMath', {
   },
 });
 
+// Component embed rule - converts back to @[type:id] syntax
+turndownService.addRule('componentEmbed', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    // Direct match
+    if (element.getAttribute('data-type') === 'component-embed') return true;
+    // NodeView wrapper match
+    if (element.classList?.contains('component-embed-wrapper')) return true;
+    // Check for data-node-view-wrapper with componentEmbed type
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const inner = element.querySelector('[data-type="component-embed"]');
+      if (inner) return true;
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    let componentType = '';
+    let componentId = '';
+
+    // Direct attributes
+    componentType = element.getAttribute('data-component-type') || '';
+    componentId = element.getAttribute('data-component-id') || '';
+
+    // Look in nested element if not found
+    if (!componentType || !componentId) {
+      const inner = element.querySelector('[data-type="component-embed"]');
+      if (inner) {
+        componentType = inner.getAttribute('data-component-type') || '';
+        componentId = inner.getAttribute('data-component-id') || '';
+      }
+    }
+
+    // Always save component embed if type is valid, even with empty ID
+    if (componentType) {
+      return `@[${componentType}:${componentId || ''}]`;
+    }
+
+    return '';
+  },
+});
+
+// Helper to process markdown inside column divs
+function processColumnLayouts(html: string): string {
+  // Use DOM parser to properly handle nested elements
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
+  const container = doc.body.firstChild as HTMLElement;
+
+  // Find all column layout divs
+  const columnLayouts = container.querySelectorAll('[data-column-layout]');
+
+  columnLayouts.forEach((layout) => {
+    // Find all column divs inside this layout
+    const columns = layout.querySelectorAll('[data-column]');
+
+    columns.forEach((column) => {
+      const content = column.textContent?.trim() || '';
+      if (content) {
+        // Convert markdown content inside the column to HTML
+        let columnHtml = showdownConverter.makeHtml(content);
+        // Handle highlight syntax
+        columnHtml = columnHtml.replace(/==([^=]+)==/g, '<mark>$1</mark>');
+        column.innerHTML = columnHtml;
+      } else {
+        column.innerHTML = '<p></p>';
+      }
+    });
+  });
+
+  return container.innerHTML;
+}
+
 export function markdownToHtml(markdown: string): string {
   if (!markdown || markdown.trim() === '') {
     return '';
   }
 
-  // First, protect math content from showdown processing
-  const mathDataStr = escapeMathForHtml(markdown);
+  // First, protect component embeds from showdown processing
+  const componentDataStr = escapeComponentEmbedsForHtml(markdown);
+  const { result: markdownWithoutComponents, componentEmbeds } = JSON.parse(componentDataStr);
+
+  // Then, protect math content from showdown processing
+  const mathDataStr = escapeMathForHtml(markdownWithoutComponents);
   const { result: escapedMarkdown, mathBlocks, mathInlines } = JSON.parse(mathDataStr);
 
   let html = showdownConverter.makeHtml(escapedMarkdown);
 
+  // Process markdown inside column layouts (showdown doesn't process content inside HTML tags)
+  html = processColumnLayouts(html);
+
   // Restore math content
   html = restoreMathFromHtml(html, { mathBlocks, mathInlines });
+
+  // Restore component embeds
+  html = restoreComponentEmbedsFromHtml(html, componentEmbeds);
 
   html = html.replace(
     /<li>\s*\[([ xX])\]\s*/g,
@@ -343,5 +651,41 @@ export function htmlToMarkdown(html: string): string {
     return '';
   }
 
-  return turndownService.turndown(html);
+  // Pre-process: Replace component embeds with placeholders before Turndown
+  // This ensures they survive Turndown processing
+  // Using placeholder without underscores to avoid Turndown escaping them
+  const componentEmbeds: { type: string; id: string }[] = [];
+
+  // Match both formats: with data- prefix and without (Tiptap generates both)
+  let processedHtml = html.replace(
+    /<span[^>]*data-type="component-embed"[^>]*data-component-type="([^"]*)"[^>]*data-component-id="([^"]*)"[^>]*>[\s\S]*?<\/span>/gi,
+    (_, type, id) => {
+      componentEmbeds.push({ type, id });
+      return `##COMPEMBED${componentEmbeds.length - 1}##`;
+    }
+  );
+
+  // Also match if attributes are in different order
+  processedHtml = processedHtml.replace(
+    /<span[^>]*data-component-type="([^"]*)"[^>]*data-component-id="([^"]*)"[^>]*data-type="component-embed"[^>]*>[\s\S]*?<\/span>/gi,
+    (_, type, id) => {
+      componentEmbeds.push({ type, id });
+      return `##COMPEMBED${componentEmbeds.length - 1}##`;
+    }
+  );
+
+  // Pre-process math blocks - turndown has issues with empty divs
+  // Convert math blocks to markdown syntax before turndown processes them
+  processedHtml = preprocessColumnContent(processedHtml);
+
+  let markdown = turndownService.turndown(processedHtml);
+
+  // Post-process: Restore component embeds as @[type:id] syntax
+  componentEmbeds.forEach((embed, index) => {
+    const placeholder = `##COMPEMBED${index}##`;
+    const replacement = embed.type ? `@[${embed.type}:${embed.id || ''}]` : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  return markdown;
 }
