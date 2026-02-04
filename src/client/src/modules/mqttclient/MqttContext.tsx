@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { MqttClient, mqttClient } from './MqttClient';
+import { mqttClient } from './MqttClient';
 import { FileData, BinaryFileData, DirectoryTree } from './types';
 
 interface MqttContextValue {

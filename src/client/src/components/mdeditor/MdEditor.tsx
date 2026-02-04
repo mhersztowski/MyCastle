@@ -13,7 +13,7 @@ import { Table, TableRow } from '@tiptap/extension-table';
 import { CustomTableCell } from './extensions/CustomTableCell';
 import { CustomTableHeader } from './extensions/CustomTableHeader';
 import { common, createLowlight } from 'lowlight';
-import { Box, IconButton, Paper, Divider, Popper, TextField, Button, Tooltip, Fab, Collapse, useMediaQuery, useTheme } from '@mui/material';
+import { Box, IconButton, Paper, Divider, Popper, TextField, Tooltip, Fab, Collapse, useMediaQuery, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import EditIcon from '@mui/icons-material/Edit';
@@ -33,6 +33,7 @@ import { AudioEmbed } from './extensions/AudioExtension';
 import { VideoEmbed } from './extensions/VideoExtension';
 import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
 import { ColumnLayout, Column } from './extensions/ColumnExtension';
+import { UIFormEmbed } from './extensions/UIFormExtension';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
 import 'katex/dist/katex.min.css';
 import './MdEditor.css';
@@ -133,6 +134,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       VideoEmbed,
       ColumnLayout,
       Column,
+      UIFormEmbed,
     ],
     content: '',
     editable,

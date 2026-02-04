@@ -102,7 +102,7 @@ export const ColumnLayout = Node.create({
         svg.setAttribute('height', '14');
 
         let x = 0;
-        widths.forEach((w, i) => {
+        widths.forEach((w) => {
           const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
           const width = (w / 100) * 24;
           rect.setAttribute('x', String(x));

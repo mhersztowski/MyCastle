@@ -47,6 +47,46 @@ function escapeComponentEmbedsForHtml(content: string): string {
   return JSON.stringify({ result, componentEmbeds });
 }
 
+// Helper to escape UI form embeds to protect them from showdown
+function escapeUIFormsForHtml(content: string): string {
+  const uiForms: { id: string; inline?: string }[] = [];
+
+  // Match @[uiform:form-id] syntax (simple reference)
+  let result = content.replace(/@\[uiform:([^\]\{][^\]]*)\]/g, (_, id) => {
+    uiForms.push({ id: id.trim() });
+    return `%%UIFORM_${uiForms.length - 1}%%`;
+  });
+
+  // Match @[uiform:{...}] inline JSON syntax
+  result = result.replace(/@\[uiform:(\{[\s\S]*?\})\]/g, (_, json) => {
+    uiForms.push({ id: '', inline: json });
+    return `%%UIFORM_${uiForms.length - 1}%%`;
+  });
+
+  return JSON.stringify({ result, uiForms });
+}
+
+// Helper to restore UI forms after showdown conversion
+function restoreUIFormsFromHtml(html: string, uiForms: { id: string; inline?: string }[]): string {
+  let result = html;
+
+  uiForms.forEach((form, index) => {
+    const attrs = form.inline
+      ? `data-type="ui-form-embed" data-inline="${encodeURIComponent(form.inline)}"`
+      : `data-type="ui-form-embed" data-form-id="${form.id}"`;
+
+    const htmlTag = `<div ${attrs}></div>`;
+    const placeholder = `%%UIFORM_${index}%%`;
+
+    // Handle placeholder wrapped in paragraph
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    // Handle standalone placeholder
+    result = result.split(placeholder).join(htmlTag);
+  });
+
+  return result;
+}
+
 // Helper to restore component embeds after showdown conversion
 function restoreComponentEmbedsFromHtml(html: string, componentEmbeds: { type: string; id: string }[]): string {
   let result = html;
@@ -395,7 +435,7 @@ turndownService.addRule('tables', {
     // If table has custom styles, output as HTML to preserve them
     if (hasCustomStyles) {
       let html = '\n<table>\n';
-      rows.forEach((row, rowIndex) => {
+      rows.forEach((row) => {
         html += '  <tr>\n';
         const cells = Array.from(row.querySelectorAll('th, td'));
         cells.forEach(cell => {
@@ -578,6 +618,57 @@ turndownService.addRule('componentEmbed', {
   },
 });
 
+// UI Form embed rule - converts back to @[uiform:id] or @[uiform:{...}] syntax
+turndownService.addRule('uiFormEmbed', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    // Direct match
+    if (element.getAttribute('data-type') === 'ui-form-embed') return true;
+    // NodeView wrapper match
+    if (element.classList?.contains('ui-form-wrapper')) return true;
+    // Check for data-node-view-wrapper with uiFormEmbed type
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const inner = element.querySelector('[data-type="ui-form-embed"]');
+      if (inner) return true;
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    let formId = '';
+    let inlineData = '';
+
+    // Direct attributes
+    formId = element.getAttribute('data-form-id') || '';
+    const encodedInline = element.getAttribute('data-inline');
+    if (encodedInline) {
+      inlineData = decodeURIComponent(encodedInline);
+    }
+
+    // Look in nested element if not found
+    if (!formId && !inlineData) {
+      const inner = element.querySelector('[data-type="ui-form-embed"]');
+      if (inner) {
+        formId = inner.getAttribute('data-form-id') || '';
+        const innerEncodedInline = inner.getAttribute('data-inline');
+        if (innerEncodedInline) {
+          inlineData = decodeURIComponent(innerEncodedInline);
+        }
+      }
+    }
+
+    // Return appropriate markdown format
+    if (inlineData) {
+      return `\n@[uiform:${inlineData}]\n`;
+    }
+    if (formId) {
+      return `\n@[uiform:${formId}]\n`;
+    }
+
+    return '';
+  },
+});
+
 // Helper to process markdown inside column divs
 function processColumnLayouts(html: string): string {
   // Use DOM parser to properly handle nested elements
@@ -614,8 +705,12 @@ export function markdownToHtml(markdown: string): string {
     return '';
   }
 
-  // First, protect component embeds from showdown processing
-  const componentDataStr = escapeComponentEmbedsForHtml(markdown);
+  // First, protect UI form embeds from showdown processing
+  const uiFormDataStr = escapeUIFormsForHtml(markdown);
+  const { result: markdownWithoutUIForms, uiForms } = JSON.parse(uiFormDataStr);
+
+  // Then, protect component embeds from showdown processing
+  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutUIForms);
   const { result: markdownWithoutComponents, componentEmbeds } = JSON.parse(componentDataStr);
 
   // Then, protect math content from showdown processing
@@ -632,6 +727,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore component embeds
   html = restoreComponentEmbedsFromHtml(html, componentEmbeds);
+
+  // Restore UI form embeds
+  html = restoreUIFormsFromHtml(html, uiForms);
 
   html = html.replace(
     /<li>\s*\[([ xX])\]\s*/g,
@@ -651,13 +749,33 @@ export function htmlToMarkdown(html: string): string {
     return '';
   }
 
+  // Pre-process: Replace UI form embeds with placeholders before Turndown
+  const uiForms: { id: string; inline?: string }[] = [];
+
+  let processedHtml = html.replace(
+    /<div[^>]*data-type="ui-form-embed"[^>]*data-form-id="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
+    (_, formId) => {
+      uiForms.push({ id: formId });
+      return `##UIFORMEMBED${uiForms.length - 1}##`;
+    }
+  );
+
+  // Match inline form data
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="ui-form-embed"[^>]*data-inline="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
+    (_, encodedInline) => {
+      uiForms.push({ id: '', inline: decodeURIComponent(encodedInline) });
+      return `##UIFORMEMBED${uiForms.length - 1}##`;
+    }
+  );
+
   // Pre-process: Replace component embeds with placeholders before Turndown
   // This ensures they survive Turndown processing
   // Using placeholder without underscores to avoid Turndown escaping them
   const componentEmbeds: { type: string; id: string }[] = [];
 
   // Match both formats: with data- prefix and without (Tiptap generates both)
-  let processedHtml = html.replace(
+  processedHtml = processedHtml.replace(
     /<span[^>]*data-type="component-embed"[^>]*data-component-type="([^"]*)"[^>]*data-component-id="([^"]*)"[^>]*>[\s\S]*?<\/span>/gi,
     (_, type, id) => {
       componentEmbeds.push({ type, id });
@@ -679,6 +797,17 @@ export function htmlToMarkdown(html: string): string {
   processedHtml = preprocessColumnContent(processedHtml);
 
   let markdown = turndownService.turndown(processedHtml);
+
+  // Post-process: Restore UI form embeds as @[uiform:...] syntax
+  uiForms.forEach((form, index) => {
+    const placeholder = `##UIFORMEMBED${index}##`;
+    const replacement = form.inline
+      ? `@[uiform:${form.inline}]`
+      : form.id
+        ? `@[uiform:${form.id}]`
+        : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
 
   // Post-process: Restore component embeds as @[type:id] syntax
   componentEmbeds.forEach((embed, index) => {

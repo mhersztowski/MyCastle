@@ -288,7 +288,7 @@ export class FilesystemService {
     }
   }
 
-  private buildDirData(tree: DirectoryTree, parent?: DirData): DirData {
+  private buildDirData(tree: DirectoryTree, _parent?: DirData): DirData {
     // Normalize paths to use forward slashes (Windows paths use backslashes)
     const normalizedPath = tree.path.replace(/\\/g, '/');
     const dirData = new DirData(tree.name, normalizedPath);

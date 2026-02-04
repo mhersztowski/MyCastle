@@ -1,11 +1,11 @@
-import type { editor } from 'monaco-editor';
+import type { editor, Selection } from 'monaco-editor';
 import * as MuiIcons from '@mui/icons-material';
 
 type IconName = keyof typeof MuiIcons;
 
 export type EditorActionExecutor = (
   editor: editor.IStandaloneCodeEditor,
-  selection: editor.Selection | null
+  selection: Selection | null
 ) => void;
 
 export interface EditorActionConfig {
@@ -68,7 +68,6 @@ export const createLinePrefixAction = (prefix: string): EditorActionExecutor => 
     const edits: editor.IIdentifiedSingleEditOperation[] = [];
 
     for (let line = startLine; line <= endLine; line++) {
-      const lineContent = model.getLineContent(line);
       edits.push({
         range: {
           startLineNumber: line,

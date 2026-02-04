@@ -1,4 +1,3 @@
-import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import FileSavePage from './pages/filesystem/FileSavePage';
@@ -10,6 +9,8 @@ import ComponentsPage from './pages/components/ComponentsPage';
 import SimpleEditorPage from './pages/editor/SimpleEditorPage';
 import MdEditorPage from './pages/editor/MdEditorPage';
 import MdViewerPage from './pages/viewer/MdViewerPage';
+import UIDesignerPage from './pages/designer/UIDesignerPage';
+import UIViewerPage from './pages/viewer/UIViewerPage';
 import { MqttProvider } from './modules/mqttclient/MqttContext';
 import { FilesystemProvider } from './modules/filesystem/FilesystemContext';
 
@@ -21,6 +22,8 @@ function App() {
         <Route path="/editor/simple/*" element={<SimpleEditorPage />} />
         <Route path="/editor/md/*" element={<MdEditorPage />} />
         <Route path="/viewer/md/*" element={<MdViewerPage />} />
+        <Route path="/designer/ui/:id?" element={<UIDesignerPage />} />
+        <Route path="/viewer/ui/:id" element={<UIViewerPage />} />
         <Route
           path="*"
           element={

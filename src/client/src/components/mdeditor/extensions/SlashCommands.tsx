@@ -33,6 +33,7 @@ import FunctionsIcon from '@mui/icons-material/Functions';
 import PersonIcon from '@mui/icons-material/Person';
 import TaskIcon from '@mui/icons-material/Task';
 import FolderIcon from '@mui/icons-material/Folder';
+import DashboardIcon from '@mui/icons-material/Dashboard';
 
 interface CommandItem {
   title: string;
@@ -282,6 +283,19 @@ const commands: CommandItem[] = [
         .focus()
         .deleteRange(range)
         .insertComponentEmbed('project', '')
+        .run();
+    },
+  },
+  {
+    title: 'UI Form',
+    description: 'Embed a UI form',
+    icon: <DashboardIcon color="info" />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertUIForm('')
         .run();
     },
   },
