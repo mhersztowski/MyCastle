@@ -13,11 +13,16 @@ Aplikacja backend:
         - wczytujący i zapisujący stan danych do plików
         - Dla szybszych operacji odczytu pliki przechowywane są w pamięci
         - Działający w katalogu o root dir w env rootDir
+        - Extends EventEmitter — emituje zdarzenia `fileChanged` przy zapisie/usunięciu pliku
+        - Atomic writes: zapis przez plik tymczasowy (.tmp) + rename
+        - Per-file write locking: zapobiega równoczesnym zapisom do tego samego pliku
     - mqttserver
         - Server mqtt wysyłający/odbierajacy json
         - Definiujący klasę Client bo serwer może mieć wiele clientów
         - Zawierający klasę Packet która definiuje typy pakietów,
         - Zawierający klasy pakietów dla każdego z typów, serializuje/deserializuje pakiety, waliduje pakiety, wysyła oraz odbiera pakiety
+        - Obsługuje AUTOMATE_RUN — uruchamianie flow na backendzie
+        - Broadcastuje FILE_CHANGED — powiadomienia o zmianach plików do wszystkich klientów
     - httpserver
         - HttpUploadServer - serwer HTTP (port 3001) z CORS
         - Endpointy: POST /upload (pliki binarne), GET /files/ (serwowanie plików z data/public/)
@@ -28,13 +33,50 @@ Aplikacja backend:
         - Inicjalizacja non-blocking — jeśli Tesseract nie może się zainicjalizować, reszta backendu działa
         - Język: polski (pol.traineddata, ~15MB, pobierany automatycznie przy pierwszym użyciu)
         - PolishReceiptParser - regex parser tekstu OCR z polskich paragonów (produkty, ceny, rabaty, suma, data, sklep)
+    - datasource
+        - DataSource - scentralizowany, in-memory store danych domenowych (EventEmitter)
+        - Ładuje i utrzymuje w pamięci: persons, tasks, projects, shoppingLists, calendar events
+        - Auto-reload przy zmianach plików (nasłuchuje FileSystem events)
+        - models/ - interfejsy modeli backendowych (PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, DirModel, FileModel)
+        - nodes/ - klasy Node z logiką domenową (PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, NodeBase)
+        - Metody wyszukiwania: getPersonById, getTasksByProjectId, findProjects, getEventsByDate, itp.
+    - automate
+        - AutomateService - ładowanie flow z data/automations.json, walidacja runtime, wykonywanie flow
+        - engine/BackendAutomateEngine - silnik wykonawczy flow (graph traversal, switch na nodeType)
+        - engine/BackendSystemApi - implementacja System API dla backendu (FileSystem + DataSource bezpośrednio)
+          - api.file (read/write/list), api.data (persons/tasks/projects/shoppingLists), api.variables, api.log, api.notify, api.utils, api.shopping
+          - api.ai — niezaimplementowane w tej iteracji (isConfigured() → false)
+          - api.speech — niedostępne na backendzie (isTtsConfigured() → false)
+        - engine/AutomateSandbox - wykonywanie skryptów JS przez new Function() z timeoutem
+        - models/ - backendowe kopie modeli (AutomateFlowModel, AutomateNodeModel, AutomateEdgeModel, AutomatePortModel)
+        - Walidacja: flow z runtime 'backend'/'universal' nie może zawierać nodów client-only (notification, tts, stt)
+        - Skrypty mają dostęp do aliasów: `inp` (= input), `vars` (= variables) dla wygodniejszego pisania na mobile
 
-Aplikacja frontend 
+Aplikacja desktop (Python):
+- Agent MQTT (paho-mqtt, WebSocket transport) nasłuchujący na `mycastle/desktop/request`
+- Wykonuje operacje systemowe na komputerze Windows i zwraca wyniki przez MQTT
+- operations/ - rejestr operacji z dekoratorem @operation:
+    - system.py - system_info (hostname, OS, CPU, RAM, disk via psutil), notification (winotify/PowerShell)
+    - process.py - list_processes, kill_process
+    - window.py - zarządzanie oknami (pygetwindow)
+    - clipboard.py - operacje na schowku (pyperclip)
+    - shell.py - wykonywanie komend shell z timeoutem
+    - app.py - uruchamianie aplikacji
+    - media.py - kontrola multimediów (pycaw, comtypes)
+- config.py - konfiguracja MQTT (localhost:1893), topiki, timeouty
+- Publikuje status (online/offline) z listą dostępnych operacji
+- Dokumentacja: docs/desktop.md
+
+Aplikacja frontend
 - aplikacja react w ts
 - aplikacja mająca wygląd podobny do tej w aplikacjach google (min google cloud)
 - wykożystująca Material UI i ikony material
 - definiująca następujące moduły
     - mqttclient - połaczenie mqtt z aplikacja backend
+        - Obsługa pakietów AUTOMATE_RUN (uruchom flow na backendzie, timeout 120s) i FILE_CHANGED (powiadomienia o zmianach plików)
+        - runAutomateFlow(flowId, variables) — wysyła request do backendu
+        - onFileChanged/offFileChanged — subscriber pattern dla zmian plików
+        - MqttContext — udostępnia lastFileChange w React context
     - filesystem - moduł odpowiedzialny za obsługę funkcjonalności filesystem
         - data/ - klasy danych runtime (DirData, FileData)
         - models/ - interfejsy modeli danych JSON (DirModel, FileModel, ProjectModel, TaskModel)
@@ -43,7 +85,10 @@ Aplikacja frontend
           - implementują często używaną funkcjonalność
         - components/ - klasy danych plików json te bardziej zagnieżdżone (FileComponent, DirComponent, FileJsonComponent)
         - FilesystemService - serwis do operacji I/O
+          - Smart data reload: reloadDataFile(path, action) — granularny reload po FILE_CHANGED (persons, tasks, projects, shoppingLists, calendar)
         - FilesystemContext - React Context do zarządzania stanem
+          - dataVersion counter — inkrementowany przy każdym reloadzie, umożliwia downstream komponentom reagowanie na zmiany danych
+          - Nasłuchuje lastFileChange z MqttContext i automatycznie odświeża dane
     - uiforms - moduł systemu UI inspirowany Godotem
         - models/ - interfejsy modeli danych
           - UIControlModel - bazowy model kontrolki z anchors, offsets, presets, sizeFlags
@@ -78,11 +123,16 @@ Aplikacja frontend
         - services/
           - UIFormService - CRUD dla formularzy (load/save z data/ui_forms.json)
     - Automate - graficzny język programowania wzorowany na NodeRed
-      - Wykonywanie skryptów JavaScript
-      - Aktualnie działa na froncie ale w przyszłości na backendzie też
-      - Udostępniający wykonywanym skryptom proste api do systemu aktualne dokumentacja interfejsu powinna być w pliku docs/automate.md
+      - Wykonywanie skryptów JavaScript na kliencie lub backendzie
+      - Udostępniający wykonywanym skryptom proste api do systemu, dokumentacja interfejsu w docs/automate.md
       - Posiadający graficzny interfejs użytkownika - graficzne łączenie nodów, okna właściwości nodów
+      - Responsywny designer mobilny (bottom drawers, FAB, touch-friendly handles, tap-to-add)
       - Zapisujący flow do pliku w filesystem
+      - Runtime classification: nody klasyfikowane jako client/backend/universal
+      - Flow z runtime 'backend' lub 'universal' wykonywane na serwerze przez MQTT (AUTOMATE_RUN)
+      - Flow z runtime 'client' lub bez runtime wykonywane lokalnie w przeglądarce
+      - Skróty w skryptach: `inp` (= input), `vars` (= variables) — aliasy dla wygody mobilnej
+      - automateActions (conversation) — list_flows zwraca runtime, run_flow routuje backend/universal do MQTT
     - ai - moduł integracji z modelami AI
       - models/ - interfejsy (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
       - providers/ - abstrakcja providerów AI z tool calling
@@ -199,11 +249,25 @@ Aplikacja frontend
 
 ## Directory Structure
 - `src/backend/`: Backend source code (TypeScript)
-  - `modules/filesystem/`: File system module with in-memory cache
+  - `modules/filesystem/`: File system module with in-memory cache, EventEmitter, atomic writes, per-file locking
   - `modules/mqttserver/`: MQTT server with Client and Packet classes
+    - `packets/`: PacketType enum, AutomateRunPacket, FileChangedPacket, i inne
   - `modules/httpserver/`: HTTP server (upload, file serving, OCR endpoints)
   - `modules/ocr/`: OCR module (Tesseract.js + Sharp + PolishReceiptParser)
+  - `modules/datasource/`: Unified backend data layer (in-memory, auto-sync)
+    - `DataSource.ts`: EventEmitter, persons/tasks/projects/shoppingLists/calendar
+    - `models/`: PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, DirModel, FileModel
+    - `nodes/`: PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, NodeBase
+  - `modules/automate/`: Backend automate engine
+    - `AutomateService.ts`: load flows, validate runtime, execute
+    - `engine/`: BackendAutomateEngine, BackendSystemApi, AutomateSandbox
+    - `models/`: AutomateFlowModel, AutomateNodeModel, AutomateEdgeModel, AutomatePortModel
   - `types/`: TypeScript type definitions
+- `src/desktop/`: Desktop Agent (Python, MQTT client for Windows system automation)
+  - `agent.py`: DesktopAgent - MQTT client, operation dispatcher
+  - `config.py`: MQTT config, topics, timeouts
+  - `operations/`: system, process, window, clipboard, shell, app, media
+  - `requirements.txt`: paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 - `src/client/`: Frontend React application (TypeScript)
   - `src/modules/mqttclient/`: MQTT client module
   - `src/modules/filesystem/`: Filesystem module
@@ -220,12 +284,13 @@ Aplikacja frontend
     - `binding/`: UIFormContext, useUIBinding, UICallbackRegistry
     - `services/`: UIFormService
   - `src/modules/automate/`: Automate module (NodeRed-like visual programming)
-    - `models/`: AutomateFlowModel, AutomateNodeModel, AutomateEdgeModel, AutomatePortModel
-    - `nodes/`: AutomateFlowNode extends NodeBase
-    - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions)
-    - `engine/`: AutomateEngine, AutomateSandbox, AutomateSystemApi
-    - `designer/`: AutomateDesigner, AutomateDesignerContext, Toolbox, Properties, Toolbar
-      - `components/`: AutomateBaseNode (custom ReactFlow node)
+    - `models/`: AutomateFlowModel (+ runtime field), AutomateNodeModel (+ AutomateNodeRuntime), AutomateEdgeModel, AutomatePortModel
+    - `nodes/`: AutomateFlowNode extends NodeBase (+ runtime property)
+    - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions + runtime per node type)
+    - `engine/`: AutomateEngine, AutomateSandbox (+ inp/vars aliases), AutomateSystemApi
+    - `designer/`: AutomateDesigner (responsive desktop + mobile), AutomateDesignerContext (+ backend routing), Toolbox, Properties, Toolbar
+      - `components/`: AutomateBaseNode (custom ReactFlow node, mobile-responsive sizing + touch targets)
+      - `mobile/`: AutomateMobileToolbar, AutomateMobileToolbox, AutomateMobileProperties, AutomateMobileLog
     - `services/`: AutomateService (CRUD, data/automations.json)
   - `src/modules/ai/`: AI module (universal provider abstraction + tool calling)
     - `models/`: AiModels (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
@@ -259,8 +324,12 @@ Aplikacja frontend
     - `task/` - components of TaskModel
   - `src/components/mdeditor/extensions/`: Markdown editor extensions
     - `UIFormExtension.tsx` - embedding UI forms in markdown
+    - `AutomateFlowExtension.tsx` - osadzanie flow automatyzacji w markdown (@[automate:flow-id]), uruchamianie z dokumentu (backend/universal via MQTT)
 - `tests/`: Automated tests
 - `docs/`: Project documentation
+  - `automate.md`: Dokumentacja System API automate (api.file, api.data, api.variables, api.log, api.ai, api.speech, api.shopping, runtime, przykłady)
+  - `desktop.md`: Dokumentacja Desktop Agent (operacje, konfiguracja, topiki MQTT)
+  - `conversation.md`: Dokumentacja akcji konwersacyjnych
 - `configs/`: Configuration files (YAML, JSON, .env, etc.)
 - `scripts/`: Utility / automation scripts
 - `assets/`: Images, fonts, or other static resources
@@ -274,9 +343,10 @@ Aplikacja frontend
   - `conversation_history.json`: Persisted conversation history (ConversationHistoryModel)
 
 ## Development Workflow & Commands
-- **Setup:** `npm install` (backend), `cd src/client && npm install` (frontend)
+- **Setup:** `npm install` (backend), `cd src/client && npm install` (frontend), `cd src/desktop && pip install -r requirements.txt` (desktop agent)
 - **Run backend:** `npm run dev` (API on 3001, MQTT on 1893)
 - **Run frontend:** `cd src/client && npm start`
+- **Run desktop agent:** `cd src/desktop && python agent.py`
 - **Test:** `npm test`
 - **Lint/Format:** `eslint .`
 - **Build:** `npm run build`
@@ -293,10 +363,11 @@ Aplikacja frontend
 Typescript with imports
 
 ## Environment & Dependencies
-- **Languages/versions:** Node 20, TypeScript
-- **Package manager:** npm
-- **Frontend Framework:** React with TypeScript, Material UI
-- **Backend Libraries:** Aedes (MQTT), dotenv
+- **Languages/versions:** Node 20, TypeScript, Python 3.14 (desktop agent)
+- **Package manager:** npm (JS), pip (Python)
+- **Frontend Framework:** React with TypeScript, Material UI, ReactFlow (Automate designer)
+- **Backend Libraries:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp
+- **Desktop Agent Libraries:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 - **External services:** MQTT broker
 
 ## Common Gotchas

@@ -9,7 +9,8 @@
       "Bash(npx vite:*)",
       "Bash(git status:*)",
       "Bash(npx react-scripts build:*)",
-      "Bash(timeout 15 npx react-scripts start:*)"
+      "Bash(timeout 15 npx react-scripts start:*)",
+      "Bash(wc:*)"
     ]
   }
 }

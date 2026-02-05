@@ -6,5 +6,7 @@ export { FileDeletePacket, FileDeletePayload } from './FileDeletePacket';
 export { FileListPacket, FileListPayload } from './FileListPacket';
 export { FileWriteBinaryPacket, FileWriteBinaryPayload } from './FileWriteBinaryPacket';
 export { FileReadBinaryPacket, FileReadBinaryPayload } from './FileReadBinaryPacket';
+export { FileChangedPacket, FileChangedPayload } from './FileChangedPacket';
+export { AutomateRunPacket, AutomateRunPayload } from './AutomateRunPacket';
 export { ResponsePacket, ResponsePayload } from './ResponsePacket';
 export { ErrorPacket, ErrorPayload } from './ErrorPacket';

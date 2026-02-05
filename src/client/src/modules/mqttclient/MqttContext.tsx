@@ -2,10 +2,17 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { mqttClient } from './MqttClient';
 import { FileData, BinaryFileData, DirectoryTree } from './types';
 
+export interface FileChangeEvent {
+  path: string;
+  action: string;
+  timestamp: number;
+}
+
 interface MqttContextValue {
   isConnected: boolean;
   isConnecting: boolean;
   error: string | null;
+  lastFileChange: FileChangeEvent | null;
   connect: () => Promise<void>;
   disconnect: () => void;
   readFile: (path: string) => Promise<FileData>;
@@ -35,6 +42,7 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastFileChange, setLastFileChange] = useState<FileChangeEvent | null>(null);
 
   const connect = useCallback(async () => {
     if (isConnected || isConnecting) return;
@@ -111,8 +119,14 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
   }, [isConnected]);
 
   useEffect(() => {
+    const handleFileChanged = (path: string, action: string) => {
+      setLastFileChange({ path, action, timestamp: Date.now() });
+    };
+    mqttClient.onFileChanged(handleFileChanged);
+
     connect();
     return () => {
+      mqttClient.offFileChanged(handleFileChanged);
       disconnect();
     };
   }, []);
@@ -121,6 +135,7 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
     isConnected,
     isConnecting,
     error,
+    lastFileChange,
     connect,
     disconnect,
     readFile,

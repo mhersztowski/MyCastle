@@ -18,6 +18,7 @@ interface FilesystemContextValue extends FilesystemState {
   syncDirinfo: (dirinfoPath: string, content: string) => boolean;
   calendar: Calendar;
   dataSource: DataSource;
+  dataVersion: number;
 }
 
 const FilesystemContext = createContext<FilesystemContextValue | null>(null);
@@ -35,7 +36,7 @@ interface FilesystemProviderProps {
 }
 
 export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children }) => {
-  const { isConnected } = useMqtt();
+  const { isConnected, lastFileChange } = useMqtt();
   const [rootDir, setRootDir] = useState<DirData | null>(null);
   const [currentPath, setCurrentPath] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<FileData | null>(null);
@@ -44,6 +45,7 @@ export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children
   const [error, setError] = useState<string | null>(null);
   const [calendar, setCalendar] = useState<Calendar>(new Calendar());
   const [dataSource, setDataSource] = useState<DataSource>(new DataSource());
+  const [dataVersion, setDataVersion] = useState(0);
   const loadingRef = useRef(false);
 
   const loadDirectory = useCallback(async (path: string = '') => {
@@ -141,6 +143,23 @@ export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children
     }
   }, [isConnected, isDataLoaded, loadAllData]);
 
+  // Smart reload when backend notifies about file changes
+  useEffect(() => {
+    if (!lastFileChange || !isDataLoaded) return;
+
+    const reload = async () => {
+      const reloaded = await filesystemService.reloadDataFile(
+        lastFileChange.path,
+        lastFileChange.action
+      );
+      if (reloaded) {
+        setDataVersion(v => v + 1);
+      }
+    };
+
+    reload();
+  }, [lastFileChange, isDataLoaded]);
+
   const value: FilesystemContextValue = {
     rootDir,
     currentPath,
@@ -150,6 +169,7 @@ export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children
     error,
     calendar,
     dataSource,
+    dataVersion,
     loadDirectory,
     loadAllData,
     readFile,

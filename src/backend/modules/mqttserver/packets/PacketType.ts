@@ -6,6 +6,8 @@ export enum PacketType {
   FILE_WRITE_BINARY = 'file_write_binary',
   FILE_READ_BINARY = 'file_read_binary',
   DIRINFO_SYNC = 'dirinfo_sync',
+  FILE_CHANGED = 'file_changed',
+  AUTOMATE_RUN = 'automate_run',
   RESPONSE = 'response',
   ERROR = 'error',
 }

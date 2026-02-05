@@ -2,6 +2,7 @@ import Aedes, { Client as AedesClient, PublishPacket } from 'aedes';
 import { createServer as createHttpServer, Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket, createWebSocketStream } from 'ws';
 import { FileSystem } from '../filesystem/FileSystem';
+import { AutomateService } from '../automate/AutomateService';
 import { Client } from './Client';
 import {
   Packet,
@@ -13,6 +14,8 @@ import {
   FileListPacket,
   FileWriteBinaryPacket,
   FileReadBinaryPacket,
+  FileChangedPacket,
+  AutomateRunPacket,
   ResponsePacket,
   ErrorPacket,
 } from './packets';
@@ -28,6 +31,7 @@ export class MqttServer {
   private wss: WebSocketServer;
   private port: number;
   private fileSystem: FileSystem;
+  private automateService: AutomateService | null = null;
   private clients: Map<string, Client>;
 
   constructor(port: number, fileSystem: FileSystem) {
@@ -149,6 +153,21 @@ export class MqttServer {
           break;
         }
 
+        case PacketType.AUTOMATE_RUN: {
+          if (!this.automateService) {
+            throw new Error('AutomateService not available');
+          }
+          const automatePacket = AutomateRunPacket.fromPayload(
+            data.payload as { flowId: string; variables?: Record<string, unknown> },
+            data.id
+          );
+          responseData = await this.automateService.executeFlow(
+            automatePacket.flowId,
+            automatePacket.variables
+          );
+          break;
+        }
+
         default:
           throw new Error(`Unknown packet type: ${data.type}`);
       }
@@ -200,6 +219,15 @@ export class MqttServer {
         });
       });
     });
+  }
+
+  setAutomateService(service: AutomateService): void {
+    this.automateService = service;
+  }
+
+  broadcastFileChanged(path: string, action: 'write' | 'delete'): void {
+    const packet = new FileChangedPacket(path, action);
+    this.publish(TOPICS.RESPONSE, packet.serialize());
   }
 
   getConnectedClients(): Client[] {

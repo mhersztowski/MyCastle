@@ -25,6 +25,7 @@ import {
   ListItemIcon,
   ListItemText,
 } from '@mui/material';
+import { useTheme, useMediaQuery } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AddIcon from '@mui/icons-material/Add';
@@ -40,6 +41,8 @@ import { v4 as uuidv4 } from 'uuid';
 const AutomateDesignerPage: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const { isConnected, isConnecting } = useMqtt();
   const { dataSource } = useFilesystem();
 
@@ -167,9 +170,17 @@ const AutomateDesignerPage: React.FC = () => {
           <IconButton edge="start" onClick={() => navigate('/automate')} sx={{ mr: 1 }}>
             <ArrowBackIcon />
           </IconButton>
-          <AccountTreeIcon sx={{ mr: 1, color: 'primary.main' }} />
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Automate Designer{flow ? ` - ${flow.name}` : ''}
+          {!isMobile && <AccountTreeIcon sx={{ mr: 1, color: 'primary.main' }} />}
+          <Typography
+            variant="h6"
+            component="div"
+            sx={{ flexGrow: 1, fontSize: isMobile ? '1rem' : undefined }}
+            noWrap
+          >
+            {isMobile
+              ? (flow?.name || 'Automate')
+              : `Automate Designer${flow ? ` - ${flow.name}` : ''}`
+            }
           </Typography>
           {saving && <CircularProgress size={20} sx={{ mr: 2 }} />}
         </Toolbar>

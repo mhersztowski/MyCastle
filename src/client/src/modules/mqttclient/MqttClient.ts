@@ -1,6 +1,6 @@
 import mqtt, { MqttClient as MqttClientType } from 'mqtt';
 import { v4 as uuidv4 } from 'uuid';
-import { PacketType, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload } from './types';
+import { PacketType, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload } from './types';
 
 const MQTT_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB - use HTTP for larger files
 
@@ -42,6 +42,7 @@ export class MqttClient {
   private client: MqttClientType | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private connectionPromise: Promise<void> | null = null;
+  private fileChangeCallbacks: Set<(path: string, action: string) => void> = new Set();
 
   async connect(brokerUrl: string = import.meta.env.VITE_MQTT_URL || 'ws://localhost:1893'): Promise<void> {
     if (this.connectionPromise) {
@@ -83,6 +84,7 @@ export class MqttClient {
     this.client = null;
     this.connectionPromise = null;
     this.pendingRequests.clear();
+    this.fileChangeCallbacks.clear();
   }
 
   get isConnected(): boolean {
@@ -107,6 +109,9 @@ export class MqttClient {
           pending.reject(new Error(payload.message));
           this.pendingRequests.delete(payload.requestId);
         }
+      } else if (data.type === PacketType.FILE_CHANGED) {
+        const payload = data.payload as FileChangedPayload;
+        this.fileChangeCallbacks.forEach(cb => cb(payload.path, payload.action));
       }
     } catch (error) {
       console.error('Error parsing response:', error);
@@ -117,7 +122,7 @@ export class MqttClient {
     return uuidv4();
   }
 
-  private sendRequest<T>(type: PacketType, payload: unknown): Promise<T> {
+  private sendRequest<T>(type: PacketType, payload: unknown, timeoutMs: number = 30000): Promise<T> {
     return new Promise((resolve, reject) => {
       if (!this.client?.connected) {
         reject(new Error('Not connected to MQTT broker'));
@@ -149,7 +154,7 @@ export class MqttClient {
           this.pendingRequests.delete(id);
           reject(new Error('Request timeout'));
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }
 
@@ -184,6 +189,18 @@ export class MqttClient {
 
   async syncDirinfo(path: string): Promise<unknown> {
     return this.sendRequest<unknown>(PacketType.DIRINFO_SYNC, { path });
+  }
+
+  async runAutomateFlow(flowId: string, variables?: Record<string, unknown>): Promise<unknown> {
+    return this.sendRequest<unknown>(PacketType.AUTOMATE_RUN, { flowId, variables }, 120000);
+  }
+
+  onFileChanged(callback: (path: string, action: string) => void): void {
+    this.fileChangeCallbacks.add(callback);
+  }
+
+  offFileChanged(callback: (path: string, action: string) => void): void {
+    this.fileChangeCallbacks.delete(callback);
   }
 
   async uploadFile(

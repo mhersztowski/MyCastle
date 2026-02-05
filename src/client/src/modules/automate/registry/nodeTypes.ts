@@ -3,7 +3,7 @@
  */
 
 import { SvgIconProps } from '@mui/material';
-import { AutomateNodeType } from '../models';
+import { AutomateNodeType, AutomateNodeRuntime } from '../models';
 import { AutomatePortModel } from '../models/AutomatePortModel';
 
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -38,6 +38,7 @@ export interface AutomateNodeTypeMetadata {
   defaultOutputs: AutomatePortModel[];
   defaultConfig: Record<string, unknown>;
   hasScript: boolean;
+  runtime: AutomateNodeRuntime;
 }
 
 export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetadata> = {
@@ -52,6 +53,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: {},
     hasScript: false,
+    runtime: 'universal',
   },
   manual_trigger: {
     nodeType: 'manual_trigger',
@@ -64,6 +66,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: {},
     hasScript: false,
+    runtime: 'universal',
   },
   js_execute: {
     nodeType: 'js_execute',
@@ -76,6 +79,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: {},
     hasScript: true,
+    runtime: 'universal',
   },
   system_api: {
     nodeType: 'system_api',
@@ -88,6 +92,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { apiMethod: '', parameters: {} },
     hasScript: false,
+    runtime: 'universal',
   },
   if_else: {
     nodeType: 'if_else',
@@ -103,6 +108,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     ],
     defaultConfig: { condition: '' },
     hasScript: false,
+    runtime: 'universal',
   },
   switch: {
     nodeType: 'switch',
@@ -118,6 +124,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     ],
     defaultConfig: { expression: '', cases: [''] },
     hasScript: false,
+    runtime: 'universal',
   },
   for_loop: {
     nodeType: 'for_loop',
@@ -133,6 +140,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     ],
     defaultConfig: { count: 10, indexVariable: 'i' },
     hasScript: false,
+    runtime: 'universal',
   },
   while_loop: {
     nodeType: 'while_loop',
@@ -148,6 +156,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     ],
     defaultConfig: { condition: '', maxIterations: 1000 },
     hasScript: false,
+    runtime: 'universal',
   },
   read_variable: {
     nodeType: 'read_variable',
@@ -163,6 +172,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     ],
     defaultConfig: { variableName: '' },
     hasScript: false,
+    runtime: 'universal',
   },
   write_variable: {
     nodeType: 'write_variable',
@@ -178,6 +188,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { variableName: '', value: '' },
     hasScript: false,
+    runtime: 'universal',
   },
   log: {
     nodeType: 'log',
@@ -190,6 +201,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { message: '', level: 'info' },
     hasScript: false,
+    runtime: 'universal',
   },
   notification: {
     nodeType: 'notification',
@@ -202,6 +214,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { message: '', severity: 'info' },
     hasScript: false,
+    runtime: 'client',
   },
   llm_call: {
     nodeType: 'llm_call',
@@ -214,6 +227,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { prompt: '', systemPrompt: '', model: '', temperature: 0.7, maxTokens: 2048, useScript: false },
     hasScript: true,
+    runtime: 'universal',
   },
   tts: {
     nodeType: 'tts',
@@ -226,6 +240,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { text: '', useScript: false, voice: '', speed: 1.0 },
     hasScript: true,
+    runtime: 'client',
   },
   stt: {
     nodeType: 'stt',
@@ -238,6 +253,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
     defaultConfig: { language: '' },
     hasScript: false,
+    runtime: 'client',
   },
   comment: {
     nodeType: 'comment',
@@ -250,6 +266,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultOutputs: [],
     defaultConfig: { text: '' },
     hasScript: false,
+    runtime: 'universal',
   },
 };
 

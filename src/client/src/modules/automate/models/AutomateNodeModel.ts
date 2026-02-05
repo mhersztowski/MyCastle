@@ -22,6 +22,8 @@ export type AutomateNodeType =
   | 'stt'
   | 'comment';
 
+export type AutomateNodeRuntime = 'client' | 'backend' | 'universal';
+
 export interface AutomateNodePosition {
   x: number;
   y: number;

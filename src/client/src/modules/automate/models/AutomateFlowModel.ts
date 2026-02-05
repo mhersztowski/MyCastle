@@ -18,6 +18,7 @@ export interface AutomateFlowModel {
   name: string;
   description?: string;
   version: string;
+  runtime?: 'client' | 'backend' | 'universal';
   nodes: AutomateNodeModel[];
   edges: AutomateEdgeModel[];
   variables?: AutomateVariableDefinition[];

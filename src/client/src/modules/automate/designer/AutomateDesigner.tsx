@@ -1,5 +1,6 @@
 /**
  * AutomateDesigner - główny komponent designera automatyzacji
+ * Responsywny: desktop (3-panel layout) / mobile (fullscreen canvas + bottom drawers)
  */
 
 import React, { useCallback, useRef, useMemo, useEffect, useState } from 'react';
@@ -16,14 +17,24 @@ import {
   EdgeChange,
   useReactFlow,
   ReactFlowProvider,
+  applyNodeChanges,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box, Typography, List, ListItem, ListItemText, Chip } from '@mui/material';
+import { Box, Typography, List, ListItem, ListItemText, Chip, Fab, Paper, IconButton, useMediaQuery, useTheme } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import CloseIcon from '@mui/icons-material/Close';
 import { v4 as uuidv4 } from 'uuid';
 import { AutomateBaseNode } from './components';
 import AutomateDesignerToolbox from './AutomateDesignerToolbox';
 import AutomateDesignerProperties from './AutomateDesignerProperties';
 import AutomateDesignerToolbar from './AutomateDesignerToolbar';
+import {
+  AutomateMobileToolbar,
+  AutomateMobileToolbox,
+  AutomateMobileProperties,
+  AutomateMobileLog,
+} from './mobile';
 import { useAutomateDesigner } from './AutomateDesignerContext';
 import { AutomateFlowModel, AutomateNodeType } from '../models';
 import { DataSource } from '../../filesystem/data/DataSource';
@@ -32,8 +43,15 @@ const nodeTypes = {
   automateNode: AutomateBaseNode,
 };
 
+type MobileDrawer = 'none' | 'toolbox' | 'properties' | 'log';
+
 // Konwertuj model nodów na ReactFlow nodes
-function flowToReactFlowNodes(flow: AutomateFlowModel | null, executingIds: Set<string>, errorIds: Set<string>): Node[] {
+function flowToReactFlowNodes(
+  flow: AutomateFlowModel | null,
+  executingIds: Set<string>,
+  errorIds: Set<string>,
+  isMobile: boolean,
+): Node[] {
   if (!flow) return [];
   return flow.nodes.map(node => ({
     id: node.id,
@@ -43,23 +61,35 @@ function flowToReactFlowNodes(flow: AutomateFlowModel | null, executingIds: Set<
       ...node,
       isExecuting: executingIds.has(node.id),
       hasError: errorIds.has(node.id),
+      isMobile,
     },
   }));
 }
 
 // Konwertuj model krawędzi na ReactFlow edges
-function flowToReactFlowEdges(flow: AutomateFlowModel | null): Edge[] {
+function flowToReactFlowEdges(flow: AutomateFlowModel | null, selectedEdgeId?: string | null, isMobile?: boolean): Edge[] {
   if (!flow) return [];
-  return flow.edges.map(edge => ({
-    id: edge.id,
-    source: edge.sourceNodeId,
-    sourceHandle: edge.sourcePortId,
-    target: edge.targetNodeId,
-    targetHandle: edge.targetPortId,
-    label: edge.label,
-    animated: false,
-    style: edge.disabled ? { stroke: '#bdbdbd', strokeDasharray: '5 5' } : undefined,
-  }));
+  return flow.edges.map(edge => {
+    const isSelected = edge.id === selectedEdgeId;
+    let style: React.CSSProperties | undefined;
+    if (edge.disabled) {
+      style = { stroke: '#bdbdbd', strokeDasharray: '5 5' };
+    } else if (isSelected) {
+      style = { stroke: '#1976d2', strokeWidth: 3 };
+    }
+    return {
+      id: edge.id,
+      source: edge.sourceNodeId,
+      sourceHandle: edge.sourcePortId,
+      target: edge.targetNodeId,
+      targetHandle: edge.targetPortId,
+      label: edge.label,
+      animated: false,
+      style,
+      // Wider touch target on mobile for easier edge selection
+      interactionWidth: isMobile ? 30 : undefined,
+    };
+  });
 }
 
 interface AutomateDesignerInnerProps {
@@ -69,9 +99,14 @@ interface AutomateDesignerInnerProps {
 }
 
 const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, saving, dataSource }) => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+
   const {
     flow,
     selectedNodeId,
+    selectedEdgeId,
+    isExecuting,
     executingNodeIds,
     errorNodeIds,
     executionLog,
@@ -90,14 +125,76 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
   const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow();
   const [showLog, setShowLog] = useState(false);
 
-  const rfNodes = useMemo(() => flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds), [flow, executingNodeIds, errorNodeIds]);
-  const rfEdges = useMemo(() => flowToReactFlowEdges(flow), [flow]);
+  // Mobile drawer state
+  const [activeDrawer, setActiveDrawer] = useState<MobileDrawer>('none');
+  const isDraggingRef = useRef(false);
+  const propsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialFitDoneRef = useRef(false);
 
-  // Obsługa zmian nodów (przesuwanie)
+  // Desktop: derive RF nodes from model (useMemo)
+  const rfNodesMemo = useMemo(
+    () => flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds, isMobile),
+    [flow, executingNodeIds, errorNodeIds, isMobile],
+  );
+  const rfEdges = useMemo(() => flowToReactFlowEdges(flow, isMobile ? selectedEdgeId : undefined, isMobile), [flow, isMobile, selectedEdgeId]);
+
+  // Mobile: separate RF nodes state - managed by applyNodeChanges, synced to model on drag end
+  const [mobileRfNodes, setMobileRfNodes] = useState<Node[]>([]);
+
+  // Sync model → mobile RF nodes (when model changes from non-drag source)
+  useEffect(() => {
+    if (isMobile && !isDraggingRef.current) {
+      setMobileRfNodes(flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds, true));
+    }
+  }, [isMobile, flow, executingNodeIds, errorNodeIds]);
+
+  // Use appropriate nodes for current mode
+  const rfNodes = isMobile ? mobileRfNodes : rfNodesMemo;
+
+  // Mobile: fitView only once on mount
+  useEffect(() => {
+    if (isMobile && !initialFitDoneRef.current && flow && flow.nodes.length > 0) {
+      initialFitDoneRef.current = true;
+      setTimeout(() => fitView(), 100);
+    }
+  }, [isMobile, flow, fitView]);
+
+  // Auto-open properties drawer on mobile when a node is selected (debounced)
+  useEffect(() => {
+    if (propsTimerRef.current) {
+      clearTimeout(propsTimerRef.current);
+      propsTimerRef.current = null;
+    }
+
+    if (isMobile && selectedNodeId) {
+      propsTimerRef.current = setTimeout(() => {
+        if (!isDraggingRef.current) {
+          setActiveDrawer('properties');
+        }
+        propsTimerRef.current = null;
+      }, 400);
+    }
+
+    return () => {
+      if (propsTimerRef.current) {
+        clearTimeout(propsTimerRef.current);
+        propsTimerRef.current = null;
+      }
+    };
+  }, [isMobile, selectedNodeId]);
+
+  // Auto-open log drawer on mobile when execution starts
+  useEffect(() => {
+    if (isMobile && isExecuting) {
+      setActiveDrawer('log');
+    }
+  }, [isMobile, isExecuting]);
+
+  // Obsługa zmian nodów - MOBILE: use applyNodeChanges for smooth drag
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     if (!flow) return;
 
-    // Obsłuż select
+    // Handle select
     for (const change of changes) {
       if (change.type === 'select') {
         if (change.selected) {
@@ -110,19 +207,52 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
       }
     }
 
-    // Obsłuż position
-    const positionChanges = changes.filter(c => c.type === 'position' && c.position);
-    if (positionChanges.length > 0) {
-      const updatedNodes = flow.nodes.map(node => {
-        const posChange = positionChanges.find(c => c.type === 'position' && c.id === node.id);
-        if (posChange && posChange.type === 'position' && posChange.position) {
-          return { ...node, position: posChange.position };
+    if (isMobile) {
+      // Mobile: let ReactFlow handle position via applyNodeChanges (smooth drag)
+      setMobileRfNodes(nds => applyNodeChanges(changes, nds));
+
+      // Track drag state
+      const hasDragStart = changes.some(c => c.type === 'position' && c.dragging === true);
+      const hasDragEnd = changes.some(c => c.type === 'position' && c.dragging === false);
+
+      if (hasDragStart) {
+        isDraggingRef.current = true;
+        if (propsTimerRef.current) {
+          clearTimeout(propsTimerRef.current);
+          propsTimerRef.current = null;
         }
-        return node;
-      });
-      updateNodes(updatedNodes);
+      }
+
+      if (hasDragEnd) {
+        isDraggingRef.current = false;
+        // Sync final positions back to model
+        setMobileRfNodes(currentNodes => {
+          const updatedModelNodes = flow.nodes.map(node => {
+            const rfNode = currentNodes.find(n => n.id === node.id);
+            if (rfNode && rfNode.position) {
+              return { ...node, position: rfNode.position };
+            }
+            return node;
+          });
+          updateNodes(updatedModelNodes);
+          return currentNodes;
+        });
+      }
+    } else {
+      // Desktop: update model directly (original behavior)
+      const positionChanges = changes.filter(c => c.type === 'position' && c.position);
+      if (positionChanges.length > 0) {
+        const updatedNodes = flow.nodes.map(node => {
+          const posChange = positionChanges.find(c => c.type === 'position' && c.id === node.id);
+          if (posChange && posChange.type === 'position' && posChange.position) {
+            return { ...node, position: posChange.position };
+          }
+          return node;
+        });
+        updateNodes(updatedNodes);
+      }
     }
-  }, [flow, selectNode, deleteNode, updateNodes]);
+  }, [flow, selectNode, deleteNode, updateNodes, isMobile]);
 
   // Obsługa zmian krawędzi
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -157,7 +287,7 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
     selectEdge(null);
   }, [selectNode, selectEdge]);
 
-  // Drop noda z toolboxu
+  // Drop noda z toolboxu (desktop only)
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -181,6 +311,18 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
     // Opcjonalny callback
   }, []);
 
+  // Mobile: tap-to-add node at viewport center
+  const handleMobileAddNode = useCallback((nodeType: AutomateNodeType) => {
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
+    const position = screenToFlowPosition({ x: centerX, y: centerY });
+    // Random offset to avoid stacking
+    position.x += (Math.random() - 0.5) * 50;
+    position.y += (Math.random() - 0.5) * 50;
+    const newNode = addNode(nodeType, position);
+    selectNode(newNode.id);
+  }, [screenToFlowPosition, addNode, selectNode]);
+
   // Save
   const handleSave = useCallback(() => {
     if (flow) {
@@ -190,12 +332,17 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
 
   // Run
   const handleRun = useCallback(() => {
-    setShowLog(true);
+    if (isMobile) {
+      setActiveDrawer('log');
+    } else {
+      setShowLog(true);
+    }
     executeFlow(dataSource);
-  }, [executeFlow, dataSource]);
+  }, [executeFlow, dataSource, isMobile]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts (desktop)
   useEffect(() => {
+    if (isMobile) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 's') {
@@ -209,8 +356,109 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave, selectedNodeId, deleteNode]);
+  }, [handleSave, selectedNodeId, deleteNode, isMobile]);
 
+  // === MOBILE LAYOUT ===
+  if (isMobile) {
+    return (
+      <>
+        <Box ref={reactFlowWrapper} sx={{ height: '100%' }}>
+          <ReactFlow
+            nodes={rfNodes}
+            edges={rfEdges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onPaneClick={onPaneClick}
+            nodeTypes={nodeTypes}
+            snapToGrid
+            snapGrid={[16, 16]}
+            minZoom={0.1}
+            maxZoom={2}
+          >
+            <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
+          </ReactFlow>
+        </Box>
+
+        {/* Floating toolbar - fixed position, independent of ReactFlow */}
+        <Box sx={{ position: 'fixed', top: 56, right: 8, zIndex: 1100 }}>
+          <AutomateMobileToolbar
+            onSave={handleSave}
+            onRun={handleRun}
+            onZoomIn={() => zoomIn()}
+            onZoomOut={() => zoomOut()}
+            onFitView={() => fitView()}
+            onToggleLog={() => setActiveDrawer(activeDrawer === 'log' ? 'none' : 'log')}
+            saving={saving}
+          />
+        </Box>
+
+        {/* Edge delete action bar - visible when edge is selected */}
+        {selectedEdgeId && (
+          <Paper
+            elevation={3}
+            sx={{
+              position: 'fixed',
+              bottom: 24,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 1100,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              px: 1.5,
+              py: 0.5,
+              borderRadius: 2,
+            }}
+          >
+            <Typography variant="body2" color="text.secondary" sx={{ mr: 0.5 }}>
+              Połączenie
+            </Typography>
+            <IconButton
+              size="small"
+              color="error"
+              onClick={() => { deleteEdge(selectedEdgeId); selectEdge(null); }}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+            <IconButton
+              size="small"
+              onClick={() => selectEdge(null)}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Paper>
+        )}
+
+        {/* FAB - add node - fixed position */}
+        <Fab
+          color="primary"
+          size="medium"
+          sx={{ position: 'fixed', bottom: 24, right: 16, zIndex: 1100 }}
+          onClick={() => setActiveDrawer('toolbox')}
+        >
+          <AddIcon />
+        </Fab>
+
+        {/* Bottom drawers (one at a time) */}
+        <AutomateMobileToolbox
+          open={activeDrawer === 'toolbox'}
+          onClose={() => setActiveDrawer('none')}
+          onAddNode={handleMobileAddNode}
+        />
+        <AutomateMobileProperties
+          open={activeDrawer === 'properties'}
+          onClose={() => setActiveDrawer('none')}
+        />
+        <AutomateMobileLog
+          open={activeDrawer === 'log'}
+          onClose={() => setActiveDrawer('none')}
+        />
+      </>
+    );
+  }
+
+  // === DESKTOP LAYOUT ===
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <AutomateDesignerToolbar

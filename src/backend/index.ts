@@ -1,8 +1,10 @@
 import dotenv from 'dotenv';
 import { MqttServer } from './modules/mqttserver/MqttServer';
-import { FileSystem } from './modules/filesystem/FileSystem';
+import { FileSystem, FileChangeEvent } from './modules/filesystem';
 import { HttpUploadServer } from './modules/httpserver/HttpUploadServer';
 import { OcrService } from './modules/ocr/OcrService';
+import { DataSource } from './modules/datasource';
+import { AutomateService } from './modules/automate';
 
 dotenv.config();
 
@@ -13,11 +15,32 @@ const rootDir = process.env.ROOT_DIR || './data';
 const fileSystem = new FileSystem(rootDir);
 const mqttServer = new MqttServer(mqttPort, fileSystem);
 const ocrService = new OcrService();
+const dataSource = new DataSource(fileSystem);
+const automateService = new AutomateService(fileSystem, dataSource);
 
 async function main() {
   try {
     await fileSystem.initialize();
     console.log(`FileSystem initialized with root: ${rootDir}`);
+
+    await dataSource.initialize();
+    console.log('DataSource initialized:', dataSource.getStats());
+
+    await automateService.initialize();
+    console.log(`AutomateService initialized: ${automateService.getAllFlows().length} flows`);
+
+    mqttServer.setAutomateService(automateService);
+
+    fileSystem.on('fileChanged', async (event: FileChangeEvent) => {
+      await dataSource.onFileChanged(event.path);
+      mqttServer.broadcastFileChanged(event.path, event.action);
+
+      // Reload automations when the file changes
+      if (event.path.replace(/\\/g, '/') === 'data/automations.json') {
+        await automateService.reload();
+        console.log(`AutomateService reloaded: ${automateService.getAllFlows().length} flows`);
+      }
+    });
 
     // OCR initialization is non-blocking — if Tesseract fails, the rest of the server still works
     try {

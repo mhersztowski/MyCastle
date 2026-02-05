@@ -1,5 +1,11 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { EventEmitter } from 'events';
+
+export interface FileChangeEvent {
+  path: string;
+  action: 'write' | 'delete';
+}
 
 export interface FileData {
   path: string;
@@ -50,15 +56,36 @@ export interface DirinfoData {
   components?: Array<{ type: string; id?: string }>;
 }
 
-export class FileSystem {
+export class FileSystem extends EventEmitter {
   private rootDir: string;
   private cache: Map<string, FileData>;
   private dirinfoCache: Map<string, DirinfoData>; // key is directory path
+  private locks: Map<string, Promise<void>>;
 
   constructor(rootDir: string) {
+    super();
     this.rootDir = path.resolve(rootDir);
     this.cache = new Map();
     this.dirinfoCache = new Map();
+    this.locks = new Map();
+  }
+
+  // Per-file write lock using promise chains (no external dependencies)
+  private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(key) || Promise.resolve();
+    let release: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    this.locks.set(key, current);
+
+    try {
+      await previous;
+      return await fn();
+    } finally {
+      release!();
+      if (this.locks.get(key) === current) {
+        this.locks.delete(key);
+      }
+    }
   }
 
   async initialize(): Promise<void> {
@@ -110,28 +137,38 @@ export class FileSystem {
     const absolutePath = this.getAbsolutePath(filePath);
     const relativePath = this.getRelativePath(absolutePath);
 
-    const dir = path.dirname(absolutePath);
-    await fs.mkdir(dir, { recursive: true });
+    return this.withLock(relativePath, async () => {
+      const dir = path.dirname(absolutePath);
+      await fs.mkdir(dir, { recursive: true });
 
-    await fs.writeFile(absolutePath, content, 'utf-8');
-    const stats = await fs.stat(absolutePath);
+      // Atomic write: write to temp file, then rename
+      const tmpPath = absolutePath + '.tmp';
+      await fs.writeFile(tmpPath, content, 'utf-8');
+      await fs.rename(tmpPath, absolutePath);
 
-    const fileData: FileData = {
-      path: relativePath,
-      content,
-      lastModified: stats.mtime,
-    };
+      const stats = await fs.stat(absolutePath);
 
-    this.cache.set(relativePath, fileData);
-    return fileData;
+      const fileData: FileData = {
+        path: relativePath,
+        content,
+        lastModified: stats.mtime,
+      };
+
+      this.cache.set(relativePath, fileData);
+      this.emit('fileChanged', { path: relativePath, action: 'write' } as FileChangeEvent);
+      return fileData;
+    });
   }
 
   async deleteFile(filePath: string): Promise<void> {
     const absolutePath = this.getAbsolutePath(filePath);
     const relativePath = this.getRelativePath(absolutePath);
 
-    await fs.unlink(absolutePath);
-    this.cache.delete(relativePath);
+    await this.withLock(relativePath, async () => {
+      await fs.unlink(absolutePath);
+      this.cache.delete(relativePath);
+      this.emit('fileChanged', { path: relativePath, action: 'delete' } as FileChangeEvent);
+    });
   }
 
   async listDirectory(dirPath: string = ''): Promise<DirectoryTree> {
@@ -189,20 +226,26 @@ export class FileSystem {
     const absolutePath = this.getAbsolutePath(filePath);
     const relativePath = this.getRelativePath(absolutePath);
 
-    const dir = path.dirname(absolutePath);
-    await fs.mkdir(dir, { recursive: true });
+    return this.withLock(relativePath, async () => {
+      const dir = path.dirname(absolutePath);
+      await fs.mkdir(dir, { recursive: true });
 
-    const buffer = Buffer.from(base64Data, 'base64');
-    await fs.writeFile(absolutePath, buffer);
-    const stats = await fs.stat(absolutePath);
+      // Atomic write: write to temp file, then rename
+      const buffer = Buffer.from(base64Data, 'base64');
+      const tmpPath = absolutePath + '.tmp';
+      await fs.writeFile(tmpPath, buffer);
+      await fs.rename(tmpPath, absolutePath);
 
-    return {
-      path: relativePath,
-      data: base64Data,
-      mimeType,
-      size: buffer.length,
-      lastModified: stats.mtime,
-    };
+      const stats = await fs.stat(absolutePath);
+
+      return {
+        path: relativePath,
+        data: base64Data,
+        mimeType,
+        size: buffer.length,
+        lastModified: stats.mtime,
+      };
+    });
   }
 
   async readBinaryFile(filePath: string): Promise<BinaryFileData> {

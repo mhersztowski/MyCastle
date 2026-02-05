@@ -1,1 +1,1 @@
-export { FileSystem, FileData, BinaryFileData, DirectoryTree } from './FileSystem';
+export { FileSystem, FileData, BinaryFileData, DirectoryTree, FileChangeEvent } from './FileSystem';

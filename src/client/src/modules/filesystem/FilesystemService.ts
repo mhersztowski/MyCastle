@@ -323,6 +323,97 @@ export class FilesystemService {
     return dirData;
   }
 
+  private static readonly DATA_FILE_MAP: Record<string, string> = {
+    'data/persons.json': 'persons',
+    'data/tasks.json': 'tasks',
+    'data/projects.json': 'projects',
+    'data/shopping_lists.json': 'shoppingLists',
+  };
+
+  async reloadDataFile(path: string, action: string): Promise<boolean> {
+    if (!this.rootDir) return false;
+
+    const dataType = FilesystemService.DATA_FILE_MAP[path];
+    const isCalendarFile = path.startsWith('data/calendar/') && path.endsWith('.json');
+
+    if (!dataType && !isCalendarFile) return false;
+
+    try {
+      if (action === 'delete') {
+        if (dataType) {
+          this.clearDataType(dataType);
+        } else if (isCalendarFile) {
+          this.reloadCalendarFromTree();
+        }
+        return true;
+      }
+
+      // Read the updated file from backend
+      const mqttFile = await mqttClient.readFile(path);
+      const encoder = new TextEncoder();
+
+      // Update in-memory FileData if it exists in the tree
+      const fileData = this.rootDir.getFileByPath(path);
+      if (fileData) {
+        fileData.setData(encoder.encode(mqttFile.content));
+      }
+
+      if (dataType) {
+        this.reloadDataType(dataType, mqttFile.content);
+      } else if (isCalendarFile) {
+        this.reloadCalendarFromTree();
+      }
+
+      console.log(`FilesystemService: Reloaded ${dataType || 'calendar'} from ${path}`);
+      return true;
+    } catch (err) {
+      console.warn(`FilesystemService: Failed to reload ${path}:`, err);
+      return false;
+    }
+  }
+
+  private reloadDataType(dataType: string, content: string): void {
+    const data = JSON.parse(content);
+
+    switch (dataType) {
+      case 'persons':
+        if (data.type === 'persons') this.dataSource.loadPersons(data as PersonsModel);
+        break;
+      case 'projects':
+        if (data.type === 'projects') this.dataSource.loadProjects(data as ProjectsModel);
+        break;
+      case 'tasks':
+        if (data.type === 'tasks') this.dataSource.loadTasks(data as TasksModel);
+        break;
+      case 'shoppingLists':
+        if (data.type === 'shopping_lists') this.dataSource.loadShoppingLists(data as ShoppingListsModel);
+        break;
+    }
+  }
+
+  private clearDataType(dataType: string): void {
+    switch (dataType) {
+      case 'persons':
+        this.dataSource.loadPersons({ type: 'persons', items: [] });
+        break;
+      case 'projects':
+        this.dataSource.loadProjects({ type: 'projects', projects: [] });
+        break;
+      case 'tasks':
+        this.dataSource.loadTasks({ type: 'tasks', tasks: [] });
+        break;
+      case 'shoppingLists':
+        this.dataSource.loadShoppingLists({ type: 'shopping_lists', lists: [] });
+        break;
+    }
+  }
+
+  private reloadCalendarFromTree(): void {
+    if (!this.rootDir) return;
+    this.loadCalendarData(this.rootDir);
+    this.dataSource.loadEventsFromCalendar(this.calendar.getItems());
+  }
+
   getDirByPath(dirPath: string): DirData | undefined {
     if (!this.rootDir) return undefined;
     if (dirPath === '' || dirPath === '/') return this.rootDir;

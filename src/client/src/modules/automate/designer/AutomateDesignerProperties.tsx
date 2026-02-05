@@ -26,6 +26,7 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import { useTheme, useMediaQuery } from '@mui/material';
 import Editor from '@monaco-editor/react';
 import { useAutomateDesigner } from './AutomateDesignerContext';
 import { NODE_TYPE_METADATA } from '../registry/nodeTypes';
@@ -36,6 +37,8 @@ const MAX_WIDTH = 600;
 const DEFAULT_WIDTH = 300;
 
 const AutomateDesignerProperties: React.FC = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const { flow, selectedNodeId, updateNode, deleteNode } = useAutomateDesigner();
 
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
@@ -630,7 +633,8 @@ const AutomateDesignerProperties: React.FC = () => {
         onClose={() => setScriptDialogOpen(false)}
         maxWidth="lg"
         fullWidth
-        PaperProps={{ sx: { height: '80vh' } }}
+        fullScreen={isMobile}
+        PaperProps={isMobile ? undefined : { sx: { height: '80vh' } }}
       >
         <DialogTitle sx={{ py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="subtitle1" fontWeight={600}>

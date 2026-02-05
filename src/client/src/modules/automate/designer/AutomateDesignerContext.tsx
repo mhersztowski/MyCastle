@@ -9,6 +9,7 @@ import { AutomateEdgeModel } from '../models/AutomateEdgeModel';
 import { NODE_TYPE_METADATA } from '../registry/nodeTypes';
 import { AutomateEngine, ExecutionLog, ExecutionResult } from '../engine/AutomateEngine';
 import { DataSource } from '../../filesystem/data/DataSource';
+import { mqttClient } from '../../mqttclient';
 import { v4 as uuidv4 } from 'uuid';
 
 interface HistoryEntry {
@@ -201,6 +202,40 @@ export const AutomateDesignerProvider: React.FC<AutomateDesignerProviderProps> =
     setExecutingNodeIds(new Set());
     setErrorNodeIds(new Set());
 
+    if (flow.runtime === 'backend' || flow.runtime === 'universal') {
+      // Remote execution on backend via MQTT
+      try {
+        const result = await mqttClient.runAutomateFlow(flow.id) as ExecutionResult;
+        setExecutionResult(result);
+        if (result.executionLog) {
+          setExecutionLog(result.executionLog);
+        }
+        if (!result.success) {
+          // Mark error nodes from execution log
+          const errorIds = new Set<string>();
+          for (const entry of result.executionLog || []) {
+            if (entry.status === 'error') {
+              errorIds.add(entry.nodeId);
+            }
+          }
+          setErrorNodeIds(errorIds);
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        setExecutionResult({
+          success: false,
+          executionLog: [],
+          logs: [],
+          notifications: [],
+          variables: {},
+          error: errorMsg,
+        });
+      }
+      setIsExecuting(false);
+      return;
+    }
+
+    // Local execution (client / universal)
     const engine = new AutomateEngine();
     engineRef.current = engine;
 

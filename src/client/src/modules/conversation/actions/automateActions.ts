@@ -5,6 +5,7 @@
 import { DataSource } from '../../filesystem/data/DataSource';
 import { automateService, AutomateEngine } from '../../automate';
 import { actionRegistry } from './ActionRegistry';
+import { mqttClient } from '../../mqttclient';
 
 export function registerAutomateActions(dataSource: DataSource): void {
   actionRegistry.register({
@@ -21,6 +22,7 @@ export function registerAutomateActions(dataSource: DataSource): void {
         id: f.id,
         name: f.name,
         description: f.description,
+        runtime: f.runtime || 'client',
       }));
     },
   });
@@ -42,6 +44,24 @@ export function registerAutomateActions(dataSource: DataSource): void {
       if (!flowNode) return { error: 'Flow nie znaleziony' };
 
       const flow = flowNode.toModel();
+
+      if (flow.runtime === 'backend' || flow.runtime === 'universal') {
+        // Execute on backend via MQTT
+        const result = await mqttClient.runAutomateFlow(flow.id) as {
+          success: boolean;
+          logs: Array<{ level: string; message: string }>;
+          notifications: Array<{ message: string }>;
+          error?: string;
+        };
+        return {
+          success: result.success,
+          logs: result.logs?.map(l => `[${l.level}] ${l.message}`) || [],
+          notifications: result.notifications?.map(n => n.message) || [],
+          error: result.error,
+        };
+      }
+
+      // Local execution for client flows
       const engine = new AutomateEngine();
       const result = await engine.executeFlow(flow, dataSource);
 

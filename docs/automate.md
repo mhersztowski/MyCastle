@@ -9,8 +9,10 @@ Moduł Automate udostępnia graficzny język programowania wzorowany na NodeRed.
 | Zmienna | Opis |
 |---------|------|
 | `api` | System API - dostęp do plików, danych, zmiennych, logowania |
-| `input` | Dane wejściowe z poprzedniego noda |
-| `variables` | Zmienne flow (bezpośredni dostęp do obiektu) |
+| `input` (`inp`) | Dane wejściowe z poprzedniego noda |
+| `variables` (`vars`) | Zmienne flow (bezpośredni dostęp do obiektu) |
+
+> **Skróty:** Zamiast `input` i `variables` można używać krótszych aliasów `inp` i `vars`. Obie formy działają identycznie.
 
 ## API Reference
 
@@ -223,37 +225,40 @@ const receiptData2 = await api.shopping.scanReceipt(images);
 api.log.info(`Produktów z wielu zdjęć: ${receiptData2.items.length}`);
 ```
 
+## Runtime — środowisko wykonania
+
+Flow może mieć ustawiony `runtime` określający gdzie jest wykonywany:
+
+| Runtime | Opis |
+|---------|------|
+| `client` | Wykonywany w przeglądarce (dostęp do TTS, STT, Notification) |
+| `backend` | Wykonywany na serwerze (bezpośredni dostęp do FileSystem, DataSource) |
+| `universal` | Wykonywany na serwerze (jak backend, ale używa tylko uniwersalnych nodów) |
+
+Flow z `runtime: 'backend'` lub `runtime: 'universal'` jest wysyłany do backendu przez MQTT. Flow z `runtime: 'client'` lub bez ustawionego runtime jest wykonywany lokalnie w przeglądarce.
+
 ## Typy nodów
 
-### Triggery
-- **Start** - Punkt startowy flow
-- **Manual Trigger** - Ręczne uruchomienie
+| Typ noda | Kategoria | Runtime | Opis |
+|----------|-----------|---------|------|
+| Start | Triggery | universal | Punkt startowy flow |
+| Manual Trigger | Triggery | universal | Ręczne uruchomienie |
+| Execute JS | Akcje | universal | Wykonanie kodu JavaScript z dostępem do System API |
+| System API | Akcje | universal | Wywołanie metody API systemu |
+| If/Else | Logika | universal | Warunkowe rozgałęzienie (warunek to wyrażenie JS) |
+| Switch | Logika | universal | Wielokierunkowe rozgałęzienie |
+| For Loop | Logika | universal | Pętla iteracyjna (count, indexVariable) |
+| While Loop | Logika | universal | Pętla warunkowa (condition, maxIterations) |
+| Read Variable | Dane | universal | Odczytaj zmienną flow |
+| Write Variable | Dane | universal | Zapisz zmienną flow |
+| Log | Wyjście | universal | Loguj wiadomość do konsoli |
+| Notification | Wyjście | **client** | Pokaż powiadomienie UI (niedostępny na backendzie) |
+| LLM Call | AI | universal | Wywołaj model AI (prompt statyczny lub dynamiczny ze skryptu) |
+| Text to Speech | AI | **client** | Odczytaj tekst na głos (niedostępny na backendzie) |
+| Speech to Text | AI | **client** | Zamień mowę na tekst (niedostępny na backendzie) |
+| Comment | Narzędzia | universal | Komentarz (nie wykonywany) |
 
-### Akcje
-- **Execute JS** - Wykonanie kodu JavaScript z dostępem do System API
-- **System API** - Wywołanie metody API systemu
-
-### Logika
-- **If/Else** - Warunkowe rozgałęzienie (warunek to wyrażenie JS)
-- **Switch** - Wielokierunkowe rozgałęzienie
-- **For Loop** - Pętla iteracyjna (count, indexVariable)
-- **While Loop** - Pętla warunkowa (condition, maxIterations)
-
-### Dane
-- **Read Variable** - Odczytaj zmienną flow
-- **Write Variable** - Zapisz zmienną flow
-
-### Wyjście
-- **Log** - Loguj wiadomość do konsoli
-- **Notification** - Pokaż powiadomienie UI
-
-### AI
-- **LLM Call** - Wywołaj model AI (prompt statyczny lub dynamiczny ze skryptu)
-- **Text to Speech** - Odczytaj tekst na głos (tekst statyczny lub dynamiczny ze skryptu)
-- **Speech to Text** - Zamień mowę na tekst (wymaga interakcji użytkownika)
-
-### Narzędzia
-- **Comment** - Komentarz (nie wykonywany)
+Flow z `runtime: 'backend'` lub `'universal'` nie może zawierać nodów client-only (Notification, TTS, STT).
 
 ## Przykłady
 

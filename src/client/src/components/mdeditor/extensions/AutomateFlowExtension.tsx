@@ -42,6 +42,7 @@ import { automateService } from '../../../modules/automate/services/AutomateServ
 import { AutomateEngine, ExecutionResult } from '../../../modules/automate/engine/AutomateEngine';
 import { AutomateFlowModel } from '../../../modules/automate/models/AutomateFlowModel';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
+import { mqttClient } from '../../../modules/mqttclient';
 
 // Dialog wyboru flow
 interface AutomateFlowPickerDialogProps {
@@ -206,12 +207,18 @@ const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
     setExecutionResult(null);
     setShowLogs(true);
 
-    const engine = new AutomateEngine();
-    engineRef.current = engine;
-
     try {
-      const result = await engine.executeFlow(flow, dataSource);
-      setExecutionResult(result);
+      if (flow.runtime === 'backend' || flow.runtime === 'universal') {
+        // Remote execution on backend via MQTT
+        const result = await mqttClient.runAutomateFlow(flow.id) as ExecutionResult;
+        setExecutionResult(result);
+      } else {
+        // Local execution for client flows
+        const engine = new AutomateEngine();
+        engineRef.current = engine;
+        const result = await engine.executeFlow(flow, dataSource);
+        setExecutionResult(result);
+      }
     } catch (err) {
       setExecutionResult({
         success: false,

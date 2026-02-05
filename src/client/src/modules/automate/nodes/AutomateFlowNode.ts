@@ -12,6 +12,7 @@ export class AutomateFlowNode extends NodeBase<AutomateFlowModel> {
   name: string;
   description?: string;
   version: string;
+  runtime?: 'client' | 'backend' | 'universal';
   nodes: AutomateNodeModel[];
   edges: AutomateEdgeModel[];
   variables: AutomateVariableDefinition[];
@@ -25,6 +26,7 @@ export class AutomateFlowNode extends NodeBase<AutomateFlowModel> {
     this.name = model.name;
     this.description = model.description;
     this.version = model.version;
+    this.runtime = model.runtime;
     this.nodes = model.nodes.map(n => ({ ...n }));
     this.edges = model.edges.map(e => ({ ...e }));
     this.variables = (model.variables || []).map(v => ({ ...v }));
@@ -52,6 +54,7 @@ export class AutomateFlowNode extends NodeBase<AutomateFlowModel> {
     };
 
     if (this.description) model.description = this.description;
+    if (this.runtime) model.runtime = this.runtime;
     if (this.variables.length > 0) model.variables = this.variables.map(v => ({ ...v }));
     if (this.viewport) model.viewport = { ...this.viewport };
     if (this.createdAt) model.createdAt = this.createdAt;

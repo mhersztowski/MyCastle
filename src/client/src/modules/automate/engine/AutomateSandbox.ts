@@ -18,6 +18,8 @@ export class AutomateSandbox {
       'api', 'input', 'variables',
       `"use strict";
        return (async () => {
+         const inp = input;
+         const vars = variables;
          ${script}
        })();`
     );
