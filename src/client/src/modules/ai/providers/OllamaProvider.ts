@@ -2,7 +2,7 @@
  * Ollama provider (lokalne modele)
  */
 
-import { AiChatRequest, AiChatResponse, AiProviderConfig } from '../models/AiModels';
+import { AiChatRequest, AiChatResponse, AiProviderConfig, AiTextContentBlock, AiImageContentBlock } from '../models/AiModels';
 import { AiProvider } from './AiProvider';
 
 export class OllamaProvider implements AiProvider {
@@ -12,7 +12,23 @@ export class OllamaProvider implements AiProvider {
       model: request.model || config.defaultModel,
       messages: request.messages.map(m => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const msg: Record<string, any> = { role: m.role, content: m.content };
+        const msg: Record<string, any> = { role: m.role };
+        if (typeof m.content === 'string') {
+          msg.content = m.content;
+        } else {
+          // Ollama: text in content, images in separate 'images' array
+          msg.content = m.content
+            .filter((b): b is AiTextContentBlock => b.type === 'text')
+            .map(b => b.text)
+            .join('\n');
+          const images = m.content
+            .filter((b): b is AiImageContentBlock => b.type === 'image_url')
+            .map(b => {
+              const match = b.image_url.url.match(/^data:[^;]+;base64,(.+)$/);
+              return match ? match[1] : b.image_url.url;
+            });
+          if (images.length > 0) msg.images = images;
+        }
         if (m.tool_calls) msg.tool_calls = m.tool_calls;
         if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
         return msg;

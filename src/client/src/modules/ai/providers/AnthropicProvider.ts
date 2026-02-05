@@ -3,7 +3,7 @@
  * Wymaga headera anthropic-dangerous-direct-browser-access dla bezposrednich wywolan z przegladarki
  */
 
-import { AiChatMessage, AiChatResponse, AiChatRequest, AiProviderConfig, AiToolCall } from '../models/AiModels';
+import { AiChatMessage, AiChatResponse, AiChatRequest, AiProviderConfig, AiToolCall, getTextContent } from '../models/AiModels';
 import { AiProvider } from './AiProvider';
 
 export class AnthropicProvider implements AiProvider {
@@ -29,7 +29,7 @@ export class AnthropicProvider implements AiProvider {
     }
 
     if (systemMessages.length > 0) {
-      body.system = systemMessages.map(m => m.content).join('\n\n');
+      body.system = systemMessages.map(m => getTextContent(m.content)).join('\n\n');
     }
 
     if (request.tools?.length) {
@@ -91,8 +91,9 @@ export class AnthropicProvider implements AiProvider {
         // Assistant message with tool calls → content blocks
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const content: any[] = [];
-        if (m.content) {
-          content.push({ type: 'text', text: m.content });
+        const textContent = getTextContent(m.content);
+        if (textContent) {
+          content.push({ type: 'text', text: textContent });
         }
         for (const tc of m.tool_calls) {
           content.push({
@@ -110,11 +111,34 @@ export class AnthropicProvider implements AiProvider {
           content: [{
             type: 'tool_result',
             tool_use_id: m.tool_call_id,
-            content: m.content,
+            content: getTextContent(m.content),
           }],
         });
-      } else {
+      } else if (typeof m.content === 'string') {
         result.push({ role: m.role, content: m.content });
+      } else {
+        // Multimodal content — translate image_url blocks to Anthropic format
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anthropicContent: any[] = m.content.map(block => {
+          if (block.type === 'text') {
+            return { type: 'text', text: block.text };
+          }
+          if (block.type === 'image_url') {
+            const dataUrlMatch = block.image_url.url.match(/^data:(image\/[a-z+]+);base64,(.+)$/);
+            if (dataUrlMatch) {
+              return {
+                type: 'image',
+                source: { type: 'base64', media_type: dataUrlMatch[1], data: dataUrlMatch[2] },
+              };
+            }
+            return {
+              type: 'image',
+              source: { type: 'url', url: block.image_url.url },
+            };
+          }
+          return block;
+        });
+        result.push({ role: m.role, content: anthropicContent });
       }
     }
 

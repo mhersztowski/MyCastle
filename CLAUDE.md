@@ -18,6 +18,16 @@ Aplikacja backend:
         - Definiujący klasę Client bo serwer może mieć wiele clientów
         - Zawierający klasę Packet która definiuje typy pakietów,
         - Zawierający klasy pakietów dla każdego z typów, serializuje/deserializuje pakiety, waliduje pakiety, wysyła oraz odbiera pakiety
+    - httpserver
+        - HttpUploadServer - serwer HTTP (port 3001) z CORS
+        - Endpointy: POST /upload (pliki binarne), GET /files/ (serwowanie plików z data/public/)
+        - POST /ocr - skanowanie paragonów przez Tesseract.js OCR
+        - GET /ocr/status - sprawdzenie dostępności OCR
+    - ocr
+        - OcrService - Tesseract.js z preprocessingiem Sharp (grayscale, normalize, sharpen, threshold)
+        - Inicjalizacja non-blocking — jeśli Tesseract nie może się zainicjalizować, reszta backendu działa
+        - Język: polski (pol.traineddata, ~15MB, pobierany automatycznie przy pierwszym użyciu)
+        - PolishReceiptParser - regex parser tekstu OCR z polskich paragonów (produkty, ceny, rabaty, suma, data, sklep)
 
 Aplikacja frontend 
 - aplikacja react w ts
@@ -125,6 +135,19 @@ Aplikacja frontend
       - Dokumentacja akcji: docs/conversation.md
       - Rozszerza AI module o tool calling (AiToolDefinition, AiToolCall) dla OpenAI, Anthropic, Ollama
       - Rozszerza Castle Agent o tryb agentowy, selektor scenariuszy, UI tool calls, dialog potwierdzenia
+    - shopping - moduł zakupów i skanowania paragonów
+      - models/ - interfejsy
+        - ReceiptModels - ReceiptData, ReceiptItem, ReceiptScanStatus
+        - ReceiptScanConfigModel - ReceiptScanEngine ('ai_vision' | 'local_ocr' | 'hybrid'), ENGINE_LABELS, ENGINE_DESCRIPTIONS
+      - services/ - provider pattern dla skanowania paragonów
+        - ReceiptScanProvider - interfejs providera (scan(imageBlobs) → ReceiptData)
+        - AiVisionReceiptProvider - wysyła zdjęcia do AI vision (multimodal), sprawdza aiService.isConfigured() przed skanowaniem
+        - LocalOcrReceiptProvider - wysyła zdjęcia do backendu POST /ocr (Tesseract.js), bez AI
+        - HybridReceiptProvider - OCR na backendzie + tekst do AI (tańsze niż AI Vision, lepsze niż samo OCR)
+        - ReceiptScannerService - deleguje do wybranego providera, loadConfig/saveConfig z data/receipt_scan_config.json (singleton: receiptScannerService)
+      - Konfiguracja: data/receipt_scan_config.json (engine)
+      - Komunikacja z backendem OCR: HTTP (nie MQTT) — MQTT ma limit 2MB i hardcoded 30s timeout
+      - URL backendu HTTP: z VITE_HTTP_URL (nie VITE_HTTP_UPLOAD_URL) — ważne dla dostępu z urządzeń mobilnych
 
 - definiuje następujące reużywalne komponenty react
       - editor - kod tekstowego edytora plików
@@ -160,6 +183,8 @@ Aplikacja frontend
     - /calendar - widok kalendarza z AI Day Planner
     - /settings/ai - konfiguracja providera AI (OpenAI, Anthropic, Ollama, Custom)
     - /settings/speech - konfiguracja TTS, STT i Wake Word
+    - /settings/receipt - konfiguracja silnika skanowania paragonów (AI Vision / Lokalne OCR / Hybrydowe), test dostępności OCR backend
+    - /shopping - listy zakupów z skanowaniem paragonów (aparat/plik → OCR/AI → przegląd → import do listy)
     - /agent - Castle Agent - głosowy asystent AI z Wake Word, STT, LLM i TTS (pipeline: wake word → nagrywanie → transkrypcja → AI → synteza mowy), tryb agentowy z tool calling, scenariusze konwersacyjne, persystencja historii
     - /todolist - widok z taskami do zrobienia
     - /components - widok demonstrujący reużywalne komponenty UI te z katalogów person, project, task
@@ -176,6 +201,8 @@ Aplikacja frontend
 - `src/backend/`: Backend source code (TypeScript)
   - `modules/filesystem/`: File system module with in-memory cache
   - `modules/mqttserver/`: MQTT server with Client and Packet classes
+  - `modules/httpserver/`: HTTP server (upload, file serving, OCR endpoints)
+  - `modules/ocr/`: OCR module (Tesseract.js + Sharp + PolishReceiptParser)
   - `types/`: TypeScript type definitions
 - `src/client/`: Frontend React application (TypeScript)
   - `src/modules/mqttclient/`: MQTT client module

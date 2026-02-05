@@ -40,9 +40,37 @@ export interface AiToolCall {
   };
 }
 
+// ===== MULTIMODAL CONTENT =====
+
+export interface AiTextContentBlock {
+  type: 'text';
+  text: string;
+}
+
+export interface AiImageContentBlock {
+  type: 'image_url';
+  image_url: {
+    url: string;
+    detail?: 'auto' | 'low' | 'high';
+  };
+}
+
+export type AiContentBlock = AiTextContentBlock | AiImageContentBlock;
+export type AiMessageContent = string | AiContentBlock[];
+
+export function getTextContent(content: AiMessageContent): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((b): b is AiTextContentBlock => b.type === 'text')
+    .map(b => b.text)
+    .join('');
+}
+
+// ===== MESSAGES =====
+
 export interface AiChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: AiMessageContent;
   tool_calls?: AiToolCall[];
   tool_call_id?: string;
 }

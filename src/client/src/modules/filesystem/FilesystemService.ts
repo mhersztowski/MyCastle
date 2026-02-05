@@ -9,6 +9,7 @@ import { FileModel, FileComponentModel } from './models/FileModel';
 import { PersonsModel } from './models/PersonModel';
 import { TasksModel } from './models/TaskModel';
 import { ProjectsModel } from './models/ProjectModel';
+import { ShoppingListsModel } from './models/ShoppingModel';
 
 // Interface for dirinfo.json structure (from backend)
 interface DirinfoFileComponent {
@@ -126,7 +127,7 @@ export class FilesystemService {
     // 6. Load DataSource with Node objects
     this.loadDataSource(this.rootDir);
     const stats = this.dataSource.getStats();
-    console.log(`FilesystemService: DataSource loaded - ${stats.persons} persons, ${stats.tasks} tasks, ${stats.projects} projects, ${stats.events} events`);
+    console.log(`FilesystemService: DataSource loaded - ${stats.persons} persons, ${stats.tasks} tasks, ${stats.projects} projects, ${stats.events} events, ${stats.shoppingLists} shopping lists`);
 
     return this.rootDir;
   }
@@ -249,6 +250,19 @@ export class FilesystemService {
         }
       } catch (err) {
         console.warn('Failed to parse tasks.json:', err);
+      }
+    }
+
+    // Load shopping lists from data/shopping_lists.json
+    const shoppingFile = rootDir.getFileByPath('data/shopping_lists.json');
+    if (shoppingFile && shoppingFile.getData().length > 0) {
+      try {
+        const data = JSON.parse(shoppingFile.toString()) as ShoppingListsModel;
+        if (data.type === 'shopping_lists') {
+          this.dataSource.loadShoppingLists(data);
+        }
+      } catch (err) {
+        console.warn('Failed to parse shopping_lists.json:', err);
       }
     }
 

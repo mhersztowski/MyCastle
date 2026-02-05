@@ -17,7 +17,9 @@ import AutomateDesignerPage from './pages/automate/AutomateDesignerPage';
 import AutomateListPage from './pages/automate/AutomateListPage';
 import AiSettingsPage from './pages/settings/AiSettingsPage';
 import SpeechSettingsPage from './pages/settings/SpeechSettingsPage';
+import ReceiptSettingsPage from './pages/settings/ReceiptSettingsPage';
 import CastleAgentPage from './pages/agent/CastleAgentPage';
+import ShoppingPage from './pages/shopping/ShoppingPage';
 import { MqttProvider } from './modules/mqttclient/MqttContext';
 import { FilesystemProvider } from './modules/filesystem/FilesystemContext';
 
@@ -44,11 +46,13 @@ function App() {
                 <Route path="/todolist" element={<ToDoListPage />} />
                 <Route path="/person" element={<PersonPage />} />
                 <Route path="/project" element={<ProjectPage />} />
+                <Route path="/shopping" element={<ShoppingPage />} />
                 <Route path="/automate" element={<AutomateListPage />} />
                 <Route path="/objectviewer" element={<ObjectViewerPage />} />
                 <Route path="/components" element={<ComponentsPage />} />
                 <Route path="/settings/ai" element={<AiSettingsPage />} />
                 <Route path="/settings/speech" element={<SpeechSettingsPage />} />
+                <Route path="/settings/receipt" element={<ReceiptSettingsPage />} />
                 <Route path="/agent" element={<CastleAgentPage />} />
               </Routes>
             </Layout>

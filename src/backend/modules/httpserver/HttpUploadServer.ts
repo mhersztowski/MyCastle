@@ -1,13 +1,24 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'http';
 import { FileSystem, BinaryFileData } from '../filesystem/FileSystem';
+import { OcrService } from '../ocr/OcrService';
+import { PolishReceiptParser, ParsedReceipt } from '../ocr/PolishReceiptParser';
 import * as path from 'path';
 import * as url from 'url';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_OCR_BODY_SIZE = 30 * 1024 * 1024; // 30MB for multiple images
 
 interface UploadResult {
   success: boolean;
   data?: BinaryFileData;
+  error?: string;
+}
+
+interface OcrResponse {
+  success: boolean;
+  text?: string;
+  parsed?: ParsedReceipt;
+  confidence?: number;
   error?: string;
 }
 
@@ -33,10 +44,14 @@ export class HttpUploadServer {
   private server: Server;
   private port: number;
   private fileSystem: FileSystem;
+  private ocrService?: OcrService;
+  private receiptParser: PolishReceiptParser;
 
-  constructor(port: number, fileSystem: FileSystem) {
+  constructor(port: number, fileSystem: FileSystem, ocrService?: OcrService) {
     this.port = port;
     this.fileSystem = fileSystem;
+    this.ocrService = ocrService;
+    this.receiptParser = new PolishReceiptParser();
     this.server = createServer((req, res) => this.handleRequest(req, res));
   }
 
@@ -58,6 +73,16 @@ export class HttpUploadServer {
 
     if (req.method === 'POST' && req.url === '/upload') {
       await this.handleUpload(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/ocr') {
+      await this.handleOcr(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/ocr/status') {
+      this.handleOcrStatus(res);
       return;
     }
 
@@ -158,6 +183,73 @@ export class HttpUploadServer {
       console.error('Upload error:', error);
       this.sendResponse(res, 500, { success: false, error: 'Upload failed' });
     });
+  }
+
+  private handleOcrStatus(res: ServerResponse): void {
+    const available = this.ocrService?.isAvailable() ?? false;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      available,
+      languages: available ? ['pol'] : [],
+    }));
+  }
+
+  private async handleOcr(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.ocrService?.isAvailable()) {
+      this.sendOcrResponse(res, 503, { success: false, error: 'OCR service not available' });
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+
+    req.on('data', (chunk: Buffer) => {
+      totalSize += chunk.length;
+      if (totalSize > MAX_OCR_BODY_SIZE) {
+        this.sendOcrResponse(res, 413, { success: false, error: 'Request body too large' });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', async () => {
+      try {
+        const body = Buffer.concat(chunks).toString('utf-8');
+        const { images } = JSON.parse(body) as { images: string[] };
+
+        if (!images || !Array.isArray(images) || images.length === 0) {
+          this.sendOcrResponse(res, 400, { success: false, error: 'Missing or empty images array' });
+          return;
+        }
+
+        const ocrResult = await this.ocrService!.processMultipleImages(images);
+        const parsed = this.receiptParser.parse(ocrResult.text);
+
+        this.sendOcrResponse(res, 200, {
+          success: true,
+          text: ocrResult.text,
+          parsed,
+          confidence: ocrResult.confidence,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'OCR processing failed';
+        console.error('OCR error:', error);
+        this.sendOcrResponse(res, 500, { success: false, error: errorMessage });
+      }
+    });
+
+    req.on('error', (error) => {
+      console.error('OCR request error:', error);
+      this.sendOcrResponse(res, 500, { success: false, error: 'OCR request failed' });
+    });
+  }
+
+  private sendOcrResponse(res: ServerResponse, statusCode: number, data: OcrResponse): void {
+    if (!res.writableEnded) {
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    }
   }
 
   private sendResponse(res: ServerResponse, statusCode: number, data: UploadResult): void {

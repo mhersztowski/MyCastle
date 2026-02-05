@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_MQTT_URL: string;
+  readonly VITE_HTTP_URL: string;
 }
 
 interface ImportMeta {

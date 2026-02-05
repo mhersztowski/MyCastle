@@ -7,6 +7,9 @@ import { DataSource } from '../../filesystem/data/DataSource';
 import { PersonModel } from '../../filesystem/models/PersonModel';
 import { TaskModel } from '../../filesystem/models/TaskModel';
 import { ProjectModel } from '../../filesystem/models/ProjectModel';
+import { ShoppingListModel, ShoppingItemModel } from '../../filesystem/models/ShoppingModel';
+import { ReceiptData } from '../../shopping/models/ReceiptModels';
+import { receiptScannerService } from '../../shopping/services/ReceiptScannerService';
 import { v4 as uuidv4 } from 'uuid';
 import dayjs from 'dayjs';
 import { aiService } from '../../ai';
@@ -27,6 +30,8 @@ export interface AutomateSystemApiInterface {
     getTaskById(id: string): TaskModel | undefined;
     getProjects(): ProjectModel[];
     getProjectById(id: string): ProjectModel | undefined;
+    getShoppingLists(): ShoppingListModel[];
+    getShoppingListById(id: string): ShoppingListModel | undefined;
   };
 
   variables: {
@@ -52,6 +57,7 @@ export interface AutomateSystemApiInterface {
 
   ai: {
     chat(prompt: string, options?: { systemPrompt?: string; model?: string; temperature?: number; maxTokens?: number }): Promise<string>;
+    chatVision(prompt: string, imageBase64: string, options?: { systemPrompt?: string; model?: string; temperature?: number; maxTokens?: number }): Promise<string>;
     chatMessages(messages: AiChatMessage[], options?: { model?: string; temperature?: number; maxTokens?: number }): Promise<AiChatResponse>;
     isConfigured(): boolean;
   };
@@ -61,6 +67,16 @@ export interface AutomateSystemApiInterface {
     stop(): void;
     isTtsConfigured(): boolean;
     isSttConfigured(): boolean;
+  };
+
+  shopping: {
+    createList(name: string, options?: { store?: string; budget?: number }): Promise<ShoppingListModel>;
+    addItem(listId: string, name: string, options?: { quantity?: number; unit?: string; category?: string; estimatedPrice?: number }): Promise<ShoppingItemModel>;
+    checkItem(listId: string, itemId: string, actualPrice?: number): Promise<void>;
+    uncheckItem(listId: string, itemId: string): Promise<void>;
+    removeItem(listId: string, itemId: string): Promise<void>;
+    completeList(listId: string): Promise<void>;
+    scanReceipt(imageBase64: string | string[]): Promise<ReceiptData>;
   };
 }
 
@@ -135,6 +151,14 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
     getProjectById: (id: string): ProjectModel | undefined => {
       return this._dataSource.getProjectById(id)?.toModel();
     },
+
+    getShoppingLists: (): ShoppingListModel[] => {
+      return this._dataSource.shoppingLists.map(l => l.toModel());
+    },
+
+    getShoppingListById: (id: string): ShoppingListModel | undefined => {
+      return this._dataSource.getShoppingListById(id)?.toModel();
+    },
   };
 
   variables = {
@@ -199,6 +223,27 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
       return response.content;
     },
 
+    chatVision: async (prompt: string, imageBase64: string, options?: { systemPrompt?: string; model?: string; temperature?: number; maxTokens?: number }): Promise<string> => {
+      const messages: AiChatMessage[] = [];
+      if (options?.systemPrompt) {
+        messages.push({ role: 'system', content: options.systemPrompt });
+      }
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: imageBase64 } },
+        ],
+      });
+      const response = await aiService.chat({
+        messages,
+        model: options?.model,
+        temperature: options?.temperature,
+        maxTokens: options?.maxTokens,
+      });
+      return response.content;
+    },
+
     chatMessages: async (messages: AiChatMessage[], options?: { model?: string; temperature?: number; maxTokens?: number }): Promise<AiChatResponse> => {
       return aiService.chat({
         messages,
@@ -232,6 +277,109 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
 
     isSttConfigured: (): boolean => {
       return speechService.isSttConfigured();
+    },
+  };
+
+  private async _getShoppingLists(): Promise<ShoppingListModel[]> {
+    return this._dataSource.shoppingLists.map(l => l.toModel());
+  }
+
+  private async _saveShoppingLists(lists: ShoppingListModel[]): Promise<void> {
+    const data = { type: 'shopping_lists', lists };
+    await mqttClient.writeFile('data/shopping_lists.json', JSON.stringify(data, null, 2));
+  }
+
+  shopping = {
+    createList: async (name: string, options?: { store?: string; budget?: number }): Promise<ShoppingListModel> => {
+      const newList: ShoppingListModel = {
+        type: 'shopping_list',
+        id: uuidv4(),
+        name,
+        store: options?.store,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        budget: options?.budget,
+        items: [],
+      };
+      const lists = await this._getShoppingLists();
+      lists.push(newList);
+      await this._saveShoppingLists(lists);
+      return newList;
+    },
+
+    addItem: async (listId: string, name: string, options?: { quantity?: number; unit?: string; category?: string; estimatedPrice?: number }): Promise<ShoppingItemModel> => {
+      const lists = await this._getShoppingLists();
+      const list = lists.find(l => l.id === listId);
+      if (!list) throw new Error(`Lista zakupów nie znaleziona: ${listId}`);
+      const newItem: ShoppingItemModel = {
+        type: 'shopping_item',
+        id: uuidv4(),
+        name,
+        quantity: options?.quantity,
+        unit: options?.unit,
+        category: options?.category,
+        estimatedPrice: options?.estimatedPrice,
+        checked: false,
+      };
+      list.items.push(newItem);
+      await this._saveShoppingLists(lists);
+      return newItem;
+    },
+
+    checkItem: async (listId: string, itemId: string, actualPrice?: number): Promise<void> => {
+      const lists = await this._getShoppingLists();
+      const list = lists.find(l => l.id === listId);
+      if (!list) throw new Error(`Lista zakupów nie znaleziona: ${listId}`);
+      const item = list.items.find(i => i.id === itemId);
+      if (!item) throw new Error(`Produkt nie znaleziony: ${itemId}`);
+      item.checked = true;
+      if (actualPrice !== undefined) item.actualPrice = actualPrice;
+      await this._saveShoppingLists(lists);
+    },
+
+    uncheckItem: async (listId: string, itemId: string): Promise<void> => {
+      const lists = await this._getShoppingLists();
+      const list = lists.find(l => l.id === listId);
+      if (!list) throw new Error(`Lista zakupów nie znaleziona: ${listId}`);
+      const item = list.items.find(i => i.id === itemId);
+      if (!item) throw new Error(`Produkt nie znaleziony: ${itemId}`);
+      item.checked = false;
+      await this._saveShoppingLists(lists);
+    },
+
+    removeItem: async (listId: string, itemId: string): Promise<void> => {
+      const lists = await this._getShoppingLists();
+      const list = lists.find(l => l.id === listId);
+      if (!list) throw new Error(`Lista zakupów nie znaleziona: ${listId}`);
+      const idx = list.items.findIndex(i => i.id === itemId);
+      if (idx === -1) throw new Error(`Produkt nie znaleziony: ${itemId}`);
+      list.items.splice(idx, 1);
+      await this._saveShoppingLists(lists);
+    },
+
+    completeList: async (listId: string): Promise<void> => {
+      const lists = await this._getShoppingLists();
+      const list = lists.find(l => l.id === listId);
+      if (!list) throw new Error(`Lista zakupów nie znaleziona: ${listId}`);
+      list.status = 'completed';
+      list.completedAt = new Date().toISOString();
+      await this._saveShoppingLists(lists);
+    },
+
+    scanReceipt: async (imageBase64: string | string[]): Promise<ReceiptData> => {
+      const inputs = Array.isArray(imageBase64) ? imageBase64 : [imageBase64];
+      const blobs = inputs.map(b64 => {
+        const parts = b64.split(',');
+        const byteString = atob(parts.length > 1 ? parts[1] : parts[0]);
+        const mimeType = b64.match(/data:([^;]+)/)?.[1] || 'image/jpeg';
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        return new Blob([ab], { type: mimeType });
+      });
+      return receiptScannerService.scanReceipt(blobs);
     },
   };
 }

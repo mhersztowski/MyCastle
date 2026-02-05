@@ -183,6 +183,18 @@ export class ConversationEngine {
           parts.push(`Projekty (${projects.length}): ${JSON.stringify(projects)}`);
           break;
         }
+        case 'shopping_summary': {
+          const lists = this.dataSource.getActiveShoppingLists();
+          const mapped = lists.map(l => ({
+            id: l.id,
+            name: l.name,
+            store: l.store,
+            progress: l.getProgressText(),
+            uncheckedItems: l.getUncheckedItems().map(i => i.name),
+          }));
+          parts.push(`Aktywne listy zakupów (${mapped.length}): ${JSON.stringify(mapped)}`);
+          break;
+        }
         case 'custom':
           if (inj.customPrompt) parts.push(inj.customPrompt);
           break;

@@ -46,6 +46,10 @@ const task = api.data.getTaskById('task-id');
 // Projekty
 const projects = api.data.getProjects();
 const project = api.data.getProjectById('project-id');
+
+// Listy zakupów
+const shoppingLists = api.data.getShoppingLists();
+const list = api.data.getShoppingListById('list-id');
 ```
 
 ### api.variables
@@ -131,6 +135,18 @@ api.log.info(`Tokeny: ${response.usage?.totalTokens}`);
 if (!api.ai.isConfigured()) {
   api.log.error('Skonfiguruj AI w Settings > AI Settings');
 }
+
+// Analiza obrazu (vision) - wymaga modelu z obsługą obrazów (GPT-4o, Claude)
+const imageBase64 = 'data:image/jpeg;base64,...'; // base64 data URL
+const description = await api.ai.chatVision('Opisz co widzisz na tym obrazie', imageBase64);
+api.log.info(description);
+
+// Z opcjami
+const analysis = await api.ai.chatVision('Przeanalizuj ten diagram', imageBase64, {
+  systemPrompt: 'Jesteś ekspertem od analizy diagramów',
+  temperature: 0.3,
+  maxTokens: 1000,
+});
 ```
 
 ### api.speech
@@ -158,6 +174,53 @@ if (!api.speech.isTtsConfigured()) {
 if (!api.speech.isSttConfigured()) {
   api.log.error('Skonfiguruj STT w Settings > Speech Settings');
 }
+```
+
+### api.shopping
+
+Zarządzanie listami zakupów. Operacje zapisu (tworzenie, modyfikacja, usuwanie).
+
+```javascript
+// Utwórz nową listę zakupów
+const list = await api.shopping.createList('Zakupy tygodniowe', {
+  store: 'Biedronka',  // opcjonalnie
+  budget: 200,          // opcjonalnie, w PLN
+});
+api.log.info(`Utworzono listę: ${list.id}`);
+
+// Dodaj produkt do listy
+const item = await api.shopping.addItem(list.id, 'Mleko', {
+  quantity: 2,           // opcjonalnie
+  unit: 'l',             // opcjonalnie: szt, kg, g, l, ml, opak
+  category: 'nabiał',   // opcjonalnie: nabiał, pieczywo, mięso, warzywa, owoce, napoje, chemia, higiena, inne
+  estimatedPrice: 8.00,  // opcjonalnie, w PLN
+});
+
+// Oznacz produkt jako kupiony
+await api.shopping.checkItem(list.id, item.id);
+// Z rzeczywistą ceną
+await api.shopping.checkItem(list.id, item.id, 7.50);
+
+// Odznacz produkt
+await api.shopping.uncheckItem(list.id, item.id);
+
+// Usuń produkt z listy
+await api.shopping.removeItem(list.id, item.id);
+
+// Zakończ zakupy (zmień status listy na completed)
+await api.shopping.completeList(list.id);
+
+// Skanowanie paragonu — używa wybranego silnika (Settings > Receipt Settings)
+// Silniki: ai_vision (AI z obrazem), local_ocr (Tesseract.js na backendzie), hybrid (OCR + AI tekst)
+const imageBase64 = 'data:image/jpeg;base64,...'; // base64 data URL zdjęcia paragonu
+const receiptData = await api.shopping.scanReceipt(imageBase64);
+// receiptData: { storeName, date, items: [{name, quantity, unit, price, originalPrice, discount, category}], total }
+api.log.info(`Sklep: ${receiptData.storeName}, produktów: ${receiptData.items.length}`);
+
+// Skanowanie długiego paragonu — wiele zdjęć (fragmenty tego samego paragonu)
+const images = ['data:image/jpeg;base64,...', 'data:image/jpeg;base64,...'];
+const receiptData2 = await api.shopping.scanReceipt(images);
+api.log.info(`Produktów z wielu zdjęć: ${receiptData2.items.length}`);
 ```
 
 ## Typy nodów
@@ -290,6 +353,41 @@ Konfiguracja LLM Call:
 Konfiguracja TTS (useScript):
 ```javascript
 return input._result; // odczytaj odpowiedź AI na głos
+```
+
+### Flow z listami zakupów
+
+```
+Start → Execute JS → Log
+```
+
+Skrypt w Execute JS:
+```javascript
+// Podsumowanie aktywnych list zakupów
+const lists = api.data.getShoppingLists();
+const active = lists.filter(l => l.status === 'active');
+for (const list of active) {
+  const unchecked = list.items.filter(i => !i.checked);
+  api.log.info(`${list.name} (${list.store || 'brak sklepu'}): ${unchecked.length} produktów do kupienia`);
+}
+return active.length;
+```
+
+### Flow tworzący listę zakupów
+
+```
+Start → Execute JS → Notification
+```
+
+Skrypt w Execute JS:
+```javascript
+// Utwórz listę z produktami
+const list = await api.shopping.createList('Zakupy weekendowe', { store: 'Lidl', budget: 150 });
+await api.shopping.addItem(list.id, 'Chleb', { quantity: 1, unit: 'szt', category: 'pieczywo' });
+await api.shopping.addItem(list.id, 'Masło', { quantity: 1, unit: 'szt', category: 'nabiał', estimatedPrice: 7 });
+await api.shopping.addItem(list.id, 'Jabłka', { quantity: 1, unit: 'kg', category: 'owoce', estimatedPrice: 5 });
+api.log.info(`Utworzono listę "${list.name}" z ${list.items.length + 3} produktami`);
+return list;
 ```
 
 ## Osadzanie w Markdown

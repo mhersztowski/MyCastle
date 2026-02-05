@@ -30,3 +30,6 @@ data/
 
 # Test coverage
 coverage/
+
+# Tesseract language data (downloaded at runtime)
+*.traineddata

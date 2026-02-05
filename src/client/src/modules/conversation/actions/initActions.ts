@@ -12,6 +12,7 @@ import { registerPersonActions } from './personActions';
 import { registerProjectActions } from './projectActions';
 import { registerNavigationActions } from './navigationActions';
 import { registerAutomateActions } from './automateActions';
+import { registerShoppingActions } from './shoppingActions';
 
 export function initializeActions(
   dataSource: DataSource,
@@ -25,4 +26,5 @@ export function initializeActions(
   registerProjectActions(dataSource);
   registerNavigationActions(navigate);
   registerAutomateActions(dataSource);
+  registerShoppingActions(dataSource);
 }

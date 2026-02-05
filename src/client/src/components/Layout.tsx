@@ -28,6 +28,8 @@ import CastleIcon from '@mui/icons-material/Castle';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 
 const drawerWidth = 240;
 
@@ -55,6 +57,11 @@ const menuItems = [
     text: 'To-Do List',
     icon: <ChecklistIcon />,
     path: '/todolist',
+  },
+  {
+    text: 'Shopping',
+    icon: <ShoppingCartIcon />,
+    path: '/shopping',
   },
   {
     text: 'Persons',
@@ -95,6 +102,11 @@ const menuItems = [
     text: 'Speech Settings',
     icon: <RecordVoiceOverIcon />,
     path: '/settings/speech',
+  },
+  {
+    text: 'Receipt Settings',
+    icon: <ReceiptLongIcon />,
+    path: '/settings/receipt',
   },
 ];
 

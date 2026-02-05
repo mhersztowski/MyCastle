@@ -222,7 +222,7 @@ export class MqttClient {
     mimeType: string,
     onProgress?: (progress: number) => void
   ): Promise<BinaryFileData> {
-    const httpUrl = import.meta.env.VITE_HTTP_UPLOAD_URL || 'http://localhost:3001/upload';
+    const httpUrl = `${import.meta.env.VITE_HTTP_URL || 'http://localhost:3001'}/upload`;
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();

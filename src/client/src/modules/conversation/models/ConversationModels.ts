@@ -8,7 +8,7 @@ import { AiToolCall } from '../../ai/models/AiModels';
 
 export type ConversationActionCategory =
   | 'tasks' | 'calendar' | 'files' | 'persons'
-  | 'projects' | 'navigation' | 'automate' | 'system';
+  | 'projects' | 'navigation' | 'automate' | 'system' | 'shopping';
 
 export interface ConversationAction {
   name: string;
@@ -34,7 +34,7 @@ export interface ConversationMessage {
 // ===== SCENARIUSZE =====
 
 export interface ContextInjector {
-  type: 'tasks_summary' | 'events_today' | 'projects_summary' | 'custom';
+  type: 'tasks_summary' | 'events_today' | 'projects_summary' | 'shopping_summary' | 'custom';
   label: string;
   customPrompt?: string;
 }
@@ -96,7 +96,7 @@ Możesz zarządzać taskami, kalendarzem, plikami, osobami i projektami.
 Używaj dostępnych narzędzi aby pomagać użytkownikowi.
 Odpowiadaj krótko i naturalnie po polsku.
 Gdy wykonujesz akcję, informuj użytkownika co robisz.`,
-    enabledCategories: ['tasks', 'calendar', 'files', 'persons', 'projects', 'navigation', 'automate', 'system'],
+    enabledCategories: ['tasks', 'calendar', 'files', 'persons', 'projects', 'navigation', 'automate', 'system', 'shopping'],
     greeting: 'Cześć! Jestem Castle Agent. Jak mogę Ci pomóc?',
   },
   {
@@ -141,6 +141,21 @@ Możesz nawigować po katalogach i otwierać strony systemu.
 Odpowiadaj krótko.`,
     enabledCategories: ['files', 'navigation'],
     greeting: 'Gotowy do przeglądania plików. Jaki katalog chcesz zobaczyć?',
+  },
+  {
+    id: 'shopping_assistant',
+    name: 'Asystent zakupów',
+    description: 'Pomoc w zarządzaniu listami zakupów',
+    icon: 'ShoppingCart',
+    systemPrompt: `Jesteś asystentem zakupów w systemie MyCastle.
+Pomagasz użytkownikowi zarządzać listami zakupów i produktami.
+Możesz tworzyć listy, dodawać/usuwać produkty, oznaczać jako kupione.
+Odpowiadaj krótko i naturalnie po polsku.`,
+    enabledCategories: ['shopping', 'persons'],
+    contextInjectors: [
+      { type: 'shopping_summary', label: 'Aktywne listy zakupów' },
+    ],
+    greeting: 'Gotowy do zarządzania Twoimi zakupami. Co chcesz zrobić?',
   },
 ];
 
