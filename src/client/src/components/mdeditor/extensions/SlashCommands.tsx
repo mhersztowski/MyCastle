@@ -34,6 +34,8 @@ import PersonIcon from '@mui/icons-material/Person';
 import TaskIcon from '@mui/icons-material/Task';
 import FolderIcon from '@mui/icons-material/Folder';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import TerminalIcon from '@mui/icons-material/Terminal';
 
 interface CommandItem {
   title: string;
@@ -296,6 +298,32 @@ const commands: CommandItem[] = [
         .focus()
         .deleteRange(range)
         .insertUIForm('')
+        .run();
+    },
+  },
+  {
+    title: 'Automate Flow',
+    description: 'Osadz automatyzacje',
+    icon: <SmartToyIcon color="warning" />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertAutomateFlow('')
+        .run();
+    },
+  },
+  {
+    title: 'Script',
+    description: 'Blok skryptu wykonywalnego',
+    icon: <TerminalIcon color="success" />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertAutomateScript('// Wpisz kod tutaj\napi.log.info("Witaj!");\ndisplay.text("Wynik: OK");')
         .run();
     },
   },

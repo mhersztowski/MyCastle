@@ -681,3 +681,22 @@
     flex-wrap: nowrap;
   }
 }
+
+/* Automate Script Block Styles */
+.md-editor-content .ProseMirror .automate-script-wrapper {
+  margin: 0.75rem 0;
+}
+
+.md-editor-content .ProseMirror .automate-script-wrapper textarea {
+  tab-size: 2;
+  -moz-tab-size: 2;
+}
+
+.md-editor-content .ProseMirror .automate-script-wrapper textarea:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.4);
+}
+
+.md-editor-content .ProseMirror .automate-script-wrapper textarea::placeholder {
+  color: #666;
+}

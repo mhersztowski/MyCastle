@@ -28,3 +28,8 @@ export interface TaskIntervalComponentModel extends TaskComponentModel {
     type: "task_interval";
     daysInterval: number;
 }
+
+export interface TaskSequenceComponentModel extends TaskComponentModel {
+    type: "task_sequence";
+    tasks?: TaskModel[];
+}

@@ -5,7 +5,9 @@
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
       "Bash(grep:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(npx vite:*)",
+      "Bash(git status:*)"
     ]
   }
 }

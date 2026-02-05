@@ -47,6 +47,65 @@ function escapeComponentEmbedsForHtml(content: string): string {
   return JSON.stringify({ result, componentEmbeds });
 }
 
+// Helper to escape automate script blocks (```automate code fences) to protect from showdown
+function escapeAutomateScriptsForHtml(content: string): string {
+  const automateScripts: { code: string; blockId: string }[] = [];
+
+  // Match ```automate or ```automate:blockId code fences
+  const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, blockId, code) => {
+    automateScripts.push({
+      code: code.trimEnd(),
+      blockId: blockId?.trim() || '',
+    });
+    return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
+  });
+
+  return JSON.stringify({ result, automateScripts });
+}
+
+// Helper to escape automate flow embeds (@[automate:id]) to protect from showdown
+function escapeAutomateFlowsForHtml(content: string): string {
+  const automateFlows: { id: string }[] = [];
+
+  const result = content.replace(/@\[automate:([^\]]+)\]/g, (_, id) => {
+    automateFlows.push({ id: id.trim() });
+    return `%%AUTOMATEFLOW_${automateFlows.length - 1}%%`;
+  });
+
+  return JSON.stringify({ result, automateFlows });
+}
+
+// Helper to restore automate flow embeds after showdown conversion
+function restoreAutomateFlowsFromHtml(html: string, automateFlows: { id: string }[]): string {
+  let result = html;
+
+  automateFlows.forEach((flow, index) => {
+    const htmlTag = `<div data-type="automate-flow-embed" data-flow-id="${flow.id}"></div>`;
+    const placeholder = `%%AUTOMATEFLOW_${index}%%`;
+
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    result = result.split(placeholder).join(htmlTag);
+  });
+
+  return result;
+}
+
+// Helper to restore automate script blocks after showdown conversion
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string }[]): string {
+  let result = html;
+
+  automateScripts.forEach((script, index) => {
+    const blockIdAttr = script.blockId ? ` data-block-id="${script.blockId}"` : '';
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
+
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    result = result.split(placeholder).join(htmlTag);
+  });
+
+  return result;
+}
+
 // Helper to escape UI form embeds to protect them from showdown
 function escapeUIFormsForHtml(content: string): string {
   const uiForms: { id: string; inline?: string }[] = [];
@@ -669,6 +728,66 @@ turndownService.addRule('uiFormEmbed', {
   },
 });
 
+// Automate flow embed rule - converts back to @[automate:id] syntax
+turndownService.addRule('automateFlowEmbed', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    if (element.getAttribute('data-type') === 'automate-flow-embed') return true;
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const inner = element.querySelector('[data-type="automate-flow-embed"]');
+      if (inner) return true;
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    let flowId = element.getAttribute('data-flow-id') || '';
+
+    if (!flowId) {
+      const inner = element.querySelector('[data-type="automate-flow-embed"]');
+      if (inner) flowId = inner.getAttribute('data-flow-id') || '';
+    }
+
+    return flowId ? `\n@[automate:${flowId}]\n` : '';
+  },
+});
+
+// Automate script block rule - converts back to ```automate code fence
+turndownService.addRule('automateScriptBlock', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    if (element.getAttribute('data-type') === 'automate-script-block') return true;
+    if (element.getAttribute('data-node-view-wrapper') !== null) {
+      const inner = element.querySelector('[data-type="automate-script-block"]');
+      if (inner) return true;
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    let code = '';
+    let blockId = '';
+
+    const encodedCode = element.getAttribute('data-code');
+    if (encodedCode) {
+      code = decodeURIComponent(encodedCode);
+    }
+    blockId = element.getAttribute('data-block-id') || '';
+
+    if (!code && !blockId) {
+      const inner = element.querySelector('[data-type="automate-script-block"]');
+      if (inner) {
+        const innerCode = inner.getAttribute('data-code');
+        code = innerCode ? decodeURIComponent(innerCode) : '';
+        blockId = inner.getAttribute('data-block-id') || '';
+      }
+    }
+
+    const langTag = blockId ? `automate:${blockId}` : 'automate';
+    return `\n\`\`\`${langTag}\n${code}\n\`\`\`\n`;
+  },
+});
+
 // Helper to process markdown inside column divs
 function processColumnLayouts(html: string): string {
   // Use DOM parser to properly handle nested elements
@@ -705,8 +824,16 @@ export function markdownToHtml(markdown: string): string {
     return '';
   }
 
-  // First, protect UI form embeds from showdown processing
-  const uiFormDataStr = escapeUIFormsForHtml(markdown);
+  // First, protect automate script blocks (code fences) from showdown processing
+  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdown);
+  const { result: markdownWithoutScripts, automateScripts } = JSON.parse(automateScriptDataStr);
+
+  // Protect automate flow embeds from showdown processing
+  const automateFlowDataStr = escapeAutomateFlowsForHtml(markdownWithoutScripts);
+  const { result: markdownWithoutFlows, automateFlows } = JSON.parse(automateFlowDataStr);
+
+  // Protect UI form embeds from showdown processing
+  const uiFormDataStr = escapeUIFormsForHtml(markdownWithoutFlows);
   const { result: markdownWithoutUIForms, uiForms } = JSON.parse(uiFormDataStr);
 
   // Then, protect component embeds from showdown processing
@@ -730,6 +857,12 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore UI form embeds
   html = restoreUIFormsFromHtml(html, uiForms);
+
+  // Restore automate flow embeds
+  html = restoreAutomateFlowsFromHtml(html, automateFlows);
+
+  // Restore automate script blocks
+  html = restoreAutomateScriptsFromHtml(html, automateScripts);
 
   html = html.replace(
     /<li>\s*\[([ xX])\]\s*/g,
@@ -766,6 +899,33 @@ export function htmlToMarkdown(html: string): string {
     (_, encodedInline) => {
       uiForms.push({ id: '', inline: decodeURIComponent(encodedInline) });
       return `##UIFORMEMBED${uiForms.length - 1}##`;
+    }
+  );
+
+  // Pre-process: Replace automate flow embeds with placeholders before Turndown
+  const automateFlows: { id: string }[] = [];
+
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="automate-flow-embed"[^>]*data-flow-id="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
+    (_, flowId) => {
+      automateFlows.push({ id: flowId });
+      return `##AUTOMATEFLOW${automateFlows.length - 1}##`;
+    }
+  );
+
+  // Pre-process: Replace automate script blocks with placeholders before Turndown
+  const automateScripts: { code: string; blockId: string }[] = [];
+
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="automate-script-block"[^>]*?(?:data-block-id="([^"]*)")?[^>]*?(?:data-code="([^"]*)")?[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const codeMatch = match.match(/data-code="([^"]*)"/);
+      const blockIdMatch = match.match(/data-block-id="([^"]*)"/);
+      automateScripts.push({
+        code: codeMatch ? decodeURIComponent(codeMatch[1]) : '',
+        blockId: blockIdMatch ? blockIdMatch[1] : '',
+      });
+      return `##AUTOMATESCRIPT${automateScripts.length - 1}##`;
     }
   );
 
@@ -813,6 +973,21 @@ export function htmlToMarkdown(html: string): string {
   componentEmbeds.forEach((embed, index) => {
     const placeholder = `##COMPEMBED${index}##`;
     const replacement = embed.type ? `@[${embed.type}:${embed.id || ''}]` : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore automate flow embeds as @[automate:id] syntax
+  automateFlows.forEach((flow, index) => {
+    const placeholder = `##AUTOMATEFLOW${index}##`;
+    const replacement = flow.id ? `@[automate:${flow.id}]` : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore automate script blocks as ```automate code fences
+  automateScripts.forEach((script, index) => {
+    const placeholder = `##AUTOMATESCRIPT${index}##`;
+    const langTag = script.blockId ? `automate:${script.blockId}` : 'automate';
+    const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 

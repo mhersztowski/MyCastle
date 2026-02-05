@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import { PacketType } from './PacketType';
 
 export interface PacketData {
@@ -19,7 +20,7 @@ export abstract class Packet {
   }
 
   private generateId(): string {
-    return `${this.type}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    return uuidv4();
   }
 
   abstract getPayload(): unknown;

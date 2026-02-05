@@ -30,7 +30,11 @@ interface EventAddModalProps {
   onAdd: (event: CurrentEvent) => void;
   initialStartTime?: Dayjs;
   initialEndTime?: Dayjs;
+  initialName?: string;
+  initialDescription?: string;
+  initialTaskId?: string;
   mode?: ModalMode;
+  editMode?: boolean;
 }
 
 const EventAddModal: React.FC<EventAddModalProps> = ({
@@ -39,7 +43,11 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
   onAdd,
   initialStartTime,
   initialEndTime,
+  initialName,
+  initialDescription,
+  initialTaskId,
   mode = 'current',
+  editMode = false,
 }) => {
   const { dataSource } = useFilesystem();
   const [name, setName] = useState('');
@@ -50,13 +58,16 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
 
   const isPermanent = mode === 'permanent';
 
-  // Reset times when modal opens
+  // Reset form when modal opens
   useEffect(() => {
     if (open) {
       setStartTime(initialStartTime || dayjs());
       setEndTime(initialEndTime || (initialStartTime ? initialStartTime.add(1, 'hour') : dayjs().add(1, 'hour')));
+      setName(initialName || '');
+      setDescription(initialDescription || '');
+      setTaskId(initialTaskId || null);
     }
-  }, [open, initialStartTime, initialEndTime]);
+  }, [open, initialStartTime, initialEndTime, initialName, initialDescription, initialTaskId]);
 
   const handleTaskChange = useCallback((id: string | null) => {
     setTaskId(id);
@@ -114,7 +125,7 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         {isPermanent ? <AddIcon color="primary" /> : <PlayArrowIcon color="primary" />}
-        {isPermanent ? 'Add Event' : 'Start New Event'}
+        {editMode ? 'Edit Event' : isPermanent ? 'Add Event' : 'Start New Event'}
         <Box sx={{ flexGrow: 1 }} />
         <IconButton onClick={handleClose} size="small">
           <CloseIcon />
@@ -191,7 +202,7 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
           startIcon={isPermanent ? <AddIcon /> : <PlayArrowIcon />}
           color="success"
         >
-          {isPermanent ? 'Add Event' : 'Start Event'}
+          {editMode ? 'Save' : isPermanent ? 'Add Event' : 'Start Event'}
         </Button>
       </DialogActions>
     </Dialog>

@@ -10,11 +10,16 @@
     "test": "jest",
     "lint": "eslint src --ext .ts"
   },
-  "keywords": ["mqtt", "personal-data", "typescript"],
+  "keywords": [
+    "mqtt",
+    "personal-data",
+    "typescript"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@types/uuid": "^10.0.0",
     "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
@@ -27,6 +32,7 @@
   "dependencies": {
     "aedes": "^0.51.0",
     "dotenv": "^16.3.1",
+    "uuid": "^13.0.0",
     "ws": "^8.16.0"
   }
 }

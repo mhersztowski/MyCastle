@@ -34,6 +34,9 @@ import { VideoEmbed } from './extensions/VideoExtension';
 import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
 import { ColumnLayout, Column } from './extensions/ColumnExtension';
 import { UIFormEmbed } from './extensions/UIFormExtension';
+import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
+import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
+import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
 import 'katex/dist/katex.min.css';
 import './MdEditor.css';
@@ -135,6 +138,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
       ColumnLayout,
       Column,
       UIFormEmbed,
+      AutomateFlowEmbed,
+      AutomateScriptBlock,
     ],
     content: '',
     editable,
@@ -467,6 +472,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
   }
 
   return (
+    <AutomateDocumentProvider>
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Collapsible toolbar for mobile */}
       <Collapse in={toolbarVisible} timeout={200}>
@@ -691,6 +697,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
         <EditorContent editor={editor} className="md-editor-content" />
       </Box>
     </Box>
+    </AutomateDocumentProvider>
   );
 };
 

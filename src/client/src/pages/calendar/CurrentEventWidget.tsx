@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Paper,
   Box,
@@ -15,6 +15,7 @@ import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 import { CurrentEvent } from './types';
 import { useFilesystem } from '../../modules/filesystem';
+import { TaskSequenceComponentModel } from '../../modules/filesystem/models/TaskModel';
 
 dayjs.extend(duration);
 
@@ -45,9 +46,19 @@ const CurrentEventWidget: React.FC<CurrentEventWidgetProps> = ({
     return () => clearInterval(interval);
   }, [event.startTime]);
 
-  const taskName = event.taskId
-    ? dataSource.getTaskById(event.taskId)?.getDisplayName()
+  const taskNode = event.taskId
+    ? dataSource.getTaskById(event.taskId)
     : null;
+
+  const taskName = taskNode?.getDisplayName() ?? null;
+
+  const sequenceTasks = useMemo(() => {
+    if (!taskNode?.components) return null;
+    const seqComp = taskNode.components.find(
+      (c): c is TaskSequenceComponentModel => c.type === 'task_sequence'
+    );
+    return seqComp?.tasks ?? null;
+  }, [taskNode]);
 
   return (
     <Paper
@@ -107,6 +118,48 @@ const CurrentEventWidget: React.FC<CurrentEventWidgetProps> = ({
               />
             )}
           </Box>
+          {sequenceTasks && sequenceTasks.length > 0 && (
+            <Box
+              sx={{
+                mt: 1,
+                pl: 1,
+                borderLeft: '2px solid',
+                borderColor: 'success.dark',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.25,
+              }}
+            >
+              <Typography variant="caption" sx={{ fontWeight: 600, opacity: 0.9 }}>
+                Sequence ({sequenceTasks.length})
+              </Typography>
+              {sequenceTasks.map((t, i) => (
+                <Box key={t.id || i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <TaskIcon sx={{ fontSize: 14, opacity: 0.8 }} />
+                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                    {t.name || '(unnamed)'}
+                  </Typography>
+                  {t.description && (
+                    <Typography variant="body2" sx={{ opacity: 0.7 }} noWrap>
+                      — {t.description}
+                    </Typography>
+                  )}
+                  {t.duration != null && (
+                    <Chip
+                      label={`${t.duration}h`}
+                      size="small"
+                      sx={{
+                        height: 18,
+                        fontSize: '0.7rem',
+                        bgcolor: 'success.dark',
+                        color: 'success.contrastText',
+                      }}
+                    />
+                  )}
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
 
         <Box sx={{ textAlign: 'center' }}>

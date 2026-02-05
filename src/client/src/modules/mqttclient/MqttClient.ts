@@ -1,4 +1,5 @@
 import mqtt, { MqttClient as MqttClientType } from 'mqtt';
+import { v4 as uuidv4 } from 'uuid';
 import { PacketType, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload } from './types';
 
 const MQTT_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB - use HTTP for larger files
@@ -112,8 +113,8 @@ export class MqttClient {
     }
   }
 
-  private generateId(type: PacketType): string {
-    return `${type}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  private generateId(): string {
+    return uuidv4();
   }
 
   private sendRequest<T>(type: PacketType, payload: unknown): Promise<T> {
@@ -123,7 +124,7 @@ export class MqttClient {
         return;
       }
 
-      const id = this.generateId(type);
+      const id = this.generateId();
       const packet: PacketData = {
         type,
         id,

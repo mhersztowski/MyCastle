@@ -1,0 +1,367 @@
+/**
+ * Engine - silnik wykonawczy flow automatyzacji
+ */
+
+import { AutomateFlowModel } from '../models/AutomateFlowModel';
+import { AutomateNodeModel } from '../models/AutomateNodeModel';
+import { AutomateEdgeModel } from '../models/AutomateEdgeModel';
+import { AutomateSystemApi, LogEntry, NotificationEntry } from './AutomateSystemApi';
+import { AutomateSandbox } from './AutomateSandbox';
+import { DataSource } from '../../filesystem/data/DataSource';
+
+export interface ExecutionLog {
+  nodeId: string;
+  nodeName: string;
+  nodeType: string;
+  status: 'running' | 'completed' | 'error' | 'skipped';
+  startTime: number;
+  endTime?: number;
+  result?: unknown;
+  error?: string;
+}
+
+export interface ExecutionResult {
+  success: boolean;
+  executionLog: ExecutionLog[];
+  logs: LogEntry[];
+  notifications: NotificationEntry[];
+  variables: Record<string, unknown>;
+  error?: string;
+}
+
+export class AutomateEngine {
+  private variables: Record<string, unknown> = {};
+  private executionLog: ExecutionLog[] = [];
+  private isRunning = false;
+  private shouldAbort = false;
+
+  onNodeStart?: (nodeId: string) => void;
+  onNodeComplete?: (nodeId: string, result: unknown) => void;
+  onNodeError?: (nodeId: string, error: string) => void;
+  onLog?: (entry: ExecutionLog) => void;
+
+  async executeFlow(flow: AutomateFlowModel, dataSource: DataSource): Promise<ExecutionResult> {
+    this.isRunning = true;
+    this.shouldAbort = false;
+    this.executionLog = [];
+
+    // Inicjalizuj zmienne z domyślnymi wartościami
+    this.variables = {};
+    if (flow.variables) {
+      for (const v of flow.variables) {
+        this.variables[v.name] = v.defaultValue ?? null;
+      }
+    }
+
+    const api = new AutomateSystemApi(dataSource, this.variables);
+
+    // Zbuduj mapy adjacencji
+    const nodeMap = new Map<string, AutomateNodeModel>();
+    for (const node of flow.nodes) {
+      nodeMap.set(node.id, node);
+    }
+
+    const outEdges = new Map<string, AutomateEdgeModel[]>();
+    for (const edge of flow.edges) {
+      if (edge.disabled) continue;
+      const list = outEdges.get(edge.sourceNodeId) || [];
+      list.push(edge);
+      outEdges.set(edge.sourceNodeId, list);
+    }
+
+    // Znajdź nody startowe (start, manual_trigger)
+    const startNodes = flow.nodes.filter(
+      n => !n.disabled && (n.nodeType === 'start' || n.nodeType === 'manual_trigger')
+    );
+
+    if (startNodes.length === 0) {
+      this.isRunning = false;
+      return {
+        success: false,
+        executionLog: [],
+        logs: api.logs,
+        notifications: api.notifications,
+        variables: { ...this.variables },
+        error: 'No start node found',
+      };
+    }
+
+    try {
+      for (const startNode of startNodes) {
+        if (this.shouldAbort) break;
+        await this.executeNode(startNode, nodeMap, outEdges, api, {});
+      }
+
+      this.isRunning = false;
+      return {
+        success: true,
+        executionLog: this.executionLog,
+        logs: api.logs,
+        notifications: api.notifications,
+        variables: { ...this.variables },
+      };
+    } catch (err) {
+      this.isRunning = false;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        executionLog: this.executionLog,
+        logs: api.logs,
+        notifications: api.notifications,
+        variables: { ...this.variables },
+        error: errorMsg,
+      };
+    }
+  }
+
+  abort(): void {
+    this.shouldAbort = true;
+    this.isRunning = false;
+  }
+
+  get running(): boolean {
+    return this.isRunning;
+  }
+
+  private async executeNode(
+    node: AutomateNodeModel,
+    nodeMap: Map<string, AutomateNodeModel>,
+    outEdges: Map<string, AutomateEdgeModel[]>,
+    api: AutomateSystemApi,
+    input: Record<string, unknown>,
+  ): Promise<void> {
+    if (this.shouldAbort || node.disabled) return;
+
+    const logEntry: ExecutionLog = {
+      nodeId: node.id,
+      nodeName: node.name,
+      nodeType: node.nodeType,
+      status: 'running',
+      startTime: Date.now(),
+    };
+    this.executionLog.push(logEntry);
+    this.onNodeStart?.(node.id);
+    this.onLog?.(logEntry);
+
+    try {
+      let result: unknown = undefined;
+      let nextPortId: string | null = null;
+
+      switch (node.nodeType) {
+        case 'start':
+        case 'manual_trigger':
+          nextPortId = 'out';
+          break;
+
+        case 'js_execute':
+          if (node.script) {
+            result = await AutomateSandbox.execute(node.script, api, input, this.variables);
+          }
+          nextPortId = 'out';
+          break;
+
+        case 'system_api': {
+          const method = node.config.apiMethod as string;
+          if (method) {
+            api.log.info(`System API call: ${method}`);
+          }
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'if_else': {
+          const condition = node.config.condition as string;
+          let condResult = false;
+          if (condition) {
+            condResult = !!await AutomateSandbox.execute(
+              `return (${condition})`,
+              api, input, this.variables
+            );
+          }
+          nextPortId = condResult ? 'true' : 'false';
+          result = condResult;
+          break;
+        }
+
+        case 'switch': {
+          const expression = node.config.expression as string;
+          const cases = (node.config.cases as string[]) || [];
+          let switchResult: unknown = undefined;
+          if (expression) {
+            switchResult = await AutomateSandbox.execute(
+              `return (${expression})`,
+              api, input, this.variables
+            );
+          }
+          const matchIndex = cases.findIndex(c => c === String(switchResult));
+          nextPortId = matchIndex >= 0 ? `case_${matchIndex}` : 'default';
+          result = switchResult;
+          break;
+        }
+
+        case 'for_loop': {
+          const count = (node.config.count as number) || 0;
+          const indexVar = (node.config.indexVariable as string) || 'i';
+          const bodyEdges = (outEdges.get(node.id) || []).filter(e => e.sourcePortId === 'body');
+
+          for (let i = 0; i < count; i++) {
+            if (this.shouldAbort) break;
+            this.variables[indexVar] = i;
+            for (const edge of bodyEdges) {
+              const targetNode = nodeMap.get(edge.targetNodeId);
+              if (targetNode) {
+                await this.executeNode(targetNode, nodeMap, outEdges, api, { ...input, index: i });
+              }
+            }
+          }
+          nextPortId = 'done';
+          result = count;
+          break;
+        }
+
+        case 'while_loop': {
+          const whileCondition = node.config.condition as string;
+          const maxIter = (node.config.maxIterations as number) || 1000;
+          const whileBodyEdges = (outEdges.get(node.id) || []).filter(e => e.sourcePortId === 'body');
+          let iter = 0;
+
+          while (iter < maxIter && !this.shouldAbort) {
+            let condResult = false;
+            if (whileCondition) {
+              condResult = !!await AutomateSandbox.execute(
+                `return (${whileCondition})`,
+                api, input, this.variables
+              );
+            }
+            if (!condResult) break;
+
+            for (const edge of whileBodyEdges) {
+              const targetNode = nodeMap.get(edge.targetNodeId);
+              if (targetNode) {
+                await this.executeNode(targetNode, nodeMap, outEdges, api, { ...input, iteration: iter });
+              }
+            }
+            iter++;
+          }
+          nextPortId = 'done';
+          result = iter;
+          break;
+        }
+
+        case 'read_variable': {
+          const varName = node.config.variableName as string;
+          result = varName ? this.variables[varName] : undefined;
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'write_variable': {
+          const writeVarName = node.config.variableName as string;
+          const value = node.config.value;
+          if (writeVarName) {
+            this.variables[writeVarName] = value;
+          }
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'log': {
+          const message = node.config.message as string || '';
+          const level = (node.config.level as string) || 'info';
+          const logFn = api.log[level as keyof typeof api.log] || api.log.info;
+          logFn(message);
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'notification': {
+          const notifMessage = node.config.message as string || '';
+          const severity = (node.config.severity as 'success' | 'info' | 'warning' | 'error') || 'info';
+          api.notify(notifMessage, severity);
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'llm_call': {
+          let prompt = '';
+          if (node.config.useScript && node.script) {
+            const scriptResult = await AutomateSandbox.execute(node.script, api, input, this.variables);
+            prompt = String(scriptResult || '');
+          } else {
+            prompt = (node.config.prompt as string) || '';
+          }
+
+          if (prompt) {
+            const llmResult = await api.ai.chat(prompt, {
+              systemPrompt: (node.config.systemPrompt as string) || undefined,
+              model: (node.config.model as string) || undefined,
+              temperature: node.config.temperature as number | undefined,
+              maxTokens: node.config.maxTokens as number | undefined,
+            });
+            result = llmResult;
+            api.log.info(`LLM response (${prompt.substring(0, 50)}...): ${String(llmResult).substring(0, 200)}`);
+          }
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'tts': {
+          let ttsText = '';
+          if (node.config.useScript && node.script) {
+            const scriptResult = await AutomateSandbox.execute(node.script, api, input, this.variables);
+            ttsText = String(scriptResult || '');
+          } else {
+            ttsText = (node.config.text as string) || '';
+          }
+
+          if (ttsText) {
+            await api.speech.say(ttsText, {
+              voice: (node.config.voice as string) || undefined,
+              speed: node.config.speed as number | undefined,
+            });
+            api.log.info(`TTS: "${ttsText.substring(0, 100)}..."`);
+          }
+          result = ttsText;
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'stt': {
+          api.log.info('STT: Node requires user interaction (microphone) - use api.speech in js_execute instead');
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'comment':
+          // Nie wykonuj nic
+          break;
+      }
+
+      logEntry.status = 'completed';
+      logEntry.endTime = Date.now();
+      logEntry.result = result;
+      this.onNodeComplete?.(node.id, result);
+      this.onLog?.(logEntry);
+
+      // Kontynuuj do następnych nodów
+      if (nextPortId) {
+        const edges = (outEdges.get(node.id) || []).filter(e => e.sourcePortId === nextPortId);
+        for (const edge of edges) {
+          if (this.shouldAbort) break;
+          const targetNode = nodeMap.get(edge.targetNodeId);
+          if (targetNode) {
+            await this.executeNode(targetNode, nodeMap, outEdges, api, { ...input, _result: result });
+          }
+        }
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logEntry.status = 'error';
+      logEntry.endTime = Date.now();
+      logEntry.error = errorMsg;
+      this.onNodeError?.(node.id, errorMsg);
+      this.onLog?.(logEntry);
+      throw err;
+    }
+  }
+}

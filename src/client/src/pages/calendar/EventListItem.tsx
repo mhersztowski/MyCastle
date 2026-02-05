@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Paper,
   Box,
@@ -8,26 +8,48 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
+  Collapse,
+  IconButton,
 } from '@mui/material';
 import EventIcon from '@mui/icons-material/Event';
 import TaskIcon from '@mui/icons-material/Task';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { EventNode } from '../../modules/filesystem/nodes';
+import { useFilesystem } from '../../modules/filesystem';
+import { TaskSequenceComponentModel } from '../../modules/filesystem/models/TaskModel';
 
 interface EventListItemProps {
   event: EventNode;
   onInsertBefore?: (event: EventNode) => void;
   onInsertAfter?: (event: EventNode) => void;
+  onEdit?: (event: EventNode) => void;
+  onDelete?: (event: EventNode) => void;
 }
 
-const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, onInsertAfter }) => {
+const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, onInsertAfter, onEdit, onDelete }) => {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [expanded, setExpanded] = useState(false);
   const menuOpen = Boolean(anchorEl);
+  const { dataSource } = useFilesystem();
 
   const isPast = event.isPast();
   const isNow = event.isNow();
+
+  const sequenceTasks = useMemo(() => {
+    if (!event.taskId) return null;
+    const taskNode = dataSource.getTaskById(event.taskId);
+    if (!taskNode?.components) return null;
+    const seqComp = taskNode.components.find(
+      (c): c is TaskSequenceComponentModel => c.type === 'task_sequence'
+    );
+    return seqComp?.tasks ?? null;
+  }, [event.taskId, dataSource]);
 
   const handleClick = (e: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(e.currentTarget);
@@ -45,6 +67,16 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, on
   const handleInsertAfter = () => {
     handleClose();
     onInsertAfter?.(event);
+  };
+
+  const handleEditClick = () => {
+    handleClose();
+    onEdit?.(event);
+  };
+
+  const handleDeleteClick = () => {
+    handleClose();
+    onDelete?.(event);
   };
 
   return (
@@ -121,15 +153,69 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, on
             </Box>
 
             {event.getTaskName() && (
-              <Chip
-                icon={<TaskIcon />}
-                label={event.getTaskName()}
-                size="small"
-                variant="outlined"
-                color="secondary"
-              />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Chip
+                  icon={<TaskIcon />}
+                  label={event.getTaskName()}
+                  size="small"
+                  variant="outlined"
+                  color="secondary"
+                />
+                {sequenceTasks && sequenceTasks.length > 0 && (
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpanded((prev) => !prev);
+                    }}
+                    sx={{ p: 0.25 }}
+                  >
+                    {expanded ? (
+                      <ExpandLessIcon fontSize="small" />
+                    ) : (
+                      <ExpandMoreIcon fontSize="small" />
+                    )}
+                  </IconButton>
+                )}
+              </Box>
             )}
           </Box>
+
+          {sequenceTasks && sequenceTasks.length > 0 && (
+            <Collapse in={expanded} timeout="auto">
+              <Box
+                sx={{
+                  mt: 1,
+                  pl: 1,
+                  borderLeft: '2px solid',
+                  borderColor: 'secondary.light',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 0.5,
+                }}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  Sequence ({sequenceTasks.length})
+                </Typography>
+                {sequenceTasks.map((t, i) => (
+                  <Box key={t.id || i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <TaskIcon sx={{ fontSize: 14, color: 'action.active' }} />
+                    <Typography variant="body2" color="text.secondary">
+                      {t.name || '(unnamed)'}
+                    </Typography>
+                    {t.description && (
+                      <Typography variant="body2" color="text.disabled" noWrap sx={{ maxWidth: 200 }}>
+                        — {t.description}
+                      </Typography>
+                    )}
+                    {t.duration != null && (
+                      <Chip label={`${t.duration}h`} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.7rem' }} />
+                    )}
+                  </Box>
+                ))}
+              </Box>
+            </Collapse>
+          )}
         </Box>
 
         <Typography
@@ -159,6 +245,14 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, on
         horizontal: 'center',
       }}
     >
+      {onEdit && (
+        <MenuItem onClick={handleEditClick}>
+          <ListItemIcon>
+            <EditIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Edit</ListItemText>
+        </MenuItem>
+      )}
       <MenuItem onClick={handleInsertBefore}>
         <ListItemIcon>
           <ArrowUpwardIcon fontSize="small" />
@@ -171,7 +265,16 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, on
         </ListItemIcon>
         <ListItemText>Insert After</ListItemText>
       </MenuItem>
+      {onDelete && (
+        <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
+          <ListItemIcon>
+            <DeleteIcon fontSize="small" color="error" />
+          </ListItemIcon>
+          <ListItemText>Delete</ListItemText>
+        </MenuItem>
+      )}
     </Menu>
+
     </>
   );
 };

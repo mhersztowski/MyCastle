@@ -22,7 +22,12 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import ManageSearchIcon from '@mui/icons-material/ManageSearch';
 import WidgetsIcon from '@mui/icons-material/Widgets';
+import PersonIcon from '@mui/icons-material/Person';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CastleIcon from '@mui/icons-material/Castle';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
 
 const drawerWidth = 240;
 
@@ -52,6 +57,21 @@ const menuItems = [
     path: '/todolist',
   },
   {
+    text: 'Persons',
+    icon: <PersonIcon />,
+    path: '/person',
+  },
+  {
+    text: 'Projects',
+    icon: <FolderIcon />,
+    path: '/project',
+  },
+  {
+    text: 'Automate',
+    icon: <AccountTreeIcon />,
+    path: '/automate',
+  },
+  {
     text: 'Object Viewer',
     icon: <ManageSearchIcon />,
     path: '/objectviewer',
@@ -60,6 +80,21 @@ const menuItems = [
     text: 'Components',
     icon: <WidgetsIcon />,
     path: '/components',
+  },
+  {
+    text: 'Castle Agent',
+    icon: <SmartToyIcon />,
+    path: '/agent',
+  },
+  {
+    text: 'AI Settings',
+    icon: <PsychologyIcon />,
+    path: '/settings/ai',
+  },
+  {
+    text: 'Speech Settings',
+    icon: <RecordVoiceOverIcon />,
+    path: '/settings/speech',
   },
 ];
 

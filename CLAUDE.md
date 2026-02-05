@@ -67,41 +67,110 @@ Aplikacja frontend
           - UICallbackRegistry - rejestr callback'ów (onClick, onChange, onSubmit)
         - services/
           - UIFormService - CRUD dla formularzy (load/save z data/ui_forms.json)
-    - definiuje następujące reużywalne komponenty react
-      - dane z następujących model:
-        - PersonModel z pliku /data/data/persons
-        - TaskModel z pliku /data/data/tasks
-        - ProjectModel z pliku /data/data/projects
-      - natępujące typy model
-        - Label
-          - wygladem przypomina przycisk z ikoną typu np Person
-          - nie edytowalny
-          - majacy props: (id np z PersonModel)
-        - Picker np. PersonPicker
-          - wygladem przypomina przycisk z ikoną typu np Person
-          - majacy props: editable, id (id np z PersonModel)
-          - gdy editable po kliknieciu wywołujacy modal z możliwością wyboru
-      - ObjectSearch - widok przeszukujący opiekty w DataSource na podstawie ich właściwości (możliwośc dodania warunków and, or, not),
+    - Automate - graficzny język programowania wzorowany na NodeRed
+      - Wykonywanie skryptów JavaScript
+      - Aktualnie działa na froncie ale w przyszłości na backendzie też
+      - Udostępniający wykonywanym skryptom proste api do systemu aktualne dokumentacja interfejsu powinna być w pliku docs/automate.md
+      - Posiadający graficzny interfejs użytkownika - graficzne łączenie nodów, okna właściwości nodów
+      - Zapisujący flow do pliku w filesystem
+    - ai - moduł integracji z modelami AI
+      - models/ - interfejsy (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
+      - providers/ - abstrakcja providerów AI z tool calling
+        - AiProvider - interfejs providera
+        - OpenAiProvider - OpenAI + Custom (OpenAI-compatible), tool calling
+        - AnthropicProvider - Anthropic Claude, tool use (translacja formatów)
+        - OllamaProvider - Ollama (local), tool calling (OpenAI-compatible)
+      - services/
+        - AiService - zarządzanie konfiguracją i wywołaniami AI (singleton: aiService)
+      - Konfiguracja: data/ai_config.json (provider, apiKey, baseUrl, defaultModel, defaults)
+      - Integracja z Automate: api.ai (chat, chatMessages, isConfigured) + node LLM Call
+      - Tool calling: obsługa tools/tool_choice w request, toolCalls w response
+    - speech - moduł syntezy i rozpoznawania mowy (TTS/STT/Wake Word)
+      - models/ - interfejsy (SpeechConfigModel, TtsConfig, SttConfig, WakeWordConfig, TtsRequest, SttResponse)
+      - providers/ - abstrakcja providerów
+        - TtsProvider/SttProvider - interfejsy
+        - OpenAiTtsProvider - OpenAI TTS API
+        - BrowserTtsProvider - Web Speech API (speechSynthesis)
+        - OpenAiSttProvider - OpenAI Whisper API
+        - BrowserSttProvider - Web Speech API (SpeechRecognition)
+      - services/
+        - SpeechService - zarządzanie konfiguracją i wywołaniami TTS/STT (singleton: speechService)
+        - AudioRecorder - wrapper na MediaRecorder API
+        - WakeWordService - detekcja frazy aktywacyjnej (singleton: wakeWordService)
+      - components/ - reużywalne komponenty React
+        - SpeakButton - przycisk TTS
+        - MicrophoneButton - przycisk STT z nagrywaniem
+        - WakeWordIndicator - wskaźnik nasłuchiwania wake word
+      - Konfiguracja: data/speech_config.json (tts, stt, wakeWord)
+      - Integracja z Automate: api.speech (say, stop) + nody TTS/STT
+    - conversation - moduł konwersacji z tool calling i scenariuszami
+      - models/ - interfejsy (ConversationAction, ConversationMessage, ConversationScenario, ConversationConfig, ContextInjector)
+      - actions/ - rejestr i wbudowane akcje konwersacyjne
+        - ActionRegistry - rejestr akcji (register, execute, toToolDefinitions)
+        - taskActions - CRUD tasków (list, get, create, update, delete, search)
+        - calendarActions - eventy kalendarza (list_events_today, list_events_date, search_events)
+        - fileActions - operacje plikowe (read_file, write_file, list_directory)
+        - personActions - osoby (list_persons, get_person)
+        - projectActions - projekty (list_projects, get_project)
+        - navigationActions - nawigacja po aplikacji (navigate_to, get_available_pages)
+        - automateActions - automatyzacje (list_flows, run_flow)
+        - initActions - inicjalizacja z dependency injection (DataSource, NavigateFunction)
+      - engine/ - silnik konwersacji
+        - ConversationEngine - pętla tool calling z obsługą scenariuszy, context injectors, confirmation flow
+      - services/
+        - ConversationService - zarządzanie konfiguracją i scenariuszami (singleton: conversationService)
+        - ConversationHistoryService - persystencja historii konwersacji (singleton: conversationHistoryService)
+      - Konfiguracja: data/conversation_config.json (agentMode, scenarios, maxToolCallsPerTurn, historyLimit)
+      - Historia: data/conversation_history.json (messages, scenarioId)
+      - Dokumentacja akcji: docs/conversation.md
+      - Rozszerza AI module o tool calling (AiToolDefinition, AiToolCall) dla OpenAI, Anthropic, Ollama
+      - Rozszerza Castle Agent o tryb agentowy, selektor scenariuszy, UI tool calls, dialog potwierdzenia
+
+- definiuje następujące reużywalne komponenty react
+      - editor - kod tekstowego edytora plików
+      - mdeditor - edytor drag and drop edytora markdown podobny do notion 
+        - rozszerzenia edytora markdown (mdeditor)
+          - UIFormExtension - osadzanie formularzy UI w markdown
+          - format referencji: @[uiform:form-id]
+          - format inline: @[uiform:{...json...}]
+          - slash command: /form
+    - integracja z markdownConverter.ts (serializacja/deserializacja)
+      - upload - ui dodawania plików do systemu
+      - person, project, task - ui zwiazany z PersonModel.ts, PersonNode.ts, ProjectModel.ts, ProjectNode.ts, TaskModel.ts, TaskNode.ts
+        - dane z następujących model:
+          - PersonModel z pliku /data/data/persons
+          - TaskModel z pliku /data/data/tasks
+          - ProjectModel z pliku /data/data/projects
+        - natępujące typy model
+          - Label
+            - wygladem przypomina przycisk z ikoną typu np Person
+            - nie edytowalny
+            - majacy props: (id np z PersonModel)
+          - Picker np. PersonPicker
+            - wygladem przypomina przycisk z ikoną typu np Person
+            - majacy props: editable, id (id np z PersonModel)
+            - gdy editable po kliknieciu wywołujacy modal z możliwością wyboru
+      - ObjectSearch - widok przeszukujący obiekty w DataSource na podstawie ich właściwości (możliwośc dodania warunków and, or, not),
       zwracający liste
 - składa się z następujących stron
     - /filesystem/save - formularz zapisujący dane do pliku
     - /filesystem/list - widok podzielony z lewej drzewo danych po pliknieciu 
-    - /calendar - widok kalendarza
+    - /person - widok edycji person bazuje na /components/person/PersonListEditor.ts
+    - /project - widok edycji project bazuje na /components/project/ProjectListEditor.ts
+    - /calendar - widok kalendarza z AI Day Planner
+    - /settings/ai - konfiguracja providera AI (OpenAI, Anthropic, Ollama, Custom)
+    - /settings/speech - konfiguracja TTS, STT i Wake Word
+    - /agent - Castle Agent - głosowy asystent AI z Wake Word, STT, LLM i TTS (pipeline: wake word → nagrywanie → transkrypcja → AI → synteza mowy), tryb agentowy z tool calling, scenariusze konwersacyjne, persystencja historii
     - /todolist - widok z taskami do zrobienia
     - /components - widok demonstrujący reużywalne komponenty UI te z katalogów person, project, task
-    - /editor/simple/{path} - wydok na bełny ekran edytora monaco do edycji plików 
-      z filesystem: json, md
+    - /editor/simple/{path} - wydok na bełny ekran edytora monaco do edycji plików z filesystem: json, md
     - /viewer/md/{path} - renderowanie zawartości plików md
     pobierz dane i wyswietl, po prawej widok wczytanych danych
     - /objectviewer - oparty na podstawie ObjectSearch wyświetlający listę objektów
     - /designer/ui/:id - visual designer formularzy UI (drag & drop)
     - /viewer/ui/:id - podgląd formularza UI
-- rozszerzenia edytora markdown (mdeditor)
-    - UIFormExtension - osadzanie formularzy UI w markdown
-      - format referencji: @[uiform:form-id]
-      - format inline: @[uiform:{...json...}]
-      - slash command: /form
-    - integracja z markdownConverter.ts (serializacja/deserializacja)
+    - /automate - lista flow automatyzacji
+    - /designer/automate/:id - visual designer flow automatyzacji (NodeRed-like)
 
 ## Directory Structure
 - `src/backend/`: Backend source code (TypeScript)
@@ -123,6 +192,38 @@ Aplikacja frontend
     - `designer/`: UIFormDesigner, UIDesignerCanvas, UIDesignerToolbox, UIDesignerProperties
     - `binding/`: UIFormContext, useUIBinding, UICallbackRegistry
     - `services/`: UIFormService
+  - `src/modules/automate/`: Automate module (NodeRed-like visual programming)
+    - `models/`: AutomateFlowModel, AutomateNodeModel, AutomateEdgeModel, AutomatePortModel
+    - `nodes/`: AutomateFlowNode extends NodeBase
+    - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions)
+    - `engine/`: AutomateEngine, AutomateSandbox, AutomateSystemApi
+    - `designer/`: AutomateDesigner, AutomateDesignerContext, Toolbox, Properties, Toolbar
+      - `components/`: AutomateBaseNode (custom ReactFlow node)
+    - `services/`: AutomateService (CRUD, data/automations.json)
+  - `src/modules/ai/`: AI module (universal provider abstraction + tool calling)
+    - `models/`: AiModels (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
+    - `providers/`: AiProvider interface, OpenAiProvider, AnthropicProvider, OllamaProvider
+    - `services/`: AiService (config load/save, chat, testConnection)
+  - `src/modules/conversation/`: Conversation module (tool calling + scenarios)
+    - `models/`: ConversationModels (ConversationAction, ConversationMessage, ConversationScenario, ConversationConfig)
+    - `actions/`: ActionRegistry, taskActions, calendarActions, fileActions, personActions, projectActions, navigationActions, automateActions, initActions
+    - `engine/`: ConversationEngine (tool calling loop)
+    - `services/`: ConversationService, ConversationHistoryService
+  - `src/modules/speech/`: Speech module (TTS/STT/Wake Word)
+    - `models/`: SpeechModels (SpeechConfigModel, TtsConfig, SttConfig, WakeWordConfig)
+    - `providers/`: TtsProvider, SttProvider, OpenAiTtsProvider, BrowserTtsProvider, OpenAiSttProvider, BrowserSttProvider
+    - `services/`: SpeechService, AudioRecorder, WakeWordService
+    - `components/`: SpeakButton, MicrophoneButton, WakeWordIndicator
+  - `src/pages/agent/`: Castle Agent page (voice assistant with Wake Word + STT + AI + TTS)
+  - `src/pages/automate/`: Automate pages (list, designer)
+  - `src/pages/designer/`: calendar pages
+  - `src/pages/designer/`: test components pages
+  - `src/pages/editor/`: editor pages
+  - `src/pages/objectviewer/`: objectviewer pages
+  - `src/pages/person/`: person pages
+  - `src/pages/project/`: project pages
+  - `src/pages/todolist/`: todolist pages
+  - `src/pages/viewer/`: viewer pages
   - `src/pages/filesystem/`: Filesystem pages (save, list)
   - `src/pages/designer/`: UI Designer pages
   - `src/components/`: Reusable UI components
@@ -139,6 +240,11 @@ Aplikacja frontend
 - `dist/`: Compiled backend code
 - `data/`: Runtime data directory (configurable via ROOT_DIR env)
   - `ui_forms.json`: UI Forms definitions (UIFormsModel)
+  - `automations.json`: Automate flow definitions (AutomateFlowsModel)
+  - `ai_config.json`: AI provider configuration (AiConfigModel)
+  - `speech_config.json`: Speech (TTS/STT/Wake Word) configuration (SpeechConfigModel)
+  - `conversation_config.json`: Conversation module configuration (ConversationConfig, scenarios)
+  - `conversation_history.json`: Persisted conversation history (ConversationHistoryModel)
 
 ## Development Workflow & Commands
 - **Setup:** `npm install` (backend), `cd src/client && npm install` (frontend)

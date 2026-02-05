@@ -33,9 +33,7 @@ import { UIFormDesigner } from '../../modules/uiforms/designer';
 import { uiFormService } from '../../modules/uiforms/services/UIFormService';
 import { UIFormModel, createForm, createControl } from '../../modules/uiforms/models';
 import { useMqtt } from '../../modules/mqttclient';
-
-// Helper: generuj unikalne ID
-const generateId = () => `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+import { v4 as uuidv4 } from 'uuid';
 
 const UIDesignerPage: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
@@ -139,8 +137,8 @@ const UIDesignerPage: React.FC = () => {
   const handleCreateNewForm = () => {
     if (!newFormName.trim()) return;
 
-    const rootControl = createControl('vbox', generateId(), 'root', 'fullRect');
-    const newForm = createForm(generateId(), newFormName.trim(), rootControl);
+    const rootControl = createControl('vbox', uuidv4(), 'root', 'fullRect');
+    const newForm = createForm(uuidv4(), newFormName.trim(), rootControl);
 
     // Zapisz ID nowego formularza żeby useEffect nie próbował go ładować z serwisu
     freshFormIdRef.current = newForm.id;

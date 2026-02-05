@@ -6,9 +6,7 @@ import React, { createContext, useContext, useState, useCallback, useRef, ReactN
 import { UIControlModel, UIFormModel, createControl, createForm } from '../models';
 import { UIControlType } from '../models/UIControlModel';
 import { CONTROL_METADATA } from '../renderer/controls/registry';
-
-// Helper: generuj unikalne ID
-const generateId = () => `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+import { v4 as uuidv4 } from 'uuid';
 
 // Historia dla undo/redo
 interface HistoryEntry {
@@ -82,7 +80,7 @@ const UIDesignerContext = createContext<UIDesignerContextType | null>(null);
 
 // Helper: deep clone with new IDs
 const cloneControlWithNewIds = (control: UIControlModel): UIControlModel => {
-  const newId = `control_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const newId = uuidv4();
   return {
     ...control,
     id: newId,
@@ -275,8 +273,8 @@ export const UIDesignerProvider: React.FC<UIDesignerProviderProps> = ({
   }, []);
 
   const createNewForm = useCallback((name: string) => {
-    const rootControl = createControl('vbox', generateId(), 'root', 'fullRect');
-    const newForm = createForm(generateId(), name, rootControl);
+    const rootControl = createControl('vbox', uuidv4(), 'root', 'fullRect');
+    const newForm = createForm(uuidv4(), name, rootControl);
     setForm(newForm);
   }, [setForm]);
 
@@ -314,7 +312,7 @@ export const UIDesignerProvider: React.FC<UIDesignerProviderProps> = ({
     // Create control with default offsets from metadata
     const newControl = createControl(
       type,
-      generateId(),
+      uuidv4(),
       type,
       'topLeft',
       meta?.defaultOffsets

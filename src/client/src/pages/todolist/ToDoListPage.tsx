@@ -15,13 +15,21 @@ import {
   Divider,
   IconButton,
   Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
 } from '@mui/material';
+import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
 import DoneIcon from '@mui/icons-material/Done';
-import dayjs from 'dayjs';
+import dayjs, { Dayjs } from 'dayjs';
 import { useMqtt } from '../../modules/mqttclient';
 import { useFilesystem } from '../../modules/filesystem';
 import { TaskNode } from '../../modules/filesystem/nodes';
@@ -40,6 +48,8 @@ const ToDoListPage: React.FC = () => {
   const [selectedTab, setSelectedTab] = useState(0);
   const [saving, setSaving] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [doneDialogTask, setDoneDialogTask] = useState<TaskNode | null>(null);
+  const [doneStartTime, setDoneStartTime] = useState<Dayjs>(dayjs());
 
   // Tab types: 'delayed', 'in1day', 'in3days'
   const tabTypes = ['delayed', 'in1day', 'in3days'] as const;
@@ -140,13 +150,22 @@ const ToDoListPage: React.FC = () => {
     return project.getPath().join('.');
   }, [dataSource]);
 
-  const handleDone = useCallback(async (task: TaskNode) => {
+  const handleDoneClick = useCallback((task: TaskNode) => {
+    setDoneStartTime(dayjs());
+    setDoneDialogTask(task);
+  }, []);
+
+  const handleDoneConfirm = useCallback(async () => {
+    if (!doneDialogTask) return;
+    const task = doneDialogTask;
+    setDoneDialogTask(null);
+
     setSaving(task.id);
     setSaveError(null);
 
     try {
-      const now = dayjs();
-      const dateStr = now.format('YYYY-MM-DD');
+      const startTime = doneStartTime;
+      const dateStr = startTime.format('YYYY-MM-DD');
       const [year, month, day] = dateStr.split('-');
 
       // Build event name from project path + task name
@@ -154,7 +173,7 @@ const ToDoListPage: React.FC = () => {
       const eventName = projectPath ? `${projectPath}.${task.name}` : task.name;
 
       // Calculate end time based on task duration (in hours)
-      const endTime = task.duration ? now.add(task.duration, 'hour') : now;
+      const endTime = task.duration ? startTime.add(task.duration, 'hour') : startTime;
 
       // Create the event model
       const newEvent: EventModel = {
@@ -162,7 +181,7 @@ const ToDoListPage: React.FC = () => {
         name: eventName,
         description: task.description,
         taskId: task.id,
-        startTime: now.toISOString(),
+        startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
       };
 
@@ -194,7 +213,7 @@ const ToDoListPage: React.FC = () => {
     } finally {
       setSaving(null);
     }
-  }, [dataSource.events, writeFile, loadAllData, getProjectPath]);
+  }, [doneDialogTask, doneStartTime, dataSource.events, writeFile, loadAllData, getProjectPath]);
 
   if (isConnecting) {
     return (
@@ -332,7 +351,7 @@ const ToDoListPage: React.FC = () => {
                         <Tooltip title="Mark as done">
                           <IconButton
                             color="success"
-                            onClick={() => handleDone(item.task)}
+                            onClick={() => handleDoneClick(item.task)}
                             disabled={saving === item.task.id}
                             size="small"
                           >
@@ -359,6 +378,42 @@ const ToDoListPage: React.FC = () => {
           )}
         </Paper>
       )}
+
+      {/* Mark as Done Dialog */}
+      <Dialog
+        open={!!doneDialogTask}
+        onClose={() => setDoneDialogTask(null)}
+      >
+        <DialogTitle>Mark as Done</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {doneDialogTask?.name}
+          </Typography>
+          <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="pl">
+            <DateTimePicker
+              label="Start time"
+              value={doneStartTime}
+              onChange={(newValue) => newValue && setDoneStartTime(newValue)}
+              slotProps={{
+                textField: { size: 'small', fullWidth: true },
+              }}
+              ampm={false}
+              format="DD.MM.YYYY HH:mm"
+            />
+          </LocalizationProvider>
+          {doneDialogTask?.duration && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+              End time: {doneStartTime.add(doneDialogTask.duration, 'hour').format('DD.MM.YYYY HH:mm')}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDoneDialogTask(null)}>Cancel</Button>
+          <Button onClick={handleDoneConfirm} variant="contained" color="success">
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

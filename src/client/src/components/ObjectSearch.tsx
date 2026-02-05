@@ -31,6 +31,7 @@ import { PersonNode } from '../modules/filesystem/nodes/PersonNode';
 import { TaskNode } from '../modules/filesystem/nodes/TaskNode';
 import { ProjectNode } from '../modules/filesystem/nodes/ProjectNode';
 import { EventNode } from '../modules/filesystem/nodes/EventNode';
+import { v4 as uuidv4 } from 'uuid';
 
 export type ObjectType = 'person' | 'task' | 'project' | 'event';
 export type ConditionOperator = 'and' | 'or' | 'not';
@@ -79,12 +80,11 @@ const OBJECT_TYPE_CONFIG: Record<ObjectType, { label: string; icon: React.ReactN
   },
 };
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
 
 const ObjectSearch: React.FC<ObjectSearchProps> = ({ dataSource, onResultsChange, showResults = true }) => {
   const [objectType, setObjectType] = useState<ObjectType>('person');
   const [groups, setGroups] = useState<SearchGroup[]>([
-    { id: generateId(), operator: 'and', conditions: [] },
+    { id: uuidv4(), operator: 'and', conditions: [] },
   ]);
 
   const addCondition = useCallback((groupId: string) => {
@@ -96,7 +96,7 @@ const ObjectSearch: React.FC<ObjectSearchProps> = ({ dataSource, onResultsChange
               conditions: [
                 ...group.conditions,
                 {
-                  id: generateId(),
+                  id: uuidv4(),
                   field: OBJECT_TYPE_CONFIG[objectType].fields[0],
                   operator: 'contains' as const,
                   value: '',
@@ -137,7 +137,7 @@ const ObjectSearch: React.FC<ObjectSearchProps> = ({ dataSource, onResultsChange
   );
 
   const addGroup = useCallback(() => {
-    setGroups(prev => [...prev, { id: generateId(), operator: 'and', conditions: [] }]);
+    setGroups(prev => [...prev, { id: uuidv4(), operator: 'and', conditions: [] }]);
   }, []);
 
   const removeGroup = useCallback((groupId: string) => {
@@ -227,7 +227,7 @@ const ObjectSearch: React.FC<ObjectSearchProps> = ({ dataSource, onResultsChange
 
   const handleObjectTypeChange = (event: SelectChangeEvent<ObjectType>) => {
     setObjectType(event.target.value as ObjectType);
-    setGroups([{ id: generateId(), operator: 'and', conditions: [] }]);
+    setGroups([{ id: uuidv4(), operator: 'and', conditions: [] }]);
   };
 
   const getResultIcon = (item: SearchResult) => {
