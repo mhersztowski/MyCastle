@@ -14,6 +14,11 @@ import {
   useMediaQuery,
   useTheme,
   Badge,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
@@ -23,6 +28,9 @@ import FolderIcon from '@mui/icons-material/Folder';
 import DescriptionIcon from '@mui/icons-material/Description';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import AutoStoriesIcon from '@mui/icons-material/AutoStories';
+import AddIcon from '@mui/icons-material/Add';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { useMqtt, DirectoryTree, FileData as MqttFileData, BinaryFileData } from '../../modules/mqttclient';
 import { useFilesystem } from '../../modules/filesystem';
 import { DirData } from '../../modules/filesystem/data/DirData';
@@ -90,7 +98,7 @@ const FileListPage: React.FC = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-  const { readBinaryFile, isConnected, isConnecting } = useMqtt();
+  const { readBinaryFile, writeFile, deleteFile, isConnected, isConnecting } = useMqtt();
   const { rootDir, isLoading, isDataLoaded, error: fsError, loadAllData } = useFilesystem();
 
   const [selectedFile, setSelectedFile] = useState<MqttFileData | null>(null);
@@ -99,6 +107,11 @@ const FileListPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState(0);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [addFileDialogOpen, setAddFileDialogOpen] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+  const [addFileLoading, setAddFileLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const openInEditor = () => {
     const filePath = selectedFile?.path || selectedBinaryFile?.path;
@@ -161,6 +174,53 @@ const FileListPage: React.FC = () => {
 
   const handleMobileTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setMobileTab(newValue);
+  };
+
+  const handleAddFile = async () => {
+    if (!newFileName.trim()) return;
+
+    setAddFileLoading(true);
+    setError(null);
+
+    try {
+      const filePath = newFileName.trim().startsWith('/')
+        ? newFileName.trim()
+        : `/${newFileName.trim()}`;
+
+      await writeFile(filePath, '');
+      setAddFileDialogOpen(false);
+      setNewFileName('');
+      await loadAllData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create file');
+    } finally {
+      setAddFileLoading(false);
+    }
+  };
+
+  const handleAddFileDialogClose = () => {
+    setAddFileDialogOpen(false);
+    setNewFileName('');
+  };
+
+  const handleDeleteFile = async () => {
+    const filePath = selectedFile?.path || selectedBinaryFile?.path;
+    if (!filePath) return;
+
+    setDeleteLoading(true);
+    setError(null);
+
+    try {
+      await deleteFile(filePath);
+      setDeleteDialogOpen(false);
+      setSelectedFile(null);
+      setSelectedBinaryFile(null);
+      await loadAllData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete file');
+    } finally {
+      setDeleteLoading(false);
+    }
   };
 
   if (isConnecting) {
@@ -259,6 +319,17 @@ const FileListPage: React.FC = () => {
                 </Tooltip>
               </>
             )}
+            <Tooltip title="Delete file">
+              <Button
+                size="small"
+                variant="outlined"
+                color="error"
+                startIcon={<DeleteIcon />}
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                Delete
+              </Button>
+            </Tooltip>
           </Box>
         )}
       </Box>
@@ -286,24 +357,45 @@ const FileListPage: React.FC = () => {
           File Browser
         </Typography>
         {isMobile ? (
-          <Tooltip title="Upload File">
-            <IconButton
-              color="primary"
-              onClick={() => setUploadModalOpen(true)}
-              sx={{ bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}
-            >
-              <CloudUploadIcon />
-            </IconButton>
-          </Tooltip>
+          <>
+            <Tooltip title="Add Empty File">
+              <IconButton
+                color="primary"
+                onClick={() => setAddFileDialogOpen(true)}
+                sx={{ bgcolor: 'secondary.main', color: 'white', '&:hover': { bgcolor: 'secondary.dark' } }}
+              >
+                <NoteAddIcon />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Upload File">
+              <IconButton
+                color="primary"
+                onClick={() => setUploadModalOpen(true)}
+                sx={{ bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}
+              >
+                <CloudUploadIcon />
+              </IconButton>
+            </Tooltip>
+          </>
         ) : (
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<CloudUploadIcon />}
-            onClick={() => setUploadModalOpen(true)}
-          >
-            Upload
-          </Button>
+          <>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<NoteAddIcon />}
+              onClick={() => setAddFileDialogOpen(true)}
+            >
+              Add File
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<CloudUploadIcon />}
+              onClick={() => setUploadModalOpen(true)}
+            >
+              Upload
+            </Button>
+          </>
         )}
         <Tooltip title="Refresh">
           <IconButton onClick={handleRefresh} disabled={loading}>
@@ -369,6 +461,65 @@ const FileListPage: React.FC = () => {
         onClose={() => setUploadModalOpen(false)}
         onSuccess={() => handleRefresh()}
       />
+
+      <Dialog open={addFileDialogOpen} onClose={handleAddFileDialogClose} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Empty File</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="File path"
+            placeholder="/path/to/file.txt"
+            fullWidth
+            variant="outlined"
+            value={newFileName}
+            onChange={(e) => setNewFileName(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && newFileName.trim()) {
+                handleAddFile();
+              }
+            }}
+            helperText="Enter the full path for the new file (e.g., /notes/todo.md)"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleAddFileDialogClose}>Cancel</Button>
+          <Button
+            onClick={handleAddFile}
+            variant="contained"
+            disabled={!newFileName.trim() || addFileLoading}
+            startIcon={addFileLoading ? <CircularProgress size={16} /> : <AddIcon />}
+          >
+            Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete File</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete this file?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, wordBreak: 'break-all' }}>
+            {currentFilePath}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)} disabled={deleteLoading}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeleteFile}
+            variant="contained"
+            color="error"
+            disabled={deleteLoading}
+            startIcon={deleteLoading ? <CircularProgress size={16} /> : <DeleteIcon />}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

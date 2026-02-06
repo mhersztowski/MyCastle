@@ -9,10 +9,46 @@ Moduł Automate udostępnia graficzny język programowania wzorowany na NodeRed.
 | Zmienna | Opis |
 |---------|------|
 | `api` | System API - dostęp do plików, danych, zmiennych, logowania |
-| `input` (`inp`) | Dane wejściowe z poprzedniego noda |
+| `input` (`inp`) | Dane wejściowe — obiekt kontekstu z wynikiem poprzedniego noda |
 | `variables` (`vars`) | Zmienne flow (bezpośredni dostęp do obiektu) |
 
 > **Skróty:** Zamiast `input` i `variables` można używać krótszych aliasów `inp` i `vars`. Obie formy działają identycznie.
+
+### Przepływ danych między nodami (`input` / `inp`)
+
+`input` (alias `inp`) to obiekt kontekstu przekazywany z poprzedniego noda. Wynik poprzedniego noda jest dostępny w polu `_result`:
+
+```javascript
+// Odczytaj wynik poprzedniego noda
+const prev = inp._result;
+api.log.info(prev);
+```
+
+Prefiks `_` oznacza, że pole jest zarządzane wewnętrznie przez silnik — nie należy go nadpisywać ręcznie.
+
+**Przykład przepływu:**
+
+```
+Start → JS "return 11" → JS "return inp._result * 2" → JS "api.log.info(inp._result)"
+```
+
+| Node | `inp` | `inp._result` | Wynik (`return`) |
+|------|-------|---------------|------------------|
+| JS 1 | `{}` | `undefined` | `11` |
+| JS 2 | `{ _result: 11 }` | `11` | `22` |
+| JS 3 | `{ _result: 22 }` | `22` | — |
+
+Log wyświetli: `22`
+
+**Częsty błąd:** `return inp` zwraca cały obiekt kontekstu (np. `{ _result: 11 }`), nie samą wartość. Następny node otrzyma wtedy `{ _result: { _result: 11 } }` — zagnieżdżony obiekt. Aby przekazać samą wartość, użyj `return inp._result`.
+
+Dodatkowe pola w `input` (zależnie od typu noda):
+
+| Pole | Kiedy dostępne | Opis |
+|------|----------------|------|
+| `inp._result` | Zawsze (po pierwszym nodzie) | Wynik poprzedniego noda |
+| `inp.index` | Wewnątrz `for_loop` body | Aktualny indeks iteracji |
+| `inp.iteration` | Wewnątrz `while_loop` body | Numer iteracji |
 
 ## API Reference
 
@@ -71,13 +107,17 @@ const allVars = api.variables.getAll();
 
 ### api.log
 
-Logowanie wiadomości (widoczne w panelu execution log).
+Logowanie wiadomości (widoczne w panelu execution log). Akceptuje string lub dowolny obiekt — obiekty są automatycznie konwertowane przez `JSON.stringify`.
 
 ```javascript
 api.log.info('Przetwarzanie rozpoczęte');
 api.log.warn('Brak danych wejściowych');
 api.log.error('Nie udało się zapisać pliku');
 api.log.debug('Zmienna counter = ' + variables.counter);
+
+// Logowanie obiektów
+api.log.info(inp._result);        // np. "42" lub '{"name":"Jan"}'
+api.log.info({ a: 1, b: 'test' }); // '{"a":1,"b":"test"}'
 ```
 
 ### api.notify

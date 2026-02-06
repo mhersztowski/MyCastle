@@ -48,14 +48,19 @@ function escapeComponentEmbedsForHtml(content: string): string {
 }
 
 // Helper to escape automate script blocks (```automate code fences) to protect from showdown
+// Format: ```automate, ```automate:blockId, ```automate::autorun, ```automate:blockId:autorun
 function escapeAutomateScriptsForHtml(content: string): string {
-  const automateScripts: { code: string; blockId: string }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean }[] = [];
 
-  // Match ```automate or ```automate:blockId code fences
-  const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, blockId, code) => {
+  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun code fences
+  const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
+    const parts = (params?.trim() || '').split(':');
+    const blockId = parts[0] || '';
+    const autorun = parts.includes('autorun');
     automateScripts.push({
       code: code.trimEnd(),
-      blockId: blockId?.trim() || '',
+      blockId,
+      autorun,
     });
     return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
   });
@@ -63,12 +68,16 @@ function escapeAutomateScriptsForHtml(content: string): string {
   return JSON.stringify({ result, automateScripts });
 }
 
-// Helper to escape automate flow embeds (@[automate:id]) to protect from showdown
+// Helper to escape automate flow embeds (@[automate:id] or @[automate:id:autorun]) to protect from showdown
 function escapeAutomateFlowsForHtml(content: string): string {
-  const automateFlows: { id: string }[] = [];
+  const automateFlows: { id: string; autorun: boolean }[] = [];
 
-  const result = content.replace(/@\[automate:([^\]]+)\]/g, (_, id) => {
-    automateFlows.push({ id: id.trim() });
+  // Match @[automate:id] or @[automate:id:autorun]
+  const result = content.replace(/@\[automate:([^\]]+)\]/g, (_, params) => {
+    const parts = params.trim().split(':');
+    const id = parts[0] || '';
+    const autorun = parts[1] === 'autorun';
+    automateFlows.push({ id, autorun });
     return `%%AUTOMATEFLOW_${automateFlows.length - 1}%%`;
   });
 
@@ -76,11 +85,12 @@ function escapeAutomateFlowsForHtml(content: string): string {
 }
 
 // Helper to restore automate flow embeds after showdown conversion
-function restoreAutomateFlowsFromHtml(html: string, automateFlows: { id: string }[]): string {
+function restoreAutomateFlowsFromHtml(html: string, automateFlows: { id: string; autorun: boolean }[]): string {
   let result = html;
 
   automateFlows.forEach((flow, index) => {
-    const htmlTag = `<div data-type="automate-flow-embed" data-flow-id="${flow.id}"></div>`;
+    const autorunAttr = flow.autorun ? ' data-autorun="true"' : ' data-autorun="false"';
+    const htmlTag = `<div data-type="automate-flow-embed" data-flow-id="${flow.id}"${autorunAttr}></div>`;
     const placeholder = `%%AUTOMATEFLOW_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -91,12 +101,13 @@ function restoreAutomateFlowsFromHtml(html: string, automateFlows: { id: string 
 }
 
 // Helper to restore automate script blocks after showdown conversion
-function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string }[]): string {
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean }[]): string {
   let result = html;
 
   automateScripts.forEach((script, index) => {
     const blockIdAttr = script.blockId ? ` data-block-id="${script.blockId}"` : '';
-    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    const autorunAttr = ` data-autorun="${script.autorun ? 'true' : 'false'}"`;
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
     const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -728,7 +739,7 @@ turndownService.addRule('uiFormEmbed', {
   },
 });
 
-// Automate flow embed rule - converts back to @[automate:id] syntax
+// Automate flow embed rule - converts back to @[automate:id] or @[automate:id:autorun] syntax
 turndownService.addRule('automateFlowEmbed', {
   filter: (node) => {
     const element = node as HTMLElement;
@@ -742,17 +753,22 @@ turndownService.addRule('automateFlowEmbed', {
   replacement: (_content, node) => {
     const element = node as HTMLElement;
     let flowId = element.getAttribute('data-flow-id') || '';
+    let autorun = element.getAttribute('data-autorun') === 'true';
 
     if (!flowId) {
       const inner = element.querySelector('[data-type="automate-flow-embed"]');
-      if (inner) flowId = inner.getAttribute('data-flow-id') || '';
+      if (inner) {
+        flowId = inner.getAttribute('data-flow-id') || '';
+        autorun = inner.getAttribute('data-autorun') === 'true';
+      }
     }
 
-    return flowId ? `\n@[automate:${flowId}]\n` : '';
+    return flowId ? `\n@[automate:${flowId}${autorun ? ':autorun' : ''}]\n` : '';
   },
 });
 
 // Automate script block rule - converts back to ```automate code fence
+// Format: ```automate, ```automate:blockId, ```automate::autorun, ```automate:blockId:autorun
 turndownService.addRule('automateScriptBlock', {
   filter: (node) => {
     const element = node as HTMLElement;
@@ -767,6 +783,7 @@ turndownService.addRule('automateScriptBlock', {
     const element = node as HTMLElement;
     let code = '';
     let blockId = '';
+    let autorun = element.getAttribute('data-autorun') === 'true';
 
     const encodedCode = element.getAttribute('data-code');
     if (encodedCode) {
@@ -780,10 +797,19 @@ turndownService.addRule('automateScriptBlock', {
         const innerCode = inner.getAttribute('data-code');
         code = innerCode ? decodeURIComponent(innerCode) : '';
         blockId = inner.getAttribute('data-block-id') || '';
+        autorun = inner.getAttribute('data-autorun') === 'true';
       }
     }
 
-    const langTag = blockId ? `automate:${blockId}` : 'automate';
+    // Build lang tag: automate, automate:blockId, automate::autorun, automate:blockId:autorun
+    let langTag = 'automate';
+    if (blockId) {
+      langTag = `automate:${blockId}`;
+    }
+    if (autorun) {
+      langTag = blockId ? `automate:${blockId}:autorun` : 'automate::autorun';
+    }
+
     return `\n\`\`\`${langTag}\n${code}\n\`\`\`\n`;
   },
 });
@@ -903,27 +929,31 @@ export function htmlToMarkdown(html: string): string {
   );
 
   // Pre-process: Replace automate flow embeds with placeholders before Turndown
-  const automateFlows: { id: string }[] = [];
+  const automateFlows: { id: string; autorun: boolean }[] = [];
 
   processedHtml = processedHtml.replace(
     /<div[^>]*data-type="automate-flow-embed"[^>]*data-flow-id="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
-    (_, flowId) => {
-      automateFlows.push({ id: flowId });
+    (match, flowId) => {
+      const autorunMatch = match.match(/data-autorun="([^"]*)"/);
+      const autorun = autorunMatch ? autorunMatch[1] === 'true' : false;
+      automateFlows.push({ id: flowId, autorun });
       return `##AUTOMATEFLOW${automateFlows.length - 1}##`;
     }
   );
 
   // Pre-process: Replace automate script blocks with placeholders before Turndown
-  const automateScripts: { code: string; blockId: string }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean }[] = [];
 
   processedHtml = processedHtml.replace(
     /<div[^>]*data-type="automate-script-block"[^>]*?(?:data-block-id="([^"]*)")?[^>]*?(?:data-code="([^"]*)")?[^>]*>[\s\S]*?<\/div>/gi,
     (match) => {
       const codeMatch = match.match(/data-code="([^"]*)"/);
       const blockIdMatch = match.match(/data-block-id="([^"]*)"/);
+      const autorunMatch = match.match(/data-autorun="([^"]*)"/);
       automateScripts.push({
         code: codeMatch ? decodeURIComponent(codeMatch[1]) : '',
         blockId: blockIdMatch ? blockIdMatch[1] : '',
+        autorun: autorunMatch ? autorunMatch[1] === 'true' : false,
       });
       return `##AUTOMATESCRIPT${automateScripts.length - 1}##`;
     }
@@ -976,17 +1006,24 @@ export function htmlToMarkdown(html: string): string {
     markdown = markdown.split(placeholder).join(replacement);
   });
 
-  // Post-process: Restore automate flow embeds as @[automate:id] syntax
+  // Post-process: Restore automate flow embeds as @[automate:id] or @[automate:id:autorun] syntax
   automateFlows.forEach((flow, index) => {
     const placeholder = `##AUTOMATEFLOW${index}##`;
-    const replacement = flow.id ? `@[automate:${flow.id}]` : '';
+    const replacement = flow.id ? `@[automate:${flow.id}${flow.autorun ? ':autorun' : ''}]` : '';
     markdown = markdown.split(placeholder).join(replacement);
   });
 
   // Post-process: Restore automate script blocks as ```automate code fences
+  // Format: automate, automate:blockId, automate::autorun, automate:blockId:autorun
   automateScripts.forEach((script, index) => {
     const placeholder = `##AUTOMATESCRIPT${index}##`;
-    const langTag = script.blockId ? `automate:${script.blockId}` : 'automate';
+    let langTag = 'automate';
+    if (script.blockId) {
+      langTag = `automate:${script.blockId}`;
+    }
+    if (script.autorun) {
+      langTag = script.blockId ? `automate:${script.blockId}:autorun` : 'automate::autorun';
+    }
     const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });

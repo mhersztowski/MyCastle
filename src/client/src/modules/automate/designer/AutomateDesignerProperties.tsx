@@ -65,6 +65,26 @@ const AutomateDesignerProperties: React.FC = () => {
     });
   }, [selectedNodeId, selectedNode, updateNode]);
 
+  // Special handler for switch node cases - syncs output ports with cases
+  const handleSwitchCasesUpdate = useCallback((casesStr: string) => {
+    if (!selectedNodeId || !selectedNode) return;
+    // Parse for outputs - filter empty, but keep raw string for TextField
+    const casesList = casesStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const outputs = [
+      ...casesList.map((c, i) => ({
+        id: `case_${i}`,
+        name: c,
+        direction: 'output' as const,
+        dataType: 'flow' as const,
+      })),
+      { id: 'default', name: 'Default', direction: 'output' as const, dataType: 'flow' as const },
+    ];
+    updateNode(selectedNodeId, {
+      config: { ...selectedNode.config, cases: casesList, casesRaw: casesStr },
+      outputs,
+    });
+  }, [selectedNodeId, selectedNode, updateNode]);
+
   // Resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -244,6 +264,7 @@ const AutomateDesignerProperties: React.FC = () => {
               size="small"
               fullWidth
               placeholder="variables.x > 10"
+              inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
             />
           )}
 
@@ -257,14 +278,16 @@ const AutomateDesignerProperties: React.FC = () => {
                 size="small"
                 fullWidth
                 placeholder="variables.status"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
               />
               <TextField
                 label="Przypadki (oddzielone przecinkiem)"
-                value={((selectedNode.config.cases as string[]) || []).join(', ')}
-                onChange={e => handleConfigUpdate('cases', e.target.value.split(',').map(s => s.trim()))}
+                value={(selectedNode.config.casesRaw as string) ?? ((selectedNode.config.cases as string[]) || []).join(', ')}
+                onChange={e => handleSwitchCasesUpdate(e.target.value)}
                 size="small"
                 fullWidth
                 placeholder="active, inactive, pending"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
               />
             </>
           )}
@@ -286,6 +309,7 @@ const AutomateDesignerProperties: React.FC = () => {
                 onChange={e => handleConfigUpdate('indexVariable', e.target.value)}
                 size="small"
                 fullWidth
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
               />
             </>
           )}
@@ -300,6 +324,7 @@ const AutomateDesignerProperties: React.FC = () => {
                 size="small"
                 fullWidth
                 placeholder="variables.counter < 100"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
               />
               <TextField
                 label="Max iteracji"
@@ -321,6 +346,7 @@ const AutomateDesignerProperties: React.FC = () => {
                 onChange={e => handleConfigUpdate('variableName', e.target.value)}
                 size="small"
                 fullWidth
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
               />
               {selectedNode.nodeType === 'write_variable' && (
                 <TextField
@@ -329,6 +355,7 @@ const AutomateDesignerProperties: React.FC = () => {
                   onChange={e => handleConfigUpdate('value', e.target.value)}
                   size="small"
                   fullWidth
+                  inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
                 />
               )}
             </>
@@ -399,6 +426,7 @@ const AutomateDesignerProperties: React.FC = () => {
               size="small"
               fullWidth
               placeholder="file.read, data.getPersons..."
+              inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
             />
           )}
 
@@ -600,6 +628,80 @@ const AutomateDesignerProperties: React.FC = () => {
               fullWidth
               placeholder="Domyślny z ustawień Speech (pl, en...)"
             />
+          )}
+
+          {/* Manual Trigger - payload */}
+          {selectedNode.nodeType === 'manual_trigger' && (
+            <>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={!!selectedNode.config.useScript}
+                    onChange={e => handleConfigUpdate('useScript', e.target.checked)}
+                    size="small"
+                  />
+                }
+                label={<Typography variant="caption">Dynamiczny payload (ze skryptu)</Typography>}
+              />
+
+              {selectedNode.config.useScript ? (
+                <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1, pt: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Skrypt (return payload)
+                    </Typography>
+                    <Tooltip title="Otwórz w pełnym oknie">
+                      <IconButton size="small" onClick={openScriptDialog}>
+                        <OpenInFullIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                  <Box sx={{ height: 200 }}>
+                    <Editor
+                      height="100%"
+                      defaultLanguage="javascript"
+                      value={selectedNode.script || ''}
+                      onChange={value => handleUpdate('script', value || '')}
+                      beforeMount={setupAutomateMonaco}
+                      options={{
+                        minimap: { enabled: false },
+                        fontSize: 12,
+                        lineNumbers: 'on',
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'on',
+                        tabSize: 2,
+                      }}
+                      theme="vs-dark"
+                    />
+                  </Box>
+                </Box>
+              ) : (
+                <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  <Box sx={{ px: 1, pt: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Payload (JSON)
+                    </Typography>
+                  </Box>
+                  <Box sx={{ height: 150 }}>
+                    <Editor
+                      height="100%"
+                      defaultLanguage="json"
+                      value={(selectedNode.config.payload as string) || '{}'}
+                      onChange={value => handleConfigUpdate('payload', value || '{}')}
+                      options={{
+                        minimap: { enabled: false },
+                        fontSize: 12,
+                        lineNumbers: 'on',
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'on',
+                        tabSize: 2,
+                      }}
+                      theme="vs-dark"
+                    />
+                  </Box>
+                </Box>
+              )}
+            </>
           )}
 
           {/* Comment */}

@@ -9,6 +9,45 @@ import { NODE_TYPE_METADATA } from '../../registry/nodeTypes';
 import { AutomateNodeType } from '../../models';
 import { AutomatePortModel } from '../../models/AutomatePortModel';
 
+// Custom comparator for memo - ensures outputs/inputs changes trigger re-render
+const propsAreEqual = (prevProps: NodeProps, nextProps: NodeProps): boolean => {
+  const prevData = prevProps.data as unknown as AutomateNodeData;
+  const nextData = nextProps.data as unknown as AutomateNodeData;
+
+  // Quick comparison of basic fields
+  if (prevProps.selected !== nextProps.selected) return false;
+  if (prevData.name !== nextData.name) return false;
+  if (prevData.disabled !== nextData.disabled) return false;
+  if (prevData.isExecuting !== nextData.isExecuting) return false;
+  if (prevData.hasError !== nextData.hasError) return false;
+  if (prevData.isMobile !== nextData.isMobile) return false;
+  if (prevData.script !== nextData.script) return false;
+  if (prevData.nodeType !== nextData.nodeType) return false;
+
+  // Deep comparison of outputs (important for switch node)
+  if (prevData.outputs?.length !== nextData.outputs?.length) return false;
+  if (prevData.outputs && nextData.outputs) {
+    for (let i = 0; i < prevData.outputs.length; i++) {
+      if (prevData.outputs[i].id !== nextData.outputs[i].id) return false;
+      if (prevData.outputs[i].name !== nextData.outputs[i].name) return false;
+    }
+  }
+
+  // Deep comparison of inputs
+  if (prevData.inputs?.length !== nextData.inputs?.length) return false;
+  if (prevData.inputs && nextData.inputs) {
+    for (let i = 0; i < prevData.inputs.length; i++) {
+      if (prevData.inputs[i].id !== nextData.inputs[i].id) return false;
+      if (prevData.inputs[i].name !== nextData.inputs[i].name) return false;
+    }
+  }
+
+  // Compare config for preview rendering (comment, js_execute)
+  if (prevData.config.text !== nextData.config.text) return false;
+
+  return true;
+};
+
 export interface AutomateNodeData {
   nodeType: AutomateNodeType;
   name: string;
@@ -164,10 +203,10 @@ const AutomateBaseNode: React.FC<NodeProps> = ({ data, selected }) => {
           .mobile-handle::before {
             content: '';
             position: absolute;
-            top: -12px;
-            left: -12px;
-            right: -12px;
-            bottom: -12px;
+            top: -20px;
+            left: -20px;
+            right: -20px;
+            bottom: -20px;
           }
         `}</style>
       )}
@@ -175,4 +214,4 @@ const AutomateBaseNode: React.FC<NodeProps> = ({ data, selected }) => {
   );
 };
 
-export default memo(AutomateBaseNode);
+export default memo(AutomateBaseNode, propsAreEqual);

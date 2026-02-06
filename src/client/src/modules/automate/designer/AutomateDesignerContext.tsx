@@ -44,6 +44,7 @@ interface AutomateDesignerActions {
   updateNodes: (nodes: AutomateNodeModel[]) => void;
 
   executeFlow: (dataSource: DataSource) => Promise<void>;
+  executeFromNode: (dataSource: DataSource, nodeId: string) => Promise<void>;
   stopExecution: () => void;
 
   undo: () => void;
@@ -279,6 +280,59 @@ export const AutomateDesignerProvider: React.FC<AutomateDesignerProviderProps> =
     engineRef.current = null;
   }, [flow, isExecuting]);
 
+  const executeFromNode = useCallback(async (dataSource: DataSource, nodeId: string) => {
+    if (!flow || isExecuting) return;
+
+    setIsExecuting(true);
+    setExecutionLog([]);
+    setExecutionResult(null);
+    setExecutingNodeIds(new Set());
+    setErrorNodeIds(new Set());
+
+    // executeFromNode only works locally (client-side)
+    const engine = new AutomateEngine();
+    engineRef.current = engine;
+
+    engine.onNodeStart = (id: string) => {
+      setExecutingNodeIds(prev => new Set(prev).add(id));
+    };
+
+    engine.onNodeComplete = (id: string) => {
+      setExecutingNodeIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    };
+
+    engine.onNodeError = (id: string) => {
+      setExecutingNodeIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setErrorNodeIds(prev => new Set(prev).add(id));
+    };
+
+    engine.onLog = (entry: ExecutionLog) => {
+      setExecutionLog(prev => {
+        const existing = prev.findIndex(e => e.nodeId === entry.nodeId && e.startTime === entry.startTime);
+        if (existing >= 0) {
+          const updated = [...prev];
+          updated[existing] = entry;
+          return updated;
+        }
+        return [...prev, entry];
+      });
+    };
+
+    const result = await engine.executeFromNode(flow, dataSource, nodeId);
+    setExecutionResult(result);
+    setIsExecuting(false);
+    setExecutingNodeIds(new Set());
+    engineRef.current = null;
+  }, [flow, isExecuting]);
+
   const stopExecution = useCallback(() => {
     engineRef.current?.abort();
     setIsExecuting(false);
@@ -330,6 +384,7 @@ export const AutomateDesignerProvider: React.FC<AutomateDesignerProviderProps> =
     selectEdge,
     updateNodes,
     executeFlow,
+    executeFromNode,
     stopExecution,
     undo,
     redo,

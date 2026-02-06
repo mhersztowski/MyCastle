@@ -29,11 +29,14 @@ export interface ExecutionResult {
   error?: string;
 }
 
+const MAX_NODE_EXECUTIONS = 10000;
+
 export class AutomateEngine {
   private variables: Record<string, unknown> = {};
   private executionLog: ExecutionLog[] = [];
   private isRunning = false;
   private shouldAbort = false;
+  private nodeExecutionCount = 0;
 
   onNodeStart?: (nodeId: string) => void;
   onNodeComplete?: (nodeId: string, result: unknown) => void;
@@ -44,6 +47,7 @@ export class AutomateEngine {
     this.isRunning = true;
     this.shouldAbort = false;
     this.executionLog = [];
+    this.nodeExecutionCount = 0;
 
     // Inicjalizuj zmienne z domyślnymi wartościami
     this.variables = {};
@@ -69,9 +73,9 @@ export class AutomateEngine {
       outEdges.set(edge.sourceNodeId, list);
     }
 
-    // Znajdź nody startowe (start, manual_trigger)
+    // Znajdź nody startowe (tylko start, manual_trigger jest wyzwalany ręcznie)
     const startNodes = flow.nodes.filter(
-      n => !n.disabled && (n.nodeType === 'start' || n.nodeType === 'manual_trigger')
+      n => !n.disabled && n.nodeType === 'start'
     );
 
     if (startNodes.length === 0) {
@@ -123,6 +127,77 @@ export class AutomateEngine {
     return this.isRunning;
   }
 
+  /**
+   * Execute flow starting from a specific node (e.g., manual_trigger)
+   */
+  async executeFromNode(flow: AutomateFlowModel, dataSource: DataSource, nodeId: string): Promise<ExecutionResult> {
+    this.isRunning = true;
+    this.shouldAbort = false;
+    this.executionLog = [];
+    this.nodeExecutionCount = 0;
+
+    // Inicjalizuj zmienne z domyślnymi wartościami
+    this.variables = {};
+    if (flow.variables) {
+      for (const v of flow.variables) {
+        this.variables[v.name] = v.defaultValue ?? null;
+      }
+    }
+
+    const api = new AutomateSystemApi(dataSource, this.variables);
+
+    // Zbuduj mapy adjacencji
+    const nodeMap = new Map<string, AutomateNodeModel>();
+    for (const node of flow.nodes) {
+      nodeMap.set(node.id, node);
+    }
+
+    const outEdges = new Map<string, AutomateEdgeModel[]>();
+    for (const edge of flow.edges) {
+      if (edge.disabled) continue;
+      const list = outEdges.get(edge.sourceNodeId) || [];
+      list.push(edge);
+      outEdges.set(edge.sourceNodeId, list);
+    }
+
+    const targetNode = nodeMap.get(nodeId);
+    if (!targetNode) {
+      this.isRunning = false;
+      return {
+        success: false,
+        executionLog: [],
+        logs: api.logs,
+        notifications: api.notifications,
+        variables: { ...this.variables },
+        error: `Node not found: ${nodeId}`,
+      };
+    }
+
+    try {
+      await this.executeNode(targetNode, nodeMap, outEdges, api, {});
+
+      this.isRunning = false;
+      return {
+        success: true,
+        executionLog: this.executionLog,
+        logs: api.logs,
+        notifications: api.notifications,
+        variables: { ...this.variables },
+      };
+    } catch (err) {
+      this.isRunning = false;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        executionLog: this.executionLog,
+        logs: api.logs,
+        notifications: api.notifications,
+        variables: { ...this.variables },
+        error: errorMsg,
+      };
+    }
+  }
+
   private async executeNode(
     node: AutomateNodeModel,
     nodeMap: Map<string, AutomateNodeModel>,
@@ -131,6 +206,11 @@ export class AutomateEngine {
     input: Record<string, unknown>,
   ): Promise<void> {
     if (this.shouldAbort || node.disabled) return;
+
+    this.nodeExecutionCount++;
+    if (this.nodeExecutionCount > MAX_NODE_EXECUTIONS) {
+      throw new Error(`Flow execution limit exceeded (${MAX_NODE_EXECUTIONS} nodes). Possible cycle detected.`);
+    }
 
     const logEntry: ExecutionLog = {
       nodeId: node.id,
@@ -149,9 +229,24 @@ export class AutomateEngine {
 
       switch (node.nodeType) {
         case 'start':
-        case 'manual_trigger':
           nextPortId = 'out';
           break;
+
+        case 'manual_trigger': {
+          // Manual trigger evaluates payload and sends it on 'out'
+          if (node.config.useScript && node.script) {
+            result = await AutomateSandbox.execute(node.script, api, input, this.variables);
+          } else {
+            const payloadStr = (node.config.payload as string) || '{}';
+            try {
+              result = JSON.parse(payloadStr);
+            } catch {
+              result = payloadStr;
+            }
+          }
+          nextPortId = 'out';
+          break;
+        }
 
         case 'js_execute':
           if (node.script) {

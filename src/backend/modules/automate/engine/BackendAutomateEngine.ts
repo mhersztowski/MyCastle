@@ -29,16 +29,20 @@ export interface ExecutionResult {
   error?: string;
 }
 
+const MAX_NODE_EXECUTIONS = 10000;
+
 export class BackendAutomateEngine {
   private variables: Record<string, unknown> = {};
   private executionLog: ExecutionLog[] = [];
   private isRunning = false;
   private shouldAbort = false;
+  private nodeExecutionCount = 0;
 
   async executeFlow(flow: AutomateFlowModel, api: AutomateSystemApiInterface): Promise<ExecutionResult> {
     this.isRunning = true;
     this.shouldAbort = false;
     this.executionLog = [];
+    this.nodeExecutionCount = 0;
 
     // Inicjalizuj zmienne z domyślnymi wartościami
     this.variables = {};
@@ -62,9 +66,9 @@ export class BackendAutomateEngine {
       outEdges.set(edge.sourceNodeId, list);
     }
 
-    // Znajdź nody startowe (start, manual_trigger)
+    // Znajdź nody startowe (tylko start, manual_trigger jest wyzwalany ręcznie)
     const startNodes = flow.nodes.filter(
-      n => !n.disabled && (n.nodeType === 'start' || n.nodeType === 'manual_trigger')
+      n => !n.disabled && n.nodeType === 'start'
     );
 
     if (startNodes.length === 0) {
@@ -125,6 +129,11 @@ export class BackendAutomateEngine {
   ): Promise<void> {
     if (this.shouldAbort || node.disabled) return;
 
+    this.nodeExecutionCount++;
+    if (this.nodeExecutionCount > MAX_NODE_EXECUTIONS) {
+      throw new Error(`Flow execution limit exceeded (${MAX_NODE_EXECUTIONS} nodes). Possible cycle detected.`);
+    }
+
     const logEntry: ExecutionLog = {
       nodeId: node.id,
       nodeName: node.name,
@@ -140,9 +149,24 @@ export class BackendAutomateEngine {
 
       switch (node.nodeType) {
         case 'start':
-        case 'manual_trigger':
           nextPortId = 'out';
           break;
+
+        case 'manual_trigger': {
+          // Manual trigger evaluates payload and sends it on 'out'
+          if (node.config.useScript && node.script) {
+            result = await AutomateSandbox.execute(node.script, api, input, this.variables);
+          } else {
+            const payloadStr = (node.config.payload as string) || '{}';
+            try {
+              result = JSON.parse(payloadStr);
+            } catch {
+              result = payloadStr;
+            }
+          }
+          nextPortId = 'out';
+          break;
+        }
 
         case 'js_execute':
           if (node.script) {

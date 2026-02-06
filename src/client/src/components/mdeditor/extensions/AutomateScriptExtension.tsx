@@ -27,6 +27,8 @@ import {
   DialogContent,
   DialogActions,
   Button,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -214,6 +216,7 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
 const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
   const blockId = useRef(node.attrs.blockId || crypto.randomUUID?.() || Math.random().toString(36).substr(2, 9));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autorunTriggeredRef = useRef(false);
 
   const {
     registerBlock,
@@ -227,6 +230,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const [code, setCode] = useState(node.attrs.code as string || '');
   const [editorDialogOpen, setEditorDialogOpen] = useState(false);
   const [dialogCode, setDialogCode] = useState('');
+  const autorun = node.attrs.autorun as boolean;
 
   // Assign blockId if not set
   useEffect(() => {
@@ -246,6 +250,19 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   useEffect(() => {
     updateBlockCode(blockId.current, code);
   }, [code, updateBlockCode]);
+
+  // Autorun effect - run script automatically when loaded if autorun is enabled
+  useEffect(() => {
+    if (autorun && code && !autorunTriggeredRef.current) {
+      autorunTriggeredRef.current = true;
+      runBlock(blockId.current);
+    }
+  }, [autorun, code, runBlock]);
+
+  // Reset autorun trigger when blockId changes
+  useEffect(() => {
+    autorunTriggeredRef.current = false;
+  }, [node.attrs.blockId]);
 
   const blockState = getBlockState(blockId.current);
   const status = blockState?.status || 'idle';
@@ -336,6 +353,21 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           <Typography variant="caption" sx={{ flex: 1, color: '#d4d4d4' }}>
             Skrypt automatyzacji
           </Typography>
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={autorun}
+                onChange={(e) => updateAttributes({ autorun: e.target.checked })}
+                sx={{
+                  '& .MuiSwitch-thumb': { bgcolor: autorun ? '#4caf50' : '#757575' },
+                  '& .MuiSwitch-track': { bgcolor: autorun ? 'rgba(76,175,80,0.5)' : 'rgba(255,255,255,0.2)' },
+                }}
+              />
+            }
+            label={<Typography variant="caption" sx={{ color: '#d4d4d4', fontSize: '0.65rem' }}>Auto</Typography>}
+            sx={{ mr: 0.5, ml: 0 }}
+          />
           <Tooltip title="Uruchom (Ctrl+Enter)">
             <span>
               <IconButton
@@ -367,7 +399,11 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                 size="small"
                 onClick={handleClear}
                 disabled={!hasOutput}
-                sx={{ color: '#d4d4d4', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}
+                sx={{
+                  color: hasOutput ? '#d4d4d4' : '#555555',
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
+                  '&.Mui-disabled': { color: '#555555' },
+                }}
               >
                 <DeleteOutlineIcon fontSize="small" />
               </IconButton>
@@ -498,6 +534,7 @@ export const AutomateScriptBlock = Node.create({
     return {
       blockId: { default: '' },
       code: { default: '' },
+      autorun: { default: false },
     };
   },
 
@@ -513,6 +550,7 @@ export const AutomateScriptBlock = Node.create({
             code: element.getAttribute('data-code')
               ? decodeURIComponent(element.getAttribute('data-code') || '')
               : '',
+            autorun: element.getAttribute('data-autorun') === 'true',
           };
         },
       },
@@ -522,6 +560,7 @@ export const AutomateScriptBlock = Node.create({
   renderHTML({ node }) {
     const attrs: Record<string, string> = {
       'data-type': 'automate-script-block',
+      'data-autorun': node.attrs.autorun ? 'true' : 'false',
     };
 
     if (node.attrs.blockId) {

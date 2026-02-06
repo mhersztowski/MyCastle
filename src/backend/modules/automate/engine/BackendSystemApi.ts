@@ -175,25 +175,38 @@ export class BackendSystemApi implements AutomateSystemApiInterface {
     },
   };
 
+  private _stringify(value: unknown): string {
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
   log = {
-    info: (message: string): void => {
-      this._logs.push({ level: 'info', message, timestamp: Date.now() });
-      console.log('[Automate]', message);
+    info: (message: unknown): void => {
+      const msg = this._stringify(message);
+      this._logs.push({ level: 'info', message: msg, timestamp: Date.now() });
+      console.log('[Automate]', msg);
     },
 
-    warn: (message: string): void => {
-      this._logs.push({ level: 'warn', message, timestamp: Date.now() });
-      console.warn('[Automate]', message);
+    warn: (message: unknown): void => {
+      const msg = this._stringify(message);
+      this._logs.push({ level: 'warn', message: msg, timestamp: Date.now() });
+      console.warn('[Automate]', msg);
     },
 
-    error: (message: string): void => {
-      this._logs.push({ level: 'error', message, timestamp: Date.now() });
-      console.error('[Automate]', message);
+    error: (message: unknown): void => {
+      const msg = this._stringify(message);
+      this._logs.push({ level: 'error', message: msg, timestamp: Date.now() });
+      console.error('[Automate]', msg);
     },
 
-    debug: (message: string): void => {
-      this._logs.push({ level: 'debug', message, timestamp: Date.now() });
-      console.debug('[Automate]', message);
+    debug: (message: unknown): void => {
+      const msg = this._stringify(message);
+      this._logs.push({ level: 'debug', message: msg, timestamp: Date.now() });
+      console.debug('[Automate]', msg);
     },
   };
 

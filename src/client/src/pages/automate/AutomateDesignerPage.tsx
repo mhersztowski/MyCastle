@@ -24,19 +24,175 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Tooltip,
+  Chip,
+  Collapse,
 } from '@mui/material';
 import { useTheme, useMediaQuery } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AddIcon from '@mui/icons-material/Add';
+import FolderIcon from '@mui/icons-material/Folder';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import SaveAsIcon from '@mui/icons-material/SaveAs';
+import ExpandLess from '@mui/icons-material/ExpandLess';
+import ExpandMore from '@mui/icons-material/ExpandMore';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 
 import { AutomateDesigner } from '../../modules/automate/designer/AutomateDesigner';
 import { AutomateDesignerProvider } from '../../modules/automate/designer/AutomateDesignerContext';
 import { automateService } from '../../modules/automate/services/AutomateService';
 import { AutomateFlowModel, createFlow } from '../../modules/automate/models';
-import { useMqtt } from '../../modules/mqttclient';
+import { useMqtt, DirectoryTree } from '../../modules/mqttclient';
 import { useFilesystem } from '../../modules/filesystem/FilesystemContext';
 import { v4 as uuidv4 } from 'uuid';
+
+const FLOW_EXTENSION = '.automate.json';
+
+// Filter tree to only show directories with .automate.json files and the files themselves
+function filterFlowTree(tree: DirectoryTree): DirectoryTree | null {
+  if (tree.type === 'file') {
+    return tree.name.endsWith(FLOW_EXTENSION) ? tree : null;
+  }
+
+  // Directory: filter children
+  const filteredChildren: DirectoryTree[] = [];
+  if (tree.children) {
+    for (const child of tree.children) {
+      const filtered = filterFlowTree(child);
+      if (filtered) {
+        filteredChildren.push(filtered);
+      }
+    }
+  }
+
+  // Only return directory if it has flow files
+  if (filteredChildren.length > 0) {
+    return { ...tree, children: filteredChildren };
+  }
+  return null;
+}
+
+interface FlowTreeNodeProps {
+  node: DirectoryTree;
+  level: number;
+  flowsMap: Map<string, AutomateFlowModel>;
+  onSelect: (flow: AutomateFlowModel) => void;
+}
+
+const FlowTreeNode: React.FC<FlowTreeNodeProps> = ({ node, level, flowsMap, onSelect }) => {
+  const [open, setOpen] = useState(level < 2);
+
+  const isDirectory = node.type === 'directory';
+  const flow = !isDirectory ? flowsMap.get(node.path) : undefined;
+
+  const handleClick = () => {
+    if (isDirectory) {
+      setOpen(!open);
+    } else if (flow) {
+      onSelect(flow);
+    }
+  };
+
+  return (
+    <>
+      <ListItemButton onClick={handleClick} sx={{ pl: 2 + level * 2 }}>
+        <ListItemIcon sx={{ minWidth: 36 }}>
+          {isDirectory ? (
+            open ? <FolderOpenIcon color="primary" /> : <FolderIcon color="primary" />
+          ) : (
+            <AccountTreeIcon color="warning" />
+          )}
+        </ListItemIcon>
+        <ListItemText
+          primary={isDirectory ? node.name : (flow?.name || node.name.replace(FLOW_EXTENSION, ''))}
+          secondary={!isDirectory && flow?.description}
+          primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+          secondaryTypographyProps={{ variant: 'caption', noWrap: true }}
+        />
+        {isDirectory && node.children && node.children.length > 0 && (
+          open ? <ExpandLess /> : <ExpandMore />
+        )}
+      </ListItemButton>
+
+      {isDirectory && node.children && (
+        <Collapse in={open} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding>
+            {node.children.map((child, index) => (
+              <FlowTreeNode
+                key={`${child.path}-${index}`}
+                node={child}
+                level={level + 1}
+                flowsMap={flowsMap}
+                onSelect={onSelect}
+              />
+            ))}
+          </List>
+        </Collapse>
+      )}
+    </>
+  );
+};
+
+// Directory picker tree node for selecting where to save flow
+interface DirTreeNodeProps {
+  node: DirectoryTree;
+  level: number;
+  selectedPath: string;
+  onSelect: (path: string) => void;
+}
+
+const DirTreeNode: React.FC<DirTreeNodeProps> = ({ node, level, selectedPath, onSelect }) => {
+  const [open, setOpen] = useState(level < 2);
+
+  if (node.type !== 'directory') return null;
+
+  const isSelected = node.path === selectedPath;
+
+  return (
+    <>
+      <ListItemButton
+        onClick={() => onSelect(node.path)}
+        selected={isSelected}
+        sx={{ pl: 2 + level * 2, py: 0.5 }}
+      >
+        <ListItemIcon sx={{ minWidth: 32 }}>
+          {open ? <FolderOpenIcon fontSize="small" color="primary" /> : <FolderIcon fontSize="small" color="primary" />}
+        </ListItemIcon>
+        <ListItemText
+          primary={node.name || '/'}
+          primaryTypographyProps={{ variant: 'body2' }}
+        />
+        {node.children && node.children.some(c => c.type === 'directory') && (
+          <IconButton
+            size="small"
+            onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+          >
+            {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+          </IconButton>
+        )}
+      </ListItemButton>
+
+      {node.children && (
+        <Collapse in={open} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding>
+            {node.children
+              .filter(c => c.type === 'directory')
+              .map((child, index) => (
+                <DirTreeNode
+                  key={`${child.path}-${index}`}
+                  node={child}
+                  level={level + 1}
+                  selectedPath={selectedPath}
+                  onSelect={onSelect}
+                />
+              ))}
+          </List>
+        </Collapse>
+      )}
+    </>
+  );
+};
 
 const AutomateDesignerPage: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
@@ -57,8 +213,18 @@ const AutomateDesignerPage: React.FC = () => {
 
   const [newFlowDialogOpen, setNewFlowDialogOpen] = useState(false);
   const [newFlowName, setNewFlowName] = useState('');
+  const [newFlowPath, setNewFlowPath] = useState('data/automations');
   const [selectFlowDialogOpen, setSelectFlowDialogOpen] = useState(false);
   const [availableFlows, setAvailableFlows] = useState<AutomateFlowModel[]>([]);
+  const [flowTree, setFlowTree] = useState<DirectoryTree | null>(null);
+  const [flowsMap, setFlowsMap] = useState<Map<string, AutomateFlowModel>>(new Map());
+  const [flowPath, setFlowPath] = useState<string | undefined>();
+  const [saveAsDialogOpen, setSaveAsDialogOpen] = useState(false);
+  const [saveAsPath, setSaveAsPath] = useState('');
+  const [loadingTree, setLoadingTree] = useState(false);
+  const [dirTree, setDirTree] = useState<DirectoryTree | null>(null);
+  const [showNewFlowDirPicker, setShowNewFlowDirPicker] = useState(false);
+  const [showSaveAsDirPicker, setShowSaveAsDirPicker] = useState(false);
 
   const freshFlowIdRef = useRef<string | null>(null);
 
@@ -81,14 +247,15 @@ const AutomateDesignerPage: React.FC = () => {
         const flowNode = automateService.getFlowById(id);
         if (flowNode) {
           setFlow(flowNode.toModel());
+          setFlowPath(automateService.getFlowPath(id));
         } else {
           setSnackbar({ open: true, message: `Nie znaleziono flow: ${id}`, severity: 'error' });
           setFlow(null);
+          setFlowPath(undefined);
         }
       } else {
         setFlow(null);
-        setSelectFlowDialogOpen(true);
-        setAvailableFlows(automateService.getAllFlows().map(f => f.toModel()));
+        openSelectFlowDialog();
       }
 
       setLoading(false);
@@ -97,14 +264,77 @@ const AutomateDesignerPage: React.FC = () => {
     loadFlow();
   }, [id, isConnected]);
 
-  const handleSave = useCallback(async (flowToSave: AutomateFlowModel) => {
+  const { listDirectory } = useMqtt();
+
+  // Load directory tree for pickers
+  const loadDirTree = useCallback(async () => {
+    if (dirTree) return;
+    try {
+      const tree = await listDirectory('');
+      setDirTree(tree);
+    } catch (err) {
+      console.error('Failed to load directory tree:', err);
+    }
+  }, [dirTree, listDirectory]);
+
+  // Load dir tree when new flow dialog opens
+  useEffect(() => {
+    if (newFlowDialogOpen && !dirTree) {
+      loadDirTree();
+    }
+  }, [newFlowDialogOpen, dirTree, loadDirTree]);
+
+  // Load dir tree when save as dialog opens
+  useEffect(() => {
+    if (saveAsDialogOpen && !dirTree) {
+      loadDirTree();
+    }
+  }, [saveAsDialogOpen, dirTree, loadDirTree]);
+
+  const openSelectFlowDialog = useCallback(async () => {
+    setSelectFlowDialogOpen(true);
+    setLoadingTree(true);
+
+    try {
+      // Load flows if not loaded
+      if (!automateService.loaded) {
+        await automateService.loadFlows();
+      }
+
+      // Build flows map (path -> flow)
+      const flows = automateService.getAllFlows();
+      const map = new Map<string, AutomateFlowModel>();
+      for (const f of flows) {
+        const path = automateService.getFlowPath(f.id);
+        if (path) {
+          map.set(path, f.toModel());
+        }
+      }
+      setFlowsMap(map);
+      setAvailableFlows(flows.map(f => f.toModel()));
+
+      // Load directory tree
+      const tree = await listDirectory('');
+      const filtered = filterFlowTree(tree);
+      setFlowTree(filtered);
+    } catch (err) {
+      console.error('Failed to load flow tree:', err);
+    } finally {
+      setLoadingTree(false);
+    }
+  }, [listDirectory]);
+
+  const handleSave = useCallback(async (flowToSave: AutomateFlowModel, customPath?: string) => {
     setSaving(true);
     try {
-      await automateService.createFlow(flowToSave);
+      await automateService.createFlow(flowToSave, customPath);
 
       if (freshFlowIdRef.current === flowToSave.id) {
         freshFlowIdRef.current = null;
       }
+
+      // Update displayed path
+      setFlowPath(automateService.getFlowPath(flowToSave.id));
 
       setSnackbar({ open: true, message: 'Flow zapisany', severity: 'success' });
 
@@ -118,22 +348,51 @@ const AutomateDesignerPage: React.FC = () => {
     }
   }, [id, navigate]);
 
-  const handleCreateNewFlow = () => {
+  const handleSaveAs = useCallback(async () => {
+    if (!flow || !saveAsPath.trim()) return;
+    const selectedDir = saveAsPath.trim();
+    const customPath = `${selectedDir}/${flow.id}.automate.json`;
+    setSaveAsDialogOpen(false);
+    setShowSaveAsDirPicker(false);
+    await handleSave({ ...flow, updatedAt: new Date().toISOString() }, customPath);
+    setSaveAsPath('');
+  }, [flow, saveAsPath, handleSave]);
+
+  const handleCreateNewFlow = async () => {
     if (!newFlowName.trim()) return;
 
-    const newFlow = createFlow(uuidv4(), newFlowName.trim());
+    const flowId = uuidv4();
+    const newFlow = createFlow(flowId, newFlowName.trim());
     freshFlowIdRef.current = newFlow.id;
+
+    // Build custom path from selected directory
+    const selectedDir = newFlowPath.trim() || 'data/automations';
+    const customPath = `${selectedDir}/${flowId}.automate.json`;
 
     setFlow(newFlow);
     setLoading(false);
     setNewFlowDialogOpen(false);
     setSelectFlowDialogOpen(false);
     setNewFlowName('');
+    setNewFlowPath('data/automations');
+    setShowNewFlowDirPicker(false);
     navigate(`/designer/automate/${newFlow.id}`, { replace: true });
+
+    // Save immediately to custom path
+    await handleSave(newFlow, customPath);
+  };
+
+  const openSaveAsDialog = () => {
+    // Extract directory from current path
+    const currentDir = flowPath ? flowPath.substring(0, flowPath.lastIndexOf('/')) : 'data/automations';
+    setSaveAsPath(currentDir);
+    setShowSaveAsDirPicker(false);
+    setSaveAsDialogOpen(true);
   };
 
   const handleSelectFlow = (selectedFlow: AutomateFlowModel) => {
     setFlow(selectedFlow);
+    setFlowPath(automateService.getFlowPath(selectedFlow.id));
     setSelectFlowDialogOpen(false);
     navigate(`/designer/automate/${selectedFlow.id}`, { replace: true });
   };
@@ -174,7 +433,7 @@ const AutomateDesignerPage: React.FC = () => {
           <Typography
             variant="h6"
             component="div"
-            sx={{ flexGrow: 1, fontSize: isMobile ? '1rem' : undefined }}
+            sx={{ fontSize: isMobile ? '1rem' : undefined }}
             noWrap
           >
             {isMobile
@@ -182,6 +441,25 @@ const AutomateDesignerPage: React.FC = () => {
               : `Automate Designer${flow ? ` - ${flow.name}` : ''}`
             }
           </Typography>
+          {flowPath && !isMobile && (
+            <Tooltip title={flowPath}>
+              <Chip
+                icon={<FolderIcon />}
+                label={flowPath.split('/').pop()}
+                size="small"
+                variant="outlined"
+                sx={{ ml: 1, maxWidth: 200 }}
+              />
+            </Tooltip>
+          )}
+          <Box sx={{ flexGrow: 1 }} />
+          {flow && !isMobile && (
+            <Tooltip title="Zapisz jako...">
+              <IconButton size="small" onClick={openSaveAsDialog} sx={{ mr: 1 }}>
+                <SaveAsIcon />
+              </IconButton>
+            </Tooltip>
+          )}
           {saving && <CircularProgress size={20} sx={{ mr: 2 }} />}
         </Toolbar>
       </AppBar>
@@ -207,10 +485,7 @@ const AutomateDesignerPage: React.FC = () => {
               </Button>
               <Button
                 variant="outlined"
-                onClick={() => {
-                  setAvailableFlows(automateService.getAllFlows().map(f => f.toModel()));
-                  setSelectFlowDialogOpen(true);
-                }}
+                onClick={openSelectFlowDialog}
               >
                 Otwórz istniejący
               </Button>
@@ -229,7 +504,7 @@ const AutomateDesignerPage: React.FC = () => {
         </Alert>
       </Snackbar>
 
-      <Dialog open={newFlowDialogOpen} onClose={() => setNewFlowDialogOpen(false)}>
+      <Dialog open={newFlowDialogOpen} onClose={() => setNewFlowDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Nowy flow</DialogTitle>
         <DialogContent>
           <TextField
@@ -238,14 +513,121 @@ const AutomateDesignerPage: React.FC = () => {
             label="Nazwa flow"
             value={newFlowName}
             onChange={e => setNewFlowName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleCreateNewFlow(); }}
-            sx={{ mt: 1 }}
+            onKeyDown={e => { if (e.key === 'Enter' && newFlowName.trim() && !showNewFlowDirPicker) handleCreateNewFlow(); }}
+            sx={{ mt: 1, mb: 2 }}
           />
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <FolderIcon color="primary" fontSize="small" />
+            <Typography variant="body2" color="text.secondary">
+              Lokalizacja:
+            </Typography>
+            <Typography variant="body2" sx={{ flex: 1 }}>
+              {newFlowPath || 'data/automations'}
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<CreateNewFolderIcon />}
+              onClick={() => setShowNewFlowDirPicker(!showNewFlowDirPicker)}
+            >
+              {showNewFlowDirPicker ? 'Ukryj' : 'Zmień'}
+            </Button>
+          </Box>
+
+          <Collapse in={showNewFlowDirPicker}>
+            <Box
+              sx={{
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                maxHeight: 250,
+                overflow: 'auto',
+                mb: 1,
+              }}
+            >
+              {dirTree ? (
+                <List dense disablePadding>
+                  <DirTreeNode
+                    node={dirTree}
+                    level={0}
+                    selectedPath={newFlowPath || 'data/automations'}
+                    onSelect={setNewFlowPath}
+                  />
+                </List>
+              ) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              )}
+            </Box>
+          </Collapse>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setNewFlowDialogOpen(false)}>Anuluj</Button>
+          <Button onClick={() => { setNewFlowDialogOpen(false); setShowNewFlowDirPicker(false); }}>Anuluj</Button>
           <Button onClick={handleCreateNewFlow} variant="contained" disabled={!newFlowName.trim()}>
             Utwórz
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={saveAsDialogOpen} onClose={() => setSaveAsDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Zapisz jako</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, mb: 1 }}>
+            <FolderIcon color="primary" fontSize="small" />
+            <Typography variant="body2" color="text.secondary">
+              Lokalizacja:
+            </Typography>
+            <Typography variant="body2" sx={{ flex: 1 }}>
+              {saveAsPath || 'data/automations'}
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<CreateNewFolderIcon />}
+              onClick={() => setShowSaveAsDirPicker(!showSaveAsDirPicker)}
+            >
+              {showSaveAsDirPicker ? 'Ukryj' : 'Zmień'}
+            </Button>
+          </Box>
+
+          <Collapse in={showSaveAsDirPicker}>
+            <Box
+              sx={{
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                maxHeight: 250,
+                overflow: 'auto',
+                mb: 1,
+              }}
+            >
+              {dirTree ? (
+                <List dense disablePadding>
+                  <DirTreeNode
+                    node={dirTree}
+                    level={0}
+                    selectedPath={saveAsPath || 'data/automations'}
+                    onSelect={setSaveAsPath}
+                  />
+                </List>
+              ) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              )}
+            </Box>
+          </Collapse>
+
+          <Typography variant="caption" color="text.secondary">
+            Plik zostanie zapisany jako: {saveAsPath || 'data/automations'}/{flow?.id}.automate.json
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setSaveAsDialogOpen(false); setShowSaveAsDirPicker(false); }}>Anuluj</Button>
+          <Button onClick={handleSaveAs} variant="contained" disabled={!saveAsPath.trim()}>
+            Zapisz
           </Button>
         </DialogActions>
       </Dialog>
@@ -257,19 +639,26 @@ const AutomateDesignerPage: React.FC = () => {
         fullWidth
       >
         <DialogTitle>Wybierz flow</DialogTitle>
-        <DialogContent dividers sx={{ p: 0 }}>
-          {availableFlows.length === 0 ? (
+        <DialogContent dividers sx={{ p: 0, minHeight: 300, maxHeight: 400, overflow: 'auto' }}>
+          {loadingTree ? (
+            <Box sx={{ p: 3, display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress />
+            </Box>
+          ) : !flowTree || availableFlows.length === 0 ? (
             <Box sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
               <Typography>Brak flow</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Utwórz nowy flow lub dodaj pliki .automate.json do filesystem
+              </Typography>
             </Box>
           ) : (
-            <List>
-              {availableFlows.map(f => (
-                <ListItemButton key={f.id} onClick={() => handleSelectFlow(f)}>
-                  <ListItemIcon><AccountTreeIcon color="primary" /></ListItemIcon>
-                  <ListItemText primary={f.name} secondary={f.description || f.id} />
-                </ListItemButton>
-              ))}
+            <List component="nav" dense>
+              <FlowTreeNode
+                node={flowTree}
+                level={0}
+                flowsMap={flowsMap}
+                onSelect={handleSelectFlow}
+              />
             </List>
           )}
         </DialogContent>

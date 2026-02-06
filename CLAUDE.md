@@ -127,12 +127,23 @@ Aplikacja frontend
       - Udostępniający wykonywanym skryptom proste api do systemu, dokumentacja interfejsu w docs/automate.md
       - Posiadający graficzny interfejs użytkownika - graficzne łączenie nodów, okna właściwości nodów
       - Responsywny designer mobilny (bottom drawers, FAB, touch-friendly handles, tap-to-add)
-      - Zapisujący flow do pliku w filesystem
+      - Zapisujący flow do plików *.automate.json w dowolnej lokalizacji filesystem
       - Runtime classification: nody klasyfikowane jako client/backend/universal
       - Flow z runtime 'backend' lub 'universal' wykonywane na serwerze przez MQTT (AUTOMATE_RUN)
       - Flow z runtime 'client' lub bez runtime wykonywane lokalnie w przeglądarce
       - Skróty w skryptach: `inp` (= input), `vars` (= variables) — aliasy dla wygody mobilnej
       - automateActions (conversation) — list_flows zwraca runtime, run_flow routuje backend/universal do MQTT
+      - Trigger nodes:
+        - Start node - uruchamiany przy kliknięciu "Run flow" (przycisk play)
+        - Manual Trigger - uruchamiany przez double-click/tap na nodzie, ma własny payload (JSON lub script)
+        - executeFromNode - metoda silnika uruchamiająca flow od konkretnego noda (dla Manual Trigger)
+      - Lista flow (/automate) - widok drzewiasty z hierarchią katalogów, directory picker przy tworzeniu nowego flow
+      - Designer (/designer/automate/:id) - directory picker przy "Nowy flow" i "Zapisz jako"
+    - notification - moduł powiadomień aplikacji
+      - NotificationService - serwis do wyświetlania powiadomień (singleton: notificationService)
+      - useNotification - hook do wyświetlania powiadomień z kontekstu React
+      - NotificationProvider - context provider dla powiadomień
+      - Typy: success, error, warning, info
     - ai - moduł integracji z modelami AI
       - models/ - interfejsy (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
       - providers/ - abstrakcja providerów AI z tool calling
@@ -201,12 +212,19 @@ Aplikacja frontend
 
 - definiuje następujące reużywalne komponenty react
       - editor - kod tekstowego edytora plików
-      - mdeditor - edytor drag and drop edytora markdown podobny do notion 
+      - mdeditor - edytor drag and drop edytora markdown podobny do notion
         - rozszerzenia edytora markdown (mdeditor)
           - UIFormExtension - osadzanie formularzy UI w markdown
           - format referencji: @[uiform:form-id]
           - format inline: @[uiform:{...json...}]
           - slash command: /form
+          - AutomateFlowExtension - osadzanie flow automatyzacji w markdown
+          - format referencji: @[automate:flow-id]
+          - Picker z drzewiastym widokiem katalogów (tree view) - hierarchiczne przeglądanie flow
+          - Uruchamianie flow z dokumentu (backend/universal via MQTT)
+          - AutomateScriptExtension - osadzanie skryptów JS w markdown
+          - format: @[automate-script:{...}]
+          - Edytor Monaco z podpowiedziami API
     - integracja z markdownConverter.ts (serializacja/deserializacja)
       - upload - ui dodawania plików do systemu
       - person, project, task - ui zwiazany z PersonModel.ts, PersonNode.ts, ProjectModel.ts, ProjectNode.ts, TaskModel.ts, TaskNode.ts
@@ -234,6 +252,7 @@ Aplikacja frontend
     - /settings/ai - konfiguracja providera AI (OpenAI, Anthropic, Ollama, Custom)
     - /settings/speech - konfiguracja TTS, STT i Wake Word
     - /settings/receipt - konfiguracja silnika skanowania paragonów (AI Vision / Lokalne OCR / Hybrydowe), test dostępności OCR backend
+    - /settings/hooks - konfiguracja hooków stron (Page Hooks) - automatyczne akcje przy otwieraniu stron
     - /shopping - listy zakupów z skanowaniem paragonów (aparat/plik → OCR/AI → przegląd → import do listy)
     - /agent - Castle Agent - głosowy asystent AI z Wake Word, STT, LLM i TTS (pipeline: wake word → nagrywanie → transkrypcja → AI → synteza mowy), tryb agentowy z tool calling, scenariusze konwersacyjne, persystencja historii
     - /todolist - widok z taskami do zrobienia
@@ -244,8 +263,8 @@ Aplikacja frontend
     - /objectviewer - oparty na podstawie ObjectSearch wyświetlający listę objektów
     - /designer/ui/:id - visual designer formularzy UI (drag & drop)
     - /viewer/ui/:id - podgląd formularza UI
-    - /automate - lista flow automatyzacji
-    - /designer/automate/:id - visual designer flow automatyzacji (NodeRed-like)
+    - /automate - lista flow automatyzacji (tree view z hierarchią katalogów, directory picker dla nowych flow)
+    - /designer/automate/:id - visual designer flow automatyzacji (NodeRed-like), directory picker przy tworzeniu/zapisywaniu
 
 ## Directory Structure
 - `src/backend/`: Backend source code (TypeScript)
@@ -287,11 +306,16 @@ Aplikacja frontend
     - `models/`: AutomateFlowModel (+ runtime field), AutomateNodeModel (+ AutomateNodeRuntime), AutomateEdgeModel, AutomatePortModel
     - `nodes/`: AutomateFlowNode extends NodeBase (+ runtime property)
     - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions + runtime per node type)
-    - `engine/`: AutomateEngine, AutomateSandbox (+ inp/vars aliases), AutomateSystemApi
-    - `designer/`: AutomateDesigner (responsive desktop + mobile), AutomateDesignerContext (+ backend routing), Toolbox, Properties, Toolbar
+    - `engine/`: AutomateEngine (+ executeFromNode), AutomateSandbox (+ inp/vars aliases), AutomateSystemApi
+    - `designer/`: AutomateDesigner (responsive desktop + mobile), AutomateDesignerContext (+ backend routing, executeFromNode), Toolbox, Properties, Toolbar
       - `components/`: AutomateBaseNode (custom ReactFlow node, mobile-responsive sizing + touch targets)
       - `mobile/`: AutomateMobileToolbar, AutomateMobileToolbox, AutomateMobileProperties, AutomateMobileLog
-    - `services/`: AutomateService (CRUD, data/automations.json)
+    - `hooks/`: useAutomateHooks - hooki dla flow automatyzacji
+    - `services/`: AutomateService (CRUD, *.automate.json files anywhere in filesystem, directory tree scanning)
+  - `src/modules/notification/`: Notification module
+    - `NotificationContext.tsx`: React context i provider dla powiadomień
+    - `NotificationService.ts`: Serwis zarządzający powiadomieniami (singleton: notificationService)
+    - `models/`: NotificationModel - typy powiadomień (success, error, warning, info)
   - `src/modules/ai/`: AI module (universal provider abstraction + tool calling)
     - `models/`: AiModels (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
     - `providers/`: AiProvider interface, OpenAiProvider, AnthropicProvider, OllamaProvider
@@ -317,6 +341,7 @@ Aplikacja frontend
   - `src/pages/todolist/`: todolist pages
   - `src/pages/viewer/`: viewer pages
   - `src/pages/filesystem/`: Filesystem pages (save, list)
+  - `src/pages/settings/`: Settings pages (AI, Speech, Receipt, Hooks)
   - `src/pages/designer/`: UI Designer pages
   - `src/components/`: Reusable UI components
     - `person/` - components of PersonModel
@@ -324,7 +349,9 @@ Aplikacja frontend
     - `task/` - components of TaskModel
   - `src/components/mdeditor/extensions/`: Markdown editor extensions
     - `UIFormExtension.tsx` - embedding UI forms in markdown
-    - `AutomateFlowExtension.tsx` - osadzanie flow automatyzacji w markdown (@[automate:flow-id]), uruchamianie z dokumentu (backend/universal via MQTT)
+    - `AutomateFlowExtension.tsx` - osadzanie flow automatyzacji w markdown (@[automate:flow-id]), uruchamianie z dokumentu (backend/universal via MQTT), tree view picker
+    - `AutomateScriptExtension.tsx` - osadzanie skryptów JS w markdown (@[automate-script:{...}]), Monaco editor z podpowiedziami API
+    - `AutomateDocumentContext.tsx` - kontekst dokumentu dla rozszerzeń automate
 - `tests/`: Automated tests
 - `docs/`: Project documentation
   - `automate.md`: Dokumentacja System API automate (api.file, api.data, api.variables, api.log, api.ai, api.speech, api.shopping, runtime, przykłady)

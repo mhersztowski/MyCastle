@@ -38,6 +38,7 @@ import {
 import { useAutomateDesigner } from './AutomateDesignerContext';
 import { AutomateFlowModel, AutomateNodeType } from '../models';
 import { DataSource } from '../../filesystem/data/DataSource';
+import { useNotification } from '../../notification';
 
 const nodeTypes = {
   automateNode: AutomateBaseNode,
@@ -119,11 +120,13 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
     deleteEdge,
     updateNodes,
     executeFlow,
+    executeFromNode,
   } = useAutomateDesigner();
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow();
+  const { screenToFlowPosition, zoomIn, zoomOut, fitView, setNodes } = useReactFlow();
   const [showLog, setShowLog] = useState(false);
+  const { notify } = useNotification();
 
   // Mobile drawer state
   const [activeDrawer, setActiveDrawer] = useState<MobileDrawer>('none');
@@ -131,7 +134,7 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
   const propsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialFitDoneRef = useRef(false);
 
-  // Desktop: derive RF nodes from model (useMemo)
+  // Derive RF nodes from model
   const rfNodesMemo = useMemo(
     () => flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds, isMobile),
     [flow, executingNodeIds, errorNodeIds, isMobile],
@@ -141,12 +144,19 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
   // Mobile: separate RF nodes state - managed by applyNodeChanges, synced to model on drag end
   const [mobileRfNodes, setMobileRfNodes] = useState<Node[]>([]);
 
-  // Sync model → mobile RF nodes (when model changes from non-drag source)
+  // Force sync nodes to ReactFlow internal state when model changes
+  // This ensures ReactFlow sees changes to node data (like outputs for switch node)
   useEffect(() => {
-    if (isMobile && !isDraggingRef.current) {
-      setMobileRfNodes(flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds, true));
+    if (isMobile) {
+      if (!isDraggingRef.current) {
+        const newNodes = flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds, true);
+        setMobileRfNodes(newNodes);
+        setNodes(newNodes);
+      }
+    } else {
+      setNodes(rfNodesMemo);
     }
-  }, [isMobile, flow, executingNodeIds, errorNodeIds]);
+  }, [isMobile, flow, executingNodeIds, errorNodeIds, rfNodesMemo, setNodes]);
 
   // Use appropriate nodes for current mode
   const rfNodes = isMobile ? mobileRfNodes : rfNodesMemo;
@@ -189,6 +199,26 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
       setActiveDrawer('log');
     }
   }, [isMobile, isExecuting]);
+
+  // Process notifications from executionResult - track by timestamp to avoid duplicates
+  const processedTimestampsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (executionResult?.notifications && executionResult.notifications.length > 0) {
+      for (const n of executionResult.notifications) {
+        if (!processedTimestampsRef.current.has(n.timestamp)) {
+          processedTimestampsRef.current.add(n.timestamp);
+          notify(n.message, n.severity || 'info');
+        }
+      }
+    }
+  }, [executionResult, notify]);
+
+  // Reset processed timestamps when execution starts
+  useEffect(() => {
+    if (isExecuting) {
+      processedTimestampsRef.current = new Set();
+    }
+  }, [isExecuting]);
 
   // Obsługa zmian nodów - MOBILE: use applyNodeChanges for smooth drag
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -287,6 +317,28 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
     selectEdge(null);
   }, [selectNode, selectEdge]);
 
+  // Double-click on trigger nodes to run flow
+  const onNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    const nodeType = (node.data as { nodeType?: string })?.nodeType;
+    if (nodeType === 'start') {
+      // Start node: execute entire flow from all start nodes
+      if (isMobile) {
+        setActiveDrawer('log');
+      } else {
+        setShowLog(true);
+      }
+      executeFlow(dataSource);
+    } else if (nodeType === 'manual_trigger') {
+      // Manual trigger: execute flow starting from this specific node
+      if (isMobile) {
+        setActiveDrawer('log');
+      } else {
+        setShowLog(true);
+      }
+      executeFromNode(dataSource, node.id);
+    }
+  }, [executeFlow, executeFromNode, dataSource, isMobile]);
+
   // Drop noda z toolboxu (desktop only)
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -370,6 +422,7 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onPaneClick={onPaneClick}
+            onNodeDoubleClick={onNodeDoubleClick}
             nodeTypes={nodeTypes}
             snapToGrid
             snapGrid={[16, 16]}
@@ -481,6 +534,7 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onPaneClick={onPaneClick}
+            onNodeDoubleClick={onNodeDoubleClick}
             onDragOver={onDragOver}
             onDrop={onDrop}
             nodeTypes={nodeTypes}

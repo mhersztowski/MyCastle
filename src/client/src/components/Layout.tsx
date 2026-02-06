@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Box,
+  Collapse,
   Drawer,
   IconButton,
   List,
@@ -16,7 +17,6 @@ import {
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import FolderIcon from '@mui/icons-material/Folder';
-import SaveIcon from '@mui/icons-material/Save';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ChecklistIcon from '@mui/icons-material/Checklist';
@@ -30,6 +30,10 @@ import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import WebhookIcon from '@mui/icons-material/Webhook';
+import SettingsIcon from '@mui/icons-material/Settings';
+import ExpandLess from '@mui/icons-material/ExpandLess';
+import ExpandMore from '@mui/icons-material/ExpandMore';
 
 const drawerWidth = 240;
 
@@ -42,11 +46,6 @@ const menuItems = [
     text: 'File Browser',
     icon: <ListAltIcon />,
     path: '/filesystem/list',
-  },
-  {
-    text: 'Save File',
-    icon: <SaveIcon />,
-    path: '/filesystem/save',
   },
   {
     text: 'Calendar',
@@ -93,20 +92,28 @@ const menuItems = [
     icon: <SmartToyIcon />,
     path: '/agent',
   },
+];
+
+const settingsItems = [
   {
-    text: 'AI Settings',
+    text: 'AI',
     icon: <PsychologyIcon />,
     path: '/settings/ai',
   },
   {
-    text: 'Speech Settings',
+    text: 'Speech',
     icon: <RecordVoiceOverIcon />,
     path: '/settings/speech',
   },
   {
-    text: 'Receipt Settings',
+    text: 'Receipt',
     icon: <ReceiptLongIcon />,
     path: '/settings/receipt',
+  },
+  {
+    text: 'Page Hooks',
+    icon: <WebhookIcon />,
+    path: '/settings/page-hooks',
   },
 ];
 
@@ -115,10 +122,19 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() =>
+    location.pathname.startsWith('/settings')
+  );
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
   };
+
+  const handleSettingsClick = () => {
+    setSettingsOpen(!settingsOpen);
+  };
+
+  const isSettingsActive = location.pathname.startsWith('/settings');
 
   const drawer = (
     <Box>
@@ -155,6 +171,58 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </ListItemButton>
           </ListItem>
         ))}
+
+        {/* Settings group */}
+        <ListItem disablePadding>
+          <ListItemButton
+            onClick={handleSettingsClick}
+            sx={{
+              backgroundColor: isSettingsActive ? theme.palette.primary.light + '10' : 'transparent',
+            }}
+          >
+            <ListItemIcon
+              sx={{
+                color: isSettingsActive ? theme.palette.primary.main : 'inherit',
+              }}
+            >
+              <SettingsIcon />
+            </ListItemIcon>
+            <ListItemText primary="Settings" />
+            {settingsOpen ? <ExpandLess /> : <ExpandMore />}
+          </ListItemButton>
+        </ListItem>
+        <Collapse in={settingsOpen} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding>
+            {settingsItems.map((item) => (
+              <ListItem key={item.text} disablePadding>
+                <ListItemButton
+                  selected={location.pathname === item.path}
+                  onClick={() => {
+                    navigate(item.path);
+                    setMobileOpen(false);
+                  }}
+                  sx={{
+                    pl: 4,
+                    '&.Mui-selected': {
+                      backgroundColor: theme.palette.primary.light + '20',
+                      borderRight: `3px solid ${theme.palette.primary.main}`,
+                    },
+                  }}
+                >
+                  <ListItemIcon
+                    sx={{
+                      color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
+                      minWidth: 36,
+                    }}
+                  >
+                    {item.icon}
+                  </ListItemIcon>
+                  <ListItemText primary={item.text} />
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </List>
+        </Collapse>
       </List>
     </Box>
   );

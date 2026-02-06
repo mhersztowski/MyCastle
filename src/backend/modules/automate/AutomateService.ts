@@ -1,20 +1,22 @@
 /**
  * Backend Automate Service - ładowanie i wykonywanie flow automatyzacji
+ * Flows are stored as *.automate.json files anywhere in the filesystem
  */
 
-import { FileSystem } from '../filesystem/FileSystem';
+import { FileSystem, DirectoryTree } from '../filesystem/FileSystem';
 import { DataSource } from '../datasource/DataSource';
-import { AutomateFlowModel, AutomateFlowsModel } from './models/AutomateFlowModel';
+import { AutomateFlowModel } from './models/AutomateFlowModel';
 import { NODE_RUNTIME_MAP } from './models/AutomateNodeModel';
 import { BackendAutomateEngine, ExecutionResult } from './engine/BackendAutomateEngine';
 import { BackendSystemApi } from './engine/BackendSystemApi';
 
-const AUTOMATIONS_PATH = 'data/automations.json';
+const FLOW_EXTENSION = '.automate.json';
 
 export class AutomateService {
   private fileSystem: FileSystem;
   private dataSource: DataSource;
   private flows: Map<string, AutomateFlowModel> = new Map();
+  private flowPaths: Map<string, string> = new Map(); // flowId -> filePath
   private isLoaded = false;
 
   constructor(fileSystem: FileSystem, dataSource: DataSource) {
@@ -27,23 +29,52 @@ export class AutomateService {
     this.isLoaded = true;
   }
 
-  private async loadFlows(): Promise<void> {
-    try {
-      const fileData = await this.fileSystem.readFile(AUTOMATIONS_PATH);
-      const data = JSON.parse(fileData.content) as AutomateFlowsModel;
-
-      this.flows.clear();
-      if (data.flows) {
-        for (const flow of data.flows) {
-          this.flows.set(flow.id, flow);
-        }
-      }
-      console.log(`AutomateService: Loaded ${this.flows.size} flows`);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('AutomateService: Failed to load automations.json:', err);
+  /**
+   * Recursively find all .automate.json files in directory tree
+   */
+  private collectAutomateFiles(tree: DirectoryTree, files: string[]): void {
+    if (tree.type === 'file' && tree.name.endsWith(FLOW_EXTENSION)) {
+      files.push(tree.path);
+    }
+    if (tree.children) {
+      for (const child of tree.children) {
+        this.collectAutomateFiles(child, files);
       }
     }
+  }
+
+  private async loadFlows(): Promise<void> {
+    try {
+      // Scan entire filesystem for .automate.json files
+      const tree = await this.fileSystem.listDirectory('');
+      const automateFiles: string[] = [];
+      this.collectAutomateFiles(tree, automateFiles);
+
+      this.flows.clear();
+      this.flowPaths.clear();
+
+      for (const filePath of automateFiles) {
+        try {
+          const fileData = await this.fileSystem.readFile(filePath);
+          const flow = JSON.parse(fileData.content) as AutomateFlowModel;
+          this.flows.set(flow.id, flow);
+          this.flowPaths.set(flow.id, filePath);
+        } catch (err) {
+          console.warn(`AutomateService: Failed to load flow ${filePath}:`, err);
+        }
+      }
+
+      console.log(`AutomateService: Loaded ${this.flows.size} flows from filesystem`);
+    } catch (err) {
+      console.warn('AutomateService: Failed to scan filesystem for flows:', err);
+    }
+  }
+
+  /**
+   * Get the file path for a flow
+   */
+  getFlowPath(flowId: string): string | undefined {
+    return this.flowPaths.get(flowId);
   }
 
   async reload(): Promise<void> {

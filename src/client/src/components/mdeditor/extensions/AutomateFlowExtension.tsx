@@ -3,7 +3,7 @@
  * Format: @[automate:flow-id]
  */
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
 import {
@@ -21,28 +21,128 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  TextField,
-  InputAdornment,
   CircularProgress,
   Chip,
   Collapse,
   Alert,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
-import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import FolderIcon from '@mui/icons-material/Folder';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ExpandLess from '@mui/icons-material/ExpandLess';
+import ExpandMore from '@mui/icons-material/ExpandMore';
 
 import { automateService } from '../../../modules/automate/services/AutomateService';
 import { AutomateEngine, ExecutionResult } from '../../../modules/automate/engine/AutomateEngine';
 import { AutomateFlowModel } from '../../../modules/automate/models/AutomateFlowModel';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
-import { mqttClient } from '../../../modules/mqttclient';
+import { mqttClient, DirectoryTree } from '../../../modules/mqttclient';
+import { useNotification } from '../../../modules/notification';
+import { AutomateFlowNode } from '../../../modules/automate/nodes';
+
+const FLOW_EXTENSION = '.automate.json';
+
+// Filter tree to only show directories with .automate.json files
+function filterFlowTree(tree: DirectoryTree): DirectoryTree | null {
+  if (tree.type === 'file') {
+    return tree.name.endsWith(FLOW_EXTENSION) ? tree : null;
+  }
+
+  const filteredChildren: DirectoryTree[] = [];
+  if (tree.children) {
+    for (const child of tree.children) {
+      const filtered = filterFlowTree(child);
+      if (filtered) {
+        filteredChildren.push(filtered);
+      }
+    }
+  }
+
+  if (filteredChildren.length > 0) {
+    return { ...tree, children: filteredChildren };
+  }
+  return null;
+}
+
+interface FlowTreeNodeProps {
+  node: DirectoryTree;
+  level: number;
+  flowsMap: Map<string, AutomateFlowNode>;
+  selectedId?: string;
+  onSelect: (flowId: string) => void;
+}
+
+const FlowTreeNode: React.FC<FlowTreeNodeProps> = ({ node, level, flowsMap, selectedId, onSelect }) => {
+  const [open, setOpen] = useState(level < 2);
+
+  const isDirectory = node.type === 'directory';
+  const flow = !isDirectory ? flowsMap.get(node.path) : undefined;
+
+  const handleClick = () => {
+    if (isDirectory) {
+      setOpen(!open);
+    } else if (flow) {
+      onSelect(flow.id);
+    }
+  };
+
+  return (
+    <>
+      <ListItemButton
+        onClick={handleClick}
+        selected={!isDirectory && flow?.id === selectedId}
+        sx={{ pl: 2 + level * 2 }}
+      >
+        <ListItemIcon sx={{ minWidth: 36 }}>
+          {isDirectory ? (
+            open ? <FolderOpenIcon color="primary" /> : <FolderIcon color="primary" />
+          ) : (
+            <AccountTreeIcon color="warning" />
+          )}
+        </ListItemIcon>
+        <ListItemText
+          primary={isDirectory ? node.name : (flow?.name || node.name.replace(FLOW_EXTENSION, ''))}
+          secondary={!isDirectory && flow?.description}
+          primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+          secondaryTypographyProps={{ variant: 'caption', noWrap: true }}
+        />
+        {!isDirectory && flow && (
+          <Chip label={`${flow.nodes?.length || 0}`} size="small" variant="outlined" sx={{ ml: 1 }} />
+        )}
+        {isDirectory && node.children && node.children.length > 0 && (
+          open ? <ExpandLess /> : <ExpandMore />
+        )}
+      </ListItemButton>
+
+      {isDirectory && node.children && (
+        <Collapse in={open} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding>
+            {node.children.map((child, index) => (
+              <FlowTreeNode
+                key={`${child.path}-${index}`}
+                node={child}
+                level={level + 1}
+                flowsMap={flowsMap}
+                selectedId={selectedId}
+                onSelect={onSelect}
+              />
+            ))}
+          </List>
+        </Collapse>
+      )}
+    </>
+  );
+};
 
 // Dialog wyboru flow
 interface AutomateFlowPickerDialogProps {
@@ -58,33 +158,44 @@ const AutomateFlowPickerDialog: React.FC<AutomateFlowPickerDialogProps> = ({
   onSelect,
   selectedId,
 }) => {
-  const [filter, setFilter] = useState('');
-  const [flows, setFlows] = useState<{ id: string; name: string; description?: string; nodeCount: number }[]>([]);
+  const [flowTree, setFlowTree] = useState<DirectoryTree | null>(null);
+  const [flowsMap, setFlowsMap] = useState<Map<string, AutomateFlowNode>>(new Map());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (open) {
-      setLoading(true);
-      automateService.loadFlows().then((loadedFlows) => {
-        setFlows(loadedFlows.map(f => ({
-          id: f.id,
-          name: f.name,
-          description: f.description,
-          nodeCount: f.nodes?.length || 0,
-        })));
-        setLoading(false);
-      });
+      const loadTree = async () => {
+        setLoading(true);
+        try {
+          // Load flows if not loaded
+          if (!automateService.loaded) {
+            await automateService.loadFlows();
+          }
+
+          // Build flows map (path -> flow)
+          const flows = automateService.getAllFlows();
+          const map = new Map<string, AutomateFlowNode>();
+          for (const f of flows) {
+            const path = automateService.getFlowPath(f.id);
+            if (path) {
+              map.set(path, f);
+            }
+          }
+          setFlowsMap(map);
+
+          // Load directory tree
+          const tree = await mqttClient.listDirectory('');
+          const filtered = filterFlowTree(tree);
+          setFlowTree(filtered);
+        } catch (err) {
+          console.error('Failed to load flow tree:', err);
+        } finally {
+          setLoading(false);
+        }
+      };
+      loadTree();
     }
   }, [open]);
-
-  const filteredFlows = useMemo(() => {
-    if (!filter.trim()) return flows;
-    const lowerFilter = filter.toLowerCase();
-    return flows.filter(f =>
-      f.name.toLowerCase().includes(lowerFilter) ||
-      f.description?.toLowerCase().includes(lowerFilter)
-    );
-  }, [flows, filter]);
 
   const handleSelect = (flowId: string) => {
     onSelect(flowId);
@@ -101,53 +212,27 @@ const AutomateFlowPickerDialog: React.FC<AutomateFlowPickerDialogProps> = ({
         </IconButton>
       </DialogTitle>
 
-      <DialogContent dividers sx={{ p: 0 }}>
-        <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-          <TextField
-            fullWidth
-            size="small"
-            placeholder="Szukaj automatyzacji..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon fontSize="small" />
-                </InputAdornment>
-              ),
-            }}
-            autoFocus
-          />
-        </Box>
-
+      <DialogContent dividers sx={{ p: 0, minHeight: 300, maxHeight: 400, overflow: 'auto' }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
             <CircularProgress />
           </Box>
-        ) : filteredFlows.length === 0 ? (
+        ) : !flowTree || flowsMap.size === 0 ? (
           <Box sx={{ p: 4, textAlign: 'center', color: 'text.secondary' }}>
-            {flows.length === 0
-              ? 'Brak zdefiniowanych automatyzacji'
-              : 'Nie znaleziono automatyzacji'}
+            <Typography>Brak zdefiniowanych automatyzacji</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Utwórz flow w designerze lub dodaj pliki .automate.json
+            </Typography>
           </Box>
         ) : (
-          <List sx={{ maxHeight: 300, overflow: 'auto' }}>
-            {filteredFlows.map((flow) => (
-              <ListItemButton
-                key={flow.id}
-                selected={flow.id === selectedId}
-                onClick={() => handleSelect(flow.id)}
-              >
-                <ListItemIcon sx={{ minWidth: 40 }}>
-                  <SmartToyIcon color={flow.id === selectedId ? 'warning' : 'action'} />
-                </ListItemIcon>
-                <ListItemText
-                  primary={flow.name}
-                  secondary={flow.description}
-                />
-                <Chip label={`${flow.nodeCount} nodow`} size="small" variant="outlined" />
-              </ListItemButton>
-            ))}
+          <List component="nav" dense>
+            <FlowTreeNode
+              node={flowTree}
+              level={0}
+              flowsMap={flowsMap}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+            />
           </List>
         )}
       </DialogContent>
@@ -169,9 +254,13 @@ const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
   const [executionResult, setExecutionResult] = useState<ExecutionResult | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [engineRef] = useState(() => ({ current: null as AutomateEngine | null }));
+  const autorunTriggeredRef = useRef(false);
+  const handleRunRef = useRef<(() => Promise<void>) | null>(null);
 
   const { dataSource } = useFilesystem();
+  const { notify } = useNotification();
   const flowId = node.attrs.flowId as string;
+  const autorun = node.attrs.autorun as boolean;
 
   // Zaladuj flow
   useEffect(() => {
@@ -194,6 +283,20 @@ const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
     loadFlow();
   }, [flowId]);
 
+  // Autorun effect - run flow automatically when loaded if autorun is enabled
+  useEffect(() => {
+    if (autorun && flow && !loading && !autorunTriggeredRef.current && !isRunning) {
+      autorunTriggeredRef.current = true;
+      // Execute directly - handleRunRef should be set by now
+      handleRunRef.current?.();
+    }
+  }, [autorun, flow, loading, isRunning]);
+
+  // Reset autorun trigger when flow changes
+  useEffect(() => {
+    autorunTriggeredRef.current = false;
+  }, [flowId]);
+
   const handleSelectFlow = (newFlowId: string) => {
     updateAttributes({ flowId: newFlowId });
     setDialogOpen(false);
@@ -207,32 +310,44 @@ const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
     setExecutionResult(null);
     setShowLogs(true);
 
+    let result: ExecutionResult | null = null;
+
     try {
       if (flow.runtime === 'backend' || flow.runtime === 'universal') {
         // Remote execution on backend via MQTT
-        const result = await mqttClient.runAutomateFlow(flow.id) as ExecutionResult;
-        setExecutionResult(result);
+        result = await mqttClient.runAutomateFlow(flow.id) as ExecutionResult;
       } else {
         // Local execution for client flows
         const engine = new AutomateEngine();
         engineRef.current = engine;
-        const result = await engine.executeFlow(flow, dataSource);
-        setExecutionResult(result);
+        result = await engine.executeFlow(flow, dataSource);
       }
+      setExecutionResult(result);
     } catch (err) {
-      setExecutionResult({
+      result = {
         success: false,
         executionLog: [],
         logs: [],
         notifications: [],
         variables: {},
         error: err instanceof Error ? err.message : String(err),
-      });
+      };
+      setExecutionResult(result);
     } finally {
       setIsRunning(false);
       engineRef.current = null;
+
+      // Process notifications
+      if (result?.notifications) {
+        for (const n of result.notifications) {
+          notify(n.message, n.severity || 'info');
+        }
+      }
     }
-  }, [flow, isRunning, dataSource, engineRef]);
+  }, [flow, isRunning, dataSource, engineRef, notify]);
+
+  // Keep ref updated for autorun
+  handleRunRef.current = handleRun;
 
   const handleStop = useCallback(() => {
     if (engineRef.current) {
@@ -384,6 +499,17 @@ const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
               Uruchom
             </Button>
           )}
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={autorun}
+                onChange={(e) => updateAttributes({ autorun: e.target.checked })}
+              />
+            }
+            label={<Typography variant="caption">Autorun</Typography>}
+            sx={{ ml: 0.5, mr: 0 }}
+          />
           {executionResult && (
             <Button
               size="small"
@@ -482,6 +608,7 @@ export const AutomateFlowEmbed = Node.create({
   addAttributes() {
     return {
       flowId: { default: '' },
+      autorun: { default: false },
     };
   },
 
@@ -494,6 +621,7 @@ export const AutomateFlowEmbed = Node.create({
           const element = node as HTMLElement;
           return {
             flowId: element.getAttribute('data-flow-id') || '',
+            autorun: element.getAttribute('data-autorun') === 'true',
           };
         },
       },
@@ -504,6 +632,7 @@ export const AutomateFlowEmbed = Node.create({
     return ['div', {
       'data-type': 'automate-flow-embed',
       'data-flow-id': node.attrs.flowId,
+      'data-autorun': node.attrs.autorun ? 'true' : 'false',
     }];
   },
 

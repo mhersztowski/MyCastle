@@ -7,6 +7,7 @@ import React, { createContext, useContext, useRef, useState, useCallback } from 
 import { AutomateSystemApi, LogEntry } from '../../../modules/automate/engine/AutomateSystemApi';
 import { AutomateSandbox } from '../../../modules/automate/engine/AutomateSandbox';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
+import { useNotification } from '../../../modules/notification';
 
 // Typy danych wyjsciowych display
 export interface DisplayItem {
@@ -64,6 +65,7 @@ interface AutomateDocumentProviderProps {
 
 export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> = ({ children }) => {
   const { dataSource } = useFilesystem();
+  const { notify } = useNotification();
   const variablesRef = useRef<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<Map<string, ScriptBlockState>>(new Map());
   const blockOrderRef = useRef<string[]>([]);
@@ -154,8 +156,9 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     const code = block.code;
     const api = getOrCreateApi();
 
-    // Reset API logs for this execution
+    // Track previous lengths for logs and notifications
     const prevLogsLength = api.logs.length;
+    const prevNotificationsLength = api.notifications.length;
 
     // Set running
     setBlocks(prev => {
@@ -178,6 +181,12 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       // Collect new logs
       const newLogs = api.logs.slice(prevLogsLength);
 
+      // Process new notifications
+      const newNotifications = api.notifications.slice(prevNotificationsLength);
+      for (const n of newNotifications) {
+        notify(n.message, n.severity || 'info');
+      }
+
       setBlocks(prev => {
         const next = new Map(prev);
         const current = next.get(id);
@@ -190,6 +199,12 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       const errorMsg = err instanceof Error ? err.message : String(err);
       const newLogs = api.logs.slice(prevLogsLength);
 
+      // Process notifications even on error
+      const newNotifications = api.notifications.slice(prevNotificationsLength);
+      for (const n of newNotifications) {
+        notify(n.message, n.severity || 'info');
+      }
+
       setBlocks(prev => {
         const next = new Map(prev);
         const current = next.get(id);
@@ -199,7 +214,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         return next;
       });
     }
-  }, [blocks, getOrCreateApi, createDisplayApi]);
+  }, [blocks, getOrCreateApi, createDisplayApi, notify]);
 
   const runAllBlocks = useCallback(async () => {
     setIsRunningAll(true);
