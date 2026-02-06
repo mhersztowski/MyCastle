@@ -87,6 +87,7 @@ function flowToReactFlowEdges(flow: AutomateFlowModel | null, selectedEdgeId?: s
       label: edge.label,
       animated: false,
       style,
+      selected: isSelected, // Required for ReactFlow delete key to work
       // Wider touch target on mobile for easier edge selection
       interactionWidth: isMobile ? 30 : undefined,
     };
@@ -139,7 +140,7 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
     () => flowToReactFlowNodes(flow, executingNodeIds, errorNodeIds, isMobile),
     [flow, executingNodeIds, errorNodeIds, isMobile],
   );
-  const rfEdges = useMemo(() => flowToReactFlowEdges(flow, isMobile ? selectedEdgeId : undefined, isMobile), [flow, isMobile, selectedEdgeId]);
+  const rfEdges = useMemo(() => flowToReactFlowEdges(flow, selectedEdgeId, isMobile), [flow, isMobile, selectedEdgeId]);
 
   // Mobile: separate RF nodes state - managed by applyNodeChanges, synced to model on drag end
   const [mobileRfNodes, setMobileRfNodes] = useState<Node[]>([]);
@@ -396,19 +397,29 @@ const AutomateDesignerInner: React.FC<AutomateDesignerInnerProps> = ({ onSave, s
   useEffect(() => {
     if (isMobile) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Check if user is typing in an input field
+      const target = e.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 's') {
           e.preventDefault();
           handleSave();
         }
       }
-      if (e.key === 'Delete' && selectedNodeId) {
+      // Only delete nodes/edges if not typing in an input field
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isInputField && selectedNodeId) {
         deleteNode(selectedNodeId);
+      }
+      // Edge deletion - also handle in custom handler for reliability
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isInputField && selectedEdgeId && !selectedNodeId) {
+        deleteEdge(selectedEdgeId);
+        selectEdge(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave, selectedNodeId, deleteNode, isMobile]);
+  }, [handleSave, selectedNodeId, selectedEdgeId, deleteNode, deleteEdge, selectEdge, isMobile]);
 
   // === MOBILE LAYOUT ===
   if (isMobile) {

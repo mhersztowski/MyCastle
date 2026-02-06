@@ -2,7 +2,7 @@
  * AutomateMobileProperties - bottom drawer z właściwościami wybranego noda
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import {
   Drawer,
   Box,
@@ -22,14 +22,146 @@ import {
   DialogActions,
   Button,
   Slider,
+  Chip,
+  InputAdornment,
+  Tooltip,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Collapse,
+  CircularProgress,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import CheckIcon from '@mui/icons-material/Check';
+import FolderIcon from '@mui/icons-material/Folder';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ExpandLess from '@mui/icons-material/ExpandLess';
+import ExpandMore from '@mui/icons-material/ExpandMore';
 import Editor from '@monaco-editor/react';
 import { useAutomateDesigner } from '../AutomateDesignerContext';
-import { NODE_TYPE_METADATA } from '../../registry/nodeTypes';
+import { NODE_TYPE_METADATA, ERROR_OUTPUT_PORT, SCHEDULE_PRESETS } from '../../registry/nodeTypes';
 import { setupAutomateMonaco } from '../automateMonacoSetup';
+import { automateService } from '../../services/AutomateService';
+import { AutomateFlowNode } from '../../nodes/AutomateFlowNode';
+import { DirectoryTree, mqttClient } from '../../../mqttclient';
+
+const FLOW_EXTENSION = '.automate.json';
+
+// Filter tree to only show directories with .automate.json files
+function filterFlowTree(tree: DirectoryTree): DirectoryTree | null {
+  if (tree.type === 'file') {
+    return tree.name.endsWith(FLOW_EXTENSION) ? tree : null;
+  }
+
+  const filteredChildren: DirectoryTree[] = [];
+  if (tree.children) {
+    for (const child of tree.children) {
+      const filtered = filterFlowTree(child);
+      if (filtered) {
+        filteredChildren.push(filtered);
+      }
+    }
+  }
+
+  if (filteredChildren.length > 0) {
+    return { ...tree, children: filteredChildren };
+  }
+  return null;
+}
+
+// Tree node for flow picker (simplified, for selection only)
+interface FlowPickerTreeNodeProps {
+  node: DirectoryTree;
+  level: number;
+  flowsMap: Map<string, AutomateFlowNode>;
+  currentFlowId?: string;
+  onSelect: (flowId: string, flowName: string) => void;
+}
+
+const FlowPickerTreeNode: React.FC<FlowPickerTreeNodeProps> = ({
+  node,
+  level,
+  flowsMap,
+  currentFlowId,
+  onSelect,
+}) => {
+  const [open, setOpen] = useState(level < 2);
+
+  const isDirectory = node.type === 'directory';
+  const flow = !isDirectory ? flowsMap.get(node.path) : undefined;
+
+  // Skip current flow
+  if (flow && flow.id === currentFlowId) return null;
+
+  const handleClick = () => {
+    if (isDirectory) {
+      setOpen(!open);
+    } else if (flow) {
+      onSelect(flow.id, flow.name);
+    }
+  };
+
+  return (
+    <>
+      <ListItemButton
+        onClick={handleClick}
+        sx={{ pl: 2 + level * 2, py: 0.75, borderRadius: 1 }}
+      >
+        <ListItemIcon sx={{ minWidth: 32 }}>
+          {isDirectory ? (
+            open ? <FolderOpenIcon fontSize="small" color="primary" /> : <FolderIcon fontSize="small" color="primary" />
+          ) : (
+            <AccountTreeIcon fontSize="small" color="warning" />
+          )}
+        </ListItemIcon>
+        <ListItemText
+          primary={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" noWrap sx={{ flex: 1 }}>
+                {isDirectory ? node.name : (flow?.name || node.name.replace(FLOW_EXTENSION, ''))}
+              </Typography>
+              {!isDirectory && flow?.runtime && (
+                <Chip
+                  label={flow.runtime}
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: '0.65rem' }}
+                />
+              )}
+            </Box>
+          }
+          primaryTypographyProps={{ component: 'div' }}
+        />
+        {isDirectory && node.children && node.children.length > 0 && (
+          open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />
+        )}
+      </ListItemButton>
+
+      {isDirectory && node.children && (
+        <Collapse in={open} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding dense>
+            {node.children.map((child: DirectoryTree, index: number) => (
+              <FlowPickerTreeNode
+                key={`${child.path}-${index}`}
+                node={child}
+                level={level + 1}
+                flowsMap={flowsMap}
+                currentFlowId={currentFlowId}
+                onSelect={onSelect}
+              />
+            ))}
+          </List>
+        </Collapse>
+      )}
+    </>
+  );
+};
 
 interface AutomateMobilePropertiesProps {
   open: boolean;
@@ -37,10 +169,54 @@ interface AutomateMobilePropertiesProps {
 }
 
 const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ open, onClose }) => {
-  const { flow, selectedNodeId, updateNode, deleteNode } = useAutomateDesigner();
+  const { flow, selectedNodeId, updateNode, deleteNode, deleteEdge } = useAutomateDesigner();
 
   const [scriptDialogOpen, setScriptDialogOpen] = useState(false);
   const [dialogScript, setDialogScript] = useState('');
+  const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
+  const [availableFlows, setAvailableFlows] = useState<AutomateFlowNode[]>([]);
+  const [flowPickerOpen, setFlowPickerOpen] = useState(false);
+  const [flowTree, setFlowTree] = useState<DirectoryTree | null>(null);
+  const [flowsMap, setFlowsMap] = useState<Map<string, AutomateFlowNode>>(new Map());
+  const [flowTreeLoading, setFlowTreeLoading] = useState(false);
+
+  // Load available flows for call_flow selector
+  useEffect(() => {
+    const loadFlows = async () => {
+      try {
+        const flows = await automateService.getAllFlows();
+        setAvailableFlows(flows);
+
+        // Build flows map (path -> flow)
+        const map = new Map<string, AutomateFlowNode>();
+        for (const f of flows) {
+          const path = automateService.getFlowPath(f.id);
+          if (path) {
+            map.set(path, f);
+          }
+        }
+        setFlowsMap(map);
+      } catch (err) {
+        console.warn('Failed to load flows for call_flow selector:', err);
+      }
+    };
+    loadFlows();
+  }, []);
+
+  // Load directory tree when flow picker opens
+  useEffect(() => {
+    if (flowPickerOpen && !flowTree) {
+      setFlowTreeLoading(true);
+      mqttClient.listDirectory('').then((tree: DirectoryTree) => {
+        const filtered = filterFlowTree(tree);
+        setFlowTree(filtered);
+      }).catch((err: unknown) => {
+        console.error('Failed to load flow tree:', err);
+      }).finally(() => {
+        setFlowTreeLoading(false);
+      });
+    }
+  }, [flowPickerOpen, flowTree]);
 
   const selectedNode = useMemo(() => {
     if (!flow || !selectedNodeId) return null;
@@ -64,6 +240,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
     if (!selectedNodeId || !selectedNode) return;
     // Parse for outputs - filter empty, but keep raw string for TextField
     const casesList = casesStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const hasErrorPort = selectedNode.config.enableErrorPort;
     const outputs = [
       ...casesList.map((c, i) => ({
         id: `case_${i}`,
@@ -72,12 +249,61 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
         dataType: 'flow' as const,
       })),
       { id: 'default', name: 'Default', direction: 'output' as const, dataType: 'flow' as const },
+      ...(hasErrorPort ? [ERROR_OUTPUT_PORT] : []),
     ];
     updateNode(selectedNodeId, {
       config: { ...selectedNode.config, cases: casesList, casesRaw: casesStr },
       outputs,
     });
   }, [selectedNodeId, selectedNode, updateNode]);
+
+  // Handler for error port toggle
+  const handleErrorPortToggle = useCallback((enabled: boolean) => {
+    if (!selectedNodeId || !selectedNode) return;
+    const meta = NODE_TYPE_METADATA[selectedNode.nodeType];
+    const baseOutputs = selectedNode.outputs?.filter(p => p.id !== 'error') || meta.defaultOutputs;
+    const newOutputs = enabled
+      ? [...baseOutputs, ERROR_OUTPUT_PORT]
+      : baseOutputs;
+    updateNode(selectedNodeId, {
+      config: { ...selectedNode.config, enableErrorPort: enabled },
+      outputs: newOutputs,
+    });
+  }, [selectedNodeId, selectedNode, updateNode]);
+
+  // Handler for generating webhook secret
+  const generateWebhookSecret = useCallback(() => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let secret = '';
+    for (let i = 0; i < 32; i++) {
+      secret += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    handleConfigUpdate('secret', secret);
+  }, [handleConfigUpdate]);
+
+  // Handler for copying webhook URL
+  const copyWebhookUrl = useCallback(() => {
+    if (!flow || !selectedNode) return;
+    const baseUrl = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+    const secret = selectedNode.config.secret as string | undefined;
+    const url = `${baseUrl}/webhook/${flow.id}/${selectedNode.id}${secret ? `?token=${secret}` : ''}`;
+    navigator.clipboard.writeText(url);
+    setCopiedWebhookUrl(true);
+    setTimeout(() => setCopiedWebhookUrl(false), 2000);
+  }, [flow, selectedNode]);
+
+  // Handler for toggling HTTP methods
+  const toggleHttpMethod = useCallback((method: string) => {
+    if (!selectedNode) return;
+    const current = (selectedNode.config.allowedMethods as string[]) || ['POST'];
+    const newMethods = current.includes(method)
+      ? current.filter(m => m !== method)
+      : [...current, method];
+    // Ensure at least one method is selected
+    if (newMethods.length > 0) {
+      handleConfigUpdate('allowedMethods', newMethods);
+    }
+  }, [selectedNode, handleConfigUpdate]);
 
   const openScriptDialog = useCallback(() => {
     setDialogScript(selectedNode?.script || '');
@@ -164,6 +390,24 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
             }
             label={<Typography variant="body2">Aktywny</Typography>}
           />
+
+          {/* Error Port Toggle - only for nodes that can error */}
+          {meta.canError && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!selectedNode.config.enableErrorPort}
+                  onChange={e => handleErrorPortToggle(e.target.checked)}
+                  size="small"
+                />
+              }
+              label={
+                <Typography variant="body2" sx={{ color: 'error.main' }}>
+                  Włącz port błędu
+                </Typography>
+              }
+            />
+          )}
 
           <Divider />
 
@@ -307,14 +551,25 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
           {/* Log */}
           {selectedNode.nodeType === 'log' && (
             <>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={!!selectedNode.config.logInput}
+                    onChange={e => handleConfigUpdate('logInput', e.target.checked)}
+                    size="small"
+                  />
+                }
+                label="Loguj input jako obiekt"
+              />
               <TextField
-                label="Wiadomość"
+                label="Wiadomość (opcjonalna)"
                 value={selectedNode.config.message || ''}
                 onChange={e => handleConfigUpdate('message', e.target.value)}
                 size="small"
                 fullWidth
                 multiline
                 rows={2}
+                helperText={selectedNode.config.logInput ? "Zostanie dodana przed obiektem input" : undefined}
               />
               <FormControl size="small" fullWidth>
                 <InputLabel>Poziom</InputLabel>
@@ -613,6 +868,156 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
             </>
           )}
 
+          {/* Webhook Trigger */}
+          {selectedNode.nodeType === 'webhook_trigger' && (
+            <>
+              {/* Webhook URL */}
+              <Box>
+                <Typography variant="caption" color="text.secondary" gutterBottom>
+                  URL Webhooka
+                </Typography>
+                <TextField
+                  value={`${import.meta.env.VITE_HTTP_URL || 'http://localhost:3001'}/webhook/${flow?.id}/${selectedNode.id}${selectedNode.config.secret ? `?token=${selectedNode.config.secret}` : ''}`}
+                  size="small"
+                  fullWidth
+                  InputProps={{
+                    readOnly: true,
+                    sx: { fontSize: '0.7rem', fontFamily: 'monospace' },
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <Tooltip title={copiedWebhookUrl ? 'Skopiowano!' : 'Kopiuj URL'}>
+                          <IconButton size="small" onClick={copyWebhookUrl}>
+                            {copiedWebhookUrl ? <CheckIcon fontSize="small" color="success" /> : <ContentCopyIcon fontSize="small" />}
+                          </IconButton>
+                        </Tooltip>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+              </Box>
+
+              {/* Secret token */}
+              <TextField
+                label="Secret Token"
+                type="password"
+                value={selectedNode.config.secret || ''}
+                onChange={e => handleConfigUpdate('secret', e.target.value)}
+                size="small"
+                fullWidth
+                placeholder="Opcjonalny token uwierzytelniający"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <Tooltip title="Generuj nowy secret">
+                        <IconButton size="small" onClick={generateWebhookSecret}>
+                          <RefreshIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </InputAdornment>
+                  ),
+                }}
+              />
+
+              {/* Allowed HTTP methods */}
+              <Box>
+                <Typography variant="caption" color="text.secondary" gutterBottom>
+                  Dozwolone metody HTTP
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                  {['POST', 'GET', 'PUT', 'DELETE'].map(method => {
+                    const isSelected = ((selectedNode.config.allowedMethods as string[]) || ['POST']).includes(method);
+                    return (
+                      <Chip
+                        key={method}
+                        label={method}
+                        size="small"
+                        onClick={() => toggleHttpMethod(method)}
+                        color={isSelected ? 'primary' : 'default'}
+                        variant={isSelected ? 'filled' : 'outlined'}
+                      />
+                    );
+                  })}
+                </Box>
+              </Box>
+
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                Dane webhooka w skrypcie:<br />
+                <code style={{ fontSize: '0.7rem' }}>inp._webhookPayload</code>, <code style={{ fontSize: '0.7rem' }}>inp._webhookMethod</code>,<br />
+                <code style={{ fontSize: '0.7rem' }}>inp._webhookHeaders</code>, <code style={{ fontSize: '0.7rem' }}>inp._webhookQuery</code>
+              </Typography>
+            </>
+          )}
+
+          {/* Schedule Trigger */}
+          {selectedNode.nodeType === 'schedule_trigger' && (
+            <>
+              {/* Enable/Disable */}
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={selectedNode.config.enabled !== false}
+                    onChange={e => handleConfigUpdate('enabled', e.target.checked)}
+                    size="small"
+                  />
+                }
+                label={<Typography variant="body2">Harmonogram aktywny</Typography>}
+              />
+
+              {/* Preset selector */}
+              <FormControl size="small" fullWidth>
+                <InputLabel>Częstotliwość</InputLabel>
+                <Select
+                  value={selectedNode.config.preset || 'custom'}
+                  label="Częstotliwość"
+                  onChange={e => {
+                    const preset = e.target.value as string;
+                    if (preset !== 'custom') {
+                      handleConfigUpdate('cronExpression', preset);
+                    }
+                    handleConfigUpdate('preset', preset);
+                  }}
+                >
+                  {SCHEDULE_PRESETS.map(p => (
+                    <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              {/* Custom cron expression */}
+              {selectedNode.config.preset === 'custom' && (
+                <TextField
+                  label="Wyrażenie cron"
+                  value={selectedNode.config.cronExpression || ''}
+                  onChange={e => handleConfigUpdate('cronExpression', e.target.value)}
+                  size="small"
+                  fullWidth
+                  placeholder="* * * * *"
+                  helperText="min(0-59) godz(0-23) dzień(1-31) mies(1-12) dzień-tyg(0-6)"
+                  inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
+                />
+              )}
+
+              {/* Timezone */}
+              <TextField
+                label="Strefa czasowa"
+                value={selectedNode.config.timezone || 'UTC'}
+                onChange={e => handleConfigUpdate('timezone', e.target.value)}
+                size="small"
+                fullWidth
+                placeholder="UTC, Europe/Warsaw"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
+              />
+
+              {/* Info */}
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                Cron: {String(selectedNode.config.cronExpression || '(brak)')}<br />
+                Dane w skrypcie:<br />
+                <code style={{ fontSize: '0.7rem' }}>inp._scheduledTime</code>, <code style={{ fontSize: '0.7rem' }}>inp._cronExpression</code>,<br />
+                <code style={{ fontSize: '0.7rem' }}>inp._timezone</code>
+              </Typography>
+            </>
+          )}
+
           {/* Comment */}
           {selectedNode.nodeType === 'comment' && (
             <TextField
@@ -624,6 +1029,221 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
               multiline
               rows={4}
             />
+          )}
+
+          {/* Call Flow */}
+          {selectedNode.nodeType === 'call_flow' && (
+            <>
+              {/* Subflow picker button */}
+              <Button
+                variant="outlined"
+                size="small"
+                fullWidth
+                onClick={() => setFlowPickerOpen(true)}
+                startIcon={<AccountTreeIcon />}
+                sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+              >
+                {selectedNode.config.flowId
+                  ? (selectedNode.config.subflowName as string) || 'Wybrany flow'
+                  : 'Wybierz subflow...'}
+              </Button>
+
+              {/* Show selected flow info */}
+              {selectedNode.config.flowId && (() => {
+                const selectedFlow = availableFlows.find(f => f.id === selectedNode.config.flowId);
+                if (!selectedFlow) {
+                  return (
+                    <Typography variant="caption" color="error">
+                      Flow nie znaleziono
+                    </Typography>
+                  );
+                }
+                return (
+                  <Box sx={{ bgcolor: 'action.hover', p: 1, borderRadius: 1 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      <strong>{selectedFlow.name}</strong><br />
+                      {selectedFlow.description && <>{selectedFlow.description}<br /></>}
+                      Nodów: {selectedFlow.nodes.length}<br />
+                      Runtime: {selectedFlow.runtime || 'universal'}
+                    </Typography>
+                  </Box>
+                );
+              })()}
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={selectedNode.config.passInputAsPayload !== false}
+                    onChange={e => handleConfigUpdate('passInputAsPayload', e.target.checked)}
+                    size="small"
+                  />
+                }
+                label={<Typography variant="body2">Przekaż input do subflow</Typography>}
+              />
+
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                W subflow: <code style={{ fontSize: '0.7rem' }}>vars._parentInput</code><br />
+                Po subflow: <code style={{ fontSize: '0.7rem' }}>inp._result</code> = zmienne
+              </Typography>
+            </>
+          )}
+
+          {/* Rate Limit */}
+          {selectedNode.nodeType === 'rate_limit' && (
+            <>
+              <FormControl size="small" fullWidth>
+                <InputLabel>Tryb</InputLabel>
+                <Select
+                  value={selectedNode.config.mode || 'delay'}
+                  label="Tryb"
+                  onChange={e => handleConfigUpdate('mode', e.target.value)}
+                >
+                  <MenuItem value="delay">Delay (opóźnij)</MenuItem>
+                  <MenuItem value="throttle">Throttle (max raz na X)</MenuItem>
+                  <MenuItem value="debounce">Debounce (poczekaj)</MenuItem>
+                </Select>
+              </FormControl>
+
+              <TextField
+                label="Czas (ms)"
+                type="number"
+                value={selectedNode.config.delayMs || 1000}
+                onChange={e => handleConfigUpdate('delayMs', parseInt(e.target.value) || 1000)}
+                size="small"
+                fullWidth
+                inputProps={{ min: 0, step: 100 }}
+              />
+
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                {selectedNode.config.mode === 'delay' && (
+                  <>Czeka określony czas.</>
+                )}
+                {selectedNode.config.mode === 'throttle' && (
+                  <>Max raz na X ms. Reszta → "Skipped".</>
+                )}
+                {selectedNode.config.mode === 'debounce' && (
+                  <>Czeka na "ciszę" - opóźnia o X ms.</>
+                )}
+              </Typography>
+            </>
+          )}
+
+          {/* For Each */}
+          {selectedNode.nodeType === 'foreach' && (
+            <>
+              <TextField
+                label="Źródło (wyrażenie JS)"
+                value={selectedNode.config.sourceExpression || 'inp._result'}
+                onChange={e => handleConfigUpdate('sourceExpression', e.target.value)}
+                size="small"
+                fullWidth
+                placeholder="inp._result"
+                helperText="Wyrażenie zwracające tablicę"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
+              />
+
+              <TextField
+                label="Zmienna elementu"
+                value={selectedNode.config.itemVariable || 'item'}
+                onChange={e => handleConfigUpdate('itemVariable', e.target.value)}
+                size="small"
+                fullWidth
+                placeholder="item"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
+              />
+
+              <TextField
+                label="Zmienna indeksu"
+                value={selectedNode.config.indexVariable || 'index'}
+                onChange={e => handleConfigUpdate('indexVariable', e.target.value)}
+                size="small"
+                fullWidth
+                placeholder="index"
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
+              />
+
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                W iteracji:<br />
+                <code style={{ fontSize: '0.7rem' }}>inp._result</code> = element<br />
+                <code style={{ fontSize: '0.7rem' }}>vars.item</code>, <code style={{ fontSize: '0.7rem' }}>vars.index</code><br />
+                Port "Loop" → każdy element<br />
+                Port "Done" → po zakończeniu
+              </Typography>
+            </>
+          )}
+
+          {/* Merge */}
+          {selectedNode.nodeType === 'merge' && (
+            <>
+              <FormControl fullWidth size="small">
+                <InputLabel>Tryb agregacji</InputLabel>
+                <Select
+                  value={selectedNode.config.mode || 'object'}
+                  label="Tryb agregacji"
+                  onChange={e => handleConfigUpdate('mode', e.target.value)}
+                >
+                  <MenuItem value="object">Obiekt</MenuItem>
+                  <MenuItem value="array">Tablica</MenuItem>
+                </Select>
+              </FormControl>
+
+              <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Porty wejściowe</Typography>
+              {selectedNode.inputs.map((port, idx) => (
+                <Box key={port.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <TextField
+                    size="small"
+                    value={port.name}
+                    onChange={e => {
+                      if (!selectedNodeId) return;
+                      const newInputs = [...selectedNode.inputs];
+                      newInputs[idx] = { ...port, name: e.target.value };
+                      updateNode(selectedNodeId, { inputs: newInputs });
+                    }}
+                    sx={{ flex: 1 }}
+                    inputProps={{ autoCapitalize: 'off', autoCorrect: 'off', spellCheck: false }}
+                  />
+                  {selectedNode.inputs.length > 2 && (
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        if (!selectedNodeId) return;
+                        if (flow) {
+                          const edgesToRemove = flow.edges.filter(
+                            e => e.targetNodeId === selectedNode.id && e.targetPortId === port.id
+                          );
+                          for (const edge of edgesToRemove) {
+                            deleteEdge(edge.id);
+                          }
+                        }
+                        const newInputs = selectedNode.inputs.filter((_, i) => i !== idx);
+                        updateNode(selectedNodeId, { inputs: newInputs });
+                      }}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </Box>
+              ))}
+              <Button
+                size="small"
+                onClick={() => {
+                  if (!selectedNodeId) return;
+                  const nextNum = selectedNode.inputs.length + 1;
+                  const newInputs = [
+                    ...selectedNode.inputs,
+                    { id: `in_${nextNum}`, name: `In ${nextNum}`, direction: 'input' as const, dataType: 'any' as const },
+                  ];
+                  updateNode(selectedNodeId, { inputs: newInputs });
+                }}
+              >
+                + Dodaj port
+              </Button>
+
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                Merge czeka na dane ze wszystkich portów.<br />
+                Wynik: obiekt lub tablica.
+              </Typography>
+            </>
           )}
 
           <Divider />
@@ -670,6 +1290,69 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
         <DialogActions>
           <Button onClick={() => setScriptDialogOpen(false)}>Anuluj</Button>
           <Button onClick={handleScriptDialogSave} variant="contained">Zapisz</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Flow picker dialog for call_flow */}
+      <Dialog
+        open={flowPickerOpen}
+        onClose={() => setFlowPickerOpen(false)}
+        fullScreen
+      >
+        <DialogTitle sx={{ py: 1.5 }}>Wybierz subflow</DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          {flowTreeLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : flowTree ? (
+            <List dense disablePadding>
+              <FlowPickerTreeNode
+                node={flowTree}
+                level={0}
+                flowsMap={flowsMap}
+                currentFlowId={flow?.id}
+                onSelect={(flowId, flowName) => {
+                  if (selectedNodeId) {
+                    updateNode(selectedNodeId, {
+                      config: {
+                        ...selectedNode?.config,
+                        flowId,
+                        subflowName: flowName,
+                      },
+                    });
+                  }
+                  setFlowPickerOpen(false);
+                }}
+              />
+            </List>
+          ) : (
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+              <Typography color="text.secondary">Brak dostępnych flow</Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFlowPickerOpen(false)}>Anuluj</Button>
+          {selectedNode?.config.flowId as string ? (
+            <Button
+              color="error"
+              onClick={() => {
+                if (selectedNodeId) {
+                  updateNode(selectedNodeId, {
+                    config: {
+                      ...selectedNode?.config,
+                      flowId: '',
+                      subflowName: '',
+                    },
+                  });
+                }
+                setFlowPickerOpen(false);
+              }}
+            >
+              Wyczyść wybór
+            </Button>
+          ) : null}
         </DialogActions>
       </Dialog>
     </>

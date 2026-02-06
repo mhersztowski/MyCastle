@@ -24,12 +24,13 @@ const propsAreEqual = (prevProps: NodeProps, nextProps: NodeProps): boolean => {
   if (prevData.script !== nextData.script) return false;
   if (prevData.nodeType !== nextData.nodeType) return false;
 
-  // Deep comparison of outputs (important for switch node)
+  // Deep comparison of outputs (important for switch node and error port)
   if (prevData.outputs?.length !== nextData.outputs?.length) return false;
   if (prevData.outputs && nextData.outputs) {
     for (let i = 0; i < prevData.outputs.length; i++) {
       if (prevData.outputs[i].id !== nextData.outputs[i].id) return false;
       if (prevData.outputs[i].name !== nextData.outputs[i].name) return false;
+      if (prevData.outputs[i].dataType !== nextData.outputs[i].dataType) return false;
     }
   }
 
@@ -42,8 +43,10 @@ const propsAreEqual = (prevProps: NodeProps, nextProps: NodeProps): boolean => {
     }
   }
 
-  // Compare config for preview rendering (comment, js_execute)
+  // Compare config for preview rendering (comment, js_execute, call_flow)
   if (prevData.config.text !== nextData.config.text) return false;
+  if (prevData.config.flowId !== nextData.config.flowId) return false;
+  if (prevData.config.subflowName !== nextData.config.subflowName) return false;
 
   return true;
 };
@@ -145,27 +148,49 @@ const AutomateBaseNode: React.FC<NodeProps> = ({ data, selected }) => {
         ))}
 
         {/* Output ports */}
-        {nodeData.outputs?.map((port) => (
-          <Box key={port.id} sx={{ position: 'relative', pr: 2, pl: 1, py: mobile ? 0.5 : 0.25, textAlign: 'right' }}>
-            <Handle
-              type="source"
-              position={Position.Right}
-              id={port.id}
-              style={{
-                top: '50%',
-                background: port.dataType === 'flow' ? '#555' : meta.color,
-                width: port.dataType === 'flow' ? handleFlowSize : handleDataSize,
-                height: port.dataType === 'flow' ? handleFlowSize : handleDataSize,
-                borderRadius: port.dataType === 'flow' ? 2 : '50%',
-                ...mobileHandleTouchTarget,
+        {nodeData.outputs?.map((port) => {
+          const isErrorPort = port.dataType === 'error';
+          const isFlowPort = port.dataType === 'flow';
+          return (
+            <Box
+              key={port.id}
+              sx={{
+                position: 'relative',
+                pr: 2,
+                pl: 1,
+                py: mobile ? 0.5 : 0.25,
+                textAlign: 'right',
+                bgcolor: isErrorPort ? '#ffebee' : undefined,
               }}
-              className={mobile ? 'mobile-handle' : undefined}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: portFontSize }}>
-              {port.name}
-            </Typography>
-          </Box>
-        ))}
+            >
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={port.id}
+                style={{
+                  top: '50%',
+                  background: isErrorPort ? '#f44336' : (isFlowPort ? '#555' : meta.color),
+                  width: isFlowPort ? handleFlowSize : handleDataSize,
+                  height: isFlowPort ? handleFlowSize : handleDataSize,
+                  borderRadius: isFlowPort ? 2 : '50%',
+                  border: isErrorPort ? '2px solid #b71c1c' : undefined,
+                  ...mobileHandleTouchTarget,
+                }}
+                className={mobile ? 'mobile-handle' : undefined}
+              />
+              <Typography
+                variant="caption"
+                sx={{
+                  fontSize: portFontSize,
+                  color: isErrorPort ? 'error.main' : 'text.secondary',
+                  fontWeight: isErrorPort ? 600 : undefined,
+                }}
+              >
+                {port.name}
+              </Typography>
+            </Box>
+          );
+        })}
 
         {/* Node-specific content preview */}
         {nodeData.nodeType === 'comment' && !!nodeData.config.text && (
@@ -184,6 +209,18 @@ const AutomateBaseNode: React.FC<NodeProps> = ({ data, selected }) => {
               sx={{ fontSize: contentFontSize, fontFamily: 'monospace', whiteSpace: 'pre', overflow: 'hidden', maxHeight: 32 }}
             >
               {nodeData.script.substring(0, 40)}...
+            </Typography>
+          </Box>
+        )}
+
+        {nodeData.nodeType === 'call_flow' && !!(nodeData.config.flowId as string) && (
+          <Box sx={{ px: 1, py: 0.5, bgcolor: 'action.hover' }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ fontSize: contentFontSize }}
+            >
+              → {(nodeData.config.subflowName as string) || (nodeData.config.flowId as string).substring(0, 8) + '...'}
             </Typography>
           </Box>
         )}

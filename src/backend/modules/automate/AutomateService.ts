@@ -10,6 +10,13 @@ import { NODE_RUNTIME_MAP } from './models/AutomateNodeModel';
 import { BackendAutomateEngine, ExecutionResult } from './engine/BackendAutomateEngine';
 import { BackendSystemApi } from './engine/BackendSystemApi';
 
+export interface WebhookData {
+  payload: unknown;
+  method: string;
+  headers: Record<string, string>;
+  query: Record<string, string>;
+}
+
 const FLOW_EXTENSION = '.automate.json';
 
 export class AutomateService {
@@ -127,10 +134,121 @@ export class AutomateService {
     const engine = new BackendAutomateEngine();
 
     console.log(`AutomateService: Executing flow "${flow.name}" (${flowId})`);
-    const result = await engine.executeFlow(flow, api);
+    const result = await engine.executeFlow(flow, api, { automateService: this });
     console.log(`AutomateService: Flow "${flow.name}" completed: success=${result.success}`);
 
     return result;
+  }
+
+  /**
+   * Execute flow from a webhook trigger node
+   */
+  async executeFromWebhook(
+    flowId: string,
+    nodeId: string,
+    webhookData: {
+      payload: unknown;
+      method: string;
+      headers: Record<string, string>;
+      query: Record<string, string>;
+    }
+  ): Promise<ExecutionResult> {
+    const flow = this.flows.get(flowId);
+    if (!flow) {
+      return {
+        success: false,
+        executionLog: [],
+        logs: [],
+        notifications: [],
+        variables: {},
+        error: `Flow not found: ${flowId}`,
+      };
+    }
+
+    // Find webhook node
+    const node = flow.nodes.find(n => n.id === nodeId);
+    if (!node) {
+      return {
+        success: false,
+        executionLog: [],
+        logs: [],
+        notifications: [],
+        variables: {},
+        error: `Node not found: ${nodeId}`,
+      };
+    }
+
+    if (node.nodeType !== 'webhook_trigger') {
+      return {
+        success: false,
+        executionLog: [],
+        logs: [],
+        notifications: [],
+        variables: {},
+        error: `Node ${nodeId} is not a webhook_trigger`,
+      };
+    }
+
+    // Validate: check for client-only nodes in the flow
+    const clientOnlyNodes = flow.nodes.filter(n => {
+      const runtime = NODE_RUNTIME_MAP[n.nodeType];
+      return runtime === 'client' && !n.disabled;
+    });
+
+    if (clientOnlyNodes.length > 0) {
+      const nodeNames = clientOnlyNodes.map(n => `${n.name} (${n.nodeType})`).join(', ');
+      return {
+        success: false,
+        executionLog: [],
+        logs: [],
+        notifications: [],
+        variables: {},
+        error: `Flow contains client-only nodes that cannot run on backend: ${nodeNames}`,
+      };
+    }
+
+    const api = new BackendSystemApi(this.fileSystem, this.dataSource, {});
+    const engine = new BackendAutomateEngine();
+
+    console.log(`AutomateService: Executing webhook flow "${flow.name}" (${flowId}) from node ${nodeId}`);
+    // Note: executeFromWebhook needs to be updated to support subflows if needed
+    const result = await engine.executeFromWebhook(flow, api, nodeId, webhookData, this);
+    console.log(`AutomateService: Webhook flow "${flow.name}" completed: success=${result.success}`);
+
+    return result;
+  }
+
+  /**
+   * Validate webhook secret token for a specific node
+   */
+  validateWebhookSecret(flowId: string, nodeId: string, token: string | undefined): boolean {
+    const flow = this.flows.get(flowId);
+    if (!flow) return false;
+
+    const node = flow.nodes.find(n => n.id === nodeId);
+    if (!node || node.nodeType !== 'webhook_trigger') return false;
+
+    const secret = node.config.secret as string | undefined;
+
+    // If no secret configured, allow access
+    if (!secret || secret === '') return true;
+
+    // If secret configured, require matching token
+    return token === secret;
+  }
+
+  /**
+   * Get allowed HTTP methods for a webhook node
+   */
+  getWebhookAllowedMethods(flowId: string, nodeId: string): string[] | null {
+    const flow = this.flows.get(flowId);
+    if (!flow) return null;
+
+    const node = flow.nodes.find(n => n.id === nodeId);
+    if (!node || node.nodeType !== 'webhook_trigger') return null;
+
+    const methods = node.config.allowedMethods as string[] | undefined;
+    return methods && methods.length > 0 ? methods : ['POST'];
   }
 
   getFlowById(id: string): AutomateFlowModel | undefined {

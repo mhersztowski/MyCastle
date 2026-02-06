@@ -43,6 +43,8 @@ Aplikacja backend:
     - automate
         - AutomateService - ładowanie flow z data/automations.json, walidacja runtime, wykonywanie flow
         - engine/BackendAutomateEngine - silnik wykonawczy flow (graph traversal, switch na nodeType)
+          - Obsługa merge nodów: mergeState (Map<nodeId, Map<portId, value>>), inEdges (krawędzie wchodzące)
+          - Przekazywanie _incomingPortId przy wywołaniach następnych nodów
         - engine/BackendSystemApi - implementacja System API dla backendu (FileSystem + DataSource bezpośrednio)
           - api.file (read/write/list), api.data (persons/tasks/projects/shoppingLists), api.variables, api.log, api.notify, api.utils, api.shopping
           - api.ai — niezaimplementowane w tej iteracji (isConfigured() → false)
@@ -137,6 +139,11 @@ Aplikacja frontend
         - Start node - uruchamiany przy kliknięciu "Run flow" (przycisk play)
         - Manual Trigger - uruchamiany przez double-click/tap na nodzie, ma własny payload (JSON lub script)
         - executeFromNode - metoda silnika uruchamiająca flow od konkretnego noda (dla Manual Trigger)
+      - Merge node - łączenie wyników z równoległych gałęzi flow
+        - Dynamiczne porty wejściowe (min 2, można dodawać więcej)
+        - Tryby agregacji: object (klucz: portId) lub array
+        - Czeka na wszystkie podłączone porty przed kontynuacją
+        - Silnik śledzi stan merge nodów (mergeState) i krawędzie wchodzące (inEdges)
       - Lista flow (/automate) - widok drzewiasty z hierarchią katalogów, directory picker przy tworzeniu nowego flow
       - Designer (/designer/automate/:id) - directory picker przy "Nowy flow" i "Zapisz jako"
     - notification - moduł powiadomień aplikacji
@@ -305,8 +312,8 @@ Aplikacja frontend
   - `src/modules/automate/`: Automate module (NodeRed-like visual programming)
     - `models/`: AutomateFlowModel (+ runtime field), AutomateNodeModel (+ AutomateNodeRuntime), AutomateEdgeModel, AutomatePortModel
     - `nodes/`: AutomateFlowNode extends NodeBase (+ runtime property)
-    - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions + runtime per node type)
-    - `engine/`: AutomateEngine (+ executeFromNode), AutomateSandbox (+ inp/vars aliases), AutomateSystemApi
+    - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions + runtime per node type, Merge node)
+    - `engine/`: AutomateEngine (+ executeFromNode, mergeState, inEdges), AutomateSandbox (+ inp/vars aliases), AutomateSystemApi
     - `designer/`: AutomateDesigner (responsive desktop + mobile), AutomateDesignerContext (+ backend routing, executeFromNode), Toolbox, Properties, Toolbar
       - `components/`: AutomateBaseNode (custom ReactFlow node, mobile-responsive sizing + touch targets)
       - `mobile/`: AutomateMobileToolbar, AutomateMobileToolbox, AutomateMobileProperties, AutomateMobileLog
@@ -357,6 +364,7 @@ Aplikacja frontend
   - `automate.md`: Dokumentacja System API automate (api.file, api.data, api.variables, api.log, api.ai, api.speech, api.shopping, runtime, przykłady)
   - `desktop.md`: Dokumentacja Desktop Agent (operacje, konfiguracja, topiki MQTT)
   - `conversation.md`: Dokumentacja akcji konwersacyjnych
+  - `uiforms.md`: Dokumentacja UI Forms (21 kontrolek, anchors/offsets, data binding, przykłady formularzy)
 - `configs/`: Configuration files (YAML, JSON, .env, etc.)
 - `scripts/`: Utility / automation scripts
 - `assets/`: Images, fonts, or other static resources

@@ -7,6 +7,8 @@ import { AutomatePortModel } from './AutomatePortModel';
 export type AutomateNodeType =
   | 'start'
   | 'manual_trigger'
+  | 'webhook_trigger'
+  | 'schedule_trigger'
   | 'js_execute'
   | 'system_api'
   | 'if_else'
@@ -20,7 +22,11 @@ export type AutomateNodeType =
   | 'llm_call'
   | 'tts'
   | 'stt'
-  | 'comment';
+  | 'comment'
+  | 'call_flow'
+  | 'rate_limit'
+  | 'foreach'
+  | 'merge';
 
 export type AutomateNodeRuntime = 'client' | 'backend' | 'universal';
 

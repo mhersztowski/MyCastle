@@ -8,6 +8,8 @@ import { AutomatePortModel } from '../models/AutomatePortModel';
 
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import TouchAppIcon from '@mui/icons-material/TouchApp';
+import WebhookIcon from '@mui/icons-material/Webhook';
+import ScheduleIcon from '@mui/icons-material/Schedule';
 import CodeIcon from '@mui/icons-material/Code';
 import ApiIcon from '@mui/icons-material/Api';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
@@ -22,6 +24,10 @@ import CommentIcon from '@mui/icons-material/Comment';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import MicIcon from '@mui/icons-material/Mic';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import TimerIcon from '@mui/icons-material/Timer';
+import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
+import CallMergeIcon from '@mui/icons-material/CallMerge';
 
 export type AutomateNodeCategory = 'triggers' | 'actions' | 'logic' | 'data' | 'output' | 'ai' | 'utility';
 
@@ -39,7 +45,33 @@ export interface AutomateNodeTypeMetadata {
   defaultConfig: Record<string, unknown>;
   hasScript: boolean;
   runtime: AutomateNodeRuntime;
+  canError: boolean;
 }
+
+/**
+ * Stały port error - dodawany do nodów gdy enableErrorPort = true
+ */
+export const ERROR_OUTPUT_PORT: AutomatePortModel = {
+  id: 'error',
+  name: 'Error',
+  direction: 'output',
+  dataType: 'error',
+};
+
+/**
+ * Schedule presets for cron expressions
+ */
+export const SCHEDULE_PRESETS = [
+  { label: 'Co minutę', value: '* * * * *' },
+  { label: 'Co 5 minut', value: '*/5 * * * *' },
+  { label: 'Co 15 minut', value: '*/15 * * * *' },
+  { label: 'Co godzinę', value: '0 * * * *' },
+  { label: 'Codziennie o 8:00', value: '0 8 * * *' },
+  { label: 'Codziennie o północy', value: '0 0 * * *' },
+  { label: 'Co poniedziałek o 9:00', value: '0 9 * * 1' },
+  { label: 'Pierwszy dzień miesiąca', value: '0 0 1 * *' },
+  { label: 'Własny cron...', value: 'custom' },
+];
 
 export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetadata> = {
   start: {
@@ -54,6 +86,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: {},
     hasScript: false,
     runtime: 'universal',
+    canError: false,
   },
   manual_trigger: {
     nodeType: 'manual_trigger',
@@ -67,6 +100,40 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { payload: '{}', useScript: false },
     hasScript: true,
     runtime: 'universal',
+    canError: false,
+  },
+  webhook_trigger: {
+    nodeType: 'webhook_trigger',
+    label: 'Webhook Trigger',
+    icon: WebhookIcon,
+    category: 'triggers',
+    description: 'Uruchomienie przez HTTP webhook',
+    color: '#4caf50',
+    defaultInputs: [],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'any' }],
+    defaultConfig: { secret: '', allowedMethods: ['POST'] },
+    hasScript: false,
+    runtime: 'backend',
+    canError: true,
+  },
+  schedule_trigger: {
+    nodeType: 'schedule_trigger',
+    label: 'Schedule Trigger',
+    icon: ScheduleIcon,
+    category: 'triggers',
+    description: 'Automatyczne uruchomienie wg harmonogramu (cron)',
+    color: '#4caf50',
+    defaultInputs: [],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'any' }],
+    defaultConfig: {
+      preset: '0 8 * * *',
+      cronExpression: '0 8 * * *',
+      timezone: 'UTC',
+      enabled: true,
+    },
+    hasScript: false,
+    runtime: 'backend',
+    canError: true,
   },
   js_execute: {
     nodeType: 'js_execute',
@@ -80,6 +147,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: {},
     hasScript: true,
     runtime: 'universal',
+    canError: true,
   },
   system_api: {
     nodeType: 'system_api',
@@ -93,6 +161,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { apiMethod: '', parameters: {} },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   if_else: {
     nodeType: 'if_else',
@@ -109,6 +178,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { condition: '' },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   switch: {
     nodeType: 'switch',
@@ -125,6 +195,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { expression: '', cases: [''] },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   for_loop: {
     nodeType: 'for_loop',
@@ -141,6 +212,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { count: 10, indexVariable: 'i' },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   while_loop: {
     nodeType: 'while_loop',
@@ -157,6 +229,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { condition: '', maxIterations: 1000 },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   read_variable: {
     nodeType: 'read_variable',
@@ -173,6 +246,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { variableName: '' },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   write_variable: {
     nodeType: 'write_variable',
@@ -189,19 +263,21 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { variableName: '', value: '' },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   log: {
     nodeType: 'log',
     label: 'Log',
     icon: TerminalIcon,
     category: 'output',
-    description: 'Loguj wiadomość',
+    description: 'Loguj wiadomość lub input',
     color: '#607d8b',
     defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
     defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
-    defaultConfig: { message: '', level: 'info' },
+    defaultConfig: { message: '', level: 'info', logInput: false },
     hasScript: false,
     runtime: 'universal',
+    canError: true,
   },
   notification: {
     nodeType: 'notification',
@@ -215,6 +291,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { message: '', severity: 'info' },
     hasScript: false,
     runtime: 'client',
+    canError: true,
   },
   llm_call: {
     nodeType: 'llm_call',
@@ -228,6 +305,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { prompt: '', systemPrompt: '', model: '', temperature: 0.7, maxTokens: 2048, useScript: false },
     hasScript: true,
     runtime: 'universal',
+    canError: true,
   },
   tts: {
     nodeType: 'tts',
@@ -241,6 +319,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { text: '', useScript: false, voice: '', speed: 1.0 },
     hasScript: true,
     runtime: 'client',
+    canError: true,
   },
   stt: {
     nodeType: 'stt',
@@ -254,6 +333,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { language: '' },
     hasScript: false,
     runtime: 'client',
+    canError: true,
   },
   comment: {
     nodeType: 'comment',
@@ -267,6 +347,72 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     defaultConfig: { text: '' },
     hasScript: false,
     runtime: 'universal',
+    canError: false,
+  },
+  call_flow: {
+    nodeType: 'call_flow',
+    label: 'Call Flow',
+    icon: AccountTreeIcon,
+    category: 'logic',
+    description: 'Wywołaj inny flow jako subflow',
+    color: '#795548',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { flowId: '', passInputAsPayload: true },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  rate_limit: {
+    nodeType: 'rate_limit',
+    label: 'Rate Limit',
+    icon: TimerIcon,
+    category: 'logic',
+    description: 'Delay, throttle lub debounce',
+    color: '#00897b',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'out', name: 'Out', direction: 'output', dataType: 'flow' },
+      { id: 'skipped', name: 'Skipped', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { mode: 'delay', delayMs: 1000 },
+    hasScript: false,
+    runtime: 'universal',
+    canError: false,
+  },
+  foreach: {
+    nodeType: 'foreach',
+    label: 'For Each',
+    icon: FormatListBulletedIcon,
+    category: 'logic',
+    description: 'Iteracja po tablicy/kolekcji',
+    color: '#2196f3',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'loop', name: 'Loop', direction: 'output', dataType: 'flow' },
+      { id: 'done', name: 'Done', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { sourceExpression: 'inp._result', itemVariable: 'item', indexVariable: 'index' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  merge: {
+    nodeType: 'merge',
+    label: 'Merge',
+    icon: CallMergeIcon,
+    category: 'logic',
+    description: 'Łączy wyniki z równoległych gałęzi',
+    color: '#00bcd4',
+    defaultInputs: [
+      { id: 'in_1', name: 'In 1', direction: 'input', dataType: 'any' },
+      { id: 'in_2', name: 'In 2', direction: 'input', dataType: 'any' },
+    ],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'object' }],
+    defaultConfig: { mode: 'object' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
   },
 };
 

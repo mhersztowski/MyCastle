@@ -5,6 +5,7 @@ import { HttpUploadServer } from './modules/httpserver/HttpUploadServer';
 import { OcrService } from './modules/ocr/OcrService';
 import { DataSource } from './modules/datasource';
 import { AutomateService } from './modules/automate';
+import { SchedulerService } from './modules/scheduler';
 
 dotenv.config();
 
@@ -17,6 +18,7 @@ const mqttServer = new MqttServer(mqttPort, fileSystem);
 const ocrService = new OcrService();
 const dataSource = new DataSource(fileSystem);
 const automateService = new AutomateService(fileSystem, dataSource);
+const schedulerService = new SchedulerService(automateService, fileSystem);
 
 async function main() {
   try {
@@ -29,6 +31,9 @@ async function main() {
     await automateService.initialize();
     console.log(`AutomateService initialized: ${automateService.getAllFlows().length} flows`);
 
+    await schedulerService.initialize();
+    console.log(`SchedulerService initialized: ${schedulerService.getActiveJobs().length} active schedules`);
+
     mqttServer.setAutomateService(automateService);
 
     fileSystem.on('fileChanged', async (event: FileChangeEvent) => {
@@ -39,6 +44,14 @@ async function main() {
       if (event.path.replace(/\\/g, '/') === 'data/automations.json') {
         await automateService.reload();
         console.log(`AutomateService reloaded: ${automateService.getAllFlows().length} flows`);
+        await schedulerService.reload();
+        console.log(`SchedulerService reloaded: ${schedulerService.getActiveJobs().length} active schedules`);
+      }
+
+      // Reload scheduler when any .automate.json file changes
+      if (event.path.endsWith('.automate.json')) {
+        await schedulerService.reload();
+        console.log(`SchedulerService reloaded (file: ${event.path}): ${schedulerService.getActiveJobs().length} active schedules`);
       }
     });
 
@@ -50,7 +63,7 @@ async function main() {
       console.warn('OCR Service failed to initialize (receipt OCR will be unavailable):', ocrError);
     }
 
-    const httpServer = new HttpUploadServer(httpPort, fileSystem, ocrService);
+    const httpServer = new HttpUploadServer(httpPort, fileSystem, ocrService, automateService);
 
     await mqttServer.start();
     console.log(`MQTT Server started on port ${mqttPort}`);

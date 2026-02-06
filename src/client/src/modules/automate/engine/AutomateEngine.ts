@@ -5,9 +5,11 @@
 import { AutomateFlowModel } from '../models/AutomateFlowModel';
 import { AutomateNodeModel } from '../models/AutomateNodeModel';
 import { AutomateEdgeModel } from '../models/AutomateEdgeModel';
+import { AutomateErrorData } from '../models/AutomatePortModel';
 import { AutomateSystemApi, LogEntry, NotificationEntry } from './AutomateSystemApi';
 import { AutomateSandbox } from './AutomateSandbox';
 import { DataSource } from '../../filesystem/data/DataSource';
+import { automateService } from '../services/AutomateService';
 
 export interface ExecutionLog {
   nodeId: string;
@@ -30,6 +32,10 @@ export interface ExecutionResult {
 }
 
 const MAX_NODE_EXECUTIONS = 10000;
+const MAX_CALL_DEPTH = 10;
+
+// Throttle state tracking (nodeId -> lastExecutionTime)
+const throttleState = new Map<string, number>();
 
 export class AutomateEngine {
   private variables: Record<string, unknown> = {};
@@ -37,17 +43,51 @@ export class AutomateEngine {
   private isRunning = false;
   private shouldAbort = false;
   private nodeExecutionCount = 0;
+  private callStack: string[] = [];
+  private dataSource: DataSource | null = null;
+  private mergeState: Map<string, Map<string, unknown>> = new Map();
+  private inEdges: Map<string, AutomateEdgeModel[]> = new Map();
 
   onNodeStart?: (nodeId: string) => void;
   onNodeComplete?: (nodeId: string, result: unknown) => void;
   onNodeError?: (nodeId: string, error: string) => void;
   onLog?: (entry: ExecutionLog) => void;
 
-  async executeFlow(flow: AutomateFlowModel, dataSource: DataSource): Promise<ExecutionResult> {
+  async executeFlow(
+    flow: AutomateFlowModel,
+    dataSource: DataSource,
+    parentCallStack: string[] = [],
+    initialInput: Record<string, unknown> = {},
+  ): Promise<ExecutionResult> {
+    // Check for recursion
+    if (parentCallStack.includes(flow.id)) {
+      return {
+        success: false,
+        executionLog: [],
+        logs: [],
+        notifications: [],
+        variables: {},
+        error: `Recursive flow call detected: ${flow.id} (${flow.name})`,
+      };
+    }
+    if (parentCallStack.length >= MAX_CALL_DEPTH) {
+      return {
+        success: false,
+        executionLog: [],
+        logs: [],
+        notifications: [],
+        variables: {},
+        error: `Max subflow depth (${MAX_CALL_DEPTH}) exceeded`,
+      };
+    }
+
     this.isRunning = true;
     this.shouldAbort = false;
     this.executionLog = [];
     this.nodeExecutionCount = 0;
+    this.mergeState = new Map();
+    this.callStack = [...parentCallStack, flow.id];
+    this.dataSource = dataSource;
 
     // Inicjalizuj zmienne z domyślnymi wartościami
     this.variables = {};
@@ -55,6 +95,10 @@ export class AutomateEngine {
       for (const v of flow.variables) {
         this.variables[v.name] = v.defaultValue ?? null;
       }
+    }
+    // Add parent input to variables
+    if (initialInput._parentInput !== undefined) {
+      this.variables._parentInput = initialInput._parentInput;
     }
 
     const api = new AutomateSystemApi(dataSource, this.variables);
@@ -72,6 +116,16 @@ export class AutomateEngine {
       list.push(edge);
       outEdges.set(edge.sourceNodeId, list);
     }
+
+    // Zbuduj mapę krawędzi wchodzących (dla merge)
+    const inEdges = new Map<string, AutomateEdgeModel[]>();
+    for (const edge of flow.edges) {
+      if (edge.disabled) continue;
+      const list = inEdges.get(edge.targetNodeId) || [];
+      list.push(edge);
+      inEdges.set(edge.targetNodeId, list);
+    }
+    this.inEdges = inEdges;
 
     // Znajdź nody startowe (tylko start, manual_trigger jest wyzwalany ręcznie)
     const startNodes = flow.nodes.filter(
@@ -93,7 +147,7 @@ export class AutomateEngine {
     try {
       for (const startNode of startNodes) {
         if (this.shouldAbort) break;
-        await this.executeNode(startNode, nodeMap, outEdges, api, {});
+        await this.executeNode(startNode, nodeMap, outEdges, api, initialInput);
       }
 
       this.isRunning = false;
@@ -305,7 +359,11 @@ export class AutomateEngine {
             for (const edge of bodyEdges) {
               const targetNode = nodeMap.get(edge.targetNodeId);
               if (targetNode) {
-                await this.executeNode(targetNode, nodeMap, outEdges, api, { ...input, index: i });
+                await this.executeNode(targetNode, nodeMap, outEdges, api, {
+                  ...input,
+                  index: i,
+                  _incomingPortId: edge.targetPortId,
+                });
               }
             }
           }
@@ -333,7 +391,11 @@ export class AutomateEngine {
             for (const edge of whileBodyEdges) {
               const targetNode = nodeMap.get(edge.targetNodeId);
               if (targetNode) {
-                await this.executeNode(targetNode, nodeMap, outEdges, api, { ...input, iteration: iter });
+                await this.executeNode(targetNode, nodeMap, outEdges, api, {
+                  ...input,
+                  iteration: iter,
+                  _incomingPortId: edge.targetPortId,
+                });
               }
             }
             iter++;
@@ -363,8 +425,16 @@ export class AutomateEngine {
         case 'log': {
           const message = node.config.message as string || '';
           const level = (node.config.level as string) || 'info';
+          const logInput = node.config.logInput as boolean;
           const logFn = api.log[level as keyof typeof api.log] || api.log.info;
-          logFn(message);
+
+          if (logInput) {
+            // Log input object as JSON
+            const inputStr = JSON.stringify(input._result ?? input, null, 2);
+            logFn(message ? `${message}\n${inputStr}` : inputStr);
+          } else {
+            logFn(message);
+          }
           nextPortId = 'out';
           break;
         }
@@ -427,9 +497,193 @@ export class AutomateEngine {
           break;
         }
 
+        case 'call_flow': {
+          const flowId = node.config.flowId as string;
+          if (!flowId) {
+            throw new Error('Call Flow: No flow selected');
+          }
+
+          // Load subflow
+          const subflowNode = automateService.getFlowById(flowId);
+          if (!subflowNode) {
+            throw new Error(`Call Flow: Flow not found: ${flowId}`);
+          }
+          const subflow = subflowNode.toModel();
+
+          // Check runtime compatibility - client can't call backend-only flows
+          if (subflow.runtime === 'backend') {
+            throw new Error(`Call Flow: Cannot call backend-only flow "${subflow.name}" from client`);
+          }
+
+          // Prepare input for subflow
+          const subflowInput: Record<string, unknown> = {};
+          if (node.config.passInputAsPayload !== false) {
+            subflowInput._parentInput = input._result;
+          }
+
+          api.log.info(`Calling subflow: ${subflow.name} (${flowId})`);
+
+          // Execute subflow with new engine instance
+          const subEngine = new AutomateEngine();
+          // Copy callbacks for nested execution
+          subEngine.onNodeStart = this.onNodeStart;
+          subEngine.onNodeComplete = this.onNodeComplete;
+          subEngine.onNodeError = this.onNodeError;
+          subEngine.onLog = this.onLog;
+
+          const subResult = await subEngine.executeFlow(
+            subflow,
+            this.dataSource!,
+            this.callStack,
+            subflowInput,
+          );
+
+          // Merge logs and notifications
+          for (const log of subResult.logs) {
+            api.logs.push(log);
+          }
+          for (const notif of subResult.notifications) {
+            api.notifications.push(notif);
+          }
+
+          if (!subResult.success) {
+            throw new Error(`Subflow "${subflow.name}" failed: ${subResult.error}`);
+          }
+
+          // Return subflow's final variables as result
+          result = subResult.variables;
+          api.log.info(`Subflow ${subflow.name} completed`);
+          nextPortId = 'out';
+          break;
+        }
+
+        case 'rate_limit': {
+          const mode = (node.config.mode as string) || 'delay';
+          const delayMs = (node.config.delayMs as number) || 1000;
+          const nodeKey = `${node.id}`;
+
+          if (mode === 'delay') {
+            // Simple delay - wait then continue
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            api.log.info(`Delayed ${delayMs}ms`);
+            nextPortId = 'out';
+          } else if (mode === 'throttle') {
+            // Throttle - execute max once per interval
+            const now = Date.now();
+            const lastExec = throttleState.get(nodeKey) || 0;
+
+            if (now - lastExec >= delayMs) {
+              throttleState.set(nodeKey, now);
+              api.log.info(`Throttle passed (${delayMs}ms interval)`);
+              nextPortId = 'out';
+            } else {
+              const remaining = delayMs - (now - lastExec);
+              api.log.info(`Throttled - ${remaining}ms remaining`);
+              nextPortId = 'skipped';
+            }
+          } else if (mode === 'debounce') {
+            // Debounce - simple implementation: delay then execute
+            // (Full debounce would need async cancellation which is complex in flow context)
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            api.log.info(`Debounced (waited ${delayMs}ms)`);
+            nextPortId = 'out';
+          }
+          break;
+        }
+
+        case 'foreach': {
+          const sourceExpr = (node.config.sourceExpression as string) || 'inp._result';
+          const itemVar = (node.config.itemVariable as string) || 'item';
+          const indexVar = (node.config.indexVariable as string) || 'index';
+          const loopEdges = (outEdges.get(node.id) || []).filter(e => e.sourcePortId === 'loop');
+
+          // Evaluate source expression to get array
+          let sourceArray: unknown[];
+          try {
+            const evaluated = await AutomateSandbox.execute(
+              `return (${sourceExpr})`,
+              api, input, this.variables
+            );
+            if (!Array.isArray(evaluated)) {
+              throw new Error(`Foreach source is not an array: ${typeof evaluated}`);
+            }
+            sourceArray = evaluated;
+          } catch (evalErr) {
+            throw new Error(`Foreach: Failed to evaluate source expression: ${evalErr instanceof Error ? evalErr.message : String(evalErr)}`);
+          }
+
+          api.log.info(`Foreach: Iterating over ${sourceArray.length} items`);
+
+          // Iterate over array
+          for (let i = 0; i < sourceArray.length; i++) {
+            if (this.shouldAbort) break;
+            const currentItem = sourceArray[i];
+            this.variables[itemVar] = currentItem;
+            this.variables[indexVar] = i;
+
+            for (const edge of loopEdges) {
+              const targetNode = nodeMap.get(edge.targetNodeId);
+              if (targetNode) {
+                await this.executeNode(targetNode, nodeMap, outEdges, api, {
+                  ...input,
+                  _result: currentItem,
+                  [itemVar]: currentItem,
+                  [indexVar]: i,
+                  _incomingPortId: edge.targetPortId,
+                });
+              }
+            }
+          }
+
+          result = sourceArray.length;
+          nextPortId = 'done';
+          break;
+        }
+
         case 'comment':
           // Nie wykonuj nic
           break;
+
+        case 'merge': {
+          const incomingPortId = (input._incomingPortId as string) || 'in_1';
+
+          if (!this.mergeState.has(node.id)) {
+            this.mergeState.set(node.id, new Map());
+          }
+          const nodeState = this.mergeState.get(node.id)!;
+          nodeState.set(incomingPortId, input._result);
+
+          // Sprawdź ile portów jest podłączonych
+          const connectedPorts = new Set<string>();
+          const nodeInEdges = this.inEdges.get(node.id) || [];
+          for (const edge of nodeInEdges) {
+            connectedPorts.add(edge.targetPortId);
+          }
+
+          // Czy wszystkie porty otrzymały dane?
+          const allReceived = [...connectedPorts].every(portId => nodeState.has(portId));
+
+          if (!allReceived) {
+            // Czekaj na pozostałe gałęzie
+            logEntry.status = 'completed';
+            logEntry.endTime = Date.now();
+            logEntry.result = { waiting: true, received: [...nodeState.keys()] };
+            this.onLog?.(logEntry);
+            return;
+          }
+
+          // Wszystkie gałęzie dotarły - agreguj
+          const mergeMode = (node.config.mode as string) || 'object';
+          if (mergeMode === 'array') {
+            result = [...nodeState.values()];
+          } else {
+            result = Object.fromEntries(nodeState.entries());
+          }
+
+          this.mergeState.delete(node.id);
+          nextPortId = 'out';
+          break;
+        }
       }
 
       logEntry.status = 'completed';
@@ -445,7 +699,11 @@ export class AutomateEngine {
           if (this.shouldAbort) break;
           const targetNode = nodeMap.get(edge.targetNodeId);
           if (targetNode) {
-            await this.executeNode(targetNode, nodeMap, outEdges, api, { ...input, _result: result });
+            await this.executeNode(targetNode, nodeMap, outEdges, api, {
+              ...input,
+              _result: result,
+              _incomingPortId: edge.targetPortId,
+            });
           }
         }
       }
@@ -456,6 +714,40 @@ export class AutomateEngine {
       logEntry.error = errorMsg;
       this.onNodeError?.(node.id, errorMsg);
       this.onLog?.(logEntry);
+
+      // Check if node has error port connected
+      const errorEdges = (outEdges.get(node.id) || []).filter(e => e.sourcePortId === 'error');
+
+      if (errorEdges.length > 0) {
+        // Prepare error data
+        const errorData: AutomateErrorData = {
+          message: errorMsg,
+          stack: err instanceof Error ? err.stack : undefined,
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.nodeType,
+          timestamp: Date.now(),
+          input,
+        };
+
+        // Continue through error port instead of propagating error
+        for (const edge of errorEdges) {
+          if (this.shouldAbort) break;
+          const targetNode = nodeMap.get(edge.targetNodeId);
+          if (targetNode) {
+            await this.executeNode(targetNode, nodeMap, outEdges, api, {
+              ...input,
+              _result: errorData,
+              _error: errorData,
+              _incomingPortId: edge.targetPortId,
+            });
+          }
+        }
+        // Error was handled - don't propagate
+        return;
+      }
+
+      // No error port connected - propagate error normally
       throw err;
     }
   }
