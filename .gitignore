@@ -25,8 +25,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Data directory
-data/
+# Data directory (only top-level)
+/data/
 
 # Test coverage
 coverage/

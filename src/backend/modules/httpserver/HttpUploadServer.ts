@@ -6,6 +6,7 @@ import { AutomateService } from '../automate/AutomateService';
 import { ExecutionResult } from '../automate/engine/BackendAutomateEngine';
 import * as path from 'path';
 import * as url from 'url';
+import * as fs from 'fs';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_OCR_BODY_SIZE = 30 * 1024 * 1024; // 30MB for multiple images
@@ -51,6 +52,27 @@ const MIME_TYPES: Record<string, string> = {
   '.zip': 'application/zip',
 };
 
+const STATIC_MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.map': 'application/json',
+  '.txt': 'text/plain',
+  '.webmanifest': 'application/manifest+json',
+};
+
 export class HttpUploadServer {
   private server: Server;
   private port: number;
@@ -58,14 +80,20 @@ export class HttpUploadServer {
   private ocrService?: OcrService;
   private automateService?: AutomateService;
   private receiptParser: PolishReceiptParser;
+  private staticDir: string | null;
 
-  constructor(port: number, fileSystem: FileSystem, ocrService?: OcrService, automateService?: AutomateService) {
+  constructor(port: number, fileSystem: FileSystem, ocrService?: OcrService, automateService?: AutomateService, staticDir?: string) {
     this.port = port;
     this.fileSystem = fileSystem;
     this.ocrService = ocrService;
     this.automateService = automateService;
+    this.staticDir = staticDir || null;
     this.receiptParser = new PolishReceiptParser();
     this.server = createServer((req, res) => this.handleRequest(req, res));
+  }
+
+  getHttpServer(): Server {
+    return this.server;
   }
 
   private setCorsHeaders(res: ServerResponse): void {
@@ -111,8 +139,70 @@ export class HttpUploadServer {
       return;
     }
 
+    // Serve static frontend files
+    if (req.method === 'GET' && this.staticDir) {
+      const served = this.handleStaticFile(req, res);
+      if (served) return;
+
+      // SPA fallback: serve index.html for client-side routes
+      this.serveSpaFallback(res);
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private handleStaticFile(req: IncomingMessage, res: ServerResponse): boolean {
+    if (!this.staticDir) return false;
+
+    const parsedUrl = url.parse(req.url || '', false);
+    const filePath = path.join(this.staticDir, parsedUrl.pathname || '/');
+
+    // Prevent directory traversal
+    const resolvedPath = path.resolve(filePath);
+    const resolvedStaticDir = path.resolve(this.staticDir);
+    if (!resolvedPath.startsWith(resolvedStaticDir)) {
+      return false;
+    }
+
+    try {
+      const stat = fs.statSync(resolvedPath);
+      if (stat.isFile()) {
+        const ext = path.extname(resolvedPath).toLowerCase();
+        const mimeType = STATIC_MIME_TYPES[ext] || 'application/octet-stream';
+        const content = fs.readFileSync(resolvedPath);
+
+        if (ext === '.js' || ext === '.css') {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+
+        res.writeHead(200, { 'Content-Type': mimeType });
+        res.end(content);
+        return true;
+      }
+    } catch {
+      // File not found — fall through
+    }
+    return false;
+  }
+
+  private serveSpaFallback(res: ServerResponse): void {
+    if (!this.staticDir) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    const indexPath = path.join(this.staticDir, 'index.html');
+    try {
+      const content = fs.readFileSync(indexPath, 'utf-8');
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(content);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    }
   }
 
   private async handleFileServe(req: IncomingMessage, res: ServerResponse): Promise<void> {

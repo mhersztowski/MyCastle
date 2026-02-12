@@ -1,6 +1,11 @@
-import Aedes, { Client as AedesClient, PublishPacket } from 'aedes';
-import { createServer as createHttpServer, Server as HttpServer } from 'http';
+import type AedesServer from 'aedes/types/instance';
+import { Client as AedesClient, PublishPacket } from 'aedes';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { createBroker } = require('aedes') as { createBroker: () => AedesServer };
+import { createServer as createHttpServer, Server as HttpServer, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket, createWebSocketStream } from 'ws';
+import { Duplex } from 'stream';
+import * as url from 'url';
 import { FileSystem } from '../filesystem/FileSystem';
 import { AutomateService } from '../automate/AutomateService';
 import { Client } from './Client';
@@ -26,25 +31,48 @@ const TOPICS = {
 };
 
 export class MqttServer {
-  private aedes: Aedes;
+  private aedes: AedesServer;
   private httpServer: HttpServer;
   private wss: WebSocketServer;
-  private port: number;
+  private externalHttpServer: boolean;
   private fileSystem: FileSystem;
   private automateService: AutomateService | null = null;
   private clients: Map<string, Client>;
 
-  constructor(port: number, fileSystem: FileSystem) {
-    this.port = port;
+  constructor(fileSystem: FileSystem, httpServer?: HttpServer) {
     this.fileSystem = fileSystem;
     this.clients = new Map();
-    this.aedes = new Aedes();
+    this.aedes = createBroker();
 
-    this.httpServer = createHttpServer();
-    this.wss = new WebSocketServer({ server: this.httpServer });
+    if (httpServer) {
+      // Shared mode: attach to existing HTTP server with path-based routing
+      this.httpServer = httpServer;
+      this.externalHttpServer = true;
+      this.wss = new WebSocketServer({ noServer: true });
+      this.setupUpgradeHandler(httpServer);
+    } else {
+      // Standalone mode: create own HTTP server
+      this.httpServer = createHttpServer();
+      this.externalHttpServer = false;
+      this.wss = new WebSocketServer({ server: this.httpServer });
+    }
 
     this.setupWebSocket();
     this.setupEventHandlers();
+  }
+
+  private setupUpgradeHandler(httpServer: HttpServer): void {
+    httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const pathname = url.parse(request.url || '', false).pathname;
+
+      if (pathname === '/mqtt') {
+        this.wss.handleUpgrade(request, socket, head, (ws) => {
+          this.wss.emit('connection', ws, request);
+        });
+      } else {
+        socket.destroy();
+      }
+    });
   }
 
   private setupWebSocket(): void {
@@ -191,7 +219,7 @@ export class MqttServer {
         dup: false,
         retain: false,
       },
-      (err) => {
+      (err?: Error) => {
         if (err) {
           console.error('Error publishing message:', err);
         }
@@ -199,9 +227,14 @@ export class MqttServer {
     );
   }
 
-  async start(): Promise<void> {
+  async start(port?: number): Promise<void> {
+    if (this.externalHttpServer) {
+      // Shared mode: HTTP server is managed externally
+      return;
+    }
+
     return new Promise((resolve, reject) => {
-      this.httpServer.listen(this.port, () => {
+      this.httpServer.listen(port, () => {
         resolve();
       });
 
@@ -214,9 +247,13 @@ export class MqttServer {
   async stop(): Promise<void> {
     return new Promise((resolve) => {
       this.aedes.close(() => {
-        this.httpServer.close(() => {
+        if (this.externalHttpServer) {
           resolve();
-        });
+        } else {
+          this.httpServer.close(() => {
+            resolve();
+          });
+        }
       });
     });
   }

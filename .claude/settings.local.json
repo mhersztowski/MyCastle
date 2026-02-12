@@ -10,7 +10,9 @@
       "Bash(git status:*)",
       "Bash(npx react-scripts build:*)",
       "Bash(timeout 15 npx react-scripts start:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(node -e:*)"
     ]
   }
 }
