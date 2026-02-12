@@ -8,6 +8,7 @@ import { AiChatMessage } from '../../ai/models/AiModels';
 import { blobToBase64DataUrl } from '../../ai/utils/imageUtils';
 import { ReceiptData, ReceiptItem } from '../models/ReceiptModels';
 import { ReceiptScanProvider } from './ReceiptScanProvider';
+import { getHttpUrl } from '../../../utils/urlHelper';
 import { DEFAULT_SHOPPING_CATEGORIES, DEFAULT_SHOPPING_UNITS } from '../../filesystem/models/ShoppingModel';
 
 interface OcrBackendResponse {
@@ -69,7 +70,7 @@ export class HybridReceiptProvider implements ReceiptScanProvider {
       })
     );
 
-    const httpUrl = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+    const httpUrl = getHttpUrl();
     const ocrResponse = await fetch(`${httpUrl}/ocr`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

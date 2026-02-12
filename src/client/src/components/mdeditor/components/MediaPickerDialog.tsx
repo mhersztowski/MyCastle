@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { getHttpUrl } from '../../../utils/urlHelper';
 import {
   Dialog,
   DialogTitle,
@@ -57,7 +58,7 @@ MEDIA_EXTENSIONS.all = [
   ...MEDIA_EXTENSIONS.video,
 ];
 
-const HTTP_BASE_URL = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+const HTTP_BASE_URL = getHttpUrl();
 
 interface MediaPickerDialogProps {
   open: boolean;

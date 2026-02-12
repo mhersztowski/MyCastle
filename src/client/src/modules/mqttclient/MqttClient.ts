@@ -1,6 +1,7 @@
 import mqtt, { MqttClient as MqttClientType } from 'mqtt';
 import { v4 as uuidv4 } from 'uuid';
 import { PacketType, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload } from './types';
+import { getHttpUrl, getMqttUrl } from '../../utils/urlHelper';
 
 const MQTT_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB - use HTTP for larger files
 
@@ -44,7 +45,7 @@ export class MqttClient {
   private connectionPromise: Promise<void> | null = null;
   private fileChangeCallbacks: Set<(path: string, action: string) => void> = new Set();
 
-  async connect(brokerUrl: string = import.meta.env.VITE_MQTT_URL || 'ws://localhost:1893'): Promise<void> {
+  async connect(brokerUrl: string = getMqttUrl()): Promise<void> {
     if (this.connectionPromise) {
       return this.connectionPromise;
     }
@@ -239,7 +240,7 @@ export class MqttClient {
     mimeType: string,
     onProgress?: (progress: number) => void
   ): Promise<BinaryFileData> {
-    const httpUrl = `${import.meta.env.VITE_HTTP_URL || 'http://localhost:3001'}/upload`;
+    const httpUrl = `${getHttpUrl()}/upload`;
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();

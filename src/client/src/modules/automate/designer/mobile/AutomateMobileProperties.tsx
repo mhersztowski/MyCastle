@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import { getHttpUrl } from '../../../../utils/urlHelper';
 import {
   Drawer,
   Box,
@@ -284,7 +285,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
   // Handler for copying webhook URL
   const copyWebhookUrl = useCallback(() => {
     if (!flow || !selectedNode) return;
-    const baseUrl = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+    const baseUrl = getHttpUrl();
     const secret = selectedNode.config.secret as string | undefined;
     const url = `${baseUrl}/webhook/${flow.id}/${selectedNode.id}${secret ? `?token=${secret}` : ''}`;
     navigator.clipboard.writeText(url);
@@ -877,7 +878,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
                   URL Webhooka
                 </Typography>
                 <TextField
-                  value={`${import.meta.env.VITE_HTTP_URL || 'http://localhost:3001'}/webhook/${flow?.id}/${selectedNode.id}${selectedNode.config.secret ? `?token=${selectedNode.config.secret}` : ''}`}
+                  value={`${getHttpUrl()}/webhook/${flow?.id}/${selectedNode.id}${selectedNode.config.secret ? `?token=${selectedNode.config.secret}` : ''}`}
                   size="small"
                   fullWidth
                   InputProps={{

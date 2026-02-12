@@ -3,6 +3,7 @@
  */
 
 import { blobToBase64DataUrl } from '../../ai/utils/imageUtils';
+import { getHttpUrl } from '../../../utils/urlHelper';
 import { ReceiptData, ReceiptItem } from '../models/ReceiptModels';
 import { ReceiptScanProvider } from './ReceiptScanProvider';
 import { DEFAULT_SHOPPING_UNITS } from '../../filesystem/models/ShoppingModel';
@@ -43,7 +44,7 @@ export class LocalOcrReceiptProvider implements ReceiptScanProvider {
       })
     );
 
-    const httpUrl = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+    const httpUrl = getHttpUrl();
     const response = await fetch(`${httpUrl}/ocr`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -114,7 +115,7 @@ export class LocalOcrReceiptProvider implements ReceiptScanProvider {
 
 export async function checkOcrBackendStatus(): Promise<{ available: boolean; languages: string[] }> {
   try {
-    const httpUrl = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+    const httpUrl = getHttpUrl();
     const response = await fetch(`${httpUrl}/ocr/status`);
     if (!response.ok) return { available: false, languages: [] };
     return await response.json();

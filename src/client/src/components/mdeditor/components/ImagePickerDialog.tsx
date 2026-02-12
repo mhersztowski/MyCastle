@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { getHttpUrl } from '../../../utils/urlHelper';
 import {
   Dialog,
   DialogTitle,
@@ -37,7 +38,7 @@ import { useFilesystem } from '../../../modules/filesystem';
 import { DirData } from '../../../modules/filesystem/data/DirData';
 
 const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'];
-const HTTP_BASE_URL = import.meta.env.VITE_HTTP_URL || 'http://localhost:3001';
+const HTTP_BASE_URL = getHttpUrl();
 
 interface ImagePickerDialogProps {
   open: boolean;
