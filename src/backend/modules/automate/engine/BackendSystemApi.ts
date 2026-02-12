@@ -9,7 +9,7 @@ import { PersonModel } from '../../datasource/models/PersonModel';
 import { TaskModel } from '../../datasource/models/TaskModel';
 import { ProjectModel } from '../../datasource/models/ProjectModel';
 import { ShoppingListModel, ShoppingItemModel, ShoppingListsModel } from '../../datasource/models/ShoppingModel';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import dayjs from 'dayjs';
 
 export interface AutomateSystemApiInterface {
@@ -215,7 +215,7 @@ export class BackendSystemApi implements AutomateSystemApiInterface {
   };
 
   utils = {
-    uuid: (): string => uuidv4(),
+    uuid: (): string => randomUUID(),
     dayjs: (date?: string): dayjs.Dayjs => dayjs(date),
     sleep: (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms)),
   };
@@ -269,7 +269,7 @@ export class BackendSystemApi implements AutomateSystemApiInterface {
     createList: async (name: string, options?: { store?: string; budget?: number }): Promise<ShoppingListModel> => {
       const newList: ShoppingListModel = {
         type: 'shopping_list',
-        id: uuidv4(),
+        id: randomUUID(),
         name,
         store: options?.store,
         status: 'active',
@@ -289,7 +289,7 @@ export class BackendSystemApi implements AutomateSystemApiInterface {
       if (!list) throw new Error(`Shopping list not found: ${listId}`);
       const newItem: ShoppingItemModel = {
         type: 'shopping_item',
-        id: uuidv4(),
+        id: randomUUID(),
         name,
         quantity: options?.quantity,
         unit: options?.unit,

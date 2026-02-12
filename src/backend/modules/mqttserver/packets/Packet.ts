@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { PacketType } from './PacketType';
 
 export interface PacketData {
@@ -20,7 +20,7 @@ export abstract class Packet {
   }
 
   private generateId(): string {
-    return uuidv4();
+    return randomUUID();
   }
 
   abstract getPayload(): unknown;
