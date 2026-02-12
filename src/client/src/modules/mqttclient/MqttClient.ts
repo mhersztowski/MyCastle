@@ -53,7 +53,7 @@ export class MqttClient {
     this.connectionPromise = new Promise((resolve, reject) => {
       this.client = mqtt.connect(brokerUrl, {
         clientId: `mycastle_web_${Date.now()}`,
-        protocol: 'ws',
+        protocol: brokerUrl.startsWith('wss') ? 'wss' : 'ws',
       });
 
       this.client.on('connect', () => {
