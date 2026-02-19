@@ -1,412 +1,159 @@
 # Project: MyCastle
 
 ## Overview
-Web base application use to manage and agregate personal information data.
+pnpm monorepo managing personal information data, with shared packages and multiple deployable applications.
 
-## Key Objectives / Current Focus
-Projekt składa się z aplikacji backend i frontend
+## Architecture
+Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
-Aplikacja backend:
-- napisana w node.js
-- Składa się z następujących modułów
-    - filesystem
-        - wczytujący i zapisujący stan danych do plików
-        - Dla szybszych operacji odczytu pliki przechowywane są w pamięci
-        - Działający w katalogu o root dir w env rootDir
-        - Extends EventEmitter — emituje zdarzenia `fileChanged` przy zapisie/usunięciu pliku
-        - Atomic writes: zapis przez plik tymczasowy (.tmp) + rename
-        - Per-file write locking: zapobiega równoczesnym zapisom do tego samego pliku
-    - mqttserver
-        - Server mqtt wysyłający/odbierajacy json
-        - Definiujący klasę Client bo serwer może mieć wiele clientów
-        - Zawierający klasę Packet która definiuje typy pakietów,
-        - Zawierający klasy pakietów dla każdego z typów, serializuje/deserializuje pakiety, waliduje pakiety, wysyła oraz odbiera pakiety
-        - Obsługuje AUTOMATE_RUN — uruchamianie flow na backendzie
-        - Broadcastuje FILE_CHANGED — powiadomienia o zmianach plików do wszystkich klientów
-    - httpserver
-        - HttpUploadServer - serwer HTTP (port 3001) z CORS
-        - Endpointy: POST /upload (pliki binarne), GET /files/ (serwowanie plików z data/public/)
-        - POST /ocr - skanowanie paragonów przez Tesseract.js OCR
-        - GET /ocr/status - sprawdzenie dostępności OCR
-    - ocr
-        - OcrService - Tesseract.js z preprocessingiem Sharp (grayscale, normalize, sharpen, threshold)
-        - Inicjalizacja non-blocking — jeśli Tesseract nie może się zainicjalizować, reszta backendu działa
-        - Język: polski (pol.traineddata, ~15MB, pobierany automatycznie przy pierwszym użyciu)
-        - PolishReceiptParser - regex parser tekstu OCR z polskich paragonów (produkty, ceny, rabaty, suma, data, sklep)
-    - datasource
-        - DataSource - scentralizowany, in-memory store danych domenowych (EventEmitter)
-        - Ładuje i utrzymuje w pamięci: persons, tasks, projects, shoppingLists, calendar events
-        - Auto-reload przy zmianach plików (nasłuchuje FileSystem events)
-        - models/ - interfejsy modeli backendowych (PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, DirModel, FileModel)
-        - nodes/ - klasy Node z logiką domenową (PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, NodeBase)
-        - Metody wyszukiwania: getPersonById, getTasksByProjectId, findProjects, getEventsByDate, itp.
-    - automate
-        - AutomateService - ładowanie flow z data/automations.json, walidacja runtime, wykonywanie flow
-        - engine/BackendAutomateEngine - silnik wykonawczy flow (graph traversal, switch na nodeType)
-          - Obsługa merge nodów: mergeState (Map<nodeId, Map<portId, value>>), inEdges (krawędzie wchodzące)
-          - Przekazywanie _incomingPortId przy wywołaniach następnych nodów
-        - engine/BackendSystemApi - implementacja System API dla backendu (FileSystem + DataSource bezpośrednio)
-          - api.file (read/write/list), api.data (persons/tasks/projects/shoppingLists), api.variables, api.log, api.notify, api.utils, api.shopping
-          - api.ai — niezaimplementowane w tej iteracji (isConfigured() → false)
-          - api.speech — niedostępne na backendzie (isTtsConfigured() → false)
-        - engine/AutomateSandbox - wykonywanie skryptów JS przez new Function() z timeoutem
-        - models/ - backendowe kopie modeli (AutomateFlowModel, AutomateNodeModel, AutomateEdgeModel, AutomatePortModel)
-        - Walidacja: flow z runtime 'backend'/'universal' nie może zawierać nodów client-only (notification, tts, stt)
-        - Skrypty mają dostęp do aliasów: `inp` (= input), `vars` (= variables) dla wygodniejszego pisania na mobile
+### Shared packages
+- **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types. Dual ESM+CJS build (tsup).
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel
+  - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode
+  - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
+  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload
+- **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core (SceneGraph, SceneNode, RenderEngine, IO)
+- **@mhersztowski/ui-core** (`packages/ui-core/`) — hooks, theme, utils for scene3d UI
+- **@mhersztowski/ui-components-scene3d** (`packages/ui-components-scene3d/`) — scene3d UI components (RichEditor, panels, toolbar)
 
-Aplikacja desktop (Python):
-- Agent MQTT (paho-mqtt, WebSocket transport) nasłuchujący na `mycastle/desktop/request`
-- Wykonuje operacje systemowe na komputerze Windows i zwraca wyniki przez MQTT
-- operations/ - rejestr operacji z dekoratorem @operation:
-    - system.py - system_info (hostname, OS, CPU, RAM, disk via psutil), notification (winotify/PowerShell)
-    - process.py - list_processes, kill_process
-    - window.py - zarządzanie oknami (pygetwindow)
-    - clipboard.py - operacje na schowku (pyperclip)
-    - shell.py - wykonywanie komend shell z timeoutem
-    - app.py - uruchamianie aplikacji
-    - media.py - kontrola multimediów (pycaw, comtypes)
-- config.py - konfiguracja MQTT (localhost:1893), topiki, timeouty
-- Publikuje status (online/offline) z listą dostępnych operacji
+### Aplikacja backend (`app/mycastle-backend/`)
+- Node.js, ESM (`"type": "module"`), build z tsup, dev z tsx watch
+- Port: 1894 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
+- Składa się z następujących modułów:
+    - **filesystem** — wczytuje/zapisuje dane do plików, in-memory cache, EventEmitter (`fileChanged`), atomic writes, per-file locking
+    - **mqttserver** — Server MQTT (Aedes), klasa Client, klasy Packet per typ. Obsługuje AUTOMATE_RUN, broadcastuje FILE_CHANGED
+      - `packets/` — barrel z `export type` dla interfejsów (ESM compatibility)
+    - **httpserver** — HttpUploadServer z CORS. Endpointy: POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook/{flowId}/{nodeId}
+    - **ocr** — Tesseract.js + Sharp preprocessing, PolishReceiptParser, non-blocking init
+    - **datasource** — in-memory store (persons, tasks, projects, shoppingLists, calendar), auto-reload z FileSystem events. Importuje modele/nody z @mhersztowski/core
+    - **automate** — AutomateService, BackendAutomateEngine (graph traversal, merge nodes), BackendSystemApi, AutomateSandbox
+    - **scheduler** — SchedulerService (node-cron), auto-reload z filesystem events
+
+### Aplikacja frontend (`app/mycastle-web/`)
+- React 18 + TypeScript, Vite, Material UI
+- Dev port: 1895 (Vite HMR)
+- Importuje modele/nody z `@mhersztowski/core` (barrel re-exports w `filesystem/models/index.ts` i `filesystem/nodes/index.ts`)
+- Moduły:
+    - **mqttclient** — MQTT client, MqttContext, AUTOMATE_RUN (timeout 120s), FILE_CHANGED
+    - **filesystem** — DirData, FileData, FilesystemService, FilesystemContext (dataVersion counter)
+    - **uiforms** — system UI (Godot-like): models, nodes, renderer (21 kontrolek), designer (drag & drop), binding (oneWay/twoWay), services
+    - **automate** — graficzny język (NodeRed-like): designer (responsive mobile), engine, registry (NODE_TYPE_METADATA), services. Runtime: client/backend/universal. Merge node, Manual Trigger
+    - **notification** — NotificationService, NotificationProvider
+    - **ai** — providers (OpenAI, Anthropic, Ollama), tool calling, konfiguracja data/ai_config.json
+    - **speech** — TTS/STT/Wake Word providers, SpeechService, AudioRecorder, WakeWordService
+    - **conversation** — ConversationEngine z tool calling, ActionRegistry (task/calendar/file/person/project/navigation/automate/shopping actions), scenariusze
+    - **shopping** — skanowanie paragonów (AI Vision / OCR / Hybrid), ReceiptScannerService
+- Komponenty reużywalne: editor (Monaco), mdeditor (Tiptap + extensions), upload, person/project/task (Label, Picker, ListEditor), ObjectSearch
+- Strony: /filesystem/list, /person, /project, /calendar, /todolist, /shopping, /agent, /automate, /designer/automate/:id, /designer/ui/:id, /viewer/md/:path, /viewer/ui/:id, /editor/simple/:path, /settings/ai, /settings/speech, /settings/receipt, /settings/hooks, /objectviewer, /components
+
+### Aplikacja desktop (`app/desktop/`)
+- Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
+- operations/: system, process, window, clipboard, shell, app, media
 - Dokumentacja: docs/desktop.md
 
-Aplikacja frontend
-- aplikacja react w ts
-- aplikacja mająca wygląd podobny do tej w aplikacjach google (min google cloud)
-- wykożystująca Material UI i ikony material
-- definiująca następujące moduły
-    - mqttclient - połaczenie mqtt z aplikacja backend
-        - Obsługa pakietów AUTOMATE_RUN (uruchom flow na backendzie, timeout 120s) i FILE_CHANGED (powiadomienia o zmianach plików)
-        - runAutomateFlow(flowId, variables) — wysyła request do backendu
-        - onFileChanged/offFileChanged — subscriber pattern dla zmian plików
-        - MqttContext — udostępnia lastFileChange w React context
-    - filesystem - moduł odpowiedzialny za obsługę funkcjonalności filesystem
-        - data/ - klasy danych runtime (DirData, FileData)
-        - models/ - interfejsy modeli danych JSON (DirModel, FileModel, ProjectModel, TaskModel)
-        - nodes - klasy wewnętrznego stanu modeli np TaskNode
-          - zawirają pola jak w models ale z uzupełnieniem w wewnętrzny stan aplikacji
-          - implementują często używaną funkcjonalność
-        - components/ - klasy danych plików json te bardziej zagnieżdżone (FileComponent, DirComponent, FileJsonComponent)
-        - FilesystemService - serwis do operacji I/O
-          - Smart data reload: reloadDataFile(path, action) — granularny reload po FILE_CHANGED (persons, tasks, projects, shoppingLists, calendar)
-        - FilesystemContext - React Context do zarządzania stanem
-          - dataVersion counter — inkrementowany przy każdym reloadzie, umożliwia downstream komponentom reagowanie na zmiany danych
-          - Nasłuchuje lastFileChange z MqttContext i automatycznie odświeża dane
-    - uiforms - moduł systemu UI inspirowany Godotem
-        - models/ - interfejsy modeli danych
-          - UIControlModel - bazowy model kontrolki z anchors, offsets, presets, sizeFlags
-          - UIFormModel - model formularza (root control, settings, callbacks, dataSchema)
-          - UILayoutModels - modele kontenerów (VBox, HBox, Grid, Tabs, Accordion)
-          - UIInputModels - modele kontrolek (Label, Button, Input, Checkbox, Select...)
-          - UIPickerModels - modele picker'ów danych (PersonPicker, TaskPicker, ProjectPicker)
-        - nodes/ - klasy Node z UI state
-          - UIControlNode extends NodeBase
-        - renderer/ - renderowanie drzewa kontrolek
-          - UIFormRenderer - główny renderer formularza
-          - UIControlRenderer - renderer pojedynczej kontrolki
-          - UIAnchorLayout - system CSS dla anchors/offsets (Godot-like positioning)
-          - controls/ - implementacje kontrolek
-            - containers/ - UIVBox, UIHBox, UIGrid, UIScroll, UIMargin
-            - basic/ - UILabel, UIButton, UIInput, UITextarea, UICheckbox, UIRadio, UISelect
-            - pickers/ - UIPersonPicker, UITaskPicker, UIProjectPicker
-            - advanced/ - UITabs, UIAccordion, UISlider, UIProgress, UITable
-            - registry.ts - rejestr komponentów
-        - designer/ - visual designer (drag & drop)
-          - UIFormDesigner - główny komponent designera
-          - UIDesignerCanvas - canvas z dropzones
-          - UIDesignerToolbox - paleta kontrolek
-          - UIDesignerProperties - panel właściwości
-          - UIDesignerTree - drzewo hierarchii
-          - UIDesignerContext - context stanu designera
-          - hooks/ - useDragDrop, useSelection, useHistory (undo/redo)
-        - binding/ - data binding
-          - UIFormContext - context danych formularza
-          - useUIBinding - hook reaktywnego bindingu (oneWay, twoWay, oneTime)
-          - UICallbackRegistry - rejestr callback'ów (onClick, onChange, onSubmit)
-        - services/
-          - UIFormService - CRUD dla formularzy (load/save z data/ui_forms.json)
-    - Automate - graficzny język programowania wzorowany na NodeRed
-      - Wykonywanie skryptów JavaScript na kliencie lub backendzie
-      - Udostępniający wykonywanym skryptom proste api do systemu, dokumentacja interfejsu w docs/automate.md
-      - Posiadający graficzny interfejs użytkownika - graficzne łączenie nodów, okna właściwości nodów
-      - Responsywny designer mobilny (bottom drawers, FAB, touch-friendly handles, tap-to-add)
-      - Zapisujący flow do plików *.automate.json w dowolnej lokalizacji filesystem
-      - Runtime classification: nody klasyfikowane jako client/backend/universal
-      - Flow z runtime 'backend' lub 'universal' wykonywane na serwerze przez MQTT (AUTOMATE_RUN)
-      - Flow z runtime 'client' lub bez runtime wykonywane lokalnie w przeglądarce
-      - Skróty w skryptach: `inp` (= input), `vars` (= variables) — aliasy dla wygody mobilnej
-      - automateActions (conversation) — list_flows zwraca runtime, run_flow routuje backend/universal do MQTT
-      - Trigger nodes:
-        - Start node - uruchamiany przy kliknięciu "Run flow" (przycisk play)
-        - Manual Trigger - uruchamiany przez double-click/tap na nodzie, ma własny payload (JSON lub script)
-        - executeFromNode - metoda silnika uruchamiająca flow od konkretnego noda (dla Manual Trigger)
-      - Merge node - łączenie wyników z równoległych gałęzi flow
-        - Dynamiczne porty wejściowe (min 2, można dodawać więcej)
-        - Tryby agregacji: object (klucz: portId) lub array
-        - Czeka na wszystkie podłączone porty przed kontynuacją
-        - Silnik śledzi stan merge nodów (mergeState) i krawędzie wchodzące (inEdges)
-      - Lista flow (/automate) - widok drzewiasty z hierarchią katalogów, directory picker przy tworzeniu nowego flow
-      - Designer (/designer/automate/:id) - directory picker przy "Nowy flow" i "Zapisz jako"
-    - notification - moduł powiadomień aplikacji
-      - NotificationService - serwis do wyświetlania powiadomień (singleton: notificationService)
-      - useNotification - hook do wyświetlania powiadomień z kontekstu React
-      - NotificationProvider - context provider dla powiadomień
-      - Typy: success, error, warning, info
-    - ai - moduł integracji z modelami AI
-      - models/ - interfejsy (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
-      - providers/ - abstrakcja providerów AI z tool calling
-        - AiProvider - interfejs providera
-        - OpenAiProvider - OpenAI + Custom (OpenAI-compatible), tool calling
-        - AnthropicProvider - Anthropic Claude, tool use (translacja formatów)
-        - OllamaProvider - Ollama (local), tool calling (OpenAI-compatible)
-      - services/
-        - AiService - zarządzanie konfiguracją i wywołaniami AI (singleton: aiService)
-      - Konfiguracja: data/ai_config.json (provider, apiKey, baseUrl, defaultModel, defaults)
-      - Integracja z Automate: api.ai (chat, chatMessages, isConfigured) + node LLM Call
-      - Tool calling: obsługa tools/tool_choice w request, toolCalls w response
-    - speech - moduł syntezy i rozpoznawania mowy (TTS/STT/Wake Word)
-      - models/ - interfejsy (SpeechConfigModel, TtsConfig, SttConfig, WakeWordConfig, TtsRequest, SttResponse)
-      - providers/ - abstrakcja providerów
-        - TtsProvider/SttProvider - interfejsy
-        - OpenAiTtsProvider - OpenAI TTS API
-        - BrowserTtsProvider - Web Speech API (speechSynthesis)
-        - OpenAiSttProvider - OpenAI Whisper API
-        - BrowserSttProvider - Web Speech API (SpeechRecognition)
-      - services/
-        - SpeechService - zarządzanie konfiguracją i wywołaniami TTS/STT (singleton: speechService)
-        - AudioRecorder - wrapper na MediaRecorder API
-        - WakeWordService - detekcja frazy aktywacyjnej (singleton: wakeWordService)
-      - components/ - reużywalne komponenty React
-        - SpeakButton - przycisk TTS
-        - MicrophoneButton - przycisk STT z nagrywaniem
-        - WakeWordIndicator - wskaźnik nasłuchiwania wake word
-      - Konfiguracja: data/speech_config.json (tts, stt, wakeWord)
-      - Integracja z Automate: api.speech (say, stop) + nody TTS/STT
-    - conversation - moduł konwersacji z tool calling i scenariuszami
-      - models/ - interfejsy (ConversationAction, ConversationMessage, ConversationScenario, ConversationConfig, ContextInjector)
-      - actions/ - rejestr i wbudowane akcje konwersacyjne
-        - ActionRegistry - rejestr akcji (register, execute, toToolDefinitions)
-        - taskActions - CRUD tasków (list, get, create, update, delete, search)
-        - calendarActions - eventy kalendarza (list_events_today, list_events_date, search_events)
-        - fileActions - operacje plikowe (read_file, write_file, list_directory)
-        - personActions - osoby (list_persons, get_person)
-        - projectActions - projekty (list_projects, get_project)
-        - navigationActions - nawigacja po aplikacji (navigate_to, get_available_pages)
-        - automateActions - automatyzacje (list_flows, run_flow)
-        - initActions - inicjalizacja z dependency injection (DataSource, NavigateFunction)
-      - engine/ - silnik konwersacji
-        - ConversationEngine - pętla tool calling z obsługą scenariuszy, context injectors, confirmation flow
-      - services/
-        - ConversationService - zarządzanie konfiguracją i scenariuszami (singleton: conversationService)
-        - ConversationHistoryService - persystencja historii konwersacji (singleton: conversationHistoryService)
-      - Konfiguracja: data/conversation_config.json (agentMode, scenarios, maxToolCallsPerTurn, historyLimit)
-      - Historia: data/conversation_history.json (messages, scenarioId)
-      - Dokumentacja akcji: docs/conversation.md
-      - Rozszerza AI module o tool calling (AiToolDefinition, AiToolCall) dla OpenAI, Anthropic, Ollama
-      - Rozszerza Castle Agent o tryb agentowy, selektor scenariuszy, UI tool calls, dialog potwierdzenia
-    - shopping - moduł zakupów i skanowania paragonów
-      - models/ - interfejsy
-        - ReceiptModels - ReceiptData, ReceiptItem, ReceiptScanStatus
-        - ReceiptScanConfigModel - ReceiptScanEngine ('ai_vision' | 'local_ocr' | 'hybrid'), ENGINE_LABELS, ENGINE_DESCRIPTIONS
-      - services/ - provider pattern dla skanowania paragonów
-        - ReceiptScanProvider - interfejs providera (scan(imageBlobs) → ReceiptData)
-        - AiVisionReceiptProvider - wysyła zdjęcia do AI vision (multimodal), sprawdza aiService.isConfigured() przed skanowaniem
-        - LocalOcrReceiptProvider - wysyła zdjęcia do backendu POST /ocr (Tesseract.js), bez AI
-        - HybridReceiptProvider - OCR na backendzie + tekst do AI (tańsze niż AI Vision, lepsze niż samo OCR)
-        - ReceiptScannerService - deleguje do wybranego providera, loadConfig/saveConfig z data/receipt_scan_config.json (singleton: receiptScannerService)
-      - Konfiguracja: data/receipt_scan_config.json (engine)
-      - Komunikacja z backendem OCR: HTTP (nie MQTT) — MQTT ma limit 2MB i hardcoded 30s timeout
-      - URL backendu HTTP: z VITE_HTTP_URL (nie VITE_HTTP_UPLOAD_URL) — ważne dla dostępu z urządzeń mobilnych
-
-- definiuje następujące reużywalne komponenty react
-      - editor - kod tekstowego edytora plików
-      - mdeditor - edytor drag and drop edytora markdown podobny do notion
-        - rozszerzenia edytora markdown (mdeditor)
-          - UIFormExtension - osadzanie formularzy UI w markdown
-          - format referencji: @[uiform:form-id]
-          - format inline: @[uiform:{...json...}]
-          - slash command: /form
-          - AutomateFlowExtension - osadzanie flow automatyzacji w markdown
-          - format referencji: @[automate:flow-id]
-          - Picker z drzewiastym widokiem katalogów (tree view) - hierarchiczne przeglądanie flow
-          - Uruchamianie flow z dokumentu (backend/universal via MQTT)
-          - AutomateScriptExtension - osadzanie skryptów JS w markdown
-          - format: @[automate-script:{...}]
-          - Edytor Monaco z podpowiedziami API
-    - integracja z markdownConverter.ts (serializacja/deserializacja)
-      - upload - ui dodawania plików do systemu
-      - person, project, task - ui zwiazany z PersonModel.ts, PersonNode.ts, ProjectModel.ts, ProjectNode.ts, TaskModel.ts, TaskNode.ts
-        - dane z następujących model:
-          - PersonModel z pliku /data/data/persons
-          - TaskModel z pliku /data/data/tasks
-          - ProjectModel z pliku /data/data/projects
-        - natępujące typy model
-          - Label
-            - wygladem przypomina przycisk z ikoną typu np Person
-            - nie edytowalny
-            - majacy props: (id np z PersonModel)
-          - Picker np. PersonPicker
-            - wygladem przypomina przycisk z ikoną typu np Person
-            - majacy props: editable, id (id np z PersonModel)
-            - gdy editable po kliknieciu wywołujacy modal z możliwością wyboru
-      - ObjectSearch - widok przeszukujący obiekty w DataSource na podstawie ich właściwości (możliwośc dodania warunków and, or, not),
-      zwracający liste
-- składa się z następujących stron
-    - /filesystem/save - formularz zapisujący dane do pliku
-    - /filesystem/list - widok podzielony z lewej drzewo danych po pliknieciu 
-    - /person - widok edycji person bazuje na /components/person/PersonListEditor.ts
-    - /project - widok edycji project bazuje na /components/project/ProjectListEditor.ts
-    - /calendar - widok kalendarza z AI Day Planner
-    - /settings/ai - konfiguracja providera AI (OpenAI, Anthropic, Ollama, Custom)
-    - /settings/speech - konfiguracja TTS, STT i Wake Word
-    - /settings/receipt - konfiguracja silnika skanowania paragonów (AI Vision / Lokalne OCR / Hybrydowe), test dostępności OCR backend
-    - /settings/hooks - konfiguracja hooków stron (Page Hooks) - automatyczne akcje przy otwieraniu stron
-    - /shopping - listy zakupów z skanowaniem paragonów (aparat/plik → OCR/AI → przegląd → import do listy)
-    - /agent - Castle Agent - głosowy asystent AI z Wake Word, STT, LLM i TTS (pipeline: wake word → nagrywanie → transkrypcja → AI → synteza mowy), tryb agentowy z tool calling, scenariusze konwersacyjne, persystencja historii
-    - /todolist - widok z taskami do zrobienia
-    - /components - widok demonstrujący reużywalne komponenty UI te z katalogów person, project, task
-    - /editor/simple/{path} - wydok na bełny ekran edytora monaco do edycji plików z filesystem: json, md
-    - /viewer/md/{path} - renderowanie zawartości plików md
-    pobierz dane i wyswietl, po prawej widok wczytanych danych
-    - /objectviewer - oparty na podstawie ObjectSearch wyświetlający listę objektów
-    - /designer/ui/:id - visual designer formularzy UI (drag & drop)
-    - /viewer/ui/:id - podgląd formularza UI
-    - /automate - lista flow automatyzacji (tree view z hierarchią katalogów, directory picker dla nowych flow)
-    - /designer/automate/:id - visual designer flow automatyzacji (NodeRed-like), directory picker przy tworzeniu/zapisywaniu
+### Aplikacja demo-scene-3d (`app/demo-scene-3d/`)
+- React + Three.js demo, Vite, depends on core-scene3d, ui-core, ui-components-scene3d
 
 ## Directory Structure
-- `src/backend/`: Backend source code (TypeScript)
-  - `modules/filesystem/`: File system module with in-memory cache, EventEmitter, atomic writes, per-file locking
-  - `modules/mqttserver/`: MQTT server with Client and Packet classes
-    - `packets/`: PacketType enum, AutomateRunPacket, FileChangedPacket, i inne
-  - `modules/httpserver/`: HTTP server (upload, file serving, OCR endpoints)
-  - `modules/ocr/`: OCR module (Tesseract.js + Sharp + PolishReceiptParser)
-  - `modules/datasource/`: Unified backend data layer (in-memory, auto-sync)
-    - `DataSource.ts`: EventEmitter, persons/tasks/projects/shoppingLists/calendar
-    - `models/`: PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, DirModel, FileModel
-    - `nodes/`: PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, NodeBase
-  - `modules/automate/`: Backend automate engine
-    - `AutomateService.ts`: load flows, validate runtime, execute
-    - `engine/`: BackendAutomateEngine, BackendSystemApi, AutomateSandbox
-    - `models/`: AutomateFlowModel, AutomateNodeModel, AutomateEdgeModel, AutomatePortModel
-  - `types/`: TypeScript type definitions
-- `src/desktop/`: Desktop Agent (Python, MQTT client for Windows system automation)
-  - `agent.py`: DesktopAgent - MQTT client, operation dispatcher
-  - `config.py`: MQTT config, topics, timeouts
-  - `operations/`: system, process, window, clipboard, shell, app, media
-  - `requirements.txt`: paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
-- `src/client/`: Frontend React application (TypeScript)
-  - `src/modules/mqttclient/`: MQTT client module
-  - `src/modules/filesystem/`: Filesystem module
-    - `data/`: Data classes (DirData, FileData)
-    - `models/`: Model interfaces (DirModel, FileModel, ProjectModel, TaskModel)
-    - `nodes/` : nodes class extend models of additional states and functions
-    - `components/`: components class (FileComponent, DirComponent, FileJsonComponent)
-  - `src/modules/uiforms/`: UI Forms module (Godot-like)
-    - `models/`: UIControlModel, UIFormModel, UILayoutModels, UIInputModels, UIPickerModels
-    - `nodes/`: UIControlNode extends NodeBase
-    - `renderer/`: UIFormRenderer, UIControlRenderer, UIAnchorLayout
-      - `controls/`: containers/, basic/, pickers/, advanced/, registry.ts
-    - `designer/`: UIFormDesigner, UIDesignerCanvas, UIDesignerToolbox, UIDesignerProperties
-    - `binding/`: UIFormContext, useUIBinding, UICallbackRegistry
-    - `services/`: UIFormService
-  - `src/modules/automate/`: Automate module (NodeRed-like visual programming)
-    - `models/`: AutomateFlowModel (+ runtime field), AutomateNodeModel (+ AutomateNodeRuntime), AutomateEdgeModel, AutomatePortModel
-    - `nodes/`: AutomateFlowNode extends NodeBase (+ runtime property)
-    - `registry/`: nodeTypes (NODE_TYPE_METADATA - node type definitions + runtime per node type, Merge node)
-    - `engine/`: AutomateEngine (+ executeFromNode, mergeState, inEdges), AutomateSandbox (+ inp/vars aliases), AutomateSystemApi
-    - `designer/`: AutomateDesigner (responsive desktop + mobile), AutomateDesignerContext (+ backend routing, executeFromNode), Toolbox, Properties, Toolbar
-      - `components/`: AutomateBaseNode (custom ReactFlow node, mobile-responsive sizing + touch targets)
-      - `mobile/`: AutomateMobileToolbar, AutomateMobileToolbox, AutomateMobileProperties, AutomateMobileLog
-    - `hooks/`: useAutomateHooks - hooki dla flow automatyzacji
-    - `services/`: AutomateService (CRUD, *.automate.json files anywhere in filesystem, directory tree scanning)
-  - `src/modules/notification/`: Notification module
-    - `NotificationContext.tsx`: React context i provider dla powiadomień
-    - `NotificationService.ts`: Serwis zarządzający powiadomieniami (singleton: notificationService)
-    - `models/`: NotificationModel - typy powiadomień (success, error, warning, info)
-  - `src/modules/ai/`: AI module (universal provider abstraction + tool calling)
-    - `models/`: AiModels (AiConfigModel, AiProviderConfig, AiChatRequest, AiChatResponse, AiToolDefinition, AiToolCall)
-    - `providers/`: AiProvider interface, OpenAiProvider, AnthropicProvider, OllamaProvider
-    - `services/`: AiService (config load/save, chat, testConnection)
-  - `src/modules/conversation/`: Conversation module (tool calling + scenarios)
-    - `models/`: ConversationModels (ConversationAction, ConversationMessage, ConversationScenario, ConversationConfig)
-    - `actions/`: ActionRegistry, taskActions, calendarActions, fileActions, personActions, projectActions, navigationActions, automateActions, initActions
-    - `engine/`: ConversationEngine (tool calling loop)
-    - `services/`: ConversationService, ConversationHistoryService
-  - `src/modules/speech/`: Speech module (TTS/STT/Wake Word)
-    - `models/`: SpeechModels (SpeechConfigModel, TtsConfig, SttConfig, WakeWordConfig)
-    - `providers/`: TtsProvider, SttProvider, OpenAiTtsProvider, BrowserTtsProvider, OpenAiSttProvider, BrowserSttProvider
-    - `services/`: SpeechService, AudioRecorder, WakeWordService
-    - `components/`: SpeakButton, MicrophoneButton, WakeWordIndicator
-  - `src/pages/agent/`: Castle Agent page (voice assistant with Wake Word + STT + AI + TTS)
-  - `src/pages/automate/`: Automate pages (list, designer)
-  - `src/pages/designer/`: calendar pages
-  - `src/pages/designer/`: test components pages
-  - `src/pages/editor/`: editor pages
-  - `src/pages/objectviewer/`: objectviewer pages
-  - `src/pages/person/`: person pages
-  - `src/pages/project/`: project pages
-  - `src/pages/todolist/`: todolist pages
-  - `src/pages/viewer/`: viewer pages
-  - `src/pages/filesystem/`: Filesystem pages (save, list)
-  - `src/pages/settings/`: Settings pages (AI, Speech, Receipt, Hooks)
-  - `src/pages/designer/`: UI Designer pages
-  - `src/components/`: Reusable UI components
-    - `person/` - components of PersonModel
-    - `project/` - components of ProjectModel
-    - `task/` - components of TaskModel
-  - `src/components/mdeditor/extensions/`: Markdown editor extensions
-    - `UIFormExtension.tsx` - embedding UI forms in markdown
-    - `AutomateFlowExtension.tsx` - osadzanie flow automatyzacji w markdown (@[automate:flow-id]), uruchamianie z dokumentu (backend/universal via MQTT), tree view picker
-    - `AutomateScriptExtension.tsx` - osadzanie skryptów JS w markdown (@[automate-script:{...}]), Monaco editor z podpowiedziami API
-    - `AutomateDocumentContext.tsx` - kontekst dokumentu dla rozszerzeń automate
-- `tests/`: Automated tests
-- `docs/`: Project documentation
-  - `automate.md`: Dokumentacja System API automate (api.file, api.data, api.variables, api.log, api.ai, api.speech, api.shopping, runtime, przykłady)
-  - `desktop.md`: Dokumentacja Desktop Agent (operacje, konfiguracja, topiki MQTT)
-  - `conversation.md`: Dokumentacja akcji konwersacyjnych
-  - `uiforms.md`: Dokumentacja UI Forms (21 kontrolek, anchors/offsets, data binding, przykłady formularzy)
-- `configs/`: Configuration files (YAML, JSON, .env, etc.)
-- `scripts/`: Utility / automation scripts
-- `assets/`: Images, fonts, or other static resources
-- `dist/`: Compiled backend code
-- `data/`: Runtime data directory (configurable via ROOT_DIR env)
-  - `ui_forms.json`: UI Forms definitions (UIFormsModel)
-  - `automations.json`: Automate flow definitions (AutomateFlowsModel)
-  - `ai_config.json`: AI provider configuration (AiConfigModel)
-  - `speech_config.json`: Speech (TTS/STT/Wake Word) configuration (SpeechConfigModel)
-  - `conversation_config.json`: Conversation module configuration (ConversationConfig, scenarios)
-  - `conversation_history.json`: Persisted conversation history (ConversationHistoryModel)
+```
+mycastle/                           # Root monorepo
+├── package.json                    # Workspace scripts, pnpm@10.28.2
+├── pnpm-workspace.yaml             # packages: [packages/*, app/*]
+├── pnpm-lock.yaml
+├── tsconfig.base.json              # Shared TS config (ES2022, bundler, react-jsx)
+├── tsconfig.json                   # Project references
+├── docker-compose.yml              # Coolify deployment (backend + web)
+├── .npmrc
+│
+├── packages/
+│   ├── core/                       # @mhersztowski/core (shared models, nodes, mqtt, automate)
+│   │   ├── src/{models,nodes,automate,mqtt}/
+│   │   ├── tsup.config.ts          # Dual ESM+CJS
+│   │   └── package.json
+│   ├── core-scene3d/               # @mhersztowski/core-scene3d
+│   ├── ui-core/                    # @mhersztowski/ui-core
+│   └── ui-components-scene3d/      # @mhersztowski/ui-components-scene3d
+│
+├── app/
+│   ├── mycastle-backend/           # Backend Node.js
+│   │   ├── src/
+│   │   │   ├── index.ts            # Entry point (port from PORT env, default 1894)
+│   │   │   └── modules/{filesystem,mqttserver,httpserver,ocr,datasource,automate,scheduler}/
+│   │   ├── Dockerfile              # Multi-stage: build → node:20-slim production
+│   │   ├── tsup.config.ts          # ESM, target node20
+│   │   └── package.json
+│   ├── mycastle-web/               # Frontend React
+│   │   ├── src/
+│   │   │   ├── modules/{mqttclient,filesystem,uiforms,automate,ai,speech,conversation,shopping,notification}/
+│   │   │   ├── pages/
+│   │   │   └── components/{editor,mdeditor,person,project,task,upload}/
+│   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine (removes .env before build)
+│   │   ├── nginx.conf              # SPA + reverse proxy to backend (/mqtt, /upload, /files, /ocr, /webhook)
+│   │   ├── vite.config.ts          # Dev port: 1895
+│   │   └── package.json
+│   ├── demo-scene-3d/              # Scene3D demo app
+│   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
+│   │   ├── nginx.conf
+│   │   └── package.json
+│   └── desktop/                    # Python MQTT agent (Windows)
+│       ├── agent.py
+│       ├── config.py
+│       ├── operations/
+│       └── requirements.txt
+│
+├── data/                           # Runtime data (ROOT_DIR)
+├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md
+└── scripts/
+```
 
 ## Development Workflow & Commands
-- **Setup:** `npm install` (backend), `cd src/client && npm install` (frontend), `cd src/desktop && pip install -r requirements.txt` (desktop agent)
-- **Run backend:** `npm run dev` (API on 3001, MQTT on 1893)
-- **Run frontend:** `cd src/client && npm start`
-- **Run desktop agent:** `cd src/desktop && python agent.py`
-- **Test:** `npm test`
-- **Lint/Format:** `eslint .`
-- **Build:** `npm run build`
+- **Setup:** `pnpm install` (from root)
+- **Build all:** `pnpm build`
+- **Build specific:** `pnpm build:core`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`
+- **Run backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
+- **Run frontend:** `pnpm dev:web` (port 1895, Vite HMR)
+- **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
+- **Run desktop agent:** `cd app/desktop && python agent.py`
+- **Typecheck:** `pnpm typecheck`
+- **Clean:** `pnpm clean`
+- **Docker (MyCastle):** `docker compose build && docker compose up -d`
+- **Docker (Scene3D):** `docker build -f app/demo-scene-3d/Dockerfile -t demo-scene-3d .`
+
+**IMPORTANT:** Run all commands from WSL (not Windows cmd). pnpm bin shims are OS-specific.
+
+## Deployment (Coolify)
+- `docker-compose.yml` definiuje 2 serwisy: `backend` (port 1894, volume /data) + `web` (nginx port 80, proxy do backend)
+- Frontend Dockerfile usuwa .env przed buildem — `urlHelper.ts` auto-detect URLs z `window.location`
+- nginx proxy: /mqtt (WebSocket upgrade), /upload, /files/, /ocr, /webhook/ → backend:1894
+- W Coolify: Docker Compose resource → przypisz domenę do serwisu `web`
+- demo-scene-3d: osobny Dockerfile resource w Coolify
 
 ## Code Style & Principles
 ### General
 - **Formatting:** Enforce automated formatting/linting (Prettier)
-- **Naming:** cammel case
+- **Naming:** camelCase
 - **Documentation:** Keep docstrings/comments focused on **"why"**, not **"what"**
 - **Modularity:** Functions/components/services should have a single responsibility
-- **Imports/dependencies:** Prefer clarity over brevity; avoid hidden magic
+- **Imports:** Use `@mhersztowski/core` for shared types. Use `export type` for interface re-exports in ESM barrels.
 
-### Language/Stack Specific
-Typescript with imports
+### ESM Considerations
+- Backend: `"type": "module"`, barrel re-exports muszą używać `export type { ... }` dla interfejsów (ESM type erasure)
+- Packages: tsup dual build (ESM + CJS)
+- Frontend: Vite handles ESM natively
 
 ## Environment & Dependencies
-- **Languages/versions:** Node 20, TypeScript, Python 3.14 (desktop agent)
-- **Package manager:** npm (JS), pip (Python)
-- **Frontend Framework:** React with TypeScript, Material UI, ReactFlow (Automate designer)
-- **Backend Libraries:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp
-- **Desktop Agent Libraries:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
-- **External services:** MQTT broker
+- **Languages:** Node 20, TypeScript 5.9+, Python 3.14 (desktop)
+- **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
+- **Build tools:** tsup (packages, backend), Vite 5 (frontend), Vite 7 (scene3d)
+- **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
+- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron
+- **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 
 ## Common Gotchas
-- **General:** Don't hardcode secrets; always use environment configs.
-- **TypeScript:** Ensure proper type definitions for MQTT and filesystem operations to avoid runtime errors.
-- **MQTT:** Use unique client IDs to avoid connection conflicts.
-- **Frontend:** Handle async operations (e.g., MQTT subscriptions) properly in React components.
+- **ESM barrels:** Backend barrel `index.ts` files must use `export type { ... }` for TypeScript interfaces. Otherwise ESM runtime throws "does not provide an export named" error.
+- **pnpm strict mode:** All dependencies must be listed explicitly in package.json (no hoisting of transitive deps).
+- **Aedes ESM import:** `import aedes from 'aedes'` (default export only), then `const { createBroker } = aedes`.
+- **WSL vs Windows:** `pnpm install` creates OS-specific bin shims. Run everything from WSL.
+- **VITE_* env vars:** Baked at build time. For production Docker, .env is removed so auto-detect kicks in.
+- **MQTT:** Use unique client IDs. WebSocket path: `/mqtt`. Shared mode (single port) for deployment.
+- **Frontend data reload:** FilesystemContext `dataVersion` counter triggers re-renders on FILE_CHANGED events.

@@ -1,0 +1,35 @@
+{
+  "name": "demo-scene-3d",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mhersztowski/core-scene3d": "workspace:*",
+    "@mhersztowski/ui-components-scene3d": "workspace:*",
+    "@mhersztowski/ui-core": "workspace:*",
+    "@mui/icons-material": "^7.3.7",
+    "@mui/material": "^7.3.7",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
+    "allotment": "^1.20.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "three": "^0.182.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.2.79",
+    "@types/react-dom": "18.2.25",
+    "@types/three": "^0.182.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "5.9.3",
+    "vite": "^7.3.1"
+  }
+}

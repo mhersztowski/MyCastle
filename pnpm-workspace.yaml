@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - app/*
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - tesseract.js

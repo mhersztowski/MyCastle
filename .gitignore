@@ -1,10 +1,10 @@
 # Dependencies
 node_modules/
-src/client/node_modules/
 
 # Build output
 dist/
-src/client/build/
+build/
+*.tsbuildinfo
 
 # Environment
 .env
@@ -33,3 +33,6 @@ coverage/
 
 # Tesseract language data (downloaded at runtime)
 *.traineddata
+
+# pnpm
+.turbo

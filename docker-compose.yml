@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: app/mycastle-backend/Dockerfile
+    environment:
+      - PORT=1894
+      - ROOT_DIR=/data
+    volumes:
+      - mycastle-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:1894/ocr/status').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: app/mycastle-web/Dockerfile
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  mycastle-data:

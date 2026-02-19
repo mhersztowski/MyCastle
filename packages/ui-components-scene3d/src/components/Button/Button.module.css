@@ -1,0 +1,118 @@
+.button {
+  font-family: var(--mhersztowski-font-family);
+  font-size: var(--mhersztowski-font-size-md);
+  font-weight: var(--mhersztowski-font-weight-medium);
+  border-radius: var(--mhersztowski-radius-sm);
+  padding: var(--mhersztowski-spacing-sm) var(--mhersztowski-spacing-md);
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: background-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mhersztowski-spacing-sm);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  line-height: var(--mhersztowski-line-height-normal);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--mhersztowski-color-primary);
+  outline-offset: 2px;
+}
+
+/* Variants */
+.filled {
+  background-color: var(--mhersztowski-color-primary);
+  color: var(--mhersztowski-color-on-primary);
+  box-shadow: var(--mhersztowski-shadow-sm);
+}
+
+.filled:hover {
+  background-color: var(--mhersztowski-color-primary-variant);
+  box-shadow: var(--mhersztowski-shadow-md);
+}
+
+.outlined {
+  background-color: transparent;
+  color: var(--mhersztowski-color-primary);
+  border: 1px solid var(--mhersztowski-color-primary);
+}
+
+.outlined:hover {
+  background-color: rgba(79, 195, 247, 0.12);
+}
+
+.text {
+  background-color: transparent;
+  color: var(--mhersztowski-color-primary);
+}
+
+.text:hover {
+  background-color: rgba(79, 195, 247, 0.12);
+}
+
+.elevated {
+  background-color: var(--mhersztowski-color-surface);
+  color: var(--mhersztowski-color-primary);
+  box-shadow: var(--mhersztowski-shadow-sm);
+}
+
+.elevated:hover {
+  box-shadow: var(--mhersztowski-shadow-md);
+}
+
+.tonal {
+  background-color: rgba(79, 195, 247, 0.15);
+  color: var(--mhersztowski-color-primary);
+}
+
+.tonal:hover {
+  background-color: rgba(79, 195, 247, 0.22);
+}
+
+/* Sizes */
+.sm {
+  font-size: var(--mhersztowski-font-size-sm);
+  padding: var(--mhersztowski-spacing-xs) var(--mhersztowski-spacing-sm);
+}
+
+.lg {
+  font-size: var(--mhersztowski-font-size-lg);
+  padding: var(--mhersztowski-spacing-md) var(--mhersztowski-spacing-lg);
+}
+
+/* States */
+.disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.fullWidth {
+  width: 100%;
+}
+
+.loading {
+  position: relative;
+  color: transparent;
+}
+
+.spinner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

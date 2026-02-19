@@ -12,7 +12,28 @@
       "Bash(timeout 15 npx react-scripts start:*)",
       "Bash(wc:*)",
       "Bash(git check-ignore:*)",
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "Bash(xargs sed:*)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(pnpm --filter @mhersztowski/core build:*)",
+      "Bash(pnpm --filter @mhersztowski/core-scene3d build:*)",
+      "Bash(pnpm --filter @mhersztowski/scene3d-ui-core build:*)",
+      "Bash(pnpm --filter mycastle-backend build:*)",
+      "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm run build:*)",
+      "Bash(pnpm --filter mycastle-web build:*)",
+      "Bash(pnpm --filter mycastle-backend exec:*)",
+      "Bash(pnpm --filter mycastle-backend exec tsx:*)",
+      "Bash(timeout 15 pnpm:*)",
+      "Bash(timeout 10 pnpm:*)",
+      "Bash(lsof:*)",
+      "Bash(curl:*)",
+      "Bash(while read f)",
+      "Bash(do sed -i 's/@mhersztowski\\\\/scene3d-ui-core/@mhersztowski\\\\/ui-core/g' \"$f\")",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "WebFetch(domain:coolify.io)",
+      "WebFetch(domain:kitemetric.com)"
     ]
   }
 }

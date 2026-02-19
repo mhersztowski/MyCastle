@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/core-scene3d" },
+    { "path": "../../packages/ui-core" },
+    { "path": "../../packages/ui-components-scene3d" }
+  ]
+}

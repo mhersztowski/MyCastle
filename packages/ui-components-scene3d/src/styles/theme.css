@@ -1,0 +1,58 @@
+:root {
+  /* Colors - Dark Engine Editor Theme */
+  --mhersztowski-color-primary: #4fc3f7;
+  --mhersztowski-color-primary-variant: #039be5;
+  --mhersztowski-color-secondary: #80cbc4;
+  --mhersztowski-color-secondary-variant: #4db6ac;
+  --mhersztowski-color-background: #1a1a1a;
+  --mhersztowski-color-surface: #252526;
+  --mhersztowski-color-surface-variant: #2d2d2d;
+  --mhersztowski-color-error: #ef5350;
+  --mhersztowski-color-warning: #ffa726;
+  --mhersztowski-color-success: #66bb6a;
+  --mhersztowski-color-on-primary: #000000;
+  --mhersztowski-color-on-secondary: #000000;
+  --mhersztowski-color-on-background: #cccccc;
+  --mhersztowski-color-on-surface: #cccccc;
+  --mhersztowski-color-on-error: #ffffff;
+  --mhersztowski-color-border: #404040;
+  --mhersztowski-color-divider: #333333;
+  --mhersztowski-color-hover: rgba(255, 255, 255, 0.06);
+  --mhersztowski-color-active: rgba(79, 195, 247, 0.15);
+  --mhersztowski-color-selection: rgba(79, 195, 247, 0.2);
+  --mhersztowski-color-text-muted: #808080;
+
+  /* Spacing */
+  --mhersztowski-spacing-xs: 4px;
+  --mhersztowski-spacing-sm: 8px;
+  --mhersztowski-spacing-md: 16px;
+  --mhersztowski-spacing-lg: 24px;
+  --mhersztowski-spacing-xl: 32px;
+
+  /* Typography */
+  --mhersztowski-font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+  --mhersztowski-font-size-xs: 0.6875rem;
+  --mhersztowski-font-size-sm: 0.75rem;
+  --mhersztowski-font-size-md: 0.8125rem;
+  --mhersztowski-font-size-lg: 1rem;
+  --mhersztowski-font-size-xl: 1.25rem;
+  --mhersztowski-font-size-xxl: 1.5rem;
+  --mhersztowski-font-weight-light: 300;
+  --mhersztowski-font-weight-regular: 400;
+  --mhersztowski-font-weight-medium: 500;
+  --mhersztowski-font-weight-bold: 600;
+  --mhersztowski-line-height-tight: 1.2;
+  --mhersztowski-line-height-normal: 1.4;
+  --mhersztowski-line-height-relaxed: 1.6;
+
+  /* Shadows */
+  --mhersztowski-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --mhersztowski-shadow-md: 0 3px 8px rgba(0, 0, 0, 0.5);
+  --mhersztowski-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Border Radius */
+  --mhersztowski-radius-sm: 3px;
+  --mhersztowski-radius-md: 6px;
+  --mhersztowski-radius-lg: 12px;
+  --mhersztowski-radius-full: 9999px;
+}

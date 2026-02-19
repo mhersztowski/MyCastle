@@ -1,0 +1,41 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: var(--mhersztowski-font-family);
+  background: var(--mhersztowski-color-background);
+}
+
+.toolbar {
+  flex-shrink: 0;
+}
+
+.content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.viewport {
+  flex: 1;
+  position: relative;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  width: 280px;
+  overflow-y: auto;
+  border-left: 1px solid var(--mhersztowski-color-divider);
+}
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  padding: var(--mhersztowski-spacing-xs) var(--mhersztowski-spacing-md);
+  background: var(--mhersztowski-color-surface);
+  border-top: 1px solid var(--mhersztowski-color-divider);
+  font-size: var(--mhersztowski-font-size-xs);
+  color: var(--mhersztowski-color-on-surface);
+  opacity: 0.7;
+  height: 28px;
+}

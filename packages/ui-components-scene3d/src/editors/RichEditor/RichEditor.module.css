@@ -1,0 +1,79 @@
+.editor {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 220px 1fr 260px;
+  grid-template-areas:
+    'toolbar toolbar toolbar'
+    'tree viewport properties'
+    'status status status';
+  height: 100%;
+  font-family: var(--mhersztowski-font-family);
+  background: var(--mhersztowski-color-background);
+  color: var(--mhersztowski-color-on-background);
+}
+
+.toolbar {
+  grid-area: toolbar;
+}
+
+.tree {
+  grid-area: tree;
+  overflow-y: auto;
+}
+
+.viewport {
+  grid-area: viewport;
+  position: relative;
+  overflow: hidden;
+  background: #2a2a2a;
+}
+
+.viewportOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  pointer-events: none;
+}
+
+.viewportLabel {
+  font-size: var(--mhersztowski-font-size-xs);
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: var(--mhersztowski-font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.properties {
+  grid-area: properties;
+  overflow-y: auto;
+}
+
+.statusBar {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--mhersztowski-color-surface);
+  border-top: 1px solid var(--mhersztowski-color-border);
+  font-size: var(--mhersztowski-font-size-xs);
+  color: var(--mhersztowski-color-text-muted);
+  height: 24px;
+  user-select: none;
+}
+
+.statusLeft,
+.statusRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusDivider {
+  opacity: 0.3;
+}

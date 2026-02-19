@@ -1,0 +1,48 @@
+.viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  font-family: var(--mhersztowski-font-family);
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.controls {
+  position: absolute;
+  bottom: var(--mhersztowski-spacing-md);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: var(--mhersztowski-spacing-xs);
+  background: var(--mhersztowski-color-surface);
+  padding: var(--mhersztowski-spacing-xs);
+  border-radius: var(--mhersztowski-radius-md);
+  box-shadow: var(--mhersztowski-shadow-md);
+}
+
+.controlButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--mhersztowski-color-on-surface);
+  border-radius: var(--mhersztowski-radius-sm);
+  cursor: pointer;
+  font-size: var(--mhersztowski-font-size-md);
+  transition: background-color 0.15s;
+}
+
+.controlButton:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.controlButtonActive {
+  background: rgba(25, 118, 210, 0.12);
+  color: var(--mhersztowski-color-primary);
+}

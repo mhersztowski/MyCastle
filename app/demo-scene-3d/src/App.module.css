@@ -1,0 +1,7 @@
+.app {
+  height: 100vh;
+  background: var(--mhersztowski-color-background);
+  font-family: var(--mhersztowski-font-family);
+  color: var(--mhersztowski-color-on-background);
+  overflow: hidden;
+}

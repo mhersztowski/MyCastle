@@ -1,0 +1,430 @@
+/**
+ * Rejestr typów nodów - metadane i domyślne konfiguracje
+ */
+
+import { SvgIconProps } from '@mui/material';
+import { AutomateNodeType, AutomateNodeRuntime, AutomatePortModel } from '@mhersztowski/core';
+
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import TouchAppIcon from '@mui/icons-material/TouchApp';
+import WebhookIcon from '@mui/icons-material/Webhook';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import CodeIcon from '@mui/icons-material/Code';
+import ApiIcon from '@mui/icons-material/Api';
+import CallSplitIcon from '@mui/icons-material/CallSplit';
+import AltRouteIcon from '@mui/icons-material/AltRoute';
+import LoopIcon from '@mui/icons-material/Loop';
+import RepeatIcon from '@mui/icons-material/Repeat';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import EditIcon from '@mui/icons-material/Edit';
+import TerminalIcon from '@mui/icons-material/Terminal';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import CommentIcon from '@mui/icons-material/Comment';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import MicIcon from '@mui/icons-material/Mic';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import TimerIcon from '@mui/icons-material/Timer';
+import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
+import CallMergeIcon from '@mui/icons-material/CallMerge';
+
+export type AutomateNodeCategory = 'triggers' | 'actions' | 'logic' | 'data' | 'output' | 'ai' | 'utility';
+
+type IconComponent = React.ComponentType<SvgIconProps>;
+
+export interface AutomateNodeTypeMetadata {
+  nodeType: AutomateNodeType;
+  label: string;
+  icon: IconComponent;
+  category: AutomateNodeCategory;
+  description: string;
+  color: string;
+  defaultInputs: AutomatePortModel[];
+  defaultOutputs: AutomatePortModel[];
+  defaultConfig: Record<string, unknown>;
+  hasScript: boolean;
+  runtime: AutomateNodeRuntime;
+  canError: boolean;
+}
+
+/**
+ * Stały port error - dodawany do nodów gdy enableErrorPort = true
+ */
+export const ERROR_OUTPUT_PORT: AutomatePortModel = {
+  id: 'error',
+  name: 'Error',
+  direction: 'output',
+  dataType: 'error',
+};
+
+/**
+ * Schedule presets for cron expressions
+ */
+export const SCHEDULE_PRESETS = [
+  { label: 'Co minutę', value: '* * * * *' },
+  { label: 'Co 5 minut', value: '*/5 * * * *' },
+  { label: 'Co 15 minut', value: '*/15 * * * *' },
+  { label: 'Co godzinę', value: '0 * * * *' },
+  { label: 'Codziennie o 8:00', value: '0 8 * * *' },
+  { label: 'Codziennie o północy', value: '0 0 * * *' },
+  { label: 'Co poniedziałek o 9:00', value: '0 9 * * 1' },
+  { label: 'Pierwszy dzień miesiąca', value: '0 0 1 * *' },
+  { label: 'Własny cron...', value: 'custom' },
+];
+
+export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetadata> = {
+  start: {
+    nodeType: 'start',
+    label: 'Start',
+    icon: PlayArrowIcon,
+    category: 'triggers',
+    description: 'Punkt startowy flow',
+    color: '#4caf50',
+    defaultInputs: [],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: {},
+    hasScript: false,
+    runtime: 'universal',
+    canError: false,
+  },
+  manual_trigger: {
+    nodeType: 'manual_trigger',
+    label: 'Manual Trigger',
+    icon: TouchAppIcon,
+    category: 'triggers',
+    description: 'Ręczne uruchomienie z payloadem',
+    color: '#4caf50',
+    defaultInputs: [],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'any' }],
+    defaultConfig: { payload: '{}', useScript: false },
+    hasScript: true,
+    runtime: 'universal',
+    canError: false,
+  },
+  webhook_trigger: {
+    nodeType: 'webhook_trigger',
+    label: 'Webhook Trigger',
+    icon: WebhookIcon,
+    category: 'triggers',
+    description: 'Uruchomienie przez HTTP webhook',
+    color: '#4caf50',
+    defaultInputs: [],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'any' }],
+    defaultConfig: { secret: '', allowedMethods: ['POST'] },
+    hasScript: false,
+    runtime: 'backend',
+    canError: true,
+  },
+  schedule_trigger: {
+    nodeType: 'schedule_trigger',
+    label: 'Schedule Trigger',
+    icon: ScheduleIcon,
+    category: 'triggers',
+    description: 'Automatyczne uruchomienie wg harmonogramu (cron)',
+    color: '#4caf50',
+    defaultInputs: [],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'any' }],
+    defaultConfig: {
+      preset: '0 8 * * *',
+      cronExpression: '0 8 * * *',
+      timezone: 'UTC',
+      enabled: true,
+    },
+    hasScript: false,
+    runtime: 'backend',
+    canError: true,
+  },
+  js_execute: {
+    nodeType: 'js_execute',
+    label: 'Execute JS',
+    icon: CodeIcon,
+    category: 'actions',
+    description: 'Wykonaj kod JavaScript',
+    color: '#ff9800',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: {},
+    hasScript: true,
+    runtime: 'universal',
+    canError: true,
+  },
+  system_api: {
+    nodeType: 'system_api',
+    label: 'System API',
+    icon: ApiIcon,
+    category: 'actions',
+    description: 'Wywołaj API systemu',
+    color: '#ff9800',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { apiMethod: '', parameters: {} },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  if_else: {
+    nodeType: 'if_else',
+    label: 'If/Else',
+    icon: CallSplitIcon,
+    category: 'logic',
+    description: 'Warunkowe rozgałęzienie',
+    color: '#2196f3',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'true', name: 'True', direction: 'output', dataType: 'flow' },
+      { id: 'false', name: 'False', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { condition: '' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  switch: {
+    nodeType: 'switch',
+    label: 'Switch',
+    icon: AltRouteIcon,
+    category: 'logic',
+    description: 'Wielokierunkowe rozgałęzienie',
+    color: '#2196f3',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'case_0', name: 'Case 1', direction: 'output', dataType: 'flow' },
+      { id: 'default', name: 'Default', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { expression: '', cases: [''] },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  for_loop: {
+    nodeType: 'for_loop',
+    label: 'For Loop',
+    icon: LoopIcon,
+    category: 'logic',
+    description: 'Pętla iteracyjna',
+    color: '#2196f3',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'body', name: 'Body', direction: 'output', dataType: 'flow' },
+      { id: 'done', name: 'Done', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { count: 10, indexVariable: 'i' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  while_loop: {
+    nodeType: 'while_loop',
+    label: 'While Loop',
+    icon: RepeatIcon,
+    category: 'logic',
+    description: 'Pętla warunkowa',
+    color: '#2196f3',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'body', name: 'Body', direction: 'output', dataType: 'flow' },
+      { id: 'done', name: 'Done', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { condition: '', maxIterations: 1000 },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  read_variable: {
+    nodeType: 'read_variable',
+    label: 'Read Variable',
+    icon: VisibilityIcon,
+    category: 'data',
+    description: 'Odczytaj zmienną',
+    color: '#9c27b0',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'out', name: 'Out', direction: 'output', dataType: 'flow' },
+      { id: 'value', name: 'Value', direction: 'output', dataType: 'any' },
+    ],
+    defaultConfig: { variableName: '' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  write_variable: {
+    nodeType: 'write_variable',
+    label: 'Write Variable',
+    icon: EditIcon,
+    category: 'data',
+    description: 'Zapisz zmienną',
+    color: '#9c27b0',
+    defaultInputs: [
+      { id: 'in', name: 'In', direction: 'input', dataType: 'flow' },
+      { id: 'value', name: 'Value', direction: 'input', dataType: 'any' },
+    ],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { variableName: '', value: '' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  log: {
+    nodeType: 'log',
+    label: 'Log',
+    icon: TerminalIcon,
+    category: 'output',
+    description: 'Loguj wiadomość lub input',
+    color: '#607d8b',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { message: '', level: 'info', logInput: false },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  notification: {
+    nodeType: 'notification',
+    label: 'Notification',
+    icon: NotificationsIcon,
+    category: 'output',
+    description: 'Pokaż powiadomienie',
+    color: '#607d8b',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { message: '', severity: 'info' },
+    hasScript: false,
+    runtime: 'client',
+    canError: true,
+  },
+  llm_call: {
+    nodeType: 'llm_call',
+    label: 'LLM Call',
+    icon: PsychologyIcon,
+    category: 'ai',
+    description: 'Wywołaj model AI (OpenAI, Anthropic, Ollama)',
+    color: '#e91e63',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { prompt: '', systemPrompt: '', model: '', temperature: 0.7, maxTokens: 2048, useScript: false },
+    hasScript: true,
+    runtime: 'universal',
+    canError: true,
+  },
+  tts: {
+    nodeType: 'tts',
+    label: 'Text to Speech',
+    icon: RecordVoiceOverIcon,
+    category: 'ai',
+    description: 'Odczytaj tekst na głos (TTS)',
+    color: '#00bcd4',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { text: '', useScript: false, voice: '', speed: 1.0 },
+    hasScript: true,
+    runtime: 'client',
+    canError: true,
+  },
+  stt: {
+    nodeType: 'stt',
+    label: 'Speech to Text',
+    icon: MicIcon,
+    category: 'ai',
+    description: 'Zamień mowę na tekst (STT)',
+    color: '#00bcd4',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { language: '' },
+    hasScript: false,
+    runtime: 'client',
+    canError: true,
+  },
+  comment: {
+    nodeType: 'comment',
+    label: 'Comment',
+    icon: CommentIcon,
+    category: 'utility',
+    description: 'Komentarz (nie wykonywany)',
+    color: '#bdbdbd',
+    defaultInputs: [],
+    defaultOutputs: [],
+    defaultConfig: { text: '' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: false,
+  },
+  call_flow: {
+    nodeType: 'call_flow',
+    label: 'Call Flow',
+    icon: AccountTreeIcon,
+    category: 'logic',
+    description: 'Wywołaj inny flow jako subflow',
+    color: '#795548',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'flow' }],
+    defaultConfig: { flowId: '', passInputAsPayload: true },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  rate_limit: {
+    nodeType: 'rate_limit',
+    label: 'Rate Limit',
+    icon: TimerIcon,
+    category: 'logic',
+    description: 'Delay, throttle lub debounce',
+    color: '#00897b',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'out', name: 'Out', direction: 'output', dataType: 'flow' },
+      { id: 'skipped', name: 'Skipped', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { mode: 'delay', delayMs: 1000 },
+    hasScript: false,
+    runtime: 'universal',
+    canError: false,
+  },
+  foreach: {
+    nodeType: 'foreach',
+    label: 'For Each',
+    icon: FormatListBulletedIcon,
+    category: 'logic',
+    description: 'Iteracja po tablicy/kolekcji',
+    color: '#2196f3',
+    defaultInputs: [{ id: 'in', name: 'In', direction: 'input', dataType: 'flow' }],
+    defaultOutputs: [
+      { id: 'loop', name: 'Loop', direction: 'output', dataType: 'flow' },
+      { id: 'done', name: 'Done', direction: 'output', dataType: 'flow' },
+    ],
+    defaultConfig: { sourceExpression: 'inp._result', itemVariable: 'item', indexVariable: 'index' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+  merge: {
+    nodeType: 'merge',
+    label: 'Merge',
+    icon: CallMergeIcon,
+    category: 'logic',
+    description: 'Łączy wyniki z równoległych gałęzi',
+    color: '#00bcd4',
+    defaultInputs: [
+      { id: 'in_1', name: 'In 1', direction: 'input', dataType: 'any' },
+      { id: 'in_2', name: 'In 2', direction: 'input', dataType: 'any' },
+    ],
+    defaultOutputs: [{ id: 'out', name: 'Out', direction: 'output', dataType: 'object' }],
+    defaultConfig: { mode: 'object' },
+    hasScript: false,
+    runtime: 'universal',
+    canError: true,
+  },
+};
+
+export const CATEGORY_LABELS: Record<AutomateNodeCategory, string> = {
+  triggers: 'Triggery',
+  actions: 'Akcje',
+  logic: 'Logika',
+  data: 'Dane',
+  output: 'Wyjście',
+  ai: 'AI',
+  utility: 'Narzędzia',
+};
+
+export const CATEGORY_ORDER: AutomateNodeCategory[] = [
+  'triggers', 'actions', 'logic', 'data', 'output', 'ai', 'utility',
+];
