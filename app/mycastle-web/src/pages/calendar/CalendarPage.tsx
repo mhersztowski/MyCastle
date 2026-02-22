@@ -33,10 +33,11 @@ import EventListItem from './EventListItem';
 import TemplateSaveDialog from './TemplateSaveDialog';
 import TemplateLoadDialog from './TemplateLoadDialog';
 import AiPlannerDialog from './AiPlannerDialog';
-import { aiService } from '../../modules/ai';
+import { App } from '../../App';
 import { v4 as uuidv4 } from 'uuid';
 
 const CalendarPage: React.FC = () => {
+  const { aiService } = App.instance;
   const { isConnected, isConnecting } = useMqtt();
   const { dataSource, isLoading, isDataLoaded, error, writeFile, readFile, loadAllData } = useFilesystem();
 

@@ -28,7 +28,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import MicIcon from '@mui/icons-material/Mic';
 
-import { speechService } from '../../modules/speech';
+import { App } from '../../App';
 import {
   SpeechConfigModel,
   TtsProviderType,
@@ -50,6 +50,7 @@ const STT_PROVIDER_LABELS: Record<SttProviderType, string> = {
 const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;
 
 const SpeechSettingsPage: React.FC = () => {
+  const { speechService } = App.instance;
   const { isConnected } = useMqtt();
   const [config, setConfig] = useState<SpeechConfigModel>({ ...DEFAULT_SPEECH_CONFIG });
   const [loading, setLoading] = useState(true);

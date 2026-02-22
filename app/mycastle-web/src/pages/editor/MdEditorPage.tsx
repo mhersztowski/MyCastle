@@ -15,10 +15,12 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DescriptionIcon from '@mui/icons-material/Description';
 import FolderIcon from '@mui/icons-material/Folder';
-import { useMqtt, mqttClient } from '../../modules/mqttclient';
+import { useMqtt } from '../../modules/mqttclient';
+import { App } from '../../App';
 import { MdEditor } from '../../components/mdeditor';
 
 const MdEditorPage: React.FC = () => {
+  const { mqttClient } = App.instance;
   const location = useLocation();
   const navigate = useNavigate();
   const { isConnected, isConnecting } = useMqtt();

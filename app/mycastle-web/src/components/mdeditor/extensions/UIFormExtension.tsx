@@ -32,7 +32,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 
 import { UIFormRenderer } from '../../../modules/uiforms/renderer/UIFormRenderer';
-import { uiFormService } from '../../../modules/uiforms/services/UIFormService';
+import { App } from '../../../App';
 import { UIFormModel } from '../../../modules/uiforms/models';
 
 // Dialog wyboru formularza
@@ -49,6 +49,7 @@ const UIFormPickerDialog: React.FC<UIFormPickerDialogProps> = ({
   onSelect,
   selectedId,
 }) => {
+  const { uiFormService } = App.instance;
   const [filter, setFilter] = useState('');
   const [forms, setForms] = useState<{ id: string; name: string; description?: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -150,6 +151,7 @@ const UIFormPickerDialog: React.FC<UIFormPickerDialogProps> = ({
 
 // Node View Component
 const UIFormNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
+  const { uiFormService } = App.instance;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [form, setForm] = useState<UIFormModel | null>(null);

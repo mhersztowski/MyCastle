@@ -32,7 +32,7 @@ const PageHooksRunner: React.FC<{ children: React.ReactNode }> = ({ children }) 
   return <>{children}</>;
 };
 
-function App() {
+function AppRoot() {
   return (
     <NotificationProvider>
       <MqttProvider>
@@ -77,4 +77,4 @@ function App() {
   );
 }
 
-export default App;
+export default AppRoot;

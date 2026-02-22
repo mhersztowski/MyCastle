@@ -1,0 +1,10 @@
+// mqtt — export client, context, hook (not mqtt types to avoid FileData collision with filesystem)
+export { MqttClient, mqttClient } from './mqtt/MqttClient';
+export { MqttProvider, useMqtt } from './mqtt/MqttContext';
+export type { FileChangeEvent } from './mqtt/MqttContext';
+
+// filesystem — all exports
+export * from './filesystem';
+
+// url helpers
+export { configureUrls, getHttpUrl, getMqttUrl } from './utils/urlHelper';

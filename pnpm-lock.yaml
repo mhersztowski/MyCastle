@@ -130,6 +130,9 @@ importers:
       '@mhersztowski/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@mhersztowski/web-client':
+        specifier: workspace:*
+        version: link:../../packages/web-client
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.50.0)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
@@ -430,6 +433,34 @@ importers:
         version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)
       typescript:
         specifier: 5.9.3
+        version: 5.9.3
+
+  packages/web-client:
+    dependencies:
+      '@mhersztowski/core':
+        specifier: workspace:*
+        version: link:../core
+      mqtt:
+        specifier: ^5.3.0
+        version: 5.15.0
+      react:
+        specifier: ^18.0.0
+        version: 18.2.0
+      uuid:
+        specifier: ^13.0.0
+        version: 13.0.0
+    devDependencies:
+      '@types/react':
+        specifier: ^18.2.0
+        version: 18.2.79
+      '@types/uuid':
+        specifier: ^10.0.0
+        version: 10.0.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
         version: 5.9.3
 
 packages:

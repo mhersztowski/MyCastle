@@ -20,7 +20,7 @@ import AddIcon from '@mui/icons-material/Add';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import CloseIcon from '@mui/icons-material/Close';
 import CameraCapture from '../../components/upload/CameraCapture';
-import { receiptScannerService } from '../../modules/shopping/services/ReceiptScannerService';
+import { App } from '../../App';
 import { ReceiptData, ReceiptItem } from '../../modules/shopping/models/ReceiptModels';
 import { ENGINE_LABELS } from '../../modules/shopping/models/ReceiptScanConfigModel';
 import { ShoppingListModel, ShoppingItemModel } from '@mhersztowski/core';
@@ -460,6 +460,7 @@ const ImportStep: React.FC<{
 const ReceiptScanDialog: React.FC<ReceiptScanDialogProps> = ({
   open, onClose, existingLists, onCreateNewList, onAddToExistingList,
 }) => {
+  const { receiptScannerService } = App.instance;
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 

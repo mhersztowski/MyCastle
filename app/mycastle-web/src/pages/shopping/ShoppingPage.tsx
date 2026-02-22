@@ -41,8 +41,7 @@ import ArchiveIcon from '@mui/icons-material/Archive';
 import StoreIcon from '@mui/icons-material/Store';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import { useFilesystem } from '../../modules/filesystem';
-import { aiService } from '../../modules/ai';
-import { receiptScannerService } from '../../modules/shopping/services/ReceiptScannerService';
+import { App } from '../../App';
 import ReceiptScanDialog from './ReceiptScanDialog';
 import { ShoppingListModel, ShoppingListsModel, ShoppingItemModel } from '@mhersztowski/core';
 import { DEFAULT_SHOPPING_CATEGORIES, DEFAULT_SHOPPING_UNITS } from '../../modules/filesystem/models/ShoppingModel';
@@ -371,6 +370,7 @@ const ShoppingItemRow: React.FC<ShoppingItemRowProps> = ({ item, onToggle, onEdi
 
 // ===== Main Shopping Page =====
 const ShoppingPage: React.FC = () => {
+  const { aiService, receiptScannerService } = App.instance;
   const { dataSource, isDataLoaded, writeFile, loadAllData } = useFilesystem();
 
   const initialData = useMemo(() => {

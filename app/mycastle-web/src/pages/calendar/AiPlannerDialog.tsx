@@ -24,7 +24,7 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { Dayjs } from 'dayjs';
 import { EventNode } from '@mhersztowski/core';
 import { DataSource } from '../../modules/filesystem/data/DataSource';
-import { aiService } from '../../modules/ai';
+import { App } from '../../App';
 import { DayTemplateEvent } from './types';
 import {
   PlannerContext,
@@ -53,6 +53,7 @@ const AiPlannerDialog: React.FC<AiPlannerDialogProps> = ({
   dataSource,
   onAccept,
 }) => {
+  const { aiService } = App.instance;
   const [preferences, setPreferences] = useState('');
   const [historyDays, setHistoryDays] = useState(7);
   const [suggestions, setSuggestions] = useState<SuggestedEvent[]>([]);

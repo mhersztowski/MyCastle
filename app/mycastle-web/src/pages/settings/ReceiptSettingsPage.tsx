@@ -20,7 +20,7 @@ import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import SaveIcon from '@mui/icons-material/Save';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
-import { receiptScannerService } from '../../modules/shopping/services/ReceiptScannerService';
+import { App } from '../../App';
 import { checkOcrBackendStatus } from '../../modules/shopping/services/LocalOcrReceiptProvider';
 import {
   ReceiptScanConfigModel,
@@ -32,6 +32,7 @@ import {
 import { useMqtt } from '../../modules/mqttclient';
 
 const ReceiptSettingsPage: React.FC = () => {
+  const { receiptScannerService } = App.instance;
   const { isConnected } = useMqtt();
   const [config, setConfig] = useState<ReceiptScanConfigModel>({ ...DEFAULT_RECEIPT_SCAN_CONFIG });
   const [loading, setLoading] = useState(true);

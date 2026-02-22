@@ -26,7 +26,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import SaveIcon from '@mui/icons-material/Save';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
-import { aiService } from '../../modules/ai';
+import { App } from '../../App';
 import { AiConfigModel, AiProviderType, DEFAULT_AI_CONFIG } from '../../modules/ai/models/AiModels';
 import { useMqtt } from '../../modules/mqttclient';
 
@@ -38,6 +38,7 @@ const PROVIDER_LABELS: Record<AiProviderType, string> = {
 };
 
 const AiSettingsPage: React.FC = () => {
+  const { aiService } = App.instance;
   const { isConnected } = useMqtt();
   const [config, setConfig] = useState<AiConfigModel>({ ...DEFAULT_AI_CONFIG });
   const [loading, setLoading] = useState(true);

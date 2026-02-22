@@ -44,15 +44,13 @@ import BuildIcon from '@mui/icons-material/Build';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChatIcon from '@mui/icons-material/Chat';
 import { useNavigate } from 'react-router-dom';
-import { aiService } from '../../modules/ai';
+import { App } from '../../App';
 import { AiToolCall } from '../../modules/ai/models/AiModels';
-import { speechService, wakeWordService, AudioRecorder, createBrowserRecognition } from '../../modules/speech';
+import { AudioRecorder, createBrowserRecognition } from '../../modules/speech';
 import { useFilesystem } from '../../modules/filesystem';
 import { useMqtt } from '../../modules/mqttclient/MqttContext';
 import {
   ConversationEngine,
-  conversationService,
-  conversationHistoryService,
   initializeActions,
 } from '../../modules/conversation';
 import type {
@@ -86,6 +84,7 @@ interface PendingConfirmation {
 }
 
 const CastleAgentPage: React.FC = () => {
+  const { aiService, speechService, wakeWordService, conversationService, conversationHistoryService } = App.instance;
   const navigate = useNavigate();
   const { dataSource } = useFilesystem();
   const { isConnected } = useMqtt();

@@ -1,4 +1,3 @@
-// All types moved to @mhersztowski/core — re-export for backward compatibility
 export {
   PacketType,
   type PacketData,

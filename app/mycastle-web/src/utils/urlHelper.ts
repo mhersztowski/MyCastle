@@ -1,19 +1,10 @@
-/**
- * Auto-detect backend URLs from window.location when VITE_* env vars are not set.
- * This allows the app to work from any URL (local IP, domain, etc.) without rebuilding.
- */
+import { configureUrls, getHttpUrl, getMqttUrl } from '@mhersztowski/web-client';
 
-export function getHttpUrl(): string {
-  if (import.meta.env.VITE_HTTP_URL) {
-    return import.meta.env.VITE_HTTP_URL;
-  }
-  return `${window.location.protocol}//${window.location.host}`;
+// Configure from Vite env vars if present (dev mode)
+const viteHttpUrl = import.meta.env.VITE_HTTP_URL;
+const viteMqttUrl = import.meta.env.VITE_MQTT_URL;
+if (viteHttpUrl || viteMqttUrl) {
+  configureUrls({ httpUrl: viteHttpUrl, mqttUrl: viteMqttUrl });
 }
 
-export function getMqttUrl(): string {
-  if (import.meta.env.VITE_MQTT_URL) {
-    return import.meta.env.VITE_MQTT_URL;
-  }
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProtocol}//${window.location.host}/mqtt`;
-}
+export { getHttpUrl, getMqttUrl };

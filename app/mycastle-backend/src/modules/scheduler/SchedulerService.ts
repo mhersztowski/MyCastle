@@ -198,9 +198,10 @@ export class SchedulerService {
     }
   }
 
-  /**
-   * Stop all registered jobs
-   */
+  shutdown(): void {
+    this.stopAllJobs();
+  }
+
   private stopAllJobs(): void {
     for (const [key, job] of this.jobs) {
       try {

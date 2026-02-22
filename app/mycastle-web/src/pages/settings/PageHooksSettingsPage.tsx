@@ -33,9 +33,8 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 
-import { pageHooksService } from '../../modules/automate/hooks/PageHooksService';
+import { App } from '../../App';
 import { PageHookModel, PageHooksConfigModel, DEFAULT_PAGE_HOOKS_CONFIG } from '../../modules/automate/hooks/PageHooksModels';
-import { automateService } from '../../modules/automate/services/AutomateService';
 import { AutomateFlowNode } from '../../modules/automate/nodes/AutomateFlowNode';
 import { useMqtt } from '../../modules/mqttclient';
 
@@ -65,6 +64,7 @@ interface HookDialogData {
 }
 
 const PageHooksSettingsPage: React.FC = () => {
+  const { pageHooksService, automateService } = App.instance;
   const { isConnected } = useMqtt();
   const [config, setConfig] = useState<PageHooksConfigModel>({ ...DEFAULT_PAGE_HOOKS_CONFIG });
   const [flows, setFlows] = useState<AutomateFlowNode[]>([]);

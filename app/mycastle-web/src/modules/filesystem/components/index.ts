@@ -1,3 +1,1 @@
-export { DirComponent } from './DirComponent';
-export { FileComponent } from './FileComponent';
-export { FileJsonComponent } from './FileJsonComponent';
+export { DirComponent, FileComponent, FileJsonComponent, FileMarkdownComponent } from '@mhersztowski/web-client';

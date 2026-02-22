@@ -33,7 +33,14 @@
       "Bash(echo:*)",
       "Bash(done)",
       "WebFetch(domain:coolify.io)",
-      "WebFetch(domain:kitemetric.com)"
+      "WebFetch(domain:kitemetric.com)",
+      "Bash(pnpm build:core:*)",
+      "Bash(pnpm build:web-client:*)",
+      "Bash(pnpm build:backend:*)",
+      "Bash(pnpm build:web:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm --filter mycastle-web run typecheck:*)",
+      "Bash(pnpm --filter mycastle-web run build)"
     ]
   }
 }

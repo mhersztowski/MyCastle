@@ -7,7 +7,7 @@ import { PageHooksConfigModel, PageHookModel, DEFAULT_PAGE_HOOKS_CONFIG } from '
 
 const CONFIG_PATH = 'data/page_hooks.json';
 
-class PageHooksService {
+export class PageHooksService {
   private config: PageHooksConfigModel = DEFAULT_PAGE_HOOKS_CONFIG;
   private loaded = false;
 

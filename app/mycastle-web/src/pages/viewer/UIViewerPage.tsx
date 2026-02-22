@@ -22,11 +22,12 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
 import { UIFormRenderer } from '../../modules/uiforms/renderer';
-import { uiFormService } from '../../modules/uiforms/services/UIFormService';
+import { App } from '../../App';
 import { UIFormModel } from '../../modules/uiforms/models';
 import { UICallbackRegistry } from '../../modules/uiforms/binding/UICallbackRegistry';
 
 const UIViewerPage: React.FC = () => {
+  const { uiFormService } = App.instance;
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 

@@ -41,7 +41,7 @@ import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 
 import { AutomateDesigner } from '../../modules/automate/designer/AutomateDesigner';
 import { AutomateDesignerProvider } from '../../modules/automate/designer/AutomateDesignerContext';
-import { automateService } from '../../modules/automate/services/AutomateService';
+import { App } from '../../App';
 import { AutomateFlowModel, createFlow } from '@mhersztowski/core';
 import { useMqtt, DirectoryTree } from '../../modules/mqttclient';
 import { useFilesystem } from '../../modules/filesystem/FilesystemContext';
@@ -195,6 +195,7 @@ const DirTreeNode: React.FC<DirTreeNodeProps> = ({ node, level, selectedPath, on
 };
 
 const AutomateDesignerPage: React.FC = () => {
+  const { automateService } = App.instance;
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const theme = useTheme();

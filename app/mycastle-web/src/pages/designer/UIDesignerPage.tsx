@@ -30,12 +30,13 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import AddIcon from '@mui/icons-material/Add';
 
 import { UIFormDesigner } from '../../modules/uiforms/designer';
-import { uiFormService } from '../../modules/uiforms/services/UIFormService';
+import { App } from '../../App';
 import { UIFormModel, createForm, createControl } from '../../modules/uiforms/models';
 import { useMqtt } from '../../modules/mqttclient';
 import { v4 as uuidv4 } from 'uuid';
 
 const UIDesignerPage: React.FC = () => {
+  const { uiFormService } = App.instance;
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const { isConnected, isConnecting } = useMqtt();

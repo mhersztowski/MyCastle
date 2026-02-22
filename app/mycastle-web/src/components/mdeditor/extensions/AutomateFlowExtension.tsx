@@ -42,11 +42,11 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 
-import { automateService } from '../../../modules/automate/services/AutomateService';
+import { App } from '../../../App';
 import { AutomateEngine, ExecutionResult } from '../../../modules/automate/engine/AutomateEngine';
 import { AutomateFlowModel } from '@mhersztowski/core';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
-import { mqttClient, DirectoryTree } from '../../../modules/mqttclient';
+import { DirectoryTree } from '../../../modules/mqttclient';
 import { useNotification } from '../../../modules/notification';
 import { AutomateFlowNode } from '../../../modules/automate/nodes';
 
@@ -158,6 +158,7 @@ const AutomateFlowPickerDialog: React.FC<AutomateFlowPickerDialogProps> = ({
   onSelect,
   selectedId,
 }) => {
+  const { automateService, mqttClient } = App.instance;
   const [flowTree, setFlowTree] = useState<DirectoryTree | null>(null);
   const [flowsMap, setFlowsMap] = useState<Map<string, AutomateFlowNode>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -246,6 +247,7 @@ const AutomateFlowPickerDialog: React.FC<AutomateFlowPickerDialogProps> = ({
 
 // Node View Component
 const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
+  const { automateService, mqttClient } = App.instance;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [flow, setFlow] = useState<AutomateFlowModel | null>(null);

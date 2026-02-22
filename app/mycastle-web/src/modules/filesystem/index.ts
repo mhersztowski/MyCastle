@@ -1,7 +1,9 @@
-export { FilesystemService, filesystemService } from './FilesystemService';
-export { FilesystemProvider, useFilesystem } from './FilesystemContext';
-export * from './types';
-export * from './data';
+export {
+  FilesystemService, filesystemService,
+  FilesystemProvider, useFilesystem,
+  DirData, FileData, Calendar, CalendarItem, DataSource,
+  DirComponent, FileComponent, FileJsonComponent, FileMarkdownComponent,
+} from '@mhersztowski/web-client';
+export type { FilesystemState, FileOperation } from '@mhersztowski/web-client';
 export * from './models';
 export * from './nodes';
-export * from './components';

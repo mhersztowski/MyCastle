@@ -38,10 +38,10 @@ import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 
-import { automateService } from '../../modules/automate/services/AutomateService';
+import { App } from '../../App';
 import { createFlow } from '@mhersztowski/core';
 import { AutomateFlowNode } from '../../modules/automate/nodes';
-import { useMqtt, DirectoryTree, mqttClient } from '../../modules/mqttclient';
+import { useMqtt, DirectoryTree } from '../../modules/mqttclient';
 import { v4 as uuidv4 } from 'uuid';
 
 const FLOW_EXTENSION = '.automate.json';
@@ -235,6 +235,7 @@ const FlowTreeNode: React.FC<FlowTreeNodeProps> = ({
 };
 
 const AutomateListPage: React.FC = () => {
+  const { automateService, mqttClient } = App.instance;
   const navigate = useNavigate();
   const { isConnected, isConnecting } = useMqtt();
 

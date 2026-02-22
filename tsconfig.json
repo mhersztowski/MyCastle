@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/core" },
+    { "path": "./packages/web-client" },
     { "path": "./packages/core-scene3d" },
     { "path": "./packages/ui-core" },
     { "path": "./packages/ui-components-scene3d" },

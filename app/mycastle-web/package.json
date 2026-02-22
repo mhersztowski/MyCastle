@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mhersztowski/core": "workspace:*",
+    "@mhersztowski/web-client": "workspace:*",
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
     "@monaco-editor/react": "^4.7.0",
