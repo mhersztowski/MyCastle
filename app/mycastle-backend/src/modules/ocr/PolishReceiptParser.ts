@@ -10,28 +10,10 @@
  * - Tax markers: A, B, C, D after price
  */
 
-export interface ParsedReceiptItem {
-  name: string;
-  quantity?: number;
-  unit?: string;
-  price: number;
-  originalPrice?: number;
-  discount?: number;
-}
-
-export interface ParsedReceipt {
-  storeName?: string;
-  date?: string;
-  items: ParsedReceiptItem[];
-  total?: number;
-  currency: string;
-}
+import type { IReceiptParser, ParsedReceipt, ParsedReceiptItem } from '@mhersztowski/core-backend';
 
 // Tax marker pattern at end of line
 const TAX_MARKER = /\s+[A-D]\s*$/;
-
-// Price pattern: digits with comma or dot as decimal separator
-const PRICE_PATTERN = /(\d+)[.,](\d{2})/;
 
 // Quantity line: "2 x 3,49" or "2 * 3,49" or "2 szt x 3,49" or "0,450 kg x 8,99"
 const QTY_LINE_PATTERN = /(\d+[.,]?\d*)\s*(szt|kg|g|l|ml|opak|op)?\s*[x*]\s*(\d+[.,]\d{2})/i;
@@ -87,11 +69,6 @@ const DATE_PATTERNS = [
   /(\d{4})[-./](\d{2})[-./](\d{2})/,
 ];
 
-function parsePrice(str: string): number {
-  const match = str.match(PRICE_PATTERN);
-  if (!match) return 0;
-  return parseFloat(`${match[1]}.${match[2]}`);
-}
 
 function findAllPrices(line: string): number[] {
   const prices: number[] = [];
@@ -103,7 +80,7 @@ function findAllPrices(line: string): number[] {
   return prices;
 }
 
-export class PolishReceiptParser {
+export class PolishReceiptParser implements IReceiptParser {
   parse(ocrText: string): ParsedReceipt {
     const lines = ocrText.split('\n').map(l => l.trim());
     const items: ParsedReceiptItem[] = [];

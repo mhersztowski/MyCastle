@@ -4,13 +4,9 @@
 
 import Tesseract from 'tesseract.js';
 import sharp from 'sharp';
+import type { IOcrService, OcrResult } from '@mhersztowski/core-backend';
 
-export interface OcrResult {
-  text: string;
-  confidence: number;
-}
-
-export class OcrService {
+export class OcrService implements IOcrService {
   private worker: Tesseract.Worker | null = null;
   private initialized = false;
 

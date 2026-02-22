@@ -1,9 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'http';
 import { FileSystem, BinaryFileData } from '../filesystem/FileSystem';
-import { OcrService } from '../ocr/OcrService';
-import { PolishReceiptParser, ParsedReceipt } from '../ocr/PolishReceiptParser';
-import { AutomateService } from '../automate/AutomateService';
-import { ExecutionResult } from '../automate/engine/BackendAutomateEngine';
+import type { IOcrService, IAutomateService, IReceiptParser, ExecutionResult, ParsedReceipt } from '../interfaces';
 import * as path from 'path';
 import * as url from 'url';
 import * as fs from 'fs';
@@ -77,18 +74,18 @@ export class HttpUploadServer {
   private server: Server;
   private port: number;
   private fileSystem: FileSystem;
-  private ocrService?: OcrService;
-  private automateService?: AutomateService;
-  private receiptParser: PolishReceiptParser;
+  private ocrService?: IOcrService;
+  private automateService?: IAutomateService;
+  private receiptParser?: IReceiptParser;
   private staticDir: string | null;
 
-  constructor(port: number, fileSystem: FileSystem, ocrService?: OcrService, automateService?: AutomateService, staticDir?: string) {
+  constructor(port: number, fileSystem: FileSystem, ocrService?: IOcrService, automateService?: IAutomateService, receiptParser?: IReceiptParser, staticDir?: string) {
     this.port = port;
     this.fileSystem = fileSystem;
     this.ocrService = ocrService;
     this.automateService = automateService;
+    this.receiptParser = receiptParser;
     this.staticDir = staticDir || null;
-    this.receiptParser = new PolishReceiptParser();
     this.server = createServer((req, res) => this.handleRequest(req, res));
   }
 
@@ -333,7 +330,7 @@ export class HttpUploadServer {
         }
 
         const ocrResult = await this.ocrService!.processMultipleImages(images);
-        const parsed = this.receiptParser.parse(ocrResult.text);
+        const parsed = this.receiptParser?.parse(ocrResult.text);
 
         this.sendOcrResponse(res, 200, {
           success: true,

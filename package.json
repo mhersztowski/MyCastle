@@ -6,6 +6,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "build:core": "pnpm --filter @mhersztowski/core run build",
+    "build:core-backend": "pnpm --filter @mhersztowski/core-backend run build",
     "build:web-client": "pnpm --filter @mhersztowski/web-client run build",
     "build:backend": "pnpm --filter mycastle-backend run build",
     "build:web": "pnpm --filter mycastle-web run build",
@@ -13,6 +14,10 @@
     "dev:backend": "pnpm --filter mycastle-backend run dev",
     "dev:web": "pnpm --filter mycastle-web run dev",
     "dev:scene3d": "pnpm --filter demo-scene-3d run dev",
+    "build:minis-backend": "pnpm --filter minis-backend run build",
+    "dev:minis-backend": "pnpm --filter minis-backend run dev",
+    "build:minis-web": "pnpm --filter minis-web run build",
+    "dev:minis-web": "pnpm --filter minis-web run dev",
     "clean": "pnpm -r exec rm -rf dist build",
     "typecheck": "pnpm -r run typecheck"
   },

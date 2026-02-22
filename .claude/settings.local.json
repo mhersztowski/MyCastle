@@ -40,7 +40,13 @@
       "Bash(pnpm build:web:*)",
       "Bash(pnpm typecheck:*)",
       "Bash(pnpm --filter mycastle-web run typecheck:*)",
-      "Bash(pnpm --filter mycastle-web run build)"
+      "Bash(pnpm --filter mycastle-web run build)",
+      "Bash(pnpm build:core-backend:*)",
+      "Bash(pnpm --filter @mhersztowski/core-backend run typecheck:*)",
+      "Bash(pnpm --filter mycastle-backend run typecheck:*)",
+      "Bash(pnpm build:minis-backend:*)",
+      "Bash(pnpm --filter minis-backend run typecheck:*)",
+      "Bash(pnpm build:minis-web:*)"
     ]
   }
 }

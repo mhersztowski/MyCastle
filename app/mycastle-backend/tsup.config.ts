@@ -8,12 +8,11 @@ export default defineConfig({
   target: 'node20',
   external: [
     '@mhersztowski/core',
-    'aedes',
+    '@mhersztowski/core-backend',
     'dayjs',
     'dotenv',
     'node-cron',
     'sharp',
     'tesseract.js',
-    'ws',
   ],
 });

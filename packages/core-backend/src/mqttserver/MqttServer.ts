@@ -7,7 +7,7 @@ import { WebSocketServer, WebSocket, createWebSocketStream } from 'ws';
 import { Duplex } from 'stream';
 import * as url from 'url';
 import { FileSystem } from '../filesystem/FileSystem';
-import { AutomateService } from '../automate/AutomateService';
+import type { IAutomateService } from '../interfaces';
 import { Client } from './Client';
 import {
   Packet,
@@ -36,7 +36,7 @@ export class MqttServer {
   private wss: WebSocketServer;
   private externalHttpServer: boolean;
   private fileSystem: FileSystem;
-  private automateService: AutomateService | null = null;
+  private automateService: IAutomateService | null = null;
   private clients: Map<string, Client>;
 
   constructor(fileSystem: FileSystem, httpServer?: HttpServer) {
@@ -258,7 +258,7 @@ export class MqttServer {
     });
   }
 
-  setAutomateService(service: AutomateService): void {
+  setAutomateService(service: IAutomateService): void {
     this.automateService = service;
   }
 

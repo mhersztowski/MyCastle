@@ -19,6 +19,12 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `filesystem/data/` — DirData, FileData, CalendarItem (extends core), Calendar, DataSource (re-export of MemoryDataSource)
   - `filesystem/components/` — DirComponent, FileComponent, FileJsonComponent, FileMarkdownComponent
   - `utils/` — configureUrls(), getHttpUrl(), getMqttUrl() (auto-detect from window.location, configurable)
+- **@mhersztowski/core-backend** (`packages/core-backend/`) — współdzielone moduły backendowe wyekstrahowane z mycastle-backend. ESM-only build (tsup).
+  - `filesystem/` — FileSystem (in-memory cache, EventEmitter fileChanged, atomic writes, per-file locking)
+  - `httpserver/` — HttpUploadServer (CORS, POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook)
+  - `mqttserver/` — MqttServer (Aedes), Client, Packet classes per type
+  - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
+  - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
 - **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core (SceneGraph, SceneNode, RenderEngine, IO)
 - **@mhersztowski/ui-core** (`packages/ui-core/`) — hooks, theme, utils for scene3d UI
 - **@mhersztowski/ui-components-scene3d** (`packages/ui-components-scene3d/`) — scene3d UI components (RichEditor, panels, toolbar)
@@ -27,14 +33,10 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Node.js, ESM (`"type": "module"`), build z tsup, dev z tsx watch
 - Port: 1894 (HTTP + MQTT WebSocket at `/mqtt` — shared mode). Opcjonalnie MQTT na osobnym porcie via `MQTT_PORT`
 - **App singleton** (`src/App.ts`): `App.create(config)` → `App.instance.init()` → `App.instance.shutdown()`. Trzyma referencje do wszystkich modułów.
-- Składa się z następujących modułów:
-    - **filesystem** — wczytuje/zapisuje dane do plików, in-memory cache, EventEmitter (`fileChanged`), atomic writes, per-file locking
-    - **mqttserver** — Server MQTT (Aedes), klasa Client, klasy Packet per typ. Obsługuje AUTOMATE_RUN, broadcastuje FILE_CHANGED
-      - `packets/` — barrel z `export type` dla interfejsów (ESM compatibility)
-    - **httpserver** — HttpUploadServer z CORS. Endpointy: POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook/{flowId}/{nodeId}
+- Importuje FileSystem, HttpUploadServer, MqttServer, DataSource z `@mhersztowski/core-backend`
+- Składa się z następujących modułów (app-specific, nie wyekstrahowane do core-backend):
     - **ocr** — Tesseract.js + Sharp preprocessing, PolishReceiptParser, non-blocking init
-    - **datasource** — in-memory store (persons, tasks, projects, shoppingLists, calendar), auto-reload z FileSystem events. Importuje modele/nody z @mhersztowski/core
-    - **automate** — AutomateService, BackendAutomateEngine (graph traversal, merge nodes), BackendSystemApi, AutomateSandbox
+    - **automate** — AutomateService (implementuje IAutomateService), BackendAutomateEngine (graph traversal, merge nodes), BackendSystemApi, AutomateSandbox
     - **scheduler** — SchedulerService (node-cron), auto-reload z filesystem events
 
 ### Aplikacja frontend (`app/mycastle-web/`)
@@ -57,6 +59,24 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Komponenty reużywalne: editor (Monaco), mdeditor (Tiptap + extensions), upload, person/project/task (Label, Picker, ListEditor), ObjectSearch
 - Strony: /filesystem/list, /person, /project, /calendar, /todolist, /shopping, /agent, /automate, /designer/automate/:id, /designer/ui/:id, /viewer/md/:path, /viewer/ui/:id, /editor/simple/:path, /settings/ai, /settings/speech, /settings/receipt, /settings/hooks, /objectviewer, /components
 - **Wzorzec dostępu do serwisów**: strony i komponenty używają `const { aiService } = App.instance;` zamiast bezpośrednich importów singletonów. React contexty (useMqtt, useFilesystem, useNotification) pozostają dla reaktywnego stanu UI.
+
+### Aplikacja backend Minis (`app/minis-backend/`)
+- Node.js, ESM, build z tsup, dev z tsx watch
+- Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
+- **App singleton** (`src/App.ts`): uproszczony — tylko FileSystem + HttpUploadServer + MqttServer (bez OCR, Automate, Scheduler, DataSource)
+- Importuje moduły z `@mhersztowski/core-backend`
+- Dane w `data-minis/` (ROOT_DIR=../../data-minis)
+
+### Aplikacja frontend Minis (`app/minis-web/`)
+- React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor
+- Dev port: 1903 (Vite HMR)
+- Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
+- **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
+- Moduły:
+    - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
+    - **filesystem** — Minis-specific: models (FileModel, DirModel, ProjectDefinitionModel, ProjectRealizationModel), nodes (FileNode, DirNode, ProjectDefinitionNode, ProjectRealizationNode), components (DirComponent, FileComponent, FileJsonComponent), FilesystemContext, ProjectDefinitionsContext, ProjectRealizationsContext
+    - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
+- Strony: /, /admin, /admin/projects, /admin/projects/:id, /admin/filesystem/list, /admin/filesystem/save, /user, /user/project, /user/project/:id, /user/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -82,6 +102,11 @@ mycastle/                           # Root monorepo
 │   │   ├── src/{models,nodes,automate,mqtt,datasource}/
 │   │   ├── tsup.config.ts          # Dual ESM+CJS
 │   │   └── package.json
+│   ├── core-backend/               # @mhersztowski/core-backend (shared backend modules)
+│   │   ├── src/{filesystem,httpserver,mqttserver,datasource}/
+│   │   ├── src/interfaces.ts       # IAutomateService, IDataSource
+│   │   ├── tsup.config.ts          # ESM-only, target node20
+│   │   └── package.json
 │   ├── web-client/                 # @mhersztowski/web-client (React MQTT+filesystem client)
 │   │   ├── src/{mqtt,filesystem,utils}/
 │   │   ├── tsup.config.ts          # Dual ESM+CJS, react as external peer
@@ -95,7 +120,7 @@ mycastle/                           # Root monorepo
 │   │   ├── src/
 │   │   │   ├── index.ts            # Entry point (port from PORT env, default 1894)
 │   │   │   ├── App.ts              # App singleton (create/instance/init/shutdown)
-│   │   │   └── modules/{filesystem,mqttserver,httpserver,ocr,datasource,automate,scheduler}/
+│   │   │   └── modules/{ocr,automate,scheduler}/
 │   │   ├── Dockerfile              # Multi-stage: build → node:20-slim production
 │   │   ├── tsup.config.ts          # ESM, target node20
 │   │   └── package.json
@@ -113,6 +138,22 @@ mycastle/                           # Root monorepo
 │   │   ├── nginx.conf              # SPA + reverse proxy to backend (/mqtt, /upload, /files, /ocr, /webhook)
 │   │   ├── vite.config.ts          # Dev port: 1895
 │   │   └── package.json
+│   ├── minis-backend/              # Minis Backend Node.js
+│   │   ├── src/
+│   │   │   ├── index.ts            # Entry point (port 1902)
+│   │   │   └── App.ts              # Simplified App singleton (FileSystem+Http+Mqtt only)
+│   │   ├── .env                    # PORT=1902, ROOT_DIR=../../data-minis
+│   │   ├── tsup.config.ts          # ESM, target node20
+│   │   └── package.json
+│   ├── minis-web/                  # Minis Frontend React
+│   │   ├── src/
+│   │   │   ├── main.tsx            # Entry (providers + App)
+│   │   │   ├── App.tsx             # Routes
+│   │   │   ├── modules/{mqttclient,filesystem,editor}/
+│   │   │   ├── pages/{admin,user,filesystem,editor}/
+│   │   │   └── components/Layout.tsx
+│   │   ├── vite.config.ts          # Dev port: 1903
+│   │   └── package.json
 │   ├── demo-scene-3d/              # Scene3D demo app
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
@@ -123,7 +164,8 @@ mycastle/                           # Root monorepo
 │       ├── operations/
 │       └── requirements.txt
 │
-├── data/                           # Runtime data (ROOT_DIR)
+├── data/                           # Runtime data (ROOT_DIR for mycastle-backend)
+├── data-minis/                     # Runtime data (ROOT_DIR for minis-backend)
 ├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md
 └── scripts/
 ```
@@ -131,9 +173,11 @@ mycastle/                           # Root monorepo
 ## Development Workflow & Commands
 - **Setup:** `pnpm install` (from root)
 - **Build all:** `pnpm build`
-- **Build specific:** `pnpm build:core`, `pnpm build:web-client`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`
-- **Run backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
-- **Run frontend:** `pnpm dev:web` (port 1895, Vite HMR)
+- **Build specific:** `pnpm build:core`, `pnpm build:core-backend`, `pnpm build:web-client`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`, `pnpm build:minis-backend`, `pnpm build:minis-web`
+- **Run MyCastle backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
+- **Run MyCastle frontend:** `pnpm dev:web` (port 1895, Vite HMR)
+- **Run Minis backend:** `pnpm dev:minis-backend` (port 1902, HTTP + MQTT WebSocket at /mqtt)
+- **Run Minis frontend:** `pnpm dev:minis-web` (port 1903, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
 - **Run desktop agent:** `cd app/desktop && python agent.py`
 - **Typecheck:** `pnpm typecheck`
@@ -166,7 +210,7 @@ mycastle/                           # Root monorepo
 ## Environment & Dependencies
 - **Languages:** Node 20, TypeScript 5.9+, Python 3.14 (desktop)
 - **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
-- **Build tools:** tsup (packages, backend), Vite 5 (frontend), Vite 7 (scene3d)
+- **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
 - **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
 - **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify

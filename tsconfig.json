@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/core" },
+    { "path": "./packages/core-backend" },
     { "path": "./packages/web-client" },
     { "path": "./packages/core-scene3d" },
     { "path": "./packages/ui-core" },
@@ -9,6 +10,8 @@
     { "path": "./packages/ui-components-mycastle" },
     { "path": "./app/mycastle-backend" },
     { "path": "./app/mycastle-web" },
-    { "path": "./app/demo-scene-3d" }
+    { "path": "./app/demo-scene-3d" },
+    { "path": "./app/minis-backend" },
+    { "path": "./app/minis-web" }
   ]
 }

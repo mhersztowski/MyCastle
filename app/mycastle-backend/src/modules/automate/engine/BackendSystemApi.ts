@@ -3,8 +3,7 @@
  * Używa FileSystem i DataSource bezpośrednio (bez MQTT roundtrip)
  */
 
-import { FileSystem } from '../../filesystem/FileSystem';
-import { DataSource } from '../../datasource/DataSource';
+import { FileSystem, DataSource } from '@mhersztowski/core-backend';
 import { PersonModel, TaskModel, ProjectModel, ShoppingListModel, ShoppingItemModel, ShoppingListsModel } from '@mhersztowski/core';
 import { randomUUID } from 'crypto';
 import dayjs from 'dayjs';

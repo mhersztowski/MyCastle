@@ -3,22 +3,15 @@
  * Flows are stored as *.automate.json files anywhere in the filesystem
  */
 
-import { FileSystem, DirectoryTree } from '../filesystem/FileSystem';
-import { DataSource } from '../datasource/DataSource';
+import { FileSystem, DataSource } from '@mhersztowski/core-backend';
+import type { DirectoryTree, IAutomateService, ExecutionResult } from '@mhersztowski/core-backend';
 import { AutomateFlowModel, NODE_RUNTIME_MAP } from '@mhersztowski/core';
-import { BackendAutomateEngine, ExecutionResult } from './engine/BackendAutomateEngine';
+import { BackendAutomateEngine } from './engine/BackendAutomateEngine';
 import { BackendSystemApi } from './engine/BackendSystemApi';
-
-export interface WebhookData {
-  payload: unknown;
-  method: string;
-  headers: Record<string, string>;
-  query: Record<string, string>;
-}
 
 const FLOW_EXTENSION = '.automate.json';
 
-export class AutomateService {
+export class AutomateService implements IAutomateService {
   private fileSystem: FileSystem;
   private dataSource: DataSource;
   private flows: Map<string, AutomateFlowModel> = new Map();

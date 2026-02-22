@@ -5,8 +5,8 @@
 
 import * as cron from 'node-cron';
 import { AutomateService } from '../automate/AutomateService';
-import { FileSystem } from '../filesystem/FileSystem';
-import { ExecutionResult } from '../automate/engine/BackendAutomateEngine';
+import { FileSystem } from '@mhersztowski/core-backend';
+import type { ExecutionResult } from '@mhersztowski/core-backend';
 
 export interface ScheduleJob {
   flowId: string;
@@ -32,14 +32,12 @@ export interface ScheduleExecutionRecord {
 
 export class SchedulerService {
   private automateService: AutomateService;
-  private fileSystem: FileSystem;
   private jobs: Map<string, ScheduleJob> = new Map();
   private executionHistory: ScheduleExecutionRecord[] = [];
   private maxHistorySize = 100;
 
-  constructor(automateService: AutomateService, fileSystem: FileSystem) {
+  constructor(automateService: AutomateService, _fileSystem: FileSystem) {
     this.automateService = automateService;
-    this.fileSystem = fileSystem;
   }
 
   async initialize(): Promise<void> {

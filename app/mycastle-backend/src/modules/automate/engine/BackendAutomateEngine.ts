@@ -3,29 +3,11 @@
  */
 
 import { AutomateFlowModel, AutomateNodeModel, NODE_RUNTIME_MAP, AutomateEdgeModel, AutomateErrorData } from '@mhersztowski/core';
+import type { ExecutionResult, ExecutionLog } from '@mhersztowski/core-backend';
 import { AutomateSystemApiInterface } from './BackendSystemApi';
-import type { LogEntry, NotificationEntry } from './BackendSystemApi';
 import { AutomateSandbox } from './AutomateSandbox';
 
-export interface ExecutionLog {
-  nodeId: string;
-  nodeName: string;
-  nodeType: string;
-  status: 'running' | 'completed' | 'error' | 'skipped';
-  startTime: number;
-  endTime?: number;
-  result?: unknown;
-  error?: string;
-}
-
-export interface ExecutionResult {
-  success: boolean;
-  executionLog: ExecutionLog[];
-  logs: LogEntry[];
-  notifications: NotificationEntry[];
-  variables: Record<string, unknown>;
-  error?: string;
-}
+export type { ExecutionResult, ExecutionLog };
 
 const MAX_NODE_EXECUTIONS = 10000;
 const MAX_CALL_DEPTH = 10;

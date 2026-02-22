@@ -1,8 +1,7 @@
-import { MqttServer } from './modules/mqttserver/MqttServer';
-import { FileSystem, FileChangeEvent } from './modules/filesystem';
-import { HttpUploadServer } from './modules/httpserver/HttpUploadServer';
+import { MqttServer, FileSystem, HttpUploadServer, DataSource } from '@mhersztowski/core-backend';
+import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { OcrService } from './modules/ocr/OcrService';
-import { DataSource } from './modules/datasource';
+import { PolishReceiptParser } from './modules/ocr/PolishReceiptParser';
 import { AutomateService } from './modules/automate';
 import { SchedulerService } from './modules/scheduler';
 
@@ -49,6 +48,7 @@ export class App {
       this.fileSystem,
       this.ocrService,
       this.automateService,
+      new PolishReceiptParser(),
       config.staticDir || undefined,
     );
   }
