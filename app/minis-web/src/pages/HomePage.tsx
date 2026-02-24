@@ -1,9 +1,24 @@
-import { Box, Typography, Card, CardContent, CardActionArea, Grid } from '@mui/material';
-import { AdminPanelSettings, Person } from '@mui/icons-material';
+import { useEffect, useState } from 'react';
+import {
+  Box, Typography, Card, CardContent, CardActionArea, Grid,
+  CircularProgress, Alert, Chip,
+} from '@mui/material';
+import { Person, AdminPanelSettings } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
+import { minisApi, type UserPublic } from '../services/MinisApiService';
 
 function HomePage() {
   const navigate = useNavigate();
+  const [users, setUsers] = useState<UserPublic[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    minisApi.getUsers()
+      .then(setUsers)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <Box
@@ -22,33 +37,36 @@ function HomePage() {
       <Typography variant="body1" color="text.secondary" paragraph>
         DIY Electronics Project Manager
       </Typography>
-      <Grid container spacing={4} sx={{ mt: 2, maxWidth: 600 }}>
-        <Grid item xs={12} sm={6}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/admin')}>
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <AdminPanelSettings sx={{ fontSize: 48, mb: 1 }} color="primary" />
-                <Typography variant="h5">Admin</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Manage files and system settings
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/user')}>
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <Person sx={{ fontSize: 48, mb: 1 }} color="primary" />
-                <Typography variant="h5">User</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Edit and work with project files
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
+
+      {loading && <CircularProgress sx={{ mt: 4 }} />}
+      {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+
+      {!loading && users.length === 0 && !error && (
+        <Typography variant="body1" color="text.secondary" sx={{ mt: 4 }}>
+          No users found. Create users via admin API.
+        </Typography>
+      )}
+
+      <Grid container spacing={3} sx={{ mt: 2, maxWidth: 800 }}>
+        {users.map((user) => (
+          <Grid item xs={12} sm={6} md={4} key={user.id}>
+            <Card>
+              <CardActionArea onClick={() => navigate(`/login/${user.id}`)}>
+                <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                  {user.isAdmin ? (
+                    <AdminPanelSettings sx={{ fontSize: 48, mb: 1 }} color="primary" />
+                  ) : (
+                    <Person sx={{ fontSize: 48, mb: 1 }} color="primary" />
+                  )}
+                  <Typography variant="h5">{user.name}</Typography>
+                  {user.isAdmin && (
+                    <Chip label="Admin" color="primary" size="small" sx={{ mt: 1 }} />
+                  )}
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
     </Box>
   );

@@ -171,6 +171,11 @@ export class FileSystem extends EventEmitter {
     });
   }
 
+  async deleteDirectory(dirPath: string): Promise<void> {
+    const absolutePath = this.getAbsolutePath(dirPath);
+    await fs.rm(absolutePath, { recursive: true, force: true });
+  }
+
   async listDirectory(dirPath: string = ''): Promise<DirectoryTree> {
     const absolutePath = this.getAbsolutePath(dirPath);
     const relativePath = this.getRelativePath(absolutePath);

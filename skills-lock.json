@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "skills": {
+    "backend-tester": {
+      "source": "olehsvyrydov/ai-development-team",
+      "sourceType": "github",
+      "computedHash": "609511af29dce5ca6c117cf1b36ab9f8bf9f9fe7baf70e06ecab8fab362c3645"
+    },
+    "contract-tester": {
+      "source": "vladm3105/aidoc-flow-framework",
+      "sourceType": "github",
+      "computedHash": "12f738508850ce61389e048bc4465a9057d75edd94292a91790079546bddc3fd"
+    },
+    "e2e-tester": {
+      "source": "olehsvyrydov/ai-development-team",
+      "sourceType": "github",
+      "computedHash": "2f22f838d1acef9a46c9a8abcc10fe3ff64b3d21f9abbc0c597fc69f366277b2"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "computedHash": "6412eb4eb3b91595ebab937f0c69501240e7ba761b3d82510b5cf506ec5c7adc"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
+    },
+    "frontend-tester": {
+      "source": "olehsvyrydov/ai-development-team",
+      "sourceType": "github",
+      "computedHash": "4eaebf0e832c78b2a5ba7cf4e6c9bc712d380bde153dc17869ef795e040b5ae4"
+    },
+    "tester": {
+      "source": "olehsvyrydov/ai-development-team",
+      "sourceType": "github",
+      "computedHash": "d19fe19640478384ee86dd8543cd7fb7e94be0a06ac4d18e6461d18d5ffeaf8a"
+    },
+    "vercel-composition-patterns": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "computedHash": "f98931159fa9c7fed043bcd18a891a46dcf89ababa38df13a4c5b7b30dc0ce07"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "computedHash": "4365be772fd3b41994a72ad478472c6d680678e7f3859860ab010e9c46e48ee0"
+    },
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "computedHash": "a6a44d5498f7e8f68289902f3dedfc6f38ae0cee1e96527c80724cf27f727c2a"
+    }
+  }
+}

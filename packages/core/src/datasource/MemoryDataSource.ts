@@ -4,6 +4,13 @@ import {
   ProjectNode,
   EventNode,
   ShoppingListNode,
+  MinisModuleDefNode,
+  MinisModuleNode,
+  MinisDeviceDefNode,
+  MinisDeviceNode,
+  MinisProjectDefNode,
+  MinisProjectNode,
+  UserNode,
 } from '../nodes';
 import {
   PersonsModel,
@@ -11,6 +18,13 @@ import {
   ProjectsModel,
   ShoppingListsModel,
   ShoppingItemModel,
+  MinisModuleDefsModel,
+  MinisModulesModel,
+  MinisDeviceDefsModel,
+  MinisDevicesModel,
+  MinisProjectDefsModel,
+  MinisProjectsModel,
+  UsersModel,
 } from '../models';
 import type { IDataSource, DataSourceStats } from './IDataSource';
 import { CalendarItem } from './CalendarItem';
@@ -21,6 +35,13 @@ export class MemoryDataSource implements IDataSource {
   private _projects: Map<string, ProjectNode> = new Map();
   private _events: EventNode[] = [];
   private _shoppingLists: Map<string, ShoppingListNode> = new Map();
+  private _minisModuleDefs: Map<string, MinisModuleDefNode> = new Map();
+  private _minisModules: Map<string, MinisModuleNode> = new Map();
+  private _minisDeviceDefs: Map<string, MinisDeviceDefNode> = new Map();
+  private _minisDevices: Map<string, MinisDeviceNode> = new Map();
+  private _minisProjectDefs: Map<string, MinisProjectDefNode> = new Map();
+  private _minisProjects: Map<string, MinisProjectNode> = new Map();
+  private _users: Map<string, UserNode> = new Map();
 
   private _isLoaded: boolean = false;
 
@@ -157,6 +178,111 @@ export class MemoryDataSource implements IDataSource {
     return taskEvents[taskEvents.length - 1];
   }
 
+  // --- Minis Module Defs ---
+
+  get minisModuleDefs(): MinisModuleDefNode[] {
+    return Array.from(this._minisModuleDefs.values());
+  }
+
+  getMinisModuleDefById(id: string): MinisModuleDefNode | undefined {
+    return this._minisModuleDefs.get(id);
+  }
+
+  findMinisModuleDefs(query: string): MinisModuleDefNode[] {
+    if (!query.trim()) return this.minisModuleDefs;
+    return this.minisModuleDefs.filter(n => n.matches(query));
+  }
+
+  // --- Minis Modules ---
+
+  get minisModules(): MinisModuleNode[] {
+    return Array.from(this._minisModules.values());
+  }
+
+  getMinisModuleById(id: string): MinisModuleNode | undefined {
+    return this._minisModules.get(id);
+  }
+
+  findMinisModules(query: string): MinisModuleNode[] {
+    if (!query.trim()) return this.minisModules;
+    return this.minisModules.filter(n => n.matches(query));
+  }
+
+  // --- Minis Device Defs ---
+
+  get minisDeviceDefs(): MinisDeviceDefNode[] {
+    return Array.from(this._minisDeviceDefs.values());
+  }
+
+  getMinisDeviceDefById(id: string): MinisDeviceDefNode | undefined {
+    return this._minisDeviceDefs.get(id);
+  }
+
+  findMinisDeviceDefs(query: string): MinisDeviceDefNode[] {
+    if (!query.trim()) return this.minisDeviceDefs;
+    return this.minisDeviceDefs.filter(n => n.matches(query));
+  }
+
+  // --- Minis Devices ---
+
+  get minisDevices(): MinisDeviceNode[] {
+    return Array.from(this._minisDevices.values());
+  }
+
+  getMinisDeviceById(id: string): MinisDeviceNode | undefined {
+    return this._minisDevices.get(id);
+  }
+
+  findMinisDevices(query: string): MinisDeviceNode[] {
+    if (!query.trim()) return this.minisDevices;
+    return this.minisDevices.filter(n => n.matches(query));
+  }
+
+  // --- Minis Project Defs ---
+
+  get minisProjectDefs(): MinisProjectDefNode[] {
+    return Array.from(this._minisProjectDefs.values());
+  }
+
+  getMinisProjectDefById(id: string): MinisProjectDefNode | undefined {
+    return this._minisProjectDefs.get(id);
+  }
+
+  findMinisProjectDefs(query: string): MinisProjectDefNode[] {
+    if (!query.trim()) return this.minisProjectDefs;
+    return this.minisProjectDefs.filter(n => n.matches(query));
+  }
+
+  // --- Minis Projects ---
+
+  get minisProjects(): MinisProjectNode[] {
+    return Array.from(this._minisProjects.values());
+  }
+
+  getMinisProjectById(id: string): MinisProjectNode | undefined {
+    return this._minisProjects.get(id);
+  }
+
+  findMinisProjects(query: string): MinisProjectNode[] {
+    if (!query.trim()) return this.minisProjects;
+    return this.minisProjects.filter(n => n.matches(query));
+  }
+
+  // --- Users ---
+
+  get users(): UserNode[] {
+    return Array.from(this._users.values());
+  }
+
+  getUserById(id: string): UserNode | undefined {
+    return this._users.get(id);
+  }
+
+  findUsers(query: string): UserNode[] {
+    if (!query.trim()) return this.users;
+    return this.users.filter(u => u.matches(query));
+  }
+
   // --- Loading state ---
 
   get isLoaded(): boolean {
@@ -233,6 +359,76 @@ export class MemoryDataSource implements IDataSource {
     this._events = EventNode.sortByTime(this._events);
   }
 
+  loadMinisModuleDefs(data: MinisModuleDefsModel): void {
+    this._minisModuleDefs.clear();
+    if (data.moduleDefs) {
+      for (const model of data.moduleDefs) {
+        const node = MinisModuleDefNode.fromModel(model);
+        this._minisModuleDefs.set(node.id, node);
+      }
+    }
+  }
+
+  loadMinisModules(data: MinisModulesModel): void {
+    this._minisModules.clear();
+    if (data.modules) {
+      for (const model of data.modules) {
+        const node = MinisModuleNode.fromModel(model);
+        this._minisModules.set(node.id, node);
+      }
+    }
+  }
+
+  loadMinisDeviceDefs(data: MinisDeviceDefsModel): void {
+    this._minisDeviceDefs.clear();
+    if (data.deviceDefs) {
+      for (const model of data.deviceDefs) {
+        const node = MinisDeviceDefNode.fromModel(model);
+        this._minisDeviceDefs.set(node.id, node);
+      }
+    }
+  }
+
+  loadMinisDevices(data: MinisDevicesModel): void {
+    this._minisDevices.clear();
+    if (data.devices) {
+      for (const model of data.devices) {
+        const node = MinisDeviceNode.fromModel(model);
+        this._minisDevices.set(node.id, node);
+      }
+    }
+  }
+
+  loadMinisProjectDefs(data: MinisProjectDefsModel): void {
+    this._minisProjectDefs.clear();
+    if (data.projectDefs) {
+      for (const model of data.projectDefs) {
+        const node = MinisProjectDefNode.fromModel(model);
+        this._minisProjectDefs.set(node.id, node);
+      }
+    }
+  }
+
+  loadMinisProjects(data: MinisProjectsModel): void {
+    this._minisProjects.clear();
+    if (data.projects) {
+      for (const model of data.projects) {
+        const node = MinisProjectNode.fromModel(model);
+        this._minisProjects.set(node.id, node);
+      }
+    }
+  }
+
+  loadUsers(data: UsersModel): void {
+    this._users.clear();
+    if (data.items) {
+      for (const model of data.items) {
+        const node = UserNode.fromModel(model);
+        this._users.set(node.id, node);
+      }
+    }
+  }
+
   private relinkTasksToProjects(): void {
     for (const task of this._tasks.values()) {
       if (task.projectId) {
@@ -252,6 +448,13 @@ export class MemoryDataSource implements IDataSource {
     this._projects.clear();
     this._events = [];
     this._shoppingLists.clear();
+    this._minisModuleDefs.clear();
+    this._minisModules.clear();
+    this._minisDeviceDefs.clear();
+    this._minisDevices.clear();
+    this._minisProjectDefs.clear();
+    this._minisProjects.clear();
+    this._users.clear();
     this._isLoaded = false;
   }
 
@@ -264,6 +467,13 @@ export class MemoryDataSource implements IDataSource {
       projects: this._projects.size,
       events: this._events.length,
       shoppingLists: this._shoppingLists.size,
+      minisModuleDefs: this._minisModuleDefs.size,
+      minisModules: this._minisModules.size,
+      minisDeviceDefs: this._minisDeviceDefs.size,
+      minisDevices: this._minisDevices.size,
+      minisProjectDefs: this._minisProjectDefs.size,
+      minisProjects: this._minisProjects.size,
+      users: this._users.size,
     };
   }
 }

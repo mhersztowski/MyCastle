@@ -1,5 +1,6 @@
-import { MqttServer, FileSystem, HttpUploadServer } from '@mhersztowski/core-backend';
+import { MqttServer, FileSystem } from '@mhersztowski/core-backend';
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
+import { MinisHttpServer } from './MinisHttpServer.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -12,18 +13,15 @@ export class App {
 
   private fileSystem: FileSystem;
   private mqttServer!: MqttServer;
-  private httpServer: HttpUploadServer;
+  private httpServer: MinisHttpServer;
   private config: AppConfig;
 
   private constructor(config: AppConfig) {
     this.config = config;
     this.fileSystem = new FileSystem(config.rootDir);
-    this.httpServer = new HttpUploadServer(
+    this.httpServer = new MinisHttpServer(
       config.httpPort,
       this.fileSystem,
-      undefined, // no OCR
-      undefined, // no automate
-      undefined, // no receipt parser
       config.staticDir,
     );
   }

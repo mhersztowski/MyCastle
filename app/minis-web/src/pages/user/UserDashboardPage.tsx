@@ -1,64 +1,58 @@
 import { Box, Typography, Card, CardContent, CardActionArea, Grid } from '@mui/material';
-import { Code, Assignment as ProjectsIcon, DeveloperBoard } from '@mui/icons-material';
-import { useNavigate } from 'react-router-dom';
+import { Devices, Build, FolderOpen } from '@mui/icons-material';
+import { useNavigate, useParams } from 'react-router-dom';
 
 function UserDashboardPage() {
   const navigate = useNavigate();
+  const { userId } = useParams<{ userId: string }>();
+
+  const activities = [
+    {
+      title: 'Add Assembled Device',
+      description: 'Register an already assembled device',
+      icon: <Devices sx={{ fontSize: 40 }} color="primary" />,
+      onClick: () => navigate(`/user/${userId}/devices`),
+    },
+    {
+      title: 'Assemble Device',
+      description: 'Follow instructions to assemble a new device',
+      icon: <Build sx={{ fontSize: 40 }} color="primary" />,
+      onClick: () => navigate(`/user/${userId}/devices`),
+    },
+    {
+      title: 'Open Device Project',
+      description: 'Work on a project for your device',
+      icon: <FolderOpen sx={{ fontSize: 40 }} color="primary" />,
+      onClick: () => navigate(`/user/${userId}/projects`),
+    },
+  ];
 
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        User Dashboard
+        Welcome!
       </Typography>
       <Typography variant="body1" color="text.secondary" paragraph>
-        Edit and work with project files
+        What would you like to do?
       </Typography>
       <Grid container spacing={3} sx={{ mt: 2 }}>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/user/projects')}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <ProjectsIcon sx={{ mr: 1 }} color="primary" />
-                  <Typography variant="h6">Projects</Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  View and manage your project realizations
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/user/editor/monaco/')}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <Code sx={{ mr: 1 }} color="primary" />
-                  <Typography variant="h6">Monaco Editor</Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  Open the code editor for project files
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/user/project')}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <DeveloperBoard sx={{ mr: 1 }} color="primary" />
-                  <Typography variant="h6">Project Editor</Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  Visual block-based Arduino programming with code editor
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
+        {activities.map((activity) => (
+          <Grid item xs={12} sm={6} md={4} key={activity.title}>
+            <Card sx={{ height: '100%' }}>
+              <CardActionArea onClick={activity.onClick} sx={{ height: '100%', p: 2 }}>
+                <CardContent sx={{ textAlign: 'center' }}>
+                  {activity.icon}
+                  <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
+                    {activity.title}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {activity.description}
+                  </Typography>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
     </Box>
   );

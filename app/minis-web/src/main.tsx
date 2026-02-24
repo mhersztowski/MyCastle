@@ -4,8 +4,8 @@ import { BrowserRouter } from 'react-router-dom';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import { MqttProvider } from '@modules/mqttclient';
 import { FilesystemProvider } from '@modules/filesystem/FilesystemContext';
-import { ProjectDefinitionsProvider } from '@modules/filesystem/ProjectDefinitionsContext';
-import { ProjectRealizationsProvider } from '@modules/filesystem/ProjectRealizationsContext';
+import { MinisDataSourceProvider } from '@modules/filesystem/MinisDataSourceContext';
+import { AuthProvider } from '@modules/auth';
 import App from './App';
 import theme from './theme';
 
@@ -16,11 +16,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <MqttProvider>
           <FilesystemProvider>
-            <ProjectDefinitionsProvider>
-              <ProjectRealizationsProvider>
+            <MinisDataSourceProvider>
+              <AuthProvider>
                 <App />
-              </ProjectRealizationsProvider>
-            </ProjectDefinitionsProvider>
+              </AuthProvider>
+            </MinisDataSourceProvider>
           </FilesystemProvider>
         </MqttProvider>
       </BrowserRouter>

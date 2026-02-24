@@ -8,11 +8,11 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Shared packages
 - **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource. Dual ESM+CJS build (tsup).
-  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel
-  - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel, MinisProjectDefModel, MinisProjectModel, UserModel
+  - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
   - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload
-  - `datasource/` — IDataSource interface, MemoryDataSource, CalendarItem, Calendar
+  - `datasource/` — IDataSource interface (w tym kolekcje Minis: minisModuleDefs, minisModules, minisDeviceDefs, minisDevices, minisProjectDefs, minisProjects, users), MemoryDataSource (load* methods per kolekcję), CalendarItem, Calendar
 - **@mhersztowski/web-client** (`packages/web-client/`) — reusable React client for MyCastle backend. Dual ESM+CJS build (tsup). React as peerDependency.
   - `mqtt/` — MqttClient (MQTT over WebSocket, request-response, file ops), MqttContext/MqttProvider, useMqtt hook
   - `filesystem/` — FilesystemService (dir tree, batch file loading, calendar, DataSource), FilesystemContext/FilesystemProvider, useFilesystem hook
@@ -20,8 +20,8 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `filesystem/components/` — DirComponent, FileComponent, FileJsonComponent, FileMarkdownComponent
   - `utils/` — configureUrls(), getHttpUrl(), getMqttUrl() (auto-detect from window.location, configurable)
 - **@mhersztowski/core-backend** (`packages/core-backend/`) — współdzielone moduły backendowe wyekstrahowane z mycastle-backend. ESM-only build (tsup).
-  - `filesystem/` — FileSystem (in-memory cache, EventEmitter fileChanged, atomic writes, per-file locking)
-  - `httpserver/` — HttpUploadServer (CORS, POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook)
+  - `filesystem/` — FileSystem (in-memory cache, EventEmitter fileChanged, atomic writes, per-file locking, deleteDirectory)
+  - `httpserver/` — HttpUploadServer (CORS, POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook). Klasa rozszerzalna: protected server, fileSystem, setCorsHeaders, handleRequest, sendJsonResponse — umożliwia subclassing (np. MinisHttpServer)
   - `mqttserver/` — MqttServer (Aedes), Client, Packet classes per type
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
@@ -64,23 +64,36 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - opis w docs/minis.md
 - Node.js, ESM, build z tsup, dev z tsx watch
 - Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
-- **App singleton** (`src/App.ts`): uproszczony — tylko FileSystem + HttpUploadServer + MqttServer (bez OCR, Automate, Scheduler, DataSource)
-- Importuje moduły z `@mhersztowski/core-backend`
+- **App singleton** (`src/App.ts`): uproszczony — FileSystem + MinisHttpServer + MqttServer (bez OCR, Automate, Scheduler)
+- Importuje FileSystem, MqttServer z `@mhersztowski/core-backend`
+- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`):
+    - `/api/auth/login` — logowanie po userId+password
+    - `/api/admin/{users,devicedefs,moduledefs,projectdefs}` — CRUD (GET list, POST create, PUT update, DELETE). Dane trzymane w JSON files (`Minis/Admin/*.json`)
+    - `/api/admin/projectdefs/:id/sources` — upload ZIP z plikami źródłowymi projektu (adm-zip)
+    - `/api/users/:userId/{devices,projects}` — CRUD per user (dane w `Minis/Users/:userId/*.json`)
+    - `/api/docs` — Swagger UI (swagger-ui-dist)
+    - `/api/swagger.json` — OpenAPI spec (`src/swagger.ts`)
+- Dependencje: adm-zip, swagger-ui-dist
 - Dane w `data-minis/` (ROOT_DIR=../../data-minis)
 
 ### Aplikacja frontend Minis (`app/minis-web/`)
 - opis w docs/minis.md
 - React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor, Blockly 12, xterm.js, esptool-js
-- Dev port: 1903 (Vite HMR)
+- Dev port: 1903 (Vite HMR), proxy `/api` → `localhost:1902`
 - Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
 - **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
+- **Routing z userId**: wszystkie ścieżki admin/user zawierają `:userId` (np. `/admin/:userId/main`, `/user/:userId/projects`). Strony pobierają userId z `useParams()`.
+- **Provider tree** (`main.tsx`): MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → App
 - Moduły:
     - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
-    - **filesystem** — Minis-specific: models (FileModel, DirModel, ProjectDefinitionModel, ProjectRealizationModel), nodes (FileNode, DirNode, ProjectDefinitionNode, ProjectRealizationNode), components (DirComponent, FileComponent, FileJsonComponent), FilesystemContext, ProjectDefinitionsContext, ProjectRealizationsContext
+    - **auth** — AuthContext/AuthProvider, useAuth hook. Login via MinisApiService, sesja w sessionStorage. Stan: currentUser (UserPublic), isAdmin, login(), logout()
+    - **filesystem** — Minis-specific: models (FileModel, DirModel), nodes (FileNode, DirNode), components (DirComponent, FileComponent, FileJsonComponent), FilesystemContext, MinisDataSourceContext (ładuje moduleDefs/deviceDefs/projectDefs via MQTT do MemoryDataSource)
     - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
     - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile — profile pinów dla różnych płytek), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
     - **serial** — komunikacja z mikrokontrolerami przez Web Serial API: WebSerialService (connect/disconnect, read/write), WebSerialTerminal (komponent xterm.js), EspFlashService (flashowanie firmware przez esptool-js), FlashDialog (UI do flashowania)
-- Strony: /, /admin, /admin/projects, /admin/projects/:id, /admin/filesystem/list, /admin/filesystem/save, /user, /user/project (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/projects, /user/projects/:id, /user/editor/monaco/*
+- Serwisy (`src/services/`):
+    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources
+- Strony: /, /login/:userId, /admin/:userId/main, /admin/:userId/users, /admin/:userId/devicesdefs, /admin/:userId/modulesdefs, /admin/:userId/projectdefs, /admin/:userId/filesystem/list, /admin/:userId/filesystem/save, /user/:userId/main, /user/:userId/devices, /user/:userId/projects, /user/:userId/project (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userId/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -145,18 +158,21 @@ mycastle/                           # Root monorepo
 │   ├── minis-backend/              # Minis Backend Node.js
 │   │   ├── src/
 │   │   │   ├── index.ts            # Entry point (port 1902)
-│   │   │   └── App.ts              # Simplified App singleton (FileSystem+Http+Mqtt only)
+│   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt)
+│   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) extending HttpUploadServer
+│   │   │   └── swagger.ts          # OpenAPI spec
 │   │   ├── .env                    # PORT=1902, ROOT_DIR=../../data-minis
 │   │   ├── tsup.config.ts          # ESM, target node20
 │   │   └── package.json
 │   ├── minis-web/                  # Minis Frontend React
 │   │   ├── src/
 │   │   │   ├── main.tsx            # Entry (providers + App)
-│   │   │   ├── App.tsx             # Routes
-│   │   │   ├── modules/{mqttclient,filesystem,editor,ardublockly2,serial}/
+│   │   │   ├── App.tsx             # Routes (all paths with :userId)
+│   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial}/
+│   │   │   ├── services/MinisApiService.ts  # REST client singleton
 │   │   │   ├── pages/{admin,user,filesystem,editor}/
 │   │   │   └── components/Layout.tsx
-│   │   ├── vite.config.ts          # Dev port: 1903
+│   │   ├── vite.config.ts          # Dev port: 1903, proxy /api → :1902
 │   │   └── package.json
 │   ├── demo-scene-3d/              # Scene3D demo app
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
@@ -216,7 +232,7 @@ mycastle/                           # Root monorepo
 - **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
 - **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
 - **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
-- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron
+- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Minis-backend additionally: adm-zip, swagger-ui-dist
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 
 ## Common Gotchas

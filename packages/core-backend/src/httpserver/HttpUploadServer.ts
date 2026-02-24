@@ -71,9 +71,9 @@ const STATIC_MIME_TYPES: Record<string, string> = {
 };
 
 export class HttpUploadServer {
-  private server: Server;
+  protected server: Server;
   private port: number;
-  private fileSystem: FileSystem;
+  protected fileSystem: FileSystem;
   private ocrService?: IOcrService;
   private automateService?: IAutomateService;
   private receiptParser?: IReceiptParser;
@@ -93,14 +93,14 @@ export class HttpUploadServer {
     return this.server;
   }
 
-  private setCorsHeaders(res: ServerResponse): void {
+  protected setCorsHeaders(res: ServerResponse): void {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-File-Path, X-Mime-Type, X-Webhook-Token');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
 
-  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  protected async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     this.setCorsHeaders(res);
 
     if (req.method === 'OPTIONS') {
@@ -498,6 +498,13 @@ export class HttpUploadServer {
   }
 
   private sendResponse(res: ServerResponse, statusCode: number, data: UploadResult): void {
+    if (!res.writableEnded) {
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    }
+  }
+
+  protected sendJsonResponse(res: ServerResponse, statusCode: number, data: unknown): void {
     if (!res.writableEnded) {
       res.writeHead(statusCode, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));

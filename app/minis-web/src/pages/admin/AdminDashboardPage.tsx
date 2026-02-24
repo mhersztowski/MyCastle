@@ -1,9 +1,24 @@
 import { Box, Typography, Card, CardContent, CardActionArea, Grid } from '@mui/material';
-import { Folder, Save, Assignment as ProjectsIcon } from '@mui/icons-material';
-import { useNavigate } from 'react-router-dom';
+import {
+  People as PeopleIcon,
+  Devices as DevicesIcon,
+  Memory as MemoryIcon,
+  Assignment as AssignmentIcon,
+  Folder,
+} from '@mui/icons-material';
+import { useNavigate, useParams } from 'react-router-dom';
 
 function AdminDashboardPage() {
   const navigate = useNavigate();
+  const { userId } = useParams<{ userId: string }>();
+
+  const cards = [
+    { title: 'Users', desc: 'Manage users', icon: <PeopleIcon />, path: `/admin/${userId}/users` },
+    { title: 'DevicesDef', desc: 'Manage device definitions', icon: <DevicesIcon />, path: `/admin/${userId}/devicesdefs` },
+    { title: 'ModulesDef', desc: 'Manage module definitions', icon: <MemoryIcon />, path: `/admin/${userId}/modulesdefs` },
+    { title: 'ProjectDefs', desc: 'Manage project definitions', icon: <AssignmentIcon />, path: `/admin/${userId}/projectdefs` },
+    { title: 'File Browser', desc: 'Browse and manage project files', icon: <Folder />, path: `/admin/${userId}/filesystem/list` },
+  ];
 
   return (
     <Box>
@@ -11,54 +26,26 @@ function AdminDashboardPage() {
         Admin Dashboard
       </Typography>
       <Typography variant="body1" color="text.secondary" paragraph>
-        Manage files and system settings
+        Manage users, devices, modules, and projects
       </Typography>
       <Grid container spacing={3} sx={{ mt: 2 }}>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/admin/projects')}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <ProjectsIcon sx={{ mr: 1 }} color="primary" />
-                  <Typography variant="h6">Project Definitions</Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  Define and manage project templates
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/admin/filesystem/list')}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <Folder sx={{ mr: 1 }} color="primary" />
-                  <Typography variant="h6">File Browser</Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  Browse and manage project files
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card>
-            <CardActionArea onClick={() => navigate('/admin/filesystem/save')}>
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <Save sx={{ mr: 1 }} color="primary" />
-                  <Typography variant="h6">Save File</Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  Create and save new files
-                </Typography>
-              </CardContent>
-            </CardActionArea>
-          </Card>
-        </Grid>
+        {cards.map((card) => (
+          <Grid item xs={12} sm={6} md={4} key={card.title}>
+            <Card>
+              <CardActionArea onClick={() => navigate(card.path)}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                    {card.icon}
+                    <Typography variant="h6" sx={{ ml: 1 }}>{card.title}</Typography>
+                  </Box>
+                  <Typography variant="body2" color="text.secondary">
+                    {card.desc}
+                  </Typography>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
     </Box>
   );
