@@ -36,13 +36,8 @@ export class EventNode extends NodeBase<EventModel> {
     this.parseDates();
   }
 
-  static fromModel(model: EventModel): EventNode {
-    return new EventNode(model);
-  }
-
-  static fromModels(models: EventModel[]): EventNode[] {
-    return models.map(m => EventNode.fromModel(m));
-  }
+  static fromModel(model: EventModel): EventNode { return new EventNode(model); }
+  static fromModels(models: EventModel[]): EventNode[] { return models.map(m => new EventNode(m)); }
 
   // Parse date strings to Dayjs objects
   private parseDates(): void {
@@ -290,13 +285,8 @@ export class EventNode extends NodeBase<EventModel> {
     };
   }
 
-  // Clone
   clone(): EventNode {
-    const cloned = new EventNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
+    const cloned = this.copyBaseStateTo(new EventNode(this.toModel()));
     cloned._taskRef = this._taskRef;
     return cloned;
   }

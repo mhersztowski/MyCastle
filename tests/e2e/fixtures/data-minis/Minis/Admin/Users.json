@@ -1,0 +1,19 @@
+{
+  "type": "users",
+  "items": [
+    {
+      "id": "admin1",
+      "name": "Admin",
+      "password": "admin123",
+      "isAdmin": true,
+      "roles": ["admin"]
+    },
+    {
+      "id": "user1",
+      "name": "TestUser",
+      "password": "user123",
+      "isAdmin": false,
+      "roles": ["viewer"]
+    }
+  ]
+}

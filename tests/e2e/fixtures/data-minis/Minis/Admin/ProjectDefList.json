@@ -1,0 +1,10 @@
+{
+  "type": "project_defs",
+  "projectDefs": [
+    {
+      "id": "pd1",
+      "name": "Blink LED",
+      "description": "Simple LED blink project"
+    }
+  ]
+}

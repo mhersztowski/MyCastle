@@ -209,10 +209,11 @@ export class MinisHttpServer extends HttpUploadServer {
     body.id = body.id || randomUUID();
 
     // Set type field based on resource
-    if (config.itemsKey === 'items') body.type = 'user';
-    else if (config.itemsKey === 'deviceDefs') body.type = 'device_def';
-    else if (config.itemsKey === 'moduleDefs') body.type = 'module_def';
-    else if (config.itemsKey === 'projectDefs') body.type = 'project_def';
+    const TYPE_MAP: Record<string, string> = {
+      items: 'user', deviceDefs: 'device_def', moduleDefs: 'module_def',
+      projectDefs: 'project_def', devices: 'device',
+    };
+    if (TYPE_MAP[config.itemsKey]) body.type = TYPE_MAP[config.itemsKey];
 
     items.push(body);
     data[config.itemsKey] = items;
@@ -291,86 +292,18 @@ export class MinisHttpServer extends HttpUploadServer {
   }
 
   private async handleUserDevices(req: IncomingMessage, res: ServerResponse, method: string, userId: string, deviceId?: string): Promise<void> {
-    try {
-      const userName = await this.resolveUserName(userId);
-      if (!userName) {
-        this.sendJsonResponse(res, 404, { error: 'User not found' });
-        return;
-      }
-
-      const filePath = `${MINIS_ROOT}/Users/${userName}/Device.json`;
-
-      switch (method) {
-        case 'GET': {
-          if (deviceId) {
-            this.sendJsonResponse(res, 405, { error: 'GET with id not supported, use list' });
-            return;
-          }
-          const data = await this.readJsonFile(filePath) as Record<string, unknown>;
-          const devices = (data.devices || []) as unknown[];
-          this.sendJsonResponse(res, 200, { items: devices });
-          return;
-        }
-        case 'POST': {
-          if (deviceId) {
-            this.sendJsonResponse(res, 405, { error: 'POST with id not supported' });
-            return;
-          }
-          const body = await this.parseRequestBody(req) as Record<string, unknown>;
-          const data = await this.readJsonFile(filePath) as Record<string, unknown>;
-          const devices = (data.devices || []) as Record<string, unknown>[];
-          body.id = body.id || randomUUID();
-          body.type = 'device';
-          devices.push(body);
-          data.devices = devices;
-          data.type = 'devices';
-          await this.writeJsonFile(filePath, data);
-          this.sendJsonResponse(res, 201, body);
-          return;
-        }
-        case 'PUT': {
-          if (!deviceId) {
-            this.sendJsonResponse(res, 400, { error: 'PUT requires an id' });
-            return;
-          }
-          const body = await this.parseRequestBody(req) as Record<string, unknown>;
-          const data = await this.readJsonFile(filePath) as Record<string, unknown>;
-          const devices = (data.devices || []) as Record<string, unknown>[];
-          const index = devices.findIndex((d) => d.id === deviceId);
-          if (index === -1) {
-            this.sendJsonResponse(res, 404, { error: `Device with id ${deviceId} not found` });
-            return;
-          }
-          devices[index] = { ...devices[index], ...body, id: deviceId };
-          data.devices = devices;
-          await this.writeJsonFile(filePath, data);
-          this.sendJsonResponse(res, 200, devices[index]);
-          return;
-        }
-        case 'DELETE': {
-          if (!deviceId) {
-            this.sendJsonResponse(res, 400, { error: 'DELETE requires an id' });
-            return;
-          }
-          const data = await this.readJsonFile(filePath) as Record<string, unknown>;
-          const devices = (data.devices || []) as Record<string, unknown>[];
-          const index = devices.findIndex((d) => d.id === deviceId);
-          if (index === -1) {
-            this.sendJsonResponse(res, 404, { error: `Device with id ${deviceId} not found` });
-            return;
-          }
-          devices.splice(index, 1);
-          data.devices = devices;
-          await this.writeJsonFile(filePath, data);
-          this.sendJsonResponse(res, 200, { success: true });
-          return;
-        }
-        default:
-          this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
-      }
-    } catch (err) {
-      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    const userName = await this.resolveUserName(userId);
+    if (!userName) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
     }
+
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/Device.json`,
+      itemsKey: 'devices',
+      typeValue: 'devices',
+    };
+    await this.handleCrud(req, res, method, config, deviceId);
   }
 
   // --- User Projects ---

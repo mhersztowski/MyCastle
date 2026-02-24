@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Box, Typography, Button, IconButton, Chip, Tooltip,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import { Edit, Delete, Add, UploadFile } from '@mui/icons-material';
 import { minisApi } from '../../services/MinisApiService';
+import { useSourceUpload } from '../../hooks/useSourceUpload';
 import type { MinisModuleDefModel } from '@mhersztowski/core';
 
 type SortKey = 'name' | 'soc' | 'isProgrammable';
@@ -31,9 +32,7 @@ function ModulesDefPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [uploading, setUploading] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const uploadTargetId = useRef<string>('');
+  const { uploading, fileInputRef, triggerUpload, handleFileSelected } = useSourceUpload('moduledefs', (msg) => setError(msg));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,27 +96,6 @@ function ModulesDefPage() {
     }
   };
 
-  const handleUploadSources = (id: string) => {
-    uploadTargetId.current = id;
-    fileInputRef.current?.click();
-  };
-
-  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !uploadTargetId.current) return;
-    setUploading(uploadTargetId.current);
-    try {
-      const result = await minisApi.uploadDefSources('moduledefs', uploadTargetId.current, file);
-      setError(null);
-      alert(`Uploaded: ${result.filesExtracted} files extracted`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setUploading(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -157,7 +135,7 @@ function ModulesDefPage() {
                 <TableCell align="right">
                   <Tooltip title="Upload Sources (zip)">
                     <span>
-                      <IconButton size="small" onClick={() => handleUploadSources(item.id)} disabled={uploading === item.id}>
+                      <IconButton size="small" onClick={() => triggerUpload(item.id)} disabled={uploading === item.id}>
                         {uploading === item.id ? <CircularProgress size={18} /> : <UploadFile />}
                       </IconButton>
                     </span>

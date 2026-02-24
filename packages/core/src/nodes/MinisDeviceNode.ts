@@ -16,13 +16,8 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
     this.sn = model.sn;
   }
 
-  static fromModel(model: MinisDeviceModel): MinisDeviceNode {
-    return new MinisDeviceNode(model);
-  }
-
-  static fromModels(models: MinisDeviceModel[]): MinisDeviceNode[] {
-    return models.map(m => MinisDeviceNode.fromModel(m));
-  }
+  static fromModel(model: MinisDeviceModel): MinisDeviceNode { return new MinisDeviceNode(model); }
+  static fromModels(models: MinisDeviceModel[]): MinisDeviceNode[] { return models.map(m => new MinisDeviceNode(m)); }
 
   getDisplayName(): string {
     return `${this.deviceDefId} (${this.sn})`;
@@ -47,11 +42,6 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
   }
 
   clone(): MinisDeviceNode {
-    const cloned = new MinisDeviceNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new MinisDeviceNode(this.toModel()));
   }
 }

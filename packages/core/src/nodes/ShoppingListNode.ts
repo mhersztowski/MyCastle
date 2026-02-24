@@ -29,13 +29,8 @@ export class ShoppingListNode extends NodeBase<ShoppingListModel> {
     this.items = model.items || [];
   }
 
-  static fromModel(model: ShoppingListModel): ShoppingListNode {
-    return new ShoppingListNode(model);
-  }
-
-  static fromModels(models: ShoppingListModel[]): ShoppingListNode[] {
-    return models.map(m => ShoppingListNode.fromModel(m));
-  }
+  static fromModel(model: ShoppingListModel): ShoppingListNode { return new ShoppingListNode(model); }
+  static fromModels(models: ShoppingListModel[]): ShoppingListNode[] { return models.map(m => new ShoppingListNode(m)); }
 
   // Display
   getDisplayName(): string {
@@ -187,14 +182,8 @@ export class ShoppingListNode extends NodeBase<ShoppingListModel> {
     };
   }
 
-  // Clone
   clone(): ShoppingListNode {
-    const cloned = new ShoppingListNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new ShoppingListNode(this.toModel()));
   }
 
   // Compare

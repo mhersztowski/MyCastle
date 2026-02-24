@@ -9,7 +9,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 ### Shared packages
 - **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource. Dual ESM+CJS build (tsup).
   - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel, MinisProjectDefModel, MinisProjectModel, UserModel
-  - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode
+  - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
   - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload
   - `datasource/` — IDataSource interface (w tym kolekcje Minis: minisModuleDefs, minisModules, minisDeviceDefs, minisDevices, minisProjectDefs, minisProjects, users), MemoryDataSource (load* methods per kolekcję), CalendarItem, Calendar
@@ -64,9 +64,9 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - opis w docs/minis.md
 - Node.js, ESM, build z tsup, dev z tsx watch
 - Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
-- **App singleton** (`src/App.ts`): uproszczony — FileSystem + MinisHttpServer + MqttServer (bez OCR, Automate, Scheduler)
+- **App singleton** (`src/App.ts`): uproszczony — FileSystem + MinisHttpServer + MqttServer (bez OCR, Automate, Scheduler). `shutdown()` gracefully zamyka HTTP server + MQTT.
 - Importuje FileSystem, MqttServer z `@mhersztowski/core-backend`
-- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`):
+- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami.
     - `/api/auth/login` — logowanie po userId+password
     - `/api/admin/{users,devicedefs,moduledefs,projectdefs}` — CRUD (GET list, POST create, PUT update, DELETE). Dane trzymane w JSON files (`Minis/Admin/*.json`)
     - `/api/admin/projectdefs/:id/sources` — upload ZIP z plikami źródłowymi projektu (adm-zip)
@@ -91,6 +91,8 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
     - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile — profile pinów dla różnych płytek), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
     - **serial** — komunikacja z mikrokontrolerami przez Web Serial API: WebSerialService (connect/disconnect, read/write), WebSerialTerminal (komponent xterm.js), EspFlashService (flashowanie firmware przez esptool-js), FlashDialog (UI do flashowania)
+- Hooks (`src/hooks/`):
+    - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP). Enkapsuluje stan uploadu, fileInputRef, trigger i handler. Używany w admin stronach (DevicesDefPage, ModulesDefPage, ProjectDefsPage).
 - Serwisy (`src/services/`):
     - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources
 - Strony: /, /login/:userId, /admin/:userId/main, /admin/:userId/users, /admin/:userId/devicesdefs, /admin/:userId/modulesdefs, /admin/:userId/projectdefs, /admin/:userId/filesystem/list, /admin/:userId/filesystem/save, /user/:userId/main, /user/:userId/devices, /user/:userId/projects, /user/:userId/project (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userId/editor/monaco/*
@@ -111,17 +113,21 @@ mycastle/                           # Root monorepo
 ├── pnpm-lock.yaml
 ├── tsconfig.base.json              # Shared TS config (ES2022, bundler, react-jsx)
 ├── tsconfig.json                   # Project references
+├── vitest.config.ts                # Root vitest config
+├── playwright.config.ts            # E2E test config (auto-start backends, baseURL minis-web)
 ├── docker-compose.yml              # Coolify deployment (backend + web)
 ├── .npmrc
 │
 ├── packages/
 │   ├── core/                       # @mhersztowski/core (shared models, nodes, mqtt, automate, datasource)
 │   │   ├── src/{models,nodes,automate,mqtt,datasource}/
+│   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # Dual ESM+CJS
 │   │   └── package.json
 │   ├── core-backend/               # @mhersztowski/core-backend (shared backend modules)
 │   │   ├── src/{filesystem,httpserver,mqttserver,datasource}/
 │   │   ├── src/interfaces.ts       # IAutomateService, IDataSource
+│   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM-only, target node20
 │   │   └── package.json
 │   ├── web-client/                 # @mhersztowski/web-client (React MQTT+filesystem client)
@@ -162,6 +168,7 @@ mycastle/                           # Root monorepo
 │   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) extending HttpUploadServer
 │   │   │   └── swagger.ts          # OpenAPI spec
 │   │   ├── .env                    # PORT=1902, ROOT_DIR=../../data-minis
+│   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM, target node20
 │   │   └── package.json
 │   ├── minis-web/                  # Minis Frontend React
@@ -169,9 +176,12 @@ mycastle/                           # Root monorepo
 │   │   │   ├── main.tsx            # Entry (providers + App)
 │   │   │   ├── App.tsx             # Routes (all paths with :userId)
 │   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial}/
+│   │   │   ├── hooks/useSourceUpload.ts  # Reusable file upload hook
 │   │   │   ├── services/MinisApiService.ts  # REST client singleton
 │   │   │   ├── pages/{admin,user,filesystem,editor}/
+│   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
 │   │   │   └── components/Layout.tsx
+│   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
 │   │   ├── vite.config.ts          # Dev port: 1903, proxy /api → :1902
 │   │   └── package.json
 │   ├── demo-scene-3d/              # Scene3D demo app
@@ -183,6 +193,16 @@ mycastle/                           # Root monorepo
 │       ├── config.py
 │       ├── operations/
 │       └── requirements.txt
+│
+├── tests/
+│   └── e2e/                        # Playwright E2E tests
+│       ├── fixtures/data-minis/    # Test fixture data (pre-seeded users, devices, projects)
+│       ├── global-setup.ts         # Copy fixtures to data-minis-test/
+│       ├── global-teardown.ts      # Cleanup test data
+│       ├── auth.spec.ts            # Login/navigation tests
+│       ├── admin-crud.spec.ts      # Admin CRUD tests
+│       ├── user-devices.spec.ts    # User device CRUD tests
+│       └── user-projects.spec.ts   # User project CRUD tests
 │
 ├── data/                           # Runtime data (ROOT_DIR for mycastle-backend)
 ├── data-minis/                     # Runtime data (ROOT_DIR for minis-backend)
@@ -200,6 +220,8 @@ mycastle/                           # Root monorepo
 - **Run Minis frontend:** `pnpm dev:minis-web` (port 1903, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
 - **Run desktop agent:** `cd app/desktop && python agent.py`
+- **Test (unit):** `pnpm test` (all packages), `pnpm test:watch`, `pnpm test:coverage`
+- **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts minis-backend + minis-web)
 - **Typecheck:** `pnpm typecheck`
 - **Clean:** `pnpm clean`
 - **Docker (MyCastle):** `docker compose build && docker compose up -d`
@@ -210,6 +232,7 @@ mycastle/                           # Root monorepo
 ## Deployment (Coolify)
 - `docker-compose.yml` definiuje 2 serwisy: `backend` (port 1894, volume /data) + `web` (nginx port 80, proxy do backend)
 - Frontend Dockerfile usuwa .env przed buildem — `urlHelper.ts` auto-detect URLs z `window.location`
+- **Dockerfiles** jawnie budują i kopiują zależności monorepo (core-backend, web-client) — multi-stage build z explicit `pnpm build:*` steps per package
 - nginx proxy: /mqtt (WebSocket upgrade), /upload, /files/, /ocr, /webhook/ → backend:1894
 - W Coolify: Docker Compose resource → przypisz domenę do serwisu `web`
 - demo-scene-3d: osobny Dockerfile resource w Coolify
@@ -227,10 +250,20 @@ mycastle/                           # Root monorepo
 - Packages: tsup dual build (ESM + CJS)
 - Frontend: Vite handles ESM natively
 
+## Testing Guidelines
+- **Unit/Integration tests:** Vitest 4 (globals enabled). Każdy package/app ma własny `vitest.config.ts`. Frontend testy (minis-web) używają `jsdom` environment + React Testing Library (`@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`). Setup w `src/test-setup.ts`.
+- **E2E tests:** Playwright. Config w `playwright.config.ts` (root). Testy w `tests/e2e/`. Auto-start `dev:minis-backend` + `dev:minis-web` z health check na Swagger endpoint. Fixtures w `tests/e2e/fixtures/data-minis/` kopiowane do `data-minis-test/` (global setup/teardown).
+- **Structure:** Testy collocated przy źródłach (`*.test.ts` / `*.test.tsx` obok implementacji). E2E w `tests/e2e/`.
+- **Coverage:** Prioritize critical business logic, API boundaries, and integrations
+- **Mocking/Stubs:** Frontend: mockowanie serwisów (np. `minisApi`), `vi.mock()`. Backend: temp directories z beforeEach/afterEach, dynamic port allocation (port 0) dla izolacji. React hooks: `renderHook()` z wrapper providers.
+- **Behaviour:** Always write tests before implementation
+- **Commands:** `pnpm test` (all unit), `pnpm test:watch`, `pnpm test:coverage` (v8), `pnpm test:e2e` (Playwright). Per-package: `pnpm --filter @mhersztowski/core test`
+
 ## Environment & Dependencies
 - **Languages:** Node 20, TypeScript 5.9+, Python 3.14 (desktop)
 - **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
 - **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
+- **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (minis-web)
 - **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
 - **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Minis-backend additionally: adm-zip, swagger-ui-dist
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify

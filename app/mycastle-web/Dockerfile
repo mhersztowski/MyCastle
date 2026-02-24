@@ -7,11 +7,13 @@ FROM base AS build
 WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/ packages/core/
+COPY packages/web-client/ packages/web-client/
 COPY app/mycastle-web/ app/mycastle-web/
 # Remove dev .env so auto-detect URLs work in production
 RUN rm -f app/mycastle-web/.env app/mycastle-web/.env.local
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @mhersztowski/core build
+RUN pnpm --filter @mhersztowski/web-client build
 RUN pnpm --filter mycastle-web build
 
 FROM nginx:alpine AS production

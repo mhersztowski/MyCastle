@@ -50,13 +50,8 @@ export class ProjectNode extends NodeBase<ProjectModel> {
     }
   }
 
-  static fromModel(model: ProjectModel): ProjectNode {
-    return new ProjectNode(model);
-  }
-
-  static fromModels(models: ProjectModel[]): ProjectNode[] {
-    return models.map(m => ProjectNode.fromModel(m));
-  }
+  static fromModel(model: ProjectModel): ProjectNode { return new ProjectNode(model); }
+  static fromModels(models: ProjectModel[]): ProjectNode[] { return models.map(m => new ProjectNode(m)); }
 
   // Children accessors
   get children(): ProjectNode[] {
@@ -316,14 +311,8 @@ export class ProjectNode extends NodeBase<ProjectModel> {
     };
   }
 
-  // Clone (deep)
   clone(): ProjectNode {
-    const cloned = new ProjectNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new ProjectNode(this.toModel()));
   }
 
   // Compare

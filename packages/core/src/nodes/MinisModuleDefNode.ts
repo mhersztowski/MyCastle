@@ -16,13 +16,8 @@ export class MinisModuleDefNode extends NodeBase<MinisModuleDefModel> {
     this.isProgrammable = model.isProgrammable;
   }
 
-  static fromModel(model: MinisModuleDefModel): MinisModuleDefNode {
-    return new MinisModuleDefNode(model);
-  }
-
-  static fromModels(models: MinisModuleDefModel[]): MinisModuleDefNode[] {
-    return models.map(m => MinisModuleDefNode.fromModel(m));
-  }
+  static fromModel(model: MinisModuleDefModel): MinisModuleDefNode { return new MinisModuleDefNode(model); }
+  static fromModels(models: MinisModuleDefModel[]): MinisModuleDefNode[] { return models.map(m => new MinisModuleDefNode(m)); }
 
   getDisplayName(): string {
     return this.name;
@@ -47,11 +42,6 @@ export class MinisModuleDefNode extends NodeBase<MinisModuleDefModel> {
   }
 
   clone(): MinisModuleDefNode {
-    const cloned = new MinisModuleDefNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new MinisModuleDefNode(this.toModel()));
   }
 }

@@ -80,6 +80,12 @@ export class App {
       console.warn('Error stopping MQTT server:', err);
     }
 
+    try {
+      await this.httpServer.stop();
+    } catch (err) {
+      console.warn('Error stopping HTTP server:', err);
+    }
+
     console.log('App shut down gracefully');
   }
 }

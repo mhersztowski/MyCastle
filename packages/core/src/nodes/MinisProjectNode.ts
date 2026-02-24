@@ -14,13 +14,8 @@ export class MinisProjectNode extends NodeBase<MinisProjectModel> {
     this.projectDefId = model.projectDefId;
   }
 
-  static fromModel(model: MinisProjectModel): MinisProjectNode {
-    return new MinisProjectNode(model);
-  }
-
-  static fromModels(models: MinisProjectModel[]): MinisProjectNode[] {
-    return models.map(m => MinisProjectNode.fromModel(m));
-  }
+  static fromModel(model: MinisProjectModel): MinisProjectNode { return new MinisProjectNode(model); }
+  static fromModels(models: MinisProjectModel[]): MinisProjectNode[] { return models.map(m => new MinisProjectNode(m)); }
 
   getDisplayName(): string {
     return this.name;
@@ -44,11 +39,6 @@ export class MinisProjectNode extends NodeBase<MinisProjectModel> {
   }
 
   clone(): MinisProjectNode {
-    const cloned = new MinisProjectNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new MinisProjectNode(this.toModel()));
   }
 }

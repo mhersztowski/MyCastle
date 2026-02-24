@@ -14,13 +14,8 @@ export class MinisModuleNode extends NodeBase<MinisModuleModel> {
     this.sn = model.sn;
   }
 
-  static fromModel(model: MinisModuleModel): MinisModuleNode {
-    return new MinisModuleNode(model);
-  }
-
-  static fromModels(models: MinisModuleModel[]): MinisModuleNode[] {
-    return models.map(m => MinisModuleNode.fromModel(m));
-  }
+  static fromModel(model: MinisModuleModel): MinisModuleNode { return new MinisModuleNode(model); }
+  static fromModels(models: MinisModuleModel[]): MinisModuleNode[] { return models.map(m => new MinisModuleNode(m)); }
 
   getDisplayName(): string {
     return `${this.moduleDefId} (${this.sn})`;
@@ -44,11 +39,6 @@ export class MinisModuleNode extends NodeBase<MinisModuleModel> {
   }
 
   clone(): MinisModuleNode {
-    const cloned = new MinisModuleNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new MinisModuleNode(this.toModel()));
   }
 }

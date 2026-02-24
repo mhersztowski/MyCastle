@@ -76,6 +76,15 @@ export abstract class NodeBase<TModel> {
     return this;
   }
 
+  // Copy base UI state to another node (for use in clone())
+  protected copyBaseStateTo<T extends NodeBase<TModel>>(target: T): T {
+    target._isSelected = this._isSelected;
+    target._isExpanded = this._isExpanded;
+    target._isEditing = this._isEditing;
+    target._isDirty = this._isDirty;
+    return target;
+  }
+
   // Abstract methods to be implemented by subclasses
   abstract getDisplayName(): string;
   abstract toModel(): TModel;

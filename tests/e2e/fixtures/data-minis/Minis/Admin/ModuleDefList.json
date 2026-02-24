@@ -1,0 +1,10 @@
+{
+  "type": "module_defs",
+  "moduleDefs": [
+    {
+      "id": "md1",
+      "name": "WiFi Module",
+      "description": "ESP WiFi module"
+    }
+  ]
+}

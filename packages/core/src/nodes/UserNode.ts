@@ -18,13 +18,8 @@ export class UserNode extends NodeBase<UserModel> {
     this.roles = [...model.roles];
   }
 
-  static fromModel(model: UserModel): UserNode {
-    return new UserNode(model);
-  }
-
-  static fromModels(models: UserModel[]): UserNode[] {
-    return models.map(m => UserNode.fromModel(m));
-  }
+  static fromModel(model: UserModel): UserNode { return new UserNode(model); }
+  static fromModels(models: UserModel[]): UserNode[] { return models.map(m => new UserNode(m)); }
 
   getDisplayName(): string {
     return this.name;
@@ -64,12 +59,7 @@ export class UserNode extends NodeBase<UserModel> {
   }
 
   clone(): UserNode {
-    const cloned = new UserNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new UserNode(this.toModel()));
   }
 
   equals(other: UserNode | UserModel): boolean {

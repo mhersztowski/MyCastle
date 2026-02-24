@@ -35,13 +35,8 @@ export class TaskNode extends NodeBase<TaskModel> {
     this.components = model.components;
   }
 
-  static fromModel(model: TaskModel): TaskNode {
-    return new TaskNode(model);
-  }
-
-  static fromModels(models: TaskModel[]): TaskNode[] {
-    return models.map(m => TaskNode.fromModel(m));
-  }
+  static fromModel(model: TaskModel): TaskNode { return new TaskNode(model); }
+  static fromModels(models: TaskModel[]): TaskNode[] { return models.map(m => new TaskNode(m)); }
 
   // Completion state
   get isCompleted(): boolean {
@@ -210,13 +205,8 @@ export class TaskNode extends NodeBase<TaskModel> {
     };
   }
 
-  // Clone
   clone(): TaskNode {
-    const cloned = new TaskNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
+    const cloned = this.copyBaseStateTo(new TaskNode(this.toModel()));
     cloned._isCompleted = this._isCompleted;
     cloned._progress = this._progress;
     cloned._projectRef = this._projectRef;

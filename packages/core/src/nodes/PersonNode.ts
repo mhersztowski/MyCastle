@@ -21,13 +21,8 @@ export class PersonNode extends NodeBase<PersonModel> {
     this.description = model.description;
   }
 
-  static fromModel(model: PersonModel): PersonNode {
-    return new PersonNode(model);
-  }
-
-  static fromModels(models: PersonModel[]): PersonNode[] {
-    return models.map(m => PersonNode.fromModel(m));
-  }
+  static fromModel(model: PersonModel): PersonNode { return new PersonNode(model); }
+  static fromModels(models: PersonModel[]): PersonNode[] { return models.map(m => new PersonNode(m)); }
 
   // Display name - prefer full name, fallback to nick
   getDisplayName(): string {
@@ -97,14 +92,8 @@ export class PersonNode extends NodeBase<PersonModel> {
     };
   }
 
-  // Create a deep copy
   clone(): PersonNode {
-    const cloned = new PersonNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new PersonNode(this.toModel()));
   }
 
   // Compare with another person

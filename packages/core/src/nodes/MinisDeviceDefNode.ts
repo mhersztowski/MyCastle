@@ -14,13 +14,8 @@ export class MinisDeviceDefNode extends NodeBase<MinisDeviceDefModel> {
     this.modules = [...model.modules];
   }
 
-  static fromModel(model: MinisDeviceDefModel): MinisDeviceDefNode {
-    return new MinisDeviceDefNode(model);
-  }
-
-  static fromModels(models: MinisDeviceDefModel[]): MinisDeviceDefNode[] {
-    return models.map(m => MinisDeviceDefNode.fromModel(m));
-  }
+  static fromModel(model: MinisDeviceDefModel): MinisDeviceDefNode { return new MinisDeviceDefNode(model); }
+  static fromModels(models: MinisDeviceDefModel[]): MinisDeviceDefNode[] { return models.map(m => new MinisDeviceDefNode(m)); }
 
   getDisplayName(): string {
     return this.name;
@@ -45,11 +40,6 @@ export class MinisDeviceDefNode extends NodeBase<MinisDeviceDefModel> {
   }
 
   clone(): MinisDeviceDefNode {
-    const cloned = new MinisDeviceDefNode(this.toModel());
-    cloned._isSelected = this._isSelected;
-    cloned._isExpanded = this._isExpanded;
-    cloned._isEditing = this._isEditing;
-    cloned._isDirty = this._isDirty;
-    return cloned;
+    return this.copyBaseStateTo(new MinisDeviceDefNode(this.toModel()));
   }
 }

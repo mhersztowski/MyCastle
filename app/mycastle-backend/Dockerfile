@@ -7,9 +7,11 @@ FROM base AS build
 WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/ packages/core/
+COPY packages/core-backend/ packages/core-backend/
 COPY app/mycastle-backend/ app/mycastle-backend/
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @mhersztowski/core build
+RUN pnpm --filter @mhersztowski/core-backend build
 RUN pnpm --filter mycastle-backend build
 
 FROM base AS production
@@ -19,6 +21,8 @@ COPY --from=build /app/app/mycastle-backend/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/core/dist ./node_modules/@mhersztowski/core/dist
 COPY --from=build /app/packages/core/package.json ./node_modules/@mhersztowski/core/
+COPY --from=build /app/packages/core-backend/dist ./node_modules/@mhersztowski/core-backend/dist
+COPY --from=build /app/packages/core-backend/package.json ./node_modules/@mhersztowski/core-backend/
 
 ENV NODE_ENV=production
 ENV PORT=1894
