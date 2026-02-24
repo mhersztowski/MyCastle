@@ -1,5 +1,5 @@
 import { Box, Typography, Card, CardContent, CardActionArea, Grid } from '@mui/material';
-import { Code, Assignment as ProjectsIcon } from '@mui/icons-material';
+import { Code, Assignment as ProjectsIcon, DeveloperBoard } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 
 function UserDashboardPage() {
@@ -16,7 +16,7 @@ function UserDashboardPage() {
       <Grid container spacing={3} sx={{ mt: 2 }}>
         <Grid item xs={12} sm={6} md={4}>
           <Card>
-            <CardActionArea onClick={() => navigate('/user/project')}>
+            <CardActionArea onClick={() => navigate('/user/projects')}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                   <ProjectsIcon sx={{ mr: 1 }} color="primary" />
@@ -39,6 +39,21 @@ function UserDashboardPage() {
                 </Box>
                 <Typography variant="body2" color="text.secondary">
                   Open the code editor for project files
+                </Typography>
+              </CardContent>
+            </CardActionArea>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={4}>
+          <Card>
+            <CardActionArea onClick={() => navigate('/user/project')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                  <DeveloperBoard sx={{ mr: 1 }} color="primary" />
+                  <Typography variant="h6">Project Editor</Typography>
+                </Box>
+                <Typography variant="body2" color="text.secondary">
+                  Visual block-based Arduino programming with code editor
                 </Typography>
               </CardContent>
             </CardActionArea>

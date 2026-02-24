@@ -61,6 +61,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **Wzorzec dostępu do serwisów**: strony i komponenty używają `const { aiService } = App.instance;` zamiast bezpośrednich importów singletonów. React contexty (useMqtt, useFilesystem, useNotification) pozostają dla reaktywnego stanu UI.
 
 ### Aplikacja backend Minis (`app/minis-backend/`)
+- opis w docs/minis.md
 - Node.js, ESM, build z tsup, dev z tsx watch
 - Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
 - **App singleton** (`src/App.ts`): uproszczony — tylko FileSystem + HttpUploadServer + MqttServer (bez OCR, Automate, Scheduler, DataSource)
@@ -68,7 +69,8 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Dane w `data-minis/` (ROOT_DIR=../../data-minis)
 
 ### Aplikacja frontend Minis (`app/minis-web/`)
-- React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor
+- opis w docs/minis.md
+- React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor, Blockly 12, xterm.js, esptool-js
 - Dev port: 1903 (Vite HMR)
 - Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
 - **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
@@ -76,7 +78,9 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
     - **filesystem** — Minis-specific: models (FileModel, DirModel, ProjectDefinitionModel, ProjectRealizationModel), nodes (FileNode, DirNode, ProjectDefinitionNode, ProjectRealizationNode), components (DirComponent, FileComponent, FileJsonComponent), FilesystemContext, ProjectDefinitionsContext, ProjectRealizationsContext
     - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
-- Strony: /, /admin, /admin/projects, /admin/projects/:id, /admin/filesystem/list, /admin/filesystem/save, /user, /user/project, /user/project/:id, /user/editor/monaco/*
+    - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile — profile pinów dla różnych płytek), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
+    - **serial** — komunikacja z mikrokontrolerami przez Web Serial API: WebSerialService (connect/disconnect, read/write), WebSerialTerminal (komponent xterm.js), EspFlashService (flashowanie firmware przez esptool-js), FlashDialog (UI do flashowania)
+- Strony: /, /admin, /admin/projects, /admin/projects/:id, /admin/filesystem/list, /admin/filesystem/save, /user, /user/project (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/projects, /user/projects/:id, /user/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -149,7 +153,7 @@ mycastle/                           # Root monorepo
 │   │   ├── src/
 │   │   │   ├── main.tsx            # Entry (providers + App)
 │   │   │   ├── App.tsx             # Routes
-│   │   │   ├── modules/{mqttclient,filesystem,editor}/
+│   │   │   ├── modules/{mqttclient,filesystem,editor,ardublockly2,serial}/
 │   │   │   ├── pages/{admin,user,filesystem,editor}/
 │   │   │   └── components/Layout.tsx
 │   │   ├── vite.config.ts          # Dev port: 1903
@@ -166,7 +170,7 @@ mycastle/                           # Root monorepo
 │
 ├── data/                           # Runtime data (ROOT_DIR for mycastle-backend)
 ├── data-minis/                     # Runtime data (ROOT_DIR for minis-backend)
-├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md
+├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md, minis.md
 └── scripts/
 ```
 

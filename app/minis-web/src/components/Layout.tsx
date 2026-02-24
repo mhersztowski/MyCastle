@@ -20,6 +20,7 @@ import {
   Code as EditorIcon,
   Logout as LogoutIcon,
   Assignment as ProjectsIcon,
+  DeveloperBoard as ArduBlocklyIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -44,7 +45,8 @@ const adminMenuItems: MenuItem[] = [
 
 const userMenuItems: MenuItem[] = [
   { text: 'User Home', icon: <HomeIcon />, path: '/user' },
-  { text: 'Projects', icon: <ProjectsIcon />, path: '/user/project' },
+  { text: 'Projects', icon: <ProjectsIcon />, path: '/user/projects' },
+  { text: 'Project Editor', icon: <ArduBlocklyIcon />, path: '/user/project' },
   { text: 'Editor', icon: <EditorIcon />, path: '/user/editor/monaco/' },
 ];
 

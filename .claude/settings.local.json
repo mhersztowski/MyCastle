@@ -46,7 +46,15 @@
       "Bash(pnpm --filter mycastle-backend run typecheck:*)",
       "Bash(pnpm build:minis-backend:*)",
       "Bash(pnpm --filter minis-backend run typecheck:*)",
-      "Bash(pnpm build:minis-web:*)"
+      "Bash(pnpm build:minis-web:*)",
+      "Bash(pnpm --filter minis-web typecheck:*)",
+      "WebFetch(domain:developers.google.com)",
+      "WebFetch(domain:blocklycodelabs.dev)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(pnpm add:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:deepwiki.com)"
     ]
   }
 }

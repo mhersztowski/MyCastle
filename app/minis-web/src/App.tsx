@@ -6,7 +6,7 @@ import FilesystemSavePage from '@pages/filesystem/FilesystemSavePage';
 import MonacoEditorPage from '@pages/editor/MonacoEditorPage';
 import HomePage from '@pages/HomePage';
 import { AdminDashboardPage, ProjectDefinitionListPage, ProjectDefinitionFormPage } from '@pages/admin';
-import { UserDashboardPage, ProjectRealizationPage, UserProjectsPage } from '@pages/user';
+import { UserDashboardPage, ProjectRealizationPage, UserProjectsPage, ProjectPage } from '@pages/user';
 
 function App() {
   return (
@@ -15,6 +15,10 @@ function App() {
       <Route
         path="/user/editor/monaco/*"
         element={<MonacoEditorPage />}
+      />
+      <Route
+        path="/user/project"
+        element={<ProjectPage />}
       />
       <Route
         path="*"
@@ -29,8 +33,8 @@ function App() {
                 <Route path="/admin/projects/new" element={<ProjectDefinitionFormPage />} />
                 <Route path="/admin/projects/:id" element={<ProjectDefinitionFormPage />} />
                 <Route path="/user" element={<UserDashboardPage />} />
-                <Route path="/user/project" element={<UserProjectsPage />} />
-                <Route path="/user/project/:id" element={<ProjectRealizationPage />} />
+                <Route path="/user/projects" element={<UserProjectsPage />} />
+                <Route path="/user/projects/:id" element={<ProjectRealizationPage />} />
               </Routes>
             </Layout>
           </Box>
