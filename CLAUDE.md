@@ -132,10 +132,14 @@ mycastle/                           # Root monorepo
 │   │   └── package.json
 │   ├── web-client/                 # @mhersztowski/web-client (React MQTT+filesystem client)
 │   │   ├── src/{mqtt,filesystem,utils}/
+│   │   ├── vitest.config.ts        # Unit tests (jsdom env)
 │   │   ├── tsup.config.ts          # Dual ESM+CJS, react as external peer
 │   │   └── package.json
 │   ├── core-scene3d/               # @mhersztowski/core-scene3d
+│   │   ├── vitest.config.ts        # Unit tests
 │   ├── ui-core/                    # @mhersztowski/ui-core
+│   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
+│   │   ├── src/test-setup.ts       # Vitest setup (@testing-library/jest-dom)
 │   └── ui-components-scene3d/      # @mhersztowski/ui-components-scene3d
 │
 ├── app/
@@ -145,6 +149,7 @@ mycastle/                           # Root monorepo
 │   │   │   ├── App.ts              # App singleton (create/instance/init/shutdown)
 │   │   │   └── modules/{ocr,automate,scheduler}/
 │   │   ├── Dockerfile              # Multi-stage: build → node:20-slim production
+│   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM, target node20
 │   │   └── package.json
 │   ├── mycastle-web/               # Frontend React
@@ -154,11 +159,13 @@ mycastle/                           # Root monorepo
 │   │   │   ├── main.tsx            # Entry point (App.create() → render)
 │   │   │   ├── modules/{mqttclient,filesystem,uiforms,automate,ai,speech,conversation,shopping,notification}/
 │   │   │   ├── pages/
+│   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
 │   │   │   └── components/{editor,mdeditor,person,project,task,upload}/
 │   │   ├── .env.development        # Dev mode URLs (loaded by vite dev)
 │   │   ├── .env.production         # Empty — auto-detect (loaded by vite build)
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine (removes .env before build)
 │   │   ├── nginx.conf              # SPA + reverse proxy to backend (/mqtt, /upload, /files, /ocr, /webhook)
+│   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
 │   │   ├── vite.config.ts          # Dev port: 1895
 │   │   └── package.json
 │   ├── minis-backend/              # Minis Backend Node.js
@@ -251,7 +258,7 @@ mycastle/                           # Root monorepo
 - Frontend: Vite handles ESM natively
 
 ## Testing Guidelines
-- **Unit/Integration tests:** Vitest 4 (globals enabled). Każdy package/app ma własny `vitest.config.ts`. Frontend testy (minis-web) używają `jsdom` environment + React Testing Library (`@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`). Setup w `src/test-setup.ts`.
+- **Unit/Integration tests:** Vitest 4 (globals enabled). Każdy package/app ma własny `vitest.config.ts`. Root `vitest.config.ts` agreguje wszystkie workspace projects. Frontend testy (mycastle-web, minis-web, ui-core) używają `jsdom` environment + React Testing Library (`@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`). Setup w `src/test-setup.ts`. Wszystkie `tsconfig.json` excludują `**/*.test.ts` / `**/*.test.tsx` z kompilacji.
 - **E2E tests:** Playwright. Config w `playwright.config.ts` (root). Testy w `tests/e2e/`. Auto-start `dev:minis-backend` + `dev:minis-web` z health check na Swagger endpoint. Fixtures w `tests/e2e/fixtures/data-minis/` kopiowane do `data-minis-test/` (global setup/teardown).
 - **Structure:** Testy collocated przy źródłach (`*.test.ts` / `*.test.tsx` obok implementacji). E2E w `tests/e2e/`.
 - **Coverage:** Prioritize critical business logic, API boundaries, and integrations
@@ -263,7 +270,7 @@ mycastle/                           # Root monorepo
 - **Languages:** Node 20, TypeScript 5.9+, Python 3.14 (desktop)
 - **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
 - **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
-- **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (minis-web)
+- **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (mycastle-web, minis-web, ui-core)
 - **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
 - **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Minis-backend additionally: adm-zip, swagger-ui-dist
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify

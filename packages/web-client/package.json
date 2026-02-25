@@ -22,7 +22,9 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@mhersztowski/core": "workspace:*",
@@ -35,6 +37,7 @@
   "devDependencies": {
     "@types/react": "^18.2.0",
     "@types/uuid": "^10.0.0",
+    "jsdom": "^28.1.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.0"
   }
