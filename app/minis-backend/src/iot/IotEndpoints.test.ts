@@ -30,7 +30,7 @@ async function seedData() {
   const devices = {
     type: 'devices',
     devices: [
-      { type: 'device', id: 'dev-iot1', deviceDefId: 'dd1', isAssembled: true, isIot: true, sn: 'SN001' },
+      { type: 'device', id: 'dev-iot1', name: 'dev-iot1', deviceDefId: 'dd1', isAssembled: true, isIot: true, sn: 'SN001' },
     ],
   };
   await fs.writeFile(path.join(tmpDir, 'Minis', 'Users', 'TestUser', 'Device.json'), JSON.stringify(devices));
@@ -70,8 +70,8 @@ afterAll(async () => {
 
 describe('IoT Config endpoints', () => {
   it('PUT creates/updates IoT config', async () => {
-    const { status, data } = await request('PUT', '/users/user1/devices/dev-iot1/iot-config', {
-      topicPrefix: 'minis/user1/dev-iot1',
+    const { status, data } = await request('PUT', '/users/TestUser/devices/dev-iot1/iot-config', {
+      topicPrefix: 'minis/TestUser/dev-iot1',
       heartbeatIntervalSec: 30,
       capabilities: [{ type: 'sensor', metricKey: 'temp', unit: '°C', label: 'Temperature' }],
     });
@@ -82,13 +82,13 @@ describe('IoT Config endpoints', () => {
   });
 
   it('GET retrieves IoT config', async () => {
-    const { status, data } = await request('GET', '/users/user1/devices/dev-iot1/iot-config');
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/iot-config');
     expect(status).toBe(200);
-    expect(data.topicPrefix).toBe('minis/user1/dev-iot1');
+    expect(data.topicPrefix).toBe('minis/TestUser/dev-iot1');
   });
 
   it('GET returns 404 for nonexistent config', async () => {
-    const { status } = await request('GET', '/users/user1/devices/nonexistent/iot-config');
+    const { status } = await request('GET', '/users/TestUser/devices/nonexistent/iot-config');
     expect(status).toBe(404);
   });
 });
@@ -97,23 +97,23 @@ describe('IoT Telemetry endpoints', () => {
   it('GET /telemetry/latest returns latest record', async () => {
     // Insert telemetry directly
     iotService.telemetry.insertTelemetry({
-      deviceId: 'dev-iot1', userId: 'user1', timestamp: Date.now(),
+      deviceId: 'dev-iot1', userId: 'TestUser', timestamp: Date.now(),
       metrics: [{ key: 'temp', value: 22.5, unit: '°C' }],
     });
 
-    const { status, data } = await request('GET', '/users/user1/devices/dev-iot1/telemetry/latest');
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/telemetry/latest');
     expect(status).toBe(200);
     expect(data.metrics[0].value).toBe(22.5);
   });
 
   it('GET /telemetry returns history', async () => {
-    const { status, data } = await request('GET', '/users/user1/devices/dev-iot1/telemetry?from=0&to=' + (Date.now() + 1000) + '&limit=10');
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/telemetry?from=0&to=' + (Date.now() + 1000) + '&limit=10');
     expect(status).toBe(200);
     expect(data.items.length).toBeGreaterThanOrEqual(1);
   });
 
   it('GET /telemetry/latest returns message for no data', async () => {
-    const { status, data } = await request('GET', '/users/user1/devices/no-data-dev/telemetry/latest');
+    const { status, data } = await request('GET', '/users/TestUser/devices/no-data-dev/telemetry/latest');
     expect(status).toBe(200);
     expect(data.message).toBeDefined();
   });
@@ -121,7 +121,7 @@ describe('IoT Telemetry endpoints', () => {
 
 describe('IoT Commands endpoints', () => {
   it('POST creates command', async () => {
-    const { status, data } = await request('POST', '/users/user1/devices/dev-iot1/commands', {
+    const { status, data } = await request('POST', '/users/TestUser/devices/dev-iot1/commands', {
       name: 'set_led', payload: { color: 'red' },
     });
     expect(status).toBe(201);
@@ -130,12 +130,12 @@ describe('IoT Commands endpoints', () => {
   });
 
   it('POST returns 400 without name', async () => {
-    const { status } = await request('POST', '/users/user1/devices/dev-iot1/commands', { payload: {} });
+    const { status } = await request('POST', '/users/TestUser/devices/dev-iot1/commands', { payload: {} });
     expect(status).toBe(400);
   });
 
   it('GET lists commands', async () => {
-    const { status, data } = await request('GET', '/users/user1/devices/dev-iot1/commands');
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/commands');
     expect(status).toBe(200);
     expect(data.items.length).toBeGreaterThanOrEqual(1);
   });
@@ -145,7 +145,7 @@ describe('IoT Alert Rules endpoints', () => {
   let ruleId: string;
 
   it('POST creates alert rule', async () => {
-    const { status, data } = await request('POST', '/users/user1/alert-rules', {
+    const { status, data } = await request('POST', '/users/TestUser/alert-rules', {
       name: 'High temp', metricKey: 'temp', conditionOp: '>', conditionValue: 30,
       severity: 'WARNING', cooldownMinutes: 5, deviceId: 'dev-iot1',
     });
@@ -155,18 +155,18 @@ describe('IoT Alert Rules endpoints', () => {
   });
 
   it('POST returns 400 without required fields', async () => {
-    const { status } = await request('POST', '/users/user1/alert-rules', { name: 'Incomplete' });
+    const { status } = await request('POST', '/users/TestUser/alert-rules', { name: 'Incomplete' });
     expect(status).toBe(400);
   });
 
   it('GET lists alert rules', async () => {
-    const { status, data } = await request('GET', '/users/user1/alert-rules');
+    const { status, data } = await request('GET', '/users/TestUser/alert-rules');
     expect(status).toBe(200);
     expect(data.items.length).toBeGreaterThanOrEqual(1);
   });
 
   it('PUT updates alert rule', async () => {
-    const { status, data } = await request('PUT', `/users/user1/alert-rules/${ruleId}`, {
+    const { status, data } = await request('PUT', `/users/TestUser/alert-rules/${ruleId}`, {
       conditionValue: 35,
     });
     expect(status).toBe(200);
@@ -174,19 +174,19 @@ describe('IoT Alert Rules endpoints', () => {
   });
 
   it('DELETE removes alert rule', async () => {
-    const { status } = await request('DELETE', `/users/user1/alert-rules/${ruleId}`);
+    const { status } = await request('DELETE', `/users/TestUser/alert-rules/${ruleId}`);
     expect(status).toBe(200);
   });
 
   it('DELETE returns 404 for nonexistent rule', async () => {
-    const { status } = await request('DELETE', '/users/user1/alert-rules/nonexistent');
+    const { status } = await request('DELETE', '/users/TestUser/alert-rules/nonexistent');
     expect(status).toBe(404);
   });
 });
 
 describe('IoT Alerts endpoints', () => {
   it('GET lists alerts', async () => {
-    const { status, data } = await request('GET', '/users/user1/alerts');
+    const { status, data } = await request('GET', '/users/TestUser/alerts');
     expect(status).toBe(200);
     expect(data.items).toBeDefined();
   });
@@ -194,20 +194,20 @@ describe('IoT Alerts endpoints', () => {
   it('PATCH acknowledges alert', async () => {
     // Create rule and trigger alert
     iotService.alerts.createRule({
-      userId: 'user1', deviceId: 'dev-iot1', metricKey: 'temp',
+      userId: 'TestUser', deviceId: 'dev-iot1', metricKey: 'temp',
       conditionOp: '>', conditionValue: 30, severity: 'CRITICAL',
       cooldownMinutes: 0, isActive: true, name: 'Test alert',
     });
-    const [alert] = iotService.alerts.evaluate('dev-iot1', 'user1', [{ key: 'temp', value: 50 }]);
+    const [alert] = iotService.alerts.evaluate('dev-iot1', 'TestUser', [{ key: 'temp', value: 50 }]);
     expect(alert).toBeDefined();
 
-    const { status, data } = await request('PATCH', `/users/user1/alerts/${alert.id}`, { status: 'ACKNOWLEDGED' });
+    const { status, data } = await request('PATCH', `/users/TestUser/alerts/${alert.id}`, { status: 'ACKNOWLEDGED' });
     expect(status).toBe(200);
     expect(data.status).toBe('ACKNOWLEDGED');
   });
 
   it('PATCH returns 400 for invalid status', async () => {
-    const { status } = await request('PATCH', '/users/user1/alerts/some-id', { status: 'INVALID' });
+    const { status } = await request('PATCH', '/users/TestUser/alerts/some-id', { status: 'INVALID' });
     expect(status).toBe(400);
   });
 });
@@ -215,11 +215,94 @@ describe('IoT Alerts endpoints', () => {
 describe('IoT Devices List endpoint', () => {
   it('GET /users/{userId}/iot/devices returns status list', async () => {
     // Record a heartbeat so there's data
-    iotService.presence.recordHeartbeat('dev-iot1', 'user1', 60);
+    iotService.presence.recordHeartbeat('dev-iot1', 'TestUser', 60);
 
-    const { status, data } = await request('GET', '/users/user1/iot/devices');
+    const { status, data } = await request('GET', '/users/TestUser/iot/devices');
     expect(status).toBe(200);
     expect(data.items.length).toBeGreaterThanOrEqual(1);
     expect(data.items[0].status).toBe('ONLINE');
+  });
+});
+
+describe('Device Sharing endpoints', () => {
+  let shareId: string;
+
+  it('POST creates a share', async () => {
+    const { status, data } = await request('POST', '/users/TestUser/devices/dev-iot1/shares', {
+      targetUserId: 'user2',
+    });
+    expect(status).toBe(201);
+    expect(data.id).toBeDefined();
+    expect(data.ownerUserId).toBe('TestUser');
+    expect(data.deviceId).toBe('dev-iot1');
+    expect(data.targetUserId).toBe('user2');
+    shareId = data.id;
+  });
+
+  it('POST returns 400 without targetUserId', async () => {
+    const { status } = await request('POST', '/users/TestUser/devices/dev-iot1/shares', {});
+    expect(status).toBe(400);
+  });
+
+  it('POST returns 409 for duplicate share', async () => {
+    const { status } = await request('POST', '/users/TestUser/devices/dev-iot1/shares', {
+      targetUserId: 'user2',
+    });
+    expect(status).toBe(409);
+  });
+
+  it('GET lists shares for device', async () => {
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/shares');
+    expect(status).toBe(200);
+    expect(data.items.length).toBe(1);
+    expect(data.items[0].targetUserId).toBe('user2');
+  });
+
+  it('GET /shared-devices returns shares for target user', async () => {
+    const { status, data } = await request('GET', '/users/user2/shared-devices');
+    expect(status).toBe(200);
+    expect(data.items.length).toBe(1);
+    expect(data.items[0].ownerUserId).toBe('TestUser');
+    expect(data.items[0].deviceId).toBe('dev-iot1');
+  });
+
+  it('GET /shared-devices returns empty for user without shares', async () => {
+    const { status, data } = await request('GET', '/users/TestUser/shared-devices');
+    expect(status).toBe(200);
+    expect(data.items.length).toBe(0);
+  });
+
+  it('DELETE removes share', async () => {
+    const { status } = await request('DELETE', `/users/TestUser/devices/dev-iot1/shares/${shareId}`);
+    expect(status).toBe(200);
+  });
+
+  it('DELETE returns 404 for nonexistent share', async () => {
+    const { status } = await request('DELETE', '/users/TestUser/devices/dev-iot1/shares/nonexistent');
+    expect(status).toBe(404);
+  });
+
+  it('GET returns empty list after delete', async () => {
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/shares');
+    expect(status).toBe(200);
+    expect(data.items.length).toBe(0);
+  });
+});
+
+describe('My Shares endpoint', () => {
+  it('GET /my-shares returns shares owned by user', async () => {
+    // Create a share first
+    await request('POST', '/users/TestUser/devices/dev-iot1/shares', { targetUserId: 'user3' });
+
+    const { status, data } = await request('GET', '/users/TestUser/my-shares');
+    expect(status).toBe(200);
+    expect(data.items.length).toBeGreaterThanOrEqual(1);
+    expect(data.items.some((s: any) => s.targetUserId === 'user3')).toBe(true);
+  });
+
+  it('GET /my-shares returns empty for user without outgoing shares', async () => {
+    const { status, data } = await request('GET', '/users/user-no-shares/my-shares');
+    expect(status).toBe(200);
+    expect(data.items.length).toBe(0);
   });
 });

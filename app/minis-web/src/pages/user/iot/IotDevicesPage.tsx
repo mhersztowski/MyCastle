@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { minisApi } from '../../../services/MinisApiService';
-import type { MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
+import type { MinisDeviceModel, MinisDeviceDefModel, DeviceShare } from '@mhersztowski/core';
 
 interface DeviceStatusInfo {
   deviceId: string;
@@ -15,33 +15,36 @@ interface DeviceStatusInfo {
 }
 
 function IotDevicesPage() {
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
   const navigate = useNavigate();
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [deviceDefs, setDeviceDefs] = useState<MinisDeviceDefModel[]>([]);
   const [statuses, setStatuses] = useState<DeviceStatusInfo[]>([]);
+  const [sharedWithMe, setSharedWithMe] = useState<DeviceShare[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!userId) return;
+    if (!userName) return;
     setLoading(true);
     try {
-      const [allDevices, defs, iotStatuses] = await Promise.all([
-        minisApi.getUserDevices(userId),
+      const [allDevices, defs, iotStatuses, sharedDevices] = await Promise.all([
+        minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(),
-        minisApi.getIotDevices(userId),
+        minisApi.getIotDevices(userName),
+        minisApi.getSharedDevices(userName),
       ]);
       setDevices(allDevices.filter((d) => d.isIot));
       setDeviceDefs(defs);
       setStatuses(iotStatuses);
+      setSharedWithMe(sharedDevices);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userName]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -66,7 +69,9 @@ function IotDevicesPage() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 3 }}>IoT Devices</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h4">IoT Devices</Typography>
+      </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {loading && <CircularProgress />}
@@ -87,9 +92,9 @@ function IotDevicesPage() {
                 key={device.id}
                 hover
                 sx={{ cursor: 'pointer' }}
-                onClick={() => navigate(`/user/${userId}/iot/device/${device.id}`)}
+                onClick={() => navigate(`/user/${userName}/iot/device/${device.name}`)}
               >
-                <TableCell>{deviceDefs.find((d) => d.id === device.deviceDefId)?.name ?? device.deviceDefId}</TableCell>
+                <TableCell>{device.name || deviceDefs.find((d) => d.id === device.deviceDefId)?.name || device.id.slice(0, 8)}</TableCell>
                 <TableCell>{device.sn || '-'}</TableCell>
                 <TableCell>
                   <Chip
@@ -107,6 +112,31 @@ function IotDevicesPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Shared with me */}
+      {sharedWithMe.length > 0 && (
+        <Box sx={{ mt: 4 }}>
+          <Typography variant="h5" sx={{ mb: 2 }}>Shared</Typography>
+          <TableContainer component={Paper}>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Device</TableCell>
+                  <TableCell>Owner</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {sharedWithMe.map((share) => (
+                  <TableRow key={share.id}>
+                    <TableCell>{share.deviceId}</TableCell>
+                    <TableCell>{share.ownerUserId}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
     </Box>
   );
 }

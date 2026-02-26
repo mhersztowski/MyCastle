@@ -9,7 +9,7 @@ const mockNavigate = vi.fn();
 const mockLogin = vi.fn();
 
 vi.mock('react-router-dom', () => ({
-  useParams: () => ({ userId: 'testuser' }),
+  useParams: () => ({ userName: 'testuser' }),
   useNavigate: () => mockNavigate,
 }));
 
@@ -32,7 +32,7 @@ describe('LoginPage', () => {
     expect(screen.getByRole('button', { name: /login/i })).toBeInTheDocument();
   });
 
-  it('shows userId', () => {
+  it('shows userName', () => {
     render(<LoginPage />);
     expect(screen.getByText(/testuser/i)).toBeInTheDocument();
   });

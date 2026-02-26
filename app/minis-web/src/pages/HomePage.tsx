@@ -51,7 +51,7 @@ function HomePage() {
         {users.map((user) => (
           <Grid item xs={12} sm={6} md={4} key={user.id}>
             <Card>
-              <CardActionArea onClick={() => navigate(`/login/${user.id}`)}>
+              <CardActionArea onClick={() => navigate(`/login/${user.name}`)}>
                 <CardContent sx={{ textAlign: 'center', py: 4 }}>
                   {user.isAdmin ? (
                     <AdminPanelSettings sx={{ fontSize: 48, mb: 1 }} color="primary" />

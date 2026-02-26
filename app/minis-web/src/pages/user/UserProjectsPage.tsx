@@ -10,7 +10,7 @@ import { minisApi } from '../../services/MinisApiService';
 import type { MinisProjectModel, MinisProjectDefModel } from '@mhersztowski/core';
 
 function UserProjectsPage() {
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
   const navigate = useNavigate();
   const [items, setItems] = useState<MinisProjectModel[]>([]);
   const [projectDefs, setProjectDefs] = useState<MinisProjectDefModel[]>([]);
@@ -22,11 +22,11 @@ function UserProjectsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!userId) return;
+    if (!userName) return;
     setLoading(true);
     try {
       const [projects, defs] = await Promise.all([
-        minisApi.getUserProjects(userId),
+        minisApi.getUserProjects(userName),
         minisApi.getProjectDefs(),
       ]);
       setItems(projects);
@@ -37,14 +37,14 @@ function UserProjectsPage() {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userName]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleAdd = async () => {
-    if (!userId || !selectedProjectDef || !projectName.trim()) return;
+    if (!userName || !selectedProjectDef || !projectName.trim()) return;
     try {
-      await minisApi.createUserProject(userId, { name: projectName.trim(), projectDefId: selectedProjectDef });
+      await minisApi.createUserProject(userName, { name: projectName.trim(), projectDefId: selectedProjectDef });
       setAddDialogOpen(false);
       setSelectedProjectDef('');
       setProjectName('');
@@ -55,13 +55,13 @@ function UserProjectsPage() {
   };
 
   const handleOpen = (project: MinisProjectModel) => {
-    navigate(`/user/${userId}/project/${project.id}`);
+    navigate(`/user/${userName}/project/${project.name}`);
   };
 
-  const handleDelete = async (projectId: string) => {
-    if (!userId) return;
+  const handleDelete = async (projectName: string) => {
+    if (!userName) return;
     try {
-      await minisApi.deleteUserProject(userId, projectId);
+      await minisApi.deleteUserProject(userName, projectName);
       setDeleteConfirm(null);
       load();
     } catch (err) {
@@ -91,7 +91,7 @@ function UserProjectsPage() {
               </Typography>
             </CardActionArea>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 0.5, pb: 0.5 }}>
-              <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item.id); }}>
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item.name); }}>
                 <Delete fontSize="small" />
               </IconButton>
             </Box>

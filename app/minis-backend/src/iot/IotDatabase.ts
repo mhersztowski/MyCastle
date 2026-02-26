@@ -83,6 +83,17 @@ export class IotDatabase {
       CREATE INDEX IF NOT EXISTS idx_alert_device_status ON alert(device_id, status);
       CREATE INDEX IF NOT EXISTS idx_alert_user_status ON alert(user_id, status);
       CREATE INDEX IF NOT EXISTS idx_alert_triggered ON alert(triggered_at);
+
+      CREATE TABLE IF NOT EXISTS device_share (
+        id              TEXT PRIMARY KEY,
+        owner_user_id   TEXT NOT NULL,
+        device_id       TEXT NOT NULL,
+        target_user_id  TEXT NOT NULL,
+        created_at      INTEGER NOT NULL,
+        UNIQUE(device_id, target_user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_share_device ON device_share(device_id);
+      CREATE INDEX IF NOT EXISTS idx_device_share_target ON device_share(target_user_id);
     `);
   }
 

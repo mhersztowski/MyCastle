@@ -326,3 +326,87 @@ describe('IotService — MQTT message handling', () => {
     // Should not throw
   });
 });
+
+describe('DeviceShareStore', () => {
+  it('creates and retrieves share', () => {
+    const share = service.shares.create('owner1', 'dev-share1', 'target1');
+    expect(share.id).toBeDefined();
+    expect(share.ownerUserId).toBe('owner1');
+    expect(share.deviceId).toBe('dev-share1');
+    expect(share.targetUserId).toBe('target1');
+  });
+
+  it('lists shares by device', () => {
+    const shares = service.shares.getSharesForDevice('dev-share1');
+    expect(shares.length).toBe(1);
+    expect(shares[0].targetUserId).toBe('target1');
+  });
+
+  it('lists shares by owner', () => {
+    service.shares.create('owner1', 'dev-share2', 'target2');
+    const shares = service.shares.getSharesByOwner('owner1');
+    expect(shares.length).toBe(2);
+  });
+
+  it('lists shares for target user', () => {
+    const shares = service.shares.getSharesForTarget('target1');
+    expect(shares.length).toBe(1);
+    expect(shares[0].deviceId).toBe('dev-share1');
+  });
+
+  it('deletes share', () => {
+    const shares = service.shares.getSharesForDevice('dev-share1');
+    const deleted = service.shares.delete(shares[0].id);
+    expect(deleted).toBe(true);
+    expect(service.shares.getSharesForDevice('dev-share1').length).toBe(0);
+  });
+
+  it('returns false for deleting nonexistent share', () => {
+    expect(service.shares.delete('nonexistent')).toBe(false);
+  });
+
+  it('enforces UNIQUE(device_id, target_user_id)', () => {
+    service.shares.create('owner1', 'dev-unique', 'targetA');
+    expect(() => service.shares.create('owner1', 'dev-unique', 'targetA')).toThrow();
+  });
+});
+
+describe('IotService — telemetry forwarding to shared users', () => {
+  it('forwards telemetry to shared users', () => {
+    service.shares.create('user1', 'dev-fwd', 'sharedUser1');
+    service.shares.create('user1', 'dev-fwd', 'sharedUser2');
+    published.length = 0;
+
+    service.handleTelemetry('user1', 'dev-fwd', {
+      metrics: [{ key: 'temp', value: 25 }],
+    });
+
+    // Should publish to owner's live topic
+    expect(published.some((p) => p.topic === 'minis/user1/dev-fwd/telemetry/live')).toBe(true);
+    // Should forward to both shared users
+    expect(published.some((p) => p.topic === 'minis/sharedUser1/shared/user1/dev-fwd/telemetry/live')).toBe(true);
+    expect(published.some((p) => p.topic === 'minis/sharedUser2/shared/user1/dev-fwd/telemetry/live')).toBe(true);
+  });
+
+  it('does not forward telemetry when no shares exist', () => {
+    published.length = 0;
+
+    service.handleTelemetry('user1', 'dev-no-shares', {
+      metrics: [{ key: 'temp', value: 20 }],
+    });
+
+    // Only owner's live topic, no shared topics
+    const sharedTopics = published.filter((p) => p.topic.includes('/shared/'));
+    expect(sharedTopics.length).toBe(0);
+  });
+
+  it('forwards status change to shared users', () => {
+    service.shares.create('user1', 'dev-status-fwd', 'sharedUser3');
+    published.length = 0;
+
+    service.presence.recordHeartbeat('dev-status-fwd', 'user1', 60);
+
+    // Should publish status to shared user
+    expect(published.some((p) => p.topic === 'minis/sharedUser3/shared/user1/dev-status-fwd/status')).toBe(true);
+  });
+});

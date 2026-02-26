@@ -90,7 +90,7 @@ afterAll(async () => {
 describe('MinisHttpServer', () => {
   describe('Auth - POST /api/auth/login', () => {
     it('returns user without password on valid login', async () => {
-      const { status, data } = await request('POST', '/auth/login', { userId: 'admin1', password: 'admin123' });
+      const { status, data } = await request('POST', '/auth/login', { name: 'AdminUser', password: 'admin123' });
       expect(status).toBe(200);
       expect(data.name).toBe('AdminUser');
       expect(data.isAdmin).toBe(true);
@@ -98,13 +98,13 @@ describe('MinisHttpServer', () => {
     });
 
     it('returns 401 on invalid password', async () => {
-      const { status, data } = await request('POST', '/auth/login', { userId: 'admin1', password: 'wrong' });
+      const { status, data } = await request('POST', '/auth/login', { name: 'AdminUser', password: 'wrong' });
       expect(status).toBe(401);
       expect(data.error).toBeDefined();
     });
 
     it('returns 400 on missing fields', async () => {
-      const { status } = await request('POST', '/auth/login', { userId: 'admin1' });
+      const { status } = await request('POST', '/auth/login', { name: 'AdminUser' });
       expect(status).toBe(400);
     });
   });
@@ -218,53 +218,53 @@ describe('MinisHttpServer', () => {
   });
 
   describe('User Devices', () => {
-    it('GET /api/users/:userId/devices returns devices list', async () => {
-      const { status, data } = await request('GET', '/users/user1/devices');
+    it('GET /api/users/:userName/devices returns devices list', async () => {
+      const { status, data } = await request('GET', '/users/NormalUser/devices');
       expect(status).toBe(200);
       expect(data.items).toBeDefined();
     });
 
-    it('POST /api/users/:userId/devices creates device', async () => {
-      const { status, data } = await request('POST', '/users/user1/devices', {
+    it('POST /api/users/:userName/devices creates device', async () => {
+      const { status, data } = await request('POST', '/users/NormalUser/devices', {
         name: 'MyDevice', deviceDefId: 'dd1',
       });
       expect(status).toBe(201);
       expect(data.name).toBe('MyDevice');
     });
 
-    it('returns 404 for unknown userId', async () => {
+    it('returns 404 for unknown userName', async () => {
       const { status } = await request('GET', '/users/nonexistent/devices');
       expect(status).toBe(404);
     });
   });
 
   describe('User Projects', () => {
-    it('GET /api/users/:userId/projects returns project list', async () => {
-      const { status, data } = await request('GET', '/users/user1/projects');
+    it('GET /api/users/:userName/projects returns project list', async () => {
+      const { status, data } = await request('GET', '/users/NormalUser/projects');
       expect(status).toBe(200);
       expect(data.items).toBeDefined();
     });
 
-    it('POST /api/users/:userId/projects creates project', async () => {
-      const { status, data } = await request('POST', '/users/user1/projects', {
-        name: 'My Blinky', projectDefId: 'pd1',
+    it('POST /api/users/:userName/projects creates project', async () => {
+      const { status, data } = await request('POST', '/users/NormalUser/projects', {
+        name: 'MyBlinky', projectDefId: 'pd1',
       });
       expect(status).toBe(201);
-      expect(data.name).toBe('My Blinky');
+      expect(data.name).toBe('MyBlinky');
       expect(data.projectDefId).toBe('pd1');
       expect(data.id).toBeDefined();
     });
 
-    it('DELETE /api/users/:userId/projects/:id deletes project', async () => {
+    it('DELETE /api/users/:userName/projects/:name deletes project', async () => {
       // Create then delete
-      const { data: created } = await request('POST', '/users/user1/projects', {
+      const { data: created } = await request('POST', '/users/NormalUser/projects', {
         name: 'ToDelete', projectDefId: 'pd1',
       });
-      const { status } = await request('DELETE', `/users/user1/projects/${encodeURIComponent(created.id)}`);
+      const { status } = await request('DELETE', `/users/NormalUser/projects/${encodeURIComponent(created.name)}`);
       expect(status).toBe(200);
     });
 
-    it('returns 404 for unknown userId', async () => {
+    it('returns 404 for unknown userName', async () => {
       const { status } = await request('GET', '/users/nonexistent/projects');
       expect(status).toBe(404);
     });

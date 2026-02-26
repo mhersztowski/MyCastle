@@ -4,26 +4,26 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 function UserDashboardPage() {
   const navigate = useNavigate();
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
 
   const activities = [
     {
       title: 'Add Assembled Device',
       description: 'Register an already assembled device',
       icon: <Devices sx={{ fontSize: 40 }} color="primary" />,
-      onClick: () => navigate(`/user/${userId}/devices`),
+      onClick: () => navigate(`/user/${userName}/devices`),
     },
     {
       title: 'Assemble Device',
       description: 'Follow instructions to assemble a new device',
       icon: <Build sx={{ fontSize: 40 }} color="primary" />,
-      onClick: () => navigate(`/user/${userId}/devices`),
+      onClick: () => navigate(`/user/${userName}/devices`),
     },
     {
       title: 'Open Device Project',
       description: 'Work on a project for your device',
       icon: <FolderOpen sx={{ fontSize: 40 }} color="primary" />,
-      onClick: () => navigate(`/user/${userId}/projects`),
+      onClick: () => navigate(`/user/${userName}/projects`),
     },
   ];
 

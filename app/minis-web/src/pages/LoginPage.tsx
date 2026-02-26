@@ -6,7 +6,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
 
 function LoginPage() {
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
   const navigate = useNavigate();
   const { login } = useAuth();
   const [password, setPassword] = useState('');
@@ -14,15 +14,15 @@ function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!userId || !password) return;
+    if (!userName || !password) return;
     setLoading(true);
     setError(null);
     try {
-      const user = await login(userId, password);
+      const user = await login(userName, password);
       if (user.isAdmin) {
-        navigate(`/admin/${userId}/main`);
+        navigate(`/admin/${userName}/main`);
       } else {
-        navigate(`/user/${userId}/main`);
+        navigate(`/user/${userName}/main`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
@@ -48,7 +48,7 @@ function LoginPage() {
             Login
           </Typography>
           <Typography variant="body1" color="text.secondary" align="center" sx={{ mb: 3 }}>
-            User: {userId}
+            User: {userName}
           </Typography>
 
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}

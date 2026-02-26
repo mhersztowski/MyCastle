@@ -11,7 +11,7 @@ import EditDeviceDialog from './components/EditDeviceDialog';
 import ActivityLog from './components/ActivityLog';
 
 function IotEmulatorPage() {
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
   const serviceRef = useRef<EmulatorService | null>(null);
 
   // Initialize service once
@@ -204,7 +204,7 @@ function IotEmulatorPage() {
       <EditDeviceDialog
         open={editDialog.open}
         config={editDialog.config}
-        userId={userId || ''}
+        userId={userName || ''}
         onSave={handleSave}
         onClose={() => setEditDialog({ open: false })}
       />

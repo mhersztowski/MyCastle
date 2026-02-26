@@ -17,9 +17,9 @@ export const swaggerSpec = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['userId', 'password'],
+                required: ['name', 'password'],
                 properties: {
-                  userId: { type: 'string' },
+                  name: { type: 'string' },
                   password: { type: 'string' },
                 },
               },
@@ -180,17 +180,17 @@ export const swaggerSpec = {
         responses: { 200: { description: 'ProjectDef deleted' } },
       },
     },
-    '/users/{userId}/projects': {
+    '/users/{userName}/projects': {
       get: {
         tags: ['User - Projects'],
         summary: 'List user projects',
-        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { 200: { description: 'Project list' } },
       },
       post: {
         tags: ['User - Projects'],
         summary: 'Create user project',
-        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
           content: {
@@ -202,12 +202,12 @@ export const swaggerSpec = {
         responses: { 201: { description: 'Project created' } },
       },
     },
-    '/users/{userId}/projects/{id}': {
+    '/users/{userName}/projects/{id}': {
       put: {
         tags: ['User - Projects'],
         summary: 'Update user project',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         ],
         requestBody: {
@@ -220,7 +220,7 @@ export const swaggerSpec = {
         tags: ['User - Projects'],
         summary: 'Delete user project',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         ],
         responses: { 200: { description: 'Project deleted' } },
@@ -229,13 +229,13 @@ export const swaggerSpec = {
 
     // --- IoT ---
 
-    '/users/{userId}/devices/{deviceId}/iot-config': {
+    '/users/{userName}/devices/{deviceName}/iot-config': {
       get: {
         tags: ['IoT - Config'],
         summary: 'Get IoT device configuration',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
         ],
         responses: {
           200: { description: 'IoT config', content: { 'application/json': { schema: { $ref: '#/components/schemas/IotDeviceConfig' } } } },
@@ -246,8 +246,8 @@ export const swaggerSpec = {
         tags: ['IoT - Config'],
         summary: 'Create or update IoT device configuration',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
         ],
         requestBody: {
           required: true,
@@ -256,13 +256,13 @@ export const swaggerSpec = {
         responses: { 200: { description: 'Config saved', content: { 'application/json': { schema: { $ref: '#/components/schemas/IotDeviceConfig' } } } } },
       },
     },
-    '/users/{userId}/devices/{deviceId}/telemetry': {
+    '/users/{userName}/devices/{deviceName}/telemetry': {
       get: {
         tags: ['IoT - Telemetry'],
         summary: 'Get telemetry history',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'from', in: 'query', schema: { type: 'integer', description: 'Start timestamp (ms)' } },
           { name: 'to', in: 'query', schema: { type: 'integer', description: 'End timestamp (ms)' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 1000 } },
@@ -275,26 +275,26 @@ export const swaggerSpec = {
         },
       },
     },
-    '/users/{userId}/devices/{deviceId}/telemetry/latest': {
+    '/users/{userName}/devices/{deviceName}/telemetry/latest': {
       get: {
         tags: ['IoT - Telemetry'],
         summary: 'Get latest telemetry record',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
         ],
         responses: {
           200: { description: 'Latest telemetry', content: { 'application/json': { schema: { $ref: '#/components/schemas/TelemetryRecord' } } } },
         },
       },
     },
-    '/users/{userId}/devices/{deviceId}/commands': {
+    '/users/{userName}/devices/{deviceName}/commands': {
       get: {
         tags: ['IoT - Commands'],
         summary: 'List commands for device',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
         ],
         responses: {
@@ -308,8 +308,8 @@ export const swaggerSpec = {
         tags: ['IoT - Commands'],
         summary: 'Send command to device',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
         ],
         requestBody: {
           required: true,
@@ -326,11 +326,11 @@ export const swaggerSpec = {
         responses: { 201: { description: 'Command created', content: { 'application/json': { schema: { $ref: '#/components/schemas/DeviceCommand' } } } } },
       },
     },
-    '/users/{userId}/alert-rules': {
+    '/users/{userName}/alert-rules': {
       get: {
         tags: ['IoT - Alert Rules'],
         summary: 'List alert rules for user',
-        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           200: {
             description: 'Alert rules list',
@@ -341,7 +341,7 @@ export const swaggerSpec = {
       post: {
         tags: ['IoT - Alert Rules'],
         summary: 'Create alert rule',
-        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
           content: { 'application/json': { schema: { $ref: '#/components/schemas/AlertRuleInput' } } },
@@ -349,12 +349,12 @@ export const swaggerSpec = {
         responses: { 201: { description: 'Rule created', content: { 'application/json': { schema: { $ref: '#/components/schemas/AlertRule' } } } } },
       },
     },
-    '/users/{userId}/alert-rules/{ruleId}': {
+    '/users/{userName}/alert-rules/{ruleId}': {
       put: {
         tags: ['IoT - Alert Rules'],
         summary: 'Update alert rule',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'ruleId', in: 'path', required: true, schema: { type: 'string' } },
         ],
         requestBody: {
@@ -370,7 +370,7 @@ export const swaggerSpec = {
         tags: ['IoT - Alert Rules'],
         summary: 'Delete alert rule',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'ruleId', in: 'path', required: true, schema: { type: 'string' } },
         ],
         responses: {
@@ -379,12 +379,12 @@ export const swaggerSpec = {
         },
       },
     },
-    '/users/{userId}/alerts': {
+    '/users/{userName}/alerts': {
       get: {
         tags: ['IoT - Alerts'],
         summary: 'List alerts for user',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 100 } },
         ],
         responses: {
@@ -395,12 +395,12 @@ export const swaggerSpec = {
         },
       },
     },
-    '/users/{userId}/alerts/{alertId}': {
+    '/users/{userName}/alerts/{alertId}': {
       patch: {
         tags: ['IoT - Alerts'],
         summary: 'Acknowledge or resolve alert',
         parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'alertId', in: 'path', required: true, schema: { type: 'string' } },
         ],
         requestBody: {
@@ -418,11 +418,65 @@ export const swaggerSpec = {
         },
       },
     },
-    '/users/{userId}/iot/devices': {
+    '/users/{userName}/devices/{deviceName}/shares': {
+      get: {
+        tags: ['IoT - Device Sharing'],
+        summary: 'List shares for a device',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: {
+            description: 'Device shares list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/DeviceShare' } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ['IoT - Device Sharing'],
+        summary: 'Share device with another user',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['targetUserId'], properties: { targetUserId: { type: 'string' } } } } },
+        },
+        responses: { 201: { description: 'Share created', content: { 'application/json': { schema: { $ref: '#/components/schemas/DeviceShare' } } } } },
+      },
+    },
+    '/users/{userName}/devices/{deviceName}/shares/{shareId}': {
+      delete: {
+        tags: ['IoT - Device Sharing'],
+        summary: 'Remove a device share',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'shareId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Share removed' }, 404: { description: 'Share not found' } },
+      },
+    },
+    '/users/{userName}/shared-devices': {
+      get: {
+        tags: ['IoT - Device Sharing'],
+        summary: 'List devices shared with this user',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Shared device list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/DeviceShare' } } } } } },
+          },
+        },
+      },
+    },
+    '/users/{userName}/iot/devices': {
       get: {
         tags: ['IoT - Devices'],
         summary: 'List IoT devices with online/offline status',
-        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           200: {
             description: 'Device status list',
@@ -602,6 +656,16 @@ export const swaggerSpec = {
           firedAt: { type: 'integer' },
           acknowledgedAt: { type: 'integer', nullable: true },
           resolvedAt: { type: 'integer', nullable: true },
+        },
+      },
+      DeviceShare: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          ownerUserId: { type: 'string' },
+          deviceId: { type: 'string' },
+          targetUserId: { type: 'string' },
+          createdAt: { type: 'integer' },
         },
       },
       IotDeviceStatus: {

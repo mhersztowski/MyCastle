@@ -10,14 +10,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 function AdminDashboardPage() {
   const navigate = useNavigate();
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
 
   const cards = [
-    { title: 'Users', desc: 'Manage users', icon: <PeopleIcon />, path: `/admin/${userId}/users` },
-    { title: 'DevicesDef', desc: 'Manage device definitions', icon: <DevicesIcon />, path: `/admin/${userId}/devicesdefs` },
-    { title: 'ModulesDef', desc: 'Manage module definitions', icon: <MemoryIcon />, path: `/admin/${userId}/modulesdefs` },
-    { title: 'ProjectDefs', desc: 'Manage project definitions', icon: <AssignmentIcon />, path: `/admin/${userId}/projectdefs` },
-    { title: 'File Browser', desc: 'Browse and manage project files', icon: <Folder />, path: `/admin/${userId}/filesystem/list` },
+    { title: 'Users', desc: 'Manage users', icon: <PeopleIcon />, path: `/admin/${userName}/users` },
+    { title: 'DevicesDef', desc: 'Manage device definitions', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
+    { title: 'ModulesDef', desc: 'Manage module definitions', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
+    { title: 'ProjectDefs', desc: 'Manage project definitions', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
+    { title: 'File Browser', desc: 'Browse and manage project files', icon: <Folder />, path: `/admin/${userName}/filesystem/list` },
   ];
 
   return (

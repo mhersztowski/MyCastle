@@ -8,10 +8,10 @@ import {
 import { Refresh, Send } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
 import { minisApi } from '../../../services/MinisApiService';
-import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel } from '@mhersztowski/core';
+import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel, MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
 
 function IotDevicePage() {
-  const { userId, deviceId } = useParams<{ userId: string; deviceId: string }>();
+  const { userName, deviceName } = useParams<{ userName: string; deviceName: string }>();
   const [config, setConfig] = useState<IotDeviceConfig | null>(null);
   const [latestTelemetry, setLatestTelemetry] = useState<TelemetryRecord | null>(null);
   const [history, setHistory] = useState<TelemetryRecord[]>([]);
@@ -23,42 +23,48 @@ function IotDevicePage() {
   const [cmdName, setCmdName] = useState('');
   const [cmdPayload, setCmdPayload] = useState('{}');
   const [deviceStatuses, setDeviceStatuses] = useState<Array<{ deviceId: string; status: string; lastSeenAt: number }>>([]);
+  const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
+  const [deviceDefs, setDeviceDefs] = useState<MinisDeviceDefModel[]>([]);
 
   const load = useCallback(async () => {
-    if (!userId || !deviceId) return;
+    if (!userName || !deviceName) return;
     setLoading(true);
     try {
       const now = Date.now();
-      const [cfg, latest, hist, cmds, alertsList, statuses] = await Promise.all([
-        minisApi.getIotConfig(userId, deviceId),
-        minisApi.getTelemetryLatest(userId, deviceId),
-        minisApi.getTelemetryHistory(userId, deviceId, now - 3600000, now, 100),
-        minisApi.getCommands(userId, deviceId),
-        minisApi.getAlerts(userId),
-        minisApi.getIotDevices(userId),
+      const [cfg, latest, hist, cmds, alertsList, statuses, allDevices, defs] = await Promise.all([
+        minisApi.getIotConfig(userName, deviceName),
+        minisApi.getTelemetryLatest(userName, deviceName),
+        minisApi.getTelemetryHistory(userName, deviceName, now - 3600000, now, 100),
+        minisApi.getCommands(userName, deviceName),
+        minisApi.getAlerts(userName),
+        minisApi.getIotDevices(userName),
+        minisApi.getUserDevices(userName),
+        minisApi.getDeviceDefs(),
       ]);
       setConfig(cfg);
       setLatestTelemetry('metrics' in latest ? latest as TelemetryRecord : null);
       setHistory(hist);
       setCommands(cmds);
-      setAlerts(alertsList.filter((a) => a.deviceId === deviceId));
+      setAlerts(alertsList.filter((a) => a.deviceId === deviceName));
       setDeviceStatuses(statuses);
+      setDevices(allDevices);
+      setDeviceDefs(defs);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, [userId, deviceId]);
+  }, [userName, deviceName]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleSendCommand = async () => {
-    if (!userId || !deviceId || !cmdName) return;
+    if (!userName || !deviceName || !cmdName) return;
     try {
       let payload = {};
       try { payload = JSON.parse(cmdPayload); } catch { /* keep empty */ }
-      await minisApi.sendCommand(userId, deviceId, cmdName, payload);
+      await minisApi.sendCommand(userName, deviceName, cmdName, payload);
       setCmdDialogOpen(false);
       setCmdName('');
       setCmdPayload('{}');
@@ -69,18 +75,20 @@ function IotDevicePage() {
   };
 
   const handleAcknowledgeAlert = async (alertId: string) => {
-    if (!userId) return;
+    if (!userName) return;
     try {
-      await minisApi.acknowledgeAlert(userId, alertId);
+      await minisApi.acknowledgeAlert(userName, alertId);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Acknowledge failed');
     }
   };
 
-  const deviceStatus = deviceStatuses.find((s) => s.deviceId === deviceId);
+  const deviceStatus = deviceStatuses.find((s) => s.deviceId === deviceName);
   const statusLabel = deviceStatus?.status ?? 'UNKNOWN';
   const statusColor = statusLabel === 'ONLINE' ? 'success' : statusLabel === 'OFFLINE' ? 'error' : 'default';
+  const currentDevice = devices.find((d) => d.name === deviceName);
+  const deviceDisplayName = currentDevice?.name || deviceDefs.find((d) => d.id === currentDevice?.deviceDefId)?.name || deviceName;
 
   if (loading) return <CircularProgress />;
 
@@ -88,7 +96,7 @@ function IotDevicePage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Typography variant="h4">Device: {deviceId}</Typography>
+          <Typography variant="h4">{deviceDisplayName}</Typography>
           <Chip label={statusLabel} color={statusColor as any} />
         </Box>
         <Button startIcon={<Refresh />} onClick={load}>Refresh</Button>

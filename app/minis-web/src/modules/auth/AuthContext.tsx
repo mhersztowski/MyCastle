@@ -4,7 +4,7 @@ import { minisApi, type UserPublic } from '../../services/MinisApiService';
 interface AuthContextValue {
   currentUser: UserPublic | null;
   isAdmin: boolean;
-  login: (userId: string, password: string) => Promise<UserPublic>;
+  login: (name: string, password: string) => Promise<UserPublic>;
   logout: () => void;
 }
 
@@ -22,8 +22,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  const login = useCallback(async (userId: string, password: string): Promise<UserPublic> => {
-    const user = await minisApi.login(userId, password);
+  const login = useCallback(async (name: string, password: string): Promise<UserPublic> => {
+    const user = await minisApi.login(name, password);
     setCurrentUser(user);
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(user));
     return user;

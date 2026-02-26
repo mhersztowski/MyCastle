@@ -25,6 +25,7 @@ import {
   Assignment as AssignmentIcon,
   AccountCircle as AccountCircleIcon,
   SwapHoriz as SwapHorizIcon,
+  Dashboard as DashboardIcon,
   Sensors as SensorsIcon,
   NotificationsActive as NotificationsActiveIcon,
   BugReport as BugReportIcon,
@@ -44,7 +45,7 @@ interface NavItem {
   path: string;
 }
 
-function extractUserId(pathname: string): string {
+function extractUserName(pathname: string): string {
   const match = pathname.match(/^\/(admin|user)\/([^/]+)/);
   return match ? match[2] : '';
 }
@@ -56,30 +57,31 @@ function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const { currentUser, isAdmin, logout } = useAuth();
 
-  const userId = extractUserId(location.pathname);
+  const userName = extractUserName(location.pathname);
   const isAdminView = location.pathname.startsWith('/admin');
 
   const menuItems = useMemo((): NavItem[] => {
-    if (!userId) return [];
+    if (!userName) return [];
     if (isAdminView) {
       return [
-        { text: 'Main', icon: <HomeIcon />, path: `/admin/${userId}/main` },
-        { text: 'Users', icon: <PeopleIcon />, path: `/admin/${userId}/users` },
-        { text: 'DevicesDef', icon: <DevicesIcon />, path: `/admin/${userId}/devicesdefs` },
-        { text: 'ModulesDef', icon: <MemoryIcon />, path: `/admin/${userId}/modulesdefs` },
-        { text: 'ProjectDefs', icon: <AssignmentIcon />, path: `/admin/${userId}/projectdefs` },
-        { text: 'Files', icon: <FolderIcon />, path: `/admin/${userId}/filesystem/list` },
+        { text: 'Main', icon: <HomeIcon />, path: `/admin/${userName}/main` },
+        { text: 'Users', icon: <PeopleIcon />, path: `/admin/${userName}/users` },
+        { text: 'DevicesDef', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
+        { text: 'ModulesDef', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
+        { text: 'ProjectDefs', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
+        { text: 'Files', icon: <FolderIcon />, path: `/admin/${userName}/filesystem/list` },
       ];
     }
     return [
-      { text: 'Main', icon: <HomeIcon />, path: `/user/${userId}/main` },
-      { text: 'Devices', icon: <DevicesIcon />, path: `/user/${userId}/devices` },
-      { text: 'Projects', icon: <AssignmentIcon />, path: `/user/${userId}/projects` },
-      { text: 'IoT Devices', icon: <SensorsIcon />, path: `/user/${userId}/iot/devices` },
-      { text: 'IoT Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userId}/iot/alerts` },
-      { text: 'IoT Emulator', icon: <BugReportIcon />, path: `/user/${userId}/iot/emulator` },
+      { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
+      { text: 'Devices', icon: <DevicesIcon />, path: `/user/${userName}/devices` },
+      { text: 'Projects', icon: <AssignmentIcon />, path: `/user/${userName}/projects` },
+      { text: 'IoT Dashboard', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard` },
+      { text: 'IoT Devices', icon: <SensorsIcon />, path: `/user/${userName}/iot/devices` },
+      { text: 'IoT Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userName}/iot/alerts` },
+      { text: 'IoT Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
     ];
-  }, [isAdminView, userId]);
+  }, [isAdminView, userName]);
 
   const sectionLabel = isAdminView ? 'Admin' : 'User';
 
@@ -96,9 +98,9 @@ function Layout({ children }: LayoutProps) {
   const handleSwitchView = () => {
     setAccountMenuAnchor(null);
     if (isAdminView) {
-      navigate(`/user/${userId}/main`);
+      navigate(`/user/${userName}/main`);
     } else {
-      navigate(`/admin/${userId}/main`);
+      navigate(`/admin/${userName}/main`);
     }
   };
 

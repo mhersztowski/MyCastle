@@ -10,32 +10,32 @@ test.describe('Authentication', () => {
   test('clicking user navigates to login', async ({ page }) => {
     await page.goto('/');
     await page.getByText('Admin').click();
-    await expect(page).toHaveURL(/\/login\/admin1/);
+    await expect(page).toHaveURL(/\/login\/Admin/);
   });
 
   test('login with correct password navigates to dashboard', async ({ page }) => {
-    await page.goto('/login/admin1');
-    await page.getByLabel(/password/i).fill('admin123');
+    await page.goto('/login/Admin');
+    await page.getByLabel(/password/i).fill('Admin23');
     await page.getByRole('button', { name: /login/i }).click();
-    await expect(page).toHaveURL(/\/admin\/admin1\/main/);
+    await expect(page).toHaveURL(/\/admin\/Admin\/main/);
   });
 
   test('login with wrong password shows error', async ({ page }) => {
-    await page.goto('/login/admin1');
+    await page.goto('/login/Admin');
     await page.getByLabel(/password/i).fill('wrongpassword');
     await page.getByRole('button', { name: /login/i }).click();
     await expect(page.getByText(/invalid|error|wrong/i)).toBeVisible();
   });
 
   test('non-admin user navigates to user dashboard', async ({ page }) => {
-    await page.goto('/login/user1');
-    await page.getByLabel(/password/i).fill('user123');
+    await page.goto('/login/TestUser');
+    await page.getByLabel(/password/i).fill('TestUser23');
     await page.getByRole('button', { name: /login/i }).click();
-    await expect(page).toHaveURL(/\/user\/user1\/main/);
+    await expect(page).toHaveURL(/\/user\/TestUser\/main/);
   });
 
   test('back button returns to home', async ({ page }) => {
-    await page.goto('/login/admin1');
+    await page.goto('/login/Admin');
     await page.getByRole('button', { name: /back/i }).click();
     await expect(page).toHaveURL('/');
   });

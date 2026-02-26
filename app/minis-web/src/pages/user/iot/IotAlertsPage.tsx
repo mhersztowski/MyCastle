@@ -8,42 +8,55 @@ import {
 import { Delete } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
 import { minisApi } from '../../../services/MinisApiService';
-import type { Alert, AlertRule } from '@mhersztowski/core';
+import type { Alert, AlertRule, MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
 
 function IotAlertsPage() {
-  const { userId } = useParams<{ userId: string }>();
+  const { userName } = useParams<{ userName: string }>();
   const [tab, setTab] = useState(0);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [rules, setRules] = useState<AlertRule[]>([]);
+  const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
+  const [deviceDefs, setDeviceDefs] = useState<MinisDeviceDefModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
   const [ruleForm, setRuleForm] = useState({ name: '', metricKey: '', conditionOp: '>', conditionValue: '', severity: 'WARNING', cooldownMinutes: '15', deviceId: '' });
 
   const load = useCallback(async () => {
-    if (!userId) return;
+    if (!userName) return;
     setLoading(true);
     try {
-      const [alertsList, rulesList] = await Promise.all([
-        minisApi.getAlerts(userId),
-        minisApi.getAlertRules(userId),
+      const [alertsList, rulesList, allDevices, defs] = await Promise.all([
+        minisApi.getAlerts(userName),
+        minisApi.getAlertRules(userName),
+        minisApi.getUserDevices(userName),
+        minisApi.getDeviceDefs(),
       ]);
       setAlerts(alertsList);
       setRules(rulesList);
+      setDevices(allDevices);
+      setDeviceDefs(defs);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userName]);
 
   useEffect(() => { load(); }, [load]);
 
+  const resolveDeviceName = (deviceId: string) => {
+    const device = devices.find((d) => d.id === deviceId);
+    if (device?.name) return device.name;
+    if (device) return deviceDefs.find((d) => d.id === device.deviceDefId)?.name || deviceId.slice(0, 8);
+    return deviceId.slice(0, 8);
+  };
+
   const handleAcknowledge = async (alertId: string) => {
-    if (!userId) return;
+    if (!userName) return;
     try {
-      await minisApi.acknowledgeAlert(userId, alertId);
+      await minisApi.acknowledgeAlert(userName, alertId);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed');
@@ -51,9 +64,9 @@ function IotAlertsPage() {
   };
 
   const handleResolve = async (alertId: string) => {
-    if (!userId) return;
+    if (!userName) return;
     try {
-      await minisApi.resolveAlert(userId, alertId);
+      await minisApi.resolveAlert(userName, alertId);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed');
@@ -61,9 +74,9 @@ function IotAlertsPage() {
   };
 
   const handleCreateRule = async () => {
-    if (!userId) return;
+    if (!userName) return;
     try {
-      await minisApi.createAlertRule(userId, {
+      await minisApi.createAlertRule(userName, {
         name: ruleForm.name,
         metricKey: ruleForm.metricKey,
         conditionOp: ruleForm.conditionOp as AlertRule['conditionOp'],
@@ -82,9 +95,9 @@ function IotAlertsPage() {
   };
 
   const handleDeleteRule = async (ruleId: string) => {
-    if (!userId) return;
+    if (!userName) return;
     try {
-      await minisApi.deleteAlertRule(userId, ruleId);
+      await minisApi.deleteAlertRule(userName, ruleId);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete rule');
@@ -119,7 +132,7 @@ function IotAlertsPage() {
             <TableBody>
               {alerts.map((alert) => (
                 <TableRow key={alert.id}>
-                  <TableCell>{alert.deviceId}</TableCell>
+                  <TableCell>{resolveDeviceName(alert.deviceId)}</TableCell>
                   <TableCell>{alert.message}</TableCell>
                   <TableCell>
                     <Chip
@@ -176,7 +189,7 @@ function IotAlertsPage() {
                         color={rule.severity === 'CRITICAL' ? 'error' : rule.severity === 'WARNING' ? 'warning' : 'info'}
                       />
                     </TableCell>
-                    <TableCell>{rule.deviceId || 'All'}</TableCell>
+                    <TableCell>{rule.deviceId ? resolveDeviceName(rule.deviceId) : 'All'}</TableCell>
                     <TableCell>
                       <IconButton size="small" onClick={() => handleDeleteRule(rule.id)}><Delete /></IconButton>
                     </TableCell>

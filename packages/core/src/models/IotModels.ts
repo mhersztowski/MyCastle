@@ -103,6 +103,16 @@ export interface Alert {
   metricSnapshot?: TelemetryMetric;
 }
 
+// --- Device Sharing ---
+
+export interface DeviceShare {
+  id: string;
+  ownerUserId: string;
+  deviceId: string;
+  targetUserId: string;
+  createdAt: number;
+}
+
 // --- Device Status (runtime) ---
 
 export type IotDeviceStatus = 'ONLINE' | 'OFFLINE' | 'UNKNOWN';

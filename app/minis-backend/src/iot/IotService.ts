@@ -5,6 +5,7 @@ import { DevicePresence } from './DevicePresence.js';
 import type { DeviceStatusChange } from './DevicePresence.js';
 import { CommandDispatcher } from './CommandDispatcher.js';
 import { AlertEngine } from './AlertEngine.js';
+import { DeviceShareStore } from './DeviceShareStore.js';
 
 export interface MqttPublishFn {
   (topic: string, payload: string): void;
@@ -16,6 +17,7 @@ export class IotService {
   readonly presence: DevicePresence;
   readonly commands: CommandDispatcher;
   readonly alerts: AlertEngine;
+  readonly shares: DeviceShareStore;
 
   private publishFn: MqttPublishFn | null = null;
 
@@ -25,6 +27,7 @@ export class IotService {
     this.presence = new DevicePresence();
     this.commands = new CommandDispatcher(this.db);
     this.alerts = new AlertEngine(this.db);
+    this.shares = new DeviceShareStore(this.db);
   }
 
   start(publishFn: MqttPublishFn): void {
@@ -32,10 +35,20 @@ export class IotService {
     this.presence.start();
 
     this.presence.on('statusChange', (change: DeviceStatusChange) => {
+      const statusPayload = JSON.stringify({ status: change.status, lastSeenAt: change.lastSeenAt });
       this.publishFn?.(
         `minis/${change.userId}/${change.deviceId}/status`,
-        JSON.stringify({ status: change.status, lastSeenAt: change.lastSeenAt }),
+        statusPayload,
       );
+
+      // Forward status to shared users
+      const shareList = this.shares.getSharesForDevice(change.deviceId);
+      for (const share of shareList) {
+        this.publishFn?.(
+          `minis/${share.targetUserId}/shared/${change.userId}/${change.deviceId}/status`,
+          statusPayload,
+        );
+      }
     });
   }
 
@@ -72,10 +85,20 @@ export class IotService {
     }
 
     // Republish telemetry for frontend subscribers
+    const recordJson = JSON.stringify(record);
     this.publishFn?.(
       `minis/${userId}/${deviceId}/telemetry/live`,
-      JSON.stringify(record),
+      recordJson,
     );
+
+    // Forward telemetry to shared users
+    const shareList = this.shares.getSharesForDevice(deviceId);
+    for (const share of shareList) {
+      this.publishFn?.(
+        `minis/${share.targetUserId}/shared/${userId}/${deviceId}/telemetry/live`,
+        recordJson,
+      );
+    }
   }
 
   // Called when MQTT message arrives on minis/+/+/heartbeat
@@ -109,12 +132,12 @@ export class IotService {
 
   // Process incoming MQTT message — route to appropriate handler
   handleMqttMessage(topic: string, payload: string): void {
-    // Topic format: minis/{userId}/{deviceId}/{type}
+    // Topic format: minis/{userName}/{deviceName}/{type}
     const parts = topic.split('/');
     if (parts.length < 4 || parts[0] !== 'minis') return;
 
-    const userId = parts[1];
-    const deviceId = parts[2];
+    const userName = parts[1];
+    const deviceName = parts[2];
     const msgType = parts.slice(3).join('/');
 
     let parsed: any;
@@ -126,13 +149,13 @@ export class IotService {
 
     switch (msgType) {
       case 'telemetry':
-        this.handleTelemetry(userId, deviceId, parsed);
+        this.handleTelemetry(userName, deviceName, parsed);
         break;
       case 'heartbeat':
-        this.handleHeartbeat(userId, deviceId, parsed);
+        this.handleHeartbeat(userName, deviceName, parsed);
         break;
       case 'command/ack':
-        this.handleCommandAck(deviceId, parsed);
+        this.handleCommandAck(deviceName, parsed);
         break;
     }
   }

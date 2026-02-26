@@ -23,14 +23,14 @@ beforeEach(() => {
 
 describe('MinisApiService', () => {
   describe('login', () => {
-    it('sends POST with userId and password', async () => {
+    it('sends POST with name and password', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'u1', name: 'Alice', isAdmin: false }));
-      const user = await minisApi.login('u1', 'pass');
+      const user = await minisApi.login('Alice', 'pass');
       expect(user.name).toBe('Alice');
       expect(mockFetch).toHaveBeenCalledWith('http://test-host/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'u1', password: 'pass' }),
+        body: JSON.stringify({ name: 'Alice', password: 'pass' }),
       });
     });
 
@@ -162,6 +162,50 @@ describe('MinisApiService', () => {
       expect(result.success).toBe(true);
       expect(mockFetch.mock.calls[0][0]).toContain('/admin/projectdefs/pd1/sources');
       expect(mockFetch.mock.calls[0][1].headers['Content-Type']).toBe('application/zip');
+    });
+  });
+
+  describe('Device Sharing', () => {
+    it('getDeviceShares extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 's1', ownerUserId: 'u1', deviceId: 'd1', targetUserId: 'u2', createdAt: 1000 }] }));
+      const shares = await minisApi.getDeviceShares('u1', 'd1');
+      expect(shares).toHaveLength(1);
+      expect(shares[0].targetUserId).toBe('u2');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/devices/d1/shares');
+      expect(mockFetch.mock.calls[0][1].method).toBe('GET');
+    });
+
+    it('createDeviceShare sends POST with targetUserId', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: 's2', ownerUserId: 'u1', deviceId: 'd1', targetUserId: 'u3', createdAt: 2000 }));
+      const share = await minisApi.createDeviceShare('u1', 'd1', 'u3');
+      expect(share.targetUserId).toBe('u3');
+      expect(mockFetch.mock.calls[0][1].method).toBe('POST');
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.targetUserId).toBe('u3');
+    });
+
+    it('deleteDeviceShare sends DELETE with all ids', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }));
+      await minisApi.deleteDeviceShare('u1', 'd1', 's1');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/devices/d1/shares/s1');
+      expect(mockFetch.mock.calls[0][1].method).toBe('DELETE');
+    });
+
+    it('getSharedDevices extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 's3', ownerUserId: 'u2', deviceId: 'd2', targetUserId: 'u1', createdAt: 3000 }] }));
+      const shares = await minisApi.getSharedDevices('u1');
+      expect(shares).toHaveLength(1);
+      expect(shares[0].ownerUserId).toBe('u2');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/shared-devices');
+    });
+
+    it('getMyShares extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 's4', ownerUserId: 'u1', deviceId: 'd1', targetUserId: 'u3', createdAt: 4000 }] }));
+      const shares = await minisApi.getMyShares('u1');
+      expect(shares).toHaveLength(1);
+      expect(shares[0].targetUserId).toBe('u3');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/my-shares');
+      expect(mockFetch.mock.calls[0][1].method).toBe('GET');
     });
   });
 

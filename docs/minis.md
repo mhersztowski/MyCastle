@@ -53,6 +53,7 @@ Na podstawie modeli zdefiniowane są Nody w pakiecie core (MinisDeviceDefNode, M
 - **AlertRule** — reguła alertu (metric, condition, severity, cooldown)
 - **Alert** — instancja alertu (OPEN → ACKNOWLEDGED → RESOLVED)
 - **IotDeviceStatus** — 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
+- **DeviceShare** — udostępnienie urządzenia (ownerUserId, deviceId, targetUserId, createdAt)
 
 ---
 
@@ -102,10 +103,12 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 ### Zaimplementowane REST API (/api/*)
 
 **Autentykacja:**
-- `POST /api/auth/login` — logowanie (userId + password), zwraca UserPublic (bez hasła)
+- `POST /api/auth/login` — logowanie (name + password), zwraca UserPublic (bez hasła)
+
+**Identyfikacja po nazwie:** Użytkownicy i urządzenia identyfikowane przez nazwę (nie UUID) w HTTP routes, MQTT topics i UI. Nazwy muszą spełniać pattern `[a-zA-Z0-9_-]` i być unikalne (user globalnie, device per user). CrudConfig.lookupKey: admin CRUD używa `'id'`, user devices/projects używają `'name'`.
 
 **Admin CRUD** (generyczny handleCrud pattern):
-- `GET/POST /api/admin/users` — lista / tworzenie użytkownika (auto-ID, tworzenie katalogu usera)
+- `GET/POST /api/admin/users` — lista / tworzenie użytkownika (auto-ID, tworzenie katalogu usera, walidacja nazwy)
 - `PUT/DELETE /api/admin/users/{id}` — edycja / usunięcie
 - `GET/POST /api/admin/devicedefs` — lista / tworzenie definicji urządzenia
 - `PUT/DELETE /api/admin/devicedefs/{id}` — edycja / usunięcie (+ kasowanie źródeł)
@@ -117,22 +120,26 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 **Upload źródeł:**
 - `POST /api/admin/{resource}/{id}/sources` — upload ZIP z plikami (max 50MB), smart prefix stripping
 
-**User CRUD** (per user, dane w Users/{userName}/):
-- `GET/POST /api/users/{userId}/devices` — lista / tworzenie urządzenia
-- `PUT/DELETE /api/users/{userId}/devices/{id}` — edycja / usunięcie
-- `GET/POST /api/users/{userId}/projects` — lista / tworzenie projektu (kopiuje źródła z ProjectDef)
-- `PUT/DELETE /api/users/{userId}/projects/{id}` — edycja / usunięcie (+ kasowanie źródeł)
+**User CRUD** (per user, dane w Users/{userName}/, lookup po nazwie urządzenia/projektu):
+- `GET/POST /api/users/{userName}/devices` — lista / tworzenie urządzenia (walidacja nazwy, unikalność)
+- `PUT/DELETE /api/users/{userName}/devices/{deviceName}` — edycja / usunięcie
+- `GET/POST /api/users/{userName}/projects` — lista / tworzenie projektu (kopiuje źródła z ProjectDef)
+- `PUT/DELETE /api/users/{userName}/projects/{projectName}` — edycja / usunięcie (+ kasowanie źródeł)
 
 **IoT API** (per user/device, dane w SQLite):
-- `GET/PUT /api/users/{userId}/devices/{deviceId}/iot-config` — konfiguracja IoT urządzenia
-- `GET /api/users/{userId}/devices/{deviceId}/telemetry?from=&to=&limit=` — historia telemetrii
-- `GET /api/users/{userId}/devices/{deviceId}/telemetry/latest` — ostatni odczyt
-- `POST/GET /api/users/{userId}/devices/{deviceId}/commands` — wysyłanie / lista komend
-- `GET/POST /api/users/{userId}/alert-rules` — lista / tworzenie reguł alertów
-- `PUT/DELETE /api/users/{userId}/alert-rules/{id}` — edycja / usunięcie reguły
-- `GET /api/users/{userId}/alerts` — lista alertów
-- `PATCH /api/users/{userId}/alerts/{id}` — acknowledge / resolve alertu
-- `GET /api/users/{userId}/iot/devices` — statusy wszystkich urządzeń IoT
+- `GET/PUT /api/users/{userName}/devices/{deviceName}/iot-config` — konfiguracja IoT urządzenia
+- `GET /api/users/{userName}/devices/{deviceName}/telemetry?from=&to=&limit=` — historia telemetrii
+- `GET /api/users/{userName}/devices/{deviceName}/telemetry/latest` — ostatni odczyt
+- `POST/GET /api/users/{userName}/devices/{deviceName}/commands` — wysyłanie / lista komend
+- `GET/POST /api/users/{userName}/alert-rules` — lista / tworzenie reguł alertów
+- `PUT/DELETE /api/users/{userName}/alert-rules/{id}` — edycja / usunięcie reguły
+- `GET /api/users/{userName}/alerts` — lista alertów
+- `PATCH /api/users/{userName}/alerts/{id}` — acknowledge / resolve alertu
+- `GET /api/users/{userName}/iot/devices` — statusy wszystkich urządzeń IoT
+- `GET/POST /api/users/{userName}/devices/{deviceName}/shares` — lista / tworzenie udostępnień urządzenia
+- `DELETE /api/users/{userName}/devices/{deviceName}/shares/{shareId}` — cofnięcie udostępnienia
+- `GET /api/users/{userName}/shared-devices` — urządzenia udostępnione temu użytkownikowi
+- `GET /api/users/{userName}/my-shares` — udostępnienia dokonane przez tego użytkownika
 
 **Swagger:**
 - `GET /api/docs` — Swagger UI
@@ -145,7 +152,8 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 - **DevicePresence** — heartbeat tracking, timeout detection (heartbeatInterval × 2.5), EventEmitter statusChange
 - **CommandDispatcher** — tworzenie komend (PENDING → SENT), update statusu po ACK
 - **AlertEngine** — CRUD reguł, ewaluacja po każdej telemetrii, cooldown, acknowledge/resolve
-- **IotService** — orchestrator: parsuje MQTT topics (`minis/{userId}/{deviceId}/{type}`), koordynuje stores, broadcast zmian statusu/alertów
+- **DeviceShareStore** — CRUD udostępnień urządzeń (prepared statements: create, delete, getSharesForDevice, getSharesByOwner, getSharesForTarget)
+- **IotService** — orchestrator: parsuje MQTT topics (`minis/{userName}/{deviceName}/{type}`), koordynuje stores, broadcast zmian statusu/alertów, forwarding telemetrii/statusu do shared users
 
 ### MQTT Integration
 
@@ -158,6 +166,28 @@ Publikuje (przez MqttServer.publishMessage()):
 - `status` — zmiana ONLINE/OFFLINE
 - `telemetry/live` — republished telemetria dla frontendu
 - `alert` — triggered alerty
+
+### Device Sharing
+
+Użytkownicy mogą udostępniać swoje urządzenia IoT innym użytkownikom (read-only: telemetria + status).
+
+**Model:** `DeviceShare` — tabela `device_share` w SQLite (UNIQUE na device_id + target_user_id)
+**Store:** `DeviceShareStore` — CRUD z prepared statements (create, delete, getSharesForDevice, getSharesByOwner, getSharesForTarget)
+
+**REST API:**
+- `GET /api/users/{userName}/devices/{deviceName}/shares` — lista udostępnień urządzenia
+- `POST /api/users/{userName}/devices/{deviceName}/shares` — udostępnienie (`{ targetUserId }` — nazwa docelowego użytkownika)
+- `DELETE /api/users/{userName}/devices/{deviceName}/shares/{shareId}` — cofnięcie udostępnienia
+- `GET /api/users/{userName}/shared-devices` — urządzenia udostępnione TEMU użytkownikowi
+- `GET /api/users/{userName}/my-shares` — udostępnienia dokonane przez tego użytkownika
+
+**Uwaga:** Pola `ownerUserId`, `targetUserId`, `deviceId` w modelu DeviceShare przechowują **nazwy** (nie UUID), dzięki czemu queries `getSharesForTarget(userName)` i `getSharesByOwner(userName)` działają z name-based routing.
+
+**MQTT forwarding:** Po każdej telemetrii/zmianie statusu IotService republishuje dane do shared users:
+- `minis/{targetUserName}/shared/{ownerUserName}/{deviceName}/telemetry/live`
+- `minis/{targetUserName}/shared/{ownerUserName}/{deviceName}/status`
+
+**Frontend:** Przycisk Share na UserDevicesPage (dialog z chipami użytkowników + select). IoT Dashboard wyświetla udostępnione urządzenia z chipem "Shared by {owner}" i niebieską krawędzią.
 
 ### Czego jeszcze nie ma:
 - Middleware autoryzacji (endpointy są publiczne — wystarczy znać URL)
@@ -175,33 +205,36 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 
 ### Zaimplementowane strony i routing
 
+**Identyfikacja po nazwie:** Routing używa `:userName` i `:deviceName` (nie UUID). Nazwy URL-safe `[a-zA-Z0-9_-]`.
+
 **Publiczne:**
 - `/` — HomePage: lista użytkowników jako karty, klik → login
-- `/login/:userId` — LoginPage: formularz hasła, nawigacja do admin/user wg roli
+- `/login/:userName` — LoginPage: formularz hasła, nawigacja do admin/user wg roli
 
-**Admin** (`/admin/:userId/*`, Layout z drawer menu):
-- `/admin/:userId/main` — AdminDashboardPage: karty nawigacyjne (Users, DeviceDefs, ModuleDefs, ProjectDefs, File Browser)
-- `/admin/:userId/users` — UsersPage: tabela CRUD (name, isAdmin, roles), dialogi add/edit
-- `/admin/:userId/devicesdefs` — DevicesDefPage: tabela CRUD + upload źródeł ZIP, selektor modułów
-- `/admin/:userId/modulesdefs` — ModulesDefPage: tabela CRUD + upload źródeł, auto isProgrammable z SoC
-- `/admin/:userId/projectdefs` — ProjectDefsPage: tabela CRUD + upload źródeł, dynamic module filtering po device
-- `/admin/:userId/filesystem/list` — FilesystemListPage: dualny przeglądarka plików (drzewo + podgląd)
-- `/admin/:userId/filesystem/save` — FilesystemSavePage
+**Admin** (`/admin/:userName/*`, Layout z drawer menu):
+- `/admin/:userName/main` — AdminDashboardPage: karty nawigacyjne (Users, DeviceDefs, ModuleDefs, ProjectDefs, File Browser)
+- `/admin/:userName/users` — UsersPage: tabela CRUD (name, isAdmin, roles), dialogi add/edit
+- `/admin/:userName/devicesdefs` — DevicesDefPage: tabela CRUD + upload źródeł ZIP, selektor modułów
+- `/admin/:userName/modulesdefs` — ModulesDefPage: tabela CRUD + upload źródeł, auto isProgrammable z SoC
+- `/admin/:userName/projectdefs` — ProjectDefsPage: tabela CRUD + upload źródeł, dynamic module filtering po device
+- `/admin/:userName/filesystem/list` — FilesystemListPage: dualny przeglądarka plików (drzewo + podgląd)
+- `/admin/:userName/filesystem/save` — FilesystemSavePage
 
-**User** (`/user/:userId/*`, Layout z drawer menu):
-- `/user/:userId/main` — UserDashboardPage: karty (Add Assembled Device, Assemble Device, Open Device Project)
-- `/user/:userId/devices` — UserDevicesPage: tabela urządzeń, dialogi Add Assembled / Assemble
-- `/user/:userId/projects` — UserProjectsPage: karty projektów, dialog Add (z wyborem ProjectDef)
-- `/user/:userId/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal i flash
+**User** (`/user/:userName/*`, Layout z drawer menu):
+- `/user/:userName/main` — UserDashboardPage: karty (Add Assembled Device, Assemble Device, Open Device Project)
+- `/user/:userName/devices` — UserDevicesPage: tabela urządzeń, dialogi Add/Assemble, Share (dialog z chipami użytkowników), sekcja "Shared with me"
+- `/user/:userName/projects` — UserProjectsPage: karty projektów, dialog Add (z wyborem ProjectDef)
+- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal i flash
 
-**IoT** (`/user/:userId/iot/*`, Layout z drawer menu):
-- `/user/:userId/iot/devices` — IotDevicesPage: lista urządzeń z isIot=true, status (ONLINE/OFFLINE), nawigacja do dashboardu
-- `/user/:userId/iot/device/:deviceId` — IotDevicePage: dashboard z metrykami (karty), konfiguracją, historią telemetrii, komendami (send dialog), alertami (ACK)
-- `/user/:userId/iot/alerts` — IotAlertsPage: tabs — alerty (ACK/Resolve) + reguły alertów (CRUD dialog)
-- `/user/:userId/iot/emulator` — IotEmulatorPage: emulator urządzeń IoT (konfiguracja, start/stop, activity log)
+**IoT** (`/user/:userName/iot/*`, Layout z drawer menu):
+- `/user/:userName/iot/dashboard` — IotDashboardPage: karty urządzeń (metryki, aktuatory, status) + udostępnione urządzenia (chip "Shared by {owner}", niebieska krawędź), auto-refresh 10s
+- `/user/:userName/iot/devices` — IotDevicesPage: lista urządzeń z isIot=true, status (ONLINE/OFFLINE), nawigacja do dashboardu, sekcja "Shared"
+- `/user/:userName/iot/device/:deviceName` — IotDevicePage: dashboard z metrykami (karty), konfiguracją, historią telemetrii, komendami (send dialog), alertami (ACK)
+- `/user/:userName/iot/alerts` — IotAlertsPage: tabs — alerty (ACK/Resolve) + reguły alertów (CRUD dialog)
+- `/user/:userName/iot/emulator` — IotEmulatorPage: emulator urządzeń IoT (konfiguracja, start/stop, activity log)
 
 **Editor:**
-- `/user/:userId/editor/monaco/*` — MonacoEditorPage: samodzielny edytor Monaco
+- `/user/:userName/editor/monaco/*` — MonacoEditorPage: samodzielny edytor Monaco
 
 ### Kluczowe moduły
 
@@ -214,7 +247,7 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - **iot-emulator** — EmulatorService (MQTT pub/sub, generatory wartości, interwały telemetrii/heartbeat, command handling), typy, presety urządzeń, persistence w localStorage
 
 ### Serwisy
-- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu (w tym 13 metod IoT: config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń)
+- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT: config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń, udostępnianie (getDeviceShares, createDeviceShare, deleteDeviceShare, getSharedDevices, getMyShares)
 
 ### Hooki
 - **useSourceUpload** — reusable hook do uploadu ZIP źródeł (stan, fileInputRef, trigger, handler)
@@ -235,7 +268,7 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 **Backend (Vitest):**
 - MinisHttpServer.test.ts — auth, admin CRUD (users, deviceDefs, moduleDefs, projectDefs), user CRUD (devices, projects), error handling (22 testy)
 - IotService.test.ts — telemetria, heartbeat, komendy, alerty, presence, lifecycle (26 testów)
-- IotEndpoints.test.ts — wszystkie REST endpointy IoT (19 testów)
+- IotEndpoints.test.ts — wszystkie REST endpointy IoT + device sharing (19+ testów)
 
 **Frontend (Vitest + jsdom + React Testing Library):**
 - LoginPage.test.tsx — render, nawigacja, error handling

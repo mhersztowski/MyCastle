@@ -45,7 +45,7 @@ type ViewMode = 'blockly' | 'split' | 'code';
 const MIN_PANEL_PX = 200;
 
 function ProjectPage() {
-  const { userId, projectId } = useParams<{ userId: string; projectId: string }>();
+  const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
   const { readFile, writeFile, listDirectory, isConnected } = useMqtt();
   const { currentUser } = useAuth();
@@ -268,7 +268,7 @@ function ProjectPage() {
       {/* Top AppBar */}
       <AppBar position="static" elevation={1}>
         <Toolbar variant="dense">
-          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userId}/main`)} sx={{ mr: 1 }}>
+          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/main`)} sx={{ mr: 1 }}>
             <ArrowBack />
           </IconButton>
           <Typography variant="h6" sx={{ mr: 2 }} noWrap>

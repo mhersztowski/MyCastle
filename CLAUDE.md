@@ -8,7 +8,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Shared packages
 - **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource. Dual ESM+CJS build (tsup).
-  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus)
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare)
   - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
   - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload
@@ -66,21 +66,24 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
 - **App singleton** (`src/App.ts`): FileSystem + MinisHttpServer + MqttServer + IotService. `shutdown()` gracefully zamyka IoT service + HTTP server + MQTT. IotService wired via `MqttServer.onMessage()` / `MqttServer.publishMessage()`.
 - Importuje FileSystem, MqttServer z `@mhersztowski/core-backend`
-- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami. Przyjmuje IotService w konstruktorze dla endpointów IoT.
-    - `/api/auth/login` — logowanie po userId+password
+- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami. CrudConfig.lookupKey: admin CRUD używa `'id'`, user devices/projects używają `'name'`. Walidacja nazw: `[a-zA-Z0-9_-]`, unikalność (400/409). Przyjmuje IotService w konstruktorze dla endpointów IoT.
+    - `/api/auth/login` — logowanie po name+password
     - `/api/admin/{users,devicedefs,moduledefs,projectdefs}` — CRUD (GET list, POST create, PUT update, DELETE). Dane trzymane w JSON files (`Minis/Admin/*.json`)
     - `/api/admin/{resource}/:id/sources` — upload ZIP z plikami źródłowymi (adm-zip, smart prefix stripping, max 50MB)
-    - `/api/users/:userId/{devices,projects}` — CRUD per user (dane w `Minis/Users/:userId/*.json`)
-    - `/api/users/:userId/devices/:deviceId/iot-config` — GET/PUT konfiguracja IoT urządzenia
-    - `/api/users/:userId/devices/:deviceId/telemetry` — GET historia (from/to/limit), GET latest
-    - `/api/users/:userId/devices/:deviceId/commands` — POST wysyłanie, GET lista (limit)
-    - `/api/users/:userId/alert-rules` — GET/POST/PUT/DELETE reguły alertów
-    - `/api/users/:userId/alerts` — GET lista, PATCH acknowledge/resolve
-    - `/api/users/:userId/iot/devices` — GET statusy wszystkich urządzeń IoT
+    - `/api/users/:userName/{devices,projects}` — CRUD per user (dane w `Minis/Users/:userName/*.json`), lookup po nazwie urządzenia/projektu
+    - `/api/users/:userName/devices/:deviceName/iot-config` — GET/PUT konfiguracja IoT urządzenia
+    - `/api/users/:userName/devices/:deviceName/telemetry` — GET historia (from/to/limit), GET latest
+    - `/api/users/:userName/devices/:deviceName/commands` — POST wysyłanie, GET lista (limit)
+    - `/api/users/:userName/alert-rules` — GET/POST/PUT/DELETE reguły alertów
+    - `/api/users/:userName/alerts` — GET lista, PATCH acknowledge/resolve
+    - `/api/users/:userName/iot/devices` — GET statusy wszystkich urządzeń IoT
+    - `/api/users/:userName/devices/:deviceName/shares` — GET/POST/DELETE udostępnienia urządzenia
+    - `/api/users/:userName/shared-devices` — GET urządzenia udostępnione temu użytkownikowi
+    - `/api/users/:userName/my-shares` — GET udostępnienia dokonane przez tego użytkownika
     - `/api/docs` — Swagger UI (swagger-ui-dist)
     - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`)
-- **IoT Service Layer** (`src/iot/`): IotDatabase (SQLite, better-sqlite3, WAL mode), TelemetryStore (INSERT/query, config CRUD, agregacja), DevicePresence (heartbeat tracking, timeout detection), CommandDispatcher (tworzenie komend, ACK tracking), AlertEngine (reguły CRUD, ewaluacja po telemetrii, cooldown), IotService (orchestrator — parsuje MQTT topics `minis/{userId}/{deviceId}/{type}`, koordynuje stores)
-- **MQTT Integration**: IotService subskrybuje `minis/` topics. Przetwarza: telemetry → insert + presence + alert eval + republish, heartbeat → presence, command/ack → update status. Publikuje: status, telemetry/live, alert
+- **IoT Service Layer** (`src/iot/`): IotDatabase (SQLite, better-sqlite3, WAL mode), TelemetryStore (INSERT/query, config CRUD, agregacja), DevicePresence (heartbeat tracking, timeout detection), CommandDispatcher (tworzenie komend, ACK tracking), AlertEngine (reguły CRUD, ewaluacja po telemetrii, cooldown), DeviceShareStore (CRUD udostępnień, prepared statements), IotService (orchestrator — parsuje MQTT topics `minis/{userName}/{deviceName}/{type}`, koordynuje stores, forwarding telemetrii/statusu do shared users)
+- **MQTT Integration**: IotService subskrybuje `minis/` topics. Przetwarza: telemetry → insert + presence + alert eval + republish + forward do shared users, heartbeat → presence, command/ack → update status. Publikuje: status, telemetry/live, alert. Forwarding do shared users: `minis/{targetUser}/shared/{owner}/{device}/telemetry/live`, `minis/{targetUser}/shared/{owner}/{device}/status`
 - Dependencje: adm-zip, swagger-ui-dist, better-sqlite3
 - Dane platformy w `data-minis/` (ROOT_DIR=../../data-minis, JSON files), dane IoT w `data-minis/iot.db` (SQLite)
 
@@ -90,7 +93,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Dev port: 1903 (Vite HMR), proxy `/api` → `localhost:1902`, proxy `/mqtt` → `ws://localhost:1902` (WebSocket)
 - Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
 - **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
-- **Routing z userId**: wszystkie ścieżki admin/user zawierają `:userId` (np. `/admin/:userId/main`, `/user/:userId/projects`). Strony pobierają userId z `useParams()`.
+- **Routing z userName**: wszystkie ścieżki admin/user zawierają `:userName` (np. `/admin/:userName/main`, `/user/:userName/projects`). IoT device page: `:deviceName`. Strony pobierają userName z `useParams()`. Identyfikacja po nazwie (nie UUID) — nazwy muszą być unikalne i URL-safe `[a-zA-Z0-9_-]`.
 - **Provider tree** (`main.tsx`): MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → App
 - Moduły:
     - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
@@ -103,8 +106,8 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Hooks (`src/hooks/`):
     - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP). Enkapsuluje stan uploadu, fileInputRef, trigger i handler. Używany w admin stronach (DevicesDefPage, ModulesDefPage, ProjectDefsPage).
 - Serwisy (`src/services/`):
-    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 13 metod IoT (config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń)
-- Strony: /, /login/:userId, /admin/:userId/main, /admin/:userId/users, /admin/:userId/devicesdefs, /admin/:userId/modulesdefs, /admin/:userId/projectdefs, /admin/:userId/filesystem/list, /admin/:userId/filesystem/save, /user/:userId/main, /user/:userId/devices, /user/:userId/projects, /user/:userId/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userId/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userId/iot/device/:deviceId (IotDevicePage — dashboard z metrykami, konfiguracją, historią, komendami, alertami), /user/:userId/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userId/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userId/editor/monaco/*
+    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 17 metod IoT (config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń, udostępnianie urządzeń)
+- Strony: /, /login/:userName, /admin/:userName/main, /admin/:userName/users, /admin/:userName/devicesdefs, /admin/:userName/modulesdefs, /admin/:userName/projectdefs, /admin/:userName/filesystem/list, /admin/:userName/filesystem/save, /user/:userName/main, /user/:userName/devices, /user/:userName/projects, /user/:userName/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userName/iot/dashboard (IotDashboardPage — karty urządzeń z metrykami + udostępnione urządzenia), /user/:userName/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userName/iot/device/:deviceName (IotDevicePage — dashboard z metrykami, konfiguracją, historią, komendami, alertami), /user/:userName/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userName/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userName/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -189,7 +192,8 @@ mycastle/                           # Root monorepo
 │   │   │       ├── DevicePresence.ts   # Heartbeat tracking, timeout detection
 │   │   │       ├── CommandDispatcher.ts # Tworzenie komend, ACK tracking
 │   │   │       ├── AlertEngine.ts      # CRUD reguł, ewaluacja, cooldown
-│   │   │       ├── IotService.ts       # Orchestrator: MQTT → stores
+│   │   │       ├── DeviceShareStore.ts # CRUD udostępnień urządzeń
+│   │   │       ├── IotService.ts       # Orchestrator: MQTT → stores, share forwarding
 │   │   │       ├── IotService.test.ts  # 26 testów
 │   │   │       └── IotEndpoints.test.ts # 19 testów REST IoT
 │   │   ├── .env                    # PORT=1902, ROOT_DIR=../../data-minis
@@ -199,10 +203,10 @@ mycastle/                           # Root monorepo
 │   ├── minis-web/                  # Minis Frontend React
 │   │   ├── src/
 │   │   │   ├── main.tsx            # Entry (providers + App)
-│   │   │   ├── App.tsx             # Routes (all paths with :userId)
+│   │   │   ├── App.tsx             # Routes (all paths with :userName/:deviceName)
 │   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial,iot-emulator}/
 │   │   │   ├── hooks/useSourceUpload.ts  # Reusable file upload hook
-│   │   │   ├── services/MinisApiService.ts  # REST client singleton (w tym 13 metod IoT)
+│   │   │   ├── services/MinisApiService.ts  # REST client singleton (w tym 17 metod IoT + udostępnianie)
 │   │   │   ├── pages/{admin,user,user/iot,filesystem,editor}/
 │   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
 │   │   │   └── components/Layout.tsx
