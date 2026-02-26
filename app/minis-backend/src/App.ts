@@ -1,6 +1,7 @@
 import { MqttServer, FileSystem } from '@mhersztowski/core-backend';
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { MinisHttpServer } from './MinisHttpServer.js';
+import { IotService } from './iot/IotService.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -14,14 +15,17 @@ export class App {
   private fileSystem: FileSystem;
   private mqttServer!: MqttServer;
   private httpServer: MinisHttpServer;
+  private iotService: IotService;
   private config: AppConfig;
 
   private constructor(config: AppConfig) {
     this.config = config;
     this.fileSystem = new FileSystem(config.rootDir);
+    this.iotService = new IotService(config.rootDir);
     this.httpServer = new MinisHttpServer(
       config.httpPort,
       this.fileSystem,
+      this.iotService,
       config.staticDir,
     );
   }
@@ -60,6 +64,17 @@ export class App {
       this.mqttServer.broadcastFileChanged(event.path, event.action);
     });
 
+    // Start IoT service — wire MQTT publish and subscribe to IoT topics
+    this.iotService.start((topic, payload) => {
+      this.mqttServer.publishMessage(topic, payload);
+    });
+    this.mqttServer.onMessage((topic, payload) => {
+      if (topic.startsWith('minis/')) {
+        this.iotService.handleMqttMessage(topic, payload);
+      }
+    });
+    console.log('IoT service started (SQLite + MQTT)');
+
     // Graceful shutdown
     const shutdownHandler = async () => {
       await this.shutdown();
@@ -73,6 +88,12 @@ export class App {
 
   async shutdown(): Promise<void> {
     console.log('App shutting down...');
+
+    try {
+      this.iotService.stop();
+    } catch (err) {
+      console.warn('Error stopping IoT service:', err);
+    }
 
     try {
       await this.mqttServer.stop();

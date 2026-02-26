@@ -139,17 +139,18 @@ describe('MinisApiService', () => {
       expect(projects[0].name).toBe('Proj');
     });
 
-    it('createUserProject sends POST with projectDefId', async () => {
+    it('createUserProject sends POST with name and projectDefId', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'p2', name: 'NewProj' }));
-      await minisApi.createUserProject('u1', 'pd1');
+      await minisApi.createUserProject('u1', { name: 'NewProj', projectDefId: 'pd1' });
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.projectDefId).toBe('pd1');
+      expect(body.name).toBe('NewProj');
     });
 
     it('deleteUserProject sends DELETE', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }));
-      await minisApi.deleteUserProject('u1', 'MyProject');
-      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/projects/MyProject');
+      await minisApi.deleteUserProject('u1', 'p1');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/projects/p1');
     });
   });
 

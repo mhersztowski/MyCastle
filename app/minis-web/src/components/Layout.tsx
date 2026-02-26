@@ -25,6 +25,9 @@ import {
   Assignment as AssignmentIcon,
   AccountCircle as AccountCircleIcon,
   SwapHoriz as SwapHorizIcon,
+  Sensors as SensorsIcon,
+  NotificationsActive as NotificationsActiveIcon,
+  BugReport as BugReportIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
@@ -72,6 +75,9 @@ function Layout({ children }: LayoutProps) {
       { text: 'Main', icon: <HomeIcon />, path: `/user/${userId}/main` },
       { text: 'Devices', icon: <DevicesIcon />, path: `/user/${userId}/devices` },
       { text: 'Projects', icon: <AssignmentIcon />, path: `/user/${userId}/projects` },
+      { text: 'IoT Devices', icon: <SensorsIcon />, path: `/user/${userId}/iot/devices` },
+      { text: 'IoT Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userId}/iot/alerts` },
+      { text: 'IoT Emulator', icon: <BugReportIcon />, path: `/user/${userId}/iot/emulator` },
     ];
   }, [isAdminView, userId]);
 

@@ -13,10 +13,11 @@ import type { MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
 interface FormData {
   deviceDefId: string;
   isAssembled: boolean;
+  isIot: boolean;
   sn: string;
 }
 
-const emptyForm: FormData = { deviceDefId: '', isAssembled: true, sn: '' };
+const emptyForm: FormData = { deviceDefId: '', isAssembled: true, isIot: false, sn: '' };
 
 function UserDevicesPage() {
   const { userId } = useParams<{ userId: string }>();
@@ -108,7 +109,7 @@ function UserDevicesPage() {
           <TableBody>
             {items.map((item) => (
               <TableRow key={item.id}>
-                <TableCell>{item.deviceDefId}</TableCell>
+                <TableCell>{deviceDefs.find(d => d.id === item.deviceDefId)?.name ?? item.deviceDefId}</TableCell>
                 <TableCell>{item.sn || '-'}</TableCell>
                 <TableCell>
                   {item.isAssembled

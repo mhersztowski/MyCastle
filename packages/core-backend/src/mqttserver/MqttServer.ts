@@ -30,6 +30,8 @@ const TOPICS = {
   RESPONSE: 'mycastle/response',
 };
 
+export type MqttMessageHandler = (topic: string, payload: string) => void;
+
 export class MqttServer {
   private aedes: AedesServer;
   private httpServer: HttpServer;
@@ -38,6 +40,7 @@ export class MqttServer {
   private fileSystem: FileSystem;
   private automateService: IAutomateService | null = null;
   private clients: Map<string, Client>;
+  private messageHandlers: MqttMessageHandler[] = [];
 
   constructor(fileSystem: FileSystem, httpServer?: HttpServer) {
     this.fileSystem = fileSystem;
@@ -95,16 +98,29 @@ export class MqttServer {
     });
 
     this.aedes.on('publish', async (packet: PublishPacket, client: AedesClient | null) => {
-      if (!client || packet.topic !== TOPICS.REQUEST) {
+      if (!client) return;
+
+      if (packet.topic === TOPICS.REQUEST) {
+        try {
+          const message = packet.payload.toString();
+          const packetData = Packet.deserialize(message);
+          await this.handlePacket(packetData, client.id);
+        } catch (error) {
+          console.error('Error processing packet:', error);
+        }
         return;
       }
 
-      try {
-        const message = packet.payload.toString();
-        const packetData = Packet.deserialize(message);
-        await this.handlePacket(packetData, client.id);
-      } catch (error) {
-        console.error('Error processing packet:', error);
+      // Forward non-system messages to registered handlers
+      if (this.messageHandlers.length > 0) {
+        const payload = packet.payload.toString();
+        for (const handler of this.messageHandlers) {
+          try {
+            handler(packet.topic, payload);
+          } catch (error) {
+            console.error('Error in message handler:', error);
+          }
+        }
       }
     });
   }
@@ -269,5 +285,13 @@ export class MqttServer {
 
   getConnectedClients(): Client[] {
     return Array.from(this.clients.values());
+  }
+
+  publishMessage(topic: string, payload: string): void {
+    this.publish(topic, payload);
+  }
+
+  onMessage(handler: MqttMessageHandler): void {
+    this.messageHandlers.push(handler);
   }
 }

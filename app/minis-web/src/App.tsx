@@ -7,7 +7,7 @@ import MonacoEditorPage from '@pages/editor/MonacoEditorPage';
 import HomePage from '@pages/HomePage';
 import LoginPage from '@pages/LoginPage';
 import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage } from '@pages/admin';
-import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage } from '@pages/user';
+import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage } from '@pages/user';
 
 function App() {
   return (
@@ -15,7 +15,7 @@ function App() {
       <Route path="/" element={<HomePage />} />
       <Route path="/login/:userId" element={<LoginPage />} />
       <Route path="/user/:userId/editor/monaco/*" element={<MonacoEditorPage />} />
-      <Route path="/user/:userId/project" element={<ProjectPage />} />
+      <Route path="/user/:userId/project/:projectId" element={<ProjectPage />} />
       <Route
         path="*"
         element={
@@ -32,6 +32,10 @@ function App() {
                 <Route path="/user/:userId/main" element={<UserDashboardPage />} />
                 <Route path="/user/:userId/devices" element={<UserDevicesPage />} />
                 <Route path="/user/:userId/projects" element={<UserProjectsPage />} />
+                <Route path="/user/:userId/iot/devices" element={<IotDevicesPage />} />
+                <Route path="/user/:userId/iot/device/:deviceId" element={<IotDevicePage />} />
+                <Route path="/user/:userId/iot/alerts" element={<IotAlertsPage />} />
+                <Route path="/user/:userId/iot/emulator" element={<IotEmulatorPage />} />
               </Routes>
             </Layout>
           </Box>

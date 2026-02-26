@@ -6,6 +6,7 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
   id: string;
   deviceDefId: string;
   isAssembled: boolean;
+  isIot: boolean;
   sn: string;
 
   constructor(model: MinisDeviceModel) {
@@ -13,6 +14,7 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
     this.id = model.id;
     this.deviceDefId = model.deviceDefId;
     this.isAssembled = model.isAssembled;
+    this.isIot = model.isIot;
     this.sn = model.sn;
   }
 
@@ -37,6 +39,7 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
       id: this.id,
       deviceDefId: this.deviceDefId,
       isAssembled: this.isAssembled,
+      isIot: this.isIot,
       sn: this.sn,
     };
   }

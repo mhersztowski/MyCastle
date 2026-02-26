@@ -12,6 +12,9 @@ import {
   FormControl,
   IconButton,
   InputLabel,
+  List,
+  ListItemButton,
+  ListItemText,
   MenuItem,
   Select,
   Toolbar,
@@ -23,12 +26,15 @@ import {
   Code,
   Extension,
   FlashOn,
+  FolderOpen,
+  Save,
   Settings,
   VerticalSplit,
   Terminal as TerminalIcon,
 } from '@mui/icons-material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useMqtt } from '@modules/mqttclient';
+import { useAuth } from '@modules/auth/AuthContext';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@modules/editor/core/EditorInstance';
 import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@modules/ardublockly2';
@@ -39,13 +45,16 @@ type ViewMode = 'blockly' | 'split' | 'code';
 const MIN_PANEL_PX = 200;
 
 function ProjectPage() {
+  const { userId, projectId } = useParams<{ userId: string; projectId: string }>();
   const navigate = useNavigate();
-  const { readFile, isConnected } = useMqtt();
+  const { readFile, writeFile, listDirectory, isConnected } = useMqtt();
+  const { currentUser } = useAuth();
   const serviceRef = useRef<ArduBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const codeEditedRef = useRef(false);
   const suppressEditorChangeRef = useRef(false);
+  const suppressBlocklyChangeRef = useRef(false);
 
   const [board, setBoard] = useState('esp8266_wemos_d1');
   const [viewMode, setViewMode] = useState<ViewMode>('blockly');
@@ -56,6 +65,9 @@ function ProjectPage() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [flashOpen, setFlashOpen] = useState(false);
+  const [sketches, setSketches] = useState<string[]>([]);
+  const [currentSketch, setCurrentSketch] = useState<string | null>(null);
+  const [sketchesOpen, setSketchesOpen] = useState(true);
 
   // Keep ref in sync with state for use inside Blockly listener
   useEffect(() => {
@@ -76,6 +88,7 @@ function ProjectPage() {
     serviceRef.current = service;
 
     service.onWorkspaceChange(() => {
+      if (suppressBlocklyChangeRef.current) return;
       if (codeEditedRef.current) {
         setConfirmOpen(true);
         return;
@@ -124,7 +137,70 @@ function ProjectPage() {
       serviceRef.current?.resize();
     }, 50);
     return () => clearTimeout(timer);
-  }, [viewMode, splitRatio, configOpen]);
+  }, [viewMode, splitRatio, configOpen, sketchesOpen]);
+
+  // Load sketches list from project examples directory
+  const projectBasePath = currentUser?.name && projectId
+    ? `Minis/Users/${currentUser.name}/Projects/${projectId}/examples`
+    : null;
+
+  useEffect(() => {
+    if (!isConnected || !projectBasePath) return;
+    listDirectory(projectBasePath).then((tree) => {
+      const dirs = (tree.children ?? [])
+        .filter((c) => c.type === 'directory')
+        .map((c) => c.name);
+      setSketches(dirs);
+    }).catch(() => setSketches([]));
+  }, [isConnected, projectBasePath, listDirectory]);
+
+  const handleLoadSketch = async (sketchName: string) => {
+    if (!projectBasePath) return;
+    setCurrentSketch(sketchName);
+    setCodeEdited(false);
+
+    const blocklyPath = `${projectBasePath}/${sketchName}/${sketchName}.blockly`;
+    const inoPath = `${projectBasePath}/${sketchName}/${sketchName}.ino`;
+
+    // Suppress workspace change events during programmatic load
+    suppressBlocklyChangeRef.current = true;
+    serviceRef.current?.clearWorkspace();
+    try {
+      const blocklyFile = await readFile(blocklyPath);
+      if (serviceRef.current && blocklyFile.content) {
+        serviceRef.current.loadFromXml(blocklyFile.content);
+      }
+    } catch {
+      // File not found — workspace already cleared
+    }
+    suppressBlocklyChangeRef.current = false;
+
+    // Load .ino into code editor, or generate from loaded blockly
+    try {
+      const inoFile = await readFile(inoPath);
+      syncCodeToEditor(inoFile.content);
+    } catch {
+      if (serviceRef.current) {
+        const code = serviceRef.current.generateArduinoCode();
+        syncCodeToEditor(code);
+      }
+    }
+  };
+
+  const handleSaveSketch = async () => {
+    if (!projectBasePath || !currentSketch) return;
+    const blocklyPath = `${projectBasePath}/${currentSketch}/${currentSketch}.blockly`;
+    const inoPath = `${projectBasePath}/${currentSketch}/${currentSketch}.ino`;
+
+    const blocklyXml = serviceRef.current?.serializeToXml() ?? '';
+    const inoCode = editorRef.current?.getContent() ?? generatedCode;
+
+    await Promise.all([
+      writeFile(blocklyPath, blocklyXml),
+      writeFile(inoPath, inoCode),
+    ]);
+    setCodeEdited(false);
+  };
 
   const handleBoardChange = (newBoard: string) => {
     setBoard(newBoard);
@@ -192,7 +268,7 @@ function ProjectPage() {
       {/* Top AppBar */}
       <AppBar position="static" elevation={1}>
         <Toolbar variant="dense">
-          <IconButton color="inherit" edge="start" onClick={() => navigate('/user')} sx={{ mr: 1 }}>
+          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userId}/main`)} sx={{ mr: 1 }}>
             <ArrowBack />
           </IconButton>
           <Typography variant="h6" sx={{ mr: 2 }} noWrap>
@@ -209,6 +285,31 @@ function ProjectPage() {
             sx={btnSx(configOpen)}
           >
             Configuration
+          </Button>
+
+          {/* Sketches toggle */}
+          <Button
+            size="small"
+            variant={sketchesOpen ? 'contained' : 'outlined'}
+            color="inherit"
+            startIcon={<FolderOpen />}
+            onClick={() => setSketchesOpen((v) => !v)}
+            sx={{ ml: 1, ...btnSx(sketchesOpen) }}
+          >
+            Sketches{currentSketch ? `: ${currentSketch}` : ''}
+          </Button>
+
+          {/* Save */}
+          <Button
+            size="small"
+            variant="outlined"
+            color="inherit"
+            startIcon={<Save />}
+            onClick={handleSaveSketch}
+            disabled={!currentSketch}
+            sx={{ ml: 1, ...btnSx(false) }}
+          >
+            Save
           </Button>
 
           <Box sx={{ flexGrow: 1 }} />
@@ -294,6 +395,40 @@ function ProjectPage() {
             <Typography variant="subtitle2" gutterBottom>
               Configuration
             </Typography>
+          </Box>
+        )}
+
+        {/* Sketches panel */}
+        {sketchesOpen && (
+          <Box
+            sx={{
+              width: 220,
+              flexShrink: 0,
+              borderRight: 1,
+              borderColor: 'divider',
+              overflow: 'auto',
+              bgcolor: 'background.paper',
+            }}
+          >
+            <Typography variant="subtitle2" sx={{ p: 2, pb: 0 }}>
+              Sketches
+            </Typography>
+            <List dense>
+              {sketches.map((name) => (
+                <ListItemButton
+                  key={name}
+                  selected={currentSketch === name}
+                  onClick={() => handleLoadSketch(name)}
+                >
+                  <ListItemText primary={name} />
+                </ListItemButton>
+              ))}
+              {sketches.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1 }}>
+                  No sketches found
+                </Typography>
+              )}
+            </List>
           </Box>
         )}
 

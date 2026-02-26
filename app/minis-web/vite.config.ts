@@ -23,6 +23,10 @@ export default defineConfig({
         target: 'http://localhost:1902',
         changeOrigin: true,
       },
+      '/mqtt': {
+        target: 'ws://localhost:1902',
+        ws: true,
+      },
     },
   },
   build: {

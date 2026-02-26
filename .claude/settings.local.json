@@ -58,7 +58,10 @@
       "WebFetch(domain:www.npmjs.com)",
       "Bash(pnpm add:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:deepwiki.com)"
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(pnpm --filter minis-backend test)",
+      "Bash(pnpm --filter minis-web test)",
+      "Bash(pnpm --filter minis-backend exec node -e \"import\\(''swagger-ui-dist''\\).then\\(m => console.log\\(m.absolutePath?.\\(\\)\\)\\)\" --input-type=module)"
     ]
   }
 }

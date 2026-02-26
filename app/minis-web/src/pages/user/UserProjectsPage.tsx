@@ -1,11 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  Box, Typography, Button, IconButton,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
+  Box, Typography, Button, IconButton, Card, CardActionArea,
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Alert, CircularProgress,
 } from '@mui/material';
-import { Add, Delete, OpenInNew } from '@mui/icons-material';
+import { Add, Delete } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { MinisProjectModel, MinisProjectDefModel } from '@mhersztowski/core';
@@ -19,6 +18,7 @@ function UserProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [selectedProjectDef, setSelectedProjectDef] = useState('');
+  const [projectName, setProjectName] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -42,25 +42,26 @@ function UserProjectsPage() {
   useEffect(() => { load(); }, [load]);
 
   const handleAdd = async () => {
-    if (!userId || !selectedProjectDef) return;
+    if (!userId || !selectedProjectDef || !projectName.trim()) return;
     try {
-      await minisApi.createUserProject(userId, selectedProjectDef);
+      await minisApi.createUserProject(userId, { name: projectName.trim(), projectDefId: selectedProjectDef });
       setAddDialogOpen(false);
       setSelectedProjectDef('');
+      setProjectName('');
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');
     }
   };
 
-  const handleOpen = (_project: MinisProjectModel) => {
-    navigate(`/user/${userId}/project`);
+  const handleOpen = (project: MinisProjectModel) => {
+    navigate(`/user/${userId}/project/${project.id}`);
   };
 
-  const handleDelete = async (projectName: string) => {
+  const handleDelete = async (projectId: string) => {
     if (!userId) return;
     try {
-      await minisApi.deleteUserProject(userId, projectName);
+      await minisApi.deleteUserProject(userId, projectId);
       setDeleteConfirm(null);
       load();
     } catch (err) {
@@ -78,43 +79,42 @@ function UserProjectsPage() {
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {loading && <CircularProgress />}
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Based On</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {items.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell>{item.name}</TableCell>
-                <TableCell>{item.projectDefId}</TableCell>
-                <TableCell align="right">
-                  <IconButton size="small" onClick={() => handleOpen(item)}><OpenInNew /></IconButton>
-                  <IconButton size="small" onClick={() => setDeleteConfirm(item.name)}><Delete /></IconButton>
-                </TableCell>
-              </TableRow>
-            ))}
-            {!loading && items.length === 0 && (
-              <TableRow><TableCell colSpan={3} align="center">No projects yet</TableCell></TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+        {items.map((item) => (
+          <Card key={item.id} sx={{ width: 220 }}>
+            <CardActionArea onClick={() => handleOpen(item)} sx={{ p: 1.5, pb: 0.5 }}>
+              <Typography variant="subtitle2" color="text.secondary">Name:</Typography>
+              <Typography variant="body1" sx={{ mb: 1 }}>{item.name}</Typography>
+              <Typography variant="subtitle2" color="text.secondary">Based on Module:</Typography>
+              <Typography variant="body2">
+                {projectDefs.find(d => d.id === item.projectDefId)?.name ?? item.projectDefId}
+              </Typography>
+            </CardActionArea>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 0.5, pb: 0.5 }}>
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item.id); }}>
+                <Delete fontSize="small" />
+              </IconButton>
+            </Box>
+          </Card>
+        ))}
+        {!loading && items.length === 0 && (
+          <Typography color="text.secondary">No projects yet</Typography>
+        )}
+      </Box>
 
       {/* Add Project Dialog */}
       <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create Project</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2, mt: 1 }}>
-            Select a project definition to create a new project from.
-          </Typography>
           <TextField
             fullWidth select label="Project Definition" value={selectedProjectDef}
-            onChange={(e) => setSelectedProjectDef(e.target.value)}
+            onChange={(e) => {
+              const defId = e.target.value;
+              setSelectedProjectDef(defId);
+              const def = projectDefs.find(d => d.id === defId);
+              if (def) setProjectName(def.name);
+            }}
+            sx={{ mt: 1, mb: 2 }}
             InputLabelProps={{ shrink: true }}
             SelectProps={{ native: true }}
           >
@@ -123,17 +123,21 @@ function UserProjectsPage() {
               <option key={def.id} value={def.id}>{def.name} (v{def.version})</option>
             ))}
           </TextField>
+          <TextField
+            fullWidth label="Project Name" value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleAdd} disabled={!selectedProjectDef}>Create</Button>
+          <Button variant="contained" onClick={handleAdd} disabled={!selectedProjectDef || !projectName.trim()}>Create</Button>
         </DialogActions>
       </Dialog>
 
       {/* Delete Confirmation */}
       <Dialog open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)}>
         <DialogTitle>Delete Project?</DialogTitle>
-        <DialogContent><Typography>Are you sure you want to delete "{deleteConfirm}"?</Typography></DialogContent>
+        <DialogContent><Typography>Are you sure you want to delete this project?</Typography></DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteConfirm(null)}>Cancel</Button>
           <Button color="error" variant="contained" onClick={() => deleteConfirm && handleDelete(deleteConfirm)}>Delete</Button>

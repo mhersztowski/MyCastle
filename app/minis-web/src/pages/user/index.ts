@@ -2,3 +2,7 @@ export { default as UserDashboardPage } from './UserDashboardPage';
 export { default as UserDevicesPage } from './UserDevicesPage';
 export { default as UserProjectsPage } from './UserProjectsPage';
 export { default as ProjectPage } from './ProjectPage';
+export { default as IotDevicesPage } from './iot/IotDevicesPage';
+export { default as IotDevicePage } from './iot/IotDevicePage';
+export { default as IotAlertsPage } from './iot/IotAlertsPage';
+export { default as IotEmulatorPage } from './iot/IotEmulatorPage';

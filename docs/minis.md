@@ -1,133 +1,256 @@
+# Minis — Platforma DIY dla dzieci
 
+Minis jest platformą wspierającą tworzenie projektów DIY, na początku skierowaną dla dzieci. Dziecko z bazy dostępnych projektów wybiera sobie ten, nad którym chciałoby pracować. Następnie dziecko ma możliwość pracy nad następującymi procesami: składanie urządzenia, edytowanie gotowego projektu programu (Blockly / Arduino C++) i wgrywanie go na mikrokontroler.
 
-Minis jest platformą wspierającą tworzenie projektów  DYI, na początku skierowaną dla dzieci. Dziecko z bazy dostępnych projektów wybiera sobie ten nad którym chciałby pracować . Następnie dziecko ma możliwość pracy nad następującymi procesami: składanie urządzenia, edytowanie gotowego projektu programu i wgrywanie go.
+---
 
-*Filesystem w data/minis:*
+## Modele danych (pakiet @mhersztowski/core)
 
-- Admin/
-    - HowTo/
-        - ConnectEsp32.md
-    - DeviceDefs/
-        - Esp32devkitc/
-            - DeviceDef.json
-            - Description.json
-    - ModuleDefs/
-        - Esp32devkitc/
-            - ModuleDef.json
-    - ProjectsDefs /
-        - ArduinoTutorial - katalog projekty
-    - DeviceDefList.json
-    - ModuleDefList.json
-    - ProjectDefList.json
-    - Users.json
-- Users/
-    - Mateo/
-        - Projects/
-            - Arduino1
-        - Device.json
-        - Module.json
-
-FileSystem struktura katalogu projektu:
-ToDo
-
-*Definiuje następujące modele w pakiecie core*
-
-MinisDeviceDef
+MinisDeviceDef — definicja urządzenia (admin)
 - name
-- modules - list of MinisModuleDefId
+- modules — lista MinisModuleDefId
 
-MinisDevice:
+MinisDevice — instancja urządzenia (per user)
 - MinisDeviceDefId
 - isAssembled
-- sn - serial number
+- isIot
+- sn — serial number
 
-MinisModuleDef:
-- name - np Esp32devkitC
-- soc - np. Esp32 IF not „” the isProgrammagle = true
+MinisModuleDef — definicja modułu (admin)
+- name — np. Esp32devkitC
+- soc — np. Esp32 (jeśli != "" to isProgrammable = true)
 - isProgrammable
 
-MinisModule:
+MinisModule — instancja modułu
 - MinisModuleDefId
 - sn
 
-MinisProjectDef
+MinisProjectDef — definicja projektu (admin)
 - name
 - version
 - DeviceDefId
 - ModuleDefId
-- software_platform
-    - Arduino
-- blocklydef
-- Pliki .blockly/.ino
+- softwarePlatform (Arduino)
+- blocklyDef
+- Pliki .blockly/.ino (uploadowane jako ZIP)
 
-MinisProject
+MinisProject — instancja projektu (per user)
 - name
 - ProjectDefId
-- Kopia plików .blockly/.ino
+- Kopia plików .blockly/.ino (kopiowana z ProjectDef przy tworzeniu)
 
-*Na podstawie modeli definiuje Nody w pakiecie core*
-Definiuje nody, które oprócz atrubutów, definuja popularne funkcje, i stany
+UserModel — użytkownik
+- name, password, isAdmin, roles[]
 
-*Endpointy minis-backend*
+Na podstawie modeli zdefiniowane są Nody w pakiecie core (MinisDeviceDefNode, MinisDeviceNode, MinisModuleDefNode, MinisModuleNode, MinisProjectDefNode, MinisProjectNode, UserNode) — rozszerzają modele o UI state i metody clone().
 
-Ma następujące endpointy operacji CRUD funkcjonalności:
- - admin
- - user
+### Modele IoT (packages/core/src/models/IotModels.ts)
 
-cały backend ma wdrożonego swaggers,
+- **IotDeviceConfig** — konfiguracja urządzenia IoT: topicPrefix, heartbeatIntervalSec, capabilities (sensor/actuator)
+- **TelemetryRecord** / **TelemetryMetric** — rekord telemetryczny z metrykami (key, value, unit)
+- **TelemetryAggregate** — agregat min/max/avg per okres
+- **DeviceCommand** — komenda z lifecycle (PENDING → SENT → ACKNOWLEDGED/FAILED/TIMEOUT)
+- **AlertRule** — reguła alertu (metric, condition, severity, cooldown)
+- **Alert** — instancja alertu (OPEN → ACKNOWLEDGED → RESOLVED)
+- **IotDeviceStatus** — 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
 
-*Strony*
+---
 
-Aplikacja ma mieć interfejs w języku angielskim.
+## Filesystem (data-minis/)
 
-Chciałby aby strony w wiekszości ptrzykadków kożystały z endpointów minis-backend.
+```
+data-minis/
+├── iot.db                               # SQLite — dane IoT (telemetria, komendy, alerty, config)
+└── Minis/
+    ├── Admin/
+    │   ├── Users.json                  # { type, items: [{ id, name, password, isAdmin, roles }] }
+    │   ├── DeviceDefList.json          # { type, deviceDefs: [...] }
+    │   ├── ModuleDefList.json          # { type, moduleDefs: [...] }
+    │   ├── ProjectDefList.json         # { type, projectDefs: [...] }
+    │   ├── HowTo/
+    │   │   └── ConnectEsp32.md
+    │   ├── DeviceDefs/
+    │   │   └── {deviceDefId}/          # pliki źródłowe definicji urządzenia
+    │   ├── ModuleDefs/
+    │   │   └── {moduleDefId}/          # pliki źródłowe definicji modułu
+    │   └── ProjectsDefs/
+    │       └── {projectDefId}/         # pliki źródłowe definicji projektu
+    │           └── examples/
+    │               └── sketch1/
+    │                   ├── sketch1.ino
+    │                   └── sketch1.blockly
+    └── Users/
+        └── {userName}/
+            ├── Device.json             # { type, devices: [...] }
+            ├── Project.json            # { type, projects: [...] }
+            └── Projects/
+                └── {projectId}/        # kopia plików z ProjectDef
+                    └── examples/
+                        └── sketch1/
+                            ├── sketch1.ino
+                            └── sketch1.blockly
+```
 
-Na stronie głównej / pojawia się lista z użytkownika na którego można się zalogować.
-Po wybraniu przejscie na strone /login gdzie następuje podanie hasła dla użytkownika. 
-Po poprawnym podaniu hasła otworzenie strony /user/{userid}/main.
+---
 
-Na wszystkich stronach admina /admin/{userid}/* pojawiło się menu po lewej z przyciskami do podstron:
-- Main /admin/{useriid}/main
-- Users - /admin/{userid}/users
-- DevicesDef - /admin/{userid}/devicesdefs
-- ModulesDef - /admin/{userid}/modulesdefs
-- ProjectDef - /projects/{user}/projectdefs
+## minis-backend (app/minis-backend/)
 
-Na stronie Users /admin/{userid}/users:
-- wyświetlana jest lista użytkowników, z ikonami akcji usuń, edytuj
-- Jest przycisk Add User, wywołujący modal dodania użytkownika
+Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 
-Na stronie DevicesDef /admin/{userid}/devicesdefs:
-- wyświetlana jest lista definicji użądzeń, z ikonami akcji usuń, edytuj
-- Jest przycisk Add DeviceDef, wywołujący modal dodania użytkownika
+**Architektura:** App singleton → FileSystem + MinisHttpServer (extends HttpUploadServer) + MqttServer + IotService. Dane platformy w JSON files (FileSystem), dane IoT w SQLite (iot.db). FileSystem events broadcastowane przez MQTT.
 
-Na stronie ModulesDef /admin/{userid}/modulesdefs:
-- wyświetlana jest lista modułów
+### Zaimplementowane REST API (/api/*)
 
-Na stronie ProjectDefs /admin/{userid}/projectdefs:
-wyświetlana jest lista z definicjami projektów, z ikonami akcji usuń, edytuj
-Jest przycisk Add ProjectDef, wywołujący modal dodania definicji projektu
+**Autentykacja:**
+- `POST /api/auth/login` — logowanie (userId + password), zwraca UserPublic (bez hasła)
 
+**Admin CRUD** (generyczny handleCrud pattern):
+- `GET/POST /api/admin/users` — lista / tworzenie użytkownika (auto-ID, tworzenie katalogu usera)
+- `PUT/DELETE /api/admin/users/{id}` — edycja / usunięcie
+- `GET/POST /api/admin/devicedefs` — lista / tworzenie definicji urządzenia
+- `PUT/DELETE /api/admin/devicedefs/{id}` — edycja / usunięcie (+ kasowanie źródeł)
+- `GET/POST /api/admin/moduledefs` — lista / tworzenie definicji modułu
+- `PUT/DELETE /api/admin/moduledefs/{id}` — edycja / usunięcie (+ kasowanie źródeł)
+- `GET/POST /api/admin/projectdefs` — lista / tworzenie definicji projektu
+- `PUT/DELETE /api/admin/projectdefs/{id}` — edycja / usunięcie (+ kasowanie źródeł)
 
-Na wszystkich stronach użytkownika /user/{userid}/* pojawiło się menu po lewej  z przyciskami do podstron
- - Main /user/{useriid}/main
-- Devices - /user/{userid}/devices
-- Projects - /user/{user}/projects
+**Upload źródeł:**
+- `POST /api/admin/{resource}/{id}/sources` — upload ZIP z plikami (max 50MB), smart prefix stripping
 
-Na stronie głównej użytkownika /user/{userid}/main} chcę żeby użytkownik wybrał czynność: 
-- Dodanie gotowego  urządzenia
-- składanie  urządzenia 
-- Otwarcie projektu  urządzenia 
+**User CRUD** (per user, dane w Users/{userName}/):
+- `GET/POST /api/users/{userId}/devices` — lista / tworzenie urządzenia
+- `PUT/DELETE /api/users/{userId}/devices/{id}` — edycja / usunięcie
+- `GET/POST /api/users/{userId}/projects` — lista / tworzenie projektu (kopiuje źródła z ProjectDef)
+- `PUT/DELETE /api/users/{userId}/projects/{id}` — edycja / usunięcie (+ kasowanie źródeł)
 
-Na stronie Devices /user/{userid/devices}:
-- wyświetlana jest lista złożonych urządzeń 
-- Jest przycisk Add Assembled Device
-- Jest przecisk Assemble Device
+**IoT API** (per user/device, dane w SQLite):
+- `GET/PUT /api/users/{userId}/devices/{deviceId}/iot-config` — konfiguracja IoT urządzenia
+- `GET /api/users/{userId}/devices/{deviceId}/telemetry?from=&to=&limit=` — historia telemetrii
+- `GET /api/users/{userId}/devices/{deviceId}/telemetry/latest` — ostatni odczyt
+- `POST/GET /api/users/{userId}/devices/{deviceId}/commands` — wysyłanie / lista komend
+- `GET/POST /api/users/{userId}/alert-rules` — lista / tworzenie reguł alertów
+- `PUT/DELETE /api/users/{userId}/alert-rules/{id}` — edycja / usunięcie reguły
+- `GET /api/users/{userId}/alerts` — lista alertów
+- `PATCH /api/users/{userId}/alerts/{id}` — acknowledge / resolve alertu
+- `GET /api/users/{userId}/iot/devices` — statusy wszystkich urządzeń IoT
 
-Na stronie Projects /user/{userid}/projects:
-- wyświetlana jest lista zapisanych projektów 
-- Jest przycisk Add
-    - Wyświetlany jest modal
+**Swagger:**
+- `GET /api/docs` — Swagger UI
+- `GET /api/docs/swagger.json` — OpenAPI 3.0.3 spec
 
-Dla wszytskich stron na górze stron pojawia się pasek tytułowy uniwersalny na który strony moga dodawac elementy ui  który tez ma przycisk zarządzajacgo kontem po prawej a w nim menu item logout, dla amina menu item  zmiany widoku user/admin
+### IoT Service Layer (src/iot/)
 
+- **IotDatabase** — SQLite (better-sqlite3), WAL mode, schema init, 5 tabel
+- **TelemetryStore** — INSERT/query telemetrii, config CRUD, agregacja min/max/avg
+- **DevicePresence** — heartbeat tracking, timeout detection (heartbeatInterval × 2.5), EventEmitter statusChange
+- **CommandDispatcher** — tworzenie komend (PENDING → SENT), update statusu po ACK
+- **AlertEngine** — CRUD reguł, ewaluacja po każdej telemetrii, cooldown, acknowledge/resolve
+- **IotService** — orchestrator: parsuje MQTT topics (`minis/{userId}/{deviceId}/{type}`), koordynuje stores, broadcast zmian statusu/alertów
+
+### MQTT Integration
+
+IotService subskrybuje topics `minis/` przez MqttServer.onMessage(). Przetwarza:
+- `telemetry` → insert + presence update + alert evaluation + republish to `telemetry/live`
+- `heartbeat` → presence update
+- `command/ack` → update command status
+
+Publikuje (przez MqttServer.publishMessage()):
+- `status` — zmiana ONLINE/OFFLINE
+- `telemetry/live` — republished telemetria dla frontendu
+- `alert` — triggered alerty
+
+### Czego jeszcze nie ma:
+- Middleware autoryzacji (endpointy są publiczne — wystarczy znać URL)
+- Logika składania urządzenia (assembly workflow)
+- Kompilacja/deployment projektów na urządzenie
+- Wymuszanie ról admin/user na poziomie API
+
+---
+
+## minis-web (app/minis-web/)
+
+React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /mqtt → ws:1902).
+
+**Provider tree:** MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → App
+
+### Zaimplementowane strony i routing
+
+**Publiczne:**
+- `/` — HomePage: lista użytkowników jako karty, klik → login
+- `/login/:userId` — LoginPage: formularz hasła, nawigacja do admin/user wg roli
+
+**Admin** (`/admin/:userId/*`, Layout z drawer menu):
+- `/admin/:userId/main` — AdminDashboardPage: karty nawigacyjne (Users, DeviceDefs, ModuleDefs, ProjectDefs, File Browser)
+- `/admin/:userId/users` — UsersPage: tabela CRUD (name, isAdmin, roles), dialogi add/edit
+- `/admin/:userId/devicesdefs` — DevicesDefPage: tabela CRUD + upload źródeł ZIP, selektor modułów
+- `/admin/:userId/modulesdefs` — ModulesDefPage: tabela CRUD + upload źródeł, auto isProgrammable z SoC
+- `/admin/:userId/projectdefs` — ProjectDefsPage: tabela CRUD + upload źródeł, dynamic module filtering po device
+- `/admin/:userId/filesystem/list` — FilesystemListPage: dualny przeglądarka plików (drzewo + podgląd)
+- `/admin/:userId/filesystem/save` — FilesystemSavePage
+
+**User** (`/user/:userId/*`, Layout z drawer menu):
+- `/user/:userId/main` — UserDashboardPage: karty (Add Assembled Device, Assemble Device, Open Device Project)
+- `/user/:userId/devices` — UserDevicesPage: tabela urządzeń, dialogi Add Assembled / Assemble
+- `/user/:userId/projects` — UserProjectsPage: karty projektów, dialog Add (z wyborem ProjectDef)
+- `/user/:userId/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal i flash
+
+**IoT** (`/user/:userId/iot/*`, Layout z drawer menu):
+- `/user/:userId/iot/devices` — IotDevicesPage: lista urządzeń z isIot=true, status (ONLINE/OFFLINE), nawigacja do dashboardu
+- `/user/:userId/iot/device/:deviceId` — IotDevicePage: dashboard z metrykami (karty), konfiguracją, historią telemetrii, komendami (send dialog), alertami (ACK)
+- `/user/:userId/iot/alerts` — IotAlertsPage: tabs — alerty (ACK/Resolve) + reguły alertów (CRUD dialog)
+- `/user/:userId/iot/emulator` — IotEmulatorPage: emulator urządzeń IoT (konfiguracja, start/stop, activity log)
+
+**Editor:**
+- `/user/:userId/editor/monaco/*` — MonacoEditorPage: samodzielny edytor Monaco
+
+### Kluczowe moduły
+
+- **auth** — AuthContext/AuthProvider, sesja w sessionStorage, login/logout
+- **filesystem** — FilesystemContext (MQTT), MinisDataSourceContext (ładuje admin JSONy), modele/nody/komponenty
+- **editor** — Monaco editor z pluginami, C++ language support, komendami
+- **ardublockly2** — Blockly wizualny edytor Arduino: bloki (io, serial, servo, stepper, spi, audio, time, map, variables), profile płytek (ESP8266, ESP32, Arduino Uno...), generator Blockly → C++
+- **serial** — Web Serial API (WebSerialService), terminal xterm.js (WebSerialTerminal), flashowanie firmware (EspFlashService + FlashDialog)
+- **mqttclient** — re-export z @mhersztowski/web-client
+- **iot-emulator** — EmulatorService (MQTT pub/sub, generatory wartości, interwały telemetrii/heartbeat, command handling), typy, presety urządzeń, persistence w localStorage
+
+### Serwisy
+- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu (w tym 13 metod IoT: config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń)
+
+### Hooki
+- **useSourceUpload** — reusable hook do uploadu ZIP źródeł (stan, fileInputRef, trigger, handler)
+- **useAuth** — dostęp do stanu autentykacji
+- **useFilesystem** — dostęp do stanu filesystem (MQTT)
+- **useMinisDataSource** — dostęp do MemoryDataSource z admin danymi
+
+### UI
+- Interfejs w języku angielskim
+- Layout z Drawer (persistent na sm+, temporary na xs) + AppBar z menu konta (logout, switch admin/user)
+- Menu user: Main, Devices, Projects, IoT Devices, IoT Alerts, IoT Emulator
+- Strony korzystają z REST API (MinisApiService), nie bezpośrednio z MQTT (wyjątek: filesystem, ProjectPage sketch load/save, IoT Emulator)
+
+---
+
+## Testy
+
+**Backend (Vitest):**
+- MinisHttpServer.test.ts — auth, admin CRUD (users, deviceDefs, moduleDefs, projectDefs), user CRUD (devices, projects), error handling (22 testy)
+- IotService.test.ts — telemetria, heartbeat, komendy, alerty, presence, lifecycle (26 testów)
+- IotEndpoints.test.ts — wszystkie REST endpointy IoT (19 testów)
+
+**Frontend (Vitest + jsdom + React Testing Library):**
+- LoginPage.test.tsx — render, nawigacja, error handling
+- UsersPage.test.tsx — ładowanie tabeli, add dialog
+- MinisApiService.test.ts — wszystkie endpointy, parsowanie, błędy, upload ZIP
+- AuthContext.test.tsx — stan, sessionStorage, login/logout
+- useSourceUpload.test.ts — flow uploadu, błędy
+- generators.test.ts — generatory wartości: constant, random, sine, linear, step (20 testów)
+- EmulatorService.test.ts — CRUD konfiguracji, localStorage, device lifecycle, command handling, activity log, event system (23 testy)
+
+**E2E (Playwright):** auth, admin CRUD, user devices, user projects. Fixtures w tests/e2e/fixtures/data-minis/.
+
+---
+
+## Dokumentacja dodatkowa
+
+- **docs/minis-iot-dashboard-plan.md** — architektura i plan IoT Dashboard
+- **docs/minis-iot-device-implementation.md** — dokumentacja dla implementujących firmware IoT (MQTT topics, payloady, lifecycle, pseudokod, testowanie)

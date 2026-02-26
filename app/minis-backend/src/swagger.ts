@@ -189,17 +189,258 @@ export const swaggerSpec = {
       },
       post: {
         tags: ['User - Projects'],
-        summary: 'Create user project from definition',
+        summary: 'Create user project',
         parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
           content: {
             'application/json': {
-              schema: { type: 'object', required: ['projectDefId'], properties: { projectDefId: { type: 'string' } } },
+              schema: { type: 'object', required: ['name', 'projectDefId'], properties: { name: { type: 'string' }, projectDefId: { type: 'string' } } },
             },
           },
         },
         responses: { 201: { description: 'Project created' } },
+      },
+    },
+    '/users/{userId}/projects/{id}': {
+      put: {
+        tags: ['User - Projects'],
+        summary: 'Update user project',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, projectDefId: { type: 'string' } } } } },
+        },
+        responses: { 200: { description: 'Project updated' } },
+      },
+      delete: {
+        tags: ['User - Projects'],
+        summary: 'Delete user project',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Project deleted' } },
+      },
+    },
+
+    // --- IoT ---
+
+    '/users/{userId}/devices/{deviceId}/iot-config': {
+      get: {
+        tags: ['IoT - Config'],
+        summary: 'Get IoT device configuration',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'IoT config', content: { 'application/json': { schema: { $ref: '#/components/schemas/IotDeviceConfig' } } } },
+          404: { description: 'Config not found' },
+        },
+      },
+      put: {
+        tags: ['IoT - Config'],
+        summary: 'Create or update IoT device configuration',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/IotDeviceConfigInput' } } },
+        },
+        responses: { 200: { description: 'Config saved', content: { 'application/json': { schema: { $ref: '#/components/schemas/IotDeviceConfig' } } } } },
+      },
+    },
+    '/users/{userId}/devices/{deviceId}/telemetry': {
+      get: {
+        tags: ['IoT - Telemetry'],
+        summary: 'Get telemetry history',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'from', in: 'query', schema: { type: 'integer', description: 'Start timestamp (ms)' } },
+          { name: 'to', in: 'query', schema: { type: 'integer', description: 'End timestamp (ms)' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 1000 } },
+        ],
+        responses: {
+          200: {
+            description: 'Telemetry records',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TelemetryRecord' } } } } } },
+          },
+        },
+      },
+    },
+    '/users/{userId}/devices/{deviceId}/telemetry/latest': {
+      get: {
+        tags: ['IoT - Telemetry'],
+        summary: 'Get latest telemetry record',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Latest telemetry', content: { 'application/json': { schema: { $ref: '#/components/schemas/TelemetryRecord' } } } },
+        },
+      },
+    },
+    '/users/{userId}/devices/{deviceId}/commands': {
+      get: {
+        tags: ['IoT - Commands'],
+        summary: 'List commands for device',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+        ],
+        responses: {
+          200: {
+            description: 'Command list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/DeviceCommand' } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ['IoT - Commands'],
+        summary: 'Send command to device',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['name'],
+                properties: { name: { type: 'string' }, payload: { type: 'object' } },
+              },
+            },
+          },
+        },
+        responses: { 201: { description: 'Command created', content: { 'application/json': { schema: { $ref: '#/components/schemas/DeviceCommand' } } } } },
+      },
+    },
+    '/users/{userId}/alert-rules': {
+      get: {
+        tags: ['IoT - Alert Rules'],
+        summary: 'List alert rules for user',
+        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Alert rules list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/AlertRule' } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ['IoT - Alert Rules'],
+        summary: 'Create alert rule',
+        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/AlertRuleInput' } } },
+        },
+        responses: { 201: { description: 'Rule created', content: { 'application/json': { schema: { $ref: '#/components/schemas/AlertRule' } } } } },
+      },
+    },
+    '/users/{userId}/alert-rules/{ruleId}': {
+      put: {
+        tags: ['IoT - Alert Rules'],
+        summary: 'Update alert rule',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'ruleId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/AlertRuleInput' } } },
+        },
+        responses: {
+          200: { description: 'Rule updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/AlertRule' } } } },
+          404: { description: 'Rule not found' },
+        },
+      },
+      delete: {
+        tags: ['IoT - Alert Rules'],
+        summary: 'Delete alert rule',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'ruleId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Rule deleted' },
+          404: { description: 'Rule not found' },
+        },
+      },
+    },
+    '/users/{userId}/alerts': {
+      get: {
+        tags: ['IoT - Alerts'],
+        summary: 'List alerts for user',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 100 } },
+        ],
+        responses: {
+          200: {
+            description: 'Alerts list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Alert' } } } } } },
+          },
+        },
+      },
+    },
+    '/users/{userId}/alerts/{alertId}': {
+      patch: {
+        tags: ['IoT - Alerts'],
+        summary: 'Acknowledge or resolve alert',
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'alertId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', required: ['status'], properties: { status: { type: 'string', enum: ['ACKNOWLEDGED', 'RESOLVED'] } } },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Alert updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Alert' } } } },
+          400: { description: 'Invalid status' },
+          404: { description: 'Alert not found' },
+        },
+      },
+    },
+    '/users/{userId}/iot/devices': {
+      get: {
+        tags: ['IoT - Devices'],
+        summary: 'List IoT devices with online/offline status',
+        parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Device status list',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    items: {
+                      type: 'array',
+                      items: { $ref: '#/components/schemas/IotDeviceStatus' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     },
   },
@@ -252,6 +493,123 @@ export const swaggerSpec = {
           moduleDefId: { type: 'string' },
           softwarePlatform: { type: 'string' },
           blocklyDef: { type: 'string' },
+        },
+      },
+      IotDeviceConfig: {
+        type: 'object',
+        properties: {
+          deviceId: { type: 'string' },
+          userId: { type: 'string' },
+          topicPrefix: { type: 'string' },
+          heartbeatIntervalSec: { type: 'integer' },
+          capabilities: { type: 'array', items: { $ref: '#/components/schemas/IotCapability' } },
+          createdAt: { type: 'integer' },
+          updatedAt: { type: 'integer' },
+        },
+      },
+      IotDeviceConfigInput: {
+        type: 'object',
+        properties: {
+          topicPrefix: { type: 'string' },
+          heartbeatIntervalSec: { type: 'integer', default: 60 },
+          capabilities: { type: 'array', items: { $ref: '#/components/schemas/IotCapability' } },
+        },
+      },
+      IotCapability: {
+        type: 'object',
+        required: ['type', 'metricKey'],
+        properties: {
+          type: { type: 'string', enum: ['sensor', 'actuator'] },
+          metricKey: { type: 'string' },
+          unit: { type: 'string' },
+          label: { type: 'string' },
+          min: { type: 'number' },
+          max: { type: 'number' },
+          commandName: { type: 'string' },
+        },
+      },
+      TelemetryRecord: {
+        type: 'object',
+        properties: {
+          deviceId: { type: 'string' },
+          userId: { type: 'string' },
+          timestamp: { type: 'integer' },
+          metrics: { type: 'array', items: { $ref: '#/components/schemas/TelemetryMetric' } },
+        },
+      },
+      TelemetryMetric: {
+        type: 'object',
+        properties: {
+          key: { type: 'string' },
+          value: { type: 'number' },
+          unit: { type: 'string' },
+        },
+      },
+      DeviceCommand: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          deviceId: { type: 'string' },
+          name: { type: 'string' },
+          payload: { type: 'object' },
+          status: { type: 'string', enum: ['PENDING', 'SENT', 'DELIVERED', 'EXECUTED', 'FAILED'] },
+          createdAt: { type: 'integer' },
+          updatedAt: { type: 'integer' },
+        },
+      },
+      AlertRule: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          userId: { type: 'string' },
+          deviceId: { type: 'string' },
+          name: { type: 'string' },
+          metricKey: { type: 'string' },
+          conditionOp: { type: 'string', enum: ['>', '<', '>=', '<=', '==', '!='] },
+          conditionValue: { type: 'number' },
+          severity: { type: 'string', enum: ['INFO', 'WARNING', 'CRITICAL'] },
+          cooldownMinutes: { type: 'integer' },
+          isActive: { type: 'boolean' },
+          createdAt: { type: 'integer' },
+        },
+      },
+      AlertRuleInput: {
+        type: 'object',
+        required: ['name', 'metricKey', 'conditionOp', 'conditionValue'],
+        properties: {
+          name: { type: 'string' },
+          deviceId: { type: 'string' },
+          metricKey: { type: 'string' },
+          conditionOp: { type: 'string', enum: ['>', '<', '>=', '<=', '==', '!='] },
+          conditionValue: { type: 'number' },
+          severity: { type: 'string', enum: ['INFO', 'WARNING', 'CRITICAL'], default: 'INFO' },
+          cooldownMinutes: { type: 'integer', default: 15 },
+          isActive: { type: 'boolean', default: true },
+        },
+      },
+      Alert: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          ruleId: { type: 'string' },
+          deviceId: { type: 'string' },
+          userId: { type: 'string' },
+          metricKey: { type: 'string' },
+          metricValue: { type: 'number' },
+          severity: { type: 'string', enum: ['INFO', 'WARNING', 'CRITICAL'] },
+          status: { type: 'string', enum: ['ACTIVE', 'ACKNOWLEDGED', 'RESOLVED'] },
+          message: { type: 'string' },
+          firedAt: { type: 'integer' },
+          acknowledgedAt: { type: 'integer', nullable: true },
+          resolvedAt: { type: 'integer', nullable: true },
+        },
+      },
+      IotDeviceStatus: {
+        type: 'object',
+        properties: {
+          deviceId: { type: 'string' },
+          status: { type: 'string', enum: ['ONLINE', 'OFFLINE'] },
+          lastSeenAt: { type: 'integer' },
         },
       },
     },

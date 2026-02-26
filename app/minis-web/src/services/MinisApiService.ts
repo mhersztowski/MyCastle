@@ -6,6 +6,11 @@ import type {
   MinisModuleDefModel,
   MinisProjectDefModel,
   MinisProjectModel,
+  IotDeviceConfig,
+  TelemetryRecord,
+  DeviceCommand,
+  AlertRule,
+  Alert,
 } from '@mhersztowski/core';
 
 export type UserPublic = Omit<UserModel, 'password'>;
@@ -146,12 +151,82 @@ class MinisApiService {
     return data.items;
   }
 
-  async createUserProject(userId: string, projectDefId: string): Promise<MinisProjectModel> {
-    return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userId)}/projects`, { projectDefId });
+  async createUserProject(userId: string, data: { name: string; projectDefId: string }): Promise<MinisProjectModel> {
+    return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userId)}/projects`, data);
   }
 
-  async deleteUserProject(userId: string, projectName: string): Promise<void> {
-    await this.request('DELETE', `/users/${encodeURIComponent(userId)}/projects/${encodeURIComponent(projectName)}`);
+  async deleteUserProject(userId: string, projectId: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userId)}/projects/${encodeURIComponent(projectId)}`);
+  }
+  // IoT - Config
+  async getIotConfig(userId: string, deviceId: string): Promise<IotDeviceConfig | null> {
+    try {
+      return await this.request<IotDeviceConfig>('GET', `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/iot-config`);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveIotConfig(userId: string, deviceId: string, config: Partial<IotDeviceConfig>): Promise<IotDeviceConfig> {
+    return this.request<IotDeviceConfig>('PUT', `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/iot-config`, config);
+  }
+
+  // IoT - Telemetry
+  async getTelemetryLatest(userId: string, deviceId: string): Promise<TelemetryRecord | { message: string }> {
+    return this.request('GET', `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/telemetry/latest`);
+  }
+
+  async getTelemetryHistory(userId: string, deviceId: string, from: number, to: number, limit = 1000): Promise<TelemetryRecord[]> {
+    const data = await this.request<{ items: TelemetryRecord[] }>('GET', `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/telemetry?from=${from}&to=${to}&limit=${limit}`);
+    return data.items;
+  }
+
+  // IoT - Commands
+  async sendCommand(userId: string, deviceId: string, name: string, payload: Record<string, unknown> = {}): Promise<DeviceCommand> {
+    return this.request<DeviceCommand>('POST', `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/commands`, { name, payload });
+  }
+
+  async getCommands(userId: string, deviceId: string, limit = 50): Promise<DeviceCommand[]> {
+    const data = await this.request<{ items: DeviceCommand[] }>('GET', `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/commands?limit=${limit}`);
+    return data.items;
+  }
+
+  // IoT - Alert Rules
+  async getAlertRules(userId: string): Promise<AlertRule[]> {
+    const data = await this.request<{ items: AlertRule[] }>('GET', `/users/${encodeURIComponent(userId)}/alert-rules`);
+    return data.items;
+  }
+
+  async createAlertRule(userId: string, rule: Omit<AlertRule, 'id' | 'userId' | 'createdAt' | 'updatedAt'>): Promise<AlertRule> {
+    return this.request<AlertRule>('POST', `/users/${encodeURIComponent(userId)}/alert-rules`, rule);
+  }
+
+  async updateAlertRule(userId: string, ruleId: string, updates: Partial<AlertRule>): Promise<AlertRule> {
+    return this.request<AlertRule>('PUT', `/users/${encodeURIComponent(userId)}/alert-rules/${encodeURIComponent(ruleId)}`, updates);
+  }
+
+  async deleteAlertRule(userId: string, ruleId: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userId)}/alert-rules/${encodeURIComponent(ruleId)}`);
+  }
+
+  // IoT - Alerts
+  async getAlerts(userId: string, limit = 100): Promise<Alert[]> {
+    const data = await this.request<{ items: Alert[] }>('GET', `/users/${encodeURIComponent(userId)}/alerts?limit=${limit}`);
+    return data.items;
+  }
+
+  async acknowledgeAlert(userId: string, alertId: string): Promise<Alert> {
+    return this.request<Alert>('PATCH', `/users/${encodeURIComponent(userId)}/alerts/${encodeURIComponent(alertId)}`, { status: 'ACKNOWLEDGED' });
+  }
+
+  async resolveAlert(userId: string, alertId: string): Promise<Alert> {
+    return this.request<Alert>('PATCH', `/users/${encodeURIComponent(userId)}/alerts/${encodeURIComponent(alertId)}`, { status: 'RESOLVED' });
+  }
+
+  // IoT - Device Status
+  async getIotDevices(userId: string): Promise<Array<{ deviceId: string; status: string; lastSeenAt: number }>> {
+    const data = await this.request<{ items: Array<{ deviceId: string; status: string; lastSeenAt: number }> }>('GET', `/users/${encodeURIComponent(userId)}/iot/devices`);
+    return data.items;
   }
 }
 

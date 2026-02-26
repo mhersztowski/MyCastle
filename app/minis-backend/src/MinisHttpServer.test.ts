@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { MinisHttpServer } from './MinisHttpServer.js';
 import { FileSystem } from '@mhersztowski/core-backend';
 import * as fs from 'fs/promises';
@@ -54,6 +54,9 @@ async function seedData() {
   // Create Device.json for user
   const devices = { type: 'devices', devices: [] };
   await fs.writeFile(path.join(tmpDir, 'Minis', 'Users', 'NormalUser', 'Device.json'), JSON.stringify(devices));
+  // Create Project.json for user
+  const projects = { type: 'projects', projects: [] };
+  await fs.writeFile(path.join(tmpDir, 'Minis', 'Users', 'NormalUser', 'Project.json'), JSON.stringify(projects));
 }
 
 async function request(method: string, apiPath: string, body?: unknown) {
@@ -244,20 +247,21 @@ describe('MinisHttpServer', () => {
 
     it('POST /api/users/:userId/projects creates project', async () => {
       const { status, data } = await request('POST', '/users/user1/projects', {
-        projectDefId: 'test-proj',
+        name: 'My Blinky', projectDefId: 'pd1',
       });
       expect(status).toBe(201);
-      expect(data.name).toBe('test-proj');
+      expect(data.name).toBe('My Blinky');
+      expect(data.projectDefId).toBe('pd1');
+      expect(data.id).toBeDefined();
     });
 
-    it('DELETE /api/users/:userId/projects/:name deletes project', async () => {
-      const { status } = await request('DELETE', '/users/user1/projects/test-proj');
+    it('DELETE /api/users/:userId/projects/:id deletes project', async () => {
+      // Create then delete
+      const { data: created } = await request('POST', '/users/user1/projects', {
+        name: 'ToDelete', projectDefId: 'pd1',
+      });
+      const { status } = await request('DELETE', `/users/user1/projects/${encodeURIComponent(created.id)}`);
       expect(status).toBe(200);
-    });
-
-    it('returns 400 when projectDefId missing', async () => {
-      const { status } = await request('POST', '/users/user1/projects', {});
-      expect(status).toBe(400);
     });
 
     it('returns 404 for unknown userId', async () => {

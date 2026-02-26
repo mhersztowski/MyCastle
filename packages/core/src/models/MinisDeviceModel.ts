@@ -3,6 +3,7 @@ export interface MinisDeviceModel {
   id: string;
   deviceDefId: string;
   isAssembled: boolean;
+  isIot: boolean;
   sn: string;
 }
 

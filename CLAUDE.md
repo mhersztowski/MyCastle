@@ -8,7 +8,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Shared packages
 - **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource. Dual ESM+CJS build (tsup).
-  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel, MinisProjectDefModel, MinisProjectModel, UserModel
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus)
   - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
   - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload
@@ -22,7 +22,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **@mhersztowski/core-backend** (`packages/core-backend/`) — współdzielone moduły backendowe wyekstrahowane z mycastle-backend. ESM-only build (tsup).
   - `filesystem/` — FileSystem (in-memory cache, EventEmitter fileChanged, atomic writes, per-file locking, deleteDirectory)
   - `httpserver/` — HttpUploadServer (CORS, POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook). Klasa rozszerzalna: protected server, fileSystem, setCorsHeaders, handleRequest, sendJsonResponse — umożliwia subclassing (np. MinisHttpServer)
-  - `mqttserver/` — MqttServer (Aedes), Client, Packet classes per type
+  - `mqttserver/` — MqttServer (Aedes, publishMessage(), onMessage(handler) for custom topic routing), MqttMessageHandler type, Client, Packet classes per type
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
 - **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core (SceneGraph, SceneNode, RenderEngine, IO)
@@ -64,22 +64,30 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - opis w docs/minis.md
 - Node.js, ESM, build z tsup, dev z tsx watch
 - Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
-- **App singleton** (`src/App.ts`): uproszczony — FileSystem + MinisHttpServer + MqttServer (bez OCR, Automate, Scheduler). `shutdown()` gracefully zamyka HTTP server + MQTT.
+- **App singleton** (`src/App.ts`): FileSystem + MinisHttpServer + MqttServer + IotService. `shutdown()` gracefully zamyka IoT service + HTTP server + MQTT. IotService wired via `MqttServer.onMessage()` / `MqttServer.publishMessage()`.
 - Importuje FileSystem, MqttServer z `@mhersztowski/core-backend`
-- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami.
+- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami. Przyjmuje IotService w konstruktorze dla endpointów IoT.
     - `/api/auth/login` — logowanie po userId+password
     - `/api/admin/{users,devicedefs,moduledefs,projectdefs}` — CRUD (GET list, POST create, PUT update, DELETE). Dane trzymane w JSON files (`Minis/Admin/*.json`)
-    - `/api/admin/projectdefs/:id/sources` — upload ZIP z plikami źródłowymi projektu (adm-zip)
+    - `/api/admin/{resource}/:id/sources` — upload ZIP z plikami źródłowymi (adm-zip, smart prefix stripping, max 50MB)
     - `/api/users/:userId/{devices,projects}` — CRUD per user (dane w `Minis/Users/:userId/*.json`)
+    - `/api/users/:userId/devices/:deviceId/iot-config` — GET/PUT konfiguracja IoT urządzenia
+    - `/api/users/:userId/devices/:deviceId/telemetry` — GET historia (from/to/limit), GET latest
+    - `/api/users/:userId/devices/:deviceId/commands` — POST wysyłanie, GET lista (limit)
+    - `/api/users/:userId/alert-rules` — GET/POST/PUT/DELETE reguły alertów
+    - `/api/users/:userId/alerts` — GET lista, PATCH acknowledge/resolve
+    - `/api/users/:userId/iot/devices` — GET statusy wszystkich urządzeń IoT
     - `/api/docs` — Swagger UI (swagger-ui-dist)
-    - `/api/swagger.json` — OpenAPI spec (`src/swagger.ts`)
-- Dependencje: adm-zip, swagger-ui-dist
-- Dane w `data-minis/` (ROOT_DIR=../../data-minis)
+    - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`)
+- **IoT Service Layer** (`src/iot/`): IotDatabase (SQLite, better-sqlite3, WAL mode), TelemetryStore (INSERT/query, config CRUD, agregacja), DevicePresence (heartbeat tracking, timeout detection), CommandDispatcher (tworzenie komend, ACK tracking), AlertEngine (reguły CRUD, ewaluacja po telemetrii, cooldown), IotService (orchestrator — parsuje MQTT topics `minis/{userId}/{deviceId}/{type}`, koordynuje stores)
+- **MQTT Integration**: IotService subskrybuje `minis/` topics. Przetwarza: telemetry → insert + presence + alert eval + republish, heartbeat → presence, command/ack → update status. Publikuje: status, telemetry/live, alert
+- Dependencje: adm-zip, swagger-ui-dist, better-sqlite3
+- Dane platformy w `data-minis/` (ROOT_DIR=../../data-minis, JSON files), dane IoT w `data-minis/iot.db` (SQLite)
 
 ### Aplikacja frontend Minis (`app/minis-web/`)
 - opis w docs/minis.md
-- React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor, Blockly 12, xterm.js, esptool-js
-- Dev port: 1903 (Vite HMR), proxy `/api` → `localhost:1902`
+- React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor, Blockly 12, xterm.js, esptool-js, mqtt
+- Dev port: 1903 (Vite HMR), proxy `/api` → `localhost:1902`, proxy `/mqtt` → `ws://localhost:1902` (WebSocket)
 - Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
 - **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
 - **Routing z userId**: wszystkie ścieżki admin/user zawierają `:userId` (np. `/admin/:userId/main`, `/user/:userId/projects`). Strony pobierają userId z `useParams()`.
@@ -91,11 +99,12 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
     - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile — profile pinów dla różnych płytek), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
     - **serial** — komunikacja z mikrokontrolerami przez Web Serial API: WebSerialService (connect/disconnect, read/write), WebSerialTerminal (komponent xterm.js), EspFlashService (flashowanie firmware przez esptool-js), FlashDialog (UI do flashowania)
+    - **iot-emulator** — emulator urządzeń IoT w przeglądarce: EmulatorService (MQTT pub/sub via `mqtt` package, jedno współdzielone połączenie, interwały telemetrii/heartbeat, command handling auto-ack/auto-fail/manual, activity log, localStorage persistence), generatory wartości (constant/random/sine/linear/step), presety urządzeń (Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device), typy
 - Hooks (`src/hooks/`):
     - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP). Enkapsuluje stan uploadu, fileInputRef, trigger i handler. Używany w admin stronach (DevicesDefPage, ModulesDefPage, ProjectDefsPage).
 - Serwisy (`src/services/`):
-    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources
-- Strony: /, /login/:userId, /admin/:userId/main, /admin/:userId/users, /admin/:userId/devicesdefs, /admin/:userId/modulesdefs, /admin/:userId/projectdefs, /admin/:userId/filesystem/list, /admin/:userId/filesystem/save, /user/:userId/main, /user/:userId/devices, /user/:userId/projects, /user/:userId/project (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userId/editor/monaco/*
+    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 13 metod IoT (config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń)
+- Strony: /, /login/:userId, /admin/:userId/main, /admin/:userId/users, /admin/:userId/devicesdefs, /admin/:userId/modulesdefs, /admin/:userId/projectdefs, /admin/:userId/filesystem/list, /admin/:userId/filesystem/save, /user/:userId/main, /user/:userId/devices, /user/:userId/projects, /user/:userId/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userId/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userId/iot/device/:deviceId (IotDevicePage — dashboard z metrykami, konfiguracją, historią, komendami, alertami), /user/:userId/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userId/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userId/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -171,9 +180,18 @@ mycastle/                           # Root monorepo
 │   ├── minis-backend/              # Minis Backend Node.js
 │   │   ├── src/
 │   │   │   ├── index.ts            # Entry point (port 1902)
-│   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt)
+│   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt+IotService)
 │   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) extending HttpUploadServer
-│   │   │   └── swagger.ts          # OpenAPI spec
+│   │   │   ├── swagger.ts          # OpenAPI spec
+│   │   │   └── iot/                # IoT service layer
+│   │   │       ├── IotDatabase.ts      # SQLite: schema init, WAL, db handle
+│   │   │       ├── TelemetryStore.ts   # INSERT/query telemetrii, config CRUD, agregacja
+│   │   │       ├── DevicePresence.ts   # Heartbeat tracking, timeout detection
+│   │   │       ├── CommandDispatcher.ts # Tworzenie komend, ACK tracking
+│   │   │       ├── AlertEngine.ts      # CRUD reguł, ewaluacja, cooldown
+│   │   │       ├── IotService.ts       # Orchestrator: MQTT → stores
+│   │   │       ├── IotService.test.ts  # 26 testów
+│   │   │       └── IotEndpoints.test.ts # 19 testów REST IoT
 │   │   ├── .env                    # PORT=1902, ROOT_DIR=../../data-minis
 │   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM, target node20
@@ -182,14 +200,14 @@ mycastle/                           # Root monorepo
 │   │   ├── src/
 │   │   │   ├── main.tsx            # Entry (providers + App)
 │   │   │   ├── App.tsx             # Routes (all paths with :userId)
-│   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial}/
+│   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial,iot-emulator}/
 │   │   │   ├── hooks/useSourceUpload.ts  # Reusable file upload hook
-│   │   │   ├── services/MinisApiService.ts  # REST client singleton
-│   │   │   ├── pages/{admin,user,filesystem,editor}/
+│   │   │   ├── services/MinisApiService.ts  # REST client singleton (w tym 13 metod IoT)
+│   │   │   ├── pages/{admin,user,user/iot,filesystem,editor}/
 │   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
 │   │   │   └── components/Layout.tsx
 │   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
-│   │   ├── vite.config.ts          # Dev port: 1903, proxy /api → :1902
+│   │   ├── vite.config.ts          # Dev port: 1903, proxy /api → :1902, proxy /mqtt → ws:1902
 │   │   └── package.json
 │   ├── demo-scene-3d/              # Scene3D demo app
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
@@ -213,7 +231,7 @@ mycastle/                           # Root monorepo
 │
 ├── data/                           # Runtime data (ROOT_DIR for mycastle-backend)
 ├── data-minis/                     # Runtime data (ROOT_DIR for minis-backend)
-├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md, minis.md
+├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md, minis.md, minis-iot-dashboard-plan.md, minis-iot-device-implementation.md
 └── scripts/
 ```
 
@@ -271,8 +289,8 @@ mycastle/                           # Root monorepo
 - **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
 - **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
 - **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (mycastle-web, minis-web, ui-core)
-- **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
-- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Minis-backend additionally: adm-zip, swagger-ui-dist
+- **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor. Minis-web additionally: mqtt (v5, raw pub/sub for IoT emulator)
+- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Minis-backend additionally: adm-zip, swagger-ui-dist, better-sqlite3 (IoT data)
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 
 ## Common Gotchas

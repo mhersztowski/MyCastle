@@ -12,3 +12,4 @@ export * from './MinisDeviceModel';
 export * from './MinisProjectDefModel';
 export * from './MinisProjectModel';
 export * from './UserModel';
+export * from './IotModels';

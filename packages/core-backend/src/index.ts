@@ -10,6 +10,7 @@ export { HttpUploadServer } from './httpserver/HttpUploadServer';
 
 // mqttserver
 export { MqttServer } from './mqttserver/MqttServer';
+export type { MqttMessageHandler } from './mqttserver/MqttServer';
 export { Client } from './mqttserver/Client';
 export { Packet } from './mqttserver/packets/Packet';
 export type { PacketData } from './mqttserver/packets/Packet';

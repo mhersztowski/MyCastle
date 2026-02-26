@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import AdmZip from 'adm-zip';
+import type { IotService } from './iot/IotService.js';
 
 interface CrudConfig {
   filePath: string;
@@ -23,9 +24,11 @@ const CRUD_CONFIGS: Record<string, CrudConfig> = {
 
 export class MinisHttpServer extends HttpUploadServer {
   private swaggerUiDir: string | null = null;
+  private iotService: IotService | null;
 
-  constructor(port: number, fileSystem: FileSystem, staticDir?: string) {
+  constructor(port: number, fileSystem: FileSystem, iotService?: IotService, staticDir?: string) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
+    this.iotService = iotService ?? null;
     this.resolveSwaggerUiDir();
   }
 
@@ -58,11 +61,17 @@ export class MinisHttpServer extends HttpUploadServer {
   }
 
   private async handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const apiPath = req.url!.replace(/^\/api/, '');
+    const fullApiPath = req.url!.replace(/^\/api/, '');
+    const apiPath = fullApiPath.split('?')[0];
     const method = req.method || 'GET';
 
     // Swagger docs
-    if (apiPath === '/docs' || apiPath === '/docs/') {
+    if (apiPath === '/docs') {
+      res.writeHead(301, { Location: '/api/docs/' });
+      res.end();
+      return;
+    }
+    if (apiPath === '/docs/') {
       this.serveSwaggerUi(res);
       return;
     }
@@ -102,8 +111,64 @@ export class MinisHttpServer extends HttpUploadServer {
       }
     }
 
+    // IoT endpoints (must be matched BEFORE generic user devices/projects routes)
+
+    // IoT config: /users/{userId}/devices/{deviceId}/iot-config
+    const iotConfigMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-config$/);
+    if (iotConfigMatch) {
+      const userId = decodeURIComponent(iotConfigMatch[1]);
+      const deviceId = decodeURIComponent(iotConfigMatch[2]);
+      await this.handleIotConfig(req, res, method, userId, deviceId);
+      return;
+    }
+
+    // IoT telemetry: /users/{userId}/devices/{deviceId}/telemetry[/latest]
+    const telemetryMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/telemetry(\/latest)?$/);
+    if (telemetryMatch) {
+      const userId = decodeURIComponent(telemetryMatch[1]);
+      const deviceId = decodeURIComponent(telemetryMatch[2]);
+      const isLatest = !!telemetryMatch[3];
+      await this.handleIotTelemetry(req, res, method, userId, deviceId, isLatest);
+      return;
+    }
+
+    // IoT commands: /users/{userId}/devices/{deviceId}/commands
+    const commandsMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/commands$/);
+    if (commandsMatch) {
+      const userId = decodeURIComponent(commandsMatch[1]);
+      const deviceId = decodeURIComponent(commandsMatch[2]);
+      await this.handleIotCommands(req, res, method, userId, deviceId);
+      return;
+    }
+
+    // IoT device status: /users/{userId}/iot/devices
+    const iotDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/iot\/devices$/);
+    if (iotDevicesMatch) {
+      const userId = decodeURIComponent(iotDevicesMatch[1]);
+      await this.handleIotDevicesList(req, res, method, userId);
+      return;
+    }
+
+    // IoT alerts: /users/{userId}/alerts[/{id}]
+    const alertsMatch = apiPath.match(/^\/users\/([^/]+)\/alerts(?:\/(.+))?$/);
+    if (alertsMatch) {
+      const userId = decodeURIComponent(alertsMatch[1]);
+      const alertId = alertsMatch[2] ? decodeURIComponent(alertsMatch[2]) : undefined;
+      await this.handleIotAlerts(req, res, method, userId, alertId);
+      return;
+    }
+
+    // IoT alert rules: /users/{userId}/alert-rules[/{id}]
+    const alertRulesMatch = apiPath.match(/^\/users\/([^/]+)\/alert-rules(?:\/(.+))?$/);
+    if (alertRulesMatch) {
+      const userId = decodeURIComponent(alertRulesMatch[1]);
+      const ruleId = alertRulesMatch[2] ? decodeURIComponent(alertRulesMatch[2]) : undefined;
+      await this.handleIotAlertRules(req, res, method, userId, ruleId);
+      return;
+    }
+
     // User devices: /users/{userId}/devices and /users/{userId}/devices/{id}
-    const userDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/devices(?:\/(.+))?$/);
+    const userDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/devices(?:\/([^/]+))?$/);
     if (userDevicesMatch) {
       const userId = decodeURIComponent(userDevicesMatch[1]);
       const deviceId = userDevicesMatch[2] ? decodeURIComponent(userDevicesMatch[2]) : undefined;
@@ -111,23 +176,13 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
 
-    // User projects: /users/{userId}/projects and /users/{userId}/projects/{name}
-    const userProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/projects(?:\/(.+))?$/);
+    // User projects: /users/{userId}/projects and /users/{userId}/projects/{id}
+    const userProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/projects(?:\/([^/]+))?$/);
     if (userProjectsMatch) {
       const userId = decodeURIComponent(userProjectsMatch[1]);
-      const projectName = userProjectsMatch[2] ? decodeURIComponent(userProjectsMatch[2]) : undefined;
-      if (method === 'GET' && !projectName) {
-        await this.handleGetUserProjects(res, userId);
-        return;
-      }
-      if (method === 'POST' && !projectName) {
-        await this.handleCreateUserProject(req, res, userId);
-        return;
-      }
-      if (method === 'DELETE' && projectName) {
-        await this.handleDeleteUserProject(res, userId, projectName);
-        return;
-      }
+      const projectId = userProjectsMatch[2] ? decodeURIComponent(userProjectsMatch[2]) : undefined;
+      await this.handleUserProjects(req, res, method, userId, projectId);
+      return;
     }
 
     this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
@@ -211,7 +266,7 @@ export class MinisHttpServer extends HttpUploadServer {
     // Set type field based on resource
     const TYPE_MAP: Record<string, string> = {
       items: 'user', deviceDefs: 'device_def', moduleDefs: 'module_def',
-      projectDefs: 'project_def', devices: 'device',
+      projectDefs: 'project_def', devices: 'device', projects: 'minis_project',
     };
     if (TYPE_MAP[config.itemsKey]) body.type = TYPE_MAP[config.itemsKey];
 
@@ -224,6 +279,19 @@ export class MinisHttpServer extends HttpUploadServer {
     if (config.itemsKey === 'items' && body.name) {
       const userDir = `${MINIS_ROOT}/Users/${body.name}/Projects`;
       await this.writeJsonFile(`${userDir}/.gitkeep`, '');
+    }
+
+    // Copy project source files from definition when creating a user project
+    if (config.itemsKey === 'projects' && body.projectDefId) {
+      const userDir = path.dirname(config.filePath);
+      const srcPath = `${MINIS_ROOT}/Admin/ProjectsDefs/${body.projectDefId}`;
+      const dstPath = `${userDir}/Projects/${body.id}`;
+      try {
+        const srcTree = await this.fileSystem.listDirectory(srcPath);
+        await this.copyTree(srcTree, srcPath, dstPath);
+      } catch {
+        // Source doesn't exist — no files to copy, directory not needed
+      }
     }
 
     const { password, ...safeBody } = body;
@@ -279,6 +347,17 @@ export class MinisHttpServer extends HttpUploadServer {
       }
     }
 
+    // Delete user project source files directory
+    if (config.itemsKey === 'projects') {
+      const userDir = path.dirname(config.filePath);
+      const projectDir = `${userDir}/Projects/${id}`;
+      try {
+        await this.fileSystem.deleteDirectory(projectDir);
+      } catch {
+        // Directory may not exist
+      }
+    }
+
     this.sendJsonResponse(res, 200, { success: true });
   }
 
@@ -308,90 +387,19 @@ export class MinisHttpServer extends HttpUploadServer {
 
   // --- User Projects ---
 
-  private async handleGetUserProjects(res: ServerResponse, userId: string): Promise<void> {
-    try {
-      const userName = await this.resolveUserName(userId);
-      if (!userName) {
-        this.sendJsonResponse(res, 404, { error: 'User not found' });
-        return;
-      }
-
-      // List project directories under Users/{userName}/Projects/
-      const projectsPath = `${MINIS_ROOT}/Users/${userName}/Projects`;
-      try {
-        const tree = await this.fileSystem.listDirectory(projectsPath);
-        const projects = (tree.children || [])
-          .filter((child) => child.type === 'directory')
-          .map((child) => ({
-            type: 'minis_project',
-            id: child.name,
-            name: child.name,
-            projectDefId: child.name,
-          }));
-        this.sendJsonResponse(res, 200, { items: projects });
-      } catch {
-        this.sendJsonResponse(res, 200, { items: [] });
-      }
-    } catch (err) {
-      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+  private async handleUserProjects(req: IncomingMessage, res: ServerResponse, method: string, userId: string, projectId?: string): Promise<void> {
+    const userName = await this.resolveUserName(userId);
+    if (!userName) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
     }
-  }
 
-  private async handleCreateUserProject(req: IncomingMessage, res: ServerResponse, userId: string): Promise<void> {
-    try {
-      const body = await this.parseRequestBody(req) as { projectDefId: string };
-      if (!body.projectDefId) {
-        this.sendJsonResponse(res, 400, { error: 'projectDefId required' });
-        return;
-      }
-
-      const userName = await this.resolveUserName(userId);
-      if (!userName) {
-        this.sendJsonResponse(res, 404, { error: 'User not found' });
-        return;
-      }
-
-      const srcPath = `${MINIS_ROOT}/Admin/ProjectsDefs/${body.projectDefId}`;
-      const dstPath = `${MINIS_ROOT}/Users/${userName}/Projects/${body.projectDefId}`;
-
-      // Copy project files from definition to user directory
-      try {
-        const srcTree = await this.fileSystem.listDirectory(srcPath);
-        await this.copyTree(srcTree, srcPath, dstPath);
-      } catch {
-        // If source doesn't exist, just create the directory
-        await this.writeJsonFile(`${dstPath}/.gitkeep`, '');
-      }
-
-      this.sendJsonResponse(res, 201, {
-        type: 'minis_project',
-        id: body.projectDefId,
-        name: body.projectDefId,
-        projectDefId: body.projectDefId,
-      });
-    } catch (err) {
-      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
-    }
-  }
-
-  private async handleDeleteUserProject(res: ServerResponse, userId: string, projectName: string): Promise<void> {
-    try {
-      const userName = await this.resolveUserName(userId);
-      if (!userName) {
-        this.sendJsonResponse(res, 404, { error: 'User not found' });
-        return;
-      }
-
-      const projectPath = `${MINIS_ROOT}/Users/${userName}/Projects/${projectName}`;
-      try {
-        await this.fileSystem.deleteDirectory(projectPath);
-      } catch {
-        // Directory may not exist
-      }
-      this.sendJsonResponse(res, 200, { success: true });
-    } catch (err) {
-      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
-    }
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/Project.json`,
+      itemsKey: 'projects',
+      typeValue: 'projects',
+    };
+    await this.handleCrud(req, res, method, config, projectId);
   }
 
   private async copyTree(tree: { name: string; type: string; path: string; children?: any[] }, srcBase: string, dstBase: string): Promise<void> {
@@ -534,8 +542,15 @@ export class MinisHttpServer extends HttpUploadServer {
     }
 
     try {
-      const content = fs.readFileSync(resolved);
+      let content: Buffer | string = fs.readFileSync(resolved);
       const ext = path.extname(resolved).toLowerCase();
+      // Replace petstore URL in swagger-initializer.js with our spec
+      if (assetPath === 'swagger-initializer.js') {
+        content = content.toString('utf-8').replace(
+          /https:\/\/petstore\.swagger\.io\/v2\/swagger\.json/g,
+          '/api/docs/swagger.json',
+        );
+      }
       const mimeTypes: Record<string, string> = {
         '.js': 'application/javascript',
         '.css': 'text/css',
@@ -547,6 +562,214 @@ export class MinisHttpServer extends HttpUploadServer {
       res.end(content);
     } catch {
       this.sendJsonResponse(res, 404, { error: 'Asset not found' });
+    }
+  }
+
+  // --- IoT Config ---
+
+  private async handleIotConfig(req: IncomingMessage, res: ServerResponse, method: string, userId: string, deviceId: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET') {
+        const config = this.iotService.telemetry.getConfig(deviceId);
+        if (!config) {
+          this.sendJsonResponse(res, 404, { error: 'IoT config not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, config);
+      } else if (method === 'PUT') {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const now = Date.now();
+        const existing = this.iotService.telemetry.getConfig(deviceId);
+        this.iotService.telemetry.upsertConfig({
+          deviceId,
+          userId,
+          topicPrefix: (body.topicPrefix as string) ?? `minis/${userId}/${deviceId}`,
+          heartbeatIntervalSec: (body.heartbeatIntervalSec as number) ?? 60,
+          capabilities: (body.capabilities as any[]) ?? [],
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        });
+        const config = this.iotService.telemetry.getConfig(deviceId);
+        this.sendJsonResponse(res, 200, config);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Telemetry ---
+
+  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, userId: string, deviceId: string, isLatest: boolean): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      return;
+    }
+    try {
+      if (isLatest) {
+        const record = this.iotService.telemetry.getLatest(deviceId);
+        this.sendJsonResponse(res, 200, record ?? { message: 'No telemetry data' });
+      } else {
+        const url = new URL(req.url!, `http://localhost`);
+        const from = parseInt(url.searchParams.get('from') ?? '0', 10);
+        const to = parseInt(url.searchParams.get('to') ?? String(Date.now()), 10);
+        const limit = parseInt(url.searchParams.get('limit') ?? '1000', 10);
+        const records = this.iotService.telemetry.getHistory(deviceId, from, to, limit);
+        this.sendJsonResponse(res, 200, { items: records });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Commands ---
+
+  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, userId: string, deviceId: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET') {
+        const url = new URL(req.url!, `http://localhost`);
+        const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+        const commands = this.iotService.commands.listCommands(deviceId, limit);
+        this.sendJsonResponse(res, 200, { items: commands });
+      } else if (method === 'POST') {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        if (!body.name) {
+          this.sendJsonResponse(res, 400, { error: 'Command name required' });
+          return;
+        }
+        const command = this.iotService.sendCommand(deviceId, body.name as string, (body.payload as Record<string, unknown>) ?? {});
+        this.sendJsonResponse(res, 201, command);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Alerts ---
+
+  private async handleIotAlerts(req: IncomingMessage, res: ServerResponse, method: string, userId: string, alertId?: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET' && !alertId) {
+        const url = new URL(req.url!, `http://localhost`);
+        const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
+        const alerts = this.iotService.alerts.listAlerts(userId, limit);
+        this.sendJsonResponse(res, 200, { items: alerts });
+      } else if (method === 'PATCH' && alertId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const status = body.status as string;
+        let alert;
+        if (status === 'ACKNOWLEDGED') {
+          alert = this.iotService.alerts.acknowledgeAlert(alertId);
+        } else if (status === 'RESOLVED') {
+          alert = this.iotService.alerts.resolveAlert(alertId);
+        } else {
+          this.sendJsonResponse(res, 400, { error: 'Invalid status. Use ACKNOWLEDGED or RESOLVED' });
+          return;
+        }
+        if (!alert) {
+          this.sendJsonResponse(res, 404, { error: 'Alert not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, alert);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Alert Rules ---
+
+  private async handleIotAlertRules(req: IncomingMessage, res: ServerResponse, method: string, userId: string, ruleId?: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET' && !ruleId) {
+        const rules = this.iotService.alerts.listRules(userId);
+        this.sendJsonResponse(res, 200, { items: rules });
+      } else if (method === 'POST' && !ruleId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        if (!body.name || !body.metricKey || !body.conditionOp || body.conditionValue === undefined) {
+          this.sendJsonResponse(res, 400, { error: 'name, metricKey, conditionOp, conditionValue required' });
+          return;
+        }
+        const rule = this.iotService.alerts.createRule({
+          userId,
+          deviceId: body.deviceId as string | undefined,
+          metricKey: body.metricKey as string,
+          conditionOp: body.conditionOp as any,
+          conditionValue: body.conditionValue as number,
+          severity: (body.severity as any) ?? 'INFO',
+          cooldownMinutes: (body.cooldownMinutes as number) ?? 15,
+          isActive: body.isActive !== false,
+          name: body.name as string,
+        });
+        this.sendJsonResponse(res, 201, rule);
+      } else if (method === 'PUT' && ruleId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const rule = this.iotService.alerts.updateRule(ruleId, body as any);
+        if (!rule) {
+          this.sendJsonResponse(res, 404, { error: 'Alert rule not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, rule);
+      } else if (method === 'DELETE' && ruleId) {
+        const deleted = this.iotService.alerts.deleteRule(ruleId);
+        if (!deleted) {
+          this.sendJsonResponse(res, 404, { error: 'Alert rule not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, { success: true });
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Devices List (with status) ---
+
+  private async handleIotDevicesList(req: IncomingMessage, res: ServerResponse, method: string, userId: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      return;
+    }
+    try {
+      const statuses = this.iotService.presence.getAllStatuses();
+      const result: Array<{ deviceId: string; status: string; lastSeenAt: number }> = [];
+      for (const [deviceId, info] of statuses) {
+        result.push({ deviceId, status: info.status, lastSeenAt: info.lastSeenAt });
+      }
+      this.sendJsonResponse(res, 200, { items: result });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
     }
   }
 
