@@ -8,3 +8,9 @@ export * from './filesystem';
 
 // url helpers
 export { configureUrls, getHttpUrl, getMqttUrl } from './utils/urlHelper';
+
+// vfs — VFS UI components
+export * from './vfs';
+
+// monaco — Monaco Editor wrapper
+export * from './monaco';

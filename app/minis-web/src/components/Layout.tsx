@@ -40,6 +40,7 @@ import {
   Api as ApiIcon,
   Hub as HubIcon,
   VpnKey as VpnKeyIcon,
+  AccountTree as AccountTreeIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
@@ -107,6 +108,7 @@ function Layout({ children }: LayoutProps) {
           { text: 'RPC Explorer', icon: <ApiIcon />, path: `/user/${userName}/tools/rpc` },
           { text: 'MQTT Explorer', icon: <HubIcon />, path: `/user/${userName}/tools/mqtt-explorer` },
           { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
+          { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },
         ],
       }] : []),
     ];

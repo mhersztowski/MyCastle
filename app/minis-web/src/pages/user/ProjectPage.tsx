@@ -36,7 +36,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useMqtt } from '@modules/mqttclient';
 import { useAuth } from '@modules/auth/AuthContext';
 import '@modules/editor/monacoWorkers';
-import { EditorInstance } from '@modules/editor/core/EditorInstance';
+import { EditorInstance } from '@mhersztowski/web-client';
 import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@modules/ardublockly2';
 import { WebSerialTerminal, FlashDialog } from '@modules/serial';
 

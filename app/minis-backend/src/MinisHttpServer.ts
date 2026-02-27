@@ -1,6 +1,7 @@
 import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth } from '@mhersztowski/core-backend';
 import type { IncomingMessage, ServerResponse } from 'http';
-import type { AuthTokenPayload } from '@mhersztowski/core';
+import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
+import { CompositeFS, NodeFS, VfsError } from '@mhersztowski/core';
 import { buildSwaggerSpec } from './swagger.js';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -33,6 +34,7 @@ export class MinisHttpServer extends HttpUploadServer {
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
   private rpcRouter: RpcRouter;
+  private vfs: CompositeFS;
 
   private static validateName(name: string): string | null {
     if (!name || name.length === 0) return 'Name is required';
@@ -40,7 +42,7 @@ export class MinisHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -48,6 +50,11 @@ export class MinisHttpServer extends HttpUploadServer {
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
     registerHandlers(this.rpcRouter, { iotService: this.iotService ?? undefined, fileSystem });
+
+    this.vfs = new CompositeFS();
+    if (rootDir) {
+      this.vfs.mount('/data', new NodeFS({ rootDir: path.resolve(rootDir) }));
+    }
   }
 
   getRpcRouter(): RpcRouter { return this.rpcRouter; }
@@ -274,7 +281,105 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
 
+    // VFS endpoints: /vfs/{operation} (admin-only)
+    const vfsMatch = apiPath.match(/^\/vfs\/([a-zA-Z]+)$/);
+    if (vfsMatch) {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      await this.handleVfs(req, res, method, vfsMatch[1]);
+      return;
+    }
+
     this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
+  }
+
+  // --- VFS ---
+
+  private async handleVfs(req: IncomingMessage, res: ServerResponse, method: string, operation: string): Promise<void> {
+    const url = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+    const vfsPath = url.searchParams.get('path') || '/';
+
+    try {
+      switch (operation) {
+        case 'capabilities': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          this.sendJsonResponse(res, 200, this.vfs.capabilities);
+          return;
+        }
+        case 'stat': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const stat = await this.vfs.stat(vfsPath);
+          this.sendJsonResponse(res, 200, stat);
+          return;
+        }
+        case 'readdir': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const entries = await this.vfs.readDirectory(vfsPath);
+          this.sendJsonResponse(res, 200, { entries });
+          return;
+        }
+        case 'readFile': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const data = await this.vfs.readFile(vfsPath);
+          const base64 = Buffer.from(data).toString('base64');
+          this.sendJsonResponse(res, 200, { data: base64 });
+          return;
+        }
+        case 'writeFile': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const writeBody = await this.parseRequestBody(req) as { data: string; options?: WriteFileOptions };
+          const content = new Uint8Array(Buffer.from(writeBody.data, 'base64'));
+          await this.vfs.writeFile!(vfsPath, content, writeBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'delete': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const delBody = await this.parseRequestBody(req) as { options?: DeleteOptions };
+          await this.vfs.delete!(vfsPath, delBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'rename': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const renBody = await this.parseRequestBody(req) as { oldPath: string; newPath: string; options?: RenameOptions };
+          await this.vfs.rename!(renBody.oldPath, renBody.newPath, renBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'mkdir': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          await this.vfs.mkdir!(vfsPath);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'copy': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const cpBody = await this.parseRequestBody(req) as { source: string; destination: string; options?: CopyOptions };
+          await this.vfs.copy!(cpBody.source, cpBody.destination, cpBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        default:
+          this.sendJsonResponse(res, 404, { error: `Unknown VFS operation: ${operation}` });
+      }
+    } catch (err) {
+      if (err instanceof VfsError) {
+        const statusMap: Record<string, number> = {
+          FileNotFound: 404,
+          FileExists: 409,
+          FileNotADirectory: 400,
+          FileIsADirectory: 400,
+          NoPermissions: 403,
+          Unavailable: 503,
+        };
+        this.sendJsonResponse(res, statusMap[err.code] ?? 500, { error: err.message, code: err.code, path: err.path });
+      } else {
+        this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+      }
+    }
   }
 
   // --- Auth ---

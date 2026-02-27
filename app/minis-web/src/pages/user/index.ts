@@ -10,3 +10,4 @@ export { default as IotEmulatorPage } from './iot/IotEmulatorPage';
 export { default as RpcExplorerPage } from './tools/RpcExplorerPage';
 export { default as MqttExplorerPage } from './tools/MqttExplorerPage';
 export { default as ApiKeysPage } from './tools/ApiKeysPage';
+export { default as TestVfsPage } from './tools/TestVfsPage';

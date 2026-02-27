@@ -8,6 +8,6 @@ export default defineConfig({
   splitting: true,
   sourcemap: true,
   clean: true,
-  external: ['react', '@mhersztowski/core', 'mqtt', 'uuid'],
+  external: ['react', 'react-dom', '@mhersztowski/core', '@mhersztowski/ui-core', 'mqtt', 'uuid', '@mui/material', '@mui/x-tree-view', '@emotion/react', '@emotion/styled', 'monaco-editor'],
   treeshake: true,
 });

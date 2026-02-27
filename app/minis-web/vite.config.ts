@@ -10,7 +10,6 @@ export default defineConfig({
       '@modules': path.resolve(__dirname, './src/modules'),
       '@components': path.resolve(__dirname, './src/components'),
       '@pages': path.resolve(__dirname, './src/pages'),
-      '@editor': path.resolve(__dirname, './src/modules/editor'),
     },
     dedupe: ['react', 'react-dom', '@mui/material'],
   },

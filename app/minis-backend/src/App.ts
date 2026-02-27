@@ -34,6 +34,7 @@ export class App {
       this.apiKeyService,
       this.iotService,
       config.staticDir,
+      config.rootDir,
     );
   }
 

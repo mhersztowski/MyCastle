@@ -175,6 +175,18 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 **RPC API:**
 - `POST /api/rpc/{methodName}` — generyczny RPC dispatch (Zod validation, auto-Swagger, `user` w context). Metody: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w minis-backend/src/rpc/handlers.ts, 3) Swagger auto-update. fieldMeta na metodach → OpenAPI extensions `x-autocomplete`/`x-depends-on` w property schemas
 
+**VFS API (admin-only):**
+- `GET /api/vfs/capabilities` — zwraca capabilities (readonly, watch)
+- `GET /api/vfs/stat?path=` — stat pliku/katalogu
+- `GET /api/vfs/readdir?path=` — lista wpisów katalogu
+- `GET /api/vfs/readFile?path=` — odczyt pliku (base64-encoded `{ data }`)
+- `POST /api/vfs/writeFile?path=` — zapis pliku (`{ data: base64, options?: WriteFileOptions }`)
+- `POST /api/vfs/delete?path=` — usunięcie (`{ options?: DeleteOptions }`)
+- `POST /api/vfs/rename` — zmiana nazwy (`{ oldPath, newPath, options? }`)
+- `POST /api/vfs/mkdir?path=` — tworzenie katalogu
+- `POST /api/vfs/copy` — kopiowanie (`{ source, destination, options? }`)
+- Server-side: CompositeFS z NodeFS mounted at `/data` (ROOT_DIR). VfsError → HTTP status codes (404/409/400/403/503). RemoteFS (client) proxies te endpointy przez REST.
+
 **Swagger:**
 - `GET /api/docs` — Swagger UI (z przyciskiem Authorize dla Bearer token)
 - `GET /api/docs/swagger.json` — OpenAPI 3.0.3 spec (auto-generated z Zod via `buildSwaggerSpec()` + `zod-to-json-schema`, wzbogacone o `x-autocomplete`/`x-depends-on` z fieldMeta, security scheme bearerAuth)
@@ -312,15 +324,16 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
     - Node-RED export: dwa buttony (NR Local `ws://172.17.0.1:1902/mqtt`, NR Remote `wss://minis.hersztowski.org/mqtt`) — kopiuje flow JSON do schowka (Import → Clipboard w Node-RED). Broker via WebSocket (Minis używa shared HTTP+MQTT na jednym porcie). Topic detail: mqtt-in + debug. Publish: inject + mqtt-out. Opcjonalnie credentials (API key) w polu
     - Performance: `requestAnimationFrame` throttle, mutable Map tree z version counter, limit 10k topics
 - `/user/:userName/tools/api-keys` — ApiKeysPage: zarządzanie kluczami API (tworzenie, kopiowanie, usuwanie). Klucz widoczny tylko raz po utworzeniu.
+- `/user/:userName/tools/testvfs` — TestVfsPage: testowa strona VFS Explorer z CompositeFS/RemoteFS (server mounted at /server), podgląd plików, manual operations (create file/folder), event log
 
 **Editor:**
-- `/user/:userName/editor/monaco/*` — MonacoEditorPage: samodzielny edytor Monaco
+- `/user/:userName/editor/monaco/*` — MonacoEditorPage: MonacoMultiEditor z `@mhersztowski/web-client`. VS Code-like UI: Activity Bar (Explorer/Search/Extensions) + Sidebar (VFS file browser po RemoteFS/CompositeFS) + tabbed multi-editor z Split Editor (grupy edytorów side-by-side) + Menu Bar (File/Edit) + Status Bar. Pliki ładowane z serwera przez VFS REST API (`/api/vfs`). Ctrl+S save bezpośrednio przez VFS writeFile.
 
 ### Kluczowe moduły
 
 - **auth** — AuthContext/AuthProvider, JWT token + sesja w sessionStorage (format `{ user, token }`), login/logout, impersonacja (admin → user view). `setAuthToken()` propaguje token do MinisApiService i RpcClient
 - **filesystem** — FilesystemContext (MQTT), MinisDataSourceContext (ładuje admin JSONy), modele/nody/komponenty
-- **editor** — Monaco editor z pluginami, C++ language support, komendami
+- **editor** — tylko `monacoWorkers.ts` (Vite-specific `?worker` imports). Reszta edytora (EditorInstance, ModelManager, plugins, language services) wyekstrahowana do `@mhersztowski/web-client/monaco`. MonacoMultiEditor — gotowy komponent VS Code-like z VFS + split editor
 - **ardublockly2** — Blockly wizualny edytor Arduino: bloki (io, serial, servo, stepper, spi, audio, time, map, variables), profile płytek (ESP8266, ESP32, Arduino Uno...), generator Blockly → C++
 - **serial** — Web Serial API (WebSerialService), terminal xterm.js (WebSerialTerminal), flashowanie firmware (EspFlashService + FlashDialog)
 - **mqttclient** — re-export z @mhersztowski/web-client

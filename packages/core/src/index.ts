@@ -4,3 +4,4 @@ export * from './automate';
 export * from './mqtt';
 export * from './datasource';
 export * from './rpc';
+export * from './vfs';
