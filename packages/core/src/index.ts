@@ -3,3 +3,4 @@ export * from './nodes';
 export * from './automate';
 export * from './mqtt';
 export * from './datasource';
+export * from './rpc';

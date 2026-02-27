@@ -6,6 +6,8 @@ import {
 import { Refresh } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { minisApi } from '../../../services/MinisApiService';
+import { EntityWidget } from './EntityWidgets';
+import type { OnCommand } from './EntityWidgets';
 import type {
   MinisDeviceModel, MinisDeviceDefModel,
   IotDeviceConfig, TelemetryRecord, IotActuatorCapability, DeviceShare,
@@ -21,11 +23,13 @@ interface DeviceCardData {
   device: MinisDeviceModel;
   config: IotDeviceConfig | null;
   latest: TelemetryRecord | null;
+  history?: TelemetryRecord[];
   isShared?: boolean;
   ownerUserId?: string;
 }
 
 const AUTO_REFRESH_MS = 10_000;
+const SPARKLINE_LIMIT = 20;
 
 function IotDashboardPage() {
   const { userName } = useParams<{ userName: string }>();
@@ -52,23 +56,25 @@ function IotDashboardPage() {
       setDeviceDefs(defs);
       setStatuses(iotStatuses);
 
+      const now = Date.now();
       const ownCards = await Promise.all(
         iotDevices.map(async (device) => {
-          const [config, latestRaw] = await Promise.all([
+          const [config, latestRaw, history] = await Promise.all([
             minisApi.getIotConfig(userName, device.name),
             minisApi.getTelemetryLatest(userName, device.name),
+            minisApi.getTelemetryHistory(userName, device.name, now - 600_000, now, SPARKLINE_LIMIT),
           ]);
           const latest = latestRaw && 'metrics' in latestRaw ? latestRaw as TelemetryRecord : null;
-          return { device, config, latest } as DeviceCardData;
+          return { device, config, latest, history } as DeviceCardData;
         }),
       );
 
-      // Load shared device data using the owner's userId
       const sharedCards = await Promise.all(
         sharedDevices.map(async (share: DeviceShare) => {
-          const [config, latestRaw] = await Promise.all([
+          const [config, latestRaw, history] = await Promise.all([
             minisApi.getIotConfig(share.ownerUserId, share.deviceId),
             minisApi.getTelemetryLatest(share.ownerUserId, share.deviceId),
+            minisApi.getTelemetryHistory(share.ownerUserId, share.deviceId, now - 600_000, now, SPARKLINE_LIMIT),
           ]);
           const latest = latestRaw && 'metrics' in latestRaw ? latestRaw as TelemetryRecord : null;
           const device: MinisDeviceModel = {
@@ -80,7 +86,7 @@ function IotDashboardPage() {
             isIot: true,
             sn: '',
           };
-          return { device, config, latest, isShared: true, ownerUserId: share.ownerUserId } as DeviceCardData;
+          return { device, config, latest, history, isShared: true, ownerUserId: share.ownerUserId } as DeviceCardData;
         }),
       );
 
@@ -96,23 +102,28 @@ function IotDashboardPage() {
   const refreshTelemetry = useCallback(async () => {
     if (!userName || cards.length === 0) return;
     try {
-      const [updatedStatuses, ...latestResults] = await Promise.all([
+      const now = Date.now();
+      const [updatedStatuses, ...results] = await Promise.all([
         minisApi.getIotDevices(userName),
-        ...cards.map((c) => {
+        ...cards.flatMap((c) => {
           const owner = c.ownerUserId ?? userName;
-          return minisApi.getTelemetryLatest(owner, c.device.name);
+          return [
+            minisApi.getTelemetryLatest(owner, c.device.name),
+            minisApi.getTelemetryHistory(owner, c.device.name, now - 600_000, now, SPARKLINE_LIMIT),
+          ];
         }),
       ]);
       setStatuses(updatedStatuses);
       setCards((prev) =>
         prev.map((card, i) => {
-          const raw = latestResults[i];
-          const latest = raw && 'metrics' in raw ? raw as TelemetryRecord : null;
-          return { ...card, latest };
+          const latestRaw = results[i * 2];
+          const history = results[i * 2 + 1] as TelemetryRecord[];
+          const latest = latestRaw && 'metrics' in (latestRaw as any) ? latestRaw as TelemetryRecord : null;
+          return { ...card, latest, history };
         }),
       );
     } catch {
-      // silent — auto-refresh failure is not critical
+      // silent
     }
   }, [userName, cards]);
 
@@ -142,11 +153,12 @@ function IotDashboardPage() {
   const getDeviceName = (device: MinisDeviceModel) =>
     device.name || deviceDefs.find((d) => d.id === device.deviceDefId)?.name || device.id.slice(0, 8);
 
-  const handleSendCommand = async (deviceName: string, commandName: string, payload: Record<string, unknown>) => {
-    if (!userName) return;
-    setSendingCmd(`${deviceName}:${commandName}:${JSON.stringify(payload)}`);
+  const handleSendCommand = async (ownerUser: string, deviceName: string, commandName: string, payload: Record<string, unknown>) => {
+    setSendingCmd(`${deviceName}:${commandName}`);
     try {
-      await minisApi.sendCommand(userName, deviceName, commandName, payload);
+      await minisApi.sendCommand(ownerUser, deviceName, commandName, payload);
+      // Quick refresh to pick up state change from emulator
+      setTimeout(refreshTelemetry, 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Command failed');
     } finally {
@@ -162,12 +174,33 @@ function IotDashboardPage() {
     return { type: 'button' as const };
   };
 
+  // Extract sparkline history values for a given metric key
+  const getMetricHistory = (history: TelemetryRecord[] | undefined, metricKey: string): number[] => {
+    if (!history) return [];
+    const values: number[] = [];
+    // History is sorted DESC, reverse for chronological order
+    for (let i = history.length - 1; i >= 0; i--) {
+      const m = history[i].metrics.find((m) => m.key === metricKey);
+      if (m && typeof m.value === 'number') values.push(m.value);
+    }
+    return values;
+  };
+
   const renderDeviceCard = (cardData: DeviceCardData) => {
-    const { device, config, latest, isShared, ownerUserId } = cardData;
-    const status = isShared ? 'UNKNOWN' : getStatus(device.id);
+    const { device, config, latest, history, isShared, ownerUserId } = cardData;
+    const status = isShared ? 'UNKNOWN' : getStatus(device.name);
     const isOffline = status !== 'ONLINE';
+    const entities = config?.entities ?? [];
+    const hasEntities = entities.length > 0;
+
+    // Old capability-based rendering (fallback)
     const sensors = config?.capabilities.filter((c) => c.type === 'sensor') ?? [];
     const actuators = isShared ? [] : (config?.capabilities.filter((c) => c.type === 'actuator') as IotActuatorCapability[] ?? []);
+
+    const ownerUser = ownerUserId ?? userName!;
+    const onEntityCommand: OnCommand = (_entityId, commandName, payload) => {
+      handleSendCommand(ownerUser, device.name, commandName, payload);
+    };
 
     return (
       <Grid item xs={12} sm={6} md={4} key={`${isShared ? 'shared-' : ''}${device.name}`}>
@@ -186,8 +219,30 @@ function IotDashboardPage() {
             </Box>
           </Box>
 
-          {/* Sensor Metrics */}
-          {sensors.length > 0 && (
+          {/* Entity-based rendering */}
+          {hasEntities && (
+            <Grid container spacing={1} sx={{ mb: 2 }}>
+              {entities.map((entity) => {
+                const metric = latest?.metrics.find((m) => m.key === entity.id);
+                const metricHistory = entity.type === 'sensor' ? getMetricHistory(history, entity.id) : undefined;
+                const isControlDisabled = isOffline || isShared || !!sendingCmd;
+                return (
+                  <Grid item xs={6} key={entity.id}>
+                    <EntityWidget
+                      entity={entity}
+                      metric={metric}
+                      history={metricHistory}
+                      onCommand={onEntityCommand}
+                      disabled={isControlDisabled}
+                    />
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+
+          {/* Capability-based rendering (fallback when no entities) */}
+          {!hasEntities && sensors.length > 0 && (
             <Grid container spacing={1} sx={{ mb: 2 }}>
               {sensors.map((sensor) => {
                 const metric = latest?.metrics.find((m) => m.key === sensor.metricKey);
@@ -217,8 +272,8 @@ function IotDashboardPage() {
             </Typography>
           )}
 
-          {/* Actuator Controls */}
-          {actuators.length > 0 && (
+          {/* Actuator Controls (fallback when no entities) */}
+          {!hasEntities && actuators.length > 0 && (
             <Box sx={{ mb: 2 }}>
               {actuators.map((actuator) => {
                 const control = getActuatorControl(actuator);
@@ -232,14 +287,14 @@ function IotDashboardPage() {
                         <Button
                           variant="contained" color="success"
                           disabled={isOffline || sendingCmd === cmdKey({ [control.field]: true })}
-                          onClick={() => handleSendCommand(device.name, actuator.commandName, { [control.field]: true })}
+                          onClick={() => handleSendCommand(ownerUser, device.name, actuator.commandName, { [control.field]: true })}
                         >
                           ON
                         </Button>
                         <Button
                           variant="contained" color="error"
                           disabled={isOffline || sendingCmd === cmdKey({ [control.field]: false })}
-                          onClick={() => handleSendCommand(device.name, actuator.commandName, { [control.field]: false })}
+                          onClick={() => handleSendCommand(ownerUser, device.name, actuator.commandName, { [control.field]: false })}
                         >
                           OFF
                         </Button>
@@ -253,7 +308,7 @@ function IotDashboardPage() {
                     <Button
                       size="small" variant="outlined"
                       disabled={isOffline || sendingCmd === cmdKey(actuator.payloadSchema)}
-                      onClick={() => handleSendCommand(device.name, actuator.commandName, actuator.payloadSchema)}
+                      onClick={() => handleSendCommand(ownerUser, device.name, actuator.commandName, actuator.payloadSchema)}
                     >
                       {actuator.label}
                     </Button>

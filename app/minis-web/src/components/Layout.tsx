@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   AppBar,
   Box,
+  Collapse,
   Drawer,
   IconButton,
   List,
@@ -21,7 +22,9 @@ import {
   Logout as LogoutIcon,
   People as PeopleIcon,
   Memory as MemoryIcon,
+  DeveloperBoard as DeveloperBoardIcon,
   Devices as DevicesIcon,
+  Code as CodeIcon,
   Assignment as AssignmentIcon,
   AccountCircle as AccountCircleIcon,
   SwapHoriz as SwapHorizIcon,
@@ -29,6 +32,12 @@ import {
   Sensors as SensorsIcon,
   NotificationsActive as NotificationsActiveIcon,
   BugReport as BugReportIcon,
+  Router as RouterIcon,
+  ExpandLess,
+  ExpandMore,
+  Build as BuildIcon,
+  Api as ApiIcon,
+  Hub as HubIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
@@ -42,7 +51,8 @@ interface LayoutProps {
 interface NavItem {
   text: string;
   icon: React.ReactNode;
-  path: string;
+  path?: string;
+  children?: NavItem[];
 }
 
 function extractUserName(pathname: string): string {
@@ -53,6 +63,7 @@ function extractUserName(pathname: string): string {
 function Layout({ children }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountMenuAnchor, setAccountMenuAnchor] = useState<null | HTMLElement>(null);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Electronics: true, IoT: true, Tools: true });
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser, isAdmin, logout } = useAuth();
@@ -74,12 +85,26 @@ function Layout({ children }: LayoutProps) {
     }
     return [
       { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
-      { text: 'Devices', icon: <DevicesIcon />, path: `/user/${userName}/devices` },
-      { text: 'Projects', icon: <AssignmentIcon />, path: `/user/${userName}/projects` },
-      { text: 'IoT Dashboard', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard` },
-      { text: 'IoT Devices', icon: <SensorsIcon />, path: `/user/${userName}/iot/devices` },
-      { text: 'IoT Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userName}/iot/alerts` },
-      { text: 'IoT Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
+      {
+        text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
+          { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
+          { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
+        ],
+      },
+      {
+        text: 'IoT', icon: <RouterIcon />, children: [
+          { text: 'Dashboard', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard` },
+          { text: 'Devices', icon: <SensorsIcon />, path: `/user/${userName}/iot/devices` },
+          { text: 'Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userName}/iot/alerts` },
+          { text: 'Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
+        ],
+      },
+      {
+        text: 'Tools', icon: <BuildIcon />, children: [
+          { text: 'RPC Explorer', icon: <ApiIcon />, path: `/user/${userName}/tools/rpc` },
+          { text: 'MQTT Explorer', icon: <HubIcon />, path: `/user/${userName}/tools/mqtt-explorer` },
+        ],
+      },
     ];
   }, [isAdminView, userName]);
 
@@ -104,6 +129,8 @@ function Layout({ children }: LayoutProps) {
     }
   };
 
+  const toggleGroup = (name: string) => setOpenGroups((prev) => ({ ...prev, [name]: !prev[name] }));
+
   const drawer = (
     <Box>
       <Toolbar>
@@ -112,17 +139,48 @@ function Layout({ children }: LayoutProps) {
         </Typography>
       </Toolbar>
       <List>
-        {menuItems.map((item) => (
-          <ListItem key={item.text} disablePadding>
-            <ListItemButton
-              selected={location.pathname === item.path}
-              onClick={() => navigate(item.path)}
-            >
-              <ListItemIcon sx={{ minWidth: 32 }}>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          </ListItem>
-        ))}
+        {menuItems.map((item) =>
+          item.children ? (
+            <Box key={item.text}>
+              <ListItem disablePadding>
+                <ListItemButton
+                  onClick={() => toggleGroup(item.text)}
+                  selected={item.children.some((c) => location.pathname === c.path)}
+                >
+                  <ListItemIcon sx={{ minWidth: 32 }}>{item.icon}</ListItemIcon>
+                  <ListItemText primary={item.text} />
+                  {openGroups[item.text] ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+                </ListItemButton>
+              </ListItem>
+              <Collapse in={openGroups[item.text]} timeout="auto" unmountOnExit>
+                <List disablePadding>
+                  {item.children.map((child) => (
+                    <ListItem key={child.text} disablePadding>
+                      <ListItemButton
+                        sx={{ pl: 4 }}
+                        selected={location.pathname === child.path}
+                        onClick={() => navigate(child.path!)}
+                      >
+                        <ListItemIcon sx={{ minWidth: 32 }}>{child.icon}</ListItemIcon>
+                        <ListItemText primary={child.text} />
+                      </ListItemButton>
+                    </ListItem>
+                  ))}
+                </List>
+              </Collapse>
+            </Box>
+          ) : (
+            <ListItem key={item.text} disablePadding>
+              <ListItemButton
+                selected={location.pathname === item.path}
+                onClick={() => navigate(item.path!)}
+              >
+                <ListItemIcon sx={{ minWidth: 32 }}>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItemButton>
+            </ListItem>
+          ),
+        )}
       </List>
     </Box>
   );

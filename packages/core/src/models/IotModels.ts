@@ -22,9 +22,57 @@ export interface IotDeviceConfig {
   topicPrefix: string;
   heartbeatIntervalSec: number;
   capabilities: IotCapability[];
+  entities?: IotEntity[];
   createdAt: number;
   updatedAt: number;
 }
+
+// --- Entities (Home Assistant-inspired) ---
+
+export type IotEntityType = 'sensor' | 'binary_sensor' | 'switch' | 'number' | 'button' | 'select';
+
+export interface IotEntityBase {
+  id: string;
+  type: IotEntityType;
+  name: string;
+  icon?: string;
+  deviceClass?: string;
+}
+
+export interface IotSensorEntity extends IotEntityBase {
+  type: 'sensor';
+  unit: string;
+}
+
+export interface IotBinarySensorEntity extends IotEntityBase {
+  type: 'binary_sensor';
+  onLabel?: string;
+  offLabel?: string;
+}
+
+export interface IotSwitchEntity extends IotEntityBase {
+  type: 'switch';
+}
+
+export interface IotNumberEntity extends IotEntityBase {
+  type: 'number';
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+}
+
+export interface IotButtonEntity extends IotEntityBase {
+  type: 'button';
+}
+
+export interface IotSelectEntity extends IotEntityBase {
+  type: 'select';
+  options: string[];
+}
+
+export type IotEntity = IotSensorEntity | IotBinarySensorEntity | IotSwitchEntity
+  | IotNumberEntity | IotButtonEntity | IotSelectEntity;
 
 // --- Telemetry ---
 

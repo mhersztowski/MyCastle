@@ -95,6 +95,13 @@ export class IotDatabase {
       CREATE INDEX IF NOT EXISTS idx_device_share_device ON device_share(device_id);
       CREATE INDEX IF NOT EXISTS idx_device_share_target ON device_share(target_user_id);
     `);
+
+    // Migration: add entities column to iot_device_config
+    try {
+      this.db.exec(`ALTER TABLE iot_device_config ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'`);
+    } catch {
+      // Column already exists
+    }
   }
 
   get raw(): Database.Database {

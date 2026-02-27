@@ -8,6 +8,6 @@ export default defineConfig({
   splitting: true,
   sourcemap: true,
   clean: true,
-  external: ['dayjs'],
+  external: ['dayjs', 'zod'],
   treeshake: true,
 });

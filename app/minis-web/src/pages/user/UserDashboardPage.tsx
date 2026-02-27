@@ -11,19 +11,19 @@ function UserDashboardPage() {
       title: 'Add Assembled Device',
       description: 'Register an already assembled device',
       icon: <Devices sx={{ fontSize: 40 }} color="primary" />,
-      onClick: () => navigate(`/user/${userName}/devices`),
+      onClick: () => navigate(`/user/${userName}/electronics/devices`),
     },
     {
       title: 'Assemble Device',
       description: 'Follow instructions to assemble a new device',
       icon: <Build sx={{ fontSize: 40 }} color="primary" />,
-      onClick: () => navigate(`/user/${userName}/devices`),
+      onClick: () => navigate(`/user/${userName}/electronics/devices`),
     },
     {
       title: 'Open Device Project',
       description: 'Work on a project for your device',
       icon: <FolderOpen sx={{ fontSize: 40 }} color="primary" />,
-      onClick: () => navigate(`/user/${userName}/projects`),
+      onClick: () => navigate(`/user/${userName}/electronics/arduino`),
     },
   ];
 

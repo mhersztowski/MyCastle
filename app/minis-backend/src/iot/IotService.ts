@@ -1,4 +1,5 @@
 import type { TelemetryMetric, DeviceCommand } from '@mhersztowski/core';
+import { mqttTopics } from '@mhersztowski/core';
 import { IotDatabase } from './IotDatabase.js';
 import { TelemetryStore } from './TelemetryStore.js';
 import { DevicePresence } from './DevicePresence.js';
@@ -109,8 +110,8 @@ export class IotService {
   }
 
   // Called when MQTT message arrives on minis/+/+/command/ack
-  handleCommandAck(deviceId: string, payload: { id: string; status: string; reason?: string }): void {
-    this.commands.updateStatus(payload.id, payload.status as any, payload.reason);
+  handleCommandAck(deviceId: string, payload: { id: string; status: 'ACKNOWLEDGED' | 'FAILED'; reason?: string }): void {
+    this.commands.updateStatus(payload.id, payload.status, payload.reason);
   }
 
   // Send command to device via MQTT
@@ -130,7 +131,7 @@ export class IotService {
     return command;
   }
 
-  // Process incoming MQTT message — route to appropriate handler
+  // Process incoming MQTT message — route to appropriate handler (Zod-validated)
   handleMqttMessage(topic: string, payload: string): void {
     // Topic format: minis/{userName}/{deviceName}/{type}
     const parts = topic.split('/');
@@ -140,23 +141,32 @@ export class IotService {
     const deviceName = parts[2];
     const msgType = parts.slice(3).join('/');
 
-    let parsed: any;
+    let raw: unknown;
     try {
-      parsed = JSON.parse(payload);
+      raw = JSON.parse(payload);
     } catch {
       return;
     }
 
     switch (msgType) {
-      case 'telemetry':
-        this.handleTelemetry(userName, deviceName, parsed);
+      case 'telemetry': {
+        const result = mqttTopics.telemetry.payloadSchema.safeParse(raw);
+        if (!result.success) return;
+        this.handleTelemetry(userName, deviceName, result.data);
         break;
-      case 'heartbeat':
-        this.handleHeartbeat(userName, deviceName, parsed);
+      }
+      case 'heartbeat': {
+        const result = mqttTopics.heartbeat.payloadSchema.safeParse(raw);
+        if (!result.success) return;
+        this.handleHeartbeat(userName, deviceName, result.data);
         break;
-      case 'command/ack':
-        this.handleCommandAck(deviceName, parsed);
+      }
+      case 'command/ack': {
+        const result = mqttTopics.commandAck.payloadSchema.safeParse(raw);
+        if (!result.success) return;
+        this.handleCommandAck(deviceName, result.data);
         break;
+      }
     }
   }
 }

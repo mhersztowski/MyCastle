@@ -55,7 +55,7 @@ function UserProjectsPage() {
   };
 
   const handleOpen = (project: MinisProjectModel) => {
-    navigate(`/user/${userName}/project/${project.name}`);
+    navigate(`/user/${userName}/project/${project.id}`);
   };
 
   const handleDelete = async (projectName: string) => {

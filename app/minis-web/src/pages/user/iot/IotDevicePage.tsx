@@ -8,6 +8,8 @@ import {
 import { Refresh, Send } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
 import { minisApi } from '../../../services/MinisApiService';
+import { EntityWidget, Sparkline } from './EntityWidgets';
+import type { OnCommand } from './EntityWidgets';
 import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel, MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
 
 function IotDevicePage() {
@@ -74,6 +76,17 @@ function IotDevicePage() {
     }
   };
 
+  const handleEntityCommand: OnCommand = async (_entityId, commandName, payload) => {
+    if (!userName || !deviceName) return;
+    try {
+      await minisApi.sendCommand(userName, deviceName, commandName, payload);
+      // Quick refresh to pick up state change from emulator
+      setTimeout(load, 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Command failed');
+    }
+  };
+
   const handleAcknowledgeAlert = async (alertId: string) => {
     if (!userName) return;
     try {
@@ -89,6 +102,19 @@ function IotDevicePage() {
   const statusColor = statusLabel === 'ONLINE' ? 'success' : statusLabel === 'OFFLINE' ? 'error' : 'default';
   const currentDevice = devices.find((d) => d.name === deviceName);
   const deviceDisplayName = currentDevice?.name || deviceDefs.find((d) => d.id === currentDevice?.deviceDefId)?.name || deviceName;
+  const isOffline = statusLabel !== 'ONLINE';
+
+  const entities = config?.entities ?? [];
+  const hasEntities = entities.length > 0;
+
+  const getMetricHistory = (metricKey: string): number[] => {
+    const values: number[] = [];
+    for (let i = Math.min(history.length - 1, 19); i >= 0; i--) {
+      const m = history[i].metrics.find((m) => m.key === metricKey);
+      if (m && typeof m.value === 'number') values.push(m.value);
+    }
+    return values;
+  };
 
   if (loading) return <CircularProgress />;
 
@@ -105,25 +131,59 @@ function IotDevicePage() {
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
       <Grid container spacing={3}>
+        {/* Entity Widgets */}
+        {hasEntities && (
+          <Grid item xs={12}>
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>Entities</Typography>
+              <Grid container spacing={2}>
+                {entities.map((entity) => {
+                  const metric = latestTelemetry?.metrics.find((m) => m.key === entity.id);
+                  const metricHistory = entity.type === 'sensor' ? getMetricHistory(entity.id) : undefined;
+                  return (
+                    <Grid item xs={12} sm={6} md={4} key={entity.id}>
+                      <EntityWidget
+                        entity={entity}
+                        metric={metric}
+                        history={metricHistory}
+                        onCommand={handleEntityCommand}
+                        disabled={isOffline}
+                      />
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            </Paper>
+          </Grid>
+        )}
+
         {/* Latest Metrics */}
         <Grid item xs={12} md={6}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>Latest Metrics</Typography>
             {latestTelemetry ? (
               <Grid container spacing={2}>
-                {latestTelemetry.metrics.map((m) => (
-                  <Grid item xs={6} sm={4} key={m.key}>
-                    <Card variant="outlined">
-                      <CardContent sx={{ textAlign: 'center', py: 1, '&:last-child': { pb: 1 } }}>
-                        <Typography variant="body2" color="text.secondary">{m.key}</Typography>
-                        <Typography variant="h5">
-                          {typeof m.value === 'number' ? m.value.toFixed(1) : String(m.value)}
-                        </Typography>
-                        {m.unit && <Typography variant="caption" color="text.secondary">{m.unit}</Typography>}
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
+                {latestTelemetry.metrics.map((m) => {
+                  const sparkValues = getMetricHistory(m.key);
+                  return (
+                    <Grid item xs={6} sm={4} key={m.key}>
+                      <Card variant="outlined">
+                        <CardContent sx={{ textAlign: 'center', py: 1, '&:last-child': { pb: 1 } }}>
+                          <Typography variant="body2" color="text.secondary">{m.key}</Typography>
+                          <Typography variant="h5">
+                            {typeof m.value === 'number' ? m.value.toFixed(1) : String(m.value)}
+                          </Typography>
+                          {m.unit && <Typography variant="caption" color="text.secondary">{m.unit}</Typography>}
+                          {sparkValues.length >= 2 && (
+                            <Box sx={{ mt: 0.5, display: 'flex', justifyContent: 'center' }}>
+                              <Sparkline values={sparkValues} width={100} height={30} />
+                            </Box>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
               </Grid>
             ) : (
               <Typography color="text.secondary">No telemetry data</Typography>
@@ -140,6 +200,7 @@ function IotDevicePage() {
                 <Typography variant="body2"><strong>Topic Prefix:</strong> {config.topicPrefix}</Typography>
                 <Typography variant="body2"><strong>Heartbeat Interval:</strong> {config.heartbeatIntervalSec}s</Typography>
                 <Typography variant="body2"><strong>Capabilities:</strong> {config.capabilities.length}</Typography>
+                {hasEntities && <Typography variant="body2"><strong>Entities:</strong> {entities.length}</Typography>}
               </Box>
             ) : (
               <Typography color="text.secondary">No config set</Typography>

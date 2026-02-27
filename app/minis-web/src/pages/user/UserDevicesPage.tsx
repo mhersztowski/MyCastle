@@ -125,6 +125,7 @@ function UserDevicesPage() {
         topicPrefix: `minis/${userName}/${device.name}`,
         heartbeatIntervalSec: preset.heartbeatIntervalSec,
         capabilities,
+        entities: preset.entities ?? [],
       });
 
       const emulatorConfig: EmulatedDeviceConfig = {
@@ -255,10 +256,10 @@ function UserDevicesPage() {
                 <TableCell align="right">
                   {item.isIot && (
                     <IconButton size="small" title="Share device" onClick={() => openShareDialog(item)}>
-                      <Share color={sharedDeviceIds.has(item.id) ? 'primary' : 'action'} />
+                      <Share color={sharedDeviceIds.has(item.name) ? 'primary' : 'action'} />
                     </IconButton>
                   )}
-                  {item.isIot && !emulatorDeviceIds.has(item.id) && (
+                  {item.isIot && !emulatorDeviceIds.has(item.name) && (
                     <IconButton
                       size="small"
                       title="Add emulator"

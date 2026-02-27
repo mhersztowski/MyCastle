@@ -7,7 +7,7 @@ import MonacoEditorPage from '@pages/editor/MonacoEditorPage';
 import HomePage from '@pages/HomePage';
 import LoginPage from '@pages/LoginPage';
 import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage } from '@pages/admin';
-import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, IotDashboardPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage } from '@pages/user';
+import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, IotDashboardPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage, RpcExplorerPage, MqttExplorerPage } from '@pages/user';
 
 function App() {
   return (
@@ -30,13 +30,15 @@ function App() {
                 <Route path="/admin/:userName/filesystem/list" element={<FilesystemListPage />} />
                 <Route path="/admin/:userName/filesystem/save" element={<FilesystemSavePage />} />
                 <Route path="/user/:userName/main" element={<UserDashboardPage />} />
-                <Route path="/user/:userName/devices" element={<UserDevicesPage />} />
-                <Route path="/user/:userName/projects" element={<UserProjectsPage />} />
+                <Route path="/user/:userName/electronics/devices" element={<UserDevicesPage />} />
+                <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />
                 <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />
                 <Route path="/user/:userName/iot/devices" element={<IotDevicesPage />} />
                 <Route path="/user/:userName/iot/device/:deviceName" element={<IotDevicePage />} />
                 <Route path="/user/:userName/iot/alerts" element={<IotAlertsPage />} />
                 <Route path="/user/:userName/iot/emulator" element={<IotEmulatorPage />} />
+                <Route path="/user/:userName/tools/rpc" element={<RpcExplorerPage />} />
+                <Route path="/user/:userName/tools/mqtt-explorer" element={<MqttExplorerPage />} />
               </Routes>
             </Layout>
           </Box>

@@ -62,6 +62,7 @@ export interface EmulatedDeviceConfig {
   rssi: number;
   battery: number;
   brokerUrl?: string;
+  entities?: import('@mhersztowski/core').IotEntity[];
 }
 
 export interface ReceivedCommand {

@@ -98,12 +98,12 @@ function IotDevicesPage() {
                 <TableCell>{device.sn || '-'}</TableCell>
                 <TableCell>
                   <Chip
-                    label={getStatus(device.id)}
-                    color={statusColor(getStatus(device.id)) as any}
+                    label={getStatus(device.name)}
+                    color={statusColor(getStatus(device.name)) as any}
                     size="small"
                   />
                 </TableCell>
-                <TableCell>{getLastSeen(device.id)}</TableCell>
+                <TableCell>{getLastSeen(device.name)}</TableCell>
               </TableRow>
             ))}
             {!loading && devices.length === 0 && (

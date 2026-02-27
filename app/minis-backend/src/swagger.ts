@@ -1,4 +1,67 @@
-export const swaggerSpec = {
+import zodToJsonSchema from 'zod-to-json-schema';
+import type { RpcMethodDef } from '@mhersztowski/core';
+import type { RpcRouter } from './rpc/RpcRouter.js';
+
+function rpcMethodToSwaggerPath(name: string, def: RpcMethodDef): Record<string, unknown> {
+  const inputSchema = zodToJsonSchema(def.input, { target: 'openApi3' }) as Record<string, unknown>;
+  const outputSchema = zodToJsonSchema(def.output, { target: 'openApi3' }) as Record<string, unknown>;
+  delete inputSchema.$schema;
+  delete outputSchema.$schema;
+
+  // Inject fieldMeta as OpenAPI extensions
+  if (def.fieldMeta && inputSchema.properties) {
+    const props = inputSchema.properties as Record<string, Record<string, unknown>>;
+    for (const [field, meta] of Object.entries(def.fieldMeta)) {
+      if (props[field]) {
+        if (meta.autocomplete) props[field]['x-autocomplete'] = meta.autocomplete;
+        if (meta.dependsOn) props[field]['x-depends-on'] = meta.dependsOn;
+      }
+    }
+  }
+
+  return {
+    post: {
+      tags: def.tags ?? ['RPC'],
+      summary: def.description ?? name,
+      operationId: `rpc_${name}`,
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: inputSchema } },
+      },
+      responses: {
+        200: {
+          description: 'Success',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  ok: { type: 'boolean', enum: [true] },
+                  result: outputSchema,
+                },
+              },
+            },
+          },
+        },
+        400: { description: 'Validation error' },
+        404: { description: 'Method not found' },
+        500: { description: 'Handler error' },
+      },
+    },
+  };
+}
+
+export function buildSwaggerSpec(rpcRouter?: RpcRouter): typeof swaggerSpec {
+  const spec = JSON.parse(JSON.stringify(swaggerSpec));
+  if (rpcRouter) {
+    for (const { name, def } of rpcRouter.getRegisteredMethods()) {
+      spec.paths[`/rpc/${name}`] = rpcMethodToSwaggerPath(name, def);
+    }
+  }
+  return spec;
+}
+
+const swaggerSpec = {
   openapi: '3.0.3',
   info: {
     title: 'Minis API',
@@ -557,6 +620,7 @@ export const swaggerSpec = {
           topicPrefix: { type: 'string' },
           heartbeatIntervalSec: { type: 'integer' },
           capabilities: { type: 'array', items: { $ref: '#/components/schemas/IotCapability' } },
+          entities: { type: 'array', items: { $ref: '#/components/schemas/IotEntity' } },
           createdAt: { type: 'integer' },
           updatedAt: { type: 'integer' },
         },
@@ -567,6 +631,25 @@ export const swaggerSpec = {
           topicPrefix: { type: 'string' },
           heartbeatIntervalSec: { type: 'integer', default: 60 },
           capabilities: { type: 'array', items: { $ref: '#/components/schemas/IotCapability' } },
+          entities: { type: 'array', items: { $ref: '#/components/schemas/IotEntity' } },
+        },
+      },
+      IotEntity: {
+        type: 'object',
+        required: ['id', 'type', 'name'],
+        properties: {
+          id: { type: 'string', description: 'Unique within device, matches telemetry metric key' },
+          type: { type: 'string', enum: ['sensor', 'binary_sensor', 'switch', 'number', 'button', 'select'] },
+          name: { type: 'string' },
+          icon: { type: 'string' },
+          deviceClass: { type: 'string' },
+          unit: { type: 'string', description: 'For sensor/number entities' },
+          min: { type: 'number', description: 'For number entity' },
+          max: { type: 'number', description: 'For number entity' },
+          step: { type: 'number', description: 'For number entity' },
+          options: { type: 'array', items: { type: 'string' }, description: 'For select entity' },
+          onLabel: { type: 'string', description: 'For binary_sensor entity' },
+          offLabel: { type: 'string', description: 'For binary_sensor entity' },
         },
       },
       IotCapability: {

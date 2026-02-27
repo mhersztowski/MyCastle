@@ -148,6 +148,11 @@ function IotEmulatorPage() {
         </Box>
       </Box>
 
+      <Alert severity="info" sx={{ mb: 2 }}>
+        The emulator runs entirely in your browser. Virtual devices send telemetry and respond to commands
+        only while this page is open. Closing the tab or navigating away will stop all emulated devices.
+      </Alert>
+
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
       <Grid container spacing={3}>

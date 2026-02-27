@@ -425,6 +425,8 @@ export class EmulatorService {
     if (config.commandAckMode === 'auto-ack') {
       const timeoutKey = `${config.id}:${command.id}`;
       const timeout = setTimeout(() => {
+        this.applyEntityCommand(config, command.name, command.payload);
+        this.sendTelemetry(config);
         this.sendCommandAck(config, command.id, 'ACKNOWLEDGED');
         this.ackTimeouts.delete(timeoutKey);
       }, config.commandAckDelaySec * 1000);
@@ -466,6 +468,47 @@ export class EmulatorService {
       this.states.set(config.id, { ...state, messagesSent: state.messagesSent + 1 });
     }
     this.emit('stateChange');
+  }
+
+  // --- Private: Entity command handling ---
+
+  private applyEntityCommand(config: EmulatedDeviceConfig, commandName: string, payload: Record<string, unknown>): void {
+    const entityId = payload.entity_id as string | undefined;
+    if (!entityId) return;
+
+    const metric = config.metrics.find((m) => m.key === entityId);
+    if (!metric) return;
+
+    switch (commandName) {
+      case 'set_state': {
+        const state = payload.state;
+        metric.generator = { type: 'constant', value: state ? 1 : 0 };
+        break;
+      }
+      case 'set_value': {
+        const value = payload.value;
+        if (typeof value === 'number') {
+          metric.generator = { type: 'constant', value };
+        }
+        break;
+      }
+      case 'set_option': {
+        const option = payload.option;
+        if (typeof option === 'string') {
+          const entity = config.entities?.find((e) => e.id === entityId);
+          if (entity?.type === 'select') {
+            const index = entity.options.indexOf(option);
+            metric.generator = { type: 'constant', value: index >= 0 ? index : 0 };
+          }
+        }
+        break;
+      }
+      case 'press':
+        // Button press — no state to update
+        break;
+    }
+
+    this.saveConfigs();
   }
 
   // --- Private: Helpers ---

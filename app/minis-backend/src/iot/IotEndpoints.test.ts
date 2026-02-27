@@ -91,6 +91,35 @@ describe('IoT Config endpoints', () => {
     const { status } = await request('GET', '/users/TestUser/devices/nonexistent/iot-config');
     expect(status).toBe(404);
   });
+
+  it('PUT saves entities alongside capabilities', async () => {
+    const entities = [
+      { id: 'temperature', type: 'sensor', name: 'Temperature', unit: '°C', deviceClass: 'temperature' },
+      { id: 'relay', type: 'switch', name: 'Main Relay' },
+      { id: 'target_temp', type: 'number', name: 'Target', min: 15, max: 30, step: 0.5, unit: '°C' },
+      { id: 'mode', type: 'select', name: 'Mode', options: ['off', 'heat', 'cool'] },
+    ];
+    const { status, data } = await request('PUT', '/users/TestUser/devices/dev-iot1/iot-config', {
+      topicPrefix: 'minis/TestUser/dev-iot1',
+      heartbeatIntervalSec: 30,
+      capabilities: [{ type: 'sensor', metricKey: 'temp', unit: '°C', label: 'Temperature' }],
+      entities,
+    });
+    expect(status).toBe(200);
+    expect(data.capabilities).toHaveLength(1);
+    expect(data.entities).toHaveLength(4);
+    expect(data.entities[0].type).toBe('sensor');
+    expect(data.entities[1].type).toBe('switch');
+    expect(data.entities[2].min).toBe(15);
+    expect(data.entities[3].options).toEqual(['off', 'heat', 'cool']);
+  });
+
+  it('GET returns entities from saved config', async () => {
+    const { status, data } = await request('GET', '/users/TestUser/devices/dev-iot1/iot-config');
+    expect(status).toBe(200);
+    expect(data.entities).toHaveLength(4);
+    expect(data.entities.find((e: any) => e.id === 'relay').type).toBe('switch');
+  });
 });
 
 describe('IoT Telemetry endpoints', () => {

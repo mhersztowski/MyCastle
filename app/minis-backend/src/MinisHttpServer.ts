@@ -1,11 +1,12 @@
 import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { swaggerSpec } from './swagger.js';
+import { buildSwaggerSpec } from './swagger.js';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import AdmZip from 'adm-zip';
 import type { IotService } from './iot/IotService.js';
+import { RpcRouter, registerHandlers } from './rpc/index.js';
 
 interface CrudConfig {
   filePath: string;
@@ -27,6 +28,7 @@ export class MinisHttpServer extends HttpUploadServer {
   private static readonly NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
   private swaggerUiDir: string | null = null;
   private iotService: IotService | null;
+  private rpcRouter: RpcRouter;
 
   private static validateName(name: string): string | null {
     if (!name || name.length === 0) return 'Name is required';
@@ -38,7 +40,11 @@ export class MinisHttpServer extends HttpUploadServer {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.iotService = iotService ?? null;
     this.resolveSwaggerUiDir();
+    this.rpcRouter = new RpcRouter();
+    registerHandlers(this.rpcRouter, { iotService: this.iotService ?? undefined, fileSystem });
   }
+
+  getRpcRouter(): RpcRouter { return this.rpcRouter; }
 
   private resolveSwaggerUiDir(): void {
     try {
@@ -84,11 +90,21 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
     if (apiPath === '/docs/swagger.json') {
-      this.sendJsonResponse(res, 200, swaggerSpec);
+      this.sendJsonResponse(res, 200, buildSwaggerSpec(this.rpcRouter));
       return;
     }
     if (apiPath.startsWith('/docs/')) {
       this.serveSwaggerAsset(apiPath.replace('/docs/', ''), res);
+      return;
+    }
+
+    // RPC dispatch: POST /api/rpc/{methodName}
+    const rpcMatch = apiPath.match(/^\/rpc\/([a-zA-Z0-9_.]+)$/);
+    if (rpcMatch && method === 'POST') {
+      const methodName = rpcMatch[1];
+      const body = await this.parseRequestBody(req);
+      const result = await this.rpcRouter.dispatch(methodName, body, {});
+      this.sendJsonResponse(res, result.statusCode, result.body);
       return;
     }
 
@@ -641,6 +657,7 @@ export class MinisHttpServer extends HttpUploadServer {
           topicPrefix: (body.topicPrefix as string) ?? `minis/${userName}/${deviceName}`,
           heartbeatIntervalSec: (body.heartbeatIntervalSec as number) ?? 60,
           capabilities: (body.capabilities as any[]) ?? [],
+          entities: (body.entities as any[]) ?? [],
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         });

@@ -165,6 +165,34 @@ describe('MinisApiService', () => {
     });
   });
 
+  describe('IoT Config with entities', () => {
+    it('saveIotConfig sends entities in body', async () => {
+      const config = {
+        topicPrefix: 'minis/u1/dev1',
+        heartbeatIntervalSec: 60,
+        capabilities: [{ type: 'sensor' as const, metricKey: 'temp', unit: '°C', label: 'Temperature' }],
+        entities: [
+          { id: 'temp', type: 'sensor' as const, name: 'Temperature', unit: '°C', deviceClass: 'temperature' },
+          { id: 'relay', type: 'switch' as const, name: 'Relay' },
+        ],
+      };
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ...config, deviceId: 'dev1', userId: 'u1', createdAt: 1, updatedAt: 2 }));
+      const result = await minisApi.saveIotConfig('u1', 'dev1', config);
+      expect(result.entities).toHaveLength(2);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.entities).toHaveLength(2);
+      expect(body.entities[0].type).toBe('sensor');
+      expect(body.entities[1].type).toBe('switch');
+      expect(body.capabilities).toHaveLength(1);
+    });
+
+    it('getIotConfig returns null on error', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ error: 'Not found' }, 404));
+      const result = await minisApi.getIotConfig('u1', 'nonexistent');
+      expect(result).toBeNull();
+    });
+  });
+
   describe('Device Sharing', () => {
     it('getDeviceShares extracts items', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 's1', ownerUserId: 'u1', deviceId: 'd1', targetUserId: 'u2', createdAt: 1000 }] }));

@@ -8,11 +8,12 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Shared packages
 - **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource. Dual ESM+CJS build (tsup).
-  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare)
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, IotEntity, IotEntityType, IotSensorEntity, IotBinarySensorEntity, IotSwitchEntity, IotNumberEntity, IotButtonEntity, IotSelectEntity, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare)
   - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
-  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload
+  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload. `topics.ts`: Zod-based MQTT topic registry (analogiczny do RPC). MqttTopicDef (pattern, description, direction, payloadSchema, tags), defineMqttTopic(), MqttPayload<T>. mqttTopics registry (telemetry, heartbeat, command, commandAck, status, telemetryLive, alert, sharedTelemetryLive, sharedStatus), MqttTopicRegistry, MqttTopicName. matchTopic(fullTopic) — dopasowuje topic do wzorca, zwraca def + wyekstrahowane params. Zod schemas = single source of truth for payload validation i type info w MQTT Explorer
   - `datasource/` — IDataSource interface (w tym kolekcje Minis: minisModuleDefs, minisModules, minisDeviceDefs, minisDevices, minisProjectDefs, minisProjects, users), MemoryDataSource (load* methods per kolekcję), CalendarItem, Calendar
+  - `rpc/` — Zod-based RPC system (shared types + method registry). `types.ts`: RpcMethodDef (z fieldMeta?: Record<string, FieldMeta>), AutocompleteSource ('users' | 'userDevices'), FieldMeta (autocomplete?, dependsOn?), defineRpcMethod(), RpcResponse/RpcErrorResponse. `methods.ts`: rpcMethods registry (ping, getDeviceStatuses, sendCommand, getLatestTelemetry), RpcMethodRegistry, RpcMethodName types. fieldMeta na metodach definiuje autocomplete sources i zależności między polami (np. deviceName dependsOn userName). Zod schemas = single source of truth for validation, types, and auto-generated Swagger docs.
 - **@mhersztowski/web-client** (`packages/web-client/`) — reusable React client for MyCastle backend. Dual ESM+CJS build (tsup). React as peerDependency.
   - `mqtt/` — MqttClient (MQTT over WebSocket, request-response, file ops), MqttContext/MqttProvider, useMqtt hook
   - `filesystem/` — FilesystemService (dir tree, batch file loading, calendar, DataSource), FilesystemContext/FilesystemProvider, useFilesystem hook
@@ -80,11 +81,13 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - `/api/users/:userName/devices/:deviceName/shares` — GET/POST/DELETE udostępnienia urządzenia
     - `/api/users/:userName/shared-devices` — GET urządzenia udostępnione temu użytkownikowi
     - `/api/users/:userName/my-shares` — GET udostępnienia dokonane przez tego użytkownika
+    - `/api/rpc/{methodName}` — POST, generyczny RPC dispatch (Zod validation, auto-Swagger)
     - `/api/docs` — Swagger UI (swagger-ui-dist)
-    - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`)
+    - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`, auto-generated z Zod schemas via `buildSwaggerSpec()` + `zod-to-json-schema`). Property schemas wzbogacone o `x-autocomplete` i `x-depends-on` z fieldMeta
+- **RPC System** (`src/rpc/`): RpcRouter (register/dispatch/getRegisteredMethods), handlers.ts (registerHandlers z deps: iotService, fileSystem). Metody RPC: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w handlers.ts, 3) call z frontendu via rpcClient — Swagger auto-update.
 - **IoT Service Layer** (`src/iot/`): IotDatabase (SQLite, better-sqlite3, WAL mode), TelemetryStore (INSERT/query, config CRUD, agregacja), DevicePresence (heartbeat tracking, timeout detection), CommandDispatcher (tworzenie komend, ACK tracking), AlertEngine (reguły CRUD, ewaluacja po telemetrii, cooldown), DeviceShareStore (CRUD udostępnień, prepared statements), IotService (orchestrator — parsuje MQTT topics `minis/{userName}/{deviceName}/{type}`, koordynuje stores, forwarding telemetrii/statusu do shared users)
-- **MQTT Integration**: IotService subskrybuje `minis/` topics. Przetwarza: telemetry → insert + presence + alert eval + republish + forward do shared users, heartbeat → presence, command/ack → update status. Publikuje: status, telemetry/live, alert. Forwarding do shared users: `minis/{targetUser}/shared/{owner}/{device}/telemetry/live`, `minis/{targetUser}/shared/{owner}/{device}/status`
-- Dependencje: adm-zip, swagger-ui-dist, better-sqlite3
+- **MQTT Integration**: IotService subskrybuje `minis/` topics. Waliduje payloady Zodem (safeParse z `mqttTopics` registry). Przetwarza: telemetry → validate + insert + presence + alert eval + republish + forward do shared users, heartbeat → validate + presence, command/ack → validate + update status. Publikuje: status, telemetry/live, alert. Forwarding do shared users: `minis/{targetUser}/shared/{owner}/{device}/telemetry/live`, `minis/{targetUser}/shared/{owner}/{device}/status`
+- Dependencje: adm-zip, swagger-ui-dist, better-sqlite3, zod, zod-to-json-schema
 - Dane platformy w `data-minis/` (ROOT_DIR=../../data-minis, JSON files), dane IoT w `data-minis/iot.db` (SQLite)
 
 ### Aplikacja frontend Minis (`app/minis-web/`)
@@ -93,7 +96,8 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Dev port: 1903 (Vite HMR), proxy `/api` → `localhost:1902`, proxy `/mqtt` → `ws://localhost:1902` (WebSocket)
 - Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
 - **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
-- **Routing z userName**: wszystkie ścieżki admin/user zawierają `:userName` (np. `/admin/:userName/main`, `/user/:userName/projects`). IoT device page: `:deviceName`. Strony pobierają userName z `useParams()`. Identyfikacja po nazwie (nie UUID) — nazwy muszą być unikalne i URL-safe `[a-zA-Z0-9_-]`.
+- **Routing z userName**: wszystkie ścieżki admin/user zawierają `:userName` (np. `/admin/:userName/main`, `/user/:userName/electronics/devices`). IoT device page: `:deviceName`. Strony pobierają userName z `useParams()`. Identyfikacja po nazwie (nie UUID) — nazwy muszą być unikalne i URL-safe `[a-zA-Z0-9_-]`.
+- **Sidebar nawigacja**: Layout z MUI Drawer, flat items + collapsible tree groups (Electronics, IoT, Tools) z `Collapse`/`ExpandLess`/`ExpandMore`. Generyczny `openGroups` state.
 - **Provider tree** (`main.tsx`): MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → App
 - Moduły:
     - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
@@ -102,12 +106,13 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
     - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile — profile pinów dla różnych płytek), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
     - **serial** — komunikacja z mikrokontrolerami przez Web Serial API: WebSerialService (connect/disconnect, read/write), WebSerialTerminal (komponent xterm.js), EspFlashService (flashowanie firmware przez esptool-js), FlashDialog (UI do flashowania)
-    - **iot-emulator** — emulator urządzeń IoT w przeglądarce: EmulatorService (MQTT pub/sub via `mqtt` package, jedno współdzielone połączenie, interwały telemetrii/heartbeat, command handling auto-ack/auto-fail/manual, activity log, localStorage persistence), generatory wartości (constant/random/sine/linear/step), presety urządzeń (Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device), typy
+    - **iot-emulator** — emulator urządzeń IoT w przeglądarce: EmulatorService (MQTT pub/sub via `mqtt` package, jedno współdzielone połączenie, interwały telemetrii/heartbeat, command handling auto-ack/auto-fail/manual, entity command handling set_state/set_value/set_option/press z natychmiastowym republish telemetrii, activity log, localStorage persistence), generatory wartości (constant/random/sine/linear/step), presety urządzeń (Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device, Smart Thermostat, Smart Plug), typy
 - Hooks (`src/hooks/`):
     - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP). Enkapsuluje stan uploadu, fileInputRef, trigger i handler. Używany w admin stronach (DevicesDefPage, ModulesDefPage, ProjectDefsPage).
 - Serwisy (`src/services/`):
     - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 17 metod IoT (config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń, udostępnianie urządzeń)
-- Strony: /, /login/:userName, /admin/:userName/main, /admin/:userName/users, /admin/:userName/devicesdefs, /admin/:userName/modulesdefs, /admin/:userName/projectdefs, /admin/:userName/filesystem/list, /admin/:userName/filesystem/save, /user/:userName/main, /user/:userName/devices, /user/:userName/projects, /user/:userName/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userName/iot/dashboard (IotDashboardPage — karty urządzeń z metrykami + udostępnione urządzenia), /user/:userName/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userName/iot/device/:deviceName (IotDevicePage — dashboard z metrykami, konfiguracją, historią, komendami, alertami), /user/:userName/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userName/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userName/editor/monaco/*
+    - **RpcClient** — singleton (`rpcClient`), type-safe klient RPC. `call<TName>(method, input): Promise<Output>` — pełny type inference z RpcMethodRegistry (IDE autocomplete na nazwy metod, input i output). Wire format: `POST /api/rpc/{method}` z JSON body.
+- Strony: /, /login/:userName, /admin/:userName/main, /admin/:userName/users, /admin/:userName/devicesdefs, /admin/:userName/modulesdefs, /admin/:userName/projectdefs, /admin/:userName/filesystem/list, /admin/:userName/filesystem/save, /user/:userName/main, /user/:userName/electronics/devices (UserDevicesPage), /user/:userName/electronics/arduino (UserProjectsPage — projekty Arduino/Blockly), /user/:userName/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userName/iot/dashboard (IotDashboardPage — entity-aware karty urządzeń: EntityWidgets z sparkline SVG, kontrolki switch/slider/select/button, fallback na capabilities, auto-refresh 10s + quick refresh po komendzie), /user/:userName/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userName/iot/device/:deviceName (IotDevicePage — entity widgets sekcja, metryki ze sparkline, konfiguracja, historia telemetrii, komendy, alerty), /user/:userName/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userName/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userName/tools/rpc (RpcExplorerPage — auto-generowane formularze z Swagger/Zod schemas, smart autocomplete z x-autocomplete/x-depends-on metadata, Execute + response, Node-RED export NR Local/NR Remote), /user/:userName/tools/mqtt-explorer (MqttExplorerPage — hierarchiczny topic tree z real-time messages, detail panel z type info z mqttTopics registry + Zod validation, publish form z topic autocomplete z registry + QoS/retain, wildcard subscriptions, Node-RED flow export NR Local 172.17.0.1:1902 / NR Remote minis.hersztowski.org, throttled rendering via requestAnimationFrame), /user/:userName/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -131,8 +136,8 @@ mycastle/                           # Root monorepo
 ├── .npmrc
 │
 ├── packages/
-│   ├── core/                       # @mhersztowski/core (shared models, nodes, mqtt, automate, datasource)
-│   │   ├── src/{models,nodes,automate,mqtt,datasource}/
+│   ├── core/                       # @mhersztowski/core (shared models, nodes, mqtt, automate, datasource, rpc)
+│   │   ├── src/{models,nodes,automate,mqtt,datasource,rpc}/
 │   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # Dual ESM+CJS
 │   │   └── package.json
@@ -184,8 +189,13 @@ mycastle/                           # Root monorepo
 │   │   ├── src/
 │   │   │   ├── index.ts            # Entry point (port 1902)
 │   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt+IotService)
-│   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) extending HttpUploadServer
-│   │   │   ├── swagger.ts          # OpenAPI spec
+│   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) + RPC dispatch, extending HttpUploadServer
+│   │   │   ├── swagger.ts          # OpenAPI spec (auto-generated z Zod via buildSwaggerSpec)
+│   │   │   ├── rpc/                # RPC system
+│   │   │   │   ├── RpcRouter.ts        # Register/dispatch/getRegisteredMethods
+│   │   │   │   ├── handlers.ts         # Handler implementations (ping, IoT methods)
+│   │   │   │   ├── RpcRouter.test.ts   # Unit tests
+│   │   │   │   └── RpcEndpoints.test.ts # Integration tests
 │   │   │   └── iot/                # IoT service layer
 │   │   │       ├── IotDatabase.ts      # SQLite: schema init, WAL, db handle
 │   │   │       ├── TelemetryStore.ts   # INSERT/query telemetrii, config CRUD, agregacja
@@ -207,7 +217,8 @@ mycastle/                           # Root monorepo
 │   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial,iot-emulator}/
 │   │   │   ├── hooks/useSourceUpload.ts  # Reusable file upload hook
 │   │   │   ├── services/MinisApiService.ts  # REST client singleton (w tym 17 metod IoT + udostępnianie)
-│   │   │   ├── pages/{admin,user,user/iot,filesystem,editor}/
+│   │   │   ├── services/RpcClient.ts       # Type-safe RPC client singleton (call z autocomplete)
+│   │   │   ├── pages/{admin,user,user/iot,user/tools,filesystem,editor}/
 │   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
 │   │   │   └── components/Layout.tsx
 │   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
