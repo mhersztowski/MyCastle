@@ -14,6 +14,7 @@ import {
   MenuItem,
   Toolbar,
   Typography,
+  Chip,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -38,9 +39,11 @@ import {
   Build as BuildIcon,
   Api as ApiIcon,
   Hub as HubIcon,
+  VpnKey as VpnKeyIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
+import ImpersonationBanner from './ImpersonationBanner';
 
 const drawerWidth = 180;
 
@@ -66,7 +69,7 @@ function Layout({ children }: LayoutProps) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Electronics: true, IoT: true, Tools: true });
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, isAdmin, logout } = useAuth();
+  const { currentUser, isAdmin, logout, impersonating, stopImpersonating } = useAuth();
 
   const userName = extractUserName(location.pathname);
   const isAdminView = location.pathname.startsWith('/admin');
@@ -99,14 +102,15 @@ function Layout({ children }: LayoutProps) {
           { text: 'Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
         ],
       },
-      {
+      ...(isAdmin && !impersonating ? [{
         text: 'Tools', icon: <BuildIcon />, children: [
           { text: 'RPC Explorer', icon: <ApiIcon />, path: `/user/${userName}/tools/rpc` },
           { text: 'MQTT Explorer', icon: <HubIcon />, path: `/user/${userName}/tools/mqtt-explorer` },
+          { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
         ],
-      },
+      }] : []),
     ];
-  }, [isAdminView, userName]);
+  }, [isAdminView, isAdmin, impersonating, userName]);
 
   const sectionLabel = isAdminView ? 'Admin' : 'User';
 
@@ -124,6 +128,9 @@ function Layout({ children }: LayoutProps) {
     setAccountMenuAnchor(null);
     if (isAdminView) {
       navigate(`/user/${userName}/main`);
+    } else if (impersonating) {
+      stopImpersonating();
+      navigate(`/admin/${currentUser!.name}/main`);
     } else {
       navigate(`/admin/${userName}/main`);
     }
@@ -185,13 +192,18 @@ function Layout({ children }: LayoutProps) {
     </Box>
   );
 
+  const bannerOffset = impersonating ? '40px' : 0;
+
   return (
-    <Box sx={{ display: 'flex', width: '100%' }}>
+    <>
+    <ImpersonationBanner />
+    <Box sx={{ display: 'flex', width: '100%', mt: bannerOffset }}>
       <AppBar
         position="fixed"
         sx={{
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           ml: { sm: `${drawerWidth}px` },
+          top: bannerOffset,
         }}
       >
         <Toolbar>
@@ -203,8 +215,9 @@ function Layout({ children }: LayoutProps) {
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
             Minis - {sectionLabel}
+            {impersonating && <Chip label={`as ${impersonating.name}`} size="small" color="warning" />}
           </Typography>
           <IconButton
             color="inherit"
@@ -222,7 +235,7 @@ function Layout({ children }: LayoutProps) {
             {currentUser && (
               <MenuItem disabled>
                 <Typography variant="body2" color="text.secondary">
-                  {currentUser.name}
+                  {currentUser.name}{impersonating ? ` (viewing ${impersonating.name})` : ''}
                 </Typography>
               </MenuItem>
             )}
@@ -259,7 +272,11 @@ function Layout({ children }: LayoutProps) {
           variant="permanent"
           sx={{
             display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: drawerWidth,
+              ...(impersonating ? { top: '40px', height: 'calc(100% - 40px)' } : {}),
+            },
           }}
           open
         >
@@ -278,6 +295,7 @@ function Layout({ children }: LayoutProps) {
         {children}
       </Box>
     </Box>
+    </>
   );
 }
 

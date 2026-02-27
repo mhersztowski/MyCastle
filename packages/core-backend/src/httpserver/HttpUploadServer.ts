@@ -96,7 +96,7 @@ export class HttpUploadServer {
   protected setCorsHeaders(res: ServerResponse): void {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-File-Path, X-Mime-Type, X-Webhook-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-File-Path, X-Mime-Type, X-Webhook-Token');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
 

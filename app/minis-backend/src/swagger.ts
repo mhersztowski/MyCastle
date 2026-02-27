@@ -69,6 +69,7 @@ const swaggerSpec = {
     version: '1.0.0',
   },
   servers: [{ url: '/api' }],
+  security: [{ bearerAuth: [] }],
   paths: {
     '/auth/login': {
       post: {
@@ -89,10 +90,21 @@ const swaggerSpec = {
             },
           },
         },
+        security: [],
         responses: {
           200: {
             description: 'Login successful',
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/UserPublic' } } },
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    token: { type: 'string', description: 'JWT token' },
+                    user: { $ref: '#/components/schemas/UserPublic' },
+                  },
+                },
+              },
+            },
           },
           401: { description: 'Invalid credentials' },
         },
@@ -560,8 +572,48 @@ const swaggerSpec = {
         },
       },
     },
+    '/users/{userName}/api-keys': {
+      get: {
+        tags: ['API Keys'],
+        summary: 'List API keys for user',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'API key list', content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/ApiKeyPublic' } } } } } } },
+        },
+      },
+      post: {
+        tags: ['API Keys'],
+        summary: 'Create API key',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } },
+        responses: {
+          201: { description: 'Created (raw key shown once)', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' } } } },
+        },
+      },
+    },
+    '/users/{userName}/api-keys/{keyId}': {
+      delete: {
+        tags: ['API Keys'],
+        summary: 'Delete API key',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'keyId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Deleted' },
+          404: { description: 'Key not found' },
+        },
+      },
+    },
   },
   components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT or API Key (minis_...)',
+      },
+    },
     schemas: {
       UserPublic: {
         type: 'object',
@@ -757,6 +809,27 @@ const swaggerSpec = {
           deviceId: { type: 'string' },
           status: { type: 'string', enum: ['ONLINE', 'OFFLINE'] },
           lastSeenAt: { type: 'integer' },
+        },
+      },
+      ApiKeyPublic: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          prefix: { type: 'string', description: 'First 14 chars of the key (e.g. minis_a1b2c3)' },
+          userId: { type: 'string' },
+          userName: { type: 'string' },
+          isAdmin: { type: 'boolean' },
+          roles: { type: 'array', items: { type: 'string' } },
+          createdAt: { type: 'integer' },
+          lastUsedAt: { type: 'integer', nullable: true },
+        },
+      },
+      ApiKeyCreateResponse: {
+        type: 'object',
+        properties: {
+          key: { $ref: '#/components/schemas/ApiKeyPublic' },
+          rawKey: { type: 'string', description: 'Full API key — shown only once' },
         },
       },
     },

@@ -7,6 +7,7 @@ import {
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { getHttpUrl } from '@mhersztowski/web-client';
+import { useAuth } from '@modules/auth';
 
 interface SchemaProperty {
   type?: string;
@@ -59,16 +60,18 @@ function buildRequestBody(schema: MethodSchema, values: Record<string, unknown>)
 }
 
 // Autocomplete data fetcher
-async function fetchAutocompleteOptions(source: string, dependsOnValue?: string): Promise<string[]> {
+async function fetchAutocompleteOptions(source: string, token: string | null, dependsOnValue?: string): Promise<string[]> {
   const base = getHttpUrl();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   try {
     if (source === 'users') {
-      const res = await fetch(`${base}/api/admin/users`);
+      const res = await fetch(`${base}/api/admin/users`, { headers });
       const data = await res.json();
       return (data.items ?? []).map((u: any) => u.name as string);
     }
     if (source === 'userDevices' && dependsOnValue) {
-      const res = await fetch(`${base}/api/users/${encodeURIComponent(dependsOnValue)}/devices`);
+      const res = await fetch(`${base}/api/users/${encodeURIComponent(dependsOnValue)}/devices`, { headers });
       const data = await res.json();
       return (data.items ?? []).map((d: any) => d.name as string);
     }
@@ -76,7 +79,7 @@ async function fetchAutocompleteOptions(source: string, dependsOnValue?: string)
   return [];
 }
 
-function useAutocompleteOptions(source: string | undefined, dependsOnValue: string | undefined) {
+function useAutocompleteOptions(source: string | undefined, token: string | null, dependsOnValue: string | undefined) {
   const [options, setOptions] = useState<string[]>([]);
 
   useEffect(() => {
@@ -85,26 +88,27 @@ function useAutocompleteOptions(source: string | undefined, dependsOnValue: stri
       setOptions([]);
       return;
     }
-    fetchAutocompleteOptions(source, dependsOnValue).then(setOptions);
-  }, [source, dependsOnValue]);
+    fetchAutocompleteOptions(source, token, dependsOnValue).then(setOptions);
+  }, [source, token, dependsOnValue]);
 
   return options;
 }
 
-function SchemaField({ name, prop, required, value, onChange, formValues }: {
+function SchemaField({ name, prop, required, value, onChange, formValues, token }: {
   name: string;
   prop: SchemaProperty;
   required: boolean;
   value: unknown;
   onChange: (name: string, value: unknown) => void;
   formValues: Record<string, unknown>;
+  token: string | null;
 }) {
   const label = `${name}${required ? ' *' : ''}`;
   const helperText = prop.description;
   const autocompleteSource = prop['x-autocomplete'];
   const dependsOn = prop['x-depends-on'];
   const dependsOnValue = dependsOn ? (formValues[dependsOn] as string) : undefined;
-  const autocompleteOptions = useAutocompleteOptions(autocompleteSource, dependsOnValue);
+  const autocompleteOptions = useAutocompleteOptions(autocompleteSource, token, dependsOnValue);
 
   // Autocomplete field
   if (autocompleteSource) {
@@ -217,7 +221,7 @@ function nodeRedId(): string {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 }
 
-function buildNodeRedRpc(methodName: string, body: Record<string, unknown>, target: NodeRedTarget): string {
+function buildNodeRedRpc(methodName: string, body: Record<string, unknown>, target: NodeRedTarget, token: string | null): string {
   const injectId = nodeRedId();
   const httpId = nodeRedId();
   const debugId = nodeRedId();
@@ -226,6 +230,7 @@ function buildNodeRedRpc(methodName: string, body: Record<string, unknown>, targ
       id: injectId, type: 'inject', name: methodName,
       props: [
         { p: 'payload', v: JSON.stringify(body), vt: 'json' },
+        ...(token ? [{ p: 'headers', v: JSON.stringify({ Authorization: `Bearer ${token}` }), vt: 'json' }] : []),
       ],
       repeat: '', crontab: '', once: false, onceDelay: 0.1, topic: '',
       x: 150, y: 200, wires: [[httpId]],
@@ -247,7 +252,10 @@ function buildNodeRedRpc(methodName: string, body: Record<string, unknown>, targ
   ]);
 }
 
+const API_KEY_STORAGE = 'minis_nr_apikey';
+
 function RpcExplorerPage() {
+  const { token } = useAuth();
   const [methods, setMethods] = useState<RpcMethodInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -255,6 +263,7 @@ function RpcExplorerPage() {
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
   const [response, setResponse] = useState<{ ok: boolean; data: unknown } | null>(null);
   const [executing, setExecuting] = useState(false);
+  const [apiKeyOverride, setApiKeyOverride] = useState(() => localStorage.getItem(API_KEY_STORAGE) || '');
 
   useEffect(() => {
     (async () => {
@@ -319,9 +328,12 @@ function RpcExplorerPage() {
         }
       }
 
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const res = await fetch(`${getHttpUrl()}/api/rpc/${currentMethod.name}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -400,6 +412,7 @@ function RpcExplorerPage() {
                       value={formValues[name]}
                       onChange={handleFieldChange}
                       formValues={formValues}
+                      token={token}
                     />
                   ))
                 )}
@@ -428,12 +441,24 @@ function RpcExplorerPage() {
                     key={t.label}
                     size="small"
                     startIcon={<AccountTreeIcon fontSize="small" />}
-                    onClick={() => navigator.clipboard.writeText(buildNodeRedRpc(currentMethod.name, requestBody, t))}
+                    onClick={() => navigator.clipboard.writeText(buildNodeRedRpc(currentMethod.name, requestBody, t, apiKeyOverride || token))}
                   >
                     {t.label}
                   </Button>
                 ))}
               </Box>
+
+              {/* API Key for Node-RED export */}
+              <TextField
+                size="small"
+                label="API Key (for Node-RED export)"
+                placeholder="minis_..."
+                value={apiKeyOverride}
+                onChange={(e) => { setApiKeyOverride(e.target.value); localStorage.setItem(API_KEY_STORAGE, e.target.value); }}
+                sx={{ mb: 2 }}
+                fullWidth
+                helperText={apiKeyOverride ? 'Node-RED export will use this API key instead of JWT token' : 'Paste an API key for stable Node-RED integrations'}
+              />
 
               {/* Response */}
               {response && (

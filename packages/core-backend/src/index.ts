@@ -10,7 +10,7 @@ export { HttpUploadServer } from './httpserver/HttpUploadServer';
 
 // mqttserver
 export { MqttServer } from './mqttserver/MqttServer';
-export type { MqttMessageHandler } from './mqttserver/MqttServer';
+export type { MqttMessageHandler, MqttAuthenticateFn } from './mqttserver/MqttServer';
 export { Client } from './mqttserver/Client';
 export { Packet } from './mqttserver/packets/Packet';
 export type { PacketData } from './mqttserver/packets/Packet';
@@ -24,6 +24,9 @@ export { FileChangedPacket } from './mqttserver/packets/FileChangedPacket';
 export { AutomateRunPacket } from './mqttserver/packets/AutomateRunPacket';
 export { ResponsePacket } from './mqttserver/packets/ResponsePacket';
 export { ErrorPacket } from './mqttserver/packets/ErrorPacket';
+
+// auth
+export { PasswordService, JwtService, ApiKeyService, extractBearerToken, checkAuth } from './auth/index';
 
 // interfaces
 export type {

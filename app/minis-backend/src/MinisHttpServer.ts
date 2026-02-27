@@ -1,5 +1,6 @@
-import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
+import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth } from '@mhersztowski/core-backend';
 import type { IncomingMessage, ServerResponse } from 'http';
+import type { AuthTokenPayload } from '@mhersztowski/core';
 import { buildSwaggerSpec } from './swagger.js';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -26,8 +27,11 @@ const CRUD_CONFIGS: Record<string, CrudConfig> = {
 
 export class MinisHttpServer extends HttpUploadServer {
   private static readonly NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+  private static readonly PUBLIC_PATHS = ['/auth/login', '/docs', '/docs/', '/docs/swagger.json'];
   private swaggerUiDir: string | null = null;
   private iotService: IotService | null;
+  private jwtService: JwtService;
+  private apiKeyService: ApiKeyService;
   private rpcRouter: RpcRouter;
 
   private static validateName(name: string): string | null {
@@ -36,8 +40,10 @@ export class MinisHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, iotService?: IotService, staticDir?: string) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
+    this.jwtService = jwtService;
+    this.apiKeyService = apiKeyService;
     this.iotService = iotService ?? null;
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
@@ -79,6 +85,18 @@ export class MinisHttpServer extends HttpUploadServer {
     const apiPath = fullApiPath.split('?')[0];
     const method = req.method || 'GET';
 
+    // --- Public endpoints (no auth required) ---
+
+    // Auth
+    if (method === 'POST' && apiPath === '/auth/login') {
+      await this.handleLogin(req, res);
+      return;
+    }
+    if (method === 'GET' && apiPath === '/auth/users') {
+      await this.handlePublicUserList(res);
+      return;
+    }
+
     // Swagger docs
     if (apiPath === '/docs') {
       res.writeHead(301, { Location: '/api/docs/' });
@@ -98,19 +116,40 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
 
+    // --- Protected endpoints (auth required) ---
+
+    const user = checkAuth(req, this.jwtService, this.apiKeyService);
+    if (!user) {
+      this.sendJsonResponse(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+
+    // Admin routes require isAdmin
+    if (apiPath.startsWith('/admin/') && !user.isAdmin) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+      return;
+    }
+
+    // API Keys: /users/{userName}/api-keys[/{keyId}]
+    const apiKeysMatch = apiPath.match(/^\/users\/([^/]+)\/api-keys(?:\/(.+))?$/);
+    if (apiKeysMatch) {
+      const userName = decodeURIComponent(apiKeysMatch[1]);
+      const keyId = apiKeysMatch[2] ? decodeURIComponent(apiKeysMatch[2]) : undefined;
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: can only manage your own API keys' });
+        return;
+      }
+      await this.handleApiKeys(req, res, method, user, keyId);
+      return;
+    }
+
     // RPC dispatch: POST /api/rpc/{methodName}
     const rpcMatch = apiPath.match(/^\/rpc\/([a-zA-Z0-9_.]+)$/);
     if (rpcMatch && method === 'POST') {
       const methodName = rpcMatch[1];
       const body = await this.parseRequestBody(req);
-      const result = await this.rpcRouter.dispatch(methodName, body, {});
+      const result = await this.rpcRouter.dispatch(methodName, body, { user });
       this.sendJsonResponse(res, result.statusCode, result.body);
-      return;
-    }
-
-    // Auth
-    if (method === 'POST' && apiPath === '/auth/login') {
-      await this.handleLogin(req, res);
       return;
     }
 
@@ -240,6 +279,17 @@ export class MinisHttpServer extends HttpUploadServer {
 
   // --- Auth ---
 
+  private async handlePublicUserList(res: ServerResponse): Promise<void> {
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`) as Record<string, any>;
+      const users = (data.items || []) as any[];
+      const publicList = users.map((u: any) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin ?? false }));
+      this.sendJsonResponse(res, 200, { items: publicList });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
   private async handleLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const body = await this.parseRequestBody(req);
@@ -250,18 +300,69 @@ export class MinisHttpServer extends HttpUploadServer {
         return;
       }
 
-      const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`);
-      const users = (data as Record<string, unknown[]>).items || [];
-      const user = users.find((u: any) => u.name === name) as any;
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`) as Record<string, any>;
+      const users = (data.items || []) as any[];
+      const user = users.find((u: any) => u.name === name);
 
-      if (!user || user.password !== password) {
+      if (!user || !await PasswordService.verify(password, user.password)) {
         this.sendJsonResponse(res, 401, { error: 'Invalid credentials' });
         return;
       }
 
-      // Return user without password
+      // Auto-migrate plaintext password to bcrypt
+      if (!PasswordService.isBcrypt(user.password)) {
+        user.password = await PasswordService.hash(password);
+        data.items = users;
+        await this.writeJsonFile(`${MINIS_ROOT}/Admin/Users.json`, data);
+      }
+
+      const tokenPayload: AuthTokenPayload = {
+        userId: user.id,
+        userName: user.name,
+        isAdmin: user.isAdmin ?? false,
+        roles: user.roles ?? [],
+      };
+      const token = this.jwtService.sign(tokenPayload);
+
       const { password: _, ...publicUser } = user;
-      this.sendJsonResponse(res, 200, publicUser);
+      this.sendJsonResponse(res, 200, { token, user: publicUser });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- API Keys ---
+
+  private async handleApiKeys(req: IncomingMessage, res: ServerResponse, method: string, user: AuthTokenPayload, keyId?: string): Promise<void> {
+    try {
+      switch (method) {
+        case 'GET': {
+          if (keyId) { this.sendJsonResponse(res, 405, { error: 'GET with id not supported, use list' }); return; }
+          const keys = this.apiKeyService.listForUser(user.userName);
+          this.sendJsonResponse(res, 200, { items: keys });
+          return;
+        }
+        case 'POST': {
+          if (keyId) { this.sendJsonResponse(res, 405, { error: 'POST with id not supported' }); return; }
+          const body = await this.parseRequestBody(req) as { name?: string };
+          if (!body.name || typeof body.name !== 'string' || body.name.trim().length === 0) {
+            this.sendJsonResponse(res, 400, { error: 'name is required' });
+            return;
+          }
+          const result = await this.apiKeyService.create(user.userName, user.userId, user.isAdmin, user.roles, body.name.trim());
+          this.sendJsonResponse(res, 201, result);
+          return;
+        }
+        case 'DELETE': {
+          if (!keyId) { this.sendJsonResponse(res, 400, { error: 'DELETE requires a key id' }); return; }
+          const deleted = await this.apiKeyService.deleteKey(keyId, user.userName);
+          if (!deleted) { this.sendJsonResponse(res, 404, { error: 'API key not found' }); return; }
+          this.sendJsonResponse(res, 200, { success: true });
+          return;
+        }
+        default:
+          this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
     }
@@ -321,6 +422,11 @@ export class MinisHttpServer extends HttpUploadServer {
 
     body.id = body.id || randomUUID();
 
+    // Hash password for user creation
+    if (config.itemsKey === 'items' && body.password && typeof body.password === 'string') {
+      body.password = await PasswordService.hash(body.password as string);
+    }
+
     // Set type field based on resource
     const TYPE_MAP: Record<string, string> = {
       items: 'user', deviceDefs: 'device_def', moduleDefs: 'module_def',
@@ -374,6 +480,11 @@ export class MinisHttpServer extends HttpUploadServer {
       // Check uniqueness (exclude current item)
       const duplicate = items.find((item, i) => i !== index && item.name === body.name);
       if (duplicate) { this.sendJsonResponse(res, 409, { error: `Name '${body.name}' already exists` }); return; }
+    }
+
+    // Hash password on user update
+    if (config.itemsKey === 'items' && body.password && typeof body.password === 'string') {
+      body.password = await PasswordService.hash(body.password as string);
     }
 
     items[index] = { ...items[index], ...body };

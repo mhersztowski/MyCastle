@@ -24,9 +24,10 @@ beforeEach(() => {
 describe('MinisApiService', () => {
   describe('login', () => {
     it('sends POST with name and password', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'u1', name: 'Alice', isAdmin: false }));
-      const user = await minisApi.login('Alice', 'pass');
-      expect(user.name).toBe('Alice');
+      mockFetch.mockResolvedValueOnce(jsonResponse({ token: 'jwt-123', user: { id: 'u1', name: 'Alice', isAdmin: false } }));
+      const result = await minisApi.login('Alice', 'pass');
+      expect(result.user.name).toBe('Alice');
+      expect(result.token).toBe('jwt-123');
       expect(mockFetch).toHaveBeenCalledWith('http://test-host/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

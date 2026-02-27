@@ -14,7 +14,7 @@ function HomePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    minisApi.getUsers()
+    minisApi.getPublicUsers()
       .then(setUsers)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));

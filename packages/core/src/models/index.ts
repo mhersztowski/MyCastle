@@ -13,3 +13,4 @@ export * from './MinisProjectDefModel';
 export * from './MinisProjectModel';
 export * from './UserModel';
 export * from './IotModels';
+export * from './AuthTypes';

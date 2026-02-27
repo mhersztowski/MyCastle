@@ -1,4 +1,4 @@
-import { MqttServer, FileSystem } from '@mhersztowski/core-backend';
+import { MqttServer, FileSystem, JwtService, PasswordService, ApiKeyService } from '@mhersztowski/core-backend';
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { MinisHttpServer } from './MinisHttpServer.js';
 import { IotService } from './iot/IotService.js';
@@ -6,6 +6,7 @@ import { IotService } from './iot/IotService.js';
 export interface AppConfig {
   httpPort: number;
   rootDir: string;
+  jwtSecret: string;
   staticDir?: string;
 }
 
@@ -16,15 +17,21 @@ export class App {
   private mqttServer!: MqttServer;
   private httpServer: MinisHttpServer;
   private iotService: IotService;
+  private jwtService: JwtService;
+  private apiKeyService: ApiKeyService;
   private config: AppConfig;
 
   private constructor(config: AppConfig) {
     this.config = config;
     this.fileSystem = new FileSystem(config.rootDir);
     this.iotService = new IotService(config.rootDir);
+    this.jwtService = new JwtService(config.jwtSecret);
+    this.apiKeyService = new ApiKeyService(this.fileSystem, 'Minis/Admin/ApiKeys.json');
     this.httpServer = new MinisHttpServer(
       config.httpPort,
       this.fileSystem,
+      this.jwtService,
+      this.apiKeyService,
       this.iotService,
       config.staticDir,
     );
@@ -49,9 +56,34 @@ export class App {
     await this.fileSystem.initialize();
     console.log(`FileSystem initialized with root: ${this.config.rootDir}`);
 
+    await this.apiKeyService.load();
+    console.log('API key service loaded');
+
     // Start HTTP server, then attach MQTT on same port
     await this.httpServer.start();
     this.mqttServer = new MqttServer(this.fileSystem, this.httpServer.getHttpServer());
+
+    // MQTT authentication: accept API key, JWT token, or username+password
+    this.mqttServer.setAuthenticate(async (_clientId, username, password) => {
+      // Try API key first (fast prefix check)
+      if (ApiKeyService.isApiKey(password)) {
+        return this.apiKeyService.verify(password) !== null;
+      }
+      // Try JWT token (browser/emulator sends token as password)
+      const payload = this.jwtService.verify(password);
+      if (payload) return true;
+      // Fallback: verify username+password against user store
+      try {
+        const data = await this.fileSystem.readFile('Minis/Admin/Users.json');
+        const users = (JSON.parse(data.content) as { items: Array<{ name: string; password: string }> }).items || [];
+        const user = users.find(u => u.name === username);
+        if (!user) return false;
+        return PasswordService.verify(password, user.password);
+      } catch {
+        return false;
+      }
+    });
+
     await this.mqttServer.start();
     console.log(`Server started on port ${this.config.httpPort} (HTTP + MQTT WebSocket at /mqtt)`);
 

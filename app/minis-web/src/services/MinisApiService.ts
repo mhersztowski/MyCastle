@@ -1,6 +1,7 @@
 import { getHttpUrl } from '@mhersztowski/web-client';
 import type {
   UserModel,
+  LoginResponse,
   MinisDeviceDefModel,
   MinisDeviceModel,
   MinisModuleDefModel,
@@ -12,20 +13,62 @@ import type {
   AlertRule,
   Alert,
   DeviceShare,
+  ApiKeyPublic,
+  ApiKeyCreateResponse,
 } from '@mhersztowski/core';
 
 export type UserPublic = Omit<UserModel, 'password'>;
 
+const STORAGE_KEY = 'minis_current_user';
+
 class MinisApiService {
+  private authToken: string | null = null;
+
   private getBaseUrl(): string {
     return getHttpUrl();
   }
 
+  setAuthToken(token: string | null): void {
+    this.authToken = token;
+  }
+
+  private getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+    return headers;
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const headers: Record<string, string> = { ...this.getAuthHeaders() };
+    if (body) headers['Content-Type'] = 'application/json';
+
     const res = await fetch(`${this.getBaseUrl()}/api${path}`, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (res.status === 401) {
+      sessionStorage.removeItem(STORAGE_KEY);
+      window.location.href = '/';
+      throw new Error('Session expired');
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  // Auth (bypasses 401 redirect — login failures should show error, not redirect)
+  async login(name: string, password: string): Promise<LoginResponse> {
+    const res = await fetch(`${this.getBaseUrl()}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -34,9 +77,15 @@ class MinisApiService {
     return res.json();
   }
 
-  // Auth
-  async login(name: string, password: string): Promise<UserPublic> {
-    return this.request<UserPublic>('POST', '/auth/login', { name, password });
+  // Public user list (no auth needed — for login page)
+  async getPublicUsers(): Promise<UserPublic[]> {
+    const res = await fetch(`${this.getBaseUrl()}/api/auth/users`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.items;
   }
 
   // Admin - Users
@@ -118,7 +167,7 @@ class MinisApiService {
   async uploadDefSources(resource: string, id: string, file: File): Promise<{ success: boolean; filesExtracted: number }> {
     const res = await fetch(`${this.getBaseUrl()}/api/admin/${resource}/${encodeURIComponent(id)}/sources`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/zip' },
+      headers: { 'Content-Type': 'application/zip', ...this.getAuthHeaders() },
       body: file,
     });
     if (!res.ok) {
@@ -252,6 +301,20 @@ class MinisApiService {
   async getMyShares(userName: string): Promise<DeviceShare[]> {
     const data = await this.request<{ items: DeviceShare[] }>('GET', `/users/${encodeURIComponent(userName)}/my-shares`);
     return data.items;
+  }
+
+  // API Keys
+  async getApiKeys(userName: string): Promise<ApiKeyPublic[]> {
+    const data = await this.request<{ items: ApiKeyPublic[] }>('GET', `/users/${encodeURIComponent(userName)}/api-keys`);
+    return data.items;
+  }
+
+  async createApiKey(userName: string, name: string): Promise<ApiKeyCreateResponse> {
+    return this.request<ApiKeyCreateResponse>('POST', `/users/${encodeURIComponent(userName)}/api-keys`, { name });
+  }
+
+  async deleteApiKey(userName: string, keyId: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/api-keys/${encodeURIComponent(keyId)}`);
   }
 }
 

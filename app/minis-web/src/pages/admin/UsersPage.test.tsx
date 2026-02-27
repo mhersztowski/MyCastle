@@ -3,6 +3,8 @@ import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import UsersPage from './UsersPage';
 
 vi.mock('../../services/MinisApiService', () => ({
@@ -14,12 +16,27 @@ vi.mock('../../services/MinisApiService', () => ({
   },
 }));
 
+vi.mock('@modules/auth', () => ({
+  useAuth: vi.fn(() => ({
+    currentUser: { id: 'a1', name: 'Admin', isAdmin: true, roles: [] },
+    startImpersonating: vi.fn(),
+  })),
+}));
+
 import { minisApi } from '../../services/MinisApiService';
 
 const mockUsers = [
   { id: 'u1', name: 'Alice', isAdmin: true, roles: ['admin'] },
   { id: 'u2', name: 'Bob', isAdmin: false, roles: ['viewer'] },
 ];
+
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <MemoryRouter>{children}</MemoryRouter>
+);
+
+function renderPage() {
+  return render(<UsersPage />, { wrapper });
+}
 
 beforeEach(() => {
   vi.mocked(minisApi.getUsers).mockReset();
@@ -37,7 +54,7 @@ describe('UsersPage', () => {
     vi.mocked(minisApi.getUsers).mockResolvedValue(mockUsers as any);
 
     await act(async () => {
-      render(<UsersPage />);
+      renderPage();
     });
 
     expect(screen.getByText('Alice')).toBeInTheDocument();
@@ -48,7 +65,7 @@ describe('UsersPage', () => {
     vi.mocked(minisApi.getUsers).mockResolvedValue([]);
 
     await act(async () => {
-      render(<UsersPage />);
+      renderPage();
     });
 
     expect(screen.getByText('No users')).toBeInTheDocument();
@@ -58,7 +75,7 @@ describe('UsersPage', () => {
     vi.mocked(minisApi.getUsers).mockRejectedValue(new Error('Server error'));
 
     await act(async () => {
-      render(<UsersPage />);
+      renderPage();
     });
 
     expect(screen.getByText('Server error')).toBeInTheDocument();
@@ -69,7 +86,7 @@ describe('UsersPage', () => {
     const user = userEvent.setup();
 
     await act(async () => {
-      render(<UsersPage />);
+      renderPage();
     });
 
     expect(screen.getByText('No users')).toBeInTheDocument();
@@ -85,7 +102,7 @@ describe('UsersPage', () => {
     const user = userEvent.setup();
 
     await act(async () => {
-      render(<UsersPage />);
+      renderPage();
     });
 
     expect(screen.getByText('No users')).toBeInTheDocument();

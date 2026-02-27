@@ -45,7 +45,7 @@ export class MqttClient {
   private connectionPromise: Promise<void> | null = null;
   private fileChangeCallbacks: Set<(path: string, action: string) => void> = new Set();
 
-  async connect(brokerUrl: string = getMqttUrl()): Promise<void> {
+  async connect(brokerUrl: string = getMqttUrl(), options?: { username?: string; password?: string }): Promise<void> {
     if (this.connectionPromise) {
       return this.connectionPromise;
     }
@@ -54,6 +54,8 @@ export class MqttClient {
       this.client = mqtt.connect(brokerUrl, {
         clientId: `mycastle_web_${Date.now()}`,
         protocol: brokerUrl.startsWith('wss') ? 'wss' : 'ws',
+        username: options?.username,
+        password: options?.password,
       });
 
       this.client.on('connect', () => {

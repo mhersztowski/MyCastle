@@ -3,10 +3,12 @@ import {
   Box, Typography, Button, IconButton, Chip, Stack,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
   Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, Switch, FormControlLabel, Alert, CircularProgress,
+  TextField, Switch, FormControlLabel, Alert, CircularProgress, Tooltip,
 } from '@mui/material';
-import { Edit, Delete, Add } from '@mui/icons-material';
+import { Edit, Delete, Add, PersonSearch as ImpersonateIcon } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import { minisApi, type UserPublic } from '../../services/MinisApiService';
+import { useAuth } from '@modules/auth';
 
 interface UserFormData {
   name: string;
@@ -18,6 +20,8 @@ interface UserFormData {
 const emptyForm: UserFormData = { name: '', password: '', isAdmin: false, roles: '' };
 
 function UsersPage() {
+  const navigate = useNavigate();
+  const { currentUser, startImpersonating } = useAuth();
   const [users, setUsers] = useState<UserPublic[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +29,11 @@ function UsersPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<UserFormData>(emptyForm);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const handleImpersonate = (user: UserPublic) => {
+    startImpersonating(user);
+    navigate(`/user/${user.name}/main`);
+  };
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -111,6 +120,13 @@ function UsersPage() {
                   </Stack>
                 </TableCell>
                 <TableCell align="right">
+                  {user.name !== currentUser?.name && (
+                    <Tooltip title={`View as ${user.name}`}>
+                      <IconButton size="small" onClick={() => handleImpersonate(user)}>
+                        <ImpersonateIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   <IconButton size="small" onClick={() => openEdit(user)}><Edit /></IconButton>
                   <IconButton size="small" onClick={() => setDeleteConfirm(user.id)}><Delete /></IconButton>
                 </TableCell>

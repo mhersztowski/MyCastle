@@ -8,5 +8,5 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: 'node20',
-  external: ['@mhersztowski/core', 'aedes', 'ws'],
+  external: ['@mhersztowski/core', 'aedes', 'ws', 'bcryptjs', 'jsonwebtoken'],
 });

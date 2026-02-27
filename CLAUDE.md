@@ -8,7 +8,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Shared packages
 - **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource. Dual ESM+CJS build (tsup).
-  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, IotEntity, IotEntityType, IotSensorEntity, IotBinarySensorEntity, IotSwitchEntity, IotNumberEntity, IotButtonEntity, IotSelectEntity, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare)
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel, MinisDeviceModel (isIot field), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, IotEntity, IotEntityType, IotSensorEntity, IotBinarySensorEntity, IotSwitchEntity, IotNumberEntity, IotButtonEntity, IotSelectEntity, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare), AuthModels (AuthTokenPayload, ApiKeyPublic)
   - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
   - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload. `topics.ts`: Zod-based MQTT topic registry (analogiczny do RPC). MqttTopicDef (pattern, description, direction, payloadSchema, tags), defineMqttTopic(), MqttPayload<T>. mqttTopics registry (telemetry, heartbeat, command, commandAck, status, telemetryLive, alert, sharedTelemetryLive, sharedStatus), MqttTopicRegistry, MqttTopicName. matchTopic(fullTopic) — dopasowuje topic do wzorca, zwraca def + wyekstrahowane params. Zod schemas = single source of truth for payload validation i type info w MQTT Explorer
@@ -23,7 +23,8 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **@mhersztowski/core-backend** (`packages/core-backend/`) — współdzielone moduły backendowe wyekstrahowane z mycastle-backend. ESM-only build (tsup).
   - `filesystem/` — FileSystem (in-memory cache, EventEmitter fileChanged, atomic writes, per-file locking, deleteDirectory)
   - `httpserver/` — HttpUploadServer (CORS, POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook). Klasa rozszerzalna: protected server, fileSystem, setCorsHeaders, handleRequest, sendJsonResponse — umożliwia subclassing (np. MinisHttpServer)
-  - `mqttserver/` — MqttServer (Aedes, publishMessage(), onMessage(handler) for custom topic routing), MqttMessageHandler type, Client, Packet classes per type
+  - `mqttserver/` — MqttServer (Aedes, publishMessage(), onMessage(handler) for custom topic routing, setAuthenticate(callback) for MQTT auth), MqttMessageHandler type, Client, Packet classes per type
+  - `auth/` — JwtService (sign/verify JWT, jsonwebtoken), PasswordService (bcrypt hash/verify, isBcrypt detection), ApiKeyService (CRUD kluczy API z prefix `minis_`, SHA-256 hash, per-user, dane w JSON file), checkAuth() middleware (Bearer token: JWT lub API key → AuthTokenPayload | null)
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
 - **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core (SceneGraph, SceneNode, RenderEngine, IO)
@@ -65,10 +66,11 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - opis w docs/minis.md
 - Node.js, ESM, build z tsup, dev z tsx watch
 - Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
-- **App singleton** (`src/App.ts`): FileSystem + MinisHttpServer + MqttServer + IotService. `shutdown()` gracefully zamyka IoT service + HTTP server + MQTT. IotService wired via `MqttServer.onMessage()` / `MqttServer.publishMessage()`.
-- Importuje FileSystem, MqttServer z `@mhersztowski/core-backend`
-- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami. CrudConfig.lookupKey: admin CRUD używa `'id'`, user devices/projects używają `'name'`. Walidacja nazw: `[a-zA-Z0-9_-]`, unikalność (400/409). Przyjmuje IotService w konstruktorze dla endpointów IoT.
-    - `/api/auth/login` — logowanie po name+password
+- **App singleton** (`src/App.ts`): FileSystem + MinisHttpServer + MqttServer + IotService + JwtService + ApiKeyService. `shutdown()` gracefully zamyka IoT service + HTTP server + MQTT. IotService wired via `MqttServer.onMessage()` / `MqttServer.publishMessage()`. MQTT auth via `MqttServer.setAuthenticate()` (API key / JWT / username+password).
+- Importuje FileSystem, MqttServer, JwtService, PasswordService, ApiKeyService z `@mhersztowski/core-backend`
+- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). JWT auth middleware (checkAuth) na wszystkie endpointy poza publicznymi (`/auth/login`, `/auth/users`, `/docs*`). Admin routes wymagają `isAdmin`. Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami. CrudConfig.lookupKey: admin CRUD używa `'id'`, user devices/projects używają `'name'`. Walidacja nazw: `[a-zA-Z0-9_-]`, unikalność (400/409). Hasła hashowane bcrypt (auto-migracja plaintext przy logowaniu).
+    - `/api/auth/login` — logowanie po name+password, zwraca `{ token, user }` (JWT + UserPublic)
+    - `/api/auth/users` — publiczna lista użytkowników (bez haseł)
     - `/api/admin/{users,devicedefs,moduledefs,projectdefs}` — CRUD (GET list, POST create, PUT update, DELETE). Dane trzymane w JSON files (`Minis/Admin/*.json`)
     - `/api/admin/{resource}/:id/sources` — upload ZIP z plikami źródłowymi (adm-zip, smart prefix stripping, max 50MB)
     - `/api/users/:userName/{devices,projects}` — CRUD per user (dane w `Minis/Users/:userName/*.json`), lookup po nazwie urządzenia/projektu
@@ -81,9 +83,10 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - `/api/users/:userName/devices/:deviceName/shares` — GET/POST/DELETE udostępnienia urządzenia
     - `/api/users/:userName/shared-devices` — GET urządzenia udostępnione temu użytkownikowi
     - `/api/users/:userName/my-shares` — GET udostępnienia dokonane przez tego użytkownika
-    - `/api/rpc/{methodName}` — POST, generyczny RPC dispatch (Zod validation, auto-Swagger)
-    - `/api/docs` — Swagger UI (swagger-ui-dist)
-    - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`, auto-generated z Zod schemas via `buildSwaggerSpec()` + `zod-to-json-schema`). Property schemas wzbogacone o `x-autocomplete` i `x-depends-on` z fieldMeta
+    - `/api/users/:userName/api-keys` — GET/POST/DELETE zarządzanie kluczami API (per-user, admin może wszystkimi)
+    - `/api/rpc/{methodName}` — POST, generyczny RPC dispatch (Zod validation, auto-Swagger, `user` w context)
+    - `/api/docs` — Swagger UI (z Authorize dla Bearer token)
+    - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`, auto-generated z Zod schemas via `buildSwaggerSpec()` + `zod-to-json-schema`). Property schemas wzbogacone o `x-autocomplete` i `x-depends-on` z fieldMeta. Security scheme bearerAuth (JWT/API key)
 - **RPC System** (`src/rpc/`): RpcRouter (register/dispatch/getRegisteredMethods), handlers.ts (registerHandlers z deps: iotService, fileSystem). Metody RPC: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w handlers.ts, 3) call z frontendu via rpcClient — Swagger auto-update.
 - **IoT Service Layer** (`src/iot/`): IotDatabase (SQLite, better-sqlite3, WAL mode), TelemetryStore (INSERT/query, config CRUD, agregacja), DevicePresence (heartbeat tracking, timeout detection), CommandDispatcher (tworzenie komend, ACK tracking), AlertEngine (reguły CRUD, ewaluacja po telemetrii, cooldown), DeviceShareStore (CRUD udostępnień, prepared statements), IotService (orchestrator — parsuje MQTT topics `minis/{userName}/{deviceName}/{type}`, koordynuje stores, forwarding telemetrii/statusu do shared users)
 - **MQTT Integration**: IotService subskrybuje `minis/` topics. Waliduje payloady Zodem (safeParse z `mqttTopics` registry). Przetwarza: telemetry → validate + insert + presence + alert eval + republish + forward do shared users, heartbeat → validate + presence, command/ack → validate + update status. Publikuje: status, telemetry/live, alert. Forwarding do shared users: `minis/{targetUser}/shared/{owner}/{device}/telemetry/live`, `minis/{targetUser}/shared/{owner}/{device}/status`
@@ -101,7 +104,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **Provider tree** (`main.tsx`): MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → App
 - Moduły:
     - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
-    - **auth** — AuthContext/AuthProvider, useAuth hook. Login via MinisApiService, sesja w sessionStorage. Stan: currentUser (UserPublic), isAdmin, login(), logout()
+    - **auth** — AuthContext/AuthProvider, useAuth hook. JWT token + sesja w sessionStorage (format `{ user, token }`). `setAuthToken()` propaguje token do MinisApiService i RpcClient. Stan: currentUser, token, isAdmin, login(), logout(), impersonating, startImpersonating(), stopImpersonating(). Impersonacja: admin może przeglądać widok innego usera (efemeryczny stan, nie persystowany)
     - **filesystem** — Minis-specific: models (FileModel, DirModel), nodes (FileNode, DirNode), components (DirComponent, FileComponent, FileJsonComponent), FilesystemContext, MinisDataSourceContext (ładuje moduleDefs/deviceDefs/projectDefs via MQTT do MemoryDataSource)
     - **editor** — Monaco editor (EditorInstance, CommandRegistry, plugins, language services) — kopia z oryginalnego Minis
     - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile — profile pinów dla różnych płytek), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
@@ -110,9 +113,11 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - Hooks (`src/hooks/`):
     - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP). Enkapsuluje stan uploadu, fileInputRef, trigger i handler. Używany w admin stronach (DevicesDefPage, ModulesDefPage, ProjectDefsPage).
 - Serwisy (`src/services/`):
-    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. Metody: login, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 17 metod IoT (config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń, udostępnianie urządzeń)
-    - **RpcClient** — singleton (`rpcClient`), type-safe klient RPC. `call<TName>(method, input): Promise<Output>` — pełny type inference z RpcMethodRegistry (IDE autocomplete na nazwy metod, input i output). Wire format: `POST /api/rpc/{method}` z JSON body.
-- Strony: /, /login/:userName, /admin/:userName/main, /admin/:userName/users, /admin/:userName/devicesdefs, /admin/:userName/modulesdefs, /admin/:userName/projectdefs, /admin/:userName/filesystem/list, /admin/:userName/filesystem/save, /user/:userName/main, /user/:userName/electronics/devices (UserDevicesPage), /user/:userName/electronics/arduino (UserProjectsPage — projekty Arduino/Blockly), /user/:userName/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userName/iot/dashboard (IotDashboardPage — entity-aware karty urządzeń: EntityWidgets z sparkline SVG, kontrolki switch/slider/select/button, fallback na capabilities, auto-refresh 10s + quick refresh po komendzie), /user/:userName/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userName/iot/device/:deviceName (IotDevicePage — entity widgets sekcja, metryki ze sparkline, konfiguracja, historia telemetrii, komendy, alerty), /user/:userName/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userName/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userName/tools/rpc (RpcExplorerPage — auto-generowane formularze z Swagger/Zod schemas, smart autocomplete z x-autocomplete/x-depends-on metadata, Execute + response, Node-RED export NR Local/NR Remote), /user/:userName/tools/mqtt-explorer (MqttExplorerPage — hierarchiczny topic tree z real-time messages, detail panel z type info z mqttTopics registry + Zod validation, publish form z topic autocomplete z registry + QoS/retain, wildcard subscriptions, Node-RED flow export NR Local 172.17.0.1:1902 / NR Remote minis.hersztowski.org, throttled rendering via requestAnimationFrame), /user/:userName/editor/monaco/*
+    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. `setAuthToken(token)` — Bearer token na requestach. Metody: login, getPublicUsers, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 17 metod IoT, 3 metody API Keys (getApiKeys, createApiKey, deleteApiKey)
+    - **RpcClient** — singleton (`rpcClient`), type-safe klient RPC. `setAuthToken(token)` — Bearer token. `call<TName>(method, input): Promise<Output>` — pełny type inference z RpcMethodRegistry (IDE autocomplete na nazwy metod, input i output). Wire format: `POST /api/rpc/{method}` z JSON body.
+- **AdminOnly guard** (`App.tsx`): route guard sprawdzający `isAdmin && !impersonating`, redirectuje do `/user/:userName/main`
+- **ImpersonationBanner** (`components/ImpersonationBanner.tsx`): fixed żółty pasek na górze z "Viewing as: {name}" + Stop. Layout offsetuje AppBar/Drawer/content gdy aktywny
+- Strony: /, /login/:userName, /admin/:userName/main, /admin/:userName/users (z przyciskiem Impersonate), /admin/:userName/devicesdefs, /admin/:userName/modulesdefs, /admin/:userName/projectdefs, /admin/:userName/filesystem/list, /admin/:userName/filesystem/save, /user/:userName/main, /user/:userName/electronics/devices (UserDevicesPage), /user/:userName/electronics/arduino (UserProjectsPage — projekty Arduino/Blockly), /user/:userName/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal i flash), /user/:userName/iot/dashboard (IotDashboardPage — entity-aware karty urządzeń: EntityWidgets z sparkline SVG, kontrolki switch/slider/select/button, fallback na capabilities, auto-refresh 10s + quick refresh po komendzie), /user/:userName/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userName/iot/device/:deviceName (IotDevicePage — entity widgets sekcja, metryki ze sparkline, konfiguracja, historia telemetrii, komendy, alerty), /user/:userName/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userName/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userName/tools/rpc (AdminOnly — RpcExplorerPage — auto-generowane formularze z Swagger/Zod schemas, smart autocomplete z x-autocomplete/x-depends-on metadata, Execute + response, Node-RED export NR Local/NR Remote), /user/:userName/tools/mqtt-explorer (AdminOnly — MqttExplorerPage — hierarchiczny topic tree z real-time messages, detail panel z type info z mqttTopics registry + Zod validation, publish form z topic autocomplete z registry + QoS/retain, wildcard subscriptions, Node-RED flow export via WebSocket ws://172.17.0.1:1902/mqtt / wss://minis.hersztowski.org/mqtt, throttled rendering via requestAnimationFrame), /user/:userName/tools/api-keys (AdminOnly — ApiKeysPage — CRUD kluczy API), /user/:userName/editor/monaco/*
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -142,7 +147,8 @@ mycastle/                           # Root monorepo
 │   │   ├── tsup.config.ts          # Dual ESM+CJS
 │   │   └── package.json
 │   ├── core-backend/               # @mhersztowski/core-backend (shared backend modules)
-│   │   ├── src/{filesystem,httpserver,mqttserver,datasource}/
+│   │   ├── src/{filesystem,httpserver,mqttserver,datasource,auth}/
+│   │   ├── src/auth/               # JwtService, PasswordService, ApiKeyService, checkAuth middleware
 │   │   ├── src/interfaces.ts       # IAutomateService, IDataSource
 │   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM-only, target node20
@@ -188,8 +194,8 @@ mycastle/                           # Root monorepo
 │   ├── minis-backend/              # Minis Backend Node.js
 │   │   ├── src/
 │   │   │   ├── index.ts            # Entry point (port 1902)
-│   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt+IotService)
-│   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) + RPC dispatch, extending HttpUploadServer
+│   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt+IotService+JwtService+ApiKeyService)
+│   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) + JWT auth middleware + RPC dispatch, extending HttpUploadServer
 │   │   │   ├── swagger.ts          # OpenAPI spec (auto-generated z Zod via buildSwaggerSpec)
 │   │   │   ├── rpc/                # RPC system
 │   │   │   │   ├── RpcRouter.ts        # Register/dispatch/getRegisteredMethods
@@ -213,14 +219,15 @@ mycastle/                           # Root monorepo
 │   ├── minis-web/                  # Minis Frontend React
 │   │   ├── src/
 │   │   │   ├── main.tsx            # Entry (providers + App)
-│   │   │   ├── App.tsx             # Routes (all paths with :userName/:deviceName)
+│   │   │   ├── App.tsx             # Routes (all paths with :userName/:deviceName), AdminOnly guard
 │   │   │   ├── modules/{mqttclient,filesystem,auth,editor,ardublockly2,serial,iot-emulator}/
 │   │   │   ├── hooks/useSourceUpload.ts  # Reusable file upload hook
-│   │   │   ├── services/MinisApiService.ts  # REST client singleton (w tym 17 metod IoT + udostępnianie)
-│   │   │   ├── services/RpcClient.ts       # Type-safe RPC client singleton (call z autocomplete)
+│   │   │   ├── services/MinisApiService.ts  # REST client singleton (w tym 17 metod IoT + udostępnianie + API Keys)
+│   │   │   ├── services/RpcClient.ts       # Type-safe RPC client singleton (call z autocomplete, setAuthToken)
 │   │   │   ├── pages/{admin,user,user/iot,user/tools,filesystem,editor}/
 │   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
-│   │   │   └── components/Layout.tsx
+│   │   │   ├── components/Layout.tsx        # Drawer + AppBar + ImpersonationBanner integration
+│   │   │   └── components/ImpersonationBanner.tsx  # Fixed banner for admin impersonation
 │   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
 │   │   ├── vite.config.ts          # Dev port: 1903, proxy /api → :1902, proxy /mqtt → ws:1902
 │   │   └── package.json
@@ -305,7 +312,7 @@ mycastle/                           # Root monorepo
 - **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
 - **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (mycastle-web, minis-web, ui-core)
 - **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor. Minis-web additionally: mqtt (v5, raw pub/sub for IoT emulator)
-- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Minis-backend additionally: adm-zip, swagger-ui-dist, better-sqlite3 (IoT data)
+- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Core-backend additionally: jsonwebtoken, bcrypt. Minis-backend additionally: adm-zip, swagger-ui-dist, better-sqlite3 (IoT data)
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 
 ## Common Gotchas

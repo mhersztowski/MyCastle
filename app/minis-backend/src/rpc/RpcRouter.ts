@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { RpcMethodDef, RpcResponse, RpcErrorResponse } from '@mhersztowski/core';
+import type { RpcMethodDef, RpcResponse, RpcErrorResponse, AuthTokenPayload } from '@mhersztowski/core';
 import { rpcMethods, type RpcMethodName } from '@mhersztowski/core';
 
 export type RpcHandler<TDef extends RpcMethodDef> = (
@@ -8,7 +8,7 @@ export type RpcHandler<TDef extends RpcMethodDef> = (
 ) => Promise<z.infer<TDef['output']>>;
 
 export interface RpcContext {
-  // Extensible with auth, etc.
+  user?: AuthTokenPayload;
 }
 
 export class RpcRouter {

@@ -31,6 +31,7 @@ const TOPICS = {
 };
 
 export type MqttMessageHandler = (topic: string, payload: string) => void;
+export type MqttAuthenticateFn = (clientId: string, username: string, password: string) => boolean | Promise<boolean>;
 
 export class MqttServer {
   private aedes: AedesServer;
@@ -276,6 +277,28 @@ export class MqttServer {
 
   setAutomateService(service: IAutomateService): void {
     this.automateService = service;
+  }
+
+  setAuthenticate(fn: MqttAuthenticateFn): void {
+    (this.aedes as any).authenticate = (
+      client: AedesClient,
+      username: string | undefined,
+      password: Buffer | undefined,
+      callback: (error: Error | null, authenticated: boolean | null) => void,
+    ) => {
+      if (!username || !password) {
+        callback(null, false);
+        return;
+      }
+      const result = fn(client.id, username, password.toString());
+      if (result instanceof Promise) {
+        result
+          .then((ok) => callback(null, ok))
+          .catch(() => callback(null, false));
+      } else {
+        callback(null, result);
+      }
+    };
   }
 
   broadcastFileChanged(path: string, action: 'write' | 'delete'): void {

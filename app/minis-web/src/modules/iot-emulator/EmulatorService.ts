@@ -40,9 +40,16 @@ export class EmulatorService {
   private activityLog: ActivityLogEntry[] = [];
   private listeners: Set<EmulatorEventCallback> = new Set();
   private connecting = false;
+  private mqttUsername: string | null = null;
+  private mqttPassword: string | null = null;
 
   constructor() {
     this.loadConfigs();
+  }
+
+  setCredentials(username: string, token: string): void {
+    this.mqttUsername = username;
+    this.mqttPassword = token;
   }
 
   // --- Event subscription ---
@@ -280,6 +287,8 @@ export class EmulatorService {
       this.mqttClient = mqtt.connect(url, {
         clientId: `minis_emulator_${Date.now()}`,
         protocolVersion: 4,
+        username: this.mqttUsername ?? undefined,
+        password: this.mqttPassword ?? undefined,
       });
 
       await new Promise<void>((resolve, reject) => {

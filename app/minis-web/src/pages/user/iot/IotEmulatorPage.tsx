@@ -4,6 +4,7 @@ import {
 } from '@mui/material';
 import { Add, PlayArrow, Stop } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
+import { useAuth } from '@modules/auth/AuthContext';
 import { EmulatorService } from '@modules/iot-emulator';
 import type { EmulatedDeviceConfig, EmulatedDeviceState, ActivityLogEntry, EmulatorEventType } from '@modules/iot-emulator';
 import EmulatedDeviceCard from './components/EmulatedDeviceCard';
@@ -12,6 +13,7 @@ import ActivityLog from './components/ActivityLog';
 
 function IotEmulatorPage() {
   const { userName } = useParams<{ userName: string }>();
+  const { currentUser, token } = useAuth();
   const serviceRef = useRef<EmulatorService | null>(null);
 
   // Initialize service once
@@ -19,6 +21,13 @@ function IotEmulatorPage() {
     serviceRef.current = new EmulatorService();
   }
   const service = serviceRef.current;
+
+  // Keep MQTT credentials in sync
+  useEffect(() => {
+    if (currentUser && token) {
+      service.setCredentials(currentUser.name, token);
+    }
+  }, [service, currentUser, token]);
 
   const [configs, setConfigs] = useState<EmulatedDeviceConfig[]>([]);
   const [states, setStates] = useState<Map<string, EmulatedDeviceState>>(new Map());

@@ -36,9 +36,11 @@ export const useMqtt = (): MqttContextValue => {
 
 interface MqttProviderProps {
   children: React.ReactNode;
+  mqttUsername?: string;
+  mqttPassword?: string;
 }
 
-export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
+export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUsername, mqttPassword }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,14 +53,15 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children }) => {
     setError(null);
 
     try {
-      await mqttClient.connect();
+      const options = mqttUsername && mqttPassword ? { username: mqttUsername, password: mqttPassword } : undefined;
+      await mqttClient.connect(undefined, options);
       setIsConnected(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connection failed');
     } finally {
       setIsConnecting(false);
     }
-  }, [isConnected, isConnecting]);
+  }, [isConnected, isConnecting, mqttUsername, mqttPassword]);
 
   const disconnect = useCallback(() => {
     mqttClient.disconnect();

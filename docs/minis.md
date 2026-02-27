@@ -72,7 +72,8 @@ data-minis/
 ├── iot.db                               # SQLite — dane IoT (telemetria, komendy, alerty, config)
 └── Minis/
     ├── Admin/
-    │   ├── Users.json                  # { type, items: [{ id, name, password, isAdmin, roles }] }
+    │   ├── Users.json                  # { type, items: [{ id, name, password (bcrypt), isAdmin, roles }] }
+    │   ├── ApiKeys.json                # { keys: [{ id, prefix, hashedKey, userName, userId, isAdmin, roles, name, createdAt, lastUsedAt }] }
     │   ├── DeviceDefList.json          # { type, deviceDefs: [...] }
     │   ├── ModuleDefList.json          # { type, moduleDefs: [...] }
     │   ├── ProjectDefList.json         # { type, projectDefs: [...] }
@@ -106,12 +107,29 @@ data-minis/
 
 Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 
-**Architektura:** App singleton → FileSystem + MinisHttpServer (extends HttpUploadServer) + MqttServer + IotService. Dane platformy w JSON files (FileSystem), dane IoT w SQLite (iot.db). FileSystem events broadcastowane przez MQTT.
+**Architektura:** App singleton → FileSystem + MinisHttpServer (extends HttpUploadServer) + MqttServer + IotService + JwtService + ApiKeyService. Dane platformy w JSON files (FileSystem), dane IoT w SQLite (iot.db). FileSystem events broadcastowane przez MQTT.
+
+### Autentykacja i autoryzacja
+
+**JWT + bcrypt:** Login zwraca JWT token (`{ token, user }`). Hasła hashowane bcrypt (auto-migracja plaintext → bcrypt przy logowaniu). Token przesyłany w header `Authorization: Bearer <token>`. Serwisy auth wyekstrahowane do `@mhersztowski/core-backend/auth/`:
+- **JwtService** — sign/verify JWT (jsonwebtoken)
+- **PasswordService** — bcrypt hash/verify, isBcrypt detection
+- **ApiKeyService** — CRUD kluczy API (prefix `minis_`, SHA-256 hash, per-user), dane w `Minis/Admin/ApiKeys.json`
+- **checkAuth()** — middleware: weryfikuje Bearer token (JWT lub API key), zwraca `AuthTokenPayload | null`
+
+**Autoryzacja REST API:**
+- Endpointy publiczne: `/auth/login`, `/auth/users`, `/docs*`
+- Wszystkie inne wymagają tokena (401 Unauthorized)
+- Endpointy `/admin/*` wymagają `isAdmin` (403 Forbidden)
+- API Keys: user może zarządzać tylko swoimi kluczami (admin może wszystkimi)
+
+**Autentykacja MQTT:** `MqttServer.setAuthenticate()` — akceptuje API key (prefix check), JWT token (w polu password), lub username+password (weryfikacja z Users.json). Ustawiane w `App.init()`.
 
 ### Zaimplementowane REST API (/api/*)
 
-**Autentykacja:**
-- `POST /api/auth/login` — logowanie (name + password), zwraca UserPublic (bez hasła)
+**Autentykacja (publiczne):**
+- `POST /api/auth/login` — logowanie (name + password), zwraca `{ token, user }` (JWT + UserPublic)
+- `GET /api/auth/users` — publiczna lista użytkowników (id, name, isAdmin — bez haseł)
 
 **Identyfikacja po nazwie:** Użytkownicy i urządzenia identyfikowane przez nazwę (nie UUID) w HTTP routes, MQTT topics i UI. Nazwy muszą spełniać pattern `[a-zA-Z0-9_-]` i być unikalne (user globalnie, device per user). CrudConfig.lookupKey: admin CRUD używa `'id'`, user devices/projects używają `'name'`.
 
@@ -149,12 +167,17 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 - `GET /api/users/{userName}/shared-devices` — urządzenia udostępnione temu użytkownikowi
 - `GET /api/users/{userName}/my-shares` — udostępnienia dokonane przez tego użytkownika
 
+**API Keys:**
+- `GET /api/users/{userName}/api-keys` — lista kluczy API użytkownika
+- `POST /api/users/{userName}/api-keys` — tworzenie klucza (`{ name }`) → `{ key: ApiKeyPublic, rawKey: string }` (rawKey widoczny tylko raz)
+- `DELETE /api/users/{userName}/api-keys/{keyId}` — usunięcie klucza
+
 **RPC API:**
-- `POST /api/rpc/{methodName}` — generyczny RPC dispatch (Zod validation, auto-Swagger). Metody: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w minis-backend/src/rpc/handlers.ts, 3) Swagger auto-update. fieldMeta na metodach → OpenAPI extensions `x-autocomplete`/`x-depends-on` w property schemas
+- `POST /api/rpc/{methodName}` — generyczny RPC dispatch (Zod validation, auto-Swagger, `user` w context). Metody: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w minis-backend/src/rpc/handlers.ts, 3) Swagger auto-update. fieldMeta na metodach → OpenAPI extensions `x-autocomplete`/`x-depends-on` w property schemas
 
 **Swagger:**
-- `GET /api/docs` — Swagger UI
-- `GET /api/docs/swagger.json` — OpenAPI 3.0.3 spec (auto-generated z Zod via `buildSwaggerSpec()` + `zod-to-json-schema`, wzbogacone o `x-autocomplete`/`x-depends-on` z fieldMeta)
+- `GET /api/docs` — Swagger UI (z przyciskiem Authorize dla Bearer token)
+- `GET /api/docs/swagger.json` — OpenAPI 3.0.3 spec (auto-generated z Zod via `buildSwaggerSpec()` + `zod-to-json-schema`, wzbogacone o `x-autocomplete`/`x-depends-on` z fieldMeta, security scheme bearerAuth)
 
 ### IoT Service Layer (src/iot/)
 
@@ -228,10 +251,8 @@ Urządzenia IoT mogą definiować **entities** — typowane encje opisujące co 
 **Emulator:** Wszystkie 6 presetów definiuje entities. Po odebraniu komendy entity emulator aktualizuje generator metryki i natychmiast wysyła zaktualizowaną telemetrię (bez czekania na regularny interwał).
 
 ### Czego jeszcze nie ma:
-- Middleware autoryzacji (endpointy są publiczne — wystarczy znać URL)
 - Logika składania urządzenia (assembly workflow)
 - Kompilacja/deployment projektów na urządzenie
-- Wymuszanie ról admin/user na poziomie API
 
 ---
 
@@ -273,7 +294,7 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - `/user/:userName/iot/alerts` — IotAlertsPage: tabs — alerty (ACK/Resolve) + reguły alertów (CRUD dialog)
 - `/user/:userName/iot/emulator` — IotEmulatorPage: emulator urządzeń IoT (konfiguracja, start/stop, activity log)
 
-**Tools** (`/user/:userName/tools/*`, collapsible group w sidebar):
+**Tools** (`/user/:userName/tools/*`, collapsible group w sidebar, **admin-only** — `AdminOnly` guard + sidebar hidden when impersonating):
 - `/user/:userName/tools/rpc` — RpcExplorerPage: interaktywny explorer metod RPC
     - Pobiera listę metod z /api/docs/swagger.json (filtruje `/rpc/*` paths)
     - 2-kolumnowy layout: lista metod pogrupowanych po tagach (System, IoT) + formularz wybranej metody
@@ -288,15 +309,16 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
     - Detail panel: topic info, payload JSON pretty-print, QoS/retained/timestamp, type info z topic registry (nazwa, kierunek, tagi, walidacja Zod, wyekstrahowane parametry)
     - Publish: Autocomplete z podpowiedziami topic patterns z `mqttTopics` registry (wzorzec + kierunek + opis), QoS, retain
     - Subscriptions: wildcard patterns (#, +), dodawanie/usuwanie subskrypcji
-    - Node-RED export: dwa buttony (NR Local `172.17.0.1:1902`, NR Remote `minis.hersztowski.org`) — kopiuje flow JSON do schowka (Import → Clipboard w Node-RED). Topic detail: mqtt-in + debug. Publish: inject + mqtt-out
+    - Node-RED export: dwa buttony (NR Local `ws://172.17.0.1:1902/mqtt`, NR Remote `wss://minis.hersztowski.org/mqtt`) — kopiuje flow JSON do schowka (Import → Clipboard w Node-RED). Broker via WebSocket (Minis używa shared HTTP+MQTT na jednym porcie). Topic detail: mqtt-in + debug. Publish: inject + mqtt-out. Opcjonalnie credentials (API key) w polu
     - Performance: `requestAnimationFrame` throttle, mutable Map tree z version counter, limit 10k topics
+- `/user/:userName/tools/api-keys` — ApiKeysPage: zarządzanie kluczami API (tworzenie, kopiowanie, usuwanie). Klucz widoczny tylko raz po utworzeniu.
 
 **Editor:**
 - `/user/:userName/editor/monaco/*` — MonacoEditorPage: samodzielny edytor Monaco
 
 ### Kluczowe moduły
 
-- **auth** — AuthContext/AuthProvider, sesja w sessionStorage, login/logout
+- **auth** — AuthContext/AuthProvider, JWT token + sesja w sessionStorage (format `{ user, token }`), login/logout, impersonacja (admin → user view). `setAuthToken()` propaguje token do MinisApiService i RpcClient
 - **filesystem** — FilesystemContext (MQTT), MinisDataSourceContext (ładuje admin JSONy), modele/nody/komponenty
 - **editor** — Monaco editor z pluginami, C++ language support, komendami
 - **ardublockly2** — Blockly wizualny edytor Arduino: bloki (io, serial, servo, stepper, spi, audio, time, map, variables), profile płytek (ESP8266, ESP32, Arduino Uno...), generator Blockly → C++
@@ -305,18 +327,20 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - **iot-emulator** — EmulatorService (MQTT pub/sub, generatory wartości, interwały telemetrii/heartbeat, command handling z entity commands: set_state/set_value/set_option/press + natychmiastowy republish telemetrii), typy (EmulatedDeviceConfig z entities?), presety urządzeń (6: Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device, Smart Thermostat, Smart Plug — każdy z entities), persistence w localStorage
 
 ### Serwisy
-- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT: config, telemetria, komendy, reguły alertów, alerty, statusy urządzeń, udostępnianie (getDeviceShares, createDeviceShare, deleteDeviceShare, getSharedDevices, getMyShares)
+- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys (getApiKeys, createApiKey, deleteApiKey) + getPublicUsers
 
 ### Hooki
 - **useSourceUpload** — reusable hook do uploadu ZIP źródeł (stan, fileInputRef, trigger, handler)
-- **useAuth** — dostęp do stanu autentykacji
+- **useAuth** — dostęp do stanu autentykacji (currentUser, token, isAdmin, login, logout, impersonating, startImpersonating, stopImpersonating)
 - **useFilesystem** — dostęp do stanu filesystem (MQTT)
 - **useMinisDataSource** — dostęp do MemoryDataSource z admin danymi
 
 ### UI
 - Interfejs w języku angielskim
 - Layout z Drawer (persistent na sm+, temporary na xs) + AppBar z menu konta (logout, switch admin/user)
-- Menu user: Main, Electronics (Devices, Arduino), IoT (Dashboard, Devices, Alerts, Emulator), Tools (RPC Explorer, MQTT Explorer)
+- Menu user: Main, Electronics (Devices, Arduino), IoT (Dashboard, Devices, Alerts, Emulator), Tools (RPC Explorer, MQTT Explorer, API Keys — admin-only)
+- **Impersonacja:** Admin może "wejść" w widok innego użytkownika z UsersPage (przycisk Impersonate). Stan efemeryczny (nie persystowany). Żółty banner `ImpersonationBanner` na górze z przyciskiem Stop. Layout przesuwa AppBar/Drawer/content gdy banner aktywny. Tools ukryte podczas impersonacji
+- **AdminOnly guard** (`App.tsx`): komponent route guard — sprawdza `isAdmin && !impersonating`, redirectuje do `/user/:userName/main`
 - Strony korzystają z REST API (MinisApiService), nie bezpośrednio z MQTT (wyjątek: filesystem, ProjectPage sketch load/save, IoT Emulator)
 
 ---
@@ -330,9 +354,9 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 
 **Frontend (Vitest + jsdom + React Testing Library):**
 - LoginPage.test.tsx — render, nawigacja, error handling
-- UsersPage.test.tsx — ładowanie tabeli, add dialog
+- UsersPage.test.tsx — ładowanie tabeli, add dialog (wrapper: MemoryRouter + mocked useAuth)
 - MinisApiService.test.ts — wszystkie endpointy, parsowanie, błędy, upload ZIP
-- AuthContext.test.tsx — stan, sessionStorage, login/logout
+- AuthContext.test.tsx — stan, sessionStorage, login/logout, impersonacja (start/stop/guard/clear on logout)
 - useSourceUpload.test.ts — flow uploadu, błędy
 - generators.test.ts — generatory wartości: constant, random, sine, linear, step (20 testów)
 - EmulatorService.test.ts — CRUD konfiguracji, localStorage, device lifecycle, command handling, activity log, event system (23 testy)

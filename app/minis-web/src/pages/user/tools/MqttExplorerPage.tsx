@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   Box, Typography, Paper, TextField, Button, Select, MenuItem, Switch,
   FormControlLabel, Chip, Divider, FormControl, InputLabel, List,
@@ -13,6 +13,7 @@ import mqtt from 'mqtt';
 import { getMqttUrl } from '@mhersztowski/web-client';
 import { matchTopic, mqttTopics } from '@mhersztowski/core';
 import type { MqttTopicDef } from '@mhersztowski/core';
+import { useAuth } from '@modules/auth';
 
 // --- Types ---
 
@@ -65,30 +66,37 @@ const MAX_TOPICS = 10_000;
 
 interface NodeRedTarget {
   label: string;
-  mqttHost: string;
+  brokerUrl: string;
   mqttPort: string;
   tls: boolean;
 }
 
 const nodeRedTargets: NodeRedTarget[] = [
-  { label: 'NR Local', mqttHost: '172.17.0.1', mqttPort: '1902', tls: false },
-  { label: 'NR Remote', mqttHost: 'minis.hersztowski.org', mqttPort: '443', tls: true },
+  { label: 'NR Local', brokerUrl: 'ws://172.17.0.1:1902/mqtt', mqttPort: '1902', tls: false },
+  { label: 'NR Remote', brokerUrl: 'wss://minis.hersztowski.org/mqtt', mqttPort: '443', tls: true },
 ];
 
 function nodeRedId(): string {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 }
 
-function buildNodeRedMqttSubscribe(topic: string, target: NodeRedTarget): string {
+function buildNodeRedMqttSubscribe(topic: string, target: NodeRedTarget, credentials?: { user: string; password: string }): string {
   const brokerId = nodeRedId();
   const mqttInId = nodeRedId();
   const debugId = nodeRedId();
   return JSON.stringify([
     {
       id: brokerId, type: 'mqtt-broker', name: `Minis (${target.label})`,
-      broker: target.mqttHost, port: target.mqttPort,
+      broker: target.brokerUrl, port: target.mqttPort,
       clientid: '', autoConnect: true, usetls: target.tls,
       protocolVersion: '4', keepalive: '60', cleansession: true,
+      autoUnsubscribe: true, birthTopic: '', closeTopic: '', willTopic: '',
+      birthQos: '0', closeQos: '0', willQos: '0',
+      birthPayload: '', closePayload: '', willPayload: '',
+      birthMsg: {}, closeMsg: {}, willMsg: {},
+      birthRetain: false, closeRetain: false, willRetain: false,
+      sessionExpiry: '',
+      ...(credentials ? { credentials: { user: credentials.user, password: credentials.password } } : {}),
     },
     {
       id: mqttInId, type: 'mqtt in', name: topic.split('/').pop() || topic,
@@ -105,16 +113,23 @@ function buildNodeRedMqttSubscribe(topic: string, target: NodeRedTarget): string
   ]);
 }
 
-function buildNodeRedMqttPublish(topic: string, target: NodeRedTarget, payload?: string): string {
+function buildNodeRedMqttPublish(topic: string, target: NodeRedTarget, payload?: string, credentials?: { user: string; password: string }): string {
   const brokerId = nodeRedId();
   const injectId = nodeRedId();
   const mqttOutId = nodeRedId();
   return JSON.stringify([
     {
       id: brokerId, type: 'mqtt-broker', name: `Minis (${target.label})`,
-      broker: target.mqttHost, port: target.mqttPort,
+      broker: target.brokerUrl, port: target.mqttPort,
       clientid: '', autoConnect: true, usetls: target.tls,
       protocolVersion: '4', keepalive: '60', cleansession: true,
+      autoUnsubscribe: true, birthTopic: '', closeTopic: '', willTopic: '',
+      birthQos: '0', closeQos: '0', willQos: '0',
+      birthPayload: '', closePayload: '', willPayload: '',
+      birthMsg: {}, closeMsg: {}, willMsg: {},
+      birthRetain: false, closeRetain: false, willRetain: false,
+      sessionExpiry: '',
+      ...(credentials ? { credentials: { user: credentials.user, password: credentials.password } } : {}),
     },
     {
       id: injectId, type: 'inject', name: 'Trigger',
@@ -229,7 +244,7 @@ function hasDescendantMatch(node: TopicNode, filter: string): boolean {
 
 // --- TopicDetail ---
 
-function TopicDetail({ node, onCopyToPublish }: { node: TopicNode; onCopyToPublish: (topic: string, payload?: string) => void }) {
+function TopicDetail({ node, onCopyToPublish, mqttCredentials }: { node: TopicNode; onCopyToPublish: (topic: string, payload?: string) => void; mqttCredentials?: { user: string; password: string } }) {
   const typeInfo = validatePayload(node.fullTopic, node.lastPayload);
 
   return (
@@ -305,7 +320,7 @@ function TopicDetail({ node, onCopyToPublish }: { node: TopicNode; onCopyToPubli
             key={t.label}
             size="small"
             startIcon={<NodeRedIcon fontSize="small" />}
-            onClick={() => navigator.clipboard.writeText(buildNodeRedMqttSubscribe(node.fullTopic, t))}
+            onClick={() => navigator.clipboard.writeText(buildNodeRedMqttSubscribe(node.fullTopic, t, mqttCredentials))}
           >
             {t.label}
           </Button>
@@ -318,6 +333,7 @@ function TopicDetail({ node, onCopyToPublish }: { node: TopicNode; onCopyToPubli
 // --- Main Page ---
 
 function MqttExplorerPage() {
+  const { currentUser, token } = useAuth();
   const clientRef = useRef<ReturnType<typeof mqtt.connect> | null>(null);
   const treeRef = useRef<TopicNode>(createRootNode());
   const messageCountRef = useRef(0);
@@ -338,6 +354,7 @@ function MqttExplorerPage() {
   const [totalMessages, setTotalMessages] = useState(0);
   const [totalTopics, setTotalTopics] = useState(0);
   const [searchFilter, setSearchFilter] = useState('');
+  const [apiKeyOverride, setApiKeyOverride] = useState(() => localStorage.getItem('minis_nr_apikey') || '');
 
   const scheduleUpdate = useCallback(() => {
     if (updateScheduledRef.current) return;
@@ -387,6 +404,7 @@ function MqttExplorerPage() {
     const client = mqtt.connect(url, {
       clientId: `minis_explorer_${Date.now()}`,
       protocolVersion: 4,
+      ...(currentUser && token ? { username: currentUser.name, password: token } : {}),
     });
     clientRef.current = client;
 
@@ -467,6 +485,12 @@ function MqttExplorerPage() {
       return next;
     });
   }, []);
+
+  const mqttCredentials = useMemo(() => {
+    if (apiKeyOverride) return { user: currentUser?.name ?? '', password: apiKeyOverride };
+    if (currentUser && token) return { user: currentUser.name, password: token };
+    return undefined;
+  }, [apiKeyOverride, currentUser, token]);
 
   const statusColor = connectionStatus === 'connected' ? 'success.main'
     : connectionStatus === 'connecting' ? 'warning.main'
@@ -560,6 +584,7 @@ function MqttExplorerPage() {
             <TopicDetail
               node={resolvedSelected}
               onCopyToPublish={(topic, payload) => { setPublishTopic(topic); if (payload) setPublishPayload(payload); }}
+              mqttCredentials={mqttCredentials}
             />
           ) : (
             <Paper sx={{ p: 3, mb: 2, textAlign: 'center' }}>
@@ -636,7 +661,7 @@ function MqttExplorerPage() {
                   size="small"
                   startIcon={<NodeRedIcon fontSize="small" />}
                   disabled={!publishTopic.trim()}
-                  onClick={() => navigator.clipboard.writeText(buildNodeRedMqttPublish(publishTopic.trim(), t, publishPayload || undefined))}
+                  onClick={() => navigator.clipboard.writeText(buildNodeRedMqttPublish(publishTopic.trim(), t, publishPayload || undefined, mqttCredentials))}
                 >
                   {t.label}
                 </Button>
@@ -650,6 +675,18 @@ function MqttExplorerPage() {
                 Publish
               </Button>
             </Box>
+
+            {/* API Key for Node-RED export */}
+            <TextField
+              size="small"
+              label="API Key (for Node-RED export)"
+              placeholder="minis_..."
+              value={apiKeyOverride}
+              onChange={(e) => { setApiKeyOverride(e.target.value); localStorage.setItem('minis_nr_apikey', e.target.value); }}
+              sx={{ mt: 2 }}
+              fullWidth
+              helperText={apiKeyOverride ? 'Node-RED export will use this API key instead of JWT token' : 'Paste an API key for stable Node-RED integrations'}
+            />
           </Paper>
         </Box>
       </Box>
