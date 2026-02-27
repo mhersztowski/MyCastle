@@ -2,6 +2,7 @@ import { MqttServer, FileSystem, JwtService, PasswordService, ApiKeyService } fr
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { MinisHttpServer } from './MinisHttpServer.js';
 import { IotService } from './iot/IotService.js';
+import { TerminalService } from './terminal/TerminalService.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -17,6 +18,7 @@ export class App {
   private mqttServer!: MqttServer;
   private httpServer: MinisHttpServer;
   private iotService: IotService;
+  private terminalService!: TerminalService;
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
   private config: AppConfig;
@@ -85,8 +87,13 @@ export class App {
       }
     });
 
+    // Attach terminal WebSocket service on same HTTP server
+    this.terminalService = new TerminalService(this.jwtService, this.apiKeyService);
+    this.terminalService.attach(this.httpServer.getHttpServer());
+    this.httpServer.setTerminalService(this.terminalService);
+
     await this.mqttServer.start();
-    console.log(`Server started on port ${this.config.httpPort} (HTTP + MQTT WebSocket at /mqtt)`);
+    console.log(`Server started on port ${this.config.httpPort} (HTTP + MQTT WebSocket at /mqtt + Terminal at /ws/terminal)`);
 
     if (this.config.staticDir) {
       console.log(`Serving frontend from: ${this.config.staticDir}`);
@@ -121,6 +128,12 @@ export class App {
 
   async shutdown(): Promise<void> {
     console.log('App shutting down...');
+
+    try {
+      this.terminalService.shutdown();
+    } catch (err) {
+      console.warn('Error stopping terminal service:', err);
+    }
 
     try {
       this.iotService.stop();

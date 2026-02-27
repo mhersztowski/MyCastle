@@ -4,6 +4,7 @@ import type { FileSystemProvider } from '@mhersztowski/core';
 import { MonacoMultiEditor, remoteFsProvider, defaultProviderRegistry } from '@mhersztowski/web-client';
 import { useAuth } from '../../modules/auth';
 import '@modules/editor/monacoWorkers';
+import '@xterm/xterm/css/xterm.css';
 
 function MonacoEditorPage() {
   const { token } = useAuth();
@@ -29,6 +30,9 @@ function MonacoEditorPage() {
       provider={cfs as FileSystemProvider}
       height="100vh"
       providerRegistry={registry}
+      enableAgent
+      enableTerminal
+      terminalToken={token ?? undefined}
     />
   );
 }

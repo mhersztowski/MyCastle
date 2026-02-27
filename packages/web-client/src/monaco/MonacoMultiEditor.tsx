@@ -20,6 +20,9 @@ import { ModelManager } from './core/ModelManager';
 import { KeyMod, KeyCode } from './core/CommandRegistry';
 import type { DocumentUri } from './utils/types';
 import { createDocumentUri } from './utils/types';
+import { AgentPanel } from './agent/ui/AgentPanel';
+import type { AgentConfig } from './agent/types';
+import { TerminalPanel } from './terminal/TerminalPanel';
 
 /* ── Types ── */
 
@@ -29,6 +32,11 @@ export interface MonacoMultiEditorProps {
   readOnly?: boolean;
   providerRegistry?: VfsProviderDef[];
   onFileSave?: (path: string, content: Uint8Array) => void | Promise<void>;
+  enableAgent?: boolean;
+  defaultAgentConfig?: Partial<AgentConfig>;
+  enableTerminal?: boolean;
+  terminalWsUrl?: string;
+  terminalToken?: string;
 }
 
 interface TabInfo {
@@ -142,12 +150,32 @@ function SearchInputIcon() {
   );
 }
 
+function AgentIcon({ active }: { active?: boolean }) {
+  const c = active ? '#fff' : '#858585';
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ display: 'block' }}>
+      <path d="M12 2L14 8L20 8L15 12L17 18L12 14L7 18L9 12L4 8L10 8Z" stroke={c} strokeWidth="1.5" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function TerminalIcon({ active }: { active?: boolean }) {
+  const c = active ? '#fff' : '#858585';
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
+      <path d="M2 3l5 5-5 5" stroke={c} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M8 13h6" stroke={c} strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /* ── Constants ── */
 
 const MIN_PANEL_PX = 180;
 const ACTIVITY_BAR_W = 48;
 const MENU_BAR_H = 30;
 const STATUS_BAR_H = 22;
+const MIN_TERMINAL_H = 100;
 
 /* ── Kbd shortcut label ── */
 
@@ -425,6 +453,11 @@ export function MonacoMultiEditor({
   readOnly = false,
   providerRegistry,
   onFileSave,
+  enableAgent = false,
+  defaultAgentConfig,
+  enableTerminal = false,
+  terminalWsUrl,
+  terminalToken,
 }: MonacoMultiEditorProps) {
   const [groups, setGroups] = useState<EditorGroup[]>(() => [{ id: makeGroupId(), tabs: [], activeTab: null, size: 1 }]);
   const [activeGroupId, setActiveGroupId] = useState<string>(groups[0].id);
@@ -432,6 +465,13 @@ export function MonacoMultiEditor({
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>('explorer');
   const [cursorInfo, setCursorInfo] = useState({ ln: 1, col: 1 });
   const [searchQuery, setSearchQuery] = useState('');
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [agentPanelWidth, setAgentPanelWidth] = useState(380);
+  const agentPanelWidthRef = useRef(380);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(200);
+  const terminalHeightRef = useRef(200);
+  const mainAreaRef = useRef<HTMLDivElement | null>(null);
 
   // Menu anchors
   const [fileMenuAnchor, setFileMenuAnchor] = useState<null | HTMLElement>(null);
@@ -723,6 +763,65 @@ export function MonacoMultiEditor({
     document.addEventListener('mouseup', onMouseUp);
   }, [splitRatio]);
 
+  // Agent panel splitter drag
+  const handleAgentSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = agentPanelWidthRef.current;
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const newWidth = Math.max(280, startWidth - dx);
+      agentPanelWidthRef.current = newWidth;
+      setAgentPanelWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []);
+
+  // Terminal splitter drag (vertical)
+  const handleTerminalSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = mainAreaRef.current;
+    if (!container) return;
+
+    const startY = e.clientY;
+    const startHeight = terminalHeightRef.current;
+    const containerHeight = container.getBoundingClientRect().height;
+    const maxHeight = containerHeight * 0.7;
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'row-resize';
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const dy = startY - ev.clientY;
+      const newHeight = Math.max(MIN_TERMINAL_H, Math.min(maxHeight, startHeight + dy));
+      terminalHeightRef.current = newHeight;
+      setTerminalHeight(newHeight);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []);
+
   // Activity bar toggle
   const togglePanel = useCallback((panel: SidebarPanel) => {
     setSidebarPanel(prev => prev === panel ? null : panel);
@@ -832,7 +931,10 @@ export function MonacoMultiEditor({
         </Menu>
       </Box>
 
-      {/* ── Main area: Activity Bar + Sidebar + Splitter + Editor Groups ── */}
+      {/* ── Main area wrapper (editors + terminal) ── */}
+      <Box ref={mainAreaRef} sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
+
+      {/* ── Editors area: Activity Bar + Sidebar + Splitter + Editor Groups ── */}
       <Box ref={splitterContainerRef} sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
 
         {/* Activity Bar */}
@@ -1002,6 +1104,92 @@ export function MonacoMultiEditor({
             </Box>
           ))}
         </Box>
+
+        {/* Agent panel splitter */}
+        {enableAgent && agentPanelOpen && (
+          <Box
+            onMouseDown={handleAgentSplitterMouseDown}
+            sx={{
+              width: 5,
+              cursor: 'col-resize',
+              bgcolor: '#2d2d2d',
+              flexShrink: 0,
+              '&:hover': { bgcolor: '#007acc' },
+              transition: 'background-color 0.15s',
+            }}
+          />
+        )}
+
+        {/* Agent panel */}
+        {enableAgent && agentPanelOpen && (
+          <Box sx={{
+            width: agentPanelWidth,
+            flexShrink: 0,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            <AgentPanel
+              provider={provider}
+              defaultConfig={defaultAgentConfig}
+              onFileOpen={handleFileOpen}
+            />
+          </Box>
+        )}
+
+        {/* Right Activity Bar (Agent) */}
+        {enableAgent && (
+          <Box sx={{
+            width: ACTIVITY_BAR_W,
+            bgcolor: '#333333',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            py: 0.5,
+            flexShrink: 0,
+            borderLeft: '1px solid #2b2b2b',
+          }}>
+            <Box
+              onClick={() => setAgentPanelOpen(p => !p)}
+              title="AI Agent (Ctrl+Shift+I)"
+              sx={{
+                width: ACTIVITY_BAR_W,
+                height: ACTIVITY_BAR_W,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                borderRight: agentPanelOpen ? '2px solid #fff' : '2px solid transparent',
+                opacity: agentPanelOpen ? 1 : 0.6,
+                '&:hover': { opacity: 1 },
+              }}
+            >
+              <AgentIcon active={agentPanelOpen} />
+            </Box>
+          </Box>
+        )}
+      </Box>
+
+      {/* ── Terminal splitter + panel ── */}
+      {enableTerminal && terminalOpen && (
+        <>
+          <Box
+            onMouseDown={handleTerminalSplitterMouseDown}
+            sx={{
+              height: 5,
+              cursor: 'row-resize',
+              bgcolor: '#2d2d2d',
+              flexShrink: 0,
+              '&:hover': { bgcolor: '#007acc' },
+              transition: 'background-color 0.15s',
+            }}
+          />
+          <Box sx={{ height: terminalHeight, flexShrink: 0, overflow: 'hidden', borderTop: '1px solid #3c3c3c' }}>
+            <TerminalPanel wsUrl={terminalWsUrl} token={terminalToken} />
+          </Box>
+        </>
+      )}
+
       </Box>
 
       {/* ── Status Bar ── */}
@@ -1015,6 +1203,25 @@ export function MonacoMultiEditor({
         gap: 2,
         userSelect: 'none',
       }}>
+        {enableTerminal && (
+          <Box
+            onClick={() => setTerminalOpen(p => !p)}
+            title="Toggle Terminal"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              cursor: 'pointer',
+              px: 0.5,
+              borderRadius: 0.5,
+              opacity: terminalOpen ? 1 : 0.7,
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', opacity: 1 },
+            }}
+          >
+            <TerminalIcon active />
+            <Typography sx={{ fontSize: 11, color: '#fff' }}>Terminal</Typography>
+          </Box>
+        )}
         {activeGroup?.activeTab ? (
           <>
             <Typography sx={{ fontSize: 12, color: '#fff' }}>
@@ -1033,7 +1240,10 @@ export function MonacoMultiEditor({
             )}
           </>
         ) : (
-          <Typography sx={{ fontSize: 12, color: '#fff', opacity: 0.7 }}>Ready</Typography>
+          <>
+            <Typography sx={{ fontSize: 12, color: '#fff', opacity: 0.7 }}>Ready</Typography>
+            <Box sx={{ flexGrow: 1 }} />
+          </>
         )}
       </Box>
     </Box>

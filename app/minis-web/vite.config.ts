@@ -26,6 +26,10 @@ export default defineConfig({
         target: 'ws://localhost:1902',
         ws: true,
       },
+      '/ws/terminal': {
+        target: 'ws://localhost:1902',
+        ws: true,
+      },
     },
   },
   build: {

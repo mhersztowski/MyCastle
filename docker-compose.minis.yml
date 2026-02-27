@@ -1,0 +1,21 @@
+services:
+  minis:
+    build:
+      context: .
+      dockerfile: app/minis-backend/Dockerfile
+    environment:
+      - PORT=1902
+      - ROOT_DIR=/data
+      - STATIC_DIR=/app/static
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - minis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:1902/api/auth/users').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  minis-data:

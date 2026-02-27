@@ -73,9 +73,8 @@ export class MqttServer {
         this.wss.handleUpgrade(request, socket, head, (ws) => {
           this.wss.emit('connection', ws, request);
         });
-      } else {
-        socket.destroy();
       }
+      // Non-MQTT paths: do nothing — let other upgrade handlers process them
     });
   }
 

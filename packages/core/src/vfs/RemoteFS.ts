@@ -48,9 +48,13 @@ export class RemoteFS implements FileSystemProvider {
     return this.cachedCapabilities ?? { readonly: false, watch: false };
   }
 
-  /** Update auth token (e.g. after login) */
+  /** Update auth token (e.g. after login). Fires a change event so UI trees refresh. */
   setToken(token: string | undefined): void {
+    const changed = this.token !== token;
     this.token = token;
+    if (changed && token) {
+      this.emitter.fire([{ type: FileChangeType.Changed, path: '/' }]);
+    }
   }
 
   /** Fetch capabilities from the server and cache them */

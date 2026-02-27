@@ -6,3 +6,5 @@ export * from './language';
 export * from './utils';
 export { MonacoMultiEditor } from './MonacoMultiEditor';
 export type { MonacoMultiEditorProps } from './MonacoMultiEditor';
+export * from './agent';
+export * from './terminal';

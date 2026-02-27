@@ -7,5 +7,5 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: 'node20',
-  external: ['@mhersztowski/core', '@mhersztowski/core-backend'],
+  external: ['@mhersztowski/core', '@mhersztowski/core-backend', 'ws', 'node-pty'],
 });

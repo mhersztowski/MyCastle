@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import AdmZip from 'adm-zip';
 import type { IotService } from './iot/IotService.js';
+import type { TerminalService } from './terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './rpc/index.js';
 
 interface CrudConfig {
@@ -31,6 +32,7 @@ export class MinisHttpServer extends HttpUploadServer {
   private static readonly PUBLIC_PATHS = ['/auth/login', '/docs', '/docs/', '/docs/swagger.json'];
   private swaggerUiDir: string | null = null;
   private iotService: IotService | null;
+  private terminalService: TerminalService | null = null;
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
   private rpcRouter: RpcRouter;
@@ -58,6 +60,10 @@ export class MinisHttpServer extends HttpUploadServer {
   }
 
   getRpcRouter(): RpcRouter { return this.rpcRouter; }
+
+  setTerminalService(service: TerminalService): void {
+    this.terminalService = service;
+  }
 
   private resolveSwaggerUiDir(): void {
     try {
@@ -128,6 +134,21 @@ export class MinisHttpServer extends HttpUploadServer {
     const user = checkAuth(req, this.jwtService, this.apiKeyService);
     if (!user) {
       this.sendJsonResponse(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+
+    // Terminal ticket: POST /api/terminal/ticket (admin only)
+    if (method === 'POST' && apiPath === '/terminal/ticket') {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      if (!this.terminalService) {
+        this.sendJsonResponse(res, 503, { error: 'Terminal service not available' });
+        return;
+      }
+      const ticket = this.terminalService.createTicket(user);
+      this.sendJsonResponse(res, 200, { ticket });
       return;
     }
 

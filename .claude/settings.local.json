@@ -62,7 +62,8 @@
       "Bash(pnpm --filter minis-backend test)",
       "Bash(pnpm --filter minis-web test)",
       "Bash(pnpm --filter minis-backend exec node -e \"import\\(''swagger-ui-dist''\\).then\\(m => console.log\\(m.absolutePath?.\\(\\)\\)\\)\" --input-type=module)",
-      "Bash(pnpm --filter @mhersztowski/web-client typecheck)"
+      "Bash(pnpm --filter @mhersztowski/web-client typecheck)",
+      "Bash(pnpm --filter @mhersztowski/web-client run typecheck)"
     ]
   }
 }

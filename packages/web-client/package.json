@@ -39,14 +39,18 @@
     "@mui/x-tree-view": "^8.0.0",
     "@emotion/react": "^11.0.0",
     "@emotion/styled": "^11.0.0",
-    "monaco-editor": ">=0.50.0"
+    "monaco-editor": ">=0.50.0",
+    "@xterm/xterm": ">=5.0.0",
+    "@xterm/addon-fit": ">=0.8.0"
   },
   "peerDependenciesMeta": {
     "@mui/material": { "optional": true },
     "@mui/x-tree-view": { "optional": true },
     "@emotion/react": { "optional": true },
     "@emotion/styled": { "optional": true },
-    "monaco-editor": { "optional": true }
+    "monaco-editor": { "optional": true },
+    "@xterm/xterm": { "optional": true },
+    "@xterm/addon-fit": { "optional": true }
   },
   "devDependencies": {
     "@emotion/react": "^11.13.0",
