@@ -1,9 +1,8 @@
-FROM node:20-slim AS base
+FROM node:20-slim
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
-FROM base AS build
 WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/ packages/core/
@@ -13,13 +12,8 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @mhersztowski/core build
 RUN pnpm --filter @mhersztowski/core-backend build
 RUN pnpm --filter mycastle-backend build
-# pnpm deploy resolves workspace deps and removes symlinks
-RUN pnpm --filter mycastle-backend deploy --prod /app/production
 
-FROM base AS production
-WORKDIR /app
-COPY --from=build /app/production ./
-
+WORKDIR /app/app/mycastle-backend
 ENV NODE_ENV=production
 ENV PORT=1894
 ENV ROOT_DIR=/data
