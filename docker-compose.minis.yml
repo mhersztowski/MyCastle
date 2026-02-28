@@ -8,6 +8,8 @@ services:
       - ROOT_DIR=/data
       - STATIC_DIR=/app/static
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+    ports:
+      - "1902:1902"
     volumes:
       - minis-data:/data
     healthcheck:
