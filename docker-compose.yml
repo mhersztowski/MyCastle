@@ -6,6 +6,9 @@ services:
     environment:
       - PORT=1894
       - ROOT_DIR=/data
+      - STATIC_DIR=/app/app/mycastle-web/build
+    ports:
+      - "1894:1894"
     volumes:
       - mycastle-data:/data
     restart: unless-stopped
@@ -14,14 +17,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-
-  web:
-    build:
-      context: .
-      dockerfile: app/mycastle-web/Dockerfile
-    depends_on:
-      - backend
-    restart: unless-stopped
 
 volumes:
   mycastle-data:
