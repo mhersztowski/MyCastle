@@ -59,6 +59,9 @@ export class App {
     await this.fileSystem.initialize();
     console.log(`FileSystem initialized with root: ${this.config.rootDir}`);
 
+    // Seed default admin user if no users exist
+    await this.seedDefaultAdmin();
+
     await this.apiKeyService.load();
     console.log('API key service loaded');
 
@@ -124,6 +127,31 @@ export class App {
     process.on('SIGINT', shutdownHandler);
 
     console.log('Minis backend initialized successfully');
+  }
+
+  private async seedDefaultAdmin(): Promise<void> {
+    const usersPath = 'Minis/Admin/Users.json';
+    try {
+      const data = await this.fileSystem.readFile(usersPath);
+      const parsed = JSON.parse(data.content);
+      if (parsed.items && parsed.items.length > 0) return;
+    } catch {
+      // File doesn't exist — create it
+    }
+
+    const hashedPassword = await PasswordService.hash('admin');
+    const defaultAdmin = {
+      items: [{
+        id: crypto.randomUUID(),
+        name: 'admin',
+        password: hashedPassword,
+        isAdmin: true,
+        roles: [],
+        type: 'user',
+      }],
+    };
+    await this.fileSystem.writeFile(usersPath, JSON.stringify(defaultAdmin, null, 2));
+    console.log('Seeded default admin user (admin/admin) — change password after first login!');
   }
 
   async shutdown(): Promise<void> {
