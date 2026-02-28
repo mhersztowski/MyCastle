@@ -6,7 +6,7 @@ services:
     environment:
       - PORT=1902
       - ROOT_DIR=/data
-      - STATIC_DIR=/app/static
+      - STATIC_DIR=/app/app/minis-web/build
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
     ports:
       - "1902:1902"
