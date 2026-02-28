@@ -13,16 +13,12 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @mhersztowski/core build
 RUN pnpm --filter @mhersztowski/core-backend build
 RUN pnpm --filter mycastle-backend build
+# pnpm deploy resolves workspace deps and removes symlinks
+RUN pnpm --filter mycastle-backend deploy --prod /app/production
 
 FROM base AS production
 WORKDIR /app
-COPY --from=build /app/app/mycastle-backend/dist ./dist
-COPY --from=build /app/app/mycastle-backend/package.json ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/packages/core/dist ./node_modules/@mhersztowski/core/dist
-COPY --from=build /app/packages/core/package.json ./node_modules/@mhersztowski/core/
-COPY --from=build /app/packages/core-backend/dist ./node_modules/@mhersztowski/core-backend/dist
-COPY --from=build /app/packages/core-backend/package.json ./node_modules/@mhersztowski/core-backend/
+COPY --from=build /app/production ./
 
 ENV NODE_ENV=production
 ENV PORT=1894

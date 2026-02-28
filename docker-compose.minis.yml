@@ -7,10 +7,9 @@ services:
       - PORT=1902
       - ROOT_DIR=/data
       - STATIC_DIR=/app/static
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
     volumes:
       - minis-data:/data
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:1902/api/auth/users').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s

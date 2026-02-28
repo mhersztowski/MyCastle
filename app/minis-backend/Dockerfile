@@ -19,17 +19,13 @@ RUN pnpm --filter @mhersztowski/core-backend build
 RUN pnpm --filter @mhersztowski/web-client build
 RUN pnpm --filter minis-backend build
 RUN pnpm --filter minis-web build
+# pnpm deploy resolves workspace deps and removes symlinks
+RUN pnpm --filter minis-backend deploy --prod /app/production
 
 FROM base AS production
 WORKDIR /app
-COPY --from=build /app/app/minis-backend/dist ./dist
-COPY --from=build /app/app/minis-backend/package.json ./
+COPY --from=build /app/production ./
 COPY --from=build /app/app/minis-web/build ./static
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/packages/core/dist ./node_modules/@mhersztowski/core/dist
-COPY --from=build /app/packages/core/package.json ./node_modules/@mhersztowski/core/
-COPY --from=build /app/packages/core-backend/dist ./node_modules/@mhersztowski/core-backend/dist
-COPY --from=build /app/packages/core-backend/package.json ./node_modules/@mhersztowski/core-backend/
 
 ENV NODE_ENV=production
 ENV PORT=1902
