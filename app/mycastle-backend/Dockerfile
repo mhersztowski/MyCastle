@@ -15,7 +15,7 @@ RUN pnpm --filter @mhersztowski/core build
 RUN pnpm --filter @mhersztowski/core-backend build
 RUN pnpm --filter @mhersztowski/web-client build
 RUN pnpm --filter mycastle-backend build
-RUN pnpm --filter mycastle-web build
+RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter mycastle-web build
 
 WORKDIR /app/app/mycastle-backend
 ENV NODE_ENV=production
