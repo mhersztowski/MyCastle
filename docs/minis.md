@@ -9,6 +9,7 @@ Minis jest platformą wspierającą tworzenie projektów DIY, na początku skier
 MinisDeviceDef — definicja urządzenia (admin)
 - name
 - modules — lista MinisModuleDefId
+- board? — opcjonalna nazwa płytki
 
 MinisDevice — instancja urządzenia (per user)
 - MinisDeviceDefId
@@ -65,10 +66,10 @@ Na podstawie modeli zdefiniowane są Nody w pakiecie core (MinisDeviceDefNode, M
 
 ---
 
-## Filesystem (data-minis/)
+## Filesystem (data/)
 
 ```
-data-minis/
+data/
 ├── iot.db                               # SQLite — dane IoT (telemetria, komendy, alerty, config)
 └── Minis/
     ├── Admin/
@@ -95,10 +96,14 @@ data-minis/
             ├── Project.json            # { type, projects: [...] }
             └── Projects/
                 └── {projectId}/        # kopia plików z ProjectDef
-                    └── examples/
-                        └── sketch1/
-                            ├── sketch1.ino
-                            └── sketch1.blockly
+                    ├── custom-config.yaml  # arduino-cli config (directories.user → project path)
+                    ├── sketches/
+                    │   └── sketch1/
+                    │       ├── sketch1.ino
+                    │       └── sketch1.blockly
+                    ├── libraries/          # zainstalowane biblioteki Arduino
+                    ├── output/             # pliki wynikowe kompilacji (.bin, .elf)
+                    └── build/              # pliki pośrednie kompilacji (czyszczone po build)
 ```
 
 ---
@@ -107,7 +112,7 @@ data-minis/
 
 Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 
-**Architektura:** App singleton → FileSystem + MinisHttpServer (extends HttpUploadServer) + MqttServer + IotService + JwtService + ApiKeyService. Dane platformy w JSON files (FileSystem), dane IoT w SQLite (iot.db). FileSystem events broadcastowane przez MQTT.
+**Architektura:** App singleton → FileSystem + MinisHttpServer (extends HttpUploadServer) + MqttServer + IotService + JwtService + ApiKeyService + ArduinoService. Dane platformy w JSON files (FileSystem), dane IoT w SQLite (iot.db). FileSystem events broadcastowane przez MQTT.
 
 ### Autentykacja i autoryzacja
 
@@ -172,6 +177,18 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 - `POST /api/users/{userName}/api-keys` — tworzenie klucza (`{ name }`) → `{ key: ApiKeyPublic, rawKey: string }` (rawKey widoczny tylko raz)
 - `DELETE /api/users/{userName}/api-keys/{keyId}` — usunięcie klucza
 
+**Arduino API:**
+- `GET /api/arduino/boards` — lista dostępnych płytek (arduino-cli board listall)
+- `GET /api/arduino/ports` — lista otwartych portów COM
+- `POST /api/users/{userName}/projects/{projectName}/compile` — kompilacja sketcha (`{ sketchName, fqbn }`)
+- `POST /api/users/{userName}/projects/{projectName}/upload` — upload firmware na urządzenie (`{ sketchName, fqbn, port }`)
+- `GET /api/users/{userName}/projects/{projectName}/output[/{fileName}]` — lista / pobranie skompilowanych plików (binary)
+
+**Sketch Files API:**
+- `GET /api/users/{userName}/projects/{projectName}/sketches` — lista katalogów sketchy
+- `GET /api/users/{userName}/projects/{projectName}/sketches/{sketchName}/{fileName}` — odczyt pliku sketcha
+- `PUT /api/users/{userName}/projects/{projectName}/sketches/{sketchName}/{fileName}` — zapis pliku sketcha (`{ content }`)
+
 **RPC API:**
 - `POST /api/rpc/{methodName}` — generyczny RPC dispatch (Zod validation, auto-Swagger, `user` w context). Metody: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w minis-backend/src/rpc/handlers.ts, 3) Swagger auto-update. fieldMeta na metodach → OpenAPI extensions `x-autocomplete`/`x-depends-on` w property schemas
 
@@ -190,6 +207,15 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 **Swagger:**
 - `GET /api/docs` — Swagger UI (z przyciskiem Authorize dla Bearer token)
 - `GET /api/docs/swagger.json` — OpenAPI 3.0.3 spec (auto-generated z Zod via `buildSwaggerSpec()` + `zod-to-json-schema`, wzbogacone o `x-autocomplete`/`x-depends-on` z fieldMeta, security scheme bearerAuth)
+
+### Arduino Service Layer (src/arduino/)
+
+- **ArduinoCli** — interfejs: `listBoards()`, `compile(options)`, `listPorts()`, `upload(options)`
+- **ArduinoCliLocal** — implementacja lokalna: `child_process.execFile` z promisify, ścieżka z `ARDUINO_CLI_LOCAL_PATH`
+- **ArduinoCliDocker** — implementacja Docker: `docker exec {container} arduino-cli ...`, container z `ARDUINO_CLI_DOCKER_NAME`
+- **ArduinoProject** — zarządzanie ścieżkami projektu i orchestracja: `ensureConfig()` (tworzy custom-config.yaml z `directories.user`), `ensureDirs()` (mkdir output/build/libraries), `compile()` → ensureConfig → ensureDirs → cli.compile → cleanBuildDir, `upload()` → cli.upload
+- **ArduinoService** — orchestrator: tworzy ArduinoCliLocal lub ArduinoCliDocker na podstawie env, `isAvailable` getter, `compile(userName, projectId, sketchName, fqbn)`, `upload(...)`, `listBoards()`, `listPorts()`
+- **Env vars:** `ARDUINO_CLI_LOCAL_PATH` (ścieżka do binarki), `ARDUINO_CLI_DOCKER_NAME` (nazwa kontenera Docker)
 
 ### IoT Service Layer (src/iot/)
 
@@ -264,7 +290,6 @@ Urządzenia IoT mogą definiować **entities** — typowane encje opisujące co 
 
 ### Czego jeszcze nie ma:
 - Logika składania urządzenia (assembly workflow)
-- Kompilacja/deployment projektów na urządzenie
 
 ---
 
@@ -272,7 +297,7 @@ Urządzenia IoT mogą definiować **entities** — typowane encje opisujące co 
 
 React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /mqtt → ws:1902).
 
-**Provider tree:** MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → App
+**Provider tree:** MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → GlobalWindowsProvider → App + GlobalApiDocs + GlobalRpcExplorer + GlobalMqttExplorer
 
 ### Zaimplementowane strony i routing
 
@@ -297,7 +322,7 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 **Electronics** (`/user/:userName/electronics/*`, collapsible group w sidebar):
 - `/user/:userName/electronics/devices` — UserDevicesPage: tabela urządzeń, dialogi Add/Assemble, Share (dialog z chipami użytkowników), sekcja "Shared with me"
 - `/user/:userName/electronics/arduino` — UserProjectsPage: karty projektów Arduino/Blockly, dialog Add (z wyborem ProjectDef)
-- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal i flash
+- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal, server-side kompilacja i flash. Board auto-detected z ProjectDef → ModuleDef → soc. Sketche ładowane/zapisywane przez REST API (nie MQTT). Compile button w bottom status bar → save & compile via REST → output panel (monospace, success/error border). Flash button → pobiera skompilowany .bin z REST → FlashDialog z pre-loaded files. AccountMenu w AppBar (zamiast board selector)
 
 **IoT** (`/user/:userName/iot/*`, collapsible group w sidebar):
 - `/user/:userName/iot/dashboard` — IotDashboardPage: entity-aware karty urządzeń (EntityWidgets ze sparkline SVG, kontrolki switch/slider/select/button, komenda → quick refresh 2s), fallback na capabilities gdy brak entities, udostępnione urządzenia (chip "Shared by {owner}", niebieska krawędź), auto-refresh 10s
@@ -325,6 +350,7 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
     - Performance: `requestAnimationFrame` throttle, mutable Map tree z version counter, limit 10k topics
 - `/user/:userName/tools/api-keys` — ApiKeysPage: zarządzanie kluczami API (tworzenie, kopiowanie, usuwanie). Klucz widoczny tylko raz po utworzeniu.
 - `/user/:userName/tools/testvfs` — TestVfsPage: testowa strona VFS Explorer z CompositeFS/RemoteFS (server mounted at /server), podgląd plików, manual operations (create file/folder), event log
+- `/user/:userName/tools/docs` — DocsPage: TypeDoc API documentation viewer (TypeDocViewer z @mhersztowski/web-client)
 
 **Editor:**
 - `/user/:userName/editor/monaco/*` — MonacoEditorPage: MonacoMultiEditor z `@mhersztowski/web-client`. VS Code-like UI: Activity Bar (Explorer/Search/Extensions) + Sidebar (VFS file browser po RemoteFS/CompositeFS) + tabbed multi-editor z Split Editor (grupy edytorów side-by-side) + Menu Bar (File/Edit) + Status Bar. Pliki ładowane z serwera przez VFS REST API (`/api/vfs`). Ctrl+S save bezpośrednio przez VFS writeFile.
@@ -334,13 +360,13 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - **auth** — AuthContext/AuthProvider, JWT token + sesja w sessionStorage (format `{ user, token }`), login/logout, impersonacja (admin → user view). `setAuthToken()` propaguje token do MinisApiService i RpcClient
 - **filesystem** — FilesystemContext (MQTT), MinisDataSourceContext (ładuje admin JSONy), modele/nody/komponenty
 - **editor** — tylko `monacoWorkers.ts` (Vite-specific `?worker` imports). Reszta edytora (EditorInstance, ModelManager, plugins, language services) wyekstrahowana do `@mhersztowski/web-client/monaco`. MonacoMultiEditor — gotowy komponent VS Code-like z VFS + split editor
-- **ardublockly2** — Blockly wizualny edytor Arduino: bloki (io, serial, servo, stepper, spi, audio, time, map, variables), profile płytek (ESP8266, ESP32, Arduino Uno...), generator Blockly → C++
-- **serial** — Web Serial API (WebSerialService), terminal xterm.js (WebSerialTerminal), flashowanie firmware (EspFlashService + FlashDialog)
+- **ardublockly2** — Blockly wizualny edytor Arduino: bloki (io, serial, servo, stepper, spi, audio, time, map, variables), profile płytek (ESP8266 Huzzah/Wemos D1, ESP32 DevKitC, Arduino Uno/Nano/Mega/Leonardo), generator Blockly → C++. BoardProfile zawiera `compilerFlag` (FQBN) i `flashConfig` (filePattern + offset, null = flash nie wspierane). `socToBoardKey` mapuje SoC (z ModuleDef) na klucz board profile
+- **serial** — Web Serial API (WebSerialService), terminal xterm.js (WebSerialTerminal), flashowanie firmware (EspFlashService + FlashDialog z opcjonalnymi `initialFiles` do pre-loaded firmware z kompilacji)
 - **mqttclient** — re-export z @mhersztowski/web-client
 - **iot-emulator** — EmulatorService (MQTT pub/sub, generatory wartości, interwały telemetrii/heartbeat, command handling z entity commands: set_state/set_value/set_option/press + natychmiastowy republish telemetrii), typy (EmulatedDeviceConfig z entities?), presety urządzeń (6: Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device, Smart Thermostat, Smart Plug — każdy z entities), persistence w localStorage
 
 ### Serwisy
-- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys (getApiKeys, createApiKey, deleteApiKey) + getPublicUsers
+- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys + getPublicUsers + Arduino API (getArduinoBoards, getArduinoPorts, compileProject, uploadFirmware, getProjectOutput, fetchOutputBinary) + Sketch API (listSketches, readSketchFile, writeSketchFile)
 
 ### Hooki
 - **useSourceUpload** — reusable hook do uploadu ZIP źródeł (stan, fileInputRef, trigger, handler)
@@ -350,11 +376,16 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 
 ### UI
 - Interfejs w języku angielskim
-- Layout z Drawer (persistent na sm+, temporary na xs) + AppBar z menu konta (logout, switch admin/user)
-- Menu user: Main, Electronics (Devices, Arduino), IoT (Dashboard, Devices, Alerts, Emulator), Tools (RPC Explorer, MQTT Explorer, API Keys — admin-only)
+- Layout z Drawer (persistent na sm+, temporary na xs) + AppBar z AccountMenu (hierarchiczne podmenu)
+- **AccountMenu** (`components/AccountMenu.tsx`): hierarchiczne menu w AppBar — Switch to Admin/User, View (Save/Load/Clear layout), Window (API Docs/RPC Explorer/MQTT Explorer), Logout
+- **GlobalWindows** (`components/GlobalWindowsContext.tsx`): system dragowalnych, resizable okien floating. `WindowName`: apiDocs, rpcExplorer, mqttExplorer. Stan: `Map<WindowName, 'open' | 'minimized'>`. Minimize → mały pasek na dole ekranu. Zamykane automatycznie przy zmianie strony. Layout persistence w localStorage (save/load/clear). Auto-close okien poza viewport. Z-index < 1300 (poniżej MUI popper/modal)
+- **GlobalWindow** (`components/GlobalWindow.tsx`): draggable, resizable floating window z title bar (minimize/maximize/close), resize handle, rejestracja konfiguracji dla save/load
+- **GlobalApiDocs/GlobalRpcExplorer/GlobalMqttExplorer**: lazy-loaded strony w GlobalWindow, dostępne z AccountMenu → Window
+- **BuildOutputPanel** (`components/BuildOutputPanel.tsx`): draggable floating panel z build output (monospace, auto-scroll, status color border: green/red/gray, clear button, close button)
+- Menu sidebar: Main, Electronics (Devices, Arduino), IoT (Dashboard, Devices, Alerts, Emulator), Tools (RPC Explorer, MQTT Explorer, API Keys, Test VFS, API Docs — admin-only)
 - **Impersonacja:** Admin może "wejść" w widok innego użytkownika z UsersPage (przycisk Impersonate). Stan efemeryczny (nie persystowany). Żółty banner `ImpersonationBanner` na górze z przyciskiem Stop. Layout przesuwa AppBar/Drawer/content gdy banner aktywny. Tools ukryte podczas impersonacji
 - **AdminOnly guard** (`App.tsx`): komponent route guard — sprawdza `isAdmin && !impersonating`, redirectuje do `/user/:userName/main`
-- Strony korzystają z REST API (MinisApiService), nie bezpośrednio z MQTT (wyjątek: filesystem, ProjectPage sketch load/save, IoT Emulator)
+- Strony korzystają z REST API (MinisApiService), nie bezpośrednio z MQTT (wyjątek: filesystem, IoT Emulator)
 
 ---
 
@@ -364,17 +395,33 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - MinisHttpServer.test.ts — auth, admin CRUD (users, deviceDefs, moduleDefs, projectDefs), user CRUD (devices, projects), error handling (22 testy)
 - IotService.test.ts — telemetria, heartbeat, komendy, alerty, presence, lifecycle (26 testów)
 - IotEndpoints.test.ts — wszystkie REST endpointy IoT + device sharing + entity config roundtrip (21+ testów)
+- ArduinoProject.test.ts — ścieżki, ensureConfig, ensureDirs, compile orchestration, upload (7 testów, mock ArduinoCli)
+- ArduinoEndpoints.test.ts — REST endpoints Arduino + Sketch: boards, ports, compile (success/400/404), upload (success/400), output list/download/path traversal, sketch CRUD (22 testy, MockArduinoCli + JwtService auth)
 
 **Frontend (Vitest + jsdom + React Testing Library):**
 - LoginPage.test.tsx — render, nawigacja, error handling
 - UsersPage.test.tsx — ładowanie tabeli, add dialog (wrapper: MemoryRouter + mocked useAuth)
-- MinisApiService.test.ts — wszystkie endpointy, parsowanie, błędy, upload ZIP
+- MinisApiService.test.ts — wszystkie endpointy, parsowanie, błędy, upload ZIP, Arduino API (boards/ports/compile/upload/output/fetchBinary), Sketch API (list/read/write)
 - AuthContext.test.tsx — stan, sessionStorage, login/logout, impersonacja (start/stop/guard/clear on logout)
 - useSourceUpload.test.ts — flow uploadu, błędy
 - generators.test.ts — generatory wartości: constant, random, sine, linear, step (20 testów)
 - EmulatorService.test.ts — CRUD konfiguracji, localStorage, device lifecycle, command handling, activity log, event system (23 testy)
 
-**E2E (Playwright):** auth, admin CRUD, user devices, user projects. Fixtures w tests/e2e/fixtures/data-minis/.
+**E2E (Playwright):** auth, admin CRUD, user devices, user projects. Fixtures w tests/e2e/fixtures/data/.
+
+---
+
+## TypeDoc API Documentation
+
+Monorepo korzysta z TypeDoc do generowania dokumentacji API ze źródeł TypeScript.
+
+- **Konfiguracja:** `typedoc.json` (root) — `entryPointStrategy: packages`, entry points: wszystkie packages/ i app/ projekty
+- **Pluginy:** `typedoc-plugin-markdown` — generacja w formacie Markdown
+- **Wyjścia:** HTML (`docs-site/html`), Markdown (`docs-site/markdown`), JSON (`docs-site/docs.json`)
+- **Komendy:** `pnpm gendocs` (domyślne wyjścia), `pnpm gendocs:html`, `pnpm gendocs:md`
+- **Frontend viewer:** DocsPage (`/user/:userName/tools/docs`) ładuje `docs.json` z `public/` i renderuje przez TypeDocViewer z `@mhersztowski/web-client/typedoc`
+- **Docker:** `docs/Dockerfile` — multi-stage build: pnpm install → build all packages → typedoc → nginx:alpine. `docs/nginx.conf` — SPA routing + asset cache
+- **Per-app typedoc.json:** Każdy app/ ma opcjonalny `typedoc.json` z nadpisanymi entry points
 
 ---
 

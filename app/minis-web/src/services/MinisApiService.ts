@@ -316,6 +316,69 @@ class MinisApiService {
   async deleteApiKey(userName: string, keyId: string): Promise<void> {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/api-keys/${encodeURIComponent(keyId)}`);
   }
+
+  // Arduino
+  async getArduinoBoards(): Promise<Array<{ fqbn: string; name: string }>> {
+    const data = await this.request<{ items: Array<{ fqbn: string; name: string }> }>('GET', '/arduino/boards');
+    return data.items;
+  }
+
+  async getArduinoPorts(): Promise<Array<{ address: string; protocol: string; boardName?: string }>> {
+    const data = await this.request<{ items: Array<{ address: string; protocol: string; boardName?: string }> }>('GET', '/arduino/ports');
+    return data.items;
+  }
+
+  async compileProject(userName: string, projectName: string, sketchName: string, fqbn: string): Promise<{
+    success: boolean; output: string; exitCode: number; outputFiles?: string[];
+  }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/compile`, {
+      sketchName, fqbn,
+    });
+  }
+
+  async uploadFirmware(userName: string, projectName: string, sketchName: string, fqbn: string, port: string): Promise<{
+    success: boolean; output: string; exitCode: number;
+  }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/upload`, {
+      sketchName, fqbn, port,
+    });
+  }
+
+  // Sketch files
+  async listSketches(userName: string, projectName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches`);
+    return data.items;
+  }
+
+  async readSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<string> {
+    const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+    return data.content;
+  }
+
+  async writeSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  async getProjectOutput(userName: string, projectName: string): Promise<Array<{ name: string; size: number }>> {
+    const data = await this.request<{ items: Array<{ name: string; size: number }> }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/output`);
+    return data.items;
+  }
+
+  /** Fetch a compiled output file as binary string (for esptool-js). */
+  async fetchOutputBinary(userName: string, projectName: string, fileName: string): Promise<string> {
+    const res = await fetch(`${this.getBaseUrl()}/api/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/output/${encodeURIComponent(fileName)}`, {
+      headers: this.getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error(`Failed to fetch ${fileName}: HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    // Convert ArrayBuffer to binary string for esptool-js
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return binary;
+  }
 }
 
 export const minisApi = new MinisApiService();

@@ -4,25 +4,24 @@ import {
   Box,
   Button,
   ButtonGroup,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
-  FormControl,
   IconButton,
-  InputLabel,
   List,
   ListItemButton,
   ListItemText,
-  MenuItem,
-  Select,
   Toolbar,
   Tooltip,
   Typography,
 } from '@mui/material';
 import {
   ArrowBack,
+  Build,
+  Close,
   Code,
   Extension,
   FlashOn,
@@ -33,12 +32,12 @@ import {
   Terminal as TerminalIcon,
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useMqtt } from '@modules/mqttclient';
-import { useAuth } from '@modules/auth/AuthContext';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
-import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@modules/ardublockly2';
-import { WebSerialTerminal, FlashDialog } from '@modules/serial';
+import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles, socToBoardKey } from '@modules/ardublockly2';
+import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/serial';
+import { minisApi } from '../../services/MinisApiService';
+import { AccountMenu } from '../../components/AccountMenu';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 
@@ -47,8 +46,6 @@ const MIN_PANEL_PX = 200;
 function ProjectPage() {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
-  const { readFile, writeFile, listDirectory, isConnected } = useMqtt();
-  const { currentUser } = useAuth();
   const serviceRef = useRef<ArduBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -56,7 +53,7 @@ function ProjectPage() {
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
 
-  const [board, setBoard] = useState('esp8266_wemos_d1');
+  const [board, setBoard] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('blockly');
   const [codeEdited, setCodeEdited] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
@@ -68,6 +65,13 @@ function ProjectPage() {
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
   const [sketchesOpen, setSketchesOpen] = useState(true);
+  const [compiling, setCompiling] = useState(false);
+  const [compileOutput, setCompileOutput] = useState('');
+  const [compileSuccess, setCompileSuccess] = useState<boolean | null>(null);
+  const [compileOutputOpen, setCompileOutputOpen] = useState(false);
+  const [flashFiles, setFlashFiles] = useState<FlashFileEntry[] | undefined>(undefined);
+  const [saveBeforeCompileOpen, setSaveBeforeCompileOpen] = useState(false);
+  const compileOutputRef = useRef<HTMLDivElement>(null);
 
   // Keep ref in sync with state for use inside Blockly listener
   useEffect(() => {
@@ -139,36 +143,51 @@ function ProjectPage() {
     return () => clearTimeout(timer);
   }, [viewMode, splitRatio, configOpen, sketchesOpen]);
 
-  // Load sketches list from project examples directory
-  const projectBasePath = currentUser?.name && projectId
-    ? `Minis/Users/${currentUser.name}/Projects/${projectId}/examples`
-    : null;
-
+  // Resolve board from ProjectDef → ModuleDef → soc
   useEffect(() => {
-    if (!isConnected || !projectBasePath) return;
-    listDirectory(projectBasePath).then((tree) => {
-      const dirs = (tree.children ?? [])
-        .filter((c) => c.type === 'directory')
-        .map((c) => c.name);
-      setSketches(dirs);
-    }).catch(() => setSketches([]));
-  }, [isConnected, projectBasePath, listDirectory]);
+    if (!userName || !projectId) return;
+    (async () => {
+      try {
+        const [projects, projectDefs, moduleDefs] = await Promise.all([
+          minisApi.getUserProjects(userName),
+          minisApi.getProjectDefs(),
+          minisApi.getModuleDefs(),
+        ]);
+        const project = projects.find(p => p.id === projectId);
+        if (!project) return;
+        const projectDef = projectDefs.find(d => d.id === project.projectDefId);
+        if (!projectDef) return;
+        const moduleDef = moduleDefs.find(m => m.id === projectDef.moduleDefId);
+        if (!moduleDef?.soc) return;
+        const boardKey = socToBoardKey[moduleDef.soc];
+        if (boardKey && boardProfiles[boardKey]) {
+          setBoard(boardKey);
+          serviceRef.current?.changeBoard(boardKey);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, [userName, projectId]);
+
+  // Load sketches list via REST API
+  useEffect(() => {
+    if (!userName || !projectId) return;
+    minisApi.listSketches(userName, projectId)
+      .then(setSketches)
+      .catch(() => setSketches([]));
+  }, [userName, projectId]);
 
   const handleLoadSketch = async (sketchName: string) => {
-    if (!projectBasePath) return;
+    if (!userName || !projectId) return;
     setCurrentSketch(sketchName);
     setCodeEdited(false);
-
-    const blocklyPath = `${projectBasePath}/${sketchName}/${sketchName}.blockly`;
-    const inoPath = `${projectBasePath}/${sketchName}/${sketchName}.ino`;
 
     // Suppress workspace change events during programmatic load
     suppressBlocklyChangeRef.current = true;
     serviceRef.current?.clearWorkspace();
     try {
-      const blocklyFile = await readFile(blocklyPath);
-      if (serviceRef.current && blocklyFile.content) {
-        serviceRef.current.loadFromXml(blocklyFile.content);
+      const blocklyContent = await minisApi.readSketchFile(userName, projectId, sketchName, `${sketchName}.blockly`);
+      if (serviceRef.current && blocklyContent) {
+        serviceRef.current.loadFromXml(blocklyContent);
       }
     } catch {
       // File not found — workspace already cleared
@@ -177,8 +196,8 @@ function ProjectPage() {
 
     // Load .ino into code editor, or generate from loaded blockly
     try {
-      const inoFile = await readFile(inoPath);
-      syncCodeToEditor(inoFile.content);
+      const inoContent = await minisApi.readSketchFile(userName, projectId, sketchName, `${sketchName}.ino`);
+      syncCodeToEditor(inoContent);
     } catch {
       if (serviceRef.current) {
         const code = serviceRef.current.generateArduinoCode();
@@ -188,23 +207,16 @@ function ProjectPage() {
   };
 
   const handleSaveSketch = async () => {
-    if (!projectBasePath || !currentSketch) return;
-    const blocklyPath = `${projectBasePath}/${currentSketch}/${currentSketch}.blockly`;
-    const inoPath = `${projectBasePath}/${currentSketch}/${currentSketch}.ino`;
+    if (!userName || !projectId || !currentSketch) return;
 
     const blocklyXml = serviceRef.current?.serializeToXml() ?? '';
     const inoCode = editorRef.current?.getContent() ?? generatedCode;
 
     await Promise.all([
-      writeFile(blocklyPath, blocklyXml),
-      writeFile(inoPath, inoCode),
+      minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
+      minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.ino`, inoCode),
     ]);
     setCodeEdited(false);
-  };
-
-  const handleBoardChange = (newBoard: string) => {
-    setBoard(newBoard);
-    serviceRef.current?.changeBoard(newBoard);
   };
 
   const switchToView = (mode: ViewMode) => {
@@ -224,6 +236,47 @@ function ProjectPage() {
   const handleCancelOverwrite = () => {
     setConfirmOpen(false);
   };
+
+  const doCompile = async () => {
+    if (!currentSketch || !userName || !projectId || !board) return;
+    setCompiling(true);
+    setCompileOutput('');
+    setCompileSuccess(null);
+    setCompileOutputOpen(true);
+
+    try {
+      await handleSaveSketch();
+      const fqbn = boardProfiles[board]?.compilerFlag;
+      if (!fqbn) {
+        setCompileOutput('Error: Unknown board FQBN');
+        setCompileSuccess(false);
+        return;
+      }
+      const result = await minisApi.compileProject(userName, projectId, currentSketch, fqbn);
+      setCompileOutput(result.output);
+      setCompileSuccess(result.success);
+    } catch (err) {
+      setCompileOutput(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setCompileSuccess(false);
+    } finally {
+      setCompiling(false);
+    }
+  };
+
+  const handleCompile = () => {
+    if (codeEdited) {
+      setSaveBeforeCompileOpen(true);
+    } else {
+      doCompile();
+    }
+  };
+
+  // Auto-scroll compile output
+  useEffect(() => {
+    if (compileOutputRef.current) {
+      compileOutputRef.current.scrollTop = compileOutputRef.current.scrollHeight;
+    }
+  }, [compileOutput]);
 
   // --- Splitter drag handling ---
   const splitterContainerRef = useRef<HTMLDivElement>(null);
@@ -347,27 +400,13 @@ function ProjectPage() {
 
           <Box sx={{ flexGrow: 1 }} />
 
-          {/* Board selector */}
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel sx={{ color: 'inherit' }}>Board</InputLabel>
-            <Select
-              value={board}
-              label="Board"
-              onChange={(e) => handleBoardChange(e.target.value)}
-              sx={{
-                color: 'inherit',
-                '.MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.4)' },
-                '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.7)' },
-                '.MuiSvgIcon-root': { color: 'inherit' },
-              }}
-            >
-              {Object.entries(boardProfiles).map(([key, profile]) => (
-                <MenuItem key={key} value={key}>
-                  {profile.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          {board && (
+            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.7)', mr: 1 }}>
+              {boardProfiles[board]?.name ?? board}
+            </Typography>
+          )}
+
+          <AccountMenu userName={userName} />
         </Toolbar>
       </AppBar>
 
@@ -394,6 +433,13 @@ function ProjectPage() {
           >
             <Typography variant="subtitle2" gutterBottom>
               Configuration
+            </Typography>
+
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Board: {board ? (boardProfiles[board]?.name ?? board) : 'Loading...'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              FQBN: {board ? (boardProfiles[board]?.compilerFlag ?? 'unknown') : '—'}
             </Typography>
           </Box>
         )}
@@ -452,12 +498,12 @@ function ProjectPage() {
             flexShrink: 0,
           }}
         >
-          <ArduBlocklyComponent
-            onServiceReady={handleServiceReady}
-            initialBoard={board}
-            readFile={readFile}
-            ready={isConnected}
-          />
+          {board && (
+            <ArduBlocklyComponent
+              onServiceReady={handleServiceReady}
+              initialBoard={board}
+            />
+          )}
         </Box>
 
         {/* Splitter handle */}
@@ -489,6 +535,45 @@ function ProjectPage() {
         </Box>
       </Box>
 
+      {/* Compile output panel */}
+      {compileOutputOpen && (
+        <Box
+          sx={{
+            height: 200,
+            borderTop: 2,
+            borderColor: compileSuccess === true ? 'success.main' : compileSuccess === false ? 'error.main' : 'divider',
+            display: 'flex',
+            flexDirection: 'column',
+            flexShrink: 0,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, bgcolor: 'action.hover' }}>
+            <Typography variant="caption" sx={{ fontWeight: 'bold', flexGrow: 1 }}>
+              {compiling ? 'Compiling...' : compileSuccess === true ? 'Compilation succeeded' : compileSuccess === false ? 'Compilation failed' : 'Build Output'}
+            </Typography>
+            <IconButton size="small" onClick={() => setCompileOutputOpen(false)}>
+              <Close sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Box>
+          <Box
+            ref={compileOutputRef}
+            sx={{
+              flexGrow: 1,
+              bgcolor: '#1e1e1e',
+              color: '#d4d4d4',
+              fontFamily: 'monospace',
+              fontSize: 12,
+              p: 1,
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          >
+            {compiling && !compileOutput ? 'Compiling...\n' : compileOutput || 'Ready.\n'}
+          </Box>
+        </Box>
+      )}
+
       {/* Bottom status bar */}
       <AppBar
         position="static"
@@ -497,15 +582,47 @@ function ProjectPage() {
         sx={{ borderTop: 1, borderColor: 'divider' }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
+          <Tooltip title="Compile">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleCompile}
+                disabled={!currentSketch || compiling}
+                color={compileSuccess === false ? 'error' : compileSuccess === true ? 'success' : 'default'}
+              >
+                {compiling ? <CircularProgress size={16} /> : <Build fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
           <Tooltip title="Serial Terminal">
             <IconButton size="small" onClick={() => setTerminalOpen(true)}>
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Flash Firmware">
-            <IconButton size="small" onClick={() => setFlashOpen(true)}>
-              <FlashOn fontSize="small" />
-            </IconButton>
+          <Tooltip title={board && boardProfiles[board]?.flashConfig ? 'Flash Firmware' : 'Flash not supported for this board'}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={!board || !boardProfiles[board]?.flashConfig || !compileSuccess}
+                onClick={async () => {
+                  if (!userName || !projectId || !currentSketch || !board) return;
+                  const fc = boardProfiles[board]?.flashConfig;
+                  if (!fc) return;
+                  const fileName = fc.filePattern.replace('{sketch}', currentSketch);
+                  try {
+                    const data = await minisApi.fetchOutputBinary(userName, projectId, fileName);
+                    setFlashFiles([{ data, address: fc.offset, name: fileName }]);
+                    setFlashOpen(true);
+                  } catch (err) {
+                    setCompileOutput(`Flash error: ${err instanceof Error ? err.message : String(err)}`);
+                    setCompileSuccess(false);
+                    setCompileOutputOpen(true);
+                  }
+                }}
+              >
+                <FlashOn fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
           <Box sx={{ flexGrow: 1 }} />
           <Typography variant="caption" color="text.secondary">
@@ -523,8 +640,28 @@ function ProjectPage() {
       {/* Flash Firmware dialog */}
       <FlashDialog
         open={flashOpen}
-        onClose={() => setFlashOpen(false)}
+        onClose={() => { setFlashOpen(false); setFlashFiles(undefined); }}
+        initialFiles={flashFiles}
       />
+
+      {/* Save before compile dialog */}
+      <Dialog open={saveBeforeCompileOpen} onClose={() => setSaveBeforeCompileOpen(false)}>
+        <DialogTitle>Unsaved changes</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            You have unsaved code changes. Save and compile?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSaveBeforeCompileOpen(false)}>Cancel</Button>
+          <Button
+            onClick={() => { setSaveBeforeCompileOpen(false); doCompile(); }}
+            variant="contained"
+          >
+            Save & Compile
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Confirm overwrite dialog */}
       <Dialog open={confirmOpen} onClose={handleCancelOverwrite}>

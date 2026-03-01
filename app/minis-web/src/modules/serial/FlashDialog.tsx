@@ -48,9 +48,11 @@ const BAUD_RATES = [115200, 230400, 460800, 921600, 1500000];
 interface FlashDialogProps {
   open: boolean;
   onClose: () => void;
+  /** Pre-loaded firmware files (from compiled output). When set, manual file selection is hidden. */
+  initialFiles?: FlashFileEntry[];
 }
 
-export function FlashDialog({ open, onClose }: FlashDialogProps) {
+export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
   const serviceRef = useRef<EspFlashService | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -130,17 +132,22 @@ export function FlashDialog({ open, onClose }: FlashDialogProps) {
     const svc = serviceRef.current;
     if (!svc) return;
 
-    // Build file entries
-    const fileEntries: FlashFileEntry[] = [];
-    for (const row of rows) {
-      if (!row.file) continue;
-      const data = await readFileAsBinaryString(row.file);
-      const address = parseInt(row.address, 16);
-      if (isNaN(address)) {
-        setLog((prev) => prev + `Invalid address: ${row.address}\n`);
-        return;
+    let fileEntries: FlashFileEntry[];
+
+    if (initialFiles && initialFiles.length > 0) {
+      fileEntries = initialFiles;
+    } else {
+      fileEntries = [];
+      for (const row of rows) {
+        if (!row.file) continue;
+        const data = await readFileAsBinaryString(row.file);
+        const address = parseInt(row.address, 16);
+        if (isNaN(address)) {
+          setLog((prev) => prev + `Invalid address: ${row.address}\n`);
+          return;
+        }
+        fileEntries.push({ data, address, name: row.file.name });
       }
-      fileEntries.push({ data, address, name: row.file.name });
     }
 
     if (fileEntries.length === 0) {
@@ -155,7 +162,7 @@ export function FlashDialog({ open, onClose }: FlashDialogProps) {
     } catch {
       // error already logged
     }
-  }, [rows, settings]);
+  }, [rows, settings, initialFiles]);
 
   const handleClose = useCallback(() => {
     if (state === 'flashing') return; // don't close during flash
@@ -236,53 +243,63 @@ export function FlashDialog({ open, onClose }: FlashDialogProps) {
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Firmware Files
           </Typography>
-          {rows.map((row) => (
-            <Box key={row.id} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
-              <TextField
-                label="Offset"
-                value={row.address}
-                onChange={(e) => updateRowAddress(row.id, e.target.value)}
-                size="small"
-                sx={{ width: 110 }}
-                disabled={isFlashing}
-              />
-              <Button
-                variant="outlined"
-                component="label"
-                size="small"
-                disabled={isFlashing}
-                sx={{ textTransform: 'none', minWidth: 0, flexGrow: 1, justifyContent: 'flex-start' }}
-              >
-                {row.file ? row.file.name : 'Choose .bin file...'}
-                <input
-                  type="file"
-                  accept=".bin,.elf"
-                  hidden
-                  onChange={(e) => updateRowFile(row.id, e.target.files?.[0] ?? null)}
-                />
-              </Button>
-              <Tooltip title="Remove">
-                <span>
-                  <IconButton
+          {initialFiles && initialFiles.length > 0 ? (
+            initialFiles.map((f, i) => (
+              <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>
+                {f.name} @ 0x{f.address.toString(16).padStart(4, '0')}
+              </Typography>
+            ))
+          ) : (
+            <>
+              {rows.map((row) => (
+                <Box key={row.id} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="Offset"
+                    value={row.address}
+                    onChange={(e) => updateRowAddress(row.id, e.target.value)}
                     size="small"
-                    onClick={() => removeRow(row.id)}
-                    disabled={rows.length <= 1 || isFlashing}
+                    sx={{ width: 110 }}
+                    disabled={isFlashing}
+                  />
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    size="small"
+                    disabled={isFlashing}
+                    sx={{ textTransform: 'none', minWidth: 0, flexGrow: 1, justifyContent: 'flex-start' }}
                   >
-                    <Delete fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Box>
-          ))}
-          <Button
-            size="small"
-            startIcon={<Add />}
-            onClick={addRow}
-            disabled={isFlashing}
-            sx={{ textTransform: 'none' }}
-          >
-            Add file
-          </Button>
+                    {row.file ? row.file.name : 'Choose .bin file...'}
+                    <input
+                      type="file"
+                      accept=".bin,.elf"
+                      hidden
+                      onChange={(e) => updateRowFile(row.id, e.target.files?.[0] ?? null)}
+                    />
+                  </Button>
+                  <Tooltip title="Remove">
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => removeRow(row.id)}
+                        disabled={rows.length <= 1 || isFlashing}
+                      >
+                        <Delete fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Box>
+              ))}
+              <Button
+                size="small"
+                startIcon={<Add />}
+                onClick={addRow}
+                disabled={isFlashing}
+                sx={{ textTransform: 'none' }}
+              >
+                Add file
+              </Button>
+            </>
+          )}
         </Box>
 
         {/* Settings */}
@@ -409,7 +426,7 @@ export function FlashDialog({ open, onClose }: FlashDialogProps) {
         <Button
           variant="contained"
           onClick={handleFlash}
-          disabled={!isConnected || isFlashing || rows.every((r) => !r.file)}
+          disabled={!isConnected || isFlashing || (!(initialFiles && initialFiles.length > 0) && rows.every((r) => !r.file))}
         >
           {isFlashing ? 'Flashing...' : 'Flash'}
         </Button>

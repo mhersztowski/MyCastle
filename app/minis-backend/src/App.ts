@@ -3,12 +3,15 @@ import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { MinisHttpServer } from './MinisHttpServer.js';
 import { IotService } from './iot/IotService.js';
 import { TerminalService } from './terminal/TerminalService.js';
+import { ArduinoService } from './arduino/index.js';
 
 export interface AppConfig {
   httpPort: number;
   rootDir: string;
   jwtSecret: string;
   staticDir?: string;
+  arduinoCliLocalPath?: string;
+  arduinoCliDockerName?: string;
 }
 
 export class App {
@@ -21,6 +24,7 @@ export class App {
   private terminalService!: TerminalService;
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
+  private arduinoService: ArduinoService;
   private config: AppConfig;
 
   private constructor(config: AppConfig) {
@@ -29,6 +33,11 @@ export class App {
     this.iotService = new IotService(config.rootDir);
     this.jwtService = new JwtService(config.jwtSecret);
     this.apiKeyService = new ApiKeyService(this.fileSystem, 'Minis/Admin/ApiKeys.json');
+    this.arduinoService = new ArduinoService({
+      localPath: config.arduinoCliLocalPath,
+      dockerContainer: config.arduinoCliDockerName,
+      rootDir: config.rootDir,
+    });
     this.httpServer = new MinisHttpServer(
       config.httpPort,
       this.fileSystem,
@@ -37,6 +46,7 @@ export class App {
       this.iotService,
       config.staticDir,
       config.rootDir,
+      this.arduinoService,
     );
   }
 

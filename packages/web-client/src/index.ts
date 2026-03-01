@@ -14,3 +14,6 @@ export * from './vfs';
 
 // monaco — Monaco Editor wrapper
 export * from './monaco';
+
+// typedoc — TypeDoc JSON viewer
+export * from './typedoc';

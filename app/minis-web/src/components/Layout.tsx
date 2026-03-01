@@ -10,8 +10,6 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  Menu,
-  MenuItem,
   Toolbar,
   Typography,
   Chip,
@@ -20,15 +18,12 @@ import {
   Menu as MenuIcon,
   Home as HomeIcon,
   Folder as FolderIcon,
-  Logout as LogoutIcon,
   People as PeopleIcon,
   Memory as MemoryIcon,
   DeveloperBoard as DeveloperBoardIcon,
   Devices as DevicesIcon,
   Code as CodeIcon,
   Assignment as AssignmentIcon,
-  AccountCircle as AccountCircleIcon,
-  SwapHoriz as SwapHorizIcon,
   Dashboard as DashboardIcon,
   Sensors as SensorsIcon,
   NotificationsActive as NotificationsActiveIcon,
@@ -41,10 +36,12 @@ import {
   Hub as HubIcon,
   VpnKey as VpnKeyIcon,
   AccountTree as AccountTreeIcon,
+  Description as DescriptionIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
+import { AccountMenu } from './AccountMenu';
 
 const drawerWidth = 180;
 
@@ -66,11 +63,10 @@ function extractUserName(pathname: string): string {
 
 function Layout({ children }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [accountMenuAnchor, setAccountMenuAnchor] = useState<null | HTMLElement>(null);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Electronics: true, IoT: true, Tools: true });
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, isAdmin, logout, impersonating, stopImpersonating } = useAuth();
+  const { isAdmin, impersonating } = useAuth();
 
   const userName = extractUserName(location.pathname);
   const isAdminView = location.pathname.startsWith('/admin');
@@ -109,6 +105,7 @@ function Layout({ children }: LayoutProps) {
           { text: 'MQTT Explorer', icon: <HubIcon />, path: `/user/${userName}/tools/mqtt-explorer` },
           { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
           { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },
+          { text: 'API Docs', icon: <DescriptionIcon />, path: `/user/${userName}/tools/docs` },
         ],
       }] : []),
     ];
@@ -118,24 +115,6 @@ function Layout({ children }: LayoutProps) {
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
-  };
-
-  const handleLogout = () => {
-    setAccountMenuAnchor(null);
-    logout();
-    navigate('/');
-  };
-
-  const handleSwitchView = () => {
-    setAccountMenuAnchor(null);
-    if (isAdminView) {
-      navigate(`/user/${userName}/main`);
-    } else if (impersonating) {
-      stopImpersonating();
-      navigate(`/admin/${currentUser!.name}/main`);
-    } else {
-      navigate(`/admin/${userName}/main`);
-    }
   };
 
   const toggleGroup = (name: string) => setOpenGroups((prev) => ({ ...prev, [name]: !prev[name] }));
@@ -221,37 +200,7 @@ function Layout({ children }: LayoutProps) {
             Minis - {sectionLabel}
             {impersonating && <Chip label={`as ${impersonating.name}`} size="small" color="warning" />}
           </Typography>
-          <IconButton
-            color="inherit"
-            onClick={(e) => setAccountMenuAnchor(e.currentTarget)}
-          >
-            <AccountCircleIcon />
-          </IconButton>
-          <Menu
-            anchorEl={accountMenuAnchor}
-            open={Boolean(accountMenuAnchor)}
-            onClose={() => setAccountMenuAnchor(null)}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          >
-            {currentUser && (
-              <MenuItem disabled>
-                <Typography variant="body2" color="text.secondary">
-                  {currentUser.name}{impersonating ? ` (viewing ${impersonating.name})` : ''}
-                </Typography>
-              </MenuItem>
-            )}
-            {isAdmin && (
-              <MenuItem onClick={handleSwitchView}>
-                <ListItemIcon><SwapHorizIcon fontSize="small" /></ListItemIcon>
-                <ListItemText>{isAdminView ? 'Switch to User' : 'Switch to Admin'}</ListItemText>
-              </MenuItem>
-            )}
-            <MenuItem onClick={handleLogout}>
-              <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>Logout</ListItemText>
-            </MenuItem>
-          </Menu>
+          <AccountMenu isAdminView={isAdminView} userName={userName} />
         </Toolbar>
       </AppBar>
       <Box

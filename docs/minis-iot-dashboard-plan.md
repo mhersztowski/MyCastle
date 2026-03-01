@@ -53,7 +53,7 @@
 ### Decyzje architektoniczne
 
 1. **MQTT (Aedes + web-client)** — istniejący broker do real-time push, bez Socket.IO
-2. **SQLite (better-sqlite3)** — persistence IoT w `data-minis/iot.db`. Synchroniczne API, WAL mode. Reszta danych w JSON files
+2. **SQLite (better-sqlite3)** — persistence IoT w `data/iot.db`. Synchroniczne API, WAL mode. Reszta danych w JSON files
 3. **Raw HTTP** — nowe endpointy w MinisHttpServer, bez Express/Fastify
 4. **MinisDevice.isIot** — istniejące pole filtruje urządzenia IoT
 5. **MQTT topic schema** — `minis/{userId}/{deviceId}/{type}` (telemetry, heartbeat, command, command/ack, status, telemetry/live, alert)
@@ -194,7 +194,7 @@ GET    /api/users/{userId}/iot/devices                       → [{ deviceId, st
 
 ## 5. PERSISTENCE (SQLite)
 
-Plik: `data-minis/iot.db`. WAL mode, synchronous=NORMAL.
+Plik: `data/iot.db`. WAL mode, synchronous=NORMAL.
 
 Tabele: `iot_device_config`, `telemetry`, `device_command`, `alert_rule`, `alert`.
 

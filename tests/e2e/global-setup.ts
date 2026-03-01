@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const FIXTURES_DIR = path.resolve(__dirname, 'fixtures/data-minis');
-const TEST_DATA_DIR = path.resolve(__dirname, '../../data-minis-test');
+const FIXTURES_DIR = path.resolve(__dirname, 'fixtures/data');
+const TEST_DATA_DIR = path.resolve(__dirname, '../../data-test');
 
 function copyDirSync(src: string, dest: string) {
   fs.mkdirSync(dest, { recursive: true });

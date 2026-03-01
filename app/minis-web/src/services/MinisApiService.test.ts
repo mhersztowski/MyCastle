@@ -238,6 +238,93 @@ describe('MinisApiService', () => {
     });
   });
 
+  describe('Arduino API', () => {
+    it('getArduinoBoards extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ fqbn: 'esp32:esp32:esp32', name: 'ESP32' }] }));
+      const boards = await minisApi.getArduinoBoards();
+      expect(boards).toHaveLength(1);
+      expect(boards[0].fqbn).toBe('esp32:esp32:esp32');
+      expect(mockFetch.mock.calls[0][0]).toContain('/arduino/boards');
+    });
+
+    it('getArduinoPorts extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ address: '/dev/ttyUSB0', protocol: 'serial' }] }));
+      const ports = await minisApi.getArduinoPorts();
+      expect(ports).toHaveLength(1);
+      expect(ports[0].address).toBe('/dev/ttyUSB0');
+    });
+
+    it('compileProject sends POST with sketchName and fqbn', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, output: 'OK', exitCode: 0, outputFiles: ['sketch.bin'] }));
+      const result = await minisApi.compileProject('alice', 'proj1', 'blink', 'esp32:esp32:esp32');
+      expect(result.success).toBe(true);
+      expect(result.outputFiles).toContain('sketch.bin');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/alice/projects/proj1/compile');
+      expect(mockFetch.mock.calls[0][1].method).toBe('POST');
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.sketchName).toBe('blink');
+      expect(body.fqbn).toBe('esp32:esp32:esp32');
+    });
+
+    it('uploadFirmware sends POST with sketchName, fqbn, port', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, output: 'Done', exitCode: 0 }));
+      const result = await minisApi.uploadFirmware('alice', 'proj1', 'blink', 'esp32:esp32:esp32', '/dev/ttyUSB0');
+      expect(result.success).toBe(true);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.port).toBe('/dev/ttyUSB0');
+    });
+
+    it('getProjectOutput extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ name: 'sketch.bin', size: 1024 }] }));
+      const files = await minisApi.getProjectOutput('alice', 'proj1');
+      expect(files).toHaveLength(1);
+      expect(files[0].name).toBe('sketch.bin');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/alice/projects/proj1/output');
+    });
+
+    it('fetchOutputBinary returns binary string', async () => {
+      const fakeData = new Uint8Array([0x00, 0x48, 0x65, 0x6c, 0x6f]);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        arrayBuffer: () => Promise.resolve(fakeData.buffer),
+      });
+      const binary = await minisApi.fetchOutputBinary('alice', 'proj1', 'sketch.bin');
+      expect(binary.length).toBe(5);
+      expect(binary.charCodeAt(1)).toBe(0x48); // 'H'
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/alice/projects/proj1/output/sketch.bin');
+    });
+
+    it('fetchOutputBinary throws on HTTP error', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      await expect(minisApi.fetchOutputBinary('alice', 'proj1', 'missing.bin')).rejects.toThrow('HTTP 404');
+    });
+  });
+
+  describe('Sketch files', () => {
+    it('listSketches extracts items', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ items: ['blink', 'fade'] }));
+      const sketches = await minisApi.listSketches('alice', 'proj1');
+      expect(sketches).toEqual(['blink', 'fade']);
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/alice/projects/proj1/sketches');
+    });
+
+    it('readSketchFile returns content', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ content: 'void setup() {}' }));
+      const content = await minisApi.readSketchFile('alice', 'proj1', 'blink', 'blink.ino');
+      expect(content).toBe('void setup() {}');
+      expect(mockFetch.mock.calls[0][0]).toContain('/sketches/blink/blink.ino');
+    });
+
+    it('writeSketchFile sends PUT with content', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }));
+      await minisApi.writeSketchFile('alice', 'proj1', 'blink', 'blink.ino', '// updated');
+      expect(mockFetch.mock.calls[0][1].method).toBe('PUT');
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.content).toBe('// updated');
+    });
+  });
+
   describe('error handling', () => {
     it('throws with error message from body', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ error: 'Custom error' }, 500));

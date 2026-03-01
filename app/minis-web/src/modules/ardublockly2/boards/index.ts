@@ -1,3 +1,3 @@
 export { BoardManager } from './BoardManager';
-export { boardProfiles } from './BoardProfile';
-export type { BoardProfile, PinPair, BusPinMap } from './BoardProfile';
+export { boardProfiles, socToBoardKey } from './BoardProfile';
+export type { BoardProfile, PinPair, BusPinMap, FlashConfig } from './BoardProfile';

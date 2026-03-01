@@ -10,6 +10,7 @@ import AdmZip from 'adm-zip';
 import type { IotService } from './iot/IotService.js';
 import type { TerminalService } from './terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './rpc/index.js';
+import type { ArduinoService } from './arduino/index.js';
 
 interface CrudConfig {
   filePath: string;
@@ -37,6 +38,8 @@ export class MinisHttpServer extends HttpUploadServer {
   private apiKeyService: ApiKeyService;
   private rpcRouter: RpcRouter;
   private vfs: CompositeFS;
+  private arduinoService: ArduinoService | null;
+  private rootDir: string | null;
 
   private static validateName(name: string): string | null {
     if (!name || name.length === 0) return 'Name is required';
@@ -44,11 +47,13 @@ export class MinisHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
     this.iotService = iotService ?? null;
+    this.arduinoService = arduinoService ?? null;
+    this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
     registerHandlers(this.rpcRouter, { iotService: this.iotService ?? undefined, fileSystem });
@@ -302,6 +307,57 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Arduino: boards list (GET /api/arduino/boards)
+    if (method === 'GET' && apiPath === '/arduino/boards') {
+      await this.handleArduinoBoards(res);
+      return;
+    }
+
+    // Arduino: ports list (GET /api/arduino/ports)
+    if (method === 'GET' && apiPath === '/arduino/ports') {
+      await this.handleArduinoPorts(res);
+      return;
+    }
+
+    // Arduino: compile (POST /api/users/{userName}/projects/{projectName}/compile)
+    const compileMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/compile$/);
+    if (compileMatch && method === 'POST') {
+      const userName = decodeURIComponent(compileMatch[1]);
+      const projectName = decodeURIComponent(compileMatch[2]);
+      await this.handleArduinoCompile(req, res, userName, projectName);
+      return;
+    }
+
+    // Arduino: upload (POST /api/users/{userName}/projects/{projectName}/upload)
+    const uploadMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/upload$/);
+    if (uploadMatch && method === 'POST') {
+      const userName = decodeURIComponent(uploadMatch[1]);
+      const projectName = decodeURIComponent(uploadMatch[2]);
+      await this.handleArduinoUpload(req, res, userName, projectName);
+      return;
+    }
+
+    // Arduino: list output files (GET /api/users/{userName}/projects/{projectName}/output)
+    const outputMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/output(?:\/([^/]+))?$/);
+    if (outputMatch) {
+      const userName = decodeURIComponent(outputMatch[1]);
+      const projectName = decodeURIComponent(outputMatch[2]);
+      const fileName = outputMatch[3] ? decodeURIComponent(outputMatch[3]) : undefined;
+      await this.handleArduinoOutput(req, res, method, userName, projectName, fileName);
+      return;
+    }
+
+    // Sketch files: /users/{userName}/projects/{projectName}/sketches[/{sketchName}/{fileName}]
+    const sketchMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
+    if (sketchMatch) {
+      const sUserName = decodeURIComponent(sketchMatch[1]);
+      const sProjectName = decodeURIComponent(sketchMatch[2]);
+      const sSketchName = sketchMatch[3] ? decodeURIComponent(sketchMatch[3]) : undefined;
+      const sFileName = sketchMatch[4] ? decodeURIComponent(sketchMatch[4]) : undefined;
+      await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
     // VFS endpoints: /vfs/{operation} (admin-only)
     const vfsMatch = apiPath.match(/^\/vfs\/([a-zA-Z]+)$/);
     if (vfsMatch) {
@@ -314,6 +370,207 @@ export class MinisHttpServer extends HttpUploadServer {
     }
 
     this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
+  }
+
+  // --- Arduino ---
+
+  private async resolveProjectId(userName: string, projectIdentifier: string): Promise<string | null> {
+    try {
+      const data = await this.fileSystem.readFile(`Minis/Users/${userName}/Project.json`);
+      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string; name: string }> };
+      const projects = parsed.projects ?? [];
+      // Try by name first, then by id
+      const project = projects.find(p => p.name === projectIdentifier) ?? projects.find(p => p.id === projectIdentifier);
+      return project?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async handleArduinoBoards(res: ServerResponse): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    try {
+      const boards = await this.arduinoService.listBoards();
+      this.sendJsonResponse(res, 200, { items: boards });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'Failed to list boards' });
+    }
+  }
+
+  private async handleArduinoPorts(res: ServerResponse): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    try {
+      const ports = await this.arduinoService.listPorts();
+      this.sendJsonResponse(res, 200, { items: ports });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'Failed to list ports' });
+    }
+  }
+
+  private async handleArduinoCompile(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string };
+    if (!body.sketchName || !body.fqbn) {
+      this.sendJsonResponse(res, 400, { error: 'sketchName and fqbn are required' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    try {
+      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn);
+      this.sendJsonResponse(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Compilation failed';
+      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
+    }
+  }
+
+  private async handleArduinoUpload(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; port?: string };
+    if (!body.sketchName || !body.fqbn || !body.port) {
+      this.sendJsonResponse(res, 400, { error: 'sketchName, fqbn and port are required' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    try {
+      const result = await this.arduinoService.upload(userName, projectId, body.sketchName, body.fqbn, body.port);
+      this.sendJsonResponse(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
+    }
+  }
+
+  private async handleArduinoOutput(_req: IncomingMessage, res: ServerResponse, method: string, userName: string, projectName: string, fileName?: string): Promise<void> {
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    const outputDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'output');
+
+    if (!fileName) {
+      // List output files
+      try {
+        const entries = await fs.promises.readdir(outputDir, { withFileTypes: true });
+        const items = entries
+          .filter(e => e.isFile())
+          .map(e => {
+            const stat = fs.statSync(path.join(outputDir, e.name));
+            return { name: e.name, size: stat.size };
+          });
+        this.sendJsonResponse(res, 200, { items });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    // Serve specific file (binary)
+    const filePath = path.join(outputDir, fileName);
+    if (fileName.includes('..') || fileName.includes('/')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid file name' });
+      return;
+    }
+    try {
+      const data = await fs.promises.readFile(filePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Content-Length': data.length,
+      });
+      res.end(data);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'File not found' });
+    }
+  }
+
+  // --- Sketch files ---
+
+  private async handleSketches(
+    req: IncomingMessage, res: ServerResponse, method: string,
+    userName: string, projectName: string,
+    sketchName?: string, fileName?: string,
+  ): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    const sketchesDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'sketches');
+
+    // GET /sketches — list sketch directories
+    if (!sketchName || !fileName) {
+      if (method !== 'GET') {
+        this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+        return;
+      }
+      try {
+        const entries = await fs.promises.readdir(sketchesDir, { withFileTypes: true });
+        const items = entries.filter(e => e.isDirectory()).map(e => e.name);
+        this.sendJsonResponse(res, 200, { items });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    // Path traversal protection
+    if (sketchName.includes('..') || fileName.includes('..')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid path' });
+      return;
+    }
+    const filePath = path.join(sketchesDir, sketchName, fileName);
+
+    if (method === 'GET') {
+      // Read sketch file
+      try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        this.sendJsonResponse(res, 200, { content });
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'File not found' });
+      }
+      return;
+    }
+
+    if (method === 'PUT') {
+      // Write sketch file
+      const body = await this.parseRequestBody(req) as { content?: string };
+      if (!body?.content && body?.content !== '') {
+        this.sendJsonResponse(res, 400, { error: 'Missing content' });
+        return;
+      }
+      await fs.promises.mkdir(path.join(sketchesDir, sketchName), { recursive: true });
+      await fs.promises.writeFile(filePath, body.content, 'utf-8');
+      this.sendJsonResponse(res, 200, { success: true });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
   }
 
   // --- VFS ---

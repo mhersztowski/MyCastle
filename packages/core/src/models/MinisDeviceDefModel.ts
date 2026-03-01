@@ -3,6 +3,7 @@ export interface MinisDeviceDefModel {
   id: string;
   name: string;
   modules: string[];
+  board?: string;
 }
 
 export interface MinisDeviceDefsModel {

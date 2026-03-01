@@ -547,7 +547,7 @@ function MqttExplorerPage() {
       {/* Main layout: tree + detail */}
       <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', md: 'row' } }}>
         {/* Topic tree */}
-        <Paper sx={{ width: { md: 350 }, flexShrink: 0, display: 'flex', flexDirection: 'column', maxHeight: { md: 'calc(100vh - 240px)' } }}>
+        <Paper sx={{ width: { md: 350 }, flexShrink: 0, display: 'flex', flexDirection: 'column', maxHeight: { md: '70vh' } }}>
           <TextField
             size="small"
             placeholder="Filter topics..."

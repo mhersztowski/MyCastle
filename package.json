@@ -23,11 +23,16 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "clean": "pnpm -r exec rm -rf dist build",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "gendocs": "typedoc",
+    "gendocs:html": "typedoc --html docs-site/html",
+    "gendocs:md": "typedoc --out docs-site/markdown"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@vitest/coverage-v8": "^4.0.18",
+    "typedoc": "^0.28.4",
+    "typedoc-plugin-markdown": "^4.4.2",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },

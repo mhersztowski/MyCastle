@@ -32,10 +32,13 @@ npm-debug.log*
 coverage/
 playwright-report/
 test-results/
-data-minis-test/
+data-test/
 
 # Tesseract language data (downloaded at runtime)
 *.traineddata
+
+# Generated documentation
+docs-site/
 
 # pnpm
 .turbo

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPointStrategy": "packages",
+  "entryPoints": [
+    "packages/core",
+    "packages/core-backend",
+    "packages/web-client",
+    "packages/core-scene3d",
+    "packages/ui-core",
+    "packages/ui-components-scene3d",
+    "app/mycastle-backend",
+    "app/mycastle-web",
+    "app/minis-backend",
+    "app/minis-web",
+    "app/demo-scene-3d"
+  ],
+  "packageOptions": {
+    "entryPoints": ["src/index.ts"],
+    "exclude": [
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/test-setup.ts",
+      "**/vite-env.d.ts",
+      "**/node_modules/**"
+    ],
+    "excludeExternals": true,
+    "excludePrivate": true,
+    "skipErrorChecking": true
+  },
+  "plugin": ["typedoc-plugin-markdown"],
+  "outputs": [
+    {
+      "name": "html",
+      "path": "./docs-site/html"
+    },
+    {
+      "name": "markdown",
+      "path": "./docs-site/markdown"
+    },
+    {
+      "name": "json",
+      "path": "./docs-site/docs.json"
+    }
+  ],
+  "name": "MyCastle",
+  "categorizeByGroup": true,
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true
+  },
+  "sort": ["source-order", "alphabetical"],
+  "gitRevision": "main",
+  "cleanOutputDir": true
+}
