@@ -10,13 +10,10 @@ services:
     ports:
       - "1894:1894"
     volumes:
-      - mycastle-data:/data
+      - /opt/mycastle-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:1894/ocr/status').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
-
-volumes:
-  mycastle-data:

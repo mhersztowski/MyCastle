@@ -1,8 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 
-export type WindowName = 'apiDocs' | 'rpcExplorer' | 'mqttExplorer';
+export type WindowName = 'apiDocs' | 'rpcExplorer' | 'mqttExplorer' | 'mjdDefEditor' | 'mjdDataEditor';
 type WindowState = 'open' | 'minimized';
+
+export interface MjdDefEditorParams {
+  mjdPath: string;
+}
+
+export interface MjdDataEditorParams {
+  mjdPath: string;
+  dataPath: string;
+}
+
+export interface WindowParamsMap {
+  mjdDefEditor: MjdDefEditorParams;
+  mjdDataEditor: MjdDataEditorParams;
+}
 
 export interface WindowConfig {
   pos: { x: number; y: number };
@@ -12,9 +26,12 @@ export interface WindowConfig {
 
 interface GlobalWindowsContextValue {
   windows: Map<WindowName, WindowState>;
+  windowParams: Map<WindowName, unknown>;
   layoutVersion: number;
   savedConfigs: Map<WindowName, WindowConfig>;
   toggle: (name: WindowName) => void;
+  openWithParams: <K extends keyof WindowParamsMap>(name: K, params: WindowParamsMap[K]) => void;
+  getParams: <K extends keyof WindowParamsMap>(name: K) => WindowParamsMap[K] | undefined;
   close: (name: WindowName) => void;
   minimize: (name: WindowName) => void;
   restore: (name: WindowName) => void;
@@ -28,9 +45,12 @@ const STORAGE_KEY = 'minis-globalwindows';
 
 const GlobalWindowsContext = createContext<GlobalWindowsContextValue>({
   windows: new Map(),
+  windowParams: new Map(),
   layoutVersion: 0,
   savedConfigs: new Map(),
   toggle: () => {},
+  openWithParams: () => {},
+  getParams: () => undefined,
   close: () => {},
   minimize: () => {},
   restore: () => {},
@@ -42,6 +62,7 @@ const GlobalWindowsContext = createContext<GlobalWindowsContextValue>({
 
 export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
   const [windows, setWindows] = useState<Map<WindowName, WindowState>>(new Map());
+  const [windowParams, setWindowParams] = useState<Map<WindowName, unknown>>(new Map());
   const [savedConfigs, setSavedConfigs] = useState<Map<WindowName, WindowConfig>>(new Map());
   const [layoutVersion, setLayoutVersion] = useState(0);
   const windowRefsMap = useRef<Map<WindowName, () => WindowConfig>>(new Map());
@@ -52,6 +73,7 @@ export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
     if (prevPathname.current !== pathname) {
       prevPathname.current = pathname;
       setWindows((prev) => (prev.size > 0 ? new Map() : prev));
+      setWindowParams((prev) => (prev.size > 0 ? new Map() : prev));
     }
   }, [pathname]);
 
@@ -70,8 +92,31 @@ export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const openWithParams = useCallback(<K extends keyof WindowParamsMap>(name: K, params: WindowParamsMap[K]) => {
+    setWindowParams((prev) => {
+      const next = new Map(prev);
+      next.set(name, params);
+      return next;
+    });
+    setWindows((prev) => {
+      const next = new Map(prev);
+      next.set(name, 'open');
+      return next;
+    });
+  }, []);
+
+  const getParams = useCallback(<K extends keyof WindowParamsMap>(name: K): WindowParamsMap[K] | undefined => {
+    return windowParams.get(name) as WindowParamsMap[K] | undefined;
+  }, [windowParams]);
+
   const close = useCallback((name: WindowName) => {
     setWindows((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Map(prev);
+      next.delete(name);
+      return next;
+    });
+    setWindowParams((prev) => {
       if (!prev.has(name)) return prev;
       const next = new Map(prev);
       next.delete(name);
@@ -138,8 +183,8 @@ export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
 
   return (
     <GlobalWindowsContext.Provider value={{
-      windows, layoutVersion, savedConfigs,
-      toggle, close, minimize, restore,
+      windows, windowParams, layoutVersion, savedConfigs,
+      toggle, openWithParams, getParams, close, minimize, restore,
       registerWindow, saveLayout, loadLayout, clearLayout,
     }}>
       {children}

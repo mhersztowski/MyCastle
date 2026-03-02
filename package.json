@@ -26,7 +26,11 @@
     "typecheck": "pnpm -r run typecheck",
     "gendocs": "typedoc",
     "gendocs:html": "typedoc --html docs-site/html",
-    "gendocs:md": "typedoc --out docs-site/markdown"
+    "gendocs:md": "typedoc --out docs-site/markdown",
+    "sync:push": "./scripts/sync.sh push",
+    "sync:push:force": "./scripts/sync.sh push --force",
+    "sync:pull": "./scripts/sync.sh pull",
+    "sync:pull:force": "./scripts/sync.sh pull --force"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

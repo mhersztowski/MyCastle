@@ -17,3 +17,6 @@ export * from './monaco';
 
 // typedoc — TypeDoc JSON viewer
 export * from './typedoc';
+
+// mjd — MJD definition & data editors
+export * from './mjd';

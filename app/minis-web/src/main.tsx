@@ -10,6 +10,8 @@ import { GlobalWindowsProvider } from './components/GlobalWindowsContext';
 import { GlobalApiDocs } from './components/GlobalApiDocs';
 import { GlobalRpcExplorer } from './components/GlobalRpcExplorer';
 import { GlobalMqttExplorer } from './components/GlobalMqttExplorer';
+import { GlobalMjdDefEditor } from './components/GlobalMjdDefEditor';
+import { GlobalMjdDataEditor } from './components/GlobalMjdDataEditor';
 import App from './App';
 import theme from './theme';
 
@@ -27,6 +29,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                   <GlobalApiDocs />
                   <GlobalRpcExplorer />
                   <GlobalMqttExplorer />
+                  <GlobalMjdDefEditor />
+                  <GlobalMjdDataEditor />
                 </GlobalWindowsProvider>
               </AuthProvider>
             </MinisDataSourceProvider>

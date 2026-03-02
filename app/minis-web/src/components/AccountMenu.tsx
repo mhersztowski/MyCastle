@@ -3,12 +3,14 @@ import { IconButton, ListItemIcon, ListItemText, Menu, MenuItem, Typography } fr
 import {
   AccountCircle as AccountCircleIcon,
   ChevronRight as ChevronRightIcon,
+  DataObject as DataObjectIcon,
   DeleteSweep as DeleteSweepIcon,
   Description as DescriptionIcon,
   FileDownload as FileDownloadIcon,
   FileUpload as FileUploadIcon,
   Logout as LogoutIcon,
   PlayArrow as RpcIcon,
+  Schema as SchemaIcon,
   Sensors as MqttIcon,
   SwapHoriz as SwapHorizIcon,
   Visibility as VisibilityIcon,
@@ -144,6 +146,14 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
         <MenuItem onClick={() => { closeAll(); toggle('mqttExplorer'); }}>
           <ListItemIcon><MqttIcon fontSize="small" /></ListItemIcon>
           <ListItemText>MQTT Explorer</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeAll(); toggle('mjdDefEditor'); }}>
+          <ListItemIcon><SchemaIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>MJD Def Editor</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeAll(); toggle('mjdDataEditor'); }}>
+          <ListItemIcon><DataObjectIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>MJD Data Editor</ListItemText>
         </MenuItem>
       </Menu>
     </>

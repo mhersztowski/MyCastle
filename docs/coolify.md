@@ -1,92 +1,146 @@
-Coolify 4.0.0-beta może nie obsługiwać dobrze Docker Compose profiles. Lepsze podejście: osobne deploymenty w Coolify dla każdej aplikacji.
+# Deployment — Coolify
 
-MyCastle (backend + web) — Docker Compose
-Projects → Twój projekt → + New → Docker Compose
-Source: GitHub → wybierz repo
-Branch: main
-Compose file: docker-compose.yml (domyślne)
-Po wykryciu serwisów:
-web → przypisz domenę (np. mycastle.twojadomena.com), port 80
-backend → bez domeny (internal), Coolify automatycznie podłączy go do sieci z web
-Volumes → mycastle-data zamapuj na persistent storage
-Ale żeby to działało czysto, usuńmy profiles z mycastle serwisów (Coolify może je zignorować albo nie uruchomić nic):
+## Architektura
 
-Write docker-compose.yml
-30 lines
-services:
-  backend:
-    build:
-      context: .
-      dockerfile: app/mycastle-backend/Dockerfile
-    environment:
-      - PORT=1894
-      - ROOT_DIR=/data
-    volumes:
-      - mycastle-data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:1894/ocr/status').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+Trzy osobne projekty w Coolify, wszystkie z tego samego repo GitHub:
 
-  web:
-    build:
-      context: .
-      dockerfile: app/mycastle-web/Dockerfile
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
+| Projekt Coolify | Typ | Compose file | Domena |
+|---|---|---|---|
+| MyCastle | Docker Compose | `docker-compose.yml` | mycastle.hersztowski.org |
+| Minis | Docker Compose | `docker-compose.minis.yml` | minis.hersztowski.org |
+| Demo Scene 3D | Dockerfile | `app/demo-scene-3d/Dockerfile` | scene3d.hersztowski.org |
 
-volumes:
-  mycastle-data:
-Demo Scene 3D — osobny resource (Dockerfile)
-Projects → Twój projekt → + New → Dockerfile
-Source: GitHub → to samo repo
-Branch: main
-Dockerfile location: app/demo-scene-3d/Dockerfile
-Build context: / (root repo — bo Dockerfile kopiuje packages/)
-Przypisz domenę (np. scene3d.twojadomena.com), port 80
-Podsumowanie w Coolify:
+## Shared data directory
 
-Resource	Typ	Co robi
-MyCastle	Docker Compose	backend (internal) + web (domena)
-Demo Scene 3D	Dockerfile	standalone app (domena)
-Każdy resource deployuje się niezależnie. Jak dodasz nową appkę do app/, tworzysz nowy Coolify resource → Dockerfile → wskazujesz na jej Dockerfile.
+MyCastle i Minis współdzielą katalog danych przez **bind mount** na hoście:
 
-W Coolify port ustawiasz w konfiguracji serwisu, nie w .env aplikacji. Demo-scene-3d to statyczna aplikacja (nginx) — nie potrzebuje żadnych zmiennych środowiskowych.
+```
+/opt/mycastle-data:/data
+```
 
-Coolify: w ustawieniach resource'a ustawiasz "Ports Exposes" np. 80 (port wewnętrzny kontenera) i przypisujesz domenę. Traefik routuje ruch do kontenera. Nie ma znaczenia jaki port "publiczny" chcesz — Coolify mapuje domenę → kontener:80.
+Oba docker-compose montują ten sam katalog hostowy `/opt/mycastle-data`. Przed pierwszym deployem trzeba go utworzyć na serwerze:
 
-Dev (Vite): port ustawiasz w vite.config.ts:
+```bash
+ssh root@server
+mkdir -p /opt/mycastle-data
+```
 
-server: { port: 1897 }
+### Struktura danych
 
+```
+/opt/mycastle-data/
+├── *.json              # MyCastle data (osoby, projekty, taski, etc.)
+├── Minis/
+│   ├── Admin/          # Minis admin data (Users.json, DeviceDefs.json, etc.)
+│   └── Users/          # Minis per-user data
+└── iot.db              # Minis IoT SQLite database
+```
 
-Prawidłowy flow
-+ New Resource (w projekcie)
-Nie wybieraj "Docker Compose" na tym etapie! — zamiast tego wybierz źródło kodu:
-Public Repository — jeśli repo jest publiczne, wklejasz URL
-GitHub App — jeśli repo jest prywatne (wymaga wcześniejszej konfiguracji w Sources)
-Wklej URL repo (np. https://github.com/twoj-user/mycastle)
-Coolify domyślnie ustawi build pack na Nixpacks — kliknij na to i zmień na Docker Compose
-Skonfiguruj:
-Branch: main
-Base Directory: /
-Docker Compose Location: /docker-compose.yml
-Kliknij Continue
-Jeśli repo jest prywatne
-Najpierw musisz dodać GitHub source:
+### Bezpieczeństwo współdzielenia
 
-Sources (lewe menu) → + Add
-Wybierz GitHub App — Coolify przeprowadzi Cię przez OAuth flow
-Dopiero potem wracasz do tworzenia resource'a i wybierasz ten GitHub App jako źródło
-Webhook
-To co widzisz (webhook) to prawdopodobnie opcja raw Docker Compose (wklejasz YAML ręcznie) — wtedy webhook służy do triggerowania deploymentu z CI/CD. Tego nie chcesz. Chcesz git-based deployment, gdzie Coolify sam klonuje repo.
+- MyCastle backend czyta/pisze JSON files w rootcie `/data`
+- Minis backend czyta/pisze w `/data/Minis/` + SQLite w `/data/iot.db`
+- Nie ma konfliktów — każdy backend operuje na swoich plikach
+- SQLite (WAL mode) — bezpieczny dopóki tylko jeden proces pisze (minis-backend)
 
-Jeszcze jedno — usuń ports z docker-compose.yml
-Coolify sam zarządza portami przez Traefik. Mając ports: w compose, może być konflikt. Chcesz żebym usunął sekcję ports z pliku?
+## Tworzenie projektu w Coolify
 
-Sources:
+### 1. Dodaj GitHub source (raz)
+
+Sources → + Add → GitHub App → OAuth flow → autoryzuj repo.
+
+### 2. Nowy resource (Docker Compose)
+
+1. Projects → Twój projekt → + New
+2. Wybierz GitHub App jako źródło
+3. Wybierz repo i branch `main`
+4. Zmień build pack z Nixpacks na **Docker Compose**
+5. Skonfiguruj:
+   - Base Directory: `/`
+   - Docker Compose Location: `/docker-compose.yml` (lub `/docker-compose.minis.yml`)
+6. Continue
+
+### 3. Konfiguracja serwisu
+
+- **Domena**: przypisz w ustawieniach serwisu (Coolify routuje przez Traefik)
+- **Ports Exposes**: port wewnętrzny kontenera (1894 dla mycastle, 1902 dla minis)
+- Nie dodawaj `ports:` w docker-compose — Coolify zarządza portami przez Traefik
+
+### 4. Nowy resource (Dockerfile — demo-scene-3d)
+
+1. Projects → + New → GitHub App → repo → branch `main`
+2. Zmień build pack na **Dockerfile**
+3. Dockerfile location: `app/demo-scene-3d/Dockerfile`
+4. Build context: `/` (root repo — Dockerfile kopiuje packages/)
+5. Przypisz domenę, port 80
+
+## Zmienne środowiskowe
+
+### MyCastle backend
+
+Ustawione w `docker-compose.yml`, nie trzeba nic dodawać w Coolify:
+
+| Zmienna | Wartość | Opis |
+|---|---|---|
+| `PORT` | `1894` | HTTP + MQTT WebSocket port |
+| `ROOT_DIR` | `/data` | Katalog danych (bind mount) |
+| `STATIC_DIR` | `/app/app/mycastle-web/build` | Statyczne pliki frontendu (serwowane z backendu) |
+
+### Minis backend
+
+Ustawione w `docker-compose.minis.yml`. `JWT_SECRET` trzeba dodać w Coolify (Environment Variables):
+
+| Zmienna | Wartość | Opis |
+|---|---|---|
+| `PORT` | `1902` | HTTP + MQTT WebSocket port |
+| `ROOT_DIR` | `/data` | Katalog danych (bind mount) |
+| `STATIC_DIR` | `/app/app/minis-web/build` | Statyczne pliki frontendu |
+| `JWT_SECRET` | (secret) | **Wymagany** — ustawić w Coolify env vars |
+
+### Frontend (mycastle-web, minis-web)
+
+Frontendy nie potrzebują zmiennych — `.env` jest usuwany przed buildem, URL-e są auto-detectowane z `window.location`.
+
+## Synchronizacja danych (local ↔ server)
+
+Skrypt `scripts/sync.sh` synchronizuje katalog `data/` między lokalnym dev a serwerem przez rsync.
+
+### Konfiguracja (raz)
+
+Skopiuj `.env.sync.example` → `.env.sync` i uzupełnij:
+
+```bash
+cp .env.sync.example .env.sync
+# Edytuj .env.sync — ustaw SYNC_HOST
+```
+
+### Użycie
+
+```bash
+# Podgląd zmian (dry-run, nic nie zmienia):
+pnpm sync:push         # co by się zmieniło na serwerze
+pnpm sync:pull         # co by się zmieniło lokalnie
+
+# Wykonaj naprawdę:
+pnpm sync:push:force   # local → server
+pnpm sync:pull:force   # server → local
+```
+
+### Co jest synchronizowane
+
+- Wszystkie pliki JSON (dane MyCastle i Minis)
+- **Wykluczone**: `iot.db`, `iot.db-wal`, `iot.db-shm` — SQLite w trybie WAL nie nadaje się do rsync (binary, aktywne zapisy). Do backupu SQLite użyj `sqlite3 iot.db ".backup backup.db"` na serwerze.
+
+### Flaga `--delete`
+
+Rsync z `--delete` usuwa pliki na docelowej stronie, których nie ma u źródła. Dlatego domyślnie robi **dry-run** — zawsze najpierw sprawdź co się zmieni.
+
+## Backup
+
+```bash
+# Na serwerze
+tar czf /root/mycastle-backup-$(date +%Y%m%d).tar.gz /opt/mycastle-data/
+
+# Lub rsync do lokalnej maszyny
+pnpm sync:pull:force
+```

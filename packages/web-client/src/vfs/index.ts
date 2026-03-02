@@ -4,6 +4,8 @@ export { useVfsTree } from './useVfsTree';
 export { VfsBreadcrumbs } from './VfsBreadcrumbs';
 export { VfsMountManager } from './VfsMountManager';
 export { getFileIcon } from './icons';
+export { VfsFileDialog } from './VfsFileDialog';
+export type { VfsFileDialogProps, VfsFileDialogMode } from './VfsFileDialog';
 export { useVfsClipboard } from './clipboard';
 export type { VfsClipboard } from './clipboard';
 export {
