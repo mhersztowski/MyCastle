@@ -30,7 +30,9 @@
     "sync:push": "./scripts/sync.sh push",
     "sync:push:force": "./scripts/sync.sh push --force",
     "sync:pull": "./scripts/sync.sh pull",
-    "sync:pull:force": "./scripts/sync.sh pull --force"
+    "sync:pull:force": "./scripts/sync.sh pull --force",
+    "sync:db-push": "./scripts/sync.sh db-push",
+    "sync:db-pull": "./scripts/sync.sh db-pull"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

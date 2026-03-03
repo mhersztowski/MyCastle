@@ -9,7 +9,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { MinisProjectModel, MinisProjectDefModel } from '@mhersztowski/core';
 
-function UserProjectsPage() {
+function UserUPythonProjectsPage() {
   const { userName } = useParams<{ userName: string }>();
   const navigate = useNavigate();
   const [items, setItems] = useState<MinisProjectModel[]>([]);
@@ -29,15 +29,13 @@ function UserProjectsPage() {
         minisApi.getUserProjects(userName),
         minisApi.getProjectDefs(),
       ]);
-      // Show only Arduino platform (or legacy entries without a platform)
-      const arduinoDefs = defs.filter(
-        (d) => !d.softwarePlatform || d.softwarePlatform === 'Arduino',
+      // Filter to only uPython platform projects
+      const upythonDefs = defs.filter((d) => d.softwarePlatform === 'uPython');
+      const upythonProjects = projects.filter((p) =>
+        upythonDefs.some((d) => d.id === p.projectDefId),
       );
-      const arduinoProjects = projects.filter((p) =>
-        arduinoDefs.some((d) => d.id === p.projectDefId),
-      );
-      setItems(arduinoProjects);
-      setProjectDefs(arduinoDefs);
+      setItems(upythonProjects);
+      setProjectDefs(upythonDefs);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
@@ -62,13 +60,13 @@ function UserProjectsPage() {
   };
 
   const handleOpen = (project: MinisProjectModel) => {
-    navigate(`/user/${userName}/project/${project.id}`);
+    navigate(`/user/${userName}/upython-project/${project.id}`);
   };
 
-  const handleDelete = async (projectName: string) => {
+  const handleDelete = async (name: string) => {
     if (!userName) return;
     try {
-      await minisApi.deleteUserProject(userName, projectName);
+      await minisApi.deleteUserProject(userName, name);
       setDeleteConfirm(null);
       load();
     } catch (err) {
@@ -79,7 +77,7 @@ function UserProjectsPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">My Projects</Typography>
+        <Typography variant="h4">My uPython Projects</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={() => setAddDialogOpen(true)}>Add</Button>
       </Box>
 
@@ -92,33 +90,36 @@ function UserProjectsPage() {
             <CardActionArea onClick={() => handleOpen(item)} sx={{ p: 1.5, pb: 0.5 }}>
               <Typography variant="subtitle2" color="text.secondary">Name:</Typography>
               <Typography variant="body1" sx={{ mb: 1 }}>{item.name}</Typography>
-              <Typography variant="subtitle2" color="text.secondary">Based on Module:</Typography>
+              <Typography variant="subtitle2" color="text.secondary">Based on:</Typography>
               <Typography variant="body2">
-                {projectDefs.find(d => d.id === item.projectDefId)?.name ?? item.projectDefId}
+                {projectDefs.find((d) => d.id === item.projectDefId)?.name ?? item.projectDefId}
               </Typography>
             </CardActionArea>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 0.5, pb: 0.5 }}>
-              <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item.name); }}>
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item.name); }}
+              >
                 <Delete fontSize="small" />
               </IconButton>
             </Box>
           </Card>
         ))}
         {!loading && items.length === 0 && (
-          <Typography color="text.secondary">No projects yet</Typography>
+          <Typography color="text.secondary">No uPython projects yet</Typography>
         )}
       </Box>
 
       {/* Add Project Dialog */}
       <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Create Project</DialogTitle>
+        <DialogTitle>Create uPython Project</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth select label="Project Definition" value={selectedProjectDef}
             onChange={(e) => {
               const defId = e.target.value;
               setSelectedProjectDef(defId);
-              const def = projectDefs.find(d => d.id === defId);
+              const def = projectDefs.find((d) => d.id === defId);
               if (def) setProjectName(def.name);
             }}
             sx={{ mt: 1, mb: 2 }}
@@ -137,21 +138,35 @@ function UserProjectsPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleAdd} disabled={!selectedProjectDef || !projectName.trim()}>Create</Button>
+          <Button
+            variant="contained"
+            onClick={handleAdd}
+            disabled={!selectedProjectDef || !projectName.trim()}
+          >
+            Create
+          </Button>
         </DialogActions>
       </Dialog>
 
       {/* Delete Confirmation */}
       <Dialog open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)}>
         <DialogTitle>Delete Project?</DialogTitle>
-        <DialogContent><Typography>Are you sure you want to delete this project?</Typography></DialogContent>
+        <DialogContent>
+          <Typography>Are you sure you want to delete this project?</Typography>
+        </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteConfirm(null)}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={() => deleteConfirm && handleDelete(deleteConfirm)}>Delete</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => deleteConfirm && handleDelete(deleteConfirm)}
+          >
+            Delete
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
   );
 }
 
-export default UserProjectsPage;
+export default UserUPythonProjectsPage;

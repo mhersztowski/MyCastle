@@ -7,7 +7,7 @@ import MonacoEditorPage from '@pages/editor/MonacoEditorPage';
 import HomePage from '@pages/HomePage';
 import LoginPage from '@pages/LoginPage';
 import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage } from '@pages/admin';
-import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, IotDashboardPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage, RpcExplorerPage, MqttExplorerPage, ApiKeysPage, TestVfsPage, DocsPage } from '@pages/user';
+import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, UserUPythonProjectsPage, UPythonProjectPage, IotDashboardPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage, RpcExplorerPage, MqttExplorerPage, ApiKeysPage, TestVfsPage, DocsPage } from '@pages/user';
 import { useAuth } from '@modules/auth';
 
 function AdminOnly({ children }: { children: React.ReactNode }) {
@@ -24,6 +24,7 @@ function App() {
       <Route path="/login/:userName" element={<LoginPage />} />
       <Route path="/user/:userName/editor/monaco/*" element={<MonacoEditorPage />} />
       <Route path="/user/:userName/project/:projectId" element={<ProjectPage />} />
+      <Route path="/user/:userName/upython-project/:projectId" element={<UPythonProjectPage />} />
       <Route
         path="*"
         element={
@@ -40,6 +41,7 @@ function App() {
                 <Route path="/user/:userName/main" element={<UserDashboardPage />} />
                 <Route path="/user/:userName/electronics/devices" element={<UserDevicesPage />} />
                 <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />
+                <Route path="/user/:userName/electronics/upython" element={<UserUPythonProjectsPage />} />
                 <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />
                 <Route path="/user/:userName/iot/devices" element={<IotDevicesPage />} />
                 <Route path="/user/:userName/iot/device/:deviceName" element={<IotDevicePage />} />

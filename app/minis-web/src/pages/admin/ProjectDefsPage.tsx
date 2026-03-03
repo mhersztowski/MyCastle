@@ -217,7 +217,16 @@ function ProjectDefsPage() {
                 <option key={mod.id} value={mod.id}>{mod.name}</option>
               ))}
           </TextField>
-          <TextField fullWidth label="Software Platform" value={form.softwarePlatform} onChange={(e) => setForm({ ...form, softwarePlatform: e.target.value })} sx={{ mb: 2 }} />
+          <TextField
+            fullWidth select label="Software Platform" value={form.softwarePlatform}
+            onChange={(e) => setForm({ ...form, softwarePlatform: e.target.value })}
+            sx={{ mb: 2 }}
+            InputLabelProps={{ shrink: true }}
+            SelectProps={{ native: true }}
+          >
+            <option value="Arduino">Arduino</option>
+            <option value="uPython">uPython</option>
+          </TextField>
           <TextField fullWidth label="Blockly Definition" value={form.blocklyDef} onChange={(e) => setForm({ ...form, blocklyDef: e.target.value })} multiline rows={3} />
         </DialogContent>
         <DialogActions>

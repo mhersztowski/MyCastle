@@ -89,6 +89,7 @@ function Layout({ children }: LayoutProps) {
         text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
           { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
           { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
+          { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
         ],
       },
       {
