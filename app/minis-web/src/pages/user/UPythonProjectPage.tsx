@@ -271,7 +271,8 @@ function UPythonProjectPage() {
     borderColor: 'rgba(255,255,255,0.4)',
     color: 'inherit',
     minWidth: { xs: 'auto' },
-    px: { xs: 0.75, sm: 1.5 },
+    px: { xs: 0.5, sm: 1.5 },
+    '& .MuiButton-startIcon': { mr: { xs: 0, sm: 1 } },
   });
 
   const showBlockly = viewMode === 'blockly' || viewMode === 'split';
