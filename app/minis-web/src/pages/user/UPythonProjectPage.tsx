@@ -299,7 +299,7 @@ function UPythonProjectPage() {
             onClick={() => setConfigOpen((v) => !v)}
             sx={btnSx(configOpen)}
           >
-            Config
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Config</Box>
           </Button>
 
           <Button
@@ -308,7 +308,7 @@ function UPythonProjectPage() {
             onClick={() => setSketchesOpen((v) => !v)}
             sx={{ ml: 1, ...btnSx(sketchesOpen) }}
           >
-            Sketches{currentSketch ? `: ${currentSketch}` : ''}
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sketches{currentSketch ? `: ${currentSketch}` : ''}</Box>
           </Button>
 
           <Button
@@ -318,7 +318,7 @@ function UPythonProjectPage() {
             disabled={!currentSketch}
             sx={{ ml: 1, ...btnSx(false) }}
           >
-            Save
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save</Box>
           </Button>
 
           <Box sx={{ flexGrow: 1 }} />
@@ -330,7 +330,7 @@ function UPythonProjectPage() {
               onClick={() => setViewMode('blockly')}
               sx={btnSx(viewMode === 'blockly')}
             >
-              Blockly
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Blockly</Box>
             </Button>
             <Button
               variant={viewMode === 'split' ? 'contained' : 'outlined'} color="inherit"
@@ -338,7 +338,7 @@ function UPythonProjectPage() {
               onClick={() => setViewMode('split')}
               sx={btnSx(viewMode === 'split')}
             >
-              Split
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Split</Box>
             </Button>
             <Button
               variant={viewMode === 'code' ? 'contained' : 'outlined'} color="inherit"
@@ -346,7 +346,7 @@ function UPythonProjectPage() {
               onClick={() => setViewMode('code')}
               sx={btnSx(viewMode === 'code')}
             >
-              Code{codeEdited ? ' *' : ''}
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Code{codeEdited ? ' *' : ''}</Box>
             </Button>
           </ButtonGroup>
 

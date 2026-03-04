@@ -305,9 +305,97 @@ boardProfiles.esp32_devkitc = {
   ],
 };
 
+/** ESP32-S3 DevKit C */
+boardProfiles.esp32s3_devkitc = {
+  name: 'ESP32-S3 DevKit C',
+  description: 'Espressif ESP32-S3 DevKit C board',
+  compilerFlag: 'esp32:esp32:esp32s3',
+  flashConfig: { filePattern: '{sketch}.ino.merged.bin', offset: 0x0000 },
+  // ADC1: GPIO1–10 (ADC2 on GPIO11–20 unavailable when Wi-Fi active)
+  analogPins: [
+    ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],
+    ['6', '6'], ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'],
+  ],
+  // GPIO0–21 and 33–48 (22–32 reserved for flash/PSRAM)
+  digitalPins: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
+  // LEDC PWM: all output-capable GPIO except strapping/USB-critical pins
+  pwmPins: [
+    ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],
+    ['6', '6'], ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'],
+    ['11', '11'], ['12', '12'], ['13', '13'], ['14', '14'], ['15', '15'],
+    ['16', '16'], ['17', '17'], ['18', '18'], ['21', '21'],
+    ['33', '33'], ['34', '34'], ['35', '35'], ['36', '36'], ['37', '37'],
+    ['38', '38'], ['39', '39'], ['40', '40'], ['41', '41'], ['42', '42'],
+    ['45', '45'], ['47', '47'], ['48', '48'],
+  ],
+  serial: [['serial', 'Serial'], ['serial1', 'Serial1'], ['serial2', 'Serial2']],
+  serialPins: {
+    // UART0 routed to USB-UART chip on DevKitC-1
+    Serial: [['TX', '43'], ['RX', '44']],
+    Serial1: [['TX', '17'], ['RX', '18']],
+    Serial2: [['TX', '15'], ['RX', '16']],
+  },
+  serialSpeed: SERIAL_SPEEDS,
+  spi: [['SPI', 'SPI']],
+  // SPI2 (FSPI) default pins on ESP32-S3 DevKitC-1
+  spiPins: { SPI: [['MOSI', '11'], ['MISO', '13'], ['SCK', '12']] },
+  spiClockDivide: SPI_CLOCK_DIVIDES,
+  i2c: [['I2C', 'Wire']],
+  i2cPins: { Wire: [['SDA', '8'], ['SCL', '9']] },
+  i2cSpeed: I2C_SPEEDS,
+  // DevKitC-1 has an addressable RGB LED (WS2812B) on GPIO48
+  builtinLed: [['BUILTIN_1', '48']],
+  interrupt: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
+};
+
+/**
+ * ESP32-S3 Pico (8MB Flash + 2MB OPI PSRAM)
+ * Waveshare ESP32-S3-Pico and similar Pico-style boards with native USB.
+ * Requires PSRAM=opi in FQBN — without it the chip (ESP32-S3R2) crashes on boot.
+ */
+boardProfiles.esp32s3_pico = {
+  name: 'ESP32-S3 Pico',
+  description: 'ESP32-S3 Pico board (8MB Flash, 2MB OPI PSRAM, native USB)',
+  // PSRAM=opi is critical for ESP32-S3R2 — omitting it causes boot crash
+  compilerFlag: 'esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=8M,FlashMode=qio,PSRAM=opi',
+  flashConfig: { filePattern: '{sketch}.ino.merged.bin', offset: 0x0000 },
+  analogPins: [
+    ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],
+    ['6', '6'], ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'],
+  ],
+  digitalPins: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
+  pwmPins: [
+    ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],
+    ['6', '6'], ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'],
+    ['11', '11'], ['12', '12'], ['13', '13'], ['14', '14'], ['15', '15'],
+    ['16', '16'], ['17', '17'], ['18', '18'], ['21', '21'],
+    ['33', '33'], ['34', '34'], ['35', '35'], ['36', '36'], ['37', '37'],
+    ['38', '38'], ['39', '39'], ['40', '40'], ['41', '41'], ['42', '42'],
+    ['45', '45'], ['47', '47'], ['48', '48'],
+  ],
+  serial: [['serial', 'Serial'], ['serial1', 'Serial1'], ['serial2', 'Serial2']],
+  serialPins: {
+    // UART0 via native USB CDC (USBMode=hwcdc)
+    Serial: [['TX', '43'], ['RX', '44']],
+    Serial1: [['TX', '17'], ['RX', '18']],
+    Serial2: [['TX', '15'], ['RX', '16']],
+  },
+  serialSpeed: SERIAL_SPEEDS,
+  spi: [['SPI', 'SPI']],
+  spiPins: { SPI: [['MOSI', '11'], ['MISO', '13'], ['SCK', '12']] },
+  spiClockDivide: SPI_CLOCK_DIVIDES,
+  i2c: [['I2C', 'Wire']],
+  i2cPins: { Wire: [['SDA', '8'], ['SCL', '9']] },
+  i2cSpeed: I2C_SPEEDS,
+  builtinLed: [['BUILTIN_1', '48']],
+  interrupt: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
+};
+
 /** Map SoC name (from ModuleDef) to board profile key */
 export const socToBoardKey: Record<string, string> = {
   Esp32: 'esp32_devkitc',
+  Esp32S3: 'esp32s3_devkitc',
+  Esp32S3Pico: 'esp32s3_pico',
   Esp8266: 'esp8266_wemos_d1',
   ATmega328: 'uno',
   ATmega2560: 'mega',

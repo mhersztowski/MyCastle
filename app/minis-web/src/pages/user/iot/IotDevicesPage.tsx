@@ -81,9 +81,9 @@ function IotDevicesPage() {
           <TableHead>
             <TableRow>
               <TableCell>Device</TableCell>
-              <TableCell>Serial Number</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Serial Number</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>Last Seen</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Last Seen</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -95,7 +95,7 @@ function IotDevicesPage() {
                 onClick={() => navigate(`/user/${userName}/iot/device/${device.name}`)}
               >
                 <TableCell>{device.name || deviceDefs.find((d) => d.id === device.deviceDefId)?.name || device.id.slice(0, 8)}</TableCell>
-                <TableCell>{device.sn || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{device.sn || '-'}</TableCell>
                 <TableCell>
                   <Chip
                     label={getStatus(device.name)}
@@ -103,7 +103,7 @@ function IotDevicesPage() {
                     size="small"
                   />
                 </TableCell>
-                <TableCell>{getLastSeen(device.name)}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{getLastSeen(device.name)}</TableCell>
               </TableRow>
             ))}
             {!loading && devices.length === 0 && (

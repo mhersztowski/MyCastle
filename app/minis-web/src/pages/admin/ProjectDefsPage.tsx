@@ -129,7 +129,7 @@ function ProjectDefsPage() {
               <TableCell sortDirection={sortBy === 'name' ? sortDir : false}>
                 <TableSortLabel active={sortBy === 'name'} direction={sortBy === 'name' ? sortDir : 'asc'} onClick={() => handleSort('name')}>Name</TableSortLabel>
               </TableCell>
-              <TableCell>Id</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Id</TableCell>
               <TableCell sortDirection={sortBy === 'version' ? sortDir : false}>
                 <TableSortLabel active={sortBy === 'version'} direction={sortBy === 'version' ? sortDir : 'asc'} onClick={() => handleSort('version')}>Version</TableSortLabel>
               </TableCell>
@@ -149,7 +149,7 @@ function ProjectDefsPage() {
             {sortedItems.map((item) => (
               <TableRow key={item.id}>
                 <TableCell>{item.name}</TableCell>
-                <TableCell><Typography variant="caption" color="text.secondary">{item.id}</Typography></TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}><Typography variant="caption" color="text.secondary">{item.id}</Typography></TableCell>
                 <TableCell>{item.version}</TableCell>
                 <TableCell>{deviceDefs.find((d) => d.id === item.deviceDefId)?.name || item.deviceDefId}</TableCell>
                 <TableCell>{moduleDefs.find((m) => m.id === item.moduleDefId)?.name || item.moduleDefId}</TableCell>

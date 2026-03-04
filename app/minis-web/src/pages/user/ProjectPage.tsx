@@ -14,11 +14,13 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  TextField,
   Toolbar,
   Tooltip,
   Typography,
 } from '@mui/material';
 import {
+  Add,
   ArrowBack,
   Build,
   Close,
@@ -26,6 +28,7 @@ import {
   Extension,
   FlashOn,
   FolderOpen,
+  UploadFile,
   Save,
   Settings,
   VerticalSplit,
@@ -54,6 +57,7 @@ function ProjectPage() {
   const suppressBlocklyChangeRef = useRef(false);
 
   const [board, setBoard] = useState<string | null>(null);
+  const [newSketchName, setNewSketchName] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('blockly');
   const [codeEdited, setCodeEdited] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
@@ -206,6 +210,14 @@ function ProjectPage() {
     }
   };
 
+  const handleNewSketch = () => {
+    const name = newSketchName.trim();
+    if (!name) return;
+    setCurrentSketch(name);
+    if (!sketches.includes(name)) setSketches((prev) => [...prev, name]);
+    setNewSketchName('');
+  };
+
   const handleSaveSketch = async () => {
     if (!userName || !projectId || !currentSketch) return;
 
@@ -337,7 +349,7 @@ function ProjectPage() {
             onClick={() => setConfigOpen((v) => !v)}
             sx={btnSx(configOpen)}
           >
-            Configuration
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Configuration</Box>
           </Button>
 
           {/* Sketches toggle */}
@@ -349,7 +361,7 @@ function ProjectPage() {
             onClick={() => setSketchesOpen((v) => !v)}
             sx={{ ml: 1, ...btnSx(sketchesOpen) }}
           >
-            Sketches{currentSketch ? `: ${currentSketch}` : ''}
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sketches{currentSketch ? `: ${currentSketch}` : ''}</Box>
           </Button>
 
           {/* Save */}
@@ -362,7 +374,7 @@ function ProjectPage() {
             disabled={!currentSketch}
             sx={{ ml: 1, ...btnSx(false) }}
           >
-            Save
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save</Box>
           </Button>
 
           <Box sx={{ flexGrow: 1 }} />
@@ -376,7 +388,7 @@ function ProjectPage() {
               onClick={() => switchToView('blockly')}
               sx={btnSx(viewMode === 'blockly')}
             >
-              Blockly
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Blockly</Box>
             </Button>
             <Button
               variant={viewMode === 'split' ? 'contained' : 'outlined'}
@@ -385,7 +397,7 @@ function ProjectPage() {
               onClick={() => switchToView('split')}
               sx={btnSx(viewMode === 'split')}
             >
-              Split
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Split</Box>
             </Button>
             <Button
               variant={viewMode === 'code' ? 'contained' : 'outlined'}
@@ -394,7 +406,7 @@ function ProjectPage() {
               onClick={() => switchToView('code')}
               sx={btnSx(viewMode === 'code')}
             >
-              Code{codeEdited ? ' *' : ''}
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Code{codeEdited ? ' *' : ''}</Box>
             </Button>
           </ButtonGroup>
 
@@ -452,14 +464,31 @@ function ProjectPage() {
               flexShrink: 0,
               borderRight: 1,
               borderColor: 'divider',
-              overflow: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
               bgcolor: 'background.paper',
             }}
           >
-            <Typography variant="subtitle2" sx={{ p: 2, pb: 0 }}>
-              Sketches
-            </Typography>
-            <List dense>
+            <Typography variant="subtitle2" sx={{ p: 2, pb: 1 }}>Sketches</Typography>
+            <Box sx={{ px: 1, pb: 1, display: 'flex', gap: 0.5 }}>
+              <TextField
+                size="small"
+                placeholder="new sketch name"
+                value={newSketchName}
+                onChange={(e) => setNewSketchName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleNewSketch(); }}
+                inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
+                sx={{ flexGrow: 1 }}
+              />
+              <Tooltip title="Create sketch">
+                <span>
+                  <IconButton size="small" onClick={handleNewSketch} disabled={!newSketchName.trim()}>
+                    <Add fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+            <List dense sx={{ flexGrow: 1, overflow: 'auto' }}>
               {sketches.map((name) => (
                 <ListItemButton
                   key={name}
@@ -471,7 +500,7 @@ function ProjectPage() {
               ))}
               {sketches.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1 }}>
-                  No sketches found
+                  No sketches yet
                 </Typography>
               )}
             </List>
@@ -598,6 +627,17 @@ function ProjectPage() {
             <IconButton size="small" onClick={() => setTerminalOpen(true)}>
               <TerminalIcon fontSize="small" />
             </IconButton>
+          </Tooltip>
+          <Tooltip title="Flash custom .bin file">
+            <span>
+              <IconButton
+                size="small"
+                disabled={!board || !boardProfiles[board]?.flashConfig}
+                onClick={() => { setFlashFiles(undefined); setFlashOpen(true); }}
+              >
+                <UploadFile fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
           <Tooltip title={board && boardProfiles[board]?.flashConfig ? 'Flash Firmware' : 'Flash not supported for this board'}>
             <span>

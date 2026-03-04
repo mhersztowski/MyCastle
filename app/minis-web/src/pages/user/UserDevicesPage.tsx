@@ -234,7 +234,7 @@ function UserDevicesPage() {
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
-              <TableCell>Serial Number</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Serial Number</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>IoT</TableCell>
               <TableCell align="right">Actions</TableCell>
@@ -244,7 +244,7 @@ function UserDevicesPage() {
             {items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell>{item.name || deviceDefs.find(d => d.id === item.deviceDefId)?.name || item.id.slice(0, 8)}</TableCell>
-                <TableCell>{item.sn || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{item.sn || '-'}</TableCell>
                 <TableCell>
                   {item.isAssembled
                     ? <Chip label="Assembled" color="success" size="small" />

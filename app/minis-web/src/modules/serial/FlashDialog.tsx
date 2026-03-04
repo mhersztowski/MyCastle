@@ -13,9 +13,10 @@ import {
   InputLabel,
   LinearProgress,
   MenuItem,
+  Radio,
+  RadioGroup,
   Select,
   TextField,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import { Add, Close, Delete, Usb, UsbOff } from '@mui/icons-material';
@@ -36,7 +37,7 @@ interface FileRow {
 
 let rowIdCounter = 0;
 
-function createRow(address = '0x10000'): FileRow {
+function createRow(address = '0x0000'): FileRow {
   return { id: rowIdCounter++, file: null, address };
 }
 
@@ -48,7 +49,7 @@ const BAUD_RATES = [115200, 230400, 460800, 921600, 1500000];
 interface FlashDialogProps {
   open: boolean;
   onClose: () => void;
-  /** Pre-loaded firmware files (from compiled output). When set, manual file selection is hidden. */
+  /** Pre-loaded firmware files (from compiled output). Enables mode selector. */
   initialFiles?: FlashFileEntry[];
 }
 
@@ -60,6 +61,11 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
   const [chipName, setChipName] = useState('');
   const [log, setLog] = useState('');
   const [progress, setProgress] = useState<FlashProgress | null>(null);
+
+  // 'compiled' | 'custom' — only relevant when initialFiles is provided
+  const [fileMode, setFileMode] = useState<'compiled' | 'custom'>('compiled');
+  const [customAddress, setCustomAddress] = useState('0x0000');
+  const [customFile, setCustomFile] = useState<File | null>(null);
 
   const [rows, setRows] = useState<FileRow[]>([createRow()]);
   const [settings, setSettings] = useState<FlashSettings>({
@@ -103,6 +109,9 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
       setProgress(null);
       setState('idle');
       setChipName('');
+      setFileMode('compiled');
+      setCustomAddress('0x0000');
+      setCustomFile(null);
       setRows([createRow()]);
       setSettings({
         baudRate: 921600,
@@ -135,7 +144,21 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
     let fileEntries: FlashFileEntry[];
 
     if (initialFiles && initialFiles.length > 0) {
-      fileEntries = initialFiles;
+      if (fileMode === 'compiled') {
+        fileEntries = initialFiles;
+      } else {
+        if (!customFile) {
+          setLog((prev) => prev + 'No file selected.\n');
+          return;
+        }
+        const data = await readFileAsBinaryString(customFile);
+        const address = parseInt(customAddress, 16);
+        if (isNaN(address)) {
+          setLog((prev) => prev + `Invalid address: ${customAddress}\n`);
+          return;
+        }
+        fileEntries = [{ data, address, name: customFile.name }];
+      }
     } else {
       fileEntries = [];
       for (const row of rows) {
@@ -162,7 +185,7 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
     } catch {
       // error already logged
     }
-  }, [rows, settings, initialFiles]);
+  }, [rows, fileMode, customFile, customAddress, settings, initialFiles]);
 
   const handleClose = useCallback(() => {
     if (state === 'flashing') return; // don't close during flash
@@ -170,7 +193,7 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
     onClose();
   }, [state, onClose]);
 
-  // --- File rows management ---
+  // --- File rows management (manual mode) ---
   const addRow = () => setRows((r) => [...r, createRow()]);
 
   const removeRow = (id: number) =>
@@ -188,6 +211,15 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
     progress && progress.total > 0
       ? Math.round((progress.written / progress.total) * 100)
       : 0;
+
+  const hasInitialFiles = initialFiles && initialFiles.length > 0;
+
+  const flashDisabled =
+    !isConnected ||
+    isFlashing ||
+    (hasInitialFiles
+      ? fileMode === 'custom' && !customFile
+      : rows.every((r) => !r.file));
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
@@ -243,12 +275,62 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Firmware Files
           </Typography>
-          {initialFiles && initialFiles.length > 0 ? (
-            initialFiles.map((f, i) => (
-              <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>
-                {f.name} @ 0x{f.address.toString(16).padStart(4, '0')}
-              </Typography>
-            ))
+
+          {hasInitialFiles ? (
+            <>
+              <RadioGroup
+                row
+                value={fileMode}
+                onChange={(e) => setFileMode(e.target.value as 'compiled' | 'custom')}
+              >
+                <FormControlLabel
+                  value="compiled"
+                  control={<Radio size="small" disabled={isFlashing} />}
+                  label="Compiled output"
+                />
+                <FormControlLabel
+                  value="custom"
+                  control={<Radio size="small" disabled={isFlashing} />}
+                  label="Custom .bin"
+                />
+              </RadioGroup>
+
+              {fileMode === 'compiled' ? (
+                <Box sx={{ mt: 0.5 }}>
+                  {initialFiles.map((f, i) => (
+                    <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>
+                      {f.name} @ 0x{f.address.toString(16).padStart(4, '0')}
+                    </Typography>
+                  ))}
+                </Box>
+              ) : (
+                <Box sx={{ display: 'flex', gap: 1, mt: 0.5, alignItems: 'center' }}>
+                  <TextField
+                    label="Offset"
+                    value={customAddress}
+                    onChange={(e) => setCustomAddress(e.target.value)}
+                    size="small"
+                    sx={{ width: 110 }}
+                    disabled={isFlashing}
+                  />
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    size="small"
+                    disabled={isFlashing}
+                    sx={{ textTransform: 'none', minWidth: 0, flexGrow: 1, justifyContent: 'flex-start' }}
+                  >
+                    {customFile ? customFile.name : 'Choose .bin file...'}
+                    <input
+                      type="file"
+                      accept=".bin"
+                      hidden
+                      onChange={(e) => setCustomFile(e.target.files?.[0] ?? null)}
+                    />
+                  </Button>
+                </Box>
+              )}
+            </>
           ) : (
             <>
               {rows.map((row) => (
@@ -276,17 +358,13 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
                       onChange={(e) => updateRowFile(row.id, e.target.files?.[0] ?? null)}
                     />
                   </Button>
-                  <Tooltip title="Remove">
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={() => removeRow(row.id)}
-                        disabled={rows.length <= 1 || isFlashing}
-                      >
-                        <Delete fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
+                  <IconButton
+                    size="small"
+                    onClick={() => removeRow(row.id)}
+                    disabled={rows.length <= 1 || isFlashing}
+                  >
+                    <Delete fontSize="small" />
+                  </IconButton>
                 </Box>
               ))}
               <Button
@@ -423,11 +501,7 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
         <Button onClick={handleClose} disabled={isFlashing}>
           Close
         </Button>
-        <Button
-          variant="contained"
-          onClick={handleFlash}
-          disabled={!isConnected || isFlashing || (!(initialFiles && initialFiles.length > 0) && rows.every((r) => !r.file))}
-        >
+        <Button variant="contained" onClick={handleFlash} disabled={flashDisabled}>
           {isFlashing ? 'Flashing...' : 'Flash'}
         </Button>
       </DialogActions>

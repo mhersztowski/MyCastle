@@ -125,7 +125,7 @@ function DevicesDefPage() {
               <TableCell sortDirection={sortBy === 'name' ? sortDir : false}>
                 <TableSortLabel active={sortBy === 'name'} direction={sortBy === 'name' ? sortDir : 'asc'} onClick={() => handleSort('name')}>Name</TableSortLabel>
               </TableCell>
-              <TableCell>Id</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Id</TableCell>
               <TableCell sortDirection={sortBy === 'modules' ? sortDir : false}>
                 <TableSortLabel active={sortBy === 'modules'} direction={sortBy === 'modules' ? sortDir : 'asc'} onClick={() => handleSort('modules')}>Modules</TableSortLabel>
               </TableCell>
@@ -136,7 +136,7 @@ function DevicesDefPage() {
             {sortedItems.map((item) => (
               <TableRow key={item.id}>
                 <TableCell>{item.name}</TableCell>
-                <TableCell><Typography variant="caption" color="text.secondary">{item.id}</Typography></TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}><Typography variant="caption" color="text.secondary">{item.id}</Typography></TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} flexWrap="wrap">
                     {(item.modules || []).map((m) => <Chip key={m} label={moduleDefNameById[m] || m} size="small" variant="outlined" />)}

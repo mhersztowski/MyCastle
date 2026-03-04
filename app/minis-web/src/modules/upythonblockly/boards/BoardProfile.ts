@@ -199,6 +199,7 @@ boardProfiles.m5stack_atom = {
 export const socToUPythonBoardKey: Record<string, string> = {
   Esp32: 'esp32_generic',
   Esp32S3: 'esp32s3_generic',
+  Esp32S3Pico: 'esp32s3_generic',
   Esp8266: 'esp8266_wemos_d1',
   RP2040: 'rp2040_pico',
   M5Stack: 'm5stack_core',
