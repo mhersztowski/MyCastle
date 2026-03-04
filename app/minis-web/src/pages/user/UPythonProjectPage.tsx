@@ -292,7 +292,7 @@ function UPythonProjectPage() {
           >
             <ArrowBack />
           </IconButton>
-          <Typography variant="h6" sx={{ mr: 2 }} noWrap>
+          <Typography variant="h6" sx={{ mr: 2, display: { xs: 'none', sm: 'block' } }} noWrap>
             uPython Project
           </Typography>
 
@@ -339,7 +339,7 @@ function UPythonProjectPage() {
               variant={viewMode === 'split' ? 'contained' : 'outlined'} color="inherit"
               startIcon={<VerticalSplit />}
               onClick={() => setViewMode('split')}
-              sx={btnSx(viewMode === 'split')}
+              sx={{ ...btnSx(viewMode === 'split'), display: { xs: 'none', sm: 'inline-flex' } }}
             >
               <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Split</Box>
             </Button>
@@ -356,7 +356,7 @@ function UPythonProjectPage() {
           <Box sx={{ flexGrow: 1 }} />
 
           {board && (
-            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.7)', mr: 1 }}>
+            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.7)', mr: 1, display: { xs: 'none', sm: 'block' } }}>
               {boardProfiles[board]?.name ?? board}
             </Typography>
           )}
