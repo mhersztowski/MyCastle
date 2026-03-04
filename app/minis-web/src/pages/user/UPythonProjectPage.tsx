@@ -270,6 +270,8 @@ function UPythonProjectPage() {
     bgcolor: active ? 'rgba(255,255,255,0.2)' : 'transparent',
     borderColor: 'rgba(255,255,255,0.4)',
     color: 'inherit',
+    minWidth: { xs: 'auto' },
+    px: { xs: 0.75, sm: 1.5 },
   });
 
   const showBlockly = viewMode === 'blockly' || viewMode === 'split';
