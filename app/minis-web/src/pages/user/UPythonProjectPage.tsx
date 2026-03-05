@@ -360,6 +360,26 @@ function UPythonProjectPage() {
               {boardProfiles[board]?.name ?? board}
             </Typography>
           )}
+          {/* Upload + Terminal — widoczne tylko na mobilnym */}
+          <Box sx={{ display: { xs: 'flex', sm: 'none' } }}>
+            <Tooltip title="Upload to device">
+              <span>
+                <IconButton
+                  color="inherit"
+                  size="small"
+                  onClick={() => setUploadOpen(true)}
+                  disabled={!generatedCode && !codeEdited}
+                >
+                  <UploadIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="MicroPython REPL Terminal">
+              <IconButton color="inherit" size="small" onClick={() => setReplOpen((v) => !v)}>
+                <TerminalIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
           <AccountMenu userName={userName} />
         </Toolbar>
       </AppBar>
@@ -499,7 +519,7 @@ function UPythonProjectPage() {
       )}
 
       {/* Bottom status bar */}
-      <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider' }}>
+      <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider', display: { xs: 'none', sm: 'block' } }}>
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
           <Tooltip title="Upload to device">
             <span>

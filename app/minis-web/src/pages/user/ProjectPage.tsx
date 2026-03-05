@@ -336,7 +336,7 @@ function ProjectPage() {
       {/* Top AppBar */}
       <AppBar position="static" elevation={1}>
         <Toolbar variant="dense">
-          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/main`)} sx={{ mr: 1 }}>
+          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/electronics/arduino`)} sx={{ mr: 1 }}>
             <ArrowBack />
           </IconButton>
           <Typography variant="h6" sx={{ mr: 2, display: { xs: 'none', md: 'block' } }} noWrap>
