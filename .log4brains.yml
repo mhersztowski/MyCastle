@@ -1,0 +1,8 @@
+project:
+  name: MyCastle
+  slug: mycastle
+
+repositories:
+  - path: .
+    name: MyCastle Monorepo
+    adrFolder: docs/architecture/adr

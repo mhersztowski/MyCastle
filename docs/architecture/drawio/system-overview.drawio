@@ -1,0 +1,259 @@
+<mxfile host="app.diagrams.net" modified="2026-03-05T00:00:00.000Z" agent="Claude Code" version="21.0.0" type="device">
+  <diagram id="system-overview" name="MyCastle System Overview">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===== TITLE ===== -->
+        <mxCell id="title" value="MyCastle — System Overview (C4 L1+L2)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="700" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ===== ACTORS ===== -->
+        <!-- User -->
+        <mxCell id="actor-user" value="&lt;b&gt;Użytkownik&lt;/b&gt;&lt;br&gt;[Person]&lt;br&gt;&lt;br&gt;Zarządza zadaniami,&lt;br&gt;projektami, urządzeniami IoT" style="shape=mxgraph.c4.person2;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;rounded=1;arcSize=50;align=center;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="300" width="140" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- Admin -->
+        <mxCell id="actor-admin" value="&lt;b&gt;Administrator&lt;/b&gt;&lt;br&gt;[Person]&lt;br&gt;&lt;br&gt;Zarządza def. urządzeń,&lt;br&gt;użytkownikami" style="shape=mxgraph.c4.person2;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;rounded=1;arcSize=50;align=center;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="520" width="140" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- IoT Device -->
+        <mxCell id="actor-iot" value="&lt;b&gt;Urządzenie IoT&lt;/b&gt;&lt;br&gt;[Hardware]&lt;br&gt;&lt;br&gt;ESP32 / Arduino&lt;br&gt;z firmware MQTT" style="shape=mxgraph.c4.person2;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontColor=#000000;rounded=1;arcSize=50;align=center;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="520" width="140" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- ===== MYCASTLE PLATFORM ===== -->
+        <mxCell id="mc-boundary" value="MyCastle Platform" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.c4.system_boundary;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=14;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="280" y="100" width="400" height="260" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mc-backend" value="&lt;b&gt;mycastle-backend&lt;/b&gt;&lt;br&gt;[Container: Node.js 20]&lt;br&gt;&lt;br&gt;Port: 1894&lt;br&gt;HTTP REST + MQTT broker&lt;br&gt;OCR, Automate, Scheduler" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="300" y="150" width="170" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mc-web" value="&lt;b&gt;mycastle-web&lt;/b&gt;&lt;br&gt;[Container: React 18]&lt;br&gt;&lt;br&gt;Port: 1895 (dev)&lt;br&gt;Vite 5 + MUI 5&lt;br&gt;Personal info mgmt" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="490" y="150" width="170" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- ===== MINIS PLATFORM ===== -->
+        <mxCell id="minis-boundary" value="Minis Platform" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.c4.system_boundary;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=14;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="700" y="100" width="620" height="560" as="geometry" />
+        </mxCell>
+
+        <mxCell id="minis-backend" value="&lt;b&gt;minis-backend&lt;/b&gt;&lt;br&gt;[Container: Node.js 20]&lt;br&gt;&lt;br&gt;Port: 1902&lt;br&gt;REST API + RPC dispatch&lt;br&gt;MQTT IoT broker&lt;br&gt;Arduino CLI integration&lt;br&gt;Auth: JWT + API Keys" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="720" y="150" width="180" height="190" as="geometry" />
+        </mxCell>
+
+        <mxCell id="minis-web" value="&lt;b&gt;minis-web&lt;/b&gt;&lt;br&gt;[Container: React 18]&lt;br&gt;&lt;br&gt;Port: 1903 (dev)&lt;br&gt;Vite 6 + MUI 6&lt;br&gt;IoT dashboard&lt;br&gt;Blockly Arduino/uPython&lt;br&gt;Serial terminal" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="920" y="150" width="180" height="190" as="geometry" />
+        </mxCell>
+
+        <mxCell id="iot-db" value="&lt;b&gt;iot.db&lt;/b&gt;&lt;br&gt;[Container: SQLite]&lt;br&gt;&lt;br&gt;WAL mode&lt;br&gt;Telemetria, komendy,&lt;br&gt;alerty, device shares" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="720" y="380" width="170" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="data-files" value="&lt;b&gt;data/&lt;/b&gt;&lt;br&gt;[Container: JSON files]&lt;br&gt;&lt;br&gt;Users, DeviceDefs,&lt;br&gt;ModuleDefs, ProjectDefs&lt;br&gt;API Keys" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="920" y="380" width="170" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- ===== SHARED PACKAGES ===== -->
+        <mxCell id="pkg-boundary" value="Shared Packages (@mhersztowski/*)" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.c4.system_boundary;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontColor=#666666;fontSize=12;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="200" y="720" width="1100" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pkg-core" value="&lt;b&gt;@mhersztowski/core&lt;/b&gt;&lt;br&gt;[Package: TypeScript]&lt;br&gt;&lt;br&gt;Models, Zod, RPC, MQTT types&lt;br&gt;VFS, MJD, Automate, DataSource" style="shape=mxgraph.c4.component2;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="220" y="760" width="190" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pkg-core-backend" value="&lt;b&gt;@mhersztowski/core-backend&lt;/b&gt;&lt;br&gt;[Package: TypeScript ESM]&lt;br&gt;&lt;br&gt;FileSystem, HttpUploadServer&lt;br&gt;MqttServer (Aedes)&lt;br&gt;Auth (JWT/bcrypt/ApiKey)" style="shape=mxgraph.c4.component2;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="430" y="760" width="190" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pkg-web-client" value="&lt;b&gt;@mhersztowski/web-client&lt;/b&gt;&lt;br&gt;[Package: TypeScript]&lt;br&gt;&lt;br&gt;MqttClient, FilesystemService&lt;br&gt;VFS UI, Monaco Editor&lt;br&gt;MJD editors, TypeDoc viewer" style="shape=mxgraph.c4.component2;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="640" y="760" width="190" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pkg-ui-core" value="&lt;b&gt;@mhersztowski/ui-core&lt;/b&gt;&lt;br&gt;[Package: TypeScript]&lt;br&gt;&lt;br&gt;Theme, hooks, utils&lt;br&gt;(React 18)" style="shape=mxgraph.c4.component2;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="850" y="760" width="190" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pkg-scene3d" value="&lt;b&gt;@mhersztowski/core-scene3d&lt;/b&gt;&lt;br&gt;[Package: TypeScript]&lt;br&gt;&lt;br&gt;SceneGraph, RenderEngine&lt;br&gt;Three.js integration" style="shape=mxgraph.c4.component2;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="760" width="190" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- ===== EXTERNAL SYSTEMS ===== -->
+        <mxCell id="ext-ai" value="&lt;b&gt;AI APIs&lt;/b&gt;&lt;br&gt;[External System]&lt;br&gt;&lt;br&gt;OpenAI / Anthropic / Ollama&lt;br&gt;LLM + Vision" style="shape=mxgraph.c4.system2;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="280" y="430" width="170" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-github" value="&lt;b&gt;GitHub&lt;/b&gt;&lt;br&gt;[External System]&lt;br&gt;&lt;br&gt;VFS GitHubFS provider&lt;br&gt;Pliki z repozytoriów" style="shape=mxgraph.c4.system2;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="200" width="160" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-arduino" value="&lt;b&gt;Arduino CLI&lt;/b&gt;&lt;br&gt;[External Tool]&lt;br&gt;&lt;br&gt;Kompilacja firmware&lt;br&gt;Local lub Docker" style="shape=mxgraph.c4.system2;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="380" width="160" height="130" as="geometry" />
+        </mxCell>
+
+        <!-- ===== DESKTOP ===== -->
+        <mxCell id="desktop" value="&lt;b&gt;desktop&lt;/b&gt;&lt;br&gt;[Container: Python 3]&lt;br&gt;&lt;br&gt;Windows MQTT agent&lt;br&gt;paho-mqtt&lt;br&gt;Operacje systemowe" style="shape=mxgraph.c4.container2;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;rounded=1;arcSize=10;align=center;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="80" y="100" width="160" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- ===== RELATIONS ===== -->
+        <!-- User → apps -->
+        <mxCell id="r1" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="actor-user" target="mc-web" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-label" value="HTTPS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r1">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <mxCell id="r2" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.7;exitDx=0;exitDy=0;" edge="1" source="actor-user" target="minis-web" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r2-label" value="HTTPS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r2">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- Admin → minis-web -->
+        <mxCell id="r3" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="actor-admin" target="minis-web" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-label" value="HTTPS (admin routes)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r3">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- IoT → minis-backend -->
+        <mxCell id="r4" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="actor-iot" target="minis-backend" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r4-label" value="MQTT over WebSocket" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r4">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- Web ↔ Backend -->
+        <mxCell id="r5" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="mc-web" target="mc-backend" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r5-label" value="REST + MQTT" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r5">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="10" /></Array></mxGeometry>
+        </mxCell>
+
+        <mxCell id="r6" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="minis-web" target="minis-backend" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r6-label" value="REST + MQTT" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r6">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="10" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- Backend → DB/Files -->
+        <mxCell id="r7" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="minis-backend" target="iot-db" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r7-label" value="better-sqlite3" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r7">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint x="30" /></Array></mxGeometry>
+        </mxCell>
+
+        <mxCell id="r8" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="minis-backend" target="data-files" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r8-label" value="Node.js fs" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r8">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint x="-30" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- External systems -->
+        <mxCell id="r9" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;" edge="1" source="mc-backend" target="ext-ai" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r9-label" value="HTTPS REST" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r9">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint x="20" /></Array></mxGeometry>
+        </mxCell>
+
+        <mxCell id="r10" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;" edge="1" source="minis-backend" target="ext-arduino" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r10-label" value="child_process / docker" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r10">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <mxCell id="r11" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;" edge="1" source="minis-web" target="ext-github" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r11-label" value="GitHub API (VFS)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r11">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- Packages → apps -->
+        <mxCell id="r12" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=open;dashed=1;strokeColor=#9673a6;" edge="1" source="mc-backend" target="pkg-core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r13" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=open;dashed=1;strokeColor=#9673a6;" edge="1" source="mc-backend" target="pkg-core-backend" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r14" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=open;dashed=1;strokeColor=#9673a6;" edge="1" source="mc-web" target="pkg-web-client" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r15" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=open;dashed=1;strokeColor=#9673a6;" edge="1" source="minis-backend" target="pkg-core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r16" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=open;dashed=1;strokeColor=#9673a6;" edge="1" source="minis-backend" target="pkg-core-backend" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r17" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=open;dashed=1;strokeColor=#9673a6;" edge="1" source="minis-web" target="pkg-web-client" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Desktop -->
+        <mxCell id="r18" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="desktop" target="mc-backend" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r18-label" value="MQTT" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" vertex="1" connectable="0" parent="r18">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><Array as="offset"><mxPoint y="-10" /></Array></mxGeometry>
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="80" y="720" width="80" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-title" value="&lt;b&gt;Legenda&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="80" y="725" width="80" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg1" value="" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="88" y="755" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg1-t" value="Backend" style="text;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="112" y="755" width="50" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg2" value="" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="88" y="778" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg2-t" value="Frontend" style="text;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="112" y="778" width="50" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3" value="" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="88" y="801" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3-t" value="Storage" style="text;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="112" y="801" width="50" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg4" value="" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="88" y="824" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg4-t" value="Package" style="text;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="112" y="824" width="50" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg5" value="" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="88" y="847" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg5-t" value="External" style="text;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="112" y="847" width="50" height="15" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
