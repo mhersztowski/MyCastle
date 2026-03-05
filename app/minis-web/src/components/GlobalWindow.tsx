@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { Box, IconButton, Paper, Typography } from '@mui/material';
+import { Box, IconButton, Paper, Typography, useMediaQuery, useTheme } from '@mui/material';
 import { Close, CropSquare, FilterNone, Minimize } from '@mui/icons-material';
 import { useGlobalWindows, type WindowName } from './GlobalWindowsContext';
 
@@ -34,6 +34,8 @@ export function GlobalWindow({
   defaultWidth = 800,
   defaultHeight = 600,
 }: GlobalWindowProps) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { savedConfigs, layoutVersion, registerWindow } = useGlobalWindows();
   const initConfig = windowName ? savedConfigs.get(windowName) : undefined;
   const [pos, setPos] = useState(initConfig?.pos ?? { x: 100, y: 80 });
@@ -89,10 +91,12 @@ export function GlobalWindow({
     setZIndex(nextZIndex());
   }, []);
 
+  const isFullscreen = maximized || isMobile;
+
   const handleTitleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       bringToFront();
-      if (maximized) return;
+      if (isFullscreen) return;
       e.preventDefault();
       dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
 
@@ -111,12 +115,12 @@ export function GlobalWindow({
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     },
-    [maximized, pos, bringToFront],
+    [isFullscreen, pos, bringToFront],
   );
 
   const handleResizeMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (maximized) return;
+      if (isFullscreen) return;
       e.preventDefault();
       e.stopPropagation();
       resizeRef.current = { startX: e.clientX, startY: e.clientY, origW: size.w, origH: size.h };
@@ -136,7 +140,7 @@ export function GlobalWindow({
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     },
-    [maximized, size],
+    [isFullscreen, size],
   );
 
   if (!open && !minimized) return null;
@@ -192,9 +196,9 @@ export function GlobalWindow({
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        borderRadius: maximized ? 0 : 1,
-        ...(maximized
-          ? { top: 0, left: 0, width: '100vw', height: '100vh' }
+        borderRadius: isFullscreen ? 0 : 1,
+        ...(isFullscreen
+          ? { top: 0, left: 0, width: '100dvw', height: '100dvh' }
           : { top: pos.y, left: pos.x, width: size.w, height: size.h }),
       }}
     >
@@ -209,7 +213,7 @@ export function GlobalWindow({
           py: 0.5,
           bgcolor: 'primary.main',
           color: 'primary.contrastText',
-          cursor: maximized ? 'default' : 'move',
+          cursor: isFullscreen ? 'default' : 'move',
           userSelect: 'none',
           flexShrink: 0,
         }}
@@ -222,9 +226,11 @@ export function GlobalWindow({
             <Minimize sx={{ fontSize: 16 }} />
           </IconButton>
         )}
-        <IconButton size="small" sx={{ color: 'inherit' }} onClick={() => setMaximized((m) => !m)}>
-          {maximized ? <FilterNone sx={{ fontSize: 14 }} /> : <CropSquare sx={{ fontSize: 16 }} />}
-        </IconButton>
+        {!isMobile && (
+          <IconButton size="small" sx={{ color: 'inherit' }} onClick={() => setMaximized((m) => !m)}>
+            {maximized ? <FilterNone sx={{ fontSize: 14 }} /> : <CropSquare sx={{ fontSize: 16 }} />}
+          </IconButton>
+        )}
         <IconButton size="small" sx={{ color: 'inherit' }} onClick={onClose}>
           <Close sx={{ fontSize: 16 }} />
         </IconButton>
@@ -236,7 +242,7 @@ export function GlobalWindow({
       </Box>
 
       {/* Resize handle */}
-      {!maximized && (
+      {!isFullscreen && (
         <Box
           onMouseDown={handleResizeMouseDown}
           sx={{
