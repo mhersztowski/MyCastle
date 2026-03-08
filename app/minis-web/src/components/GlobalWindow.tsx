@@ -145,116 +145,118 @@ export function GlobalWindow({
 
   if (!open && !minimized) return null;
 
-  if (minimized) {
-    return (
+  return (
+    <>
+      {/* Minimized taskbar indicator — shown only when minimized */}
+      {minimized && (
+        <Paper
+          elevation={4}
+          onClick={() => { bringToFront(); onRestore?.(); }}
+          onMouseDown={bringToFront}
+          sx={{
+            position: 'fixed',
+            bottom: 0,
+            left: 16,
+            zIndex,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5,
+            px: 1.5,
+            py: 0.5,
+            bgcolor: 'primary.main',
+            color: 'primary.contrastText',
+            cursor: 'pointer',
+            borderTopLeftRadius: 8,
+            borderTopRightRadius: 8,
+            borderBottomLeftRadius: 0,
+            borderBottomRightRadius: 0,
+            maxWidth: 200,
+            userSelect: 'none',
+          }}
+        >
+          <Typography variant="body2" sx={{ fontWeight: 'bold', flexGrow: 1 }} noWrap>
+            {title}
+          </Typography>
+          <IconButton
+            size="small"
+            sx={{ color: 'inherit' }}
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+          >
+            <Close sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Paper>
+      )}
+
+      {/* Main window — kept in DOM even when minimized to preserve children state (e.g. xterm canvas) */}
       <Paper
-        elevation={4}
-        onClick={() => { bringToFront(); onRestore?.(); }}
+        elevation={8}
         onMouseDown={bringToFront}
         sx={{
           position: 'fixed',
-          bottom: 0,
-          left: 16,
           zIndex,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.5,
-          px: 1.5,
-          py: 0.5,
-          bgcolor: 'primary.main',
-          color: 'primary.contrastText',
-          cursor: 'pointer',
-          borderTopLeftRadius: 8,
-          borderTopRightRadius: 8,
-          borderBottomLeftRadius: 0,
-          borderBottomRightRadius: 0,
-          maxWidth: 200,
-          userSelect: 'none',
+          display: minimized ? 'none' : 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          borderRadius: isFullscreen ? 0 : 1,
+          ...(isFullscreen
+            ? { top: 0, left: 0, width: '100dvw', height: '100dvh' }
+            : { top: pos.y, left: pos.x, width: size.w, height: size.h }),
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 'bold', flexGrow: 1 }} noWrap>
-          {title}
-        </Typography>
-        <IconButton
-          size="small"
-          sx={{ color: 'inherit' }}
-          onClick={(e) => { e.stopPropagation(); onClose(); }}
-        >
-          <Close sx={{ fontSize: 14 }} />
-        </IconButton>
-      </Paper>
-    );
-  }
-
-  return (
-    <Paper
-      elevation={8}
-      onMouseDown={bringToFront}
-      sx={{
-        position: 'fixed',
-        zIndex,
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        borderRadius: isFullscreen ? 0 : 1,
-        ...(isFullscreen
-          ? { top: 0, left: 0, width: '100dvw', height: '100dvh' }
-          : { top: pos.y, left: pos.x, width: size.w, height: size.h }),
-      }}
-    >
-      {/* Title bar */}
-      <Box
-        onMouseDown={handleTitleMouseDown}
-        onDoubleClick={() => setMaximized((m) => !m)}
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          px: 1,
-          py: 0.5,
-          bgcolor: 'primary.main',
-          color: 'primary.contrastText',
-          cursor: isFullscreen ? 'default' : 'move',
-          userSelect: 'none',
-          flexShrink: 0,
-        }}
-      >
-        <Typography variant="body2" sx={{ fontWeight: 'bold', flexGrow: 1 }} noWrap>
-          {title}
-        </Typography>
-        {onMinimize && (
-          <IconButton size="small" sx={{ color: 'inherit' }} onClick={onMinimize}>
-            <Minimize sx={{ fontSize: 16 }} />
-          </IconButton>
-        )}
-        {!isMobile && (
-          <IconButton size="small" sx={{ color: 'inherit' }} onClick={() => setMaximized((m) => !m)}>
-            {maximized ? <FilterNone sx={{ fontSize: 14 }} /> : <CropSquare sx={{ fontSize: 16 }} />}
-          </IconButton>
-        )}
-        <IconButton size="small" sx={{ color: 'inherit' }} onClick={onClose}>
-          <Close sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Box>
-
-      {/* Content */}
-      <Box sx={{ flexGrow: 1, overflow: 'hidden', minHeight: 0 }}>
-        {children}
-      </Box>
-
-      {/* Resize handle */}
-      {!isFullscreen && (
+        {/* Title bar */}
         <Box
-          onMouseDown={handleResizeMouseDown}
+          onMouseDown={handleTitleMouseDown}
+          onDoubleClick={() => setMaximized((m) => !m)}
           sx={{
-            position: 'absolute',
-            bottom: 0,
-            right: 0,
-            width: 16,
-            height: 16,
-            cursor: 'nwse-resize',
+            display: 'flex',
+            alignItems: 'center',
+            px: 1,
+            py: 0.5,
+            bgcolor: 'primary.main',
+            color: 'primary.contrastText',
+            cursor: isFullscreen ? 'default' : 'move',
+            userSelect: 'none',
+            flexShrink: 0,
           }}
-        />
-      )}
-    </Paper>
+        >
+          <Typography variant="body2" sx={{ fontWeight: 'bold', flexGrow: 1 }} noWrap>
+            {title}
+          </Typography>
+          {onMinimize && (
+            <IconButton size="small" sx={{ color: 'inherit' }} onClick={onMinimize}>
+              <Minimize sx={{ fontSize: 16 }} />
+            </IconButton>
+          )}
+          {!isMobile && (
+            <IconButton size="small" sx={{ color: 'inherit' }} onClick={() => setMaximized((m) => !m)}>
+              {maximized ? <FilterNone sx={{ fontSize: 14 }} /> : <CropSquare sx={{ fontSize: 16 }} />}
+            </IconButton>
+          )}
+          <IconButton size="small" sx={{ color: 'inherit' }} onClick={onClose}>
+            <Close sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Box>
+
+        {/* Content */}
+        <Box sx={{ flexGrow: 1, overflow: 'hidden', minHeight: 0 }}>
+          {children}
+        </Box>
+
+        {/* Resize handle */}
+        {!isFullscreen && (
+          <Box
+            onMouseDown={handleResizeMouseDown}
+            sx={{
+              position: 'absolute',
+              bottom: 0,
+              right: 0,
+              width: 16,
+              height: 16,
+              cursor: 'nwse-resize',
+            }}
+          />
+        )}
+      </Paper>
+    </>
   );
 }

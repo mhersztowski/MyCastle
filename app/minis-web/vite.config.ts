@@ -19,15 +19,15 @@ export default defineConfig({
     open: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:1902',
+        target: 'http://localhost:1912',
         changeOrigin: true,
       },
       '/mqtt': {
-        target: 'ws://localhost:1902',
+        target: 'ws://localhost:1912',
         ws: true,
       },
       '/ws/terminal': {
-        target: 'ws://localhost:1902',
+        target: 'ws://localhost:1912',
         ws: true,
       },
     },

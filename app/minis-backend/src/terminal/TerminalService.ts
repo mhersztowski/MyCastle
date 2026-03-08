@@ -125,6 +125,8 @@ export class TerminalService {
     const session: TerminalSession = { ws, pty: term };
     this.sessions.set(ws, session);
 
+    ws.send(JSON.stringify({ type: 'ready' }));
+
     term.onData((data: string) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'output', data }));

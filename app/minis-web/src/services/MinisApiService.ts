@@ -396,6 +396,10 @@ class MinisApiService {
     return data.items;
   }
 
+  async getTerminalTicket(): Promise<{ ticket: string }> {
+    return this.request<{ ticket: string }>('POST', '/terminal/ticket');
+  }
+
   /** Fetch a compiled output file as binary string (for esptool-js). */
   async fetchOutputBinary(userName: string, projectName: string, fileName: string): Promise<string> {
     const res = await fetch(`${this.getBaseUrl()}/api/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/output/${encodeURIComponent(fileName)}`, {

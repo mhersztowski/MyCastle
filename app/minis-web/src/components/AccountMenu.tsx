@@ -1,7 +1,10 @@
 import { useRef, useState } from 'react';
-import { IconButton, ListItemIcon, ListItemText, Menu, MenuItem, Typography } from '@mui/material';
+import { Divider, IconButton, ListItemIcon, ListItemText, Menu, MenuItem, Typography } from '@mui/material';
 import {
   AccountCircle as AccountCircleIcon,
+  Brightness4 as DarkModeIcon,
+  Brightness7 as LightModeIcon,
+  Check as CheckIcon,
   ChevronRight as ChevronRightIcon,
   DataObject as DataObjectIcon,
   DeleteSweep as DeleteSweepIcon,
@@ -13,12 +16,15 @@ import {
   Schema as SchemaIcon,
   Sensors as MqttIcon,
   SwapHoriz as SwapHorizIcon,
+  Terminal as TerminalIcon,
+  Tune as TuneIcon,
   Visibility as VisibilityIcon,
   WebAsset as WebAssetIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
 import { useGlobalWindows } from './GlobalWindowsContext';
+import { useDisplay } from './DisplayContext';
 
 interface AccountMenuProps {
   isAdminView?: boolean;
@@ -27,8 +33,9 @@ interface AccountMenuProps {
 
 export function AccountMenu({ isAdminView = false, userName: userNameProp }: AccountMenuProps) {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [subMenu, setSubMenu] = useState<'view' | 'window' | null>(null);
+  const [subMenu, setSubMenu] = useState<'view' | 'window' | 'display' | null>(null);
   const subMenuAnchorRef = useRef<HTMLLIElement | null>(null);
+  const { themeMode, size, setThemeMode, setSize } = useDisplay();
   const navigate = useNavigate();
   const { currentUser, isAdmin, logout, impersonating, stopImpersonating } = useAuth();
   const { toggle, saveLayout, loadLayout, clearLayout } = useGlobalWindows();
@@ -99,6 +106,14 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
           <ListItemText>Window</ListItemText>
           <ChevronRightIcon fontSize="small" sx={{ ml: 1, color: 'text.secondary' }} />
         </MenuItem>
+        <MenuItem
+          ref={(el) => { if (subMenu === 'display') subMenuAnchorRef.current = el; }}
+          onClick={(e) => { subMenuAnchorRef.current = e.currentTarget as HTMLLIElement; setSubMenu(subMenu === 'display' ? null : 'display'); }}
+        >
+          <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>Display</ListItemText>
+          <ChevronRightIcon fontSize="small" sx={{ ml: 1, color: 'text.secondary' }} />
+        </MenuItem>
         <MenuItem onClick={handleLogout}>
           <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Logout</ListItemText>
@@ -155,6 +170,49 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
           <ListItemIcon><DataObjectIcon fontSize="small" /></ListItemIcon>
           <ListItemText>MJD Data Editor</ListItemText>
         </MenuItem>
+        {isAdmin && (
+          <MenuItem onClick={() => { closeAll(); toggle('terminal'); }}>
+            <ListItemIcon><TerminalIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Terminal</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
+
+      {/* Display submenu */}
+      <Menu
+        anchorEl={subMenuAnchorRef.current}
+        open={subMenu === 'display'}
+        onClose={() => setSubMenu(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        <MenuItem disabled sx={{ opacity: '1 !important' }}>
+          <Typography variant="caption" color="text.secondary">Theme</Typography>
+        </MenuItem>
+        <MenuItem onClick={() => setThemeMode('light')}>
+          <ListItemIcon>
+            {themeMode === 'light' ? <CheckIcon fontSize="small" /> : <LightModeIcon fontSize="small" />}
+          </ListItemIcon>
+          <ListItemText>Light</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => setThemeMode('dark')}>
+          <ListItemIcon>
+            {themeMode === 'dark' ? <CheckIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+          </ListItemIcon>
+          <ListItemText>Dark</ListItemText>
+        </MenuItem>
+        <Divider />
+        <MenuItem disabled sx={{ opacity: '1 !important' }}>
+          <Typography variant="caption" color="text.secondary">Size</Typography>
+        </MenuItem>
+        {(['small', 'medium', 'large'] as const).map((s) => (
+          <MenuItem key={s} onClick={() => setSize(s)}>
+            <ListItemIcon>
+              {size === s ? <CheckIcon fontSize="small" /> : null}
+            </ListItemIcon>
+            <ListItemText sx={{ textTransform: 'capitalize' }}>{s}</ListItemText>
+          </MenuItem>
+        ))}
       </Menu>
     </>
   );
