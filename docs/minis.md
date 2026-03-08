@@ -12,10 +12,13 @@ MinisDeviceDef — definicja urządzenia (admin)
 - board? — opcjonalna nazwa płytki
 
 MinisDevice — instancja urządzenia (per user)
+- id
 - MinisDeviceDefId
 - isAssembled
 - isIot
 - sn — serial number
+- description - string - markdown string
+- localization : string localizationId
 
 MinisModuleDef — definicja modułu (admin)
 - name — np. Esp32devkitC
@@ -39,6 +42,15 @@ MinisProject — instancja projektu (per user)
 - name
 - ProjectDefId
 - Kopia plików .blockly/.ino (kopiowana z ProjectDef przy tworzeniu)
+
+MinisLocalization
+
+- id — localizationId (UUID)
+- name — string — nazwa lokalizacji
+- type — string : "place" | "geo" — typ lokalizacji
+- place — null | string — nazwa miejsca, np. "electronics"
+- geo — null | { lat: number, lng: number } — współrzędne GPS
+- device — string — deviceId (powiązane urządzenie)
 
 UserModel — użytkownik
 - name, password, isAdmin, roles[]
@@ -94,8 +106,10 @@ data/
         └── {userName}/
             ├── Device.json             # { type, devices: [...] }
             ├── Project.json            # { type, projects: [...] }
+            ├── Localizations.json      # { type, items: [MinisLocalizationModel] }
             └── Projects/
                 └── {projectId}/        # kopia plików z ProjectDef
+                    ├── README.md           # opis projektu w Markdown (opcjonalny)
                     ├── custom-config.yaml  # arduino-cli config (directories.user → project path)
                     ├── sketches/
                     │   └── sketch1/
@@ -188,6 +202,22 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 - `GET /api/users/{userName}/projects/{projectName}/sketches` — lista katalogów sketchy
 - `GET /api/users/{userName}/projects/{projectName}/sketches/{sketchName}/{fileName}` — odczyt pliku sketcha
 - `PUT /api/users/{userName}/projects/{projectName}/sketches/{sketchName}/{fileName}` — zapis pliku sketcha (`{ content }`)
+
+**README API:**
+
+- `GET /api/users/{userName}/projects/{projectName}/readme` — odczyt README.md projektu (`{ content }` lub 404)
+- `PUT /api/users/{userName}/projects/{projectName}/readme` — zapis README.md (`{ content }`)
+
+**Localizations API:**
+
+- `GET /api/users/{userName}/localizations` — lista lokalizacji (`{ items: MinisLocalizationModel[] }`)
+- `POST /api/users/{userName}/localizations` — tworzenie lokalizacji (auto-UUID)
+- `PUT /api/users/{userName}/localizations/{id}` — aktualizacja lokalizacji
+- `DELETE /api/users/{userName}/localizations/{id}` — usunięcie lokalizacji
+
+**AI Search Proxy:**
+
+- `POST /api/ai/search` — proxy do OpenAI lub Anthropic API (omija CORS blokadę przeglądarki). Body: `{ model: 'openai'|'anthropic', apiKey: string, systemPrompt: string, userPrompt: string }`. Zwraca `{ result: string }`. OpenAI: gpt-4o-mini; Anthropic: claude-haiku-4-5-20251001
 
 **RPC API:**
 - `POST /api/rpc/{methodName}` — generyczny RPC dispatch (Zod validation, auto-Swagger, `user` w context). Metody: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w minis-backend/src/rpc/handlers.ts, 3) Swagger auto-update. fieldMeta na metodach → OpenAPI extensions `x-autocomplete`/`x-depends-on` w property schemas
@@ -318,11 +348,13 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 
 **User** (`/user/:userName/*`, Layout z drawer menu — collapsible tree groups):
 - `/user/:userName/main` — UserDashboardPage: karty (Add Assembled Device, Assemble Device, Open Device Project)
+- `/user/:userName/localization` — LocalizationPage: tabela lokalizacji z filtrowaniem (name/place text + type dropdown), Group by Place checkbox (grupuje wiersze w sekcje po wartości `place`), AI Search accordion (model selector OpenAI/Anthropic, API key w localStorage, prompt textarea → POST /api/ai/search → filtruje po zwróconych IDs), opis urządzenia jako Markdown popover (ikona ⓘ → Popover z react-markdown + remark-breaks)
 
 **Electronics** (`/user/:userName/electronics/*`, collapsible group w sidebar):
-- `/user/:userName/electronics/devices` — UserDevicesPage: tabela urządzeń, dialogi Add/Assemble, Share (dialog z chipami użytkowników), sekcja "Shared with me"
+
+- `/user/:userName/electronics/devices` — UserDevicesPage: tabela urządzeń, dialogi Add/Assemble (auto-generowanie nazwy jako `DefName-SN`), Share (dialog z chipami użytkowników), sekcja "Shared with me". Kliknięcie wiersza → slide-out Drawer (prawa strona, 400px) z edycją: name (disabled), sn, description (markdown, multiline), isAssembled switch, isIot switch
 - `/user/:userName/electronics/arduino` — UserProjectsPage: karty projektów Arduino/Blockly, dialog Add (z wyborem ProjectDef)
-- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal, server-side kompilacja i flash. Board auto-detected z ProjectDef → ModuleDef → soc. Sketche ładowane/zapisywane przez REST API (nie MQTT). Compile button w bottom status bar → save & compile via REST → output panel (monospace, success/error border). Flash button → pobiera skompilowany .bin z REST → FlashDialog z pre-loaded files. AccountMenu w AppBar (zamiast board selector)
+- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal, server-side kompilacja i flash. Board auto-detected z ProjectDef → ModuleDef → soc. Sketche ładowane/zapisywane przez REST API (nie MQTT). README panel boczny (przycisk README w AppBar) — podgląd Markdown + edycja inline + save. Compile button w bottom status bar → save & compile via REST → output panel (monospace, success/error border). Flash button → pobiera skompilowany .bin z REST → FlashDialog z pre-loaded files. AccountMenu w AppBar (zamiast board selector)
 
 **IoT** (`/user/:userName/iot/*`, collapsible group w sidebar):
 - `/user/:userName/iot/dashboard` — IotDashboardPage: entity-aware karty urządzeń (EntityWidgets ze sparkline SVG, kontrolki switch/slider/select/button, komenda → quick refresh 2s), fallback na capabilities gdy brak entities, udostępnione urządzenia (chip "Shared by {owner}", niebieska krawędź), auto-refresh 10s
@@ -366,7 +398,8 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - **iot-emulator** — EmulatorService (MQTT pub/sub, generatory wartości, interwały telemetrii/heartbeat, command handling z entity commands: set_state/set_value/set_option/press + natychmiastowy republish telemetrii), typy (EmulatedDeviceConfig z entities?), presety urządzeń (6: Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device, Smart Thermostat, Smart Plug — każdy z entities), persistence w localStorage
 
 ### Serwisy
-- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys + getPublicUsers + Arduino API (getArduinoBoards, getArduinoPorts, compileProject, uploadFirmware, getProjectOutput, fetchOutputBinary) + Sketch API (listSketches, readSketchFile, writeSketchFile)
+
+- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys + getPublicUsers + Arduino API (getArduinoBoards, getArduinoPorts, compileProject, uploadFirmware, getProjectOutput, fetchOutputBinary) + Sketch API (listSketches, readSketchFile, writeSketchFile) + README API (readProjectReadme → null gdy brak, writeProjectReadme) + Localization API (getLocalizations, createLocalization, updateLocalization, deleteLocalization)
 
 ### Hooki
 - **useSourceUpload** — reusable hook do uploadu ZIP źródeł (stan, fileInputRef, trigger, handler)

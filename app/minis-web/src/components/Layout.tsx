@@ -37,6 +37,7 @@ import {
   VpnKey as VpnKeyIcon,
   AccountTree as AccountTreeIcon,
   Description as DescriptionIcon,
+  LocationOn as LocationOnIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
@@ -85,6 +86,7 @@ function Layout({ children }: LayoutProps) {
     }
     return [
       { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
+      { text: 'Localization', icon: <LocationOnIcon />, path: `/user/${userName}/localization` },
       {
         text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
           { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },

@@ -4,6 +4,7 @@ import type {
   LoginResponse,
   MinisDeviceDefModel,
   MinisDeviceModel,
+  MinisLocalizationModel,
   MinisModuleDefModel,
   MinisProjectDefModel,
   MinisProjectModel,
@@ -195,6 +196,24 @@ class MinisApiService {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}`);
   }
 
+  // User - Localizations
+  async getLocalizations(userName: string): Promise<MinisLocalizationModel[]> {
+    const data = await this.request<{ items: MinisLocalizationModel[] }>('GET', `/users/${encodeURIComponent(userName)}/localizations`);
+    return data.items ?? [];
+  }
+
+  async createLocalization(userName: string, loc: Omit<MinisLocalizationModel, 'type' | 'id'>): Promise<MinisLocalizationModel> {
+    return this.request<MinisLocalizationModel>('POST', `/users/${encodeURIComponent(userName)}/localizations`, loc);
+  }
+
+  async updateLocalization(userName: string, locId: string, loc: Partial<MinisLocalizationModel>): Promise<MinisLocalizationModel> {
+    return this.request<MinisLocalizationModel>('PUT', `/users/${encodeURIComponent(userName)}/localizations/${encodeURIComponent(locId)}`, loc);
+  }
+
+  async deleteLocalization(userName: string, locId: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/localizations/${encodeURIComponent(locId)}`);
+  }
+
   // User - Projects
   async getUserProjects(userName: string): Promise<MinisProjectModel[]> {
     const data = await this.request<{ items: MinisProjectModel[] }>('GET', `/users/${encodeURIComponent(userName)}/projects`);
@@ -357,6 +376,19 @@ class MinisApiService {
 
   async writeSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  async readProjectReadme(userName: string, projectName: string): Promise<string | null> {
+    try {
+      const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/readme`);
+      return data.content;
+    } catch {
+      return null;
+    }
+  }
+
+  async writeProjectReadme(userName: string, projectName: string, content: string): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/readme`, { content });
   }
 
   async getProjectOutput(userName: string, projectName: string): Promise<Array<{ name: string; size: number }>> {

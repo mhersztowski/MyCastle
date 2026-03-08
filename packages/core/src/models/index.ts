@@ -9,6 +9,7 @@ export * from './MinisModuleDefModel';
 export * from './MinisModuleModel';
 export * from './MinisDeviceDefModel';
 export * from './MinisDeviceModel';
+export * from './MinisLocalizationModel';
 export * from './MinisProjectDefModel';
 export * from './MinisProjectModel';
 export * from './UserModel';

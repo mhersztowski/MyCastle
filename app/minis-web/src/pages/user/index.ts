@@ -14,3 +14,4 @@ export { default as MqttExplorerPage } from './tools/MqttExplorerPage';
 export { default as ApiKeysPage } from './tools/ApiKeysPage';
 export { default as TestVfsPage } from './tools/TestVfsPage';
 export { default as DocsPage } from './tools/DocsPage';
+export { default as LocalizationPage } from './tools/LocalizationPage';

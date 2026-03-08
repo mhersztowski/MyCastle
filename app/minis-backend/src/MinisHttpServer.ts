@@ -157,6 +157,12 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
 
+    // AI search proxy: POST /ai/search
+    if (apiPath === '/ai/search' && method === 'POST') {
+      await this.handleAiSearch(req, res);
+      return;
+    }
+
     // Admin routes require isAdmin
     if (apiPath.startsWith('/admin/') && !user.isAdmin) {
       this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
@@ -289,6 +295,15 @@ export class MinisHttpServer extends HttpUploadServer {
       return;
     }
 
+    // User localizations: /users/{userName}/localizations[/{id}]
+    const userLocalizationsMatch = apiPath.match(/^\/users\/([^/]+)\/localizations(?:\/([^/]+))?$/);
+    if (userLocalizationsMatch) {
+      const userName = decodeURIComponent(userLocalizationsMatch[1]);
+      const locId = userLocalizationsMatch[2] ? decodeURIComponent(userLocalizationsMatch[2]) : undefined;
+      await this.handleUserLocalizations(req, res, method, userName, locId);
+      return;
+    }
+
     // User devices: /users/{userName}/devices and /users/{userName}/devices/{deviceName}
     const userDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/devices(?:\/([^/]+))?$/);
     if (userDevicesMatch) {
@@ -344,6 +359,15 @@ export class MinisHttpServer extends HttpUploadServer {
       const projectName = decodeURIComponent(outputMatch[2]);
       const fileName = outputMatch[3] ? decodeURIComponent(outputMatch[3]) : undefined;
       await this.handleArduinoOutput(req, res, method, userName, projectName, fileName);
+      return;
+    }
+
+    // README: /users/{userName}/projects/{projectName}/readme
+    const readmeMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/readme$/);
+    if (readmeMatch) {
+      const rUserName = decodeURIComponent(readmeMatch[1]);
+      const rProjectName = decodeURIComponent(readmeMatch[2]);
+      await this.handleProjectReadme(req, res, method, rUserName, rProjectName);
       return;
     }
 
@@ -507,6 +531,44 @@ export class MinisHttpServer extends HttpUploadServer {
     } catch {
       this.sendJsonResponse(res, 404, { error: 'File not found' });
     }
+  }
+
+  // --- README ---
+
+  private async handleProjectReadme(
+    req: IncomingMessage, res: ServerResponse, method: string,
+    userName: string, projectName: string,
+  ): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    const readmePath = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'README.md');
+
+    if (method === 'GET') {
+      try {
+        const content = await fs.promises.readFile(readmePath, 'utf-8');
+        this.sendJsonResponse(res, 200, { content });
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'README not found' });
+      }
+      return;
+    }
+
+    if (method === 'PUT') {
+      const body = await this.parseRequestBody(req) as { content?: string };
+      if (body?.content === undefined) {
+        this.sendJsonResponse(res, 400, { error: 'Missing content' });
+        return;
+      }
+      await fs.promises.mkdir(path.dirname(readmePath), { recursive: true });
+      await fs.promises.writeFile(readmePath, body.content, 'utf-8');
+      this.sendJsonResponse(res, 200, { success: true });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
   }
 
   // --- Sketch files ---
@@ -924,11 +986,84 @@ export class MinisHttpServer extends HttpUploadServer {
     this.sendJsonResponse(res, 200, { success: true });
   }
 
+  // --- AI Search Proxy ---
+
+  private async handleAiSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const { model, apiKey, systemPrompt, userPrompt } = body as {
+      model: 'openai' | 'anthropic';
+      apiKey: string;
+      systemPrompt: string;
+      userPrompt: string;
+    };
+
+    if (!model || !apiKey || !userPrompt) {
+      this.sendJsonResponse(res, 400, { error: 'model, apiKey and userPrompt are required' });
+      return;
+    }
+
+    try {
+      let result: string;
+      if (model === 'openai') {
+        const r = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+          }),
+        });
+        const data = await r.json() as any;
+        if (!r.ok) throw new Error(data.error?.message ?? `OpenAI error ${r.status}`);
+        result = data.choices[0].message.content;
+      } else {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+          }),
+        });
+        const data = await r.json() as any;
+        if (!r.ok) throw new Error(data.error?.message ?? `Anthropic error ${r.status}`);
+        result = data.content[0].text;
+      }
+      this.sendJsonResponse(res, 200, { result });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'AI request failed' });
+    }
+  }
+
   // --- User Devices ---
 
   private async userExistsByName(name: string): Promise<boolean> {
     const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`);
     return ((data as any).items || []).some((u: any) => u.name === name);
+  }
+
+  private async handleUserLocalizations(req: IncomingMessage, res: ServerResponse, method: string, userName: string, locId?: string): Promise<void> {
+    if (!await this.userExistsByName(userName)) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
+    }
+
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/Localization.json`,
+      itemsKey: 'localizations',
+      typeValue: 'localizations',
+      lookupKey: 'id',
+    };
+    await this.handleCrud(req, res, method, config, locId);
   }
 
   private async handleUserDevices(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName?: string): Promise<void> {

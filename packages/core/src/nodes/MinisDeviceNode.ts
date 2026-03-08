@@ -9,6 +9,8 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
   isAssembled: boolean;
   isIot: boolean;
   sn: string;
+  description?: string;
+  localizationId?: string;
 
   constructor(model: MinisDeviceModel) {
     super();
@@ -18,6 +20,8 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
     this.isAssembled = model.isAssembled;
     this.isIot = model.isIot;
     this.sn = model.sn;
+    this.description = model.description;
+    this.localizationId = model.localizationId;
   }
 
   static fromModel(model: MinisDeviceModel): MinisDeviceNode { return new MinisDeviceNode(model); }
@@ -45,6 +49,8 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
       isAssembled: this.isAssembled,
       isIot: this.isIot,
       sn: this.sn,
+      description: this.description,
+      localizationId: this.localizationId,
     };
   }
 

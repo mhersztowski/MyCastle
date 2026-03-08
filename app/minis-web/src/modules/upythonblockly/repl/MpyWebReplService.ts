@@ -19,8 +19,13 @@ export interface WebReplConnectOptions {
   password: string;
 }
 
-const WEBREPL_PUTFILE_REQ = 1;
-const WEBREPL_PUTFILE_RSP = 2;
+// WebREPL binary protocol constants
+// Request/response type for PUT file operation (same value in both directions)
+const WEBREPL_PUT_FILE = 1;
+
+// Response signature bytes: 'W', 'B'
+const WEBREPL_RSP_SIG0 = 0x57;
+const WEBREPL_RSP_SIG1 = 0x42;
 
 export class MpyWebReplService {
   private ws: WebSocket | null = null;
@@ -125,36 +130,38 @@ export class MpyWebReplService {
 
   /**
    * Upload a binary file via WebREPL binary PUT protocol.
-   * Sends the 1-packet binary handshake followed by data chunks.
+   *
+   * Request record format (82 bytes, little-endian): <2sBBQLH64s>
+   *   [0-1]   sig    'WA' (0x57, 0x41)
+   *   [2]     type   1 = PUT_FILE
+   *   [3]     flags  0
+   *   [4-11]  offset uint64 (always 0 for full upload)
+   *   [12-15] size   uint32 (file size in bytes)
+   *   [16-17] flen   uint16 (filename length)
+   *   [18-81] fname  up to 64 bytes of filename
+   *
+   * Response record: 8 bytes <2sBBi> — sig 'WB', type, flags, result (>=0 = OK)
    */
   async putFile(destName: string, data: Uint8Array): Promise<void> {
     if (!this.ws || !this.authenticated) throw new Error('Not connected');
 
-    // Build request record (128 bytes):
-    // [0]: rec type (1=put)
-    // [1]: reserved
-    // [2..3]: file size (LE)  ... actually spec uses [2..5] for size
-    // [10..n]: filename
-    const nameBytes = this.encoder.encode(destName);
-    const rec = new Uint8Array(128);
-    rec[0] = WEBREPL_PUTFILE_REQ;
-    rec[1] = 0;
-    // File size (LE 4 bytes at offset 2)
-    const size = data.length;
-    rec[2] = size & 0xff;
-    rec[3] = (size >> 8) & 0xff;
-    rec[4] = (size >> 16) & 0xff;
-    rec[5] = (size >> 24) & 0xff;
-    // Filename length at offset 6 (LE 2 bytes)
-    rec[6] = nameBytes.length & 0xff;
-    rec[7] = (nameBytes.length >> 8) & 0xff;
-    // Filename at offset 8
-    rec.set(nameBytes.slice(0, 120), 8);
+    const nameBytes = this.encoder.encode(destName).slice(0, 64);
+    const rec = new Uint8Array(82);
+    const view = new DataView(rec.buffer);
+
+    rec[0] = 0x57; // 'W'
+    rec[1] = 0x41; // 'A'
+    rec[2] = WEBREPL_PUT_FILE;
+    rec[3] = 0; // flags
+    // bytes [4-11] = offset uint64 = 0, already zeroed
+    view.setUint32(12, data.length, true); // size
+    view.setUint16(16, nameBytes.length, true); // fname_len
+    rec.set(nameBytes, 18); // fname
 
     this.ws.send(rec.buffer);
 
-    // Wait for "OK" response
-    await this.waitForResponse(WEBREPL_PUTFILE_RSP, 3000);
+    // Wait for ACK after header (response sig='WB', type=PUT_FILE, result>=0)
+    await this.waitForResponse(WEBREPL_PUT_FILE, 3000);
 
     // Send data in 1 KB chunks
     const CHUNK = 1024;
@@ -162,8 +169,8 @@ export class MpyWebReplService {
       this.ws.send(data.slice(offset, offset + CHUNK).buffer);
     }
 
-    // Wait for final OK
-    await this.waitForResponse(WEBREPL_PUTFILE_RSP, 5000);
+    // Wait for final ACK
+    await this.waitForResponse(WEBREPL_PUT_FILE, 5000);
   }
 
   // ---------------------------------------------------------------------------
@@ -199,14 +206,21 @@ export class MpyWebReplService {
 
   private lastBinaryResponse: Uint8Array | null = null;
 
+  // Response record: 8 bytes — sig 'WB' (0x57,0x42), type, flags, result (int32 LE, >=0 = OK)
   private waitForResponse(recType: number, timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const check = setInterval(() => {
-        if (this.lastBinaryResponse && this.lastBinaryResponse[0] === recType) {
+        const r = this.lastBinaryResponse;
+        if (r && r.length >= 8 && r[0] === WEBREPL_RSP_SIG0 && r[1] === WEBREPL_RSP_SIG1 && r[2] === recType) {
           clearInterval(check);
           clearTimeout(timer);
           this.lastBinaryResponse = null;
-          resolve();
+          const result = new DataView(r.buffer).getInt32(4, true);
+          if (result < 0) {
+            reject(new Error(`WebREPL PUT failed (result=${result})`));
+          } else {
+            resolve();
+          }
         }
       }, 50);
       const timer = setTimeout(() => {

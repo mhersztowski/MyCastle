@@ -6,6 +6,8 @@ export interface MinisDeviceModel {
   isAssembled: boolean;
   isIot: boolean;
   sn: string;
+  description?: string;
+  localizationId?: string;
 }
 
 export interface MinisDevicesModel {

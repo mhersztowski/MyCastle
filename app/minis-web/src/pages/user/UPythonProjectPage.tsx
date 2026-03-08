@@ -23,6 +23,8 @@ import {
   ArrowBack,
   Close,
   Code,
+  Description,
+  Edit as EditIcon,
   Extension,
   FolderOpen,
   Save,
@@ -31,6 +33,8 @@ import {
   Upload as UploadIcon,
   VerticalSplit,
 } from '@mui/icons-material';
+import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import { useNavigate, useParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
@@ -72,6 +76,10 @@ function UPythonProjectPage() {
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
   const [sketchesOpen, setSketchesOpen] = useState(true);
+  const [readmeOpen, setReadmeOpen] = useState(false);
+  const [readmeContent, setReadmeContent] = useState<string | null>(null);
+  const [readmeEditMode, setReadmeEditMode] = useState(false);
+  const [readmeEditValue, setReadmeEditValue] = useState('');
 
   // Keep ref in sync for use inside Blockly listener
   useEffect(() => {
@@ -175,6 +183,19 @@ function UPythonProjectPage() {
       .then(setSketches)
       .catch(() => setSketches([]));
   }, [userName, projectId]);
+
+  // Load README
+  useEffect(() => {
+    if (!userName || !projectId) return;
+    minisApi.readProjectReadme(userName, projectId).then(setReadmeContent);
+  }, [userName, projectId]);
+
+  const handleSaveReadme = async () => {
+    if (!userName || !projectId) return;
+    await minisApi.writeProjectReadme(userName, projectId, readmeEditValue);
+    setReadmeContent(readmeEditValue);
+    setReadmeEditMode(false);
+  };
 
   const handleLoadSketch = async (sketchName: string) => {
     if (!userName || !projectId) return;
@@ -306,6 +327,15 @@ function UPythonProjectPage() {
           </Button>
 
           <Button
+            size="small" variant={readmeOpen ? 'contained' : 'outlined'} color="inherit"
+            startIcon={<Description />}
+            onClick={() => setReadmeOpen((v) => !v)}
+            sx={{ ml: 1, ...btnSx(readmeOpen) }}
+          >
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>README</Box>
+          </Button>
+
+          <Button
             size="small" variant={sketchesOpen ? 'contained' : 'outlined'} color="inherit"
             startIcon={<FolderOpen />}
             onClick={() => setSketchesOpen((v) => !v)}
@@ -405,6 +435,60 @@ function UPythonProjectPage() {
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
               Platform: MicroPython
             </Typography>
+          </Box>
+        )}
+
+        {/* README panel */}
+        {readmeOpen && (
+          <Box
+            sx={{
+              width: 360, flexShrink: 0,
+              borderRight: 1, borderColor: 'divider',
+              display: 'flex', flexDirection: 'column',
+              bgcolor: 'background.paper',
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+              <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>README</Typography>
+              {readmeEditMode ? (
+                <>
+                  <Tooltip title="Save">
+                    <IconButton size="small" onClick={handleSaveReadme}><Save fontSize="small" /></IconButton>
+                  </Tooltip>
+                  <Tooltip title="Cancel">
+                    <IconButton size="small" onClick={() => setReadmeEditMode(false)}><Close sx={{ fontSize: 16 }} /></IconButton>
+                  </Tooltip>
+                </>
+              ) : (
+                <Tooltip title="Edit">
+                  <IconButton size="small" onClick={() => { setReadmeEditValue(readmeContent ?? ''); setReadmeEditMode(true); }}>
+                    <EditIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            <Box sx={{ flexGrow: 1, overflow: 'auto', p: 2 }}>
+              {readmeEditMode ? (
+                <TextField
+                  multiline
+                  fullWidth
+                  minRows={10}
+                  value={readmeEditValue}
+                  onChange={(e) => setReadmeEditValue(e.target.value)}
+                  variant="outlined"
+                  size="small"
+                  inputProps={{ style: { fontFamily: 'monospace', fontSize: 13 } }}
+                />
+              ) : readmeContent ? (
+                <Box sx={{ '& h1,h2,h3': { mt: 1, mb: 0.5 }, '& p': { mt: 0, mb: 1 }, '& pre': { bgcolor: 'action.hover', p: 1, borderRadius: 1, overflow: 'auto', fontSize: 12 }, '& code': { bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5, fontSize: 12 } }}>
+                  <ReactMarkdown remarkPlugins={[remarkBreaks]}>{readmeContent}</ReactMarkdown>
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No README yet. Click <EditIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> to create one.
+                </Typography>
+              )}
+            </Box>
           </Box>
         )}
 

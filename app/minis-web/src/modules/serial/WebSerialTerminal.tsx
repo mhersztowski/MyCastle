@@ -82,6 +82,17 @@ export function WebSerialTerminal({ open, onClose }: WebSerialTerminalProps) {
 
     requestAnimationFrame(() => fitAddon.fit());
 
+    // Ctrl+Shift+C → copy selection
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true;
+      if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') {
+        const sel = term.getSelection();
+        if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
     term.onData((data) => {
       serialRef.current?.write(data);
     });

@@ -8,6 +8,7 @@ export * from './MinisModuleDefNode';
 export * from './MinisModuleNode';
 export * from './MinisDeviceDefNode';
 export * from './MinisDeviceNode';
+export * from './MinisLocalizationNode';
 export * from './MinisProjectDefNode';
 export * from './MinisProjectNode';
 export * from './UserNode';

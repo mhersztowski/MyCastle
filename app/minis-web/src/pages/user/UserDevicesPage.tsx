@@ -5,14 +5,15 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, FormControlLabel, Switch, Alert, CircularProgress,
   Select, MenuItem, InputLabel, FormControl, Stack,
+  Drawer, Divider,
 } from '@mui/material';
-import { Delete, Add, Build, SmartToy, Share } from '@mui/icons-material';
+import { Delete, Add, Build, SmartToy, Share, LocationOn, Close } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { UserPublic } from '../../services/MinisApiService';
 import { DEVICE_PRESETS } from '@modules/iot-emulator';
 import type { EmulatedDeviceConfig } from '@modules/iot-emulator';
-import type { MinisDeviceModel, MinisDeviceDefModel, IotCapability, DeviceShare } from '@mhersztowski/core';
+import type { MinisDeviceModel, MinisDeviceDefModel, IotCapability, DeviceShare, MinisLocalizationModel } from '@mhersztowski/core';
 
 const EMULATOR_STORAGE_KEY = 'minis-iot-emulator-configs';
 
@@ -22,6 +23,14 @@ interface FormData {
   isAssembled: boolean;
   isIot: boolean;
   sn: string;
+}
+
+interface EditPanelForm {
+  name: string;
+  sn: string;
+  description: string;
+  isAssembled: boolean;
+  isIot: boolean;
 }
 
 const emptyForm: FormData = { name: '', deviceDefId: '', isAssembled: true, isIot: false, sn: '' };
@@ -55,22 +64,28 @@ function UserDevicesPage() {
   const [shareSaving, setShareSaving] = useState(false);
   const [sharedDeviceIds, setSharedDeviceIds] = useState<Set<string>>(new Set());
   const [sharedWithMe, setSharedWithMe] = useState<DeviceShare[]>([]);
+  const [localizations, setLocalizations] = useState<MinisLocalizationModel[]>([]);
+  const [editPanelDevice, setEditPanelDevice] = useState<MinisDeviceModel | null>(null);
+  const [editPanelForm, setEditPanelForm] = useState<EditPanelForm>({ name: '', sn: '', description: '', isAssembled: true, isIot: false });
+  const [editPanelSaving, setEditPanelSaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!userName) return;
     setLoading(true);
     try {
-      const [devices, defs, myShares, sharedDevices] = await Promise.all([
+      const [devices, defs, myShares, sharedDevices, locs] = await Promise.all([
         minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(),
         minisApi.getMyShares(userName),
         minisApi.getSharedDevices(userName),
+        minisApi.getLocalizations(userName),
       ]);
       setItems(devices);
       setDeviceDefs(defs);
       setEmulatorDeviceIds(new Set(getEmulatorConfigs().map((c) => c.deviceId)));
       setSharedDeviceIds(new Set(myShares.map((s) => s.deviceId)));
       setSharedWithMe(sharedDevices);
+      setLocalizations(locs);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
@@ -217,6 +232,39 @@ function UserDevicesPage() {
     }
   };
 
+  const openEditPanel = (device: MinisDeviceModel) => {
+    setEditPanelDevice(device);
+    setEditPanelForm({
+      name: device.name,
+      sn: device.sn,
+      description: device.description ?? '',
+      isAssembled: device.isAssembled,
+      isIot: device.isIot,
+    });
+  };
+
+  const handleEditPanelSave = async () => {
+    if (!userName || !editPanelDevice) return;
+    setEditPanelSaving(true);
+    try {
+      await minisApi.updateUserDevice(userName, editPanelDevice.name, {
+        sn: editPanelForm.sn,
+        description: editPanelForm.description || undefined,
+        isAssembled: editPanelForm.isAssembled,
+        isIot: editPanelForm.isIot,
+      });
+      setEditPanelDevice(null);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Update failed');
+    } finally {
+      setEditPanelSaving(false);
+    }
+  };
+
+  const getLocalization = (localizationId?: string) =>
+    localizationId ? localizations.find((l) => l.id === localizationId) : undefined;
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -235,6 +283,7 @@ function UserDevicesPage() {
             <TableRow>
               <TableCell>Name</TableCell>
               <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Serial Number</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Localization</TableCell>
               <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Status</TableCell>
               <TableCell>IoT</TableCell>
               <TableCell align="right">Actions</TableCell>
@@ -242,9 +291,20 @@ function UserDevicesPage() {
           </TableHead>
           <TableBody>
             {items.map((item) => (
-              <TableRow key={item.id}>
+              <TableRow key={item.id} hover sx={{ cursor: 'pointer' }}
+                onClick={(e) => { if ((e.target as HTMLElement).closest('button')) return; openEditPanel(item); }}
+              >
                 <TableCell>{item.name || deviceDefs.find(d => d.id === item.deviceDefId)?.name || item.id.slice(0, 8)}</TableCell>
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{item.sn || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
+                  {(() => {
+                    const loc = getLocalization(item.localizationId);
+                    if (!loc) return '-';
+                    if (loc.typ === 'place') return loc.place ? `${loc.name} (${loc.place})` : loc.name;
+                    if (loc.geo) return `${loc.name} (${loc.geo.lat}, ${loc.geo.lon})`;
+                    return loc.name;
+                  })()}
+                </TableCell>
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
                   {item.isAssembled
                     ? <Chip label="Assembled" color="success" size="small" />
@@ -270,6 +330,13 @@ function UserDevicesPage() {
                   )}
                   <IconButton
                     size="small"
+                    title="Manage localization"
+                    onClick={() => navigate(`/user/${userName}/localization`)}
+                  >
+                    <LocationOn color={item.localizationId ? 'primary' : 'action'} />
+                  </IconButton>
+                  <IconButton
+                    size="small"
                     title={item.isAssembled ? 'Mark as not assembled' : 'Mark as assembled'}
                     onClick={() => handleToggleAssembled(item)}
                   >
@@ -280,7 +347,7 @@ function UserDevicesPage() {
               </TableRow>
             ))}
             {!loading && items.length === 0 && (
-              <TableRow><TableCell colSpan={5} align="center">No devices yet</TableCell></TableRow>
+              <TableRow><TableCell colSpan={6} align="center">No devices yet</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
@@ -311,16 +378,53 @@ function UserDevicesPage() {
         </Box>
       )}
 
+      {/* Edit Device Panel */}
+      <Drawer anchor="right" open={!!editPanelDevice} onClose={() => setEditPanelDevice(null)}
+        PaperProps={{ sx: { width: { xs: '100%', sm: 400 }, p: 3 } }}
+      >
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6">{editPanelDevice?.name}</Typography>
+          <IconButton onClick={() => setEditPanelDevice(null)}><Close /></IconButton>
+        </Box>
+        <Divider sx={{ mb: 2 }} />
+        <TextField fullWidth label="Device Name" value={editPanelForm.name} disabled sx={{ mb: 2 }}
+          helperText="Name cannot be changed"
+        />
+        <TextField fullWidth label="Serial Number" value={editPanelForm.sn}
+          onChange={(e) => setEditPanelForm((f) => ({ ...f, sn: e.target.value }))} sx={{ mb: 2 }} />
+        <TextField fullWidth multiline minRows={4} label="Description (Markdown)" value={editPanelForm.description}
+          onChange={(e) => setEditPanelForm((f) => ({ ...f, description: e.target.value }))} sx={{ mb: 2 }} />
+        <FormControlLabel
+          control={<Switch checked={editPanelForm.isAssembled}
+            onChange={(e) => setEditPanelForm((f) => ({ ...f, isAssembled: e.target.checked }))} />}
+          label="Assembled" sx={{ mb: 1, display: 'block' }}
+        />
+        <FormControlLabel
+          control={<Switch checked={editPanelForm.isIot}
+            onChange={(e) => setEditPanelForm((f) => ({ ...f, isIot: e.target.checked }))} />}
+          label="IoT Device" sx={{ mb: 2, display: 'block' }}
+        />
+        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+          <Button onClick={() => setEditPanelDevice(null)}>Cancel</Button>
+          <Button variant="contained" onClick={handleEditPanelSave} disabled={editPanelSaving}>
+            {editPanelSaving ? 'Saving...' : 'Save'}
+          </Button>
+        </Box>
+      </Drawer>
+
       {/* Add Device Dialog */}
       <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add Device</DialogTitle>
         <DialogContent>
-          <TextField fullWidth label="Device Name" value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ mt: 1, mb: 2 }} />
           <TextField
             fullWidth select label="Device Definition" value={form.deviceDefId}
-            onChange={(e) => setForm({ ...form, deviceDefId: e.target.value })}
-            sx={{ mb: 2 }}
+            onChange={(e) => {
+              const defId = e.target.value;
+              const defName = deviceDefs.find((d) => d.id === defId)?.name ?? '';
+              const autoName = defName && form.sn ? `${defName}-${form.sn}` : defName;
+              setForm((f) => ({ ...f, deviceDefId: defId, name: autoName || f.name }));
+            }}
+            sx={{ mt: 1, mb: 2 }}
             InputLabelProps={{ shrink: true }}
             SelectProps={{ native: true }}
           >
@@ -330,7 +434,14 @@ function UserDevicesPage() {
             ))}
           </TextField>
           <TextField fullWidth label="Serial Number" value={form.sn}
-            onChange={(e) => setForm({ ...form, sn: e.target.value })} sx={{ mb: 2 }} />
+            onChange={(e) => {
+              const sn = e.target.value;
+              const defName = deviceDefs.find((d) => d.id === form.deviceDefId)?.name ?? '';
+              const autoName = defName && sn ? `${defName}-${sn}` : defName;
+              setForm((f) => ({ ...f, sn, name: autoName || f.name }));
+            }} sx={{ mb: 2 }} />
+          <TextField fullWidth label="Device Name" value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ mb: 2 }} />
           <FormControlLabel
             control={<Switch checked={form.isAssembled} onChange={(e) => setForm({ ...form, isAssembled: e.target.checked })} />}
             label="Assembled"

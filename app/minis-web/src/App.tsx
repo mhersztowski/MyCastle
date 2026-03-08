@@ -7,7 +7,7 @@ import MonacoEditorPage from '@pages/editor/MonacoEditorPage';
 import HomePage from '@pages/HomePage';
 import LoginPage from '@pages/LoginPage';
 import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage } from '@pages/admin';
-import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, UserUPythonProjectsPage, UPythonProjectPage, IotDashboardPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage, RpcExplorerPage, MqttExplorerPage, ApiKeysPage, TestVfsPage, DocsPage } from '@pages/user';
+import { UserDashboardPage, UserDevicesPage, UserProjectsPage, ProjectPage, UserUPythonProjectsPage, UPythonProjectPage, IotDashboardPage, IotDevicesPage, IotDevicePage, IotAlertsPage, IotEmulatorPage, RpcExplorerPage, MqttExplorerPage, ApiKeysPage, TestVfsPage, DocsPage, LocalizationPage } from '@pages/user';
 import { useAuth } from '@modules/auth';
 
 function AdminOnly({ children }: { children: React.ReactNode }) {
@@ -52,6 +52,7 @@ function App() {
                 <Route path="/user/:userName/tools/api-keys" element={<AdminOnly><ApiKeysPage /></AdminOnly>} />
                 <Route path="/user/:userName/tools/testvfs" element={<AdminOnly><TestVfsPage /></AdminOnly>} />
                 <Route path="/user/:userName/tools/docs" element={<AdminOnly><DocsPage /></AdminOnly>} />
+                <Route path="/user/:userName/localization" element={<LocalizationPage />} />
               </Routes>
             </Layout>
           </Box>

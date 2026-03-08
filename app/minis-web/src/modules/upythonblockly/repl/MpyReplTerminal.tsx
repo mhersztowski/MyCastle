@@ -50,6 +50,9 @@ function MpyReplTerminal({
   const xtermRef = useRef<Terminal | null>(null);
   const serialRef = useRef<MpySerialReplService | null>(null);
   const webReplRef = useRef<MpyWebReplService | null>(null);
+  // Keep a ref so the xterm key handler (created once) can read current backend
+  const backendRef = useRef<Backend>(defaultBackend);
+  useEffect(() => { backendRef.current = backend; }, [backend]);
 
   // Initialize xterm.js
   useEffect(() => {
@@ -64,12 +67,23 @@ function MpyReplTerminal({
     term.open(terminalRef.current);
     xtermRef.current = term;
 
-    // Keyboard input → send to device
+    // Ctrl+Shift+C → copy selection
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true;
+      if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') {
+        const sel = term.getSelection();
+        if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
+    // Keyboard input + paste → send to device
+    // Use refs (not state) to avoid stale closure — this handler is created once
     term.onData((data) => {
-      if (!connected) return;
-      if (backend === 'serial' && serialRef.current?.isConnected) {
+      if (backendRef.current === 'serial' && serialRef.current?.isConnected) {
         serialRef.current.write(data).catch(() => { /* ignore */ });
-      } else if (backend === 'webrepl' && webReplRef.current?.isConnected) {
+      } else if (backendRef.current === 'webrepl' && webReplRef.current?.isConnected) {
         webReplRef.current.send(data).catch(() => { /* ignore */ });
       }
     });
@@ -90,14 +104,18 @@ function MpyReplTerminal({
     try {
       if (backend === 'serial') {
         const svc = new MpySerialReplService();
-        await svc.connect(baudRate);
         svc.onData(writeToTerminal);
+        await svc.connect(baudRate);
         serialRef.current = svc;
+        // Interrupt any running program, exit raw REPL if stuck there, get fresh prompt
+        await svc.write('\x03\x03\x02\r\n');
       } else {
         const svc = new MpyWebReplService();
-        await svc.connect({ ip: webReplIp, port: webReplPort, password: webReplPassword });
         svc.onData(writeToTerminal);
+        await svc.connect({ ip: webReplIp, port: webReplPort, password: webReplPassword });
         webReplRef.current = svc;
+        // Device is authenticated but prompt was consumed during auth — request a fresh one
+        await svc.send('\r\n');
       }
       setConnected(true);
       onConnect?.();
