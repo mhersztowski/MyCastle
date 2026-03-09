@@ -52,7 +52,7 @@ class MinisApiService {
     });
 
     if (res.status === 401) {
-      sessionStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEY);
       window.location.href = '/';
       throw new Error('Session expired');
     }

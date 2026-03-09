@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Box } from '@mui/material';
 import { CompositeFS, RemoteFS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
 import { MonacoMultiEditor, remoteFsProvider, defaultProviderRegistry } from '@mhersztowski/web-client';
@@ -26,14 +27,16 @@ function MonacoEditorPage() {
   );
 
   return (
-    <MonacoMultiEditor
-      provider={cfs as FileSystemProvider}
-      height="100vh"
-      providerRegistry={registry}
-      enableAgent
-      enableTerminal
-      terminalToken={token ?? undefined}
-    />
+    <Box sx={{ position: 'fixed', inset: 0 }}>
+      <MonacoMultiEditor
+        provider={cfs as FileSystemProvider}
+        height="100%"
+        providerRegistry={registry}
+        enableAgent
+        enableTerminal
+        terminalToken={token ?? undefined}
+      />
+    </Box>
   );
 }
 

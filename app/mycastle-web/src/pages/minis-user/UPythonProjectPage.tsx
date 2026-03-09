@@ -301,9 +301,9 @@ function UPythonProjectPage() {
   const codeForUpload = editorRef.current?.getContent() ?? generatedCode;
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh', width: '100dvw' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0 }}>
       {/* Top AppBar */}
-      <AppBar position="static" elevation={1}>
+      <AppBar position="static" elevation={1} sx={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense">
           <IconButton
             color="inherit"

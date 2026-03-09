@@ -100,6 +100,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
         linkOnPaste: true,
         HTMLAttributes: {
           class: 'md-editor-link',
+          target: null,
+          rel: null,
         },
       }),
       EditableImage,
@@ -188,9 +190,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
       // Set cursor to the beginning and scroll to top after DOM update
       setTimeout(() => {
         editor.commands.focus('start');
-        if (contentWrapperRef.current) {
-          contentWrapperRef.current.scrollTop = 0;
-        }
+        requestAnimationFrame(() => {
+          if (contentWrapperRef.current) {
+            contentWrapperRef.current.scrollTop = 0;
+          }
+        });
       }, 100);
       isInitializedRef.current = true;
     }
@@ -206,9 +210,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
         // Set cursor to the beginning and scroll to top after DOM update
         setTimeout(() => {
           editor.commands.focus('start');
-          if (contentWrapperRef.current) {
-            contentWrapperRef.current.scrollTop = 0;
-          }
+          requestAnimationFrame(() => {
+            if (contentWrapperRef.current) {
+              contentWrapperRef.current.scrollTop = 0;
+            }
+          });
         }, 100);
       }
     }
@@ -221,25 +227,31 @@ const MdEditor: React.FC<MdEditorProps> = ({
   const onLinkClickRef = useRef(onLinkClick);
   useEffect(() => { onLinkClickRef.current = onLinkClick; }, [onLinkClick]);
 
-  // Intercept internal link clicks using capture phase — runs before ProseMirror's own handlers
+  // Intercept internal link clicks — document-level capture to run before any browser navigation
   useEffect(() => {
     if (!editor) return;
-    const dom = editor.view.dom;
+    const editorDom = editor.view.dom;
     const handler = (e: MouseEvent) => {
-      if (!onLinkClickRef.current) return;
-      const anchor = (e.target as HTMLElement).closest('a');
-      if (!anchor) return;
-      const href = anchor.getAttribute('href');
-      if (!href) return;
-      const isExternal = href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:');
-      if (!isExternal) {
-        e.preventDefault();
-        e.stopPropagation();
-        onLinkClickRef.current(href);
+      const anchor = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null;
+      if (!anchor || !editorDom.contains(anchor)) return;
+      const resolved = anchor.href;
+      if (!resolved || resolved.startsWith('mailto:')) return;
+      // Prevent default immediately for all non-mailto links inside editor
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        const url = new URL(resolved);
+        if (url.origin !== window.location.origin) {
+          window.open(resolved, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        if (onLinkClickRef.current) onLinkClickRef.current(url.pathname);
+      } catch {
+        if (onLinkClickRef.current) onLinkClickRef.current(resolved);
       }
     };
-    dom.addEventListener('click', handler, true);
-    return () => dom.removeEventListener('click', handler, true);
+    document.addEventListener('click', handler, true);
+    return () => document.removeEventListener('click', handler, true);
   }, [editor]);
 
   const handleSave = useCallback(() => {
@@ -336,21 +348,26 @@ const MdEditor: React.FC<MdEditorProps> = ({
   const handleOpenLink = useCallback(() => {
     if (!linkUrl) return;
 
-    // Check if it's a relative/internal link (not http/https/mailto)
-    const isExternal = linkUrl.startsWith('http://') ||
-                       linkUrl.startsWith('https://') ||
-                       linkUrl.startsWith('mailto:');
-
-    if (isExternal) {
-      window.open(linkUrl, '_blank', 'noopener,noreferrer');
-    } else if (onLinkClick) {
-      onLinkClick(linkUrl);
-    } else {
-      // Internal link - open in editor
-      let path = linkUrl.startsWith('/') ? linkUrl.substring(1) : linkUrl;
-      window.open(`/editor/simple/${path}`, '_blank', 'noopener,noreferrer');
+    try {
+      const url = new URL(linkUrl, window.location.href);
+      if (url.protocol === 'mailto:') {
+        window.open(linkUrl, '_blank', 'noopener,noreferrer');
+      } else if (url.origin === window.location.origin) {
+        // Same-origin: route internally
+        if (onLinkClick) {
+          onLinkClick(url.pathname);
+        } else {
+          window.open(url.pathname, '_self');
+        }
+      } else {
+        window.open(linkUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch {
+      if (onLinkClick) {
+        onLinkClick(linkUrl);
+      }
     }
-  }, [linkUrl]);
+  }, [linkUrl, onLinkClick]);
 
   // Handle mouse over links - show popup after delay
   const handleEditorMouseOver = useCallback((e: React.MouseEvent) => {

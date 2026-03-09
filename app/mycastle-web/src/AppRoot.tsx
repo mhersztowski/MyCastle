@@ -1,5 +1,14 @@
 import React from 'react';
-import { Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
+
+function MdFileRedirect() {
+  const location = useLocation();
+  if (location.pathname.endsWith('.md')) {
+    const path = location.pathname.startsWith('/') ? location.pathname.substring(1) : location.pathname;
+    return <Navigate to={`/workspace/md/${path}`} replace />;
+  }
+  return null;
+}
 import { Box } from '@mui/material';
 import Layout from './components/Layout';
 import { MinimalTopBar } from './components/MinimalTopBar';
@@ -142,6 +151,7 @@ function AppRoot() {
                   <Route path="/user/:userName/pim/settings/receipt" element={<ReceiptSettingsPage />} />
                   <Route path="/user/:userName/pim/settings/page-hooks" element={<PageHooksSettingsPage />} />
                   <Route path="/user/:userName/pim/agent" element={<CastleAgentPage />} />
+                  <Route path="*" element={<MdFileRedirect />} />
                 </Routes>
               </Layout>
             </Box>

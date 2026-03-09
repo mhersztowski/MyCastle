@@ -218,19 +218,19 @@ function Layout({ children }: LayoutProps) {
     </Box>
   );
 
-  const bannerOffset = impersonating ? '40px' : 0;
+  const bannerOffset = impersonating ? '40px' : '0px';
 
   return (
     <>
       <ImpersonationBanner />
-      <Box sx={{ display: 'flex', minHeight: '100vh', mt: bannerOffset }}>
+      <Box sx={{ position: 'fixed', inset: 0, top: bannerOffset, display: 'flex', flexDirection: 'column' }}>
+        {/* AppBar — static, part of the flex column, no hardcoded margins needed */}
         <AppBar
-          position="fixed"
+          position="static"
           sx={{
-            width: { sm: `calc(100% - ${drawerWidth}px)` },
-            ml: { sm: `${drawerWidth}px` },
-            top: bannerOffset,
+            flexShrink: 0,
             paddingTop: 'env(safe-area-inset-top)',
+            zIndex: (theme) => theme.zIndex.drawer + 1,
           }}
         >
           <Toolbar>
@@ -249,7 +249,10 @@ function Layout({ children }: LayoutProps) {
             <AccountMenu isAdminView={isAdminView} userName={userName} />
           </Toolbar>
         </AppBar>
-        <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
+
+        {/* Body row: sidebar + content */}
+        <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          {/* Temporary drawer for mobile */}
           <Drawer
             variant="temporary"
             open={mobileOpen}
@@ -262,33 +265,37 @@ function Layout({ children }: LayoutProps) {
           >
             {drawer}
           </Drawer>
-          <Drawer
-            variant="permanent"
+
+          {/* Permanent sidebar for desktop — relative positioning so it fits the flex layout */}
+          <Box
+            component="nav"
             sx={{
-              display: { xs: 'none', sm: 'block' },
-              '& .MuiDrawer-paper': {
-                boxSizing: 'border-box',
-                width: drawerWidth,
-                ...(impersonating ? { top: '40px', height: 'calc(100% - 40px)' } : {}),
-              },
+              display: { xs: 'none', sm: 'flex' },
+              flexDirection: 'column',
+              width: drawerWidth,
+              flexShrink: 0,
+              borderRight: 1,
+              borderColor: 'divider',
+              overflowY: 'auto',
+              bgcolor: 'background.paper',
             }}
-            open
           >
             {drawer}
-          </Drawer>
-        </Box>
-        <Box
-          component="main"
-          sx={{
-            flexGrow: 1,
-            p: 3,
-            width: { sm: `calc(100% - ${drawerWidth}px)` },
-            mt: 'calc(64px + env(safe-area-inset-top))',
-          }}
-        >
-          <Container maxWidth="lg">
-            {children}
-          </Container>
+          </Box>
+
+          {/* Main content */}
+          <Box
+            component="main"
+            sx={{
+              flex: 1,
+              overflow: 'auto',
+              p: 3,
+            }}
+          >
+            <Container maxWidth="lg">
+              {children}
+            </Container>
+          </Box>
         </Box>
       </Box>
     </>

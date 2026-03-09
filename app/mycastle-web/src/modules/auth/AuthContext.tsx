@@ -24,7 +24,7 @@ const STORAGE_KEY = 'minis_current_user';
 
 function restoreSession(): AuthSession | null {
   try {
-    const stored = sessionStorage.getItem(STORAGE_KEY);
+    const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return null;
     const parsed = JSON.parse(stored);
     // Support new format { user, token } and legacy format (user object directly)
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const newSession: AuthSession = { user: response.user, token: response.token };
     applyToken(response.token);
     setSession(newSession);
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));
     return response.user;
   }, []);
 
@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applyToken(null);
     setSession(null);
     setImpersonating(null);
-    sessionStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY);
   }, []);
 
   const startImpersonating = useCallback((user: UserPublic) => {

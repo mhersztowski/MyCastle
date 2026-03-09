@@ -353,9 +353,9 @@ function ProjectPage() {
   const showBlockly = viewMode === 'blockly' || viewMode === 'split';
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh', width: '100dvw' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0 }}>
       {/* Top AppBar */}
-      <AppBar position="static" elevation={1}>
+      <AppBar position="static" elevation={1} sx={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense">
           <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/electronics/arduino`)} sx={{ mr: 1 }}>
             <ArrowBack />
