@@ -106,16 +106,16 @@ const WorkspaceMdPage: React.FC = () => {
   }, [navigate, currentUser]);
 
   useMinimalTopBarSlot(
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden' }}>
-      <IconButton size="small" onClick={() => setSidebarOpen(o => !o)} sx={{ color: 'rgba(255,255,255,0.8)', p: 0.25 }}>
-        {sidebarOpen ? <MenuOpenIcon sx={{ fontSize: 18 }} /> : <MenuIcon sx={{ fontSize: 18 }} />}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 0.5 }, overflow: 'hidden' }}>
+      <IconButton size="small" onClick={() => setSidebarOpen(o => !o)} sx={{ color: 'rgba(255,255,255,0.8)', p: { xs: 0.75, sm: 0.25 } }}>
+        {sidebarOpen ? <MenuOpenIcon sx={{ fontSize: { xs: 22, sm: 18 } }} /> : <MenuIcon sx={{ fontSize: { xs: 22, sm: 18 } }} />}
       </IconButton>
-      <IconButton size="small" onClick={handleBack} sx={{ color: 'rgba(255,255,255,0.8)', p: 0.25 }}>
-        <ArrowBackIcon sx={{ fontSize: 18 }} />
+      <IconButton size="small" onClick={handleBack} sx={{ color: 'rgba(255,255,255,0.8)', p: { xs: 0.75, sm: 0.25 } }}>
+        <ArrowBackIcon sx={{ fontSize: { xs: 22, sm: 18 } }} />
       </IconButton>
       {filePath && (
-        <IconButton size="small" onClick={toggleFavorite} sx={{ color: isFavorite ? '#ffd700' : 'rgba(255,255,255,0.5)', p: 0.25, flexShrink: 0 }}>
-          {isFavorite ? <StarIcon sx={{ fontSize: 16 }} /> : <StarBorderIcon sx={{ fontSize: 16 }} />}
+        <IconButton size="small" onClick={toggleFavorite} sx={{ color: isFavorite ? '#ffd700' : 'rgba(255,255,255,0.5)', p: { xs: 0.75, sm: 0.25 }, flexShrink: 0 }}>
+          {isFavorite ? <StarIcon sx={{ fontSize: { xs: 20, sm: 16 } }} /> : <StarBorderIcon sx={{ fontSize: { xs: 20, sm: 16 } }} />}
         </IconButton>
       )}
       {filePath
@@ -149,6 +149,12 @@ const WorkspaceMdPage: React.FC = () => {
       setLoadingFile(false);
     }
   }, [readFile]);
+
+  useEffect(() => {
+    if (!filePath && isConnected) {
+      navigate('/workspace/md/index.md');
+    }
+  }, [filePath, isConnected, navigate]);
 
   useEffect(() => {
     if (filePath) loadFile(filePath);

@@ -29,14 +29,13 @@ export function GlobalWindow({
   minimized = false,
   onClose,
   onMinimize,
-  onRestore,
   children,
   defaultWidth = 800,
   defaultHeight = 600,
 }: GlobalWindowProps) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const { savedConfigs, layoutVersion, registerWindow } = useGlobalWindows();
+  const { savedConfigs, layoutVersion, registerWindow, registerTitle } = useGlobalWindows();
   const initConfig = windowName ? savedConfigs.get(windowName) : undefined;
   const [pos, setPos] = useState(initConfig?.pos ?? { x: 100, y: 80 });
   const [size, setSize] = useState(initConfig?.size ?? { w: defaultWidth, h: defaultHeight });
@@ -60,6 +59,12 @@ export function GlobalWindow({
       maximized: maximizedRef.current,
     }));
   }, [windowName, registerWindow]);
+
+  // Register title for the shared minimized taskbar
+  useEffect(() => {
+    if (!windowName) return;
+    return registerTitle(windowName, title);
+  }, [windowName, title, registerTitle]);
 
   // Restore from loaded layout
   useEffect(() => {
@@ -147,46 +152,6 @@ export function GlobalWindow({
 
   return (
     <>
-      {/* Minimized taskbar indicator — shown only when minimized */}
-      {minimized && (
-        <Paper
-          elevation={4}
-          onClick={() => { bringToFront(); onRestore?.(); }}
-          onMouseDown={bringToFront}
-          sx={{
-            position: 'fixed',
-            bottom: 0,
-            left: 16,
-            zIndex,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 0.5,
-            px: 1.5,
-            py: 0.5,
-            bgcolor: 'primary.main',
-            color: 'primary.contrastText',
-            cursor: 'pointer',
-            borderTopLeftRadius: 8,
-            borderTopRightRadius: 8,
-            borderBottomLeftRadius: 0,
-            borderBottomRightRadius: 0,
-            maxWidth: 200,
-            userSelect: 'none',
-          }}
-        >
-          <Typography variant="body2" sx={{ fontWeight: 'bold', flexGrow: 1 }} noWrap>
-            {title}
-          </Typography>
-          <IconButton
-            size="small"
-            sx={{ color: 'inherit' }}
-            onClick={(e) => { e.stopPropagation(); onClose(); }}
-          >
-            <Close sx={{ fontSize: 14 }} />
-          </IconButton>
-        </Paper>
-      )}
-
       {/* Main window — kept in DOM even when minimized to preserve children state (e.g. xterm canvas) */}
       <Paper
         elevation={8}

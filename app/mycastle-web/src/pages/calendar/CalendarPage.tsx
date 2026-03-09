@@ -39,7 +39,7 @@ import { v4 as uuidv4 } from 'uuid';
 const CalendarPage: React.FC = () => {
   const { aiService } = App.instance;
   const { isConnected, isConnecting } = useMqtt();
-  const { dataSource, isLoading, isDataLoaded, error, writeFile, readFile, loadAllData } = useFilesystem();
+  const { dataSource, isLoading, isDataLoaded, error, writeFile, readFile } = useFilesystem();
 
   const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
   const [currentEvent, setCurrentEvent] = useState<CurrentEvent | null>(null);
@@ -194,9 +194,6 @@ const CalendarPage: React.FC = () => {
         // Save to filesystem
         await writeFile(filePath, JSON.stringify(eventsModel, null, 2));
 
-        // Reload data to get the new event
-        await loadAllData();
-
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : 'Failed to save event');
       } finally {
@@ -208,7 +205,7 @@ const CalendarPage: React.FC = () => {
     }
     setAddModalOpen(false);
     setEditingEvent(null);
-  }, [dataSource.events, editingEvent, writeFile, loadAllData]);
+  }, [dataSource.events, editingEvent, writeFile]);
 
   const handleDeleteEvent = useCallback(async (event: EventNode) => {
     setSaving(true);
@@ -234,13 +231,12 @@ const CalendarPage: React.FC = () => {
       };
 
       await writeFile(filePath, JSON.stringify(eventsModel, null, 2));
-      await loadAllData();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to delete event');
     } finally {
       setSaving(false);
     }
-  }, [dataSource.events, writeFile, loadAllData]);
+  }, [dataSource.events, writeFile]);
 
   const handleStopEvent = useCallback(async () => {
     if (!currentEvent) return;
@@ -289,15 +285,12 @@ const CalendarPage: React.FC = () => {
       // Clear current event
       setCurrentEvent(null);
 
-      // Reload data to get the new event
-      await loadAllData();
-
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save event');
     } finally {
       setSaving(false);
     }
-  }, [currentEvent, dataSource.events, writeFile, loadAllData]);
+  }, [currentEvent, dataSource.events, writeFile]);
 
   const TEMPLATES_PATH = 'data/calendar/templates.json';
 
@@ -392,14 +385,13 @@ const CalendarPage: React.FC = () => {
       };
 
       await writeFile(filePath, JSON.stringify(eventsModel, null, 2));
-      await loadAllData();
       setLoadTemplateOpen(false);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to load template');
     } finally {
       setSaving(false);
     }
-  }, [selectedDate, dataSource.events, writeFile, loadAllData]);
+  }, [selectedDate, dataSource.events, writeFile]);
 
   const handleDeleteTemplate = useCallback(async (templateId: string) => {
     try {
@@ -467,13 +459,12 @@ const CalendarPage: React.FC = () => {
       };
 
       await writeFile(filePath, JSON.stringify(eventsModel, null, 2));
-      await loadAllData();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save AI plan');
     } finally {
       setSaving(false);
     }
-  }, [selectedDate, dataSource.events, writeFile, loadAllData]);
+  }, [selectedDate, dataSource.events, writeFile]);
 
   if (isConnecting) {
     return (

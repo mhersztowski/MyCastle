@@ -45,6 +45,8 @@ export class FilesystemService {
   private rootDir: DirData | null = null;
   private calendar: Calendar = new Calendar();
   private dataSource: DataSource = new DataSource();
+  // Tracks files we recently wrote ourselves so reloadDataFile() can skip redundant re-reads
+  private recentWrites = new Set<string>();
 
   async loadDirectory(path: string = ''): Promise<DirData> {
     const tree = await mqttClient.listDirectory(path);
@@ -70,14 +72,48 @@ export class FilesystemService {
 
     if (!this.rootDir) return null;
 
-    const fileData = this.rootDir.getFileByPath(path);
+    const encoder = new TextEncoder();
+    let fileData: FileData | null = this.rootDir.getFileByPath(path) ?? null;
     if (fileData) {
-      const encoder = new TextEncoder();
       fileData.setData(encoder.encode(content));
-      return fileData;
+    } else {
+      // New file — add it to the in-memory tree so datasource rebuild can see it
+      fileData = this.addFileToTree(path, content) ?? null;
     }
 
-    return null;
+    // Rebuild the relevant datasource slice immediately (no MQTT round-trip needed)
+    this.reloadDataForPath(path, content);
+
+    // Mark as recently written so reloadDataFile() can skip the redundant re-read
+    this.recentWrites.add(path);
+    setTimeout(() => this.recentWrites.delete(path), 5000);
+
+    return fileData;
+  }
+
+  private addFileToTree(path: string, content: string): FileData | undefined {
+    if (!this.rootDir) return undefined;
+
+    const parts = path.split('/');
+    const fileName = parts.pop();
+    if (!fileName) return undefined;
+
+    const parentDir = this.rootDir.createSubDirs(parts);
+    const fileData = new FileData(fileName, path, parentDir);
+    const encoder = new TextEncoder();
+    fileData.setData(encoder.encode(content));
+    parentDir.getFiles().push(fileData);
+    return fileData;
+  }
+
+  private reloadDataForPath(path: string, content: string): void {
+    const dataType = FilesystemService.DATA_FILE_MAP[path];
+    const isCalendarFile = path.startsWith('data/calendar/') && path.endsWith('.json');
+    if (dataType) {
+      this.reloadDataType(dataType, content);
+    } else if (isCalendarFile) {
+      this.reloadCalendarFromTree();
+    }
   }
 
   async deleteFile(path: string): Promise<boolean> {
@@ -340,6 +376,11 @@ export class FilesystemService {
     const isCalendarFile = path.startsWith('data/calendar/') && path.endsWith('.json');
 
     if (!dataType && !isCalendarFile) return false;
+
+    // Skip re-read if we wrote this file ourselves — in-memory state is already up-to-date
+    if (action !== 'delete' && this.recentWrites.has(path)) {
+      return false;
+    }
 
     try {
       if (action === 'delete') {

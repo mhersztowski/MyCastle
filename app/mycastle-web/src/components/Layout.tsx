@@ -32,13 +32,11 @@ import {
   BugReport as BugReportIcon,
   Router as RouterIcon,
   Build as BuildIcon,
-  Api as ApiIcon,
-  Hub as HubIcon,
   VpnKey as VpnKeyIcon,
   AccountTree as AccountTreeIcon,
-  Description as DescriptionIcon,
   Notes as NotesIcon,
   LocationOn as LocationOnIcon,
+  Storage as StorageIcon,
   Castle as CastleIcon,
   Apps as AppsIcon,
   CalendarMonth as CalendarMonthIcon,
@@ -81,6 +79,8 @@ function Layout({ children }: LayoutProps) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     Electronics: true,
     IoT: true,
+    Pim: true,
+    Server: true,
     Tools: true,
     Settings: false,
   });
@@ -109,7 +109,6 @@ function Layout({ children }: LayoutProps) {
     if (isMinisView) {
       return [
         { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
-        { text: 'Localization', icon: <LocationOnIcon />, path: `/user/${userName}/localization` },
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
@@ -127,23 +126,25 @@ function Layout({ children }: LayoutProps) {
         },
         {
           text: 'Pim', icon: <AppsIcon />, children: [
+            { text: 'Notes', icon: <NotesIcon />, path: `/workspace/md` },
             { text: 'Calendar', icon: <CalendarMonthIcon />, path: `/user/${userName}/pim/calendar` },
             { text: 'To-Do List', icon: <ChecklistIcon />, path: `/user/${userName}/pim/todolist` },
             { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },
             { text: 'Persons', icon: <PersonIcon />, path: `/user/${userName}/pim/person` },
             { text: 'Projects', icon: <FolderIcon />, path: `/user/${userName}/pim/project` },
-            { text: 'Automate', icon: <AccountTreeIcon />, path: `/user/${userName}/pim/automate` },
             { text: 'Agent', icon: <SmartToyIcon />, path: `/user/${userName}/pim/agent` },
-            { text: 'Notes', icon: <NotesIcon />, path: `/workspace/md` },
+            { text: 'Localization', icon: <LocationOnIcon />, path: `/user/${userName}/localization` },
+          ],
+        },
+        {
+          text: 'Server', icon: <StorageIcon />, children: [
+            { text: 'Automate', icon: <AccountTreeIcon />, path: `/user/${userName}/pim/automate` },
           ],
         },
         ...(isAdmin && !impersonating ? [{
           text: 'Tools', icon: <BuildIcon />, children: [
-            { text: 'RPC Explorer', icon: <ApiIcon />, path: `/user/${userName}/tools/rpc` },
-            { text: 'MQTT Explorer', icon: <HubIcon />, path: `/user/${userName}/tools/mqtt-explorer` },
             { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
             { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },
-            { text: 'API Docs', icon: <DescriptionIcon />, path: `/user/${userName}/tools/docs` },
           ],
         }, {
           text: 'Castle Settings', icon: <SettingsIcon />, children: [

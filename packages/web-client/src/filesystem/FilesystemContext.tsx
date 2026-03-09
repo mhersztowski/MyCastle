@@ -106,7 +106,10 @@ export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children
     setIsLoading(true);
     setError(null);
     try {
-      return await filesystemService.writeFile(path, content);
+      const result = await filesystemService.writeFile(path, content);
+      // Trigger re-render for consumers of dataSource/calendar (datasource was already updated in-memory)
+      setDataVersion(v => v + 1);
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to write file');
       return null;

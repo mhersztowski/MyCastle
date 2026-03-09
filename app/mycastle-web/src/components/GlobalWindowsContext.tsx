@@ -29,6 +29,7 @@ interface GlobalWindowsContextValue {
   windowParams: Map<WindowName, unknown>;
   layoutVersion: number;
   savedConfigs: Map<WindowName, WindowConfig>;
+  windowTitles: Map<WindowName, string>;
   toggle: (name: WindowName) => void;
   openWithParams: <K extends keyof WindowParamsMap>(name: K, params: WindowParamsMap[K]) => void;
   getParams: <K extends keyof WindowParamsMap>(name: K) => WindowParamsMap[K] | undefined;
@@ -36,6 +37,7 @@ interface GlobalWindowsContextValue {
   minimize: (name: WindowName) => void;
   restore: (name: WindowName) => void;
   registerWindow: (name: WindowName, getConfig: () => WindowConfig) => () => void;
+  registerTitle: (name: WindowName, title: string) => () => void;
   saveLayout: () => void;
   loadLayout: () => void;
   clearLayout: () => void;
@@ -48,6 +50,7 @@ const GlobalWindowsContext = createContext<GlobalWindowsContextValue>({
   windowParams: new Map(),
   layoutVersion: 0,
   savedConfigs: new Map(),
+  windowTitles: new Map(),
   toggle: () => {},
   openWithParams: () => {},
   getParams: () => undefined,
@@ -55,6 +58,7 @@ const GlobalWindowsContext = createContext<GlobalWindowsContextValue>({
   minimize: () => {},
   restore: () => {},
   registerWindow: () => () => {},
+  registerTitle: () => () => {},
   saveLayout: () => {},
   loadLayout: () => {},
   clearLayout: () => {},
@@ -66,6 +70,8 @@ export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
   const [savedConfigs, setSavedConfigs] = useState<Map<WindowName, WindowConfig>>(new Map());
   const [layoutVersion, setLayoutVersion] = useState(0);
   const windowRefsMap = useRef<Map<WindowName, () => WindowConfig>>(new Map());
+  const windowTitlesRef = useRef<Map<WindowName, string>>(new Map());
+  const [windowTitles, setWindowTitles] = useState<Map<WindowName, string>>(new Map());
   const { pathname } = useLocation();
   const prevPathname = useRef(pathname);
 
@@ -147,6 +153,15 @@ export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
     return () => { windowRefsMap.current.delete(name); };
   }, []);
 
+  const registerTitle = useCallback((name: WindowName, title: string) => {
+    windowTitlesRef.current.set(name, title);
+    setWindowTitles(new Map(windowTitlesRef.current));
+    return () => {
+      windowTitlesRef.current.delete(name);
+      setWindowTitles(new Map(windowTitlesRef.current));
+    };
+  }, []);
+
   const saveLayout = useCallback(() => {
     const configs: Record<string, WindowConfig> = {};
     for (const [name, getConfig] of windowRefsMap.current) {
@@ -183,9 +198,9 @@ export function GlobalWindowsProvider({ children }: { children: ReactNode }) {
 
   return (
     <GlobalWindowsContext.Provider value={{
-      windows, windowParams, layoutVersion, savedConfigs,
+      windows, windowParams, layoutVersion, savedConfigs, windowTitles,
       toggle, openWithParams, getParams, close, minimize, restore,
-      registerWindow, saveLayout, loadLayout, clearLayout,
+      registerWindow, registerTitle, saveLayout, loadLayout, clearLayout,
     }}>
       {children}
     </GlobalWindowsContext.Provider>
