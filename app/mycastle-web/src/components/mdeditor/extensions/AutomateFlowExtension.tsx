@@ -207,7 +207,7 @@ const AutomateFlowPickerDialog: React.FC<AutomateFlowPickerDialogProps> = ({
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <SmartToyIcon color="warning" />
-        <Typography variant="h6" sx={{ flex: 1 }}>Wybierz automatyzacje</Typography>
+        <Typography variant="h6" sx={{ flex: 1 }}>Select automation</Typography>
         <IconButton size="small" onClick={onClose}>
           <CloseIcon />
         </IconButton>
@@ -437,7 +437,7 @@ const AutomateFlowNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
               </IconButton>
             </Tooltip>
             {flow && (
-              <Tooltip title="Edytuj w designerze">
+              <Tooltip title="Edit in designer">
                 <IconButton
                   size="small"
                   onClick={() => window.open(`/designer/automate/${flowId}`, '_blank')}

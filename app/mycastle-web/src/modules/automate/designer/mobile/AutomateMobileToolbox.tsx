@@ -59,7 +59,7 @@ const AutomateMobileToolbox: React.FC<AutomateMobileToolboxProps> = ({ open, onC
       {/* Header */}
       <Box sx={{ px: 2, pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography variant="subtitle1" fontWeight={600}>
-          Dodaj node
+          Add node
         </Typography>
         <IconButton size="small" onClick={onClose}>
           <CloseIcon fontSize="small" />

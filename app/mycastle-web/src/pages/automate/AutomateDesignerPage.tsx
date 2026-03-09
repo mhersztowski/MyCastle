@@ -251,7 +251,7 @@ const AutomateDesignerPage: React.FC = () => {
           setFlow(flowNode.toModel());
           setFlowPath(automateService.getFlowPath(id));
         } else {
-          setSnackbar({ open: true, message: `Nie znaleziono flow: ${id}`, severity: 'error' });
+          setSnackbar({ open: true, message: `Flow not found: ${id}`, severity: 'error' });
           setFlow(null);
           setFlowPath(undefined);
         }
@@ -438,7 +438,7 @@ const AutomateDesignerPage: React.FC = () => {
       )}
       <Box sx={{ flexGrow: 1 }} />
       {flow && !isMobile && (
-        <Tooltip title="Zapisz jako...">
+        <Tooltip title="Save as...">
           <IconButton size="small" onClick={openSaveAsDialog} color="inherit"><SaveAsIcon fontSize="small" /></IconButton>
         </Tooltip>
       )}
@@ -464,7 +464,7 @@ const AutomateDesignerPage: React.FC = () => {
         ) : (
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
             <AccountTreeIcon sx={{ fontSize: 64, color: 'action.disabled' }} />
-            <Typography color="text.secondary">Wybierz lub utwórz flow</Typography>
+            <Typography color="text.secondary">Select or create a flow</Typography>
             <Box sx={{ display: 'flex', gap: 2 }}>
               <Button variant="contained" startIcon={<AddIcon />} onClick={() => setNewFlowDialogOpen(true)}>
                 Nowy flow
@@ -558,7 +558,7 @@ const AutomateDesignerPage: React.FC = () => {
       </Dialog>
 
       <Dialog open={saveAsDialogOpen} onClose={() => setSaveAsDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Zapisz jako</DialogTitle>
+        <DialogTitle>Save as</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, mb: 1 }}>
             <FolderIcon color="primary" fontSize="small" />
@@ -613,7 +613,7 @@ const AutomateDesignerPage: React.FC = () => {
         <DialogActions>
           <Button onClick={() => { setSaveAsDialogOpen(false); setShowSaveAsDirPicker(false); }}>Anuluj</Button>
           <Button onClick={handleSaveAs} variant="contained" disabled={!saveAsPath.trim()}>
-            Zapisz
+            Save
           </Button>
         </DialogActions>
       </Dialog>
@@ -624,7 +624,7 @@ const AutomateDesignerPage: React.FC = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Wybierz flow</DialogTitle>
+        <DialogTitle>Select flow</DialogTitle>
         <DialogContent dividers sx={{ p: 0, minHeight: 300, maxHeight: 400, overflow: 'auto' }}>
           {loadingTree ? (
             <Box sx={{ p: 3, display: 'flex', justifyContent: 'center' }}>

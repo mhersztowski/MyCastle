@@ -258,7 +258,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                   </Tooltip>
                 </ToggleButton>
                 <ToggleButton value="inline">
-                  <Tooltip title="W linii (obok innych)">
+                  <Tooltip title="Inline (next to others)">
                     <ViewStreamIcon />
                   </Tooltip>
                 </ToggleButton>
@@ -267,7 +267,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                 {editAlign === 'left' && 'Obrazek po lewej, tekst opływa z prawej'}
                 {editAlign === 'center' && 'Obrazek wyśrodkowany (domyślnie)'}
                 {editAlign === 'right' && 'Obrazek po prawej, tekst opływa z lewej'}
-                {editAlign === 'inline' && 'Obrazek w linii - można wstawić kolejny obok'}
+                {editAlign === 'inline' && 'Inline image - another can be placed next to it'}
               </Typography>
             </Box>
 
@@ -320,7 +320,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                   onClick={handleSave}
                   disabled={!editSrc}
                 >
-                  Zapisz
+                  Save
                 </Button>
               </Box>
             </Box>
@@ -430,7 +430,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
               zIndex: 10,
             }}
           >
-            <Tooltip title="Edytuj obrazek" arrow>
+            <Tooltip title="Edit image" arrow>
               <IconButton
                 size="small"
                 onClick={startEditing}
@@ -456,7 +456,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                 <OpenInNewIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Usuń obrazek" arrow>
+            <Tooltip title="Delete image" arrow>
               <IconButton
                 size="small"
                 onClick={deleteNode}
@@ -567,7 +567,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                   fontSize: '11px',
                 }}
               >
-                {align === 'left' ? '← lewo' : align === 'right' ? 'prawo →' : 'w linii'}
+                {align === 'left' ? '← left' : align === 'right' ? 'right →' : 'inline'}
               </Box>
             )}
           </Box>

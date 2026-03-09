@@ -128,7 +128,7 @@ export const ColumnLayout = Node.create({
       const addBtn = document.createElement('button');
       addBtn.className = 'column-btn column-btn-add';
       addBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>';
-      addBtn.title = 'Dodaj kolumnę';
+      addBtn.title = 'Add column';
       addBtn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -138,7 +138,7 @@ export const ColumnLayout = Node.create({
       const removeBtn = document.createElement('button');
       removeBtn.className = 'column-btn column-btn-remove';
       removeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
-      removeBtn.title = 'Usuń kolumnę';
+      removeBtn.title = 'Remove column';
       removeBtn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -213,7 +213,7 @@ export const ColumnLayout = Node.create({
 
         const columnCount = currentNode.content.childCount;
         addBtn.style.display = columnCount >= 3 ? 'none' : '';
-        removeBtn.title = columnCount > 2 ? 'Usuń ostatnią kolumnę' : 'Usuń układ kolumn';
+        removeBtn.title = columnCount > 2 ? 'Remove last column' : 'Remove column layout';
 
         // Update preset buttons based on column count
         presetsContainer.innerHTML = '';

@@ -105,7 +105,7 @@ export function registerShoppingActions(dataSource: DataSource): void {
 
   actionRegistry.register({
     name: 'add_shopping_item',
-    description: 'Dodaj produkt do listy zakupów.',
+    description: 'Add a product to the shopping list.',
     category: 'shopping',
     confirmation: true,
     parameters: {
@@ -196,7 +196,7 @@ export function registerShoppingActions(dataSource: DataSource): void {
 
   actionRegistry.register({
     name: 'remove_shopping_item',
-    description: 'Usuń produkt z listy zakupów.',
+    description: 'Remove a product from the shopping list.',
     category: 'shopping',
     confirmation: true,
     parameters: {

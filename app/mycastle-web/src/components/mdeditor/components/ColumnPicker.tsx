@@ -53,7 +53,7 @@ const ColumnPicker: React.FC<ColumnPickerProps> = ({ onSelect }) => {
       >
         <Box sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-            Wybierz liczbę kolumn
+            Select number of columns
           </Typography>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button

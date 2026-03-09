@@ -201,7 +201,7 @@ const FlowTreeNode: React.FC<FlowTreeNodeProps> = ({
                 <ContentCopyIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Usuń">
+            <Tooltip title="Delete">
               <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); onDelete(flow.id); }}>
                 <DeleteIcon fontSize="small" />
               </IconButton>

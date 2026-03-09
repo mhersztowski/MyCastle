@@ -1046,7 +1046,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
               >
                 {selectedNode.config.flowId
                   ? (selectedNode.config.subflowName as string) || 'Wybrany flow'
-                  : 'Wybierz subflow...'}
+                  : 'Select subflow...'}
               </Button>
 
               {/* Show selected flow info */}
@@ -1237,7 +1237,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
                   updateNode(selectedNodeId, { inputs: newInputs });
                 }}
               >
-                + Dodaj port
+                + Add port
               </Button>
 
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
@@ -1290,7 +1290,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setScriptDialogOpen(false)}>Anuluj</Button>
-          <Button onClick={handleScriptDialogSave} variant="contained">Zapisz</Button>
+          <Button onClick={handleScriptDialogSave} variant="contained">Save</Button>
         </DialogActions>
       </Dialog>
 
@@ -1300,7 +1300,7 @@ const AutomateMobileProperties: React.FC<AutomateMobilePropertiesProps> = ({ ope
         onClose={() => setFlowPickerOpen(false)}
         fullScreen
       >
-        <DialogTitle sx={{ py: 1.5 }}>Wybierz subflow</DialogTitle>
+        <DialogTitle sx={{ py: 1.5 }}>Select subflow</DialogTitle>
         <DialogContent dividers sx={{ p: 0 }}>
           {flowTreeLoading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>

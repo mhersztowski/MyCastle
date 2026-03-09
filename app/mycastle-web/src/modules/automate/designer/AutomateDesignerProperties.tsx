@@ -364,7 +364,7 @@ const AutomateDesignerProperties: React.FC = () => {
           }}
         />
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', mt: 4 }}>
-          Wybierz node aby zobaczyć właściwości
+          Select a node to see its properties
         </Typography>
       </Box>
     );
@@ -1139,7 +1139,7 @@ const AutomateDesignerProperties: React.FC = () => {
               >
                 {selectedNode.config.flowId
                   ? (selectedNode.config.subflowName as string) || 'Wybrany flow'
-                  : 'Wybierz subflow...'}
+                  : 'Select subflow...'}
               </Button>
 
               {/* Show selected flow info */}
@@ -1337,7 +1337,7 @@ const AutomateDesignerProperties: React.FC = () => {
                   updateNode(selectedNodeId, { inputs: newInputs });
                 }}
               >
-                + Dodaj port
+                + Add port
               </Button>
 
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
@@ -1399,7 +1399,7 @@ const AutomateDesignerProperties: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setScriptDialogOpen(false)}>Anuluj</Button>
-          <Button onClick={handleScriptDialogSave} variant="contained">Zapisz</Button>
+          <Button onClick={handleScriptDialogSave} variant="contained">Save</Button>
         </DialogActions>
       </Dialog>
 
@@ -1410,7 +1410,7 @@ const AutomateDesignerProperties: React.FC = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Wybierz subflow</DialogTitle>
+        <DialogTitle>Select subflow</DialogTitle>
         <DialogContent dividers sx={{ p: 0 }}>
           {flowTreeLoading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>

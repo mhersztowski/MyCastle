@@ -252,7 +252,7 @@ export const NODE_TYPE_METADATA: Record<AutomateNodeType, AutomateNodeTypeMetada
     label: 'Write Variable',
     icon: EditIcon,
     category: 'data',
-    description: 'Zapisz zmienną',
+    description: 'Save variable',
     color: '#9c27b0',
     defaultInputs: [
       { id: 'in', name: 'In', direction: 'input', dataType: 'flow' },

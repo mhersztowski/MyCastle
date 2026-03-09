@@ -127,7 +127,7 @@ const UIViewerPage: React.FC = () => {
       <DashboardIcon sx={{ mr: 1, fontSize: 16, color: 'inherit', opacity: 0.8 }} />
       <Typography variant="body2" noWrap sx={{ flexGrow: 1, color: 'inherit' }}>{form?.name || 'UI Viewer'}</Typography>
       {!error && <IconButton size="small" onClick={handleRefresh} color="inherit" sx={{ mr: 0.5 }}><RefreshIcon fontSize="small" /></IconButton>}
-      {!error && <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => navigate(`/designer/ui/${id}`)} color="inherit">Edytuj</Button>}
+      {!error && <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => navigate(`/designer/ui/${id}`)} color="inherit">Edit</Button>}
     </>,
     [form, error, id, navigate, handleRefresh],
   );

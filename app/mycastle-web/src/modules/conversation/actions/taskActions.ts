@@ -115,7 +115,7 @@ export function registerTaskActions(dataSource: DataSource): void {
 
   actionRegistry.register({
     name: 'delete_task',
-    description: 'Usuń task po ID.',
+    description: 'Delete task by ID.',
     category: 'tasks',
     confirmation: true,
     parameters: {

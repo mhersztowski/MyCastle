@@ -52,7 +52,7 @@ const AutomateDesignerToolbar: React.FC<AutomateDesignerToolbarProps> = ({
         bgcolor: 'background.paper',
       }}
     >
-      <Tooltip title="Zapisz (Ctrl+S)">
+      <Tooltip title="Save (Ctrl+S)">
         <span>
           <IconButton size="small" onClick={onSave} disabled={saving}>
             {saving ? <CircularProgress size={18} /> : <SaveIcon fontSize="small" />}

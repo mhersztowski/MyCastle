@@ -310,7 +310,7 @@ const ImagePickerDialog: React.FC<ImagePickerDialogProps> = ({
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <ImageIcon color="primary" />
         <Typography variant="h6" component="span">
-          Wybierz obrazek z plików
+          Select image from files
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
         <IconButton size="small" onClick={onClose}>
@@ -489,7 +489,7 @@ const ImagePickerDialog: React.FC<ImagePickerDialogProps> = ({
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   <ImageIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
                   <Typography color="text.secondary">
-                    {filter ? 'Nie znaleziono obrazków' : 'Brak obrazków w tym folderze'}
+                    {filter ? 'No images found' : 'No images in this folder'}
                   </Typography>
                 </Box>
               )}
@@ -583,7 +583,7 @@ const ImagePickerDialog: React.FC<ImagePickerDialogProps> = ({
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   <ImageIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
                   <Typography color="text.secondary">
-                    {filter ? 'Nie znaleziono obrazków' : 'Wybierz folder z obrazkami'}
+                    {filter ? 'No images found' : 'Select a folder with images'}
                   </Typography>
                 </Box>
               )}
@@ -604,7 +604,7 @@ const ImagePickerDialog: React.FC<ImagePickerDialogProps> = ({
           onClick={handleConfirm}
           disabled={!selectedImagePath}
         >
-          Wybierz
+          Select
         </Button>
       </DialogActions>
     </Dialog>

@@ -26,7 +26,7 @@ export function registerFileActions(): void {
 
   actionRegistry.register({
     name: 'write_file',
-    description: 'Zapisz zawartość do pliku.',
+    description: 'Save content to file.',
     category: 'files',
     confirmation: true,
     parameters: {

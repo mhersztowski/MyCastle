@@ -129,7 +129,7 @@ const PageHooksSettingsPage: React.FC = () => {
 
   const handleDialogSave = useCallback(async () => {
     if (!dialogData.flowId) {
-      setSaveMessage({ type: 'error', text: 'Wybierz flow' });
+      setSaveMessage({ type: 'error', text: 'Select flow' });
       return;
     }
 
@@ -192,7 +192,7 @@ const PageHooksSettingsPage: React.FC = () => {
             size="small"
             disabled={flows.length === 0}
           >
-            Dodaj
+            Add
           </Button>
         </Box>
 
@@ -259,7 +259,7 @@ const PageHooksSettingsPage: React.FC = () => {
 
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editingHookId ? 'Edytuj hook' : 'Dodaj hook'}</DialogTitle>
+        <DialogTitle>{editingHookId ? 'Edit hook' : 'Add hook'}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <FormControl fullWidth size="small">
@@ -303,7 +303,7 @@ const PageHooksSettingsPage: React.FC = () => {
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>Anuluj</Button>
           <Button variant="contained" onClick={handleDialogSave}>
-            {editingHookId ? 'Zapisz' : 'Dodaj'}
+            {editingHookId ? 'Save' : 'Add'}
           </Button>
         </DialogActions>
       </Dialog>

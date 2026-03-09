@@ -121,7 +121,7 @@ const AudioNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
           }}
         >
           <Typography variant="subtitle2" color="secondary" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AudiotrackIcon /> Edycja audio
+            <AudiotrackIcon /> Edit audio
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -236,7 +236,7 @@ const AudioNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                   onClick={handleSave}
                   disabled={!editSrc}
                 >
-                  Zapisz
+                  Save
                 </Button>
               </Box>
             </Box>
@@ -282,7 +282,7 @@ const AudioNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
               zIndex: 10,
             }}
           >
-            <Tooltip title="Edytuj audio" arrow>
+            <Tooltip title="Edit audio" arrow>
               <IconButton
                 size="small"
                 onClick={startEditing}
@@ -295,7 +295,7 @@ const AudioNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                 <EditIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Usuń audio" arrow>
+            <Tooltip title="Delete audio" arrow>
               <IconButton
                 size="small"
                 onClick={deleteNode}

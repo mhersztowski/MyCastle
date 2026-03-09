@@ -10,7 +10,7 @@ import { useAuth } from '@modules/auth';
 
 function HomePage() {
   const navigate = useNavigate();
-  const { currentUser, isAdmin } = useAuth();
+  const { currentUser } = useAuth();
   const [users, setUsers] = useState<UserPublic[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,10 +23,7 @@ function HomePage() {
   }, []);
 
   if (currentUser) {
-    const dest = isAdmin
-      ? `/admin/${currentUser.name}/main`
-      : `/user/${currentUser.name}/main`;
-    return <Navigate to={dest} replace />;
+    return <Navigate to={`/user/${currentUser.name}/main`} replace />;
   }
 
   return (

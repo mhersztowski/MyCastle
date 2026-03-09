@@ -219,7 +219,7 @@ const UIDesignerPage: React.FC = () => {
           >
             <DashboardIcon sx={{ fontSize: 64, color: 'action.disabled' }} />
             <Typography color="text.secondary">
-              Wybierz lub utwórz formularz
+              Select or create a form
             </Typography>
             <Box sx={{ display: 'flex', gap: 2 }}>
               <Button
@@ -289,7 +289,7 @@ const UIDesignerPage: React.FC = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Wybierz formularz</DialogTitle>
+        <DialogTitle>Select form</DialogTitle>
         <DialogContent dividers sx={{ p: 0 }}>
           {availableForms.length === 0 ? (
             <Box sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>

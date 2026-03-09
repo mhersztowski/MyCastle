@@ -488,7 +488,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <PermMediaIcon color="primary" />
         <Typography variant="h6" component="span">
-          Wybierz media
+          Select media
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
         <IconButton size="small" onClick={onClose}>
@@ -656,7 +656,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   {getMediaIcon(mediaType)}
                   <Typography color="text.secondary">
-                    {filter ? 'Nie znaleziono mediów' : `Brak ${getMediaTypeLabel(mediaType).toLowerCase()} w tym folderze`}
+                    {filter ? 'No media found' : `Brak ${getMediaTypeLabel(mediaType).toLowerCase()} w tym folderze`}
                   </Typography>
                 </Box>
               )}
@@ -699,7 +699,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   {getMediaIcon(mediaType)}
                   <Typography color="text.secondary">
-                    {filter ? 'Nie znaleziono mediów' : 'Wybierz folder z mediami'}
+                    {filter ? 'No media found' : 'Select a folder with media'}
                   </Typography>
                 </Box>
               )}
@@ -720,7 +720,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
           onClick={handleConfirm}
           disabled={!selectedMediaPath}
         >
-          Wybierz
+          Select
         </Button>
       </DialogActions>
     </Dialog>

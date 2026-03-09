@@ -515,7 +515,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditorDialogOpen(false)}>Anuluj</Button>
-          <Button onClick={handleEditorDialogSave} variant="contained">Zapisz</Button>
+          <Button onClick={handleEditorDialogSave} variant="contained">Save</Button>
         </DialogActions>
       </Dialog>
     </NodeViewWrapper>

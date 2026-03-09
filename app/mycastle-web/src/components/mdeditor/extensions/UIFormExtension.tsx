@@ -86,7 +86,7 @@ const UIFormPickerDialog: React.FC<UIFormPickerDialogProps> = ({
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <DashboardIcon color="primary" />
-        <Typography variant="h6" sx={{ flex: 1 }}>Wybierz formularz UI</Typography>
+        <Typography variant="h6" sx={{ flex: 1 }}>Select UI form</Typography>
         <IconButton size="small" onClick={onClose}>
           <CloseIcon />
         </IconButton>
@@ -119,7 +119,7 @@ const UIFormPickerDialog: React.FC<UIFormPickerDialogProps> = ({
           <Box sx={{ p: 4, textAlign: 'center', color: 'text.secondary' }}>
             {forms.length === 0
               ? 'Brak zdefiniowanych formularzy'
-              : 'Nie znaleziono formularzy'}
+              : 'No forms found'}
           </Box>
         ) : (
           <List sx={{ maxHeight: 300, overflow: 'auto' }}>
@@ -273,7 +273,7 @@ const UIFormNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selec
               </IconButton>
             </Tooltip>
             {form && !inlineData && (
-              <Tooltip title="Edytuj w designerze">
+              <Tooltip title="Edit in designer">
                 <IconButton
                   size="small"
                   onClick={() => window.open(`/designer/ui/${form.id}`, '_blank')}

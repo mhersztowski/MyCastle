@@ -165,7 +165,7 @@ const DesignerToolbar: React.FC<{
       </Tooltip>
 
       {/* Save */}
-      <Tooltip title="Zapisz (Ctrl+S)">
+      <Tooltip title="Save (Ctrl+S)">
         <IconButton size="small" onClick={onSave} color="primary">
           <SaveIcon fontSize="small" />
         </IconButton>
@@ -249,7 +249,7 @@ const FormSettingsDialog: React.FC<{
       <DialogActions>
         <Button onClick={onClose}>Anuluj</Button>
         <Button onClick={handleSave} variant="contained">
-          Zapisz
+          Save
         </Button>
       </DialogActions>
     </Dialog>

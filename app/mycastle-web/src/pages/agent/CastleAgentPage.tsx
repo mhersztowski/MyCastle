@@ -727,7 +727,7 @@ const CastleAgentPage: React.FC = () => {
             size="small"
             placeholder="Instrukcja systemowa dla AI..."
             disabled={agentMode}
-            helperText={agentMode ? 'Edytuj scenariusze w konfiguracji' : undefined}
+            helperText={agentMode ? 'Edit scenarios in config' : undefined}
           />
         </Paper>
       )}

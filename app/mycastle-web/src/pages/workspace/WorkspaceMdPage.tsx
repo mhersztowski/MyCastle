@@ -224,7 +224,7 @@ const WorkspaceMdPage: React.FC = () => {
           <>
             <Box sx={{ px: 1.5, pt: 1.5, pb: 0.5 }}>
               <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', letterSpacing: 0.5, textTransform: 'uppercase', fontSize: 10 }}>
-                Ulubione
+                Favorites
               </Typography>
             </Box>
             <List dense disablePadding>
@@ -249,7 +249,7 @@ const WorkspaceMdPage: React.FC = () => {
 
         <Box sx={{ px: 1.5, pt: favoriteFiles.length > 0 ? 0.5 : 1.5, pb: 0.5 }}>
           <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', letterSpacing: 0.5, textTransform: 'uppercase', fontSize: 10 }}>
-            Notatki
+            Notes
           </Typography>
         </Box>
 
@@ -287,7 +287,7 @@ const WorkspaceMdPage: React.FC = () => {
           </Box>
         ) : !filePath ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <Typography color="text.secondary">Wybierz plik z panelu po lewej</Typography>
+            <Typography color="text.secondary">Select a file from the left panel</Typography>
           </Box>
         ) : (
           <MdEditor

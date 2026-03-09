@@ -172,7 +172,7 @@ const VideoNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
           }}
         >
           <Typography variant="subtitle2" color="error" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <VideocamIcon /> Edycja video
+            <VideocamIcon /> Edit video
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -224,7 +224,7 @@ const VideoNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                 onClick={() => setPosterPickerOpen(true)}
                 sx={{ whiteSpace: 'nowrap' }}
               >
-                Wybierz
+                Select
               </Button>
             </Box>
 
@@ -377,7 +377,7 @@ const VideoNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                   onClick={handleSave}
                   disabled={!editSrc}
                 >
-                  Zapisz
+                  Save
                 </Button>
               </Box>
             </Box>
@@ -445,7 +445,7 @@ const VideoNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
               zIndex: 10,
             }}
           >
-            <Tooltip title="Edytuj video" arrow>
+            <Tooltip title="Edit video" arrow>
               <IconButton
                 size="small"
                 onClick={startEditing}
@@ -458,7 +458,7 @@ const VideoNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
                 <EditIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Usuń video" arrow>
+            <Tooltip title="Delete video" arrow>
               <IconButton
                 size="small"
                 onClick={deleteNode}

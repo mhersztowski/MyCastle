@@ -65,7 +65,8 @@
       "Bash(pnpm --filter @mhersztowski/web-client typecheck)",
       "Bash(pnpm --filter @mhersztowski/web-client run typecheck)",
       "Bash(pnpm --filter mycastle-web add -D vite-plugin-pwa)",
-      "Bash(pnpm dlx @vite-pwa/assets-generator --preset minimal public/icon.svg)"
+      "Bash(pnpm dlx @vite-pwa/assets-generator --preset minimal public/icon.svg)",
+      "Bash(pnpm --filter mycastle-web typecheck)"
     ]
   }
 }

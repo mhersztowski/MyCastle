@@ -363,7 +363,7 @@ const UIDesignerCanvas: React.FC<UIDesignerCanvasProps> = ({ onControlSelect }) 
         }}
       >
         <Typography color="text.secondary">
-          Wybierz lub utwórz formularz
+          Select or create a form
         </Typography>
       </Box>
     );

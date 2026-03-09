@@ -720,8 +720,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
           />
           <Tooltip title={
             linkUrl && !linkUrl.startsWith('http://') && !linkUrl.startsWith('https://') && !linkUrl.startsWith('mailto:')
-              ? "Otwórz w edytorze"
-              : "Otwórz link"
+              ? "Open in editor"
+              : "Open link"
           }>
             <IconButton
               size="small"
@@ -731,7 +731,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
               <OpenInNewIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Usuń link">
+          <Tooltip title="Remove link">
             <IconButton
               size="small"
               onClick={handleRemoveLink}

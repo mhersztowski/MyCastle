@@ -723,7 +723,7 @@ const UIDesignerProperties: React.FC<UIDesignerPropertiesProps> = ({ collapsed =
                 <ContentCopyIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Usuń">
+            <Tooltip title="Delete">
               <IconButton
                 size="small"
                 color="error"
@@ -750,7 +750,7 @@ const UIDesignerProperties: React.FC<UIDesignerPropertiesProps> = ({ collapsed =
         ) : (
           <Box sx={{ p: 2, textAlign: 'center', color: 'text.secondary' }}>
             <Typography variant="body2">
-              Wybierz kontrolkę aby edytować jej właściwości
+              Select a control to edit its properties
             </Typography>
           </Box>
         )}

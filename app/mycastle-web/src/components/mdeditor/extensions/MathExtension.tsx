@@ -168,7 +168,7 @@ const MathBlockNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, se
         >
           <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
             <span style={{ fontSize: '14px', fontWeight: 500, color: '#1976d2' }}>
-              Edycja LaTeX
+              Edit LaTeX
             </span>
           </Box>
           <textarea
@@ -226,7 +226,7 @@ const MathBlockNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, se
                   fontWeight: 500,
                 }}
               >
-                Zapisz
+                Save
               </button>
             </Box>
           </Box>
@@ -254,7 +254,7 @@ const MathBlockNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, se
         >
           {/* Edit button overlay */}
           {(isHovered || selected) && (
-            <Tooltip title="Edytuj LaTeX" arrow>
+            <Tooltip title="Edit LaTeX" arrow>
               <IconButton
                 size="small"
                 onClick={(e) => {
