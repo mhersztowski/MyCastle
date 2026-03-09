@@ -7,8 +7,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
-  AppBar,
-  Toolbar,
   Typography,
   IconButton,
   CircularProgress,
@@ -26,6 +24,7 @@ import {
   ListItemText,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import { useMinimalTopBarSlot } from '../../components/MinimalTopBarContext';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import AddIcon from '@mui/icons-material/Add';
 
@@ -186,21 +185,18 @@ const UIDesignerPage: React.FC = () => {
     );
   }
 
+  useMinimalTopBarSlot(
+    <>
+      <IconButton size="small" edge="start" onClick={() => navigate(-1)} color="inherit" sx={{ mr: 1 }}><ArrowBackIcon fontSize="small" /></IconButton>
+      <DashboardIcon sx={{ mr: 1, fontSize: 16, color: 'inherit', opacity: 0.8 }} />
+      <Typography variant="body2" sx={{ flexGrow: 1, color: 'inherit' }}>UI Designer</Typography>
+      {saving && <CircularProgress size={16} color="inherit" sx={{ mr: 1 }} />}
+    </>,
+    [saving, navigate],
+  );
+
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
-      {/* App Bar */}
-      <AppBar position="static" color="default" elevation={1}>
-        <Toolbar variant="dense">
-          <IconButton edge="start" onClick={() => navigate(-1)} sx={{ mr: 1 }}>
-            <ArrowBackIcon />
-          </IconButton>
-          <DashboardIcon sx={{ mr: 1, color: 'primary.main' }} />
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            UI Designer
-          </Typography>
-          {saving && <CircularProgress size={20} sx={{ mr: 2 }} />}
-        </Toolbar>
-      </AppBar>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
 
       {/* Designer */}
       <Box sx={{ flex: 1, overflow: 'hidden' }}>

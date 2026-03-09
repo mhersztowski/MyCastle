@@ -46,9 +46,10 @@ import EmojiPicker from './components/EmojiPicker';
 interface MdEditorToolbarProps {
   editor: Editor;
   onSave?: () => void;
+  saveDisabled?: boolean;
 }
 
-const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => {
+const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveDisabled }) => {
   const [insertMenuAnchor, setInsertMenuAnchor] = useState<null | HTMLElement>(null);
   const insertMenuOpen = Boolean(insertMenuAnchor);
 
@@ -406,6 +407,7 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave }) => 
             size="small"
             startIcon={<SaveIcon />}
             onClick={onSave}
+            disabled={saveDisabled}
           >
             Save
           </Button>

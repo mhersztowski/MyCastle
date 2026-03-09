@@ -5,10 +5,9 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '@modules/auth';
 import {
   Box,
-  AppBar,
-  Toolbar,
   Typography,
   IconButton,
   CircularProgress,
@@ -30,6 +29,7 @@ import {
 } from '@mui/material';
 import { useTheme, useMediaQuery } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import { useMinimalTopBarSlot } from '../../components/MinimalTopBarContext';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AddIcon from '@mui/icons-material/Add';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -198,6 +198,7 @@ const AutomateDesignerPage: React.FC = () => {
   const { automateService } = App.instance;
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
+  const { currentUser } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const { isConnected, isConnecting } = useMqtt();
@@ -423,47 +424,31 @@ const AutomateDesignerPage: React.FC = () => {
     );
   }
 
+  useMinimalTopBarSlot(
+    <>
+      <IconButton size="small" edge="start" onClick={() => navigate(`/user/${currentUser?.name}/pim/automate`)} color="inherit" sx={{ mr: 1 }}><ArrowBackIcon fontSize="small" /></IconButton>
+      {!isMobile && <AccountTreeIcon sx={{ mr: 1, fontSize: 16, color: 'inherit', opacity: 0.8 }} />}
+      <Typography variant="body2" noWrap sx={{ color: 'inherit' }}>
+        {isMobile ? (flow?.name || 'Automate') : `Automate Designer${flow ? ` - ${flow.name}` : ''}`}
+      </Typography>
+      {flowPath && !isMobile && (
+        <Tooltip title={flowPath}>
+          <Chip icon={<FolderIcon />} label={flowPath.split('/').pop()} size="small" variant="outlined" sx={{ ml: 1, maxWidth: 160, color: 'inherit', borderColor: 'rgba(255,255,255,0.5)' }} />
+        </Tooltip>
+      )}
+      <Box sx={{ flexGrow: 1 }} />
+      {flow && !isMobile && (
+        <Tooltip title="Zapisz jako...">
+          <IconButton size="small" onClick={openSaveAsDialog} color="inherit"><SaveAsIcon fontSize="small" /></IconButton>
+        </Tooltip>
+      )}
+      {saving && <CircularProgress size={16} color="inherit" />}
+    </>,
+    [flow, flowPath, isMobile, saving, currentUser, navigate, openSaveAsDialog],
+  );
+
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
-      <AppBar position="static" color="default" elevation={1}>
-        <Toolbar variant="dense">
-          <IconButton edge="start" onClick={() => navigate('/automate')} sx={{ mr: 1 }}>
-            <ArrowBackIcon />
-          </IconButton>
-          {!isMobile && <AccountTreeIcon sx={{ mr: 1, color: 'primary.main' }} />}
-          <Typography
-            variant="h6"
-            component="div"
-            sx={{ fontSize: isMobile ? '1rem' : undefined }}
-            noWrap
-          >
-            {isMobile
-              ? (flow?.name || 'Automate')
-              : `Automate Designer${flow ? ` - ${flow.name}` : ''}`
-            }
-          </Typography>
-          {flowPath && !isMobile && (
-            <Tooltip title={flowPath}>
-              <Chip
-                icon={<FolderIcon />}
-                label={flowPath.split('/').pop()}
-                size="small"
-                variant="outlined"
-                sx={{ ml: 1, maxWidth: 200 }}
-              />
-            </Tooltip>
-          )}
-          <Box sx={{ flexGrow: 1 }} />
-          {flow && !isMobile && (
-            <Tooltip title="Zapisz jako...">
-              <IconButton size="small" onClick={openSaveAsDialog} sx={{ mr: 1 }}>
-                <SaveAsIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {saving && <CircularProgress size={20} sx={{ mr: 2 }} />}
-        </Toolbar>
-      </AppBar>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
 
       <Box sx={{ flex: 1, overflow: 'hidden' }}>
         {flow ? (

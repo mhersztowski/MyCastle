@@ -628,7 +628,7 @@ const ShoppingPage: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 2, maxWidth: 900 }}>
+    <Box sx={{ p: 2, maxWidth: 900, mx: 'auto' }}>
       {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}>
         <ShoppingCartIcon color="primary" />

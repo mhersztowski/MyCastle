@@ -44,6 +44,7 @@ import BuildIcon from '@mui/icons-material/Build';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChatIcon from '@mui/icons-material/Chat';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@modules/auth';
 import { App } from '../../App';
 import { AiToolCall } from '../../modules/ai/models/AiModels';
 import { AudioRecorder, createBrowserRecognition } from '../../modules/speech';
@@ -86,6 +87,7 @@ interface PendingConfirmation {
 const CastleAgentPage: React.FC = () => {
   const { aiService, speechService, wakeWordService, conversationService, conversationHistoryService } = App.instance;
   const navigate = useNavigate();
+  const { currentUser } = useAuth();
   const { dataSource } = useFilesystem();
   const { isConnected } = useMqtt();
 
@@ -669,7 +671,7 @@ const CastleAgentPage: React.FC = () => {
         </Tooltip>
 
         <Tooltip title="Ustawienia Speech">
-          <IconButton onClick={() => navigate('/settings/speech')} size="small">
+          <IconButton onClick={() => navigate(`/user/${currentUser?.name}/pim/settings/speech`)} size="small">
             <VolumeUpIcon />
           </IconButton>
         </Tooltip>
@@ -702,7 +704,7 @@ const CastleAgentPage: React.FC = () => {
       {/* Config warnings */}
       {!aiConfigured && (
         <Alert severity="warning" sx={{ mb: 1 }}>
-          AI nie jest skonfigurowane. <Typography component="span" sx={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate('/settings/ai')}>Przejdź do AI Settings</Typography>
+          AI nie jest skonfigurowane. <Typography component="span" sx={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => navigate(`/user/${currentUser?.name}/pim/settings/ai`)}>Przejdź do AI Settings</Typography>
         </Alert>
       )}
 

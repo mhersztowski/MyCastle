@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Box, AppBar, Toolbar, Typography, Button, CircularProgress, Alert } from '@mui/material';
+import { Box, Typography, Button, CircularProgress, Alert } from '@mui/material';
+import { useMinimalTopBarSlot } from '../../components/MinimalTopBarContext';
 import { Save as SaveIcon, ArrowBack as ArrowBackIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import Editor, { Monaco } from '@monaco-editor/react';
 import { useMqtt } from '../../modules/mqttclient/MqttContext';
@@ -415,62 +416,35 @@ const SimpleEditorPage: React.FC = () => {
     }
   }, [isConnected, listDirectory]);
 
+  useMinimalTopBarSlot(
+    <>
+      <Button size="small" startIcon={<ArrowBackIcon />} onClick={handleBack} color="inherit" sx={{ mr: 1 }}>Back</Button>
+      <Typography variant="body2" noWrap sx={{ flexGrow: 1, fontFamily: 'monospace', color: 'inherit' }}>
+        {path || 'No file selected'}
+        {schemaLoaded && language === 'json' && (
+          <Typography component="span" variant="caption" sx={{ ml: 1, color: 'success.light' }}>(Schema)</Typography>
+        )}
+      </Typography>
+      {language === 'markdown' && (
+        <Button size="small" variant="outlined" startIcon={<VisibilityIcon />} onClick={handleView} color="inherit" sx={{ mr: 1 }}>View</Button>
+      )}
+      <Button size="small" variant="contained" startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />} onClick={handleSave} disabled={!hasChanges || saving || loading}>
+        {saving ? 'Saving...' : 'Save'}
+      </Button>
+    </>,
+    [path, schemaLoaded, language, saving, hasChanges, loading, handleBack, handleView, handleSave],
+  );
+
   return (
     <Box
       sx={{
         display: 'flex',
         flexDirection: 'column',
-        height: 'var(--app-height, 100vh)',
+        height: '100%',
         overflow: 'hidden',
         paddingTop: 'env(safe-area-inset-top)',
       }}
     >
-      <AppBar
-        position="sticky"
-        color="default"
-        elevation={1}
-        sx={{
-          top: 0,
-          zIndex: 1100,
-          flexShrink: 0,
-        }}
-      >
-        <Toolbar variant="dense">
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={handleBack}
-            sx={{ mr: 2 }}
-          >
-            Back
-          </Button>
-          <Typography variant="subtitle1" sx={{ flexGrow: 1, fontFamily: 'monospace' }}>
-            {path || 'No file selected'}
-            {schemaLoaded && language === 'json' && (
-              <Typography component="span" variant="caption" sx={{ ml: 2, color: 'success.main' }}>
-                (Schema loaded)
-              </Typography>
-            )}
-          </Typography>
-          {language === 'markdown' && (
-            <Button
-              variant="outlined"
-              startIcon={<VisibilityIcon />}
-              onClick={handleView}
-              sx={{ mr: 1 }}
-            >
-              View
-            </Button>
-          )}
-          <Button
-            variant="contained"
-            startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
-            onClick={handleSave}
-            disabled={!hasChanges || saving || loading}
-          >
-            {saving ? 'Saving...' : 'Save'}
-          </Button>
-        </Toolbar>
-      </AppBar>
 
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>

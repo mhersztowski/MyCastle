@@ -36,6 +36,7 @@ EXCLUDES=(
 
 RSYNC_OPTS=(
   -avz
+  --no-o --no-g   # nie próbuj zmieniać owner/group (pliki tworzone przez Docker mają inny UID/GID)
   --delete
   "${EXCLUDES[@]}"
 )

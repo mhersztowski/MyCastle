@@ -1,0 +1,396 @@
+/**
+ * JSON toolbox definition for the uPython Blockly workspace.
+ */
+export const TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
+  kind: 'categoryToolbox',
+  contents: [
+    {
+      kind: 'category',
+      name: 'Events',
+      colour: '#FF6680',
+      contents: [
+        { kind: 'block', type: 'upy_start' },
+        { kind: 'block', type: 'upy_forever' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Logic',
+      categorystyle: 'logic_category',
+      contents: [
+        { kind: 'block', type: 'controls_if' },
+        { kind: 'block', type: 'logic_compare' },
+        { kind: 'block', type: 'logic_operation' },
+        { kind: 'block', type: 'logic_negate' },
+        { kind: 'block', type: 'logic_boolean' },
+        { kind: 'block', type: 'logic_null' },
+        { kind: 'block', type: 'logic_ternary' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Loops',
+      categorystyle: 'loop_category',
+      contents: [
+        {
+          kind: 'block',
+          type: 'controls_repeat_ext',
+          inputs: { TIMES: { shadow: { type: 'math_number', fields: { NUM: 10 } } } },
+        },
+        { kind: 'block', type: 'controls_whileUntil' },
+        {
+          kind: 'block',
+          type: 'controls_for',
+          inputs: {
+            FROM: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+            TO: { shadow: { type: 'math_number', fields: { NUM: 9 } } },
+            BY: { shadow: { type: 'math_number', fields: { NUM: 1 } } },
+          },
+        },
+        { kind: 'block', type: 'controls_flow_statements' },
+        {
+          kind: 'block',
+          type: 'upy_for_in_range',
+          inputs: { TIMES: { shadow: { type: 'math_number', fields: { NUM: 10 } } } },
+        },
+        { kind: 'block', type: 'controls_forEach' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Control',
+      colour: '30',
+      contents: [
+        { kind: 'block', type: 'upy_try_except' },
+        { kind: 'block', type: 'upy_switch' },
+        { kind: 'block', type: 'upy_when_var_changes' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Bits',
+      colour: '20',
+      contents: [
+        { kind: 'block', type: 'upy_bitwise' },
+        { kind: 'block', type: 'upy_bitnot' },
+        {
+          kind: 'block',
+          type: 'upy_bit_get',
+          inputs: { BIT: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_bit_set',
+          inputs: { BIT: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_bit_clear',
+          inputs: { BIT: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_bit_toggle',
+          inputs: { BIT: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+        },
+        { kind: 'block', type: 'upy_int_from_bytes' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Math',
+      categorystyle: 'math_category',
+      contents: [
+        { kind: 'block', type: 'math_number' },
+        { kind: 'block', type: 'math_arithmetic' },
+        { kind: 'block', type: 'math_single' },
+        { kind: 'block', type: 'math_trig' },
+        { kind: 'block', type: 'math_constant' },
+        { kind: 'block', type: 'math_number_property' },
+        {
+          kind: 'block',
+          type: 'math_change',
+          inputs: { DELTA: { shadow: { type: 'math_number', fields: { NUM: 1 } } } },
+        },
+        { kind: 'block', type: 'math_round' },
+        { kind: 'block', type: 'math_modulo' },
+        {
+          kind: 'block',
+          type: 'math_constrain',
+          inputs: {
+            LOW: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+            HIGH: { shadow: { type: 'math_number', fields: { NUM: 100 } } },
+          },
+        },
+        {
+          kind: 'block',
+          type: 'math_random_int',
+          inputs: {
+            FROM: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+            TO: { shadow: { type: 'math_number', fields: { NUM: 100 } } },
+          },
+        },
+        { kind: 'block', type: 'math_random_float' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Type / List',
+      colour: '230',
+      contents: [
+        { kind: 'block', type: 'upy_to_int' },
+        { kind: 'block', type: 'upy_to_float' },
+        { kind: 'block', type: 'upy_list_sum' },
+        { kind: 'block', type: 'lists_create_with' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Text',
+      categorystyle: 'text_category',
+      contents: [
+        { kind: 'block', type: 'text' },
+        { kind: 'block', type: 'text_join' },
+        {
+          kind: 'block',
+          type: 'text_append',
+          inputs: { TEXT: { shadow: { type: 'text' } } },
+        },
+        { kind: 'block', type: 'text_length' },
+        { kind: 'block', type: 'text_isEmpty' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Variables',
+      categorystyle: 'variable_category',
+      contents: [
+        { kind: 'block', type: 'variables_get' },
+        { kind: 'block', type: 'variables_set' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Functions',
+      categorystyle: 'procedure_category',
+      custom: 'PROCEDURE',
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Pin I/O',
+      colour: '250',
+      contents: [
+        { kind: 'block', type: 'upy_pin_init' },
+        { kind: 'block', type: 'upy_pin_on' },
+        { kind: 'block', type: 'upy_pin_off' },
+        { kind: 'block', type: 'upy_pin_get_value' },
+        {
+          kind: 'block',
+          type: 'upy_pin_set_value',
+          inputs: { VALUE: { shadow: { type: 'math_number', fields: { NUM: 1 } } } },
+        },
+        { kind: 'block', type: 'upy_pin_unused' },
+        { kind: 'sep' },
+        {
+          kind: 'block',
+          type: 'upy_pin_write',
+          inputs: { VALUE: { shadow: { type: 'upy_highlow' } } },
+        },
+        { kind: 'block', type: 'upy_pin_read' },
+        { kind: 'block', type: 'upy_pin_toggle' },
+        {
+          kind: 'block',
+          type: 'upy_builtin_led',
+          inputs: { VALUE: { shadow: { type: 'upy_highlow' } } },
+        },
+        { kind: 'block', type: 'upy_highlow' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'ADC',
+      colour: '200',
+      contents: [
+        { kind: 'block', type: 'upy_adc_init' },
+        { kind: 'block', type: 'upy_adc_read' },
+        { kind: 'block', type: 'upy_adc_read_u16' },
+        { kind: 'block', type: 'upy_adc_read_uv' },
+        { kind: 'block', type: 'upy_adc_width' },
+        { kind: 'block', type: 'upy_adc_atten' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'PWM',
+      colour: '60',
+      contents: [
+        {
+          kind: 'block',
+          type: 'upy_pwm_init',
+          inputs: {
+            FREQ: { shadow: { type: 'math_number', fields: { NUM: 20000 } } },
+            DUTY: { shadow: { type: 'math_number', fields: { NUM: 512 } } },
+          },
+        },
+        { kind: 'block', type: 'upy_pwm_get_duty' },
+        { kind: 'block', type: 'upy_pwm_get_duty_u16' },
+        { kind: 'block', type: 'upy_pwm_get_freq' },
+        {
+          kind: 'block',
+          type: 'upy_pwm_set_duty_u16',
+          inputs: { DUTY: { shadow: { type: 'math_number', fields: { NUM: 32768 } } } },
+        },
+        { kind: 'sep' },
+        {
+          kind: 'block',
+          type: 'upy_pwm_duty',
+          inputs: { DUTY: { shadow: { type: 'math_number', fields: { NUM: 512 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_pwm_freq',
+          inputs: { FREQ: { shadow: { type: 'math_number', fields: { NUM: 1000 } } } },
+        },
+        { kind: 'block', type: 'upy_pwm_deinit' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Time',
+      colour: '140',
+      contents: [
+        {
+          kind: 'block',
+          type: 'upy_sleep_ms',
+          inputs: { MS: { shadow: { type: 'math_number', fields: { NUM: 1000 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_sleep_us',
+          inputs: { US: { shadow: { type: 'math_number', fields: { NUM: 100 } } } },
+        },
+        { kind: 'block', type: 'upy_ticks_ms' },
+        { kind: 'block', type: 'upy_ticks_us' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'Timer',
+      colour: '140',
+      contents: [
+        { kind: 'block', type: 'upy_timer_new' },
+        {
+          kind: 'block',
+          type: 'upy_timer_init',
+          inputs: { PERIOD: { shadow: { type: 'math_number', fields: { NUM: 1000 } } } },
+        },
+        { kind: 'block', type: 'upy_timer_callback' },
+        { kind: 'block', type: 'upy_timer_deinit' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'UART / Print',
+      colour: '160',
+      contents: [
+        { kind: 'block', type: 'upy_uart_init_full' },
+        { kind: 'block', type: 'upy_uart_setup' },
+        { kind: 'block', type: 'upy_uart_deinit' },
+        { kind: 'block', type: 'upy_uart_any' },
+        { kind: 'block', type: 'upy_uart_read_all' },
+        {
+          kind: 'block',
+          type: 'upy_uart_read_bytes',
+          inputs: { NBYTES: { shadow: { type: 'math_number', fields: { NUM: 1 } } } },
+        },
+        { kind: 'block', type: 'upy_uart_read_raw' },
+        { kind: 'block', type: 'upy_uart_txdone' },
+        { kind: 'block', type: 'upy_uart_readinto' },
+        {
+          kind: 'block',
+          type: 'upy_uart_write_str',
+          inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: 'hello' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_uart_write_line',
+          inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: 'hello' } } } },
+        },
+        { kind: 'block', type: 'upy_uart_write_var' },
+        { kind: 'block', type: 'upy_uart_write_bytes_var' },
+        {
+          kind: 'block',
+          type: 'upy_uart_write_raw',
+          inputs: { VAL: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+        },
+        { kind: 'block', type: 'upy_uart_sendbreak' },
+        { kind: 'block', type: 'upy_uart_flush' },
+        { kind: 'sep' },
+        { kind: 'block', type: 'upy_uart_init' },
+        { kind: 'block', type: 'upy_uart_write' },
+        { kind: 'block', type: 'upy_uart_readline' },
+        { kind: 'block', type: 'upy_print' },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'I2C',
+      colour: '170',
+      contents: [
+        { kind: 'block', type: 'upy_i2c_init' },
+        { kind: 'block', type: 'upy_i2c_scan' },
+        {
+          kind: 'block',
+          type: 'upy_i2c_writeto',
+          inputs: { ADDR: { shadow: { type: 'math_number', fields: { NUM: 60 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_i2c_readfrom',
+          inputs: {
+            ADDR: { shadow: { type: 'math_number', fields: { NUM: 60 } } },
+            NBYTES: { shadow: { type: 'math_number', fields: { NUM: 1 } } },
+          },
+        },
+      ],
+    },
+    { kind: 'sep' },
+    {
+      kind: 'category',
+      name: 'WiFi',
+      colour: '120',
+      contents: [
+        {
+          kind: 'block',
+          type: 'upy_wifi_connect',
+          inputs: {
+            SSID: { shadow: { type: 'text', fields: { TEXT: 'MyNetwork' } } },
+            PASSWORD: { shadow: { type: 'text', fields: { TEXT: 'password' } } },
+          },
+        },
+        { kind: 'block', type: 'upy_wifi_is_connected' },
+        { kind: 'block', type: 'upy_wifi_ifconfig' },
+        { kind: 'block', type: 'upy_wifi_disconnect' },
+      ],
+    },
+  ],
+};
+
+// Import needed for type only
+import type * as Blockly from 'blockly';

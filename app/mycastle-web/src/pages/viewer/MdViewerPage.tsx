@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Box, AppBar, Toolbar, Typography, Button, CircularProgress, Alert, Paper } from '@mui/material';
+import { Box, Typography, Button, CircularProgress, Alert, Paper } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, Edit as EditIcon } from '@mui/icons-material';
+import { useMinimalTopBarSlot } from '../../components/MinimalTopBarContext';
 import { useMqtt } from '../../modules/mqttclient/MqttContext';
 import { MarkdownRenderer } from '../../utils/MdParser';
 import 'katex/dist/katex.min.css';
@@ -48,47 +49,27 @@ const MdViewerPage: React.FC = () => {
     navigate(`/editor/simple/${path}`);
   };
 
+  useMinimalTopBarSlot(
+    <>
+      <Button size="small" startIcon={<ArrowBackIcon />} onClick={handleBack} color="inherit" sx={{ mr: 1 }}>Back</Button>
+      <Typography variant="body2" noWrap sx={{ flexGrow: 1, fontFamily: 'monospace', color: 'inherit' }}>
+        {path || 'No file selected'}
+      </Typography>
+      <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={handleEdit} disabled={!path} color="inherit">Edit</Button>
+    </>,
+    [path, handleBack, handleEdit],
+  );
+
   return (
     <Box
       sx={{
         display: 'flex',
         flexDirection: 'column',
-        height: 'var(--app-height, 100vh)',
+        height: '100%',
         overflow: 'hidden',
         paddingTop: 'env(safe-area-inset-top)',
       }}
     >
-      <AppBar
-        position="sticky"
-        color="default"
-        elevation={1}
-        sx={{
-          top: 0,
-          zIndex: 1100,
-          flexShrink: 0,
-        }}
-      >
-        <Toolbar variant="dense">
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={handleBack}
-            sx={{ mr: 2 }}
-          >
-            Back
-          </Button>
-          <Typography variant="subtitle1" sx={{ flexGrow: 1, fontFamily: 'monospace' }}>
-            {path || 'No file selected'}
-          </Typography>
-          <Button
-            variant="outlined"
-            startIcon={<EditIcon />}
-            onClick={handleEdit}
-            disabled={!path}
-          >
-            Edit
-          </Button>
-        </Toolbar>
-      </AppBar>
 
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>

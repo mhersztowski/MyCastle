@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { RpcRouter } from './RpcRouter.js';
+import { RpcRouter } from '@mhersztowski/core-backend';
 import { registerHandlers } from './handlers.js';
 
 let router: RpcRouter;

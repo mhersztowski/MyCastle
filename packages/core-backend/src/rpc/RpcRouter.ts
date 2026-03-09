@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 import type { RpcMethodDef, RpcResponse, RpcErrorResponse, AuthTokenPayload } from '@mhersztowski/core';
 import { rpcMethods, type RpcMethodName } from '@mhersztowski/core';
 

@@ -1,0 +1,1593 @@
+import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth } from '@mhersztowski/core-backend';
+import type { IncomingMessage, ServerResponse } from 'http';
+import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
+import { CompositeFS, NodeFS, VfsError } from '@mhersztowski/core';
+import { buildSwaggerSpec } from './swagger.js';
+import { randomUUID } from 'crypto';
+import * as path from 'path';
+import * as fs from 'fs';
+import AdmZip from 'adm-zip';
+import type { IotService } from './modules/iot/IotService.js';
+import type { TerminalService } from './modules/terminal/TerminalService.js';
+import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
+import type { ArduinoService } from './modules/arduino/index.js';
+
+interface CrudConfig {
+  filePath: string;
+  itemsKey: string;
+  typeValue: string;
+  lookupKey: 'id' | 'name';
+}
+
+const MINIS_ROOT = 'Minis';
+
+const CRUD_CONFIGS: Record<string, CrudConfig> = {
+  users: { filePath: `${MINIS_ROOT}/Admin/Users.json`, itemsKey: 'items', typeValue: 'users', lookupKey: 'id' },
+  devicedefs: { filePath: `${MINIS_ROOT}/Admin/DeviceDefList.json`, itemsKey: 'deviceDefs', typeValue: 'device_defs', lookupKey: 'id' },
+  moduledefs: { filePath: `${MINIS_ROOT}/Admin/ModuleDefList.json`, itemsKey: 'moduleDefs', typeValue: 'module_defs', lookupKey: 'id' },
+  projectdefs: { filePath: `${MINIS_ROOT}/Admin/ProjectDefList.json`, itemsKey: 'projectDefs', typeValue: 'project_defs', lookupKey: 'id' },
+};
+
+export class MycastleHttpServer extends HttpUploadServer {
+  private static readonly NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+  private swaggerUiDir: string | null = null;
+  private iotService: IotService | null;
+  private terminalService: TerminalService | null = null;
+  private jwtService: JwtService;
+  private apiKeyService: ApiKeyService;
+  private rpcRouter: RpcRouter;
+  private vfs: CompositeFS;
+  private arduinoService: ArduinoService | null;
+  private rootDir: string | null;
+
+  private static validateName(name: string): string | null {
+    if (!name || name.length === 0) return 'Name is required';
+    if (!MycastleHttpServer.NAME_PATTERN.test(name)) return 'Name must contain only letters, digits, hyphens, underscores';
+    return null;
+  }
+
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService) {
+    super(port, fileSystem, undefined, undefined, undefined, staticDir);
+    this.jwtService = jwtService;
+    this.apiKeyService = apiKeyService;
+    this.iotService = iotService ?? null;
+    this.arduinoService = arduinoService ?? null;
+    this.rootDir = rootDir ? path.resolve(rootDir) : null;
+    this.resolveSwaggerUiDir();
+    this.rpcRouter = new RpcRouter();
+    registerHandlers(this.rpcRouter, { iotService: this.iotService ?? undefined, fileSystem });
+
+    this.vfs = new CompositeFS();
+    if (rootDir) {
+      this.vfs.mount('/data', new NodeFS({ rootDir: path.resolve(rootDir) }));
+    }
+  }
+
+  getRpcRouter(): RpcRouter { return this.rpcRouter; }
+
+  setTerminalService(service: TerminalService): void {
+    this.terminalService = service;
+  }
+
+  private resolveSwaggerUiDir(): void {
+    try {
+      const swaggerUiPath = import.meta.resolve('swagger-ui-dist');
+      // import.meta.resolve returns a file:// URL
+      const resolved = new URL(swaggerUiPath).pathname;
+      this.swaggerUiDir = path.dirname(resolved);
+    } catch {
+      console.warn('swagger-ui-dist not found, /api/docs will not be available');
+    }
+  }
+
+  protected async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.url?.startsWith('/api/')) {
+      await this.handleApiRequest(req, res);
+      return;
+    }
+
+    await super.handleRequest(req, res);
+  }
+
+  private async handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const fullApiPath = req.url!.replace(/^\/api/, '');
+    const apiPath = fullApiPath.split('?')[0];
+    const method = req.method || 'GET';
+
+    // --- Public endpoints (no auth required) ---
+
+    // Auth
+    if (method === 'POST' && apiPath === '/auth/login') {
+      await this.handleLogin(req, res);
+      return;
+    }
+    if (method === 'GET' && apiPath === '/auth/users') {
+      await this.handlePublicUserList(res);
+      return;
+    }
+
+    // Swagger docs
+    if (apiPath === '/docs') {
+      res.writeHead(301, { Location: '/api/docs/' });
+      res.end();
+      return;
+    }
+    if (apiPath === '/docs/') {
+      this.serveSwaggerUi(res);
+      return;
+    }
+    if (apiPath === '/docs/swagger.json') {
+      this.sendJsonResponse(res, 200, buildSwaggerSpec(this.rpcRouter));
+      return;
+    }
+    if (apiPath.startsWith('/docs/')) {
+      this.serveSwaggerAsset(apiPath.replace('/docs/', ''), res);
+      return;
+    }
+
+    // --- Protected endpoints (auth required) ---
+
+    const user = checkAuth(req, this.jwtService, this.apiKeyService);
+    if (!user) {
+      this.sendJsonResponse(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+
+    // Terminal ticket: POST /api/terminal/ticket (admin only)
+    if (method === 'POST' && apiPath === '/terminal/ticket') {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      if (!this.terminalService) {
+        this.sendJsonResponse(res, 503, { error: 'Terminal service not available' });
+        return;
+      }
+      const ticket = this.terminalService.createTicket(user);
+      this.sendJsonResponse(res, 200, { ticket });
+      return;
+    }
+
+    // AI search proxy: POST /ai/search
+    if (apiPath === '/ai/search' && method === 'POST') {
+      await this.handleAiSearch(req, res);
+      return;
+    }
+
+    // Admin routes require isAdmin
+    if (apiPath.startsWith('/admin/') && !user.isAdmin) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+      return;
+    }
+
+    // API Keys: /users/{userName}/api-keys[/{keyId}]
+    const apiKeysMatch = apiPath.match(/^\/users\/([^/]+)\/api-keys(?:\/(.+))?$/);
+    if (apiKeysMatch) {
+      const userName = decodeURIComponent(apiKeysMatch[1]);
+      const keyId = apiKeysMatch[2] ? decodeURIComponent(apiKeysMatch[2]) : undefined;
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: can only manage your own API keys' });
+        return;
+      }
+      await this.handleApiKeys(req, res, method, user, keyId);
+      return;
+    }
+
+    // RPC dispatch: POST /api/rpc/{methodName}
+    const rpcMatch = apiPath.match(/^\/rpc\/([a-zA-Z0-9_.]+)$/);
+    if (rpcMatch && method === 'POST') {
+      const methodName = rpcMatch[1];
+      const body = await this.parseRequestBody(req);
+      const result = await this.rpcRouter.dispatch(methodName, body, { user });
+      this.sendJsonResponse(res, result.statusCode, result.body);
+      return;
+    }
+
+    // Def sources upload: POST /admin/{resource}/{id}/sources
+    const sourcesMatch = apiPath.match(/^\/admin\/(\w+)\/([^/]+)\/sources$/);
+    if (sourcesMatch && method === 'POST') {
+      const resource = sourcesMatch[1];
+      const defId = decodeURIComponent(sourcesMatch[2]);
+      await this.handleUploadDefSources(req, res, resource, defId);
+      return;
+    }
+
+    // Admin CRUD routes: /admin/{resource} and /admin/{resource}/{id}
+    const adminMatch = apiPath.match(/^\/admin\/(\w+)(?:\/(.+))?$/);
+    if (adminMatch) {
+      const resource = adminMatch[1];
+      const id = adminMatch[2] ? decodeURIComponent(adminMatch[2]) : undefined;
+      const config = CRUD_CONFIGS[resource];
+      if (config) {
+        await this.handleCrud(req, res, method, config, id);
+        return;
+      }
+    }
+
+    // IoT endpoints (must be matched BEFORE generic user devices/projects routes)
+
+    // IoT config: /users/{userName}/devices/{deviceName}/iot-config
+    const iotConfigMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-config$/);
+    if (iotConfigMatch) {
+      const userName = decodeURIComponent(iotConfigMatch[1]);
+      const deviceName = decodeURIComponent(iotConfigMatch[2]);
+      await this.handleIotConfig(req, res, method, userName, deviceName);
+      return;
+    }
+
+    // IoT telemetry: /users/{userName}/devices/{deviceName}/telemetry[/latest]
+    const telemetryMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/telemetry(\/latest)?$/);
+    if (telemetryMatch) {
+      const userName = decodeURIComponent(telemetryMatch[1]);
+      const deviceName = decodeURIComponent(telemetryMatch[2]);
+      const isLatest = !!telemetryMatch[3];
+      await this.handleIotTelemetry(req, res, method, userName, deviceName, isLatest);
+      return;
+    }
+
+    // IoT commands: /users/{userName}/devices/{deviceName}/commands
+    const commandsMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/commands$/);
+    if (commandsMatch) {
+      const userName = decodeURIComponent(commandsMatch[1]);
+      const deviceName = decodeURIComponent(commandsMatch[2]);
+      await this.handleIotCommands(req, res, method, userName, deviceName);
+      return;
+    }
+
+    // Device shares: /users/{userName}/devices/{deviceName}/shares[/{shareId}]
+    const sharesMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/shares(?:\/(.+))?$/);
+    if (sharesMatch) {
+      const userName = decodeURIComponent(sharesMatch[1]);
+      const deviceName = decodeURIComponent(sharesMatch[2]);
+      const shareId = sharesMatch[3] ? decodeURIComponent(sharesMatch[3]) : undefined;
+      await this.handleDeviceShares(req, res, method, userName, deviceName, shareId);
+      return;
+    }
+
+    // Shared devices for target user: /users/{userName}/shared-devices
+    const sharedDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/shared-devices$/);
+    if (sharedDevicesMatch) {
+      const userName = decodeURIComponent(sharedDevicesMatch[1]);
+      await this.handleSharedDevices(req, res, method, userName);
+      return;
+    }
+
+    // Shares owned by user: /users/{userName}/my-shares
+    const mySharesMatch = apiPath.match(/^\/users\/([^/]+)\/my-shares$/);
+    if (mySharesMatch) {
+      const userName = decodeURIComponent(mySharesMatch[1]);
+      await this.handleMyShares(req, res, method, userName);
+      return;
+    }
+
+    // IoT device status: /users/{userName}/iot/devices
+    const iotDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/iot\/devices$/);
+    if (iotDevicesMatch) {
+      const userName = decodeURIComponent(iotDevicesMatch[1]);
+      await this.handleIotDevicesList(req, res, method, userName);
+      return;
+    }
+
+    // IoT alerts: /users/{userName}/alerts[/{id}]
+    const alertsMatch = apiPath.match(/^\/users\/([^/]+)\/alerts(?:\/(.+))?$/);
+    if (alertsMatch) {
+      const userName = decodeURIComponent(alertsMatch[1]);
+      const alertId = alertsMatch[2] ? decodeURIComponent(alertsMatch[2]) : undefined;
+      await this.handleIotAlerts(req, res, method, userName, alertId);
+      return;
+    }
+
+    // IoT alert rules: /users/{userName}/alert-rules[/{id}]
+    const alertRulesMatch = apiPath.match(/^\/users\/([^/]+)\/alert-rules(?:\/(.+))?$/);
+    if (alertRulesMatch) {
+      const userName = decodeURIComponent(alertRulesMatch[1]);
+      const ruleId = alertRulesMatch[2] ? decodeURIComponent(alertRulesMatch[2]) : undefined;
+      await this.handleIotAlertRules(req, res, method, userName, ruleId);
+      return;
+    }
+
+    // User localizations: /users/{userName}/localizations[/{id}]
+    const userLocalizationsMatch = apiPath.match(/^\/users\/([^/]+)\/localizations(?:\/([^/]+))?$/);
+    if (userLocalizationsMatch) {
+      const userName = decodeURIComponent(userLocalizationsMatch[1]);
+      const locId = userLocalizationsMatch[2] ? decodeURIComponent(userLocalizationsMatch[2]) : undefined;
+      await this.handleUserLocalizations(req, res, method, userName, locId);
+      return;
+    }
+
+    // User devices: /users/{userName}/devices and /users/{userName}/devices/{deviceName}
+    const userDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/devices(?:\/([^/]+))?$/);
+    if (userDevicesMatch) {
+      const userName = decodeURIComponent(userDevicesMatch[1]);
+      const deviceName = userDevicesMatch[2] ? decodeURIComponent(userDevicesMatch[2]) : undefined;
+      await this.handleUserDevices(req, res, method, userName, deviceName);
+      return;
+    }
+
+    // User projects: /users/{userName}/projects and /users/{userName}/projects/{projectName}
+    const userProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/projects(?:\/([^/]+))?$/);
+    if (userProjectsMatch) {
+      const userName = decodeURIComponent(userProjectsMatch[1]);
+      const projectName = userProjectsMatch[2] ? decodeURIComponent(userProjectsMatch[2]) : undefined;
+      await this.handleUserProjects(req, res, method, userName, projectName);
+      return;
+    }
+
+    // Arduino: boards list (GET /api/arduino/boards)
+    if (method === 'GET' && apiPath === '/arduino/boards') {
+      await this.handleArduinoBoards(res);
+      return;
+    }
+
+    // Arduino: ports list (GET /api/arduino/ports)
+    if (method === 'GET' && apiPath === '/arduino/ports') {
+      await this.handleArduinoPorts(res);
+      return;
+    }
+
+    // Arduino: compile (POST /api/users/{userName}/projects/{projectName}/compile)
+    const compileMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/compile$/);
+    if (compileMatch && method === 'POST') {
+      const userName = decodeURIComponent(compileMatch[1]);
+      const projectName = decodeURIComponent(compileMatch[2]);
+      await this.handleArduinoCompile(req, res, userName, projectName);
+      return;
+    }
+
+    // Arduino: upload (POST /api/users/{userName}/projects/{projectName}/upload)
+    const uploadMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/upload$/);
+    if (uploadMatch && method === 'POST') {
+      const userName = decodeURIComponent(uploadMatch[1]);
+      const projectName = decodeURIComponent(uploadMatch[2]);
+      await this.handleArduinoUpload(req, res, userName, projectName);
+      return;
+    }
+
+    // Arduino: list output files (GET /api/users/{userName}/projects/{projectName}/output)
+    const outputMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/output(?:\/([^/]+))?$/);
+    if (outputMatch) {
+      const userName = decodeURIComponent(outputMatch[1]);
+      const projectName = decodeURIComponent(outputMatch[2]);
+      const fileName = outputMatch[3] ? decodeURIComponent(outputMatch[3]) : undefined;
+      await this.handleArduinoOutput(req, res, method, userName, projectName, fileName);
+      return;
+    }
+
+    // README: /users/{userName}/projects/{projectName}/readme
+    const readmeMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/readme$/);
+    if (readmeMatch) {
+      const rUserName = decodeURIComponent(readmeMatch[1]);
+      const rProjectName = decodeURIComponent(readmeMatch[2]);
+      await this.handleProjectReadme(req, res, method, rUserName, rProjectName);
+      return;
+    }
+
+    // Sketch files: /users/{userName}/projects/{projectName}/sketches[/{sketchName}/{fileName}]
+    const sketchMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
+    if (sketchMatch) {
+      const sUserName = decodeURIComponent(sketchMatch[1]);
+      const sProjectName = decodeURIComponent(sketchMatch[2]);
+      const sSketchName = sketchMatch[3] ? decodeURIComponent(sketchMatch[3]) : undefined;
+      const sFileName = sketchMatch[4] ? decodeURIComponent(sketchMatch[4]) : undefined;
+      await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
+    // VFS endpoints: /vfs/{operation} (admin-only)
+    const vfsMatch = apiPath.match(/^\/vfs\/([a-zA-Z]+)$/);
+    if (vfsMatch) {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      await this.handleVfs(req, res, method, vfsMatch[1]);
+      return;
+    }
+
+    this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
+  }
+
+  // --- Arduino ---
+
+  private async resolveProjectId(userName: string, projectIdentifier: string): Promise<string | null> {
+    try {
+      const data = await this.fileSystem.readFile(`Minis/Users/${userName}/Project.json`);
+      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string; name: string }> };
+      const projects = parsed.projects ?? [];
+      // Try by name first, then by id
+      const project = projects.find(p => p.name === projectIdentifier) ?? projects.find(p => p.id === projectIdentifier);
+      return project?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async handleArduinoBoards(res: ServerResponse): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    try {
+      const boards = await this.arduinoService.listBoards();
+      this.sendJsonResponse(res, 200, { items: boards });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'Failed to list boards' });
+    }
+  }
+
+  private async handleArduinoPorts(res: ServerResponse): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    try {
+      const ports = await this.arduinoService.listPorts();
+      this.sendJsonResponse(res, 200, { items: ports });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'Failed to list ports' });
+    }
+  }
+
+  private async handleArduinoCompile(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string };
+    if (!body.sketchName || !body.fqbn) {
+      this.sendJsonResponse(res, 400, { error: 'sketchName and fqbn are required' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    try {
+      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn);
+      this.sendJsonResponse(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Compilation failed';
+      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
+    }
+  }
+
+  private async handleArduinoUpload(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.arduinoService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
+      return;
+    }
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; port?: string };
+    if (!body.sketchName || !body.fqbn || !body.port) {
+      this.sendJsonResponse(res, 400, { error: 'sketchName, fqbn and port are required' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    try {
+      const result = await this.arduinoService.upload(userName, projectId, body.sketchName, body.fqbn, body.port);
+      this.sendJsonResponse(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
+    }
+  }
+
+  private async handleArduinoOutput(_req: IncomingMessage, res: ServerResponse, method: string, userName: string, projectName: string, fileName?: string): Promise<void> {
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    const outputDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'output');
+
+    if (!fileName) {
+      // List output files
+      try {
+        const entries = await fs.promises.readdir(outputDir, { withFileTypes: true });
+        const items = entries
+          .filter(e => e.isFile())
+          .map(e => {
+            const stat = fs.statSync(path.join(outputDir, e.name));
+            return { name: e.name, size: stat.size };
+          });
+        this.sendJsonResponse(res, 200, { items });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    // Serve specific file (binary)
+    const filePath = path.join(outputDir, fileName);
+    if (fileName.includes('..') || fileName.includes('/')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid file name' });
+      return;
+    }
+    try {
+      const data = await fs.promises.readFile(filePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Content-Length': data.length,
+      });
+      res.end(data);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'File not found' });
+    }
+  }
+
+  // --- README ---
+
+  private async handleProjectReadme(
+    req: IncomingMessage, res: ServerResponse, method: string,
+    userName: string, projectName: string,
+  ): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    const readmePath = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'README.md');
+
+    if (method === 'GET') {
+      try {
+        const content = await fs.promises.readFile(readmePath, 'utf-8');
+        this.sendJsonResponse(res, 200, { content });
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'README not found' });
+      }
+      return;
+    }
+
+    if (method === 'PUT') {
+      const body = await this.parseRequestBody(req) as { content?: string };
+      if (body?.content === undefined) {
+        this.sendJsonResponse(res, 400, { error: 'Missing content' });
+        return;
+      }
+      await fs.promises.mkdir(path.dirname(readmePath), { recursive: true });
+      await fs.promises.writeFile(readmePath, body.content, 'utf-8');
+      this.sendJsonResponse(res, 200, { success: true });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  // --- Sketch files ---
+
+  private async handleSketches(
+    req: IncomingMessage, res: ServerResponse, method: string,
+    userName: string, projectName: string,
+    sketchName?: string, fileName?: string,
+  ): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    const sketchesDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'sketches');
+
+    // GET /sketches — list sketch directories
+    if (!sketchName || !fileName) {
+      if (method !== 'GET') {
+        this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+        return;
+      }
+      try {
+        const entries = await fs.promises.readdir(sketchesDir, { withFileTypes: true });
+        const items = entries.filter(e => e.isDirectory()).map(e => e.name);
+        this.sendJsonResponse(res, 200, { items });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    // Path traversal protection
+    if (sketchName.includes('..') || fileName.includes('..')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid path' });
+      return;
+    }
+    const filePath = path.join(sketchesDir, sketchName, fileName);
+
+    if (method === 'GET') {
+      // Read sketch file
+      try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        this.sendJsonResponse(res, 200, { content });
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'File not found' });
+      }
+      return;
+    }
+
+    if (method === 'PUT') {
+      // Write sketch file
+      const body = await this.parseRequestBody(req) as { content?: string };
+      if (!body?.content && body?.content !== '') {
+        this.sendJsonResponse(res, 400, { error: 'Missing content' });
+        return;
+      }
+      await fs.promises.mkdir(path.join(sketchesDir, sketchName), { recursive: true });
+      await fs.promises.writeFile(filePath, body.content, 'utf-8');
+      this.sendJsonResponse(res, 200, { success: true });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  // --- VFS ---
+
+  private async handleVfs(req: IncomingMessage, res: ServerResponse, method: string, operation: string): Promise<void> {
+    const url = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+    const vfsPath = url.searchParams.get('path') || '/';
+
+    try {
+      switch (operation) {
+        case 'capabilities': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          this.sendJsonResponse(res, 200, this.vfs.capabilities);
+          return;
+        }
+        case 'stat': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const stat = await this.vfs.stat(vfsPath);
+          this.sendJsonResponse(res, 200, stat);
+          return;
+        }
+        case 'readdir': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const entries = await this.vfs.readDirectory(vfsPath);
+          this.sendJsonResponse(res, 200, { entries });
+          return;
+        }
+        case 'readFile': {
+          if (method !== 'GET') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const data = await this.vfs.readFile(vfsPath);
+          const base64 = Buffer.from(data).toString('base64');
+          this.sendJsonResponse(res, 200, { data: base64 });
+          return;
+        }
+        case 'writeFile': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const writeBody = await this.parseRequestBody(req) as { data: string; options?: WriteFileOptions };
+          const content = new Uint8Array(Buffer.from(writeBody.data, 'base64'));
+          await this.vfs.writeFile!(vfsPath, content, writeBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'delete': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const delBody = await this.parseRequestBody(req) as { options?: DeleteOptions };
+          await this.vfs.delete!(vfsPath, delBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'rename': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const renBody = await this.parseRequestBody(req) as { oldPath: string; newPath: string; options?: RenameOptions };
+          await this.vfs.rename!(renBody.oldPath, renBody.newPath, renBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'mkdir': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          await this.vfs.mkdir!(vfsPath);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        case 'copy': {
+          if (method !== 'POST') { this.sendJsonResponse(res, 405, { error: 'Method not allowed' }); return; }
+          const cpBody = await this.parseRequestBody(req) as { source: string; destination: string; options?: CopyOptions };
+          await this.vfs.copy!(cpBody.source, cpBody.destination, cpBody.options);
+          this.sendJsonResponse(res, 200, { ok: true });
+          return;
+        }
+        default:
+          this.sendJsonResponse(res, 404, { error: `Unknown VFS operation: ${operation}` });
+      }
+    } catch (err) {
+      if (err instanceof VfsError) {
+        const statusMap: Record<string, number> = {
+          FileNotFound: 404,
+          FileExists: 409,
+          FileNotADirectory: 400,
+          FileIsADirectory: 400,
+          NoPermissions: 403,
+          Unavailable: 503,
+        };
+        this.sendJsonResponse(res, statusMap[err.code] ?? 500, { error: err.message, code: err.code, path: err.path });
+      } else {
+        this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+      }
+    }
+  }
+
+  // --- Auth ---
+
+  private async handlePublicUserList(res: ServerResponse): Promise<void> {
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`) as Record<string, any>;
+      const users = (data.items || []) as any[];
+      const publicList = users.map((u: any) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin ?? false }));
+      this.sendJsonResponse(res, 200, { items: publicList });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  private async handleLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await this.parseRequestBody(req);
+      const { name, password } = body as { name: string; password: string };
+
+      if (!name || !password) {
+        this.sendJsonResponse(res, 400, { error: 'name and password required' });
+        return;
+      }
+
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`) as Record<string, any>;
+      const users = (data.items || []) as any[];
+      const user = users.find((u: any) => u.name === name);
+
+      if (!user || !await PasswordService.verify(password, user.password)) {
+        this.sendJsonResponse(res, 401, { error: 'Invalid credentials' });
+        return;
+      }
+
+      // Auto-migrate plaintext password to bcrypt
+      if (!PasswordService.isBcrypt(user.password)) {
+        user.password = await PasswordService.hash(password);
+        data.items = users;
+        await this.writeJsonFile(`${MINIS_ROOT}/Admin/Users.json`, data);
+      }
+
+      const tokenPayload: AuthTokenPayload = {
+        userId: user.id,
+        userName: user.name,
+        isAdmin: user.isAdmin ?? false,
+        roles: user.roles ?? [],
+      };
+      const token = this.jwtService.sign(tokenPayload);
+
+      const { password: _, ...publicUser } = user;
+      this.sendJsonResponse(res, 200, { token, user: publicUser });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- API Keys ---
+
+  private async handleApiKeys(req: IncomingMessage, res: ServerResponse, method: string, user: AuthTokenPayload, keyId?: string): Promise<void> {
+    try {
+      switch (method) {
+        case 'GET': {
+          if (keyId) { this.sendJsonResponse(res, 405, { error: 'GET with id not supported, use list' }); return; }
+          const keys = this.apiKeyService.listForUser(user.userName);
+          this.sendJsonResponse(res, 200, { items: keys });
+          return;
+        }
+        case 'POST': {
+          if (keyId) { this.sendJsonResponse(res, 405, { error: 'POST with id not supported' }); return; }
+          const body = await this.parseRequestBody(req) as { name?: string };
+          if (!body.name || typeof body.name !== 'string' || body.name.trim().length === 0) {
+            this.sendJsonResponse(res, 400, { error: 'name is required' });
+            return;
+          }
+          const result = await this.apiKeyService.create(user.userName, user.userId, user.isAdmin, user.roles, body.name.trim());
+          this.sendJsonResponse(res, 201, result);
+          return;
+        }
+        case 'DELETE': {
+          if (!keyId) { this.sendJsonResponse(res, 400, { error: 'DELETE requires a key id' }); return; }
+          const deleted = await this.apiKeyService.deleteKey(keyId, user.userName);
+          if (!deleted) { this.sendJsonResponse(res, 404, { error: 'API key not found' }); return; }
+          this.sendJsonResponse(res, 200, { success: true });
+          return;
+        }
+        default:
+          this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- Generic CRUD ---
+
+  private async handleCrud(req: IncomingMessage, res: ServerResponse, method: string, config: CrudConfig, id?: string): Promise<void> {
+    try {
+      switch (method) {
+        case 'GET':
+          if (!id) await this.crudList(res, config);
+          else this.sendJsonResponse(res, 405, { error: 'GET with id not supported, use list' });
+          break;
+        case 'POST':
+          if (!id) await this.crudCreate(req, res, config);
+          else this.sendJsonResponse(res, 405, { error: 'POST with id not supported' });
+          break;
+        case 'PUT':
+          if (id) await this.crudUpdate(req, res, config, id);
+          else this.sendJsonResponse(res, 400, { error: 'PUT requires an id' });
+          break;
+        case 'DELETE':
+          if (id) await this.crudDelete(res, config, id);
+          else this.sendJsonResponse(res, 400, { error: 'DELETE requires an id' });
+          break;
+        default:
+          this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  private async crudList(res: ServerResponse, config: CrudConfig): Promise<void> {
+    const data = await this.readJsonFile(config.filePath);
+    const items = (data as Record<string, unknown[]>)[config.itemsKey] || [];
+    // Strip passwords from users
+    const safeItems = config.itemsKey === 'items'
+      ? items.map((u: any) => { const { password, ...rest } = u; return rest; })
+      : items;
+    this.sendJsonResponse(res, 200, { items: safeItems });
+  }
+
+  private async crudCreate(req: IncomingMessage, res: ServerResponse, config: CrudConfig): Promise<void> {
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const data = await this.readJsonFile(config.filePath) as Record<string, unknown>;
+    const items = (data[config.itemsKey] || []) as Record<string, unknown>[];
+
+    // Validate name format and uniqueness
+    if (body.name && typeof body.name === 'string') {
+      const nameErr = MycastleHttpServer.validateName(body.name as string);
+      if (nameErr) { this.sendJsonResponse(res, 400, { error: nameErr }); return; }
+      const duplicate = items.find((item) => item.name === body.name);
+      if (duplicate) { this.sendJsonResponse(res, 409, { error: `Name '${body.name}' already exists` }); return; }
+    }
+
+    body.id = body.id || randomUUID();
+
+    // Hash password for user creation
+    if (config.itemsKey === 'items' && body.password && typeof body.password === 'string') {
+      body.password = await PasswordService.hash(body.password as string);
+    }
+
+    // Set type field based on resource
+    const TYPE_MAP: Record<string, string> = {
+      items: 'user', deviceDefs: 'device_def', moduleDefs: 'module_def',
+      projectDefs: 'project_def', devices: 'device', projects: 'minis_project',
+    };
+    if (TYPE_MAP[config.itemsKey]) body.type = TYPE_MAP[config.itemsKey];
+
+    items.push(body);
+    data[config.itemsKey] = items;
+    data.type = config.typeValue;
+    await this.writeJsonFile(config.filePath, data);
+
+    // Create user directory if creating a user
+    if (config.itemsKey === 'items' && body.name) {
+      const userDir = `${MINIS_ROOT}/Users/${body.name}/Projects`;
+      await this.writeJsonFile(`${userDir}/.gitkeep`, '');
+    }
+
+    // Copy project source files from definition when creating a user project
+    if (config.itemsKey === 'projects' && body.projectDefId) {
+      const userDir = path.dirname(config.filePath);
+      const srcPath = `${MINIS_ROOT}/Admin/ProjectsDefs/${body.projectDefId}`;
+      const dstPath = `${userDir}/Projects/${body.id}`;
+      try {
+        const srcTree = await this.fileSystem.listDirectory(srcPath);
+        await this.copyTree(srcTree, srcPath, dstPath);
+      } catch {
+        // Source doesn't exist — no files to copy, directory not needed
+      }
+    }
+
+    const { password, ...safeBody } = body;
+    this.sendJsonResponse(res, 201, config.itemsKey === 'items' ? safeBody : body);
+  }
+
+  private async crudUpdate(req: IncomingMessage, res: ServerResponse, config: CrudConfig, id: string): Promise<void> {
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const data = await this.readJsonFile(config.filePath) as Record<string, unknown>;
+    const items = (data[config.itemsKey] || []) as Record<string, unknown>[];
+
+    const index = items.findIndex((item) => item[config.lookupKey] === id);
+    if (index === -1) {
+      this.sendJsonResponse(res, 404, { error: `Item ${id} not found` });
+      return;
+    }
+
+    // Validate name format if name is being changed
+    if (body.name && typeof body.name === 'string') {
+      const nameErr = MycastleHttpServer.validateName(body.name as string);
+      if (nameErr) { this.sendJsonResponse(res, 400, { error: nameErr }); return; }
+      // Check uniqueness (exclude current item)
+      const duplicate = items.find((item, i) => i !== index && item.name === body.name);
+      if (duplicate) { this.sendJsonResponse(res, 409, { error: `Name '${body.name}' already exists` }); return; }
+    }
+
+    // Hash password on user update
+    if (config.itemsKey === 'items' && body.password && typeof body.password === 'string') {
+      body.password = await PasswordService.hash(body.password as string);
+    }
+
+    items[index] = { ...items[index], ...body };
+    // Preserve the lookup key value for id-based resources
+    if (config.lookupKey === 'id') items[index].id = items[index].id ?? id;
+    data[config.itemsKey] = items;
+    await this.writeJsonFile(config.filePath, data);
+
+    const result = items[index];
+    const { password, ...safeResult } = result;
+    this.sendJsonResponse(res, 200, config.itemsKey === 'items' ? safeResult : result);
+  }
+
+  private async crudDelete(res: ServerResponse, config: CrudConfig, id: string): Promise<void> {
+    const data = await this.readJsonFile(config.filePath) as Record<string, unknown>;
+    const items = (data[config.itemsKey] || []) as Record<string, unknown>[];
+
+    const index = items.findIndex((item) => item[config.lookupKey] === id);
+    if (index === -1) {
+      this.sendJsonResponse(res, 404, { error: `Item ${id} not found` });
+      return;
+    }
+
+    items.splice(index, 1);
+    data[config.itemsKey] = items;
+    await this.writeJsonFile(config.filePath, data);
+
+    // Delete associated directory if it exists
+    const sourcesConfig = MycastleHttpServer.SOURCES_CONFIG[
+      config.itemsKey === 'deviceDefs' ? 'devicedefs' :
+      config.itemsKey === 'moduleDefs' ? 'moduledefs' :
+      config.itemsKey === 'projectDefs' ? 'projectdefs' : ''
+    ];
+    if (sourcesConfig) {
+      const dirPath = `${sourcesConfig.destDir}/${id}`;
+      try {
+        await this.fileSystem.deleteDirectory(dirPath);
+      } catch {
+        // Directory may not exist
+      }
+    }
+
+    // Delete user project source files directory
+    if (config.itemsKey === 'projects') {
+      const userDir = path.dirname(config.filePath);
+      const projectDir = `${userDir}/Projects/${id}`;
+      try {
+        await this.fileSystem.deleteDirectory(projectDir);
+      } catch {
+        // Directory may not exist
+      }
+    }
+
+    this.sendJsonResponse(res, 200, { success: true });
+  }
+
+  // --- AI Search Proxy ---
+
+  private async handleAiSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const { model, apiKey, systemPrompt, userPrompt } = body as {
+      model: 'openai' | 'anthropic';
+      apiKey: string;
+      systemPrompt: string;
+      userPrompt: string;
+    };
+
+    if (!model || !apiKey || !userPrompt) {
+      this.sendJsonResponse(res, 400, { error: 'model, apiKey and userPrompt are required' });
+      return;
+    }
+
+    try {
+      let result: string;
+      if (model === 'openai') {
+        const r = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+          }),
+        });
+        const data = await r.json() as any;
+        if (!r.ok) throw new Error(data.error?.message ?? `OpenAI error ${r.status}`);
+        result = data.choices[0].message.content;
+      } else {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+          }),
+        });
+        const data = await r.json() as any;
+        if (!r.ok) throw new Error(data.error?.message ?? `Anthropic error ${r.status}`);
+        result = data.content[0].text;
+      }
+      this.sendJsonResponse(res, 200, { result });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'AI request failed' });
+    }
+  }
+
+  // --- User Devices ---
+
+  private async userExistsByName(name: string): Promise<boolean> {
+    const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`);
+    return ((data as any).items || []).some((u: any) => u.name === name);
+  }
+
+  private async handleUserLocalizations(req: IncomingMessage, res: ServerResponse, method: string, userName: string, locId?: string): Promise<void> {
+    if (!await this.userExistsByName(userName)) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
+    }
+
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/Localization.json`,
+      itemsKey: 'localizations',
+      typeValue: 'localizations',
+      lookupKey: 'id',
+    };
+    await this.handleCrud(req, res, method, config, locId);
+  }
+
+  private async handleUserDevices(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName?: string): Promise<void> {
+    if (!await this.userExistsByName(userName)) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
+    }
+
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/Device.json`,
+      itemsKey: 'devices',
+      typeValue: 'devices',
+      lookupKey: 'name',
+    };
+    await this.handleCrud(req, res, method, config, deviceName);
+  }
+
+  // --- User Projects ---
+
+  private async handleUserProjects(req: IncomingMessage, res: ServerResponse, method: string, userName: string, projectName?: string): Promise<void> {
+    if (!await this.userExistsByName(userName)) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
+    }
+
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/Project.json`,
+      itemsKey: 'projects',
+      typeValue: 'projects',
+      lookupKey: 'name',
+    };
+    await this.handleCrud(req, res, method, config, projectName);
+  }
+
+  private async copyTree(tree: { name: string; type: string; path: string; children?: any[] }, srcBase: string, dstBase: string): Promise<void> {
+    if (tree.type === 'file') {
+      const fileData = await this.fileSystem.readFile(tree.path);
+      const relativePath = tree.path.substring(srcBase.length);
+      await this.fileSystem.writeFile(`${dstBase}${relativePath}`, fileData.content);
+      return;
+    }
+    if (tree.children) {
+      for (const child of tree.children) {
+        await this.copyTree(child, srcBase, dstBase);
+      }
+    }
+  }
+
+  // --- Def Sources Upload ---
+
+  private static readonly SOURCES_CONFIG: Record<string, { listFile: string; itemsKey: string; destDir: string }> = {
+    devicedefs: { listFile: `${MINIS_ROOT}/Admin/DeviceDefList.json`, itemsKey: 'deviceDefs', destDir: `${MINIS_ROOT}/Admin/DeviceDefs` },
+    moduledefs: { listFile: `${MINIS_ROOT}/Admin/ModuleDefList.json`, itemsKey: 'moduleDefs', destDir: `${MINIS_ROOT}/Admin/ModuleDefs` },
+    projectdefs: { listFile: `${MINIS_ROOT}/Admin/ProjectDefList.json`, itemsKey: 'projectDefs', destDir: `${MINIS_ROOT}/Admin/ProjectsDefs` },
+  };
+
+  private async handleUploadDefSources(req: IncomingMessage, res: ServerResponse, resource: string, defId: string): Promise<void> {
+    try {
+      const config = MycastleHttpServer.SOURCES_CONFIG[resource];
+      if (!config) {
+        this.sendJsonResponse(res, 400, { error: `Upload not supported for ${resource}` });
+        return;
+      }
+
+      const data = await this.readJsonFile(config.listFile) as Record<string, any>;
+      const items = (data[config.itemsKey] || []) as any[];
+      const item = items.find((d) => d.id === defId);
+      if (!item) {
+        this.sendJsonResponse(res, 404, { error: 'Definition not found' });
+        return;
+      }
+
+      // Read the zip binary from request body
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50MB
+
+      await new Promise<void>((resolve, reject) => {
+        req.on('data', (chunk: Buffer) => {
+          totalSize += chunk.length;
+          if (totalSize > MAX_ZIP_SIZE) {
+            reject(new Error('Zip file too large (max 50MB)'));
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on('end', resolve);
+        req.on('error', reject);
+      });
+
+      const zipBuffer = Buffer.concat(chunks);
+      const zip = new AdmZip(zipBuffer);
+      const entries = zip.getEntries();
+
+      const destPath = `${config.destDir}/${item.id}`;
+
+      // Detect single root directory — if all entries share the same top-level dir, strip it
+      const fileEntries = entries.filter((e) => !e.isDirectory && !e.entryName.includes('..'));
+      const topLevelDirs = new Set<string>();
+      for (const entry of fileEntries) {
+        const firstSlash = entry.entryName.indexOf('/');
+        if (firstSlash > 0) {
+          topLevelDirs.add(entry.entryName.substring(0, firstSlash + 1));
+        } else {
+          topLevelDirs.clear();
+          break;
+        }
+      }
+      const stripPrefix = topLevelDirs.size === 1 ? [...topLevelDirs][0] : '';
+
+      // Extract each file
+      let fileCount = 0;
+      const textExts = ['.ino', '.blockly', '.json', '.xml', '.txt', '.md', '.h', '.c', '.cpp', '.py', '.html', '.css', '.js'];
+      for (const entry of fileEntries) {
+        const entryPath = stripPrefix ? entry.entryName.substring(stripPrefix.length) : entry.entryName;
+        if (!entryPath) continue;
+
+        const content = entry.getData();
+        const filePath = `${destPath}/${entryPath}`;
+        const ext = path.extname(entryPath).toLowerCase();
+
+        if (textExts.includes(ext)) {
+          await this.fileSystem.writeFile(filePath, content.toString('utf-8'));
+        } else {
+          const base64 = content.toString('base64');
+          await this.fileSystem.writeBinaryFile(filePath, base64, 'application/octet-stream');
+        }
+        fileCount++;
+      }
+
+      this.sendJsonResponse(res, 200, { success: true, filesExtracted: fileCount, path: destPath });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- Swagger UI ---
+
+  private serveSwaggerUi(res: ServerResponse): void {
+    if (!this.swaggerUiDir) {
+      this.sendJsonResponse(res, 503, { error: 'swagger-ui-dist not available' });
+      return;
+    }
+    const indexPath = path.join(this.swaggerUiDir, 'index.html');
+    try {
+      let html = fs.readFileSync(indexPath, 'utf-8');
+      // Replace default petstore URL with our spec
+      html = html.replace(
+        /https:\/\/petstore\.swagger\.io\/v2\/swagger\.json|https:\/\/petstore3\.swagger\.io\/api\/v3\/openapi\.json/g,
+        '/api/docs/swagger.json',
+      );
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(html);
+    } catch {
+      this.sendJsonResponse(res, 500, { error: 'Failed to load swagger UI' });
+    }
+  }
+
+  private serveSwaggerAsset(assetPath: string, res: ServerResponse): void {
+    if (!this.swaggerUiDir) {
+      this.sendJsonResponse(res, 503, { error: 'swagger-ui-dist not available' });
+      return;
+    }
+
+    const filePath = path.join(this.swaggerUiDir, assetPath);
+    const resolved = path.resolve(filePath);
+    const resolvedDir = path.resolve(this.swaggerUiDir);
+    if (!resolved.startsWith(resolvedDir)) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+      return;
+    }
+
+    try {
+      let content: Buffer | string = fs.readFileSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      // Replace petstore URL in swagger-initializer.js with our spec
+      if (assetPath === 'swagger-initializer.js') {
+        content = content.toString('utf-8').replace(
+          /https:\/\/petstore\.swagger\.io\/v2\/swagger\.json/g,
+          '/api/docs/swagger.json',
+        );
+      }
+      const mimeTypes: Record<string, string> = {
+        '.js': 'application/javascript',
+        '.css': 'text/css',
+        '.html': 'text/html',
+        '.png': 'image/png',
+        '.map': 'application/json',
+      };
+      res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+      res.end(content);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'Asset not found' });
+    }
+  }
+
+  // --- IoT Config ---
+
+  private async handleIotConfig(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET') {
+        const config = this.iotService.telemetry.getConfig(deviceName);
+        if (!config) {
+          this.sendJsonResponse(res, 404, { error: 'IoT config not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, config);
+      } else if (method === 'PUT') {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const now = Date.now();
+        const existing = this.iotService.telemetry.getConfig(deviceName);
+        this.iotService.telemetry.upsertConfig({
+          deviceId: deviceName,
+          userId: userName,
+          topicPrefix: (body.topicPrefix as string) ?? `minis/${userName}/${deviceName}`,
+          heartbeatIntervalSec: (body.heartbeatIntervalSec as number) ?? 60,
+          capabilities: (body.capabilities as any[]) ?? [],
+          entities: (body.entities as any[]) ?? [],
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        });
+        const config = this.iotService.telemetry.getConfig(deviceName);
+        this.sendJsonResponse(res, 200, config);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Telemetry ---
+
+  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string, isLatest: boolean): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      return;
+    }
+    try {
+      if (isLatest) {
+        const record = this.iotService.telemetry.getLatest(deviceName);
+        this.sendJsonResponse(res, 200, record ?? { message: 'No telemetry data' });
+      } else {
+        const url = new URL(req.url!, `http://localhost`);
+        const from = parseInt(url.searchParams.get('from') ?? '0', 10);
+        const to = parseInt(url.searchParams.get('to') ?? String(Date.now()), 10);
+        const limit = parseInt(url.searchParams.get('limit') ?? '1000', 10);
+        const records = this.iotService.telemetry.getHistory(deviceName, from, to, limit);
+        this.sendJsonResponse(res, 200, { items: records });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Commands ---
+
+  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET') {
+        const url = new URL(req.url!, `http://localhost`);
+        const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+        const commands = this.iotService.commands.listCommands(deviceName, limit);
+        this.sendJsonResponse(res, 200, { items: commands });
+      } else if (method === 'POST') {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        if (!body.name) {
+          this.sendJsonResponse(res, 400, { error: 'Command name required' });
+          return;
+        }
+        const command = this.iotService.sendCommand(deviceName, body.name as string, (body.payload as Record<string, unknown>) ?? {});
+        this.sendJsonResponse(res, 201, command);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Alerts ---
+
+  private async handleIotAlerts(req: IncomingMessage, res: ServerResponse, method: string, userName: string, alertId?: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET' && !alertId) {
+        const url = new URL(req.url!, `http://localhost`);
+        const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
+        const alerts = this.iotService.alerts.listAlerts(userName, limit);
+        this.sendJsonResponse(res, 200, { items: alerts });
+      } else if (method === 'PATCH' && alertId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const status = body.status as string;
+        let alert;
+        if (status === 'ACKNOWLEDGED') {
+          alert = this.iotService.alerts.acknowledgeAlert(alertId);
+        } else if (status === 'RESOLVED') {
+          alert = this.iotService.alerts.resolveAlert(alertId);
+        } else {
+          this.sendJsonResponse(res, 400, { error: 'Invalid status. Use ACKNOWLEDGED or RESOLVED' });
+          return;
+        }
+        if (!alert) {
+          this.sendJsonResponse(res, 404, { error: 'Alert not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, alert);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Alert Rules ---
+
+  private async handleIotAlertRules(req: IncomingMessage, res: ServerResponse, method: string, userName: string, ruleId?: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET' && !ruleId) {
+        const rules = this.iotService.alerts.listRules(userName);
+        this.sendJsonResponse(res, 200, { items: rules });
+      } else if (method === 'POST' && !ruleId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        if (!body.name || !body.metricKey || !body.conditionOp || body.conditionValue === undefined) {
+          this.sendJsonResponse(res, 400, { error: 'name, metricKey, conditionOp, conditionValue required' });
+          return;
+        }
+        const rule = this.iotService.alerts.createRule({
+          userId: userName,
+          deviceId: body.deviceId as string | undefined,
+          metricKey: body.metricKey as string,
+          conditionOp: body.conditionOp as any,
+          conditionValue: body.conditionValue as number,
+          severity: (body.severity as any) ?? 'INFO',
+          cooldownMinutes: (body.cooldownMinutes as number) ?? 15,
+          isActive: body.isActive !== false,
+          name: body.name as string,
+        });
+        this.sendJsonResponse(res, 201, rule);
+      } else if (method === 'PUT' && ruleId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const rule = this.iotService.alerts.updateRule(ruleId, body as any);
+        if (!rule) {
+          this.sendJsonResponse(res, 404, { error: 'Alert rule not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, rule);
+      } else if (method === 'DELETE' && ruleId) {
+        const deleted = this.iotService.alerts.deleteRule(ruleId);
+        if (!deleted) {
+          this.sendJsonResponse(res, 404, { error: 'Alert rule not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, { success: true });
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- IoT Devices List (with status) ---
+
+  private async handleIotDevicesList(_req: IncomingMessage, res: ServerResponse, method: string, _userName: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      return;
+    }
+    try {
+      const statuses = this.iotService.presence.getAllStatuses();
+      const result: Array<{ deviceId: string; status: string; lastSeenAt: number }> = [];
+      for (const [deviceId, info] of statuses) {
+        result.push({ deviceId, status: info.status, lastSeenAt: info.lastSeenAt });
+      }
+      this.sendJsonResponse(res, 200, { items: result });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- Device Shares ---
+
+  private async handleDeviceShares(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string, shareId?: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    try {
+      if (method === 'GET' && !shareId) {
+        const shares = this.iotService.shares.getSharesForDevice(deviceName);
+        this.sendJsonResponse(res, 200, { items: shares });
+      } else if (method === 'POST' && !shareId) {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        if (!body.targetUserId) {
+          this.sendJsonResponse(res, 400, { error: 'targetUserId required' });
+          return;
+        }
+        const share = this.iotService.shares.create(userName, deviceName, body.targetUserId as string);
+        this.sendJsonResponse(res, 201, share);
+      } else if (method === 'DELETE' && shareId) {
+        const deleted = this.iotService.shares.delete(shareId);
+        if (!deleted) {
+          this.sendJsonResponse(res, 404, { error: 'Share not found' });
+          return;
+        }
+        this.sendJsonResponse(res, 200, { success: true });
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      const msg = this.errorMessage(err);
+      if (msg.includes('UNIQUE constraint')) {
+        this.sendJsonResponse(res, 409, { error: 'Share already exists' });
+      } else {
+        this.sendJsonResponse(res, 500, { error: msg });
+      }
+    }
+  }
+
+  private async handleSharedDevices(_req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      return;
+    }
+    try {
+      const shares = this.iotService.shares.getSharesForTarget(userName);
+      this.sendJsonResponse(res, 200, { items: shares });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  private async handleMyShares(_req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      return;
+    }
+    try {
+      const shares = this.iotService.shares.getSharesByOwner(userName);
+      this.sendJsonResponse(res, 200, { items: shares });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- Helpers ---
+
+  private async readJsonFile(filePath: string): Promise<unknown> {
+    try {
+      const fileData = await this.fileSystem.readFile(filePath);
+      return JSON.parse(fileData.content);
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeJsonFile(filePath: string, data: unknown): Promise<void> {
+    const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    await this.fileSystem.writeFile(filePath, content);
+  }
+
+  private async parseRequestBody(req: IncomingMessage): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      const MAX_BODY_SIZE = 5 * 1024 * 1024;
+
+      req.on('data', (chunk: Buffer) => {
+        totalSize += chunk.length;
+        if (totalSize > MAX_BODY_SIZE) {
+          reject(new Error('Request body too large'));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      req.on('end', () => {
+        try {
+          const body = Buffer.concat(chunks).toString('utf-8');
+          resolve(body ? JSON.parse(body) : {});
+        } catch (err) {
+          reject(new Error('Invalid JSON body'));
+        }
+      });
+
+      req.on('error', reject);
+    });
+  }
+
+  private errorMessage(err: unknown): string {
+    return err instanceof Error ? err.message : 'Internal server error';
+  }
+}

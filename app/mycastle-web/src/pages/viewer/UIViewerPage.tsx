@@ -7,8 +7,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
-  AppBar,
-  Toolbar,
   Typography,
   IconButton,
   CircularProgress,
@@ -20,6 +18,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import EditIcon from '@mui/icons-material/Edit';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import { useMinimalTopBarSlot } from '../../components/MinimalTopBarContext';
 
 import { UIFormRenderer } from '../../modules/uiforms/renderer';
 import { App } from '../../App';
@@ -122,65 +121,28 @@ const UIViewerPage: React.FC = () => {
     );
   }
 
+  useMinimalTopBarSlot(
+    <>
+      <IconButton size="small" edge="start" onClick={() => navigate(-1)} color="inherit" sx={{ mr: 1 }}><ArrowBackIcon fontSize="small" /></IconButton>
+      <DashboardIcon sx={{ mr: 1, fontSize: 16, color: 'inherit', opacity: 0.8 }} />
+      <Typography variant="body2" noWrap sx={{ flexGrow: 1, color: 'inherit' }}>{form?.name || 'UI Viewer'}</Typography>
+      {!error && <IconButton size="small" onClick={handleRefresh} color="inherit" sx={{ mr: 0.5 }}><RefreshIcon fontSize="small" /></IconButton>}
+      {!error && <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => navigate(`/designer/ui/${id}`)} color="inherit">Edytuj</Button>}
+    </>,
+    [form, error, id, navigate, handleRefresh],
+  );
+
   if (error) {
     return (
-      <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        <AppBar position="static" color="default" elevation={1}>
-          <Toolbar variant="dense">
-            <IconButton edge="start" onClick={() => navigate(-1)} sx={{ mr: 1 }}>
-              <ArrowBackIcon />
-            </IconButton>
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              UI Viewer
-            </Typography>
-          </Toolbar>
-        </AppBar>
-        <Box
-          sx={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 2,
-          }}
-        >
-          <Typography color="error" variant="h6">
-            {error}
-          </Typography>
-          <Button variant="outlined" onClick={() => navigate(-1)}>
-            Wróć
-          </Button>
-        </Box>
+      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+        <Typography color="error" variant="h6">{error}</Typography>
+        <Button variant="outlined" onClick={() => navigate(-1)}>Wróć</Button>
       </Box>
     );
   }
 
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'grey.100' }}>
-      {/* App Bar */}
-      <AppBar position="static" color="default" elevation={1}>
-        <Toolbar variant="dense">
-          <IconButton edge="start" onClick={() => navigate(-1)} sx={{ mr: 1 }}>
-            <ArrowBackIcon />
-          </IconButton>
-          <DashboardIcon sx={{ mr: 1, color: 'primary.main' }} />
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            {form?.name || 'UI Viewer'}
-          </Typography>
-          <IconButton onClick={handleRefresh} sx={{ mr: 1 }}>
-            <RefreshIcon />
-          </IconButton>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<EditIcon />}
-            onClick={() => navigate(`/designer/ui/${id}`)}
-          >
-            Edytuj
-          </Button>
-        </Toolbar>
-      </AppBar>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'grey.100' }}>
 
       {/* Content */}
       <Box

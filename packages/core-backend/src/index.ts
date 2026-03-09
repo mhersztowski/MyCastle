@@ -28,6 +28,10 @@ export { ErrorPacket } from './mqttserver/packets/ErrorPacket';
 // auth
 export { PasswordService, JwtService, ApiKeyService, extractBearerToken, checkAuth } from './auth/index';
 
+// rpc
+export { RpcRouter } from './rpc/index';
+export type { RpcHandler, RpcContext } from './rpc/index';
+
 // interfaces
 export type {
   IAutomateService,

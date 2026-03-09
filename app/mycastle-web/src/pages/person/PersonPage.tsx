@@ -75,7 +75,7 @@ const PersonPage: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 3, maxWidth: 900 }}>
+    <Box sx={{ p: 3, maxWidth: 900, mx: 'auto' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3, gap: 1 }}>
         <PersonIcon color="primary" />
         <Typography variant="h5" sx={{ flex: 1 }}>

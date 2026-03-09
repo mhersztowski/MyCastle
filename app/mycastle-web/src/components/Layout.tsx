@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useState, useMemo } from 'react';
+import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Box,
+  Chip,
   Collapse,
+  Container,
   Drawer,
   IconButton,
   List,
@@ -13,285 +15,283 @@ import {
   ListItemText,
   Toolbar,
   Typography,
-  useTheme,
 } from '@mui/material';
-import MenuIcon from '@mui/icons-material/Menu';
-import FolderIcon from '@mui/icons-material/Folder';
-import ListAltIcon from '@mui/icons-material/ListAlt';
-import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
-import ChecklistIcon from '@mui/icons-material/Checklist';
-import ManageSearchIcon from '@mui/icons-material/ManageSearch';
-import WidgetsIcon from '@mui/icons-material/Widgets';
-import PersonIcon from '@mui/icons-material/Person';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import CastleIcon from '@mui/icons-material/Castle';
-import PsychologyIcon from '@mui/icons-material/Psychology';
-import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
-import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
-import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
-import WebhookIcon from '@mui/icons-material/Webhook';
-import SettingsIcon from '@mui/icons-material/Settings';
-import ExpandLess from '@mui/icons-material/ExpandLess';
-import ExpandMore from '@mui/icons-material/ExpandMore';
+import {
+  Menu as MenuIcon,
+  Home as HomeIcon,
+  Folder as FolderIcon,
+  People as PeopleIcon,
+  Memory as MemoryIcon,
+  DeveloperBoard as DeveloperBoardIcon,
+  Devices as DevicesIcon,
+  Code as CodeIcon,
+  Assignment as AssignmentIcon,
+  Dashboard as DashboardIcon,
+  Sensors as SensorsIcon,
+  NotificationsActive as NotificationsActiveIcon,
+  BugReport as BugReportIcon,
+  Router as RouterIcon,
+  Build as BuildIcon,
+  Api as ApiIcon,
+  Hub as HubIcon,
+  VpnKey as VpnKeyIcon,
+  AccountTree as AccountTreeIcon,
+  Description as DescriptionIcon,
+  Notes as NotesIcon,
+  LocationOn as LocationOnIcon,
+  Castle as CastleIcon,
+  Apps as AppsIcon,
+  CalendarMonth as CalendarMonthIcon,
+  Checklist as ChecklistIcon,
+  Person as PersonIcon,
+  SmartToy as SmartToyIcon,
+  ShoppingCart as ShoppingCartIcon,
+  Psychology as PsychologyIcon,
+  RecordVoiceOver as RecordVoiceOverIcon,
+  ReceiptLong as ReceiptLongIcon,
+  Webhook as WebhookIcon,
+  Settings as SettingsIcon,
+  ExpandLess,
+  ExpandMore,
+} from '@mui/icons-material';
+import { useAuth } from '@modules/auth';
+import ImpersonationBanner from './ImpersonationBanner';
+import { AccountMenu } from './AccountMenu';
 
-const drawerWidth = 240;
+const drawerWidth = 200;
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
-const menuItems = [
-  {
-    text: 'File Browser',
-    icon: <ListAltIcon />,
-    path: '/filesystem/list',
-  },
-  {
-    text: 'Calendar',
-    icon: <CalendarMonthIcon />,
-    path: '/calendar',
-  },
-  {
-    text: 'To-Do List',
-    icon: <ChecklistIcon />,
-    path: '/todolist',
-  },
-  {
-    text: 'Shopping',
-    icon: <ShoppingCartIcon />,
-    path: '/shopping',
-  },
-  {
-    text: 'Persons',
-    icon: <PersonIcon />,
-    path: '/person',
-  },
-  {
-    text: 'Projects',
-    icon: <FolderIcon />,
-    path: '/project',
-  },
-  {
-    text: 'Automate',
-    icon: <AccountTreeIcon />,
-    path: '/automate',
-  },
-  {
-    text: 'Object Viewer',
-    icon: <ManageSearchIcon />,
-    path: '/objectviewer',
-  },
-  {
-    text: 'Components',
-    icon: <WidgetsIcon />,
-    path: '/components',
-  },
-  {
-    text: 'Castle Agent',
-    icon: <SmartToyIcon />,
-    path: '/agent',
-  },
-];
+interface NavItem {
+  text: string;
+  icon: React.ReactNode;
+  path?: string;
+  children?: NavItem[];
+}
 
-const settingsItems = [
-  {
-    text: 'AI',
-    icon: <PsychologyIcon />,
-    path: '/settings/ai',
-  },
-  {
-    text: 'Speech',
-    icon: <RecordVoiceOverIcon />,
-    path: '/settings/speech',
-  },
-  {
-    text: 'Receipt',
-    icon: <ReceiptLongIcon />,
-    path: '/settings/receipt',
-  },
-  {
-    text: 'Page Hooks',
-    icon: <WebhookIcon />,
-    path: '/settings/page-hooks',
-  },
-];
+function extractUserName(pathname: string): string {
+  const match = pathname.match(/^\/(admin|user)\/([^/]+)/);
+  return match ? match[2] : '';
+}
 
-const Layout: React.FC<LayoutProps> = ({ children }) => {
-  const theme = useTheme();
+function Layout({ children }: LayoutProps) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    Electronics: true,
+    IoT: true,
+    Tools: true,
+    Settings: false,
+  });
   const navigate = useNavigate();
   const location = useLocation();
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(() =>
-    location.pathname.startsWith('/settings')
-  );
+  const { currentUser, isAdmin, impersonating } = useAuth();
 
-  const handleDrawerToggle = () => {
-    setMobileOpen(!mobileOpen);
-  };
+  if (!currentUser) {
+    return <Navigate to="/" replace />;
+  }
 
-  const handleSettingsClick = () => {
-    setSettingsOpen(!settingsOpen);
-  };
+  const isAdminView = location.pathname.startsWith('/admin');
+  const isMinisView = location.pathname.startsWith('/admin') || location.pathname.startsWith('/user');
+  const userName = extractUserName(location.pathname) || currentUser.name;
 
-  const isSettingsActive = location.pathname.startsWith('/settings');
+  const menuItems = useMemo((): NavItem[] => {
+    if (isAdminView) {
+      return [
+        { text: 'Main', icon: <HomeIcon />, path: `/admin/${userName}/main` },
+        { text: 'Users', icon: <PeopleIcon />, path: `/admin/${userName}/users` },
+        { text: 'DevicesDef', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
+        { text: 'ModulesDef', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
+        { text: 'ProjectDefs', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
+      ];
+    }
+    if (isMinisView) {
+      return [
+        { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
+        { text: 'Localization', icon: <LocationOnIcon />, path: `/user/${userName}/localization` },
+        {
+          text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
+            { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
+            { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
+            { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
+          ],
+        },
+        {
+          text: 'IoT', icon: <RouterIcon />, children: [
+            { text: 'Dashboard', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard` },
+            { text: 'Devices', icon: <SensorsIcon />, path: `/user/${userName}/iot/devices` },
+            { text: 'Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userName}/iot/alerts` },
+            { text: 'Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
+          ],
+        },
+        {
+          text: 'Pim', icon: <AppsIcon />, children: [
+            { text: 'Calendar', icon: <CalendarMonthIcon />, path: `/user/${userName}/pim/calendar` },
+            { text: 'To-Do List', icon: <ChecklistIcon />, path: `/user/${userName}/pim/todolist` },
+            { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },
+            { text: 'Persons', icon: <PersonIcon />, path: `/user/${userName}/pim/person` },
+            { text: 'Projects', icon: <FolderIcon />, path: `/user/${userName}/pim/project` },
+            { text: 'Automate', icon: <AccountTreeIcon />, path: `/user/${userName}/pim/automate` },
+            { text: 'Agent', icon: <SmartToyIcon />, path: `/user/${userName}/pim/agent` },
+            { text: 'Notes', icon: <NotesIcon />, path: `/workspace/md` },
+          ],
+        },
+        ...(isAdmin && !impersonating ? [{
+          text: 'Tools', icon: <BuildIcon />, children: [
+            { text: 'RPC Explorer', icon: <ApiIcon />, path: `/user/${userName}/tools/rpc` },
+            { text: 'MQTT Explorer', icon: <HubIcon />, path: `/user/${userName}/tools/mqtt-explorer` },
+            { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
+            { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },
+            { text: 'API Docs', icon: <DescriptionIcon />, path: `/user/${userName}/tools/docs` },
+          ],
+        }, {
+          text: 'Castle Settings', icon: <SettingsIcon />, children: [
+            { text: 'AI', icon: <PsychologyIcon />, path: `/user/${userName}/pim/settings/ai` },
+            { text: 'Speech', icon: <RecordVoiceOverIcon />, path: `/user/${userName}/pim/settings/speech` },
+            { text: 'Receipt', icon: <ReceiptLongIcon />, path: `/user/${userName}/pim/settings/receipt` },
+            { text: 'Page Hooks', icon: <WebhookIcon />, path: `/user/${userName}/pim/settings/page-hooks` },
+          ],
+        }] : []),
+      ];
+    }
+    return [];
+  }, [isAdminView, isMinisView, isAdmin, impersonating, userName]);
+
+  const sectionLabel = isAdminView ? 'Admin' : 'User';
+
+  const toggleGroup = (name: string) =>
+    setOpenGroups((prev) => ({ ...prev, [name]: !prev[name] }));
 
   const drawer = (
     <Box>
       <Toolbar>
         <CastleIcon sx={{ mr: 1 }} />
-        <Typography variant="h6" noWrap>
+        <Typography variant="h6" noWrap component="div">
           MyCastle
         </Typography>
       </Toolbar>
       <List>
-        {menuItems.map((item) => (
-          <ListItem key={item.text} disablePadding>
-            <ListItemButton
-              selected={location.pathname === item.path}
-              onClick={() => {
-                navigate(item.path);
-                setMobileOpen(false);
-              }}
-              sx={{
-                '&.Mui-selected': {
-                  backgroundColor: theme.palette.primary.light + '20',
-                  borderRight: `3px solid ${theme.palette.primary.main}`,
-                },
-              }}
-            >
-              <ListItemIcon
-                sx={{
-                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
-                }}
-              >
-                {item.icon}
-              </ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          </ListItem>
-        ))}
-
-        {/* Settings group */}
-        <ListItem disablePadding>
-          <ListItemButton
-            onClick={handleSettingsClick}
-            sx={{
-              backgroundColor: isSettingsActive ? theme.palette.primary.light + '10' : 'transparent',
-            }}
-          >
-            <ListItemIcon
-              sx={{
-                color: isSettingsActive ? theme.palette.primary.main : 'inherit',
-              }}
-            >
-              <SettingsIcon />
-            </ListItemIcon>
-            <ListItemText primary="Settings" />
-            {settingsOpen ? <ExpandLess /> : <ExpandMore />}
-          </ListItemButton>
-        </ListItem>
-        <Collapse in={settingsOpen} timeout="auto" unmountOnExit>
-          <List component="div" disablePadding>
-            {settingsItems.map((item) => (
-              <ListItem key={item.text} disablePadding>
+        {menuItems.map((item) =>
+          item.children ? (
+            <Box key={item.text}>
+              <ListItem disablePadding>
                 <ListItemButton
-                  selected={location.pathname === item.path}
-                  onClick={() => {
-                    navigate(item.path);
-                    setMobileOpen(false);
-                  }}
-                  sx={{
-                    pl: 4,
-                    '&.Mui-selected': {
-                      backgroundColor: theme.palette.primary.light + '20',
-                      borderRight: `3px solid ${theme.palette.primary.main}`,
-                    },
-                  }}
+                  onClick={() => toggleGroup(item.text)}
+                  selected={item.children.some((c) => location.pathname === c.path || location.pathname.startsWith(c.path ?? ''))}
                 >
-                  <ListItemIcon
-                    sx={{
-                      color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
-                      minWidth: 36,
-                    }}
-                  >
-                    {item.icon}
-                  </ListItemIcon>
+                  <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
                   <ListItemText primary={item.text} />
+                  {openGroups[item.text] ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
                 </ListItemButton>
               </ListItem>
-            ))}
-          </List>
-        </Collapse>
+              <Collapse in={openGroups[item.text]} timeout="auto" unmountOnExit>
+                <List disablePadding>
+                  {item.children.map((child) => (
+                    <ListItem key={child.text} disablePadding>
+                      <ListItemButton
+                        sx={{ pl: 4 }}
+                        selected={location.pathname === child.path}
+                        onClick={() => { navigate(child.path!); setMobileOpen(false); }}
+                      >
+                        <ListItemIcon sx={{ minWidth: 32 }}>{child.icon}</ListItemIcon>
+                        <ListItemText primary={child.text} />
+                      </ListItemButton>
+                    </ListItem>
+                  ))}
+                </List>
+              </Collapse>
+            </Box>
+          ) : (
+            <ListItem key={item.text} disablePadding>
+              <ListItemButton
+                selected={location.pathname === item.path}
+                onClick={() => { navigate(item.path!); setMobileOpen(false); }}
+              >
+                <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItemButton>
+            </ListItem>
+          )
+        )}
       </List>
     </Box>
   );
 
+  const bannerOffset = impersonating ? '40px' : 0;
+
   return (
-    <Box sx={{ display: 'flex' }}>
-      <AppBar
-        position="fixed"
-        sx={{
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
-          ml: { sm: `${drawerWidth}px` },
-        }}
-      >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            aria-label="open drawer"
-            edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { sm: 'none' } }}
+    <>
+      <ImpersonationBanner />
+      <Box sx={{ display: 'flex', minHeight: '100vh', mt: bannerOffset }}>
+        <AppBar
+          position="fixed"
+          sx={{
+            width: { sm: `calc(100% - ${drawerWidth}px)` },
+            ml: { sm: `${drawerWidth}px` },
+            top: bannerOffset,
+          }}
+        >
+          <Toolbar>
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setMobileOpen(!mobileOpen)}
+              sx={{ mr: 2, display: { sm: 'none' } }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+              MyCastle — {sectionLabel}
+              {impersonating && <Chip label={`as ${impersonating.name}`} size="small" color="warning" />}
+            </Typography>
+            <AccountMenu isAdminView={isAdminView} userName={userName} />
+          </Toolbar>
+        </AppBar>
+        <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
+          <Drawer
+            variant="temporary"
+            open={mobileOpen}
+            onClose={() => setMobileOpen(false)}
+            ModalProps={{ keepMounted: true }}
+            sx={{
+              display: { xs: 'block', sm: 'none' },
+              '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            }}
           >
-            <MenuIcon />
-          </IconButton>
-          <FolderIcon sx={{ mr: 1 }} />
-          <Typography variant="h6" noWrap component="div">
-            Filesystem
-          </Typography>
-        </Toolbar>
-      </AppBar>
-      <Box
-        component="nav"
-        sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
-      >
-        <Drawer
-          variant="temporary"
-          open={mobileOpen}
-          onClose={handleDrawerToggle}
-          ModalProps={{ keepMounted: true }}
+            {drawer}
+          </Drawer>
+          <Drawer
+            variant="permanent"
+            sx={{
+              display: { xs: 'none', sm: 'block' },
+              '& .MuiDrawer-paper': {
+                boxSizing: 'border-box',
+                width: drawerWidth,
+                ...(impersonating ? { top: '40px', height: 'calc(100% - 40px)' } : {}),
+              },
+            }}
+            open
+          >
+            {drawer}
+          </Drawer>
+        </Box>
+        <Box
+          component="main"
           sx={{
-            display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            flexGrow: 1,
+            p: 3,
+            width: { sm: `calc(100% - ${drawerWidth}px)` },
+            mt: 8,
           }}
         >
-          {drawer}
-        </Drawer>
-        <Drawer
-          variant="permanent"
-          sx={{
-            display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
-          }}
-          open
-        >
-          {drawer}
-        </Drawer>
+          <Container maxWidth="lg">
+            {children}
+          </Container>
+        </Box>
       </Box>
-      <Box
-        component="main"
-        sx={{
-          flexGrow: 1,
-          p: 3,
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
-          mt: 8,
-        }}
-      >
-        {children}
-      </Box>
-    </Box>
+    </>
   );
-};
+}
 
 export default Layout;

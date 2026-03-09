@@ -46,17 +46,21 @@ const lowlight = createLowlight(common);
 export interface MdEditorProps {
   initialContent?: string;
   onSave?: (markdown: string) => void;
+  onLinkClick?: (href: string) => void;
   placeholder?: string;
   editable?: boolean;
   autoFocus?: boolean;
+  autoSaveDelay?: number; // ms, default 2000; 0 = disabled
 }
 
 const MdEditor: React.FC<MdEditorProps> = ({
   initialContent = '',
   onSave,
+  onLinkClick,
   placeholder = 'Type \'/\' for commands...',
   editable = true,
   autoFocus = false,
+  autoSaveDelay = 30000,
 }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -210,15 +214,62 @@ const MdEditor: React.FC<MdEditorProps> = ({
     }
   }, [initialContent, editor]);
 
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'unsaved' | 'saving'>('saved');
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSaveRef = useRef(onSave);
+  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
+  const onLinkClickRef = useRef(onLinkClick);
+  useEffect(() => { onLinkClickRef.current = onLinkClick; }, [onLinkClick]);
+
+  // Intercept internal link clicks using capture phase — runs before ProseMirror's own handlers
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const handler = (e: MouseEvent) => {
+      if (!onLinkClickRef.current) return;
+      const anchor = (e.target as HTMLElement).closest('a');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href) return;
+      const isExternal = href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:');
+      if (!isExternal) {
+        e.preventDefault();
+        e.stopPropagation();
+        onLinkClickRef.current(href);
+      }
+    };
+    dom.addEventListener('click', handler, true);
+    return () => dom.removeEventListener('click', handler, true);
+  }, [editor]);
+
   const handleSave = useCallback(() => {
     if (editor && onSave) {
       const html = editor.getHTML();
-      console.log('MdEditor handleSave - HTML:', html);
       const markdown = htmlToMarkdown(html);
-      console.log('MdEditor handleSave - Markdown:', markdown);
-      onSave(markdown);
+      setSaveStatus('saving');
+      Promise.resolve(onSave(markdown)).finally(() => setSaveStatus('saved'));
     }
   }, [editor, onSave]);
+
+  // Autosave on content change
+  useEffect(() => {
+    if (!editor || !autoSaveDelay) return;
+    const onUpdate = () => {
+      setSaveStatus('unsaved');
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => {
+        if (!onSaveRef.current) return;
+        const markdown = htmlToMarkdown(editor.getHTML());
+        setSaveStatus('saving');
+        Promise.resolve(onSaveRef.current(markdown)).finally(() => setSaveStatus('saved'));
+      }, autoSaveDelay);
+    };
+    editor.on('update', onUpdate);
+    return () => {
+      editor.off('update', onUpdate);
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [editor, autoSaveDelay]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -292,16 +343,12 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
     if (isExternal) {
       window.open(linkUrl, '_blank', 'noopener,noreferrer');
+    } else if (onLinkClick) {
+      onLinkClick(linkUrl);
     } else {
       // Internal link - open in editor
-      // Remove leading slash if present for path
-      let path = linkUrl;
-      if (path.startsWith('/')) {
-        path = path.substring(1);
-      }
-      // Determine file type and open appropriate editor
-      const editorUrl = `/editor/simple/${path}`;
-      window.open(editorUrl, '_blank', 'noopener,noreferrer');
+      let path = linkUrl.startsWith('/') ? linkUrl.substring(1) : linkUrl;
+      window.open(`/editor/simple/${path}`, '_blank', 'noopener,noreferrer');
     }
   }, [linkUrl]);
 
@@ -445,6 +492,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
     };
   }, []);
 
+
   // Handle scroll to auto-hide toolbar on mobile
   const handleScroll = useCallback(() => {
     if (!isMobile || !contentWrapperRef.current) return;
@@ -476,7 +524,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Collapsible toolbar for mobile */}
       <Collapse in={toolbarVisible} timeout={200}>
-        <MdEditorToolbar editor={editor} onSave={handleSave} />
+        <MdEditorToolbar editor={editor} onSave={handleSave} saveDisabled={saveStatus === 'saved'} />
       </Collapse>
 
       {/* FAB to show toolbar when hidden on mobile */}

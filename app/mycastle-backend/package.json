@@ -15,15 +15,25 @@
   "dependencies": {
     "@mhersztowski/core": "workspace:*",
     "@mhersztowski/core-backend": "workspace:*",
+    "adm-zip": "^0.5.16",
+    "better-sqlite3": "^12.6.2",
     "dayjs": "^1.11.19",
     "dotenv": "^16.3.1",
     "node-cron": "^4.2.1",
+    "node-pty": "^1.0.0",
     "sharp": "^0.34.5",
-    "tesseract.js": "^7.0.0"
+    "swagger-ui-dist": "^5.31.2",
+    "tesseract.js": "^7.0.0",
+    "ws": "^8.16.0",
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.24.0"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.10.0",
     "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.5.10",
     "tsx": "^4.0.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"

@@ -285,11 +285,7 @@ export class MqttServer {
       password: Buffer | undefined,
       callback: (error: Error | null, authenticated: boolean | null) => void,
     ) => {
-      if (!username || !password) {
-        callback(null, false);
-        return;
-      }
-      const result = fn(client.id, username, password.toString());
+      const result = fn(client.id, username ?? '', password?.toString() ?? '');
       if (result instanceof Promise) {
         result
           .then((ok) => callback(null, ok))

@@ -30,7 +30,6 @@ const CRUD_CONFIGS: Record<string, CrudConfig> = {
 
 export class MinisHttpServer extends HttpUploadServer {
   private static readonly NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
-  private static readonly PUBLIC_PATHS = ['/auth/login', '/docs', '/docs/', '/docs/swagger.json'];
   private swaggerUiDir: string | null = null;
   private iotService: IotService | null;
   private terminalService: TerminalService | null = null;
@@ -1302,7 +1301,7 @@ export class MinisHttpServer extends HttpUploadServer {
 
   // --- IoT Telemetry ---
 
-  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string, isLatest: boolean): Promise<void> {
+  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string, isLatest: boolean): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
@@ -1330,7 +1329,7 @@ export class MinisHttpServer extends HttpUploadServer {
 
   // --- IoT Commands ---
 
-  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string): Promise<void> {
+  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
@@ -1449,7 +1448,7 @@ export class MinisHttpServer extends HttpUploadServer {
 
   // --- IoT Devices List (with status) ---
 
-  private async handleIotDevicesList(req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+  private async handleIotDevicesList(_req: IncomingMessage, res: ServerResponse, method: string, _userName: string): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
@@ -1509,7 +1508,7 @@ export class MinisHttpServer extends HttpUploadServer {
     }
   }
 
-  private async handleSharedDevices(req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+  private async handleSharedDevices(_req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
@@ -1526,7 +1525,7 @@ export class MinisHttpServer extends HttpUploadServer {
     }
   }
 
-  private async handleMyShares(req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+  private async handleMyShares(_req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;

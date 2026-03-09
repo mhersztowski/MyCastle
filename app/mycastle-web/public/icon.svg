@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#1976d2"/>
+  <!-- Battlements top -->
+  <rect x="80"  y="100" width="60" height="70" fill="white"/>
+  <rect x="160" y="130" width="60" height="40" fill="white"/>
+  <rect x="240" y="100" width="60" height="70" fill="white"/>
+  <rect x="320" y="130" width="60" height="40" fill="white"/>
+  <rect x="400" y="100" width="60" height="70" fill="white"/>
+  <!-- Main wall -->
+  <rect x="80" y="170" width="380" height="200" fill="white"/>
+  <!-- Gate arch -->
+  <rect x="210" y="240" width="92" height="130" rx="46" fill="#1976d2"/>
+  <!-- Tower windows -->
+  <rect x="115" y="200" width="50" height="60" rx="25" fill="#1976d2"/>
+  <rect x="347" y="200" width="50" height="60" rx="25" fill="#1976d2"/>
+  <!-- Base -->
+  <rect x="60" y="370" width="420" height="40" rx="10" fill="white"/>
+</svg>
