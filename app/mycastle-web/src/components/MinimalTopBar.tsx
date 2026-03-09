@@ -9,10 +9,10 @@ function MinimalTopBarInner({ children }: { children: React.ReactNode }) {
   const { slot } = useMinimalTopBarContext();
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
       <AppBar
         position="static"
-        sx={{ minHeight: 36, flexShrink: 0, '& .MuiToolbar-root': { minHeight: 36, py: 0 } }}
+        sx={{ minHeight: 36, flexShrink: 0, paddingTop: 'env(safe-area-inset-top)', '& .MuiToolbar-root': { minHeight: 36, py: 0 } }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 36, px: 1.5, gap: 1 }}>
           <CastleIcon sx={{ fontSize: 16, opacity: 0.7, flexShrink: 0 }} />

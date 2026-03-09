@@ -230,6 +230,7 @@ function Layout({ children }: LayoutProps) {
             width: { sm: `calc(100% - ${drawerWidth}px)` },
             ml: { sm: `${drawerWidth}px` },
             top: bannerOffset,
+            paddingTop: 'env(safe-area-inset-top)',
           }}
         >
           <Toolbar>
@@ -282,7 +283,7 @@ function Layout({ children }: LayoutProps) {
             flexGrow: 1,
             p: 3,
             width: { sm: `calc(100% - ${drawerWidth}px)` },
-            mt: 8,
+            mt: 'calc(64px + env(safe-area-inset-top))',
           }}
         >
           <Container maxWidth="lg">
