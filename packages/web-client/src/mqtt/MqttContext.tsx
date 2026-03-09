@@ -38,9 +38,10 @@ interface MqttProviderProps {
   children: React.ReactNode;
   mqttUsername?: string;
   mqttPassword?: string;
+  userBasePath?: string;
 }
 
-export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUsername, mqttPassword }) => {
+export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUsername, mqttPassword, userBasePath }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,6 +121,10 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUserna
     }
     return mqttClient.syncDirinfo(path);
   }, [isConnected]);
+
+  useEffect(() => {
+    mqttClient.setUserBasePath(userBasePath ?? '');
+  }, [userBasePath]);
 
   useEffect(() => {
     const handleFileChanged = (path: string, action: string) => {

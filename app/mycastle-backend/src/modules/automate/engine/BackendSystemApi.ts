@@ -90,13 +90,20 @@ export class BackendSystemApi implements AutomateSystemApiInterface {
   private _variables: Record<string, unknown>;
   private _dataSource: DataSource;
   private _fileSystem: FileSystem;
+  private _userDataPath: string;
   private _logs: LogEntry[] = [];
   private _notifications: NotificationEntry[] = [];
 
-  constructor(fileSystem: FileSystem, dataSource: DataSource, variables: Record<string, unknown>) {
+  constructor(fileSystem: FileSystem, dataSource: DataSource, variables: Record<string, unknown>, userDataPath: string = '') {
     this._fileSystem = fileSystem;
     this._dataSource = dataSource;
     this._variables = variables;
+    this._userDataPath = userDataPath;
+  }
+
+  private p(localPath: string): string {
+    if (!this._userDataPath) return localPath;
+    return `${this._userDataPath}/${localPath}`;
   }
 
   get logs(): LogEntry[] {
@@ -258,7 +265,7 @@ export class BackendSystemApi implements AutomateSystemApiInterface {
 
   private async _saveShoppingLists(lists: ShoppingListModel[]): Promise<void> {
     const data: ShoppingListsModel = { type: 'shopping_lists', lists };
-    await this._fileSystem.writeFile('data/shopping_lists.json', JSON.stringify(data, null, 2));
+    await this._fileSystem.writeFile(this.p('data/shopping_lists.json'), JSON.stringify(data, null, 2));
   }
 
   shopping = {

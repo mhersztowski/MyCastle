@@ -16,7 +16,8 @@ import { useAuth } from '../../modules/auth';
 import type { DirectoryTree } from '@mhersztowski/core';
 
 const SIDEBAR_WIDTH = 160;
-const DATA_DIR = '';
+// Directory (relative to user MQTT root) where markdown notes are stored
+const MD_DIR = 'md';
 const FAVORITES_FILE = 'md_favorites.json';
 
 interface MdFile {
@@ -25,10 +26,20 @@ interface MdFile {
   folder: string;
 }
 
+// Returns path for URL (relative to MD_DIR, without MD_DIR/ prefix)
 function collectMdFiles(tree: DirectoryTree): MdFile[] {
+  const prefix = `${MD_DIR}/`;
   return (tree.children ?? [])
     .filter(child => child.type === 'file' && child.name.endsWith('.md'))
-    .map(child => ({ name: child.name.slice(0, -3), path: child.path, folder: '' }));
+    .map(child => {
+      const urlPath = child.path.startsWith(prefix) ? child.path.slice(prefix.length) : child.path;
+      return { name: child.name.slice(0, -3), path: urlPath, folder: '' };
+    });
+}
+
+// Prefix a URL-relative path with MD_DIR for MQTT operations
+function mqttPath(urlPath: string): string {
+  return `${MD_DIR}/${urlPath}`;
 }
 
 function Breadcrumb({ filePath }: { filePath: string }) {
@@ -129,7 +140,7 @@ const WorkspaceMdPage: React.FC = () => {
   useEffect(() => {
     if (!isConnected) return;
     setLoadingTree(true);
-    listDirectory(DATA_DIR)
+    listDirectory(MD_DIR)
       .then(tree => setFiles(collectMdFiles(tree)))
       .catch(console.error)
       .finally(() => setLoadingTree(false));
@@ -140,7 +151,7 @@ const WorkspaceMdPage: React.FC = () => {
     if (!path) return;
     setLoadingFile(true);
     try {
-      const file = await readFile(path);
+      const file = await readFile(mqttPath(path));
       setContent(file.content);
     } catch (err) {
       console.error('Failed to read file:', err);
@@ -164,7 +175,7 @@ const WorkspaceMdPage: React.FC = () => {
   const handleSave = useCallback(async (markdown: string) => {
     if (!filePath) return;
     try {
-      await writeFile(filePath, markdown);
+      await writeFile(mqttPath(filePath), markdown);
     } catch (err) {
       console.error('Failed to save file:', err);
     }

@@ -44,6 +44,39 @@ export class MqttClient {
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private connectionPromise: Promise<void> | null = null;
   private fileChangeCallbacks: Set<(path: string, action: string) => void> = new Set();
+  private userBasePath: string = '';
+
+  setUserBasePath(path: string): void {
+    this.userBasePath = path;
+  }
+
+  // Prefix a local path with the user base path
+  private p(localPath: string): string {
+    if (!this.userBasePath) return localPath;
+    if (!localPath) return this.userBasePath;
+    return `${this.userBasePath}/${localPath}`;
+  }
+
+  // Strip user base path prefix from a full path
+  private stripBase(fullPath: string): string {
+    if (!this.userBasePath) return fullPath;
+    const prefix = `${this.userBasePath}/`;
+    return fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath;
+  }
+
+  // Strip base path from all paths in a directory tree
+  private stripBaseFromTree(tree: DirectoryTree): DirectoryTree {
+    const strippedPath = this.stripBase(tree.path);
+    return {
+      ...tree,
+      path: strippedPath,
+      children: tree.children?.map(child =>
+        child.type === 'directory'
+          ? this.stripBaseFromTree(child)
+          : { ...child, path: this.stripBase(child.path) }
+      ),
+    };
+  }
 
   async connect(brokerUrl: string = getMqttUrl(), options?: { username?: string; password?: string }): Promise<void> {
     if (this.connectionPromise) {
@@ -114,7 +147,8 @@ export class MqttClient {
         }
       } else if (data.type === PacketType.FILE_CHANGED) {
         const payload = data.payload as FileChangedPayload;
-        this.fileChangeCallbacks.forEach(cb => cb(payload.path, payload.action));
+        const localPath = this.stripBase(normalizePath(payload.path));
+        this.fileChangeCallbacks.forEach(cb => cb(localPath, payload.action));
       }
     } catch (error) {
       console.error('Error parsing response:', error);
@@ -162,36 +196,40 @@ export class MqttClient {
   }
 
   async readFile(path: string): Promise<FileData> {
-    const data = await this.sendRequest<FileData>(PacketType.FILE_READ, { path });
-    return normalizeFileData(data);
+    const data = await this.sendRequest<FileData>(PacketType.FILE_READ, { path: this.p(path) });
+    const normalized = normalizeFileData(data);
+    return { ...normalized, path: this.stripBase(normalized.path) };
   }
 
   async writeFile(path: string, content: string): Promise<FileData> {
-    const data = await this.sendRequest<FileData>(PacketType.FILE_WRITE, { path, content });
-    return normalizeFileData(data);
+    const data = await this.sendRequest<FileData>(PacketType.FILE_WRITE, { path: this.p(path), content });
+    const normalized = normalizeFileData(data);
+    return { ...normalized, path: this.stripBase(normalized.path) };
   }
 
   async deleteFile(path: string): Promise<{ success: boolean }> {
-    return this.sendRequest<{ success: boolean }>(PacketType.FILE_DELETE, { path });
+    return this.sendRequest<{ success: boolean }>(PacketType.FILE_DELETE, { path: this.p(path) });
   }
 
   async listDirectory(path: string = ''): Promise<DirectoryTree> {
-    const tree = await this.sendRequest<DirectoryTree>(PacketType.FILE_LIST, { path });
-    return normalizeDirectoryTree(tree);
+    const tree = await this.sendRequest<DirectoryTree>(PacketType.FILE_LIST, { path: this.p(path) });
+    return this.stripBaseFromTree(normalizeDirectoryTree(tree));
   }
 
   async writeBinaryFile(path: string, data: string, mimeType: string): Promise<BinaryFileData> {
-    const result = await this.sendRequest<BinaryFileData>(PacketType.FILE_WRITE_BINARY, { path, data, mimeType });
-    return normalizeBinaryFileData(result);
+    const result = await this.sendRequest<BinaryFileData>(PacketType.FILE_WRITE_BINARY, { path: this.p(path), data, mimeType });
+    const normalized = normalizeBinaryFileData(result);
+    return { ...normalized, path: this.stripBase(normalized.path) };
   }
 
   async readBinaryFile(path: string): Promise<BinaryFileData> {
-    const data = await this.sendRequest<BinaryFileData>(PacketType.FILE_READ_BINARY, { path });
-    return normalizeBinaryFileData(data);
+    const data = await this.sendRequest<BinaryFileData>(PacketType.FILE_READ_BINARY, { path: this.p(path) });
+    const normalized = normalizeBinaryFileData(data);
+    return { ...normalized, path: this.stripBase(normalized.path) };
   }
 
   async syncDirinfo(path: string): Promise<unknown> {
-    return this.sendRequest<unknown>(PacketType.DIRINFO_SYNC, { path });
+    return this.sendRequest<unknown>(PacketType.DIRINFO_SYNC, { path: this.p(path) });
   }
 
   async runAutomateFlow(flowId: string, variables?: Record<string, unknown>): Promise<unknown> {
@@ -219,8 +257,8 @@ export class MqttClient {
       return this.writeBinaryFile(path, base64Data, mimeType);
     }
 
-    // For large files, use HTTP upload
-    return this.httpUpload(path, file, mimeType, onProgress);
+    // For large files, use HTTP upload (path is already prefixed via p())
+    return this.httpUpload(this.p(path), file, mimeType, onProgress);
   }
 
   private async blobToBase64(blob: Blob): Promise<string> {

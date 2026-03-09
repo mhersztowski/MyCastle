@@ -16,6 +16,8 @@ export interface AppConfig {
   jwtSecret: string;
   arduinoCliLocalPath?: string;
   arduinoCliDockerName?: string;
+  /** Base path for user PIM data, e.g. 'Minis/Users/marcin'. Defaults to env USER_DATA_PATH. */
+  userDataPath?: string;
 }
 
 export class App {
@@ -48,10 +50,11 @@ export class App {
     this.config = config;
     this.sharedPort = !config.mqttPort || config.mqttPort === config.httpPort;
 
+    const userDataPath = config.userDataPath ?? process.env.USER_DATA_PATH ?? '';
     this.fileSystem = new FileSystem(config.rootDir);
     this.ocrService = new OcrService();
-    this.dataSource = new DataSource(this.fileSystem);
-    this.automateService = new AutomateService(this.fileSystem, this.dataSource);
+    this.dataSource = new DataSource(this.fileSystem, userDataPath);
+    this.automateService = new AutomateService(this.fileSystem, this.dataSource, userDataPath);
     this.schedulerService = new SchedulerService(this.automateService, this.fileSystem);
     this.iotService = new IotService(config.rootDir);
     this.jwtService = new JwtService(config.jwtSecret);

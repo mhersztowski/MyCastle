@@ -25,21 +25,32 @@ import {
 } from '@mhersztowski/core';
 import type { IDataSource, DataSourceStats } from '@mhersztowski/core';
 
-const DATA_FILE_MAP: Record<string, string> = {
-  'data/persons.json': 'persons',
-  'data/tasks.json': 'tasks',
-  'data/projects.json': 'projects',
-  'data/shopping_lists.json': 'shoppingLists',
-};
-
 export class DataSource extends EventEmitter implements IDataSource {
   private fileSystem: FileSystem;
   private _store: MemoryDataSource = new MemoryDataSource();
   private _calendar: Calendar = new Calendar();
+  // Base path prefix for user data files (e.g. 'Minis/Users/marcin')
+  private userDataPath: string;
 
-  constructor(fileSystem: FileSystem) {
+  constructor(fileSystem: FileSystem, userDataPath: string = '') {
     super();
     this.fileSystem = fileSystem;
+    this.userDataPath = userDataPath;
+  }
+
+  // Resolve a user-relative path like 'data/persons.json' to the full path
+  private p(localPath: string): string {
+    if (!this.userDataPath) return localPath;
+    return `${this.userDataPath}/${localPath}`;
+  }
+
+  private get dataFileMap(): Record<string, string> {
+    return {
+      [this.p('data/persons.json')]: 'persons',
+      [this.p('data/tasks.json')]: 'tasks',
+      [this.p('data/projects.json')]: 'projects',
+      [this.p('data/shopping_lists.json')]: 'shoppingLists',
+    };
   }
 
   async initialize(): Promise<void> {
@@ -49,17 +60,17 @@ export class DataSource extends EventEmitter implements IDataSource {
   }
 
   private async loadAll(): Promise<void> {
-    await this.loadDataFile('data/persons.json', 'persons');
-    await this.loadDataFile('data/projects.json', 'projects');
-    await this.loadDataFile('data/tasks.json', 'tasks');
-    await this.loadDataFile('data/shopping_lists.json', 'shoppingLists');
+    await this.loadDataFile(this.p('data/persons.json'), 'persons');
+    await this.loadDataFile(this.p('data/projects.json'), 'projects');
+    await this.loadDataFile(this.p('data/tasks.json'), 'tasks');
+    await this.loadDataFile(this.p('data/shopping_lists.json'), 'shoppingLists');
     await this.loadCalendarEvents();
   }
 
   async onFileChanged(filePath: string): Promise<void> {
     const normalized = filePath.replace(/\\/g, '/');
 
-    const dataType = DATA_FILE_MAP[normalized];
+    const dataType = this.dataFileMap[normalized];
     if (dataType) {
       await this.loadDataFile(normalized, dataType);
       console.log(`DataSource: reloaded ${dataType} from ${normalized}`);
@@ -67,7 +78,8 @@ export class DataSource extends EventEmitter implements IDataSource {
       return;
     }
 
-    if (/^data\/calendar\/\d{4}\/\d{2}\/\d{2}\.json$/.test(normalized)) {
+    const calendarBase = this.p('data/calendar/');
+    if (normalized.startsWith(calendarBase) && normalized.endsWith('.json')) {
       await this.loadCalendarEvents();
       console.log(`DataSource: reloaded events from calendar change: ${normalized}`);
       this.emit('dataChanged', { type: 'events', path: normalized });
@@ -104,10 +116,11 @@ export class DataSource extends EventEmitter implements IDataSource {
     this._calendar.clear();
 
     try {
-      const calendarExists = await this.fileSystem.exists('data/calendar');
+      const calendarDir = this.p('data/calendar');
+      const calendarExists = await this.fileSystem.exists(calendarDir);
       if (!calendarExists) return;
 
-      const calendarTree = await this.fileSystem.listDirectory('data/calendar');
+      const calendarTree = await this.fileSystem.listDirectory(calendarDir);
       const calendarFiles = this.findCalendarFiles(calendarTree);
 
       for (const filePath of calendarFiles) {

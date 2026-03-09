@@ -21,11 +21,12 @@ import './global.css';
 
 App.create();
 
-// Wraps MqttProvider passing the JWT token as MQTT password so the backend can auth
+// Wraps MqttProvider passing JWT token as MQTT password and scoping file paths to the current user
 function MqttProviderWithAuth({ children }: { children: React.ReactNode }) {
-  const { token } = useAuth();
+  const { token, currentUser } = useAuth();
+  const userBasePath = currentUser ? `Minis/Users/${currentUser.name}` : '';
   return (
-    <MqttProvider mqttUsername="web" mqttPassword={token ?? undefined}>
+    <MqttProvider mqttUsername="web" mqttPassword={token ?? undefined} userBasePath={userBasePath}>
       {children}
     </MqttProvider>
   );

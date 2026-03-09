@@ -14,13 +14,15 @@ const FLOW_EXTENSION = '.automate.json';
 export class AutomateService implements IAutomateService {
   private fileSystem: FileSystem;
   private dataSource: DataSource;
+  private userDataPath: string;
   private flows: Map<string, AutomateFlowModel> = new Map();
   private flowPaths: Map<string, string> = new Map(); // flowId -> filePath
   private isLoaded = false;
 
-  constructor(fileSystem: FileSystem, dataSource: DataSource) {
+  constructor(fileSystem: FileSystem, dataSource: DataSource, userDataPath: string = '') {
     this.fileSystem = fileSystem;
     this.dataSource = dataSource;
+    this.userDataPath = userDataPath;
   }
 
   async initialize(): Promise<void> {
@@ -122,7 +124,7 @@ export class AutomateService implements IAutomateService {
       Object.assign(variables, inputVars);
     }
 
-    const api = new BackendSystemApi(this.fileSystem, this.dataSource, variables);
+    const api = new BackendSystemApi(this.fileSystem, this.dataSource, variables, this.userDataPath);
     const engine = new BackendAutomateEngine();
 
     console.log(`AutomateService: Executing flow "${flow.name}" (${flowId})`);
