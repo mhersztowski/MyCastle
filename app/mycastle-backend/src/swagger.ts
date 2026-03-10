@@ -572,6 +572,586 @@ const swaggerSpec = {
         },
       },
     },
+    '/admin/scripts': {
+      get: {
+        tags: ['Admin - Scripts'],
+        summary: 'List available server-side scripts',
+        responses: {
+          200: {
+            description: 'Script list',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    scripts: { type: 'array', items: { $ref: '#/components/schemas/ScriptInfo' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/admin/scripts/{name}': {
+      get: {
+        tags: ['Admin - Scripts'],
+        summary: 'Get script content',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' }, description: 'Script filename (e.g. hello.js)' }],
+        responses: {
+          200: {
+            description: 'Script content',
+            content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, content: { type: 'string' } } } } },
+          },
+          400: { description: 'Invalid script name' },
+          404: { description: 'Script not found' },
+        },
+      },
+      put: {
+        tags: ['Admin - Scripts'],
+        summary: 'Create or update a script',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', required: ['content'], properties: { content: { type: 'string', description: 'JavaScript source code' } } },
+            },
+          },
+        },
+        responses: { 200: { description: 'Script saved' }, 400: { description: 'Invalid name or missing content' } },
+      },
+      delete: {
+        tags: ['Admin - Scripts'],
+        summary: 'Delete a script',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Script deleted' }, 400: { description: 'Script not found or invalid name' } },
+      },
+    },
+    '/admin/scripts/{name}/run': {
+      post: {
+        tags: ['Admin - Scripts'],
+        summary: 'Run a script (Node.js subprocess, timeout 30s)',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  args: { type: 'array', items: { type: 'string' }, description: 'Command-line arguments passed to the script' },
+                  env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Extra environment variables' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Run result',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ScriptRunResult' } } },
+          },
+          400: { description: 'Script not found or invalid name' },
+          503: { description: 'Scripts service not available' },
+        },
+      },
+    },
+    '/terminal/ticket': {
+      post: {
+        tags: ['Terminal'],
+        summary: 'Create a one-time terminal auth ticket (valid 30s)',
+        responses: {
+          200: {
+            description: 'Ticket created',
+            content: { 'application/json': { schema: { type: 'object', properties: { ticket: { type: 'string' } } } } },
+          },
+          401: { description: 'Unauthorized' },
+        },
+      },
+    },
+    '/ai/search': {
+      post: {
+        tags: ['AI'],
+        summary: 'Proxy AI search request to OpenAI or Anthropic',
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['model', 'apiKey', 'userPrompt'],
+                properties: {
+                  model: { type: 'string', enum: ['openai', 'anthropic'] },
+                  apiKey: { type: 'string' },
+                  systemPrompt: { type: 'string' },
+                  userPrompt: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'AI response',
+            content: { 'application/json': { schema: { type: 'object', properties: { result: { type: 'string' } } } } },
+          },
+          400: { description: 'Invalid request' },
+          500: { description: 'AI API error' },
+        },
+      },
+    },
+    '/admin/devicedefs/{id}/sources': {
+      post: {
+        tags: ['Admin - DeviceDefs'],
+        summary: 'Upload source ZIP for device definition',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } } },
+        },
+        responses: { 200: { description: 'Sources uploaded' }, 400: { description: 'Invalid file' } },
+      },
+    },
+    '/admin/moduledefs/{id}/sources': {
+      post: {
+        tags: ['Admin - ModuleDefs'],
+        summary: 'Upload source ZIP for module definition',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } } },
+        },
+        responses: { 200: { description: 'Sources uploaded' }, 400: { description: 'Invalid file' } },
+      },
+    },
+    '/admin/projectdefs/{id}/sources': {
+      post: {
+        tags: ['Admin - ProjectDefs'],
+        summary: 'Upload source ZIP for project definition',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } } },
+        },
+        responses: { 200: { description: 'Sources uploaded' }, 400: { description: 'Invalid file' } },
+      },
+    },
+    '/users/{userName}/devices': {
+      get: {
+        tags: ['User - Devices'],
+        summary: 'List user devices',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Device list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Device' } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ['User - Devices'],
+        summary: 'Create user device',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/DeviceInput' } } },
+        },
+        responses: { 201: { description: 'Device created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Device' } } } } },
+      },
+    },
+    '/users/{userName}/devices/{deviceName}': {
+      put: {
+        tags: ['User - Devices'],
+        summary: 'Update user device',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/DeviceInput' } } },
+        },
+        responses: { 200: { description: 'Device updated' }, 404: { description: 'Device not found' } },
+      },
+      delete: {
+        tags: ['User - Devices'],
+        summary: 'Delete user device',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'deviceName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Device deleted' }, 404: { description: 'Device not found' } },
+      },
+    },
+    '/users/{userName}/my-shares': {
+      get: {
+        tags: ['IoT - Device Sharing'],
+        summary: 'List shares created by this user',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'My shares list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/DeviceShare' } } } } } },
+          },
+        },
+      },
+    },
+    '/users/{userName}/localizations': {
+      get: {
+        tags: ['User - Localizations'],
+        summary: 'List user localizations',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Localization list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Localization' } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ['User - Localizations'],
+        summary: 'Create localization',
+        parameters: [{ name: 'userName', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/LocalizationInput' } } },
+        },
+        responses: { 201: { description: 'Localization created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Localization' } } } } },
+      },
+    },
+    '/users/{userName}/localizations/{id}': {
+      put: {
+        tags: ['User - Localizations'],
+        summary: 'Update localization',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/LocalizationInput' } } },
+        },
+        responses: { 200: { description: 'Localization updated' }, 404: { description: 'Not found' } },
+      },
+      delete: {
+        tags: ['User - Localizations'],
+        summary: 'Delete localization',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Localization deleted' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/arduino/boards': {
+      get: {
+        tags: ['Arduino'],
+        summary: 'List available Arduino boards',
+        responses: {
+          200: {
+            description: 'Board list',
+            content: { 'application/json': { schema: { type: 'object', properties: { boards: { type: 'array', items: { $ref: '#/components/schemas/ArduinoBoard' } } } } } },
+          },
+          503: { description: 'Arduino CLI not available' },
+        },
+      },
+    },
+    '/arduino/ports': {
+      get: {
+        tags: ['Arduino'],
+        summary: 'List available serial ports',
+        responses: {
+          200: {
+            description: 'Port list',
+            content: { 'application/json': { schema: { type: 'object', properties: { ports: { type: 'array', items: { type: 'object', properties: { address: { type: 'string' }, protocol: { type: 'string' } } } } } } } },
+          },
+          503: { description: 'Arduino CLI not available' },
+        },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/compile': {
+      post: {
+        tags: ['Arduino - Projects'],
+        summary: 'Compile Arduino sketch',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['sketchName', 'fqbn'], properties: { sketchName: { type: 'string' }, fqbn: { type: 'string' } } } } },
+        },
+        responses: {
+          200: { description: 'Compile result', content: { 'application/json': { schema: { $ref: '#/components/schemas/ArduinoCompileResult' } } } },
+          400: { description: 'Compile error' },
+          503: { description: 'Arduino CLI not available' },
+        },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/upload': {
+      post: {
+        tags: ['Arduino - Projects'],
+        summary: 'Upload firmware to device',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', required: ['sketchName', 'fqbn', 'port'], properties: { sketchName: { type: 'string' }, fqbn: { type: 'string' }, port: { type: 'string' } } },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Upload result', content: { 'application/json': { schema: { $ref: '#/components/schemas/ArduinoCompileResult' } } } },
+          400: { description: 'Upload error' },
+          503: { description: 'Arduino CLI not available' },
+        },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/output': {
+      get: {
+        tags: ['Arduino - Projects'],
+        summary: 'List compiled output files',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: {
+            description: 'Output file list',
+            content: { 'application/json': { schema: { type: 'object', properties: { files: { type: 'array', items: { type: 'string' } } } } } },
+          },
+        },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/output/{fileName}': {
+      get: {
+        tags: ['Arduino - Projects'],
+        summary: 'Download compiled output file',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'fileName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Binary file content', content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } },
+          404: { description: 'File not found' },
+        },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/readme': {
+      get: {
+        tags: ['Arduino - Projects'],
+        summary: 'Get project README',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'README content', content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string' } } } } } },
+        },
+      },
+      put: {
+        tags: ['Arduino - Projects'],
+        summary: 'Save project README',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' } } } } },
+        },
+        responses: { 200: { description: 'README saved' } },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/sketches': {
+      get: {
+        tags: ['Arduino - Projects'],
+        summary: 'List sketches in project',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: {
+            description: 'Sketch list',
+            content: { 'application/json': { schema: { type: 'object', properties: { sketches: { type: 'array', items: { type: 'string' } } } } } },
+          },
+        },
+      },
+    },
+    '/users/{userName}/projects/{projectName}/sketches/{sketchName}/{fileName}': {
+      get: {
+        tags: ['Arduino - Projects'],
+        summary: 'Read sketch file content',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'sketchName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'fileName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'File content', content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string' } } } } } },
+          404: { description: 'File not found' },
+        },
+      },
+      put: {
+        tags: ['Arduino - Projects'],
+        summary: 'Write sketch file content',
+        parameters: [
+          { name: 'userName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'projectName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'sketchName', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'fileName', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' } } } } },
+        },
+        responses: { 200: { description: 'File saved' } },
+      },
+    },
+    '/vfs/capabilities': {
+      get: {
+        tags: ['VFS'],
+        summary: 'Get VFS capabilities',
+        responses: {
+          200: {
+            description: 'Capabilities flags',
+            content: { 'application/json': { schema: { type: 'object', properties: { capabilities: { type: 'integer' } } } } },
+          },
+        },
+      },
+    },
+    '/vfs/stat': {
+      get: {
+        tags: ['VFS'],
+        summary: 'Stat a VFS path',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'File stat', content: { 'application/json': { schema: { $ref: '#/components/schemas/VfsStat' } } } },
+          404: { description: 'Path not found' },
+        },
+      },
+    },
+    '/vfs/readdir': {
+      get: {
+        tags: ['VFS'],
+        summary: 'List directory contents',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Directory entries',
+            content: { 'application/json': { schema: { type: 'object', properties: { entries: { type: 'array', items: { $ref: '#/components/schemas/VfsEntry' } } } } } },
+          },
+          404: { description: 'Directory not found' },
+        },
+      },
+    },
+    '/vfs/readFile': {
+      get: {
+        tags: ['VFS'],
+        summary: 'Read file content (base64-encoded)',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'File content',
+            content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string', format: 'byte', description: 'Base64-encoded file content' } } } } },
+          },
+          404: { description: 'File not found' },
+        },
+      },
+    },
+    '/vfs/writeFile': {
+      post: {
+        tags: ['VFS'],
+        summary: 'Write file content (base64-encoded)',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['content'],
+                properties: {
+                  content: { type: 'string', format: 'byte', description: 'Base64-encoded file content' },
+                  overwrite: { type: 'boolean' },
+                  create: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: 'File written' }, 409: { description: 'File exists (overwrite=false)' } },
+      },
+    },
+    '/vfs/delete': {
+      post: {
+        tags: ['VFS'],
+        summary: 'Delete a VFS path',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: { type: 'object', properties: { recursive: { type: 'boolean' } } },
+            },
+          },
+        },
+        responses: { 200: { description: 'Deleted' }, 404: { description: 'Path not found' } },
+      },
+    },
+    '/vfs/rename': {
+      post: {
+        tags: ['VFS'],
+        summary: 'Rename/move a VFS path',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['oldPath', 'newPath'],
+                properties: { oldPath: { type: 'string' }, newPath: { type: 'string' }, overwrite: { type: 'boolean' } },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: 'Renamed' }, 404: { description: 'Source not found' }, 409: { description: 'Target exists' } },
+      },
+    },
+    '/vfs/mkdir': {
+      post: {
+        tags: ['VFS'],
+        summary: 'Create a directory',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Directory created' }, 409: { description: 'Already exists' } },
+      },
+    },
+    '/vfs/copy': {
+      post: {
+        tags: ['VFS'],
+        summary: 'Copy a VFS path',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['source', 'destination'],
+                properties: { source: { type: 'string' }, destination: { type: 'string' }, overwrite: { type: 'boolean' } },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: 'Copied' }, 404: { description: 'Source not found' }, 409: { description: 'Target exists' } },
+      },
+    },
     '/users/{userName}/api-keys': {
       get: {
         tags: ['API Keys'],
@@ -825,11 +1405,111 @@ const swaggerSpec = {
           lastUsedAt: { type: 'integer', nullable: true },
         },
       },
+      ScriptInfo: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Script filename (e.g. hello.js)' },
+          size: { type: 'integer', description: 'File size in bytes' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      ScriptRunResult: {
+        type: 'object',
+        properties: {
+          stdout: { type: 'string' },
+          stderr: { type: 'string' },
+          exitCode: { type: 'integer', nullable: true },
+          duration: { type: 'integer', description: 'Execution time in milliseconds' },
+        },
+      },
       ApiKeyCreateResponse: {
         type: 'object',
         properties: {
           key: { $ref: '#/components/schemas/ApiKeyPublic' },
           rawKey: { type: 'string', description: 'Full API key — shown only once' },
+        },
+      },
+      Device: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          sn: { type: 'string' },
+          description: { type: 'string' },
+          isAssembled: { type: 'boolean' },
+          isIot: { type: 'boolean' },
+          deviceDefId: { type: 'string' },
+          localizationId: { type: 'string' },
+        },
+      },
+      DeviceInput: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: { type: 'string', pattern: '^[a-zA-Z0-9_-]+$' },
+          sn: { type: 'string' },
+          description: { type: 'string' },
+          isAssembled: { type: 'boolean' },
+          isIot: { type: 'boolean' },
+          deviceDefId: { type: 'string' },
+          localizationId: { type: 'string' },
+        },
+      },
+      Localization: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          type: { type: 'string', enum: ['place', 'geo'] },
+          place: { type: 'string' },
+          geo: {
+            type: 'object',
+            nullable: true,
+            properties: { lat: { type: 'number' }, lng: { type: 'number' } },
+          },
+          device: { type: 'string', description: 'Device ID associated with this localization' },
+        },
+      },
+      LocalizationInput: {
+        type: 'object',
+        required: ['name', 'type'],
+        properties: {
+          name: { type: 'string' },
+          type: { type: 'string', enum: ['place', 'geo'] },
+          place: { type: 'string' },
+          geo: { type: 'object', nullable: true, properties: { lat: { type: 'number' }, lng: { type: 'number' } } },
+          device: { type: 'string' },
+        },
+      },
+      ArduinoBoard: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          fqbn: { type: 'string' },
+        },
+      },
+      ArduinoCompileResult: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          stdout: { type: 'string' },
+          stderr: { type: 'string' },
+        },
+      },
+      VfsStat: {
+        type: 'object',
+        properties: {
+          type: { type: 'integer', description: '1 = File, 2 = Directory' },
+          ctime: { type: 'integer', description: 'Creation time (ms)' },
+          mtime: { type: 'integer', description: 'Modified time (ms)' },
+          size: { type: 'integer' },
+        },
+      },
+      VfsEntry: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          type: { type: 'integer', description: '1 = File, 2 = Directory' },
         },
       },
     },

@@ -10,8 +10,6 @@
     "packages/ui-components-scene3d",
     "app/mycastle-backend",
     "app/mycastle-web",
-    "app/minis-backend",
-    "app/minis-web",
     "app/demo-scene-3d"
   ],
   "packageOptions": {

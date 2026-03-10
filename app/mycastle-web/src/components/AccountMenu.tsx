@@ -9,6 +9,7 @@ import {
   DataObject as DataObjectIcon,
   DeleteSweep as DeleteSweepIcon,
   Description as DescriptionIcon,
+  Folder as FolderIcon,
   FileDownload as FileDownloadIcon,
   FileUpload as FileUploadIcon,
   Logout as LogoutIcon,
@@ -174,6 +175,12 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
           <MenuItem onClick={() => { closeAll(); toggle('terminal'); }}>
             <ListItemIcon><TerminalIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Terminal</ListItemText>
+          </MenuItem>
+        )}
+        {isAdmin && (
+          <MenuItem onClick={() => { closeAll(); toggle('vfs'); }}>
+            <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>VFS Explorer</ListItemText>
           </MenuItem>
         )}
       </Menu>

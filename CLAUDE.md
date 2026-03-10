@@ -32,11 +32,12 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `mqttserver/` — MqttServer (Aedes, publishMessage(), onMessage(handler) for custom topic routing, setAuthenticate(callback) for MQTT auth), MqttMessageHandler type, Client, Packet classes per type
   - `auth/` — JwtService (sign/verify JWT, jsonwebtoken), PasswordService (bcrypt hash/verify, isBcrypt detection), ApiKeyService (CRUD kluczy API z prefix `minis_`, SHA-256 hash, per-user, dane w JSON file), checkAuth() middleware (Bearer token: JWT lub API key → AuthTokenPayload | null)
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
-  - `rpc/` — **RpcRouter** (wyekstrahowany z minis-backend). `RpcRouter`: register/dispatch/getRegisteredMethods. `RpcContext` z `user?: AuthTokenPayload`. Używany zarówno przez mycastle-backend jak i minis-backend.
+  - `rpc/` — **RpcRouter**. `RpcRouter`: register/dispatch/getRegisteredMethods. `RpcContext` z `user?: AuthTokenPayload`. Używany przez mycastle-backend.
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
 - **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core (SceneGraph, SceneNode, RenderEngine, IO)
 - **@mhersztowski/ui-core** (`packages/ui-core/`) — hooks, theme, utils for scene3d UI
 - **@mhersztowski/ui-components-scene3d** (`packages/ui-components-scene3d/`) — scene3d UI components (RichEditor, panels, toolbar)
+
 
 ### Aplikacja backend (`app/mycastle-backend/`)
 - Node.js, ESM (`"type": "module"`), build z tsup, dev z tsx watch
@@ -44,14 +45,14 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **App singleton** (`src/App.ts`): `App.create(config)` → `App.instance.init()` → `App.instance.shutdown()`. Trzyma referencje do wszystkich modułów: fileSystem, ocrService, dataSource, automateService, schedulerService, httpServer, iotService, arduinoService, _mqttServer (lazy), jwtService, apiKeyService, terminalService. Seeduje domyślnego admina (admin/admin) przy pierwszym uruchomieniu.
 - Importuje FileSystem, MqttServer, JwtService, PasswordService, ApiKeyService, DataSource, RpcRouter z `@mhersztowski/core-backend`
 - **MQTT auth**: anonymous allowed (web client), lub API key, JWT token, lub username+password
-- **MycastleHttpServer** (`src/MycastleHttpServer.ts`): rozszerza HttpUploadServer, dodaje pełne REST API (`/api/*`) analogiczne do MinisHttpServer. JWT auth middleware (checkAuth) na wszystkie endpointy poza publicznymi. Admin routes wymagają `isAdmin`. Generyczny `handleCrud(config: CrudConfig)`. Endpointy identyczne jak MinisHttpServer (patrz sekcja minis-backend).
+- **MycastleHttpServer** (`src/MycastleHttpServer.ts`): rozszerza HttpUploadServer, dodaje pełne REST API (`/api/*`). JWT auth middleware (checkAuth) na wszystkie endpointy poza publicznymi. Admin routes wymagają `isAdmin`. Generyczny `handleCrud(config: CrudConfig)`.
 - **TerminalService** (`src/modules/terminal/TerminalService.ts`): WebSocket PTY (node-pty, xterm-compatible). Ticket-based auth (one-time 30s ticket). Attach do HTTP server na `/ws/terminal`. `createTicket(payload)` — wywoływane z HTTP endpoint po weryfikacji JWT.
 - Moduły w `src/modules/`:
     - **ocr** — Tesseract.js + Sharp preprocessing, PolishReceiptParser, non-blocking init
     - **automate** — AutomateService (implementuje IAutomateService), BackendAutomateEngine (graph traversal, merge nodes), BackendSystemApi, AutomateSandbox
     - **scheduler** — SchedulerService (node-cron), auto-reload z filesystem events
-    - **iot** — pełna warstwa IoT (taka sama jak minis-backend/iot): IotDatabase (SQLite, WAL), TelemetryStore, DevicePresence, CommandDispatcher, AlertEngine, DeviceShareStore, IotService
-    - **arduino** — pełna warstwa Arduino (taka sama jak minis-backend/arduino): ArduinoCli, ArduinoCliLocal, ArduinoCliDocker, ArduinoProject, ArduinoService
+    - **iot** — pełna warstwa IoT: IotDatabase (SQLite, WAL), TelemetryStore, DevicePresence, CommandDispatcher, AlertEngine, DeviceShareStore, IotService
+    - **arduino** — pełna warstwa Arduino: ArduinoCli, ArduinoCliLocal, ArduinoCliDocker, ArduinoProject, ArduinoService
     - **rpc** — handlers.ts (registerHandlers z deps: iotService, fileSystem). Importuje RpcRouter z `@mhersztowski/core-backend`
 - `src/swagger.ts` — OpenAPI 3.0.3 spec (auto-generated z Zod via buildSwaggerSpec)
 
@@ -82,14 +83,14 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **serial** — Web Serial API: WebSerialService, WebSerialTerminal (xterm.js), EspFlashService (esptool-js), FlashDialog
     - **iot-emulator** — EmulatorService (MQTT pub/sub via `mqtt` package, interwały telemetrii/heartbeat, command handling, activity log, localStorage persistence), presety urządzeń, generatory wartości
 - Serwisy (`src/services/`):
-    - **MinisApiService** — singleton (`minisApi`), REST client do `/api/*`. `setAuthToken(token)`. Pełne API identyczne jak w minis-web (auth, admin CRUD, user devices/projects, IoT, API keys, Arduino, Sketch, README, Localization). Dodatkowo: `getTerminalTicket()` → `{ ticket }` (do GlobalTerminal).
+    - **MinisApiService** — singleton (`minisApi`), REST client do `/api/*`. `setAuthToken(token)`. Pełne API: auth, admin CRUD, user devices/projects, IoT, API keys, Arduino, Sketch, README, Localization. Dodatkowo: `getTerminalTicket()` → `{ ticket }` (do GlobalTerminal).
     - **RpcClient** — singleton (`rpcClient`), type-safe klient RPC. `setAuthToken(token)`. `call<TName>(method, input): Promise<Output>`. Wire format: `POST /api/rpc/{method}`.
 - Hooks (`src/hooks/`):
     - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP)
 - Komponenty (`src/components/`):
     - **GlobalWindowsContext** — `WindowName`: `'apiDocs' | 'rpcExplorer' | 'mqttExplorer' | 'mjdDefEditor' | 'mjdDataEditor' | 'terminal'`. Layout save/load/clear (localStorage). Zamknięcie okien przy zmianie route.
     - **GlobalTerminal** — xterm.js terminal w GlobalWindow, wielosesyjny (tabs), WebSocket `/ws/terminal` z ticket auth. Ctrl+Shift+C kopiuje zaznaczenie.
-    - **GlobalWindow**, **GlobalApiDocs**, **GlobalRpcExplorer**, **GlobalMqttExplorer**, **GlobalMjdDefEditor**, **GlobalMjdDataEditor** — pływające okna (analogiczne jak w minis-web)
+    - **GlobalWindow**, **GlobalApiDocs**, **GlobalRpcExplorer**, **GlobalMqttExplorer**, **GlobalMjdDefEditor**, **GlobalMjdDataEditor** — pływające okna
     - **AccountMenu** — hierarchiczne menu (View save/load/clear, Window API Docs/RPC/MQTT/Terminal)
     - **BuildOutputPanel**, **ImpersonationBanner**, **MinimalTopBar**, **MinimalTopBarContext** — komponenty UI
     - **DisplayContext** — ThemeProvider wrapper z trybem ciemnym i rozmiarem czcionki
@@ -101,79 +102,6 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - Layout pages (Minis user): `/user/:userName/main`, `/user/:userName/localization`, `/user/:userName/electronics/devices`, `/user/:userName/electronics/arduino`, `/user/:userName/electronics/upython`, `/user/:userName/iot/dashboard`, `/user/:userName/iot/devices`, `/user/:userName/iot/device/:deviceName`, `/user/:userName/iot/alerts`, `/user/:userName/iot/emulator`, `/user/:userName/tools/rpc` (AdminOnly), `/user/:userName/tools/mqtt-explorer` (AdminOnly), `/user/:userName/tools/api-keys` (AdminOnly), `/user/:userName/tools/testvfs` (AdminOnly), `/user/:userName/tools/docs` (AdminOnly)
     - Layout pages (PIM — pod `/user/:userName/pim/`): `/calendar`, `/todolist`, `/person`, `/project`, `/shopping`, `/automate`, `/objectviewer`, `/components`, `/settings/ai`, `/settings/speech`, `/settings/receipt`, `/settings/page-hooks`, `/agent`
 - **Wzorzec dostępu do serwisów**: strony i komponenty używają `const { aiService } = App.instance;` zamiast bezpośrednich importów singletonów. React contexty (useMqtt, useFilesystem, useNotification, useAuth) pozostają dla reaktywnego stanu UI.
-
-### Aplikacja backend Minis (`app/minis-backend/`)
-- opis w docs/minis.md
-- Node.js, ESM, build z tsup, dev z tsx watch
-- Port: 1902 (HTTP + MQTT WebSocket at `/mqtt` — shared mode)
-- **App singleton** (`src/App.ts`): FileSystem + MinisHttpServer + MqttServer + IotService + JwtService + ApiKeyService + ArduinoService. `shutdown()` gracefully zamyka IoT service + HTTP server + MQTT. IotService wired via `MqttServer.onMessage()` / `MqttServer.publishMessage()`. MQTT auth via `MqttServer.setAuthenticate()` (API key / JWT / username+password).
-- Importuje FileSystem, MqttServer, JwtService, PasswordService, ApiKeyService z `@mhersztowski/core-backend`
-- **MinisHttpServer** (`src/MinisHttpServer.ts`): rozszerza HttpUploadServer, dodaje REST API (`/api/*`). JWT auth middleware (checkAuth) na wszystkie endpointy poza publicznymi (`/auth/login`, `/auth/users`, `/docs*`). Admin routes wymagają `isAdmin`. Wewnętrznie używa generycznego `handleCrud(config: CrudConfig)` do obsługi CRUD — eliminuje duplikację kodu między endpointami. CrudConfig.lookupKey: admin CRUD używa `'id'`, user devices/projects używają `'name'`. Walidacja nazw: `[a-zA-Z0-9_-]`, unikalność (400/409). Hasła hashowane bcrypt (auto-migracja plaintext przy logowaniu).
-    - `/api/auth/login` — logowanie po name+password, zwraca `{ token, user }` (JWT + UserPublic)
-    - `/api/auth/users` — publiczna lista użytkowników (bez haseł)
-    - `/api/admin/{users,devicedefs,moduledefs,projectdefs}` — CRUD (GET list, POST create, PUT update, DELETE). Dane trzymane w JSON files (`Minis/Admin/*.json`)
-    - `/api/admin/{resource}/:id/sources` — upload ZIP z plikami źródłowymi (adm-zip, smart prefix stripping, max 50MB)
-    - `/api/users/:userName/{devices,projects}` — CRUD per user (dane w `Minis/Users/:userName/*.json`), lookup po nazwie urządzenia/projektu
-    - `/api/users/:userName/devices/:deviceName/iot-config` — GET/PUT konfiguracja IoT urządzenia
-    - `/api/users/:userName/devices/:deviceName/telemetry` — GET historia (from/to/limit), GET latest
-    - `/api/users/:userName/devices/:deviceName/commands` — POST wysyłanie, GET lista (limit)
-    - `/api/users/:userName/alert-rules` — GET/POST/PUT/DELETE reguły alertów
-    - `/api/users/:userName/alerts` — GET lista, PATCH acknowledge/resolve
-    - `/api/users/:userName/iot/devices` — GET statusy wszystkich urządzeń IoT
-    - `/api/users/:userName/devices/:deviceName/shares` — GET/POST/DELETE udostępnienia urządzenia
-    - `/api/users/:userName/shared-devices` — GET urządzenia udostępnione temu użytkownikowi
-    - `/api/users/:userName/my-shares` — GET udostępnienia dokonane przez tego użytkownika
-    - `/api/users/:userName/api-keys` — GET/POST/DELETE zarządzanie kluczami API (per-user, admin może wszystkimi)
-    - `/api/arduino/boards` — GET lista dostępnych płytek (arduino-cli board listall)
-    - `/api/arduino/ports` — GET lista portów COM
-    - `/api/users/:userName/projects/:projectName/compile` — POST kompilacja (`{ sketchName, fqbn }`)
-    - `/api/users/:userName/projects/:projectName/upload` — POST upload firmware (`{ sketchName, fqbn, port }`)
-    - `/api/users/:userName/projects/:projectName/output[/:fileName]` — GET lista / pobranie skompilowanych plików
-    - `/api/users/:userName/projects/:projectName/sketches[/:sketchName/:fileName]` — GET lista / GET odczyt / PUT zapis plików sketchy
-    - `/api/users/:userName/projects/:projectName/readme` — GET/PUT plik README.md projektu (przechowywany w `Minis/Users/:userName/Projects/:projectId/README.md`)
-    - `/api/users/:userName/localizations[/:id]` — CRUD lokalizacji per user (dane w `Minis/Users/:userName/Localizations.json`). MinisLocalizationModel: id, name, type ('place'|'geo'), place?, geo? ({lat,lng}), device (deviceId)
-    - `/api/ai/search` — POST proxy do OpenAI / Anthropic API (CORS bypass). Body: `{ model: 'openai'|'anthropic', apiKey, systemPrompt, userPrompt }`. Zwraca `{ result: string }`. OpenAI: gpt-4o-mini, Anthropic: claude-haiku-4-5-20251001
-    - `/api/vfs/{operation}?path=` — admin-only VFS REST endpoints (capabilities, stat, readdir, readFile, writeFile, delete, rename, mkdir, copy). Server-side CompositeFS z NodeFS mounted at /data. Base64-encoded file content. VfsError → proper HTTP status codes (404/409/400/403/503)
-    - `/api/rpc/{methodName}` — POST, generyczny RPC dispatch (Zod validation, auto-Swagger, `user` w context)
-    - `/api/docs` — Swagger UI (z Authorize dla Bearer token)
-    - `/api/docs/swagger.json` — OpenAPI 3.0.3 spec (`src/swagger.ts`, auto-generated z Zod schemas via `buildSwaggerSpec()` + `zod-to-json-schema`). Property schemas wzbogacone o `x-autocomplete` i `x-depends-on` z fieldMeta. Security scheme bearerAuth (JWT/API key)
-- **RPC System** (`src/rpc/`): RpcRouter wyekstrahowany do `@mhersztowski/core-backend`. `handlers.ts` (registerHandlers z deps: iotService, fileSystem) — importuje RpcRouter z core-backend. Metody RPC: ping, getDeviceStatuses, sendCommand, getLatestTelemetry. Dodawanie nowej metody: 1) schema w core/rpc/methods.ts, 2) handler w handlers.ts, 3) call z frontendu via rpcClient — Swagger auto-update.
-- **Arduino Service Layer** (`src/arduino/`): ArduinoCli (interfejs), ArduinoCliLocal (child_process.execFile, env `ARDUINO_CLI_LOCAL_PATH`), ArduinoCliDocker (docker exec, env `ARDUINO_CLI_DOCKER_NAME`), ArduinoProject (zarządzanie ścieżkami: sketches/libraries/output/build/custom-config.yaml, orchestracja compile/upload), ArduinoService (orchestrator: tworzy Local/Docker na podstawie env, `isAvailable` getter, compile/upload/listBoards/listPorts)
-- **IoT Service Layer** (`src/iot/`): IotDatabase (SQLite, better-sqlite3, WAL mode), TelemetryStore (INSERT/query, config CRUD, agregacja), DevicePresence (heartbeat tracking, timeout detection), CommandDispatcher (tworzenie komend, ACK tracking), AlertEngine (reguły CRUD, ewaluacja po telemetrii, cooldown), DeviceShareStore (CRUD udostępnień, prepared statements), IotService (orchestrator — parsuje MQTT topics `minis/{userName}/{deviceName}/{type}`, koordynuje stores, forwarding telemetrii/statusu do shared users)
-- **MQTT Integration**: IotService subskrybuje `minis/` topics. Waliduje payloady Zodem (safeParse z `mqttTopics` registry). Przetwarza: telemetry → validate + insert + presence + alert eval + republish + forward do shared users, heartbeat → validate + presence, command/ack → validate + update status. Publikuje: status, telemetry/live, alert. Forwarding do shared users: `minis/{targetUser}/shared/{owner}/{device}/telemetry/live`, `minis/{targetUser}/shared/{owner}/{device}/status`
-- Dependencje: adm-zip, swagger-ui-dist, better-sqlite3, zod, zod-to-json-schema
-- Dane platformy w `data/` (ROOT_DIR=../../data, JSON files), dane IoT w `data/iot.db` (SQLite)
-
-### Aplikacja frontend Minis (`app/minis-web/`)
-- opis w docs/minis.md
-- React 18 + TypeScript, Vite 6, Material UI 6, Monaco Editor, Blockly 12, xterm.js, esptool-js, mqtt
-- Dev port: 1903 (Vite HMR), proxy `/api` → `localhost:1902`, proxy `/mqtt` → `ws://localhost:1902` (WebSocket)
-- Importuje typy z `@mhersztowski/core`, transport MQTT z `@mhersztowski/web-client` (re-exported w `modules/mqttclient/`)
-- **Nie używa** web-client's `FilesystemProvider` (zbyt powiązany z mycastle). Ma własny uproszczony `FilesystemContext` korzystający z `useMqtt()` do transportu.
-- **Routing z userName**: wszystkie ścieżki admin/user zawierają `:userName` (np. `/admin/:userName/main`, `/user/:userName/electronics/devices`). IoT device page: `:deviceName`. Strony pobierają userName z `useParams()`. Identyfikacja po nazwie (nie UUID) — nazwy muszą być unikalne i URL-safe `[a-zA-Z0-9_-]`.
-- **Sidebar nawigacja**: Layout z MUI Drawer, flat items + collapsible tree groups (Electronics, IoT, Tools) z `Collapse`/`ExpandLess`/`ExpandMore`. Generyczny `openGroups` state.
-- **Provider tree** (`main.tsx`): MqttProvider → FilesystemProvider → MinisDataSourceProvider → AuthProvider → GlobalWindowsProvider → App + GlobalApiDocs + GlobalRpcExplorer + GlobalMqttExplorer + GlobalMjdDefEditor + GlobalMjdDataEditor
-- Moduły:
-    - **mqttclient** — re-exports z @mhersztowski/web-client (MqttProvider, useMqtt)
-    - **auth** — AuthContext/AuthProvider, useAuth hook. JWT token + sesja w sessionStorage (format `{ user, token }`). `setAuthToken()` propaguje token do MinisApiService i RpcClient. Stan: currentUser, token, isAdmin, login(), logout(), impersonating, startImpersonating(), stopImpersonating(). Impersonacja: admin może przeglądać widok innego usera (efemeryczny stan, nie persystowany)
-    - **filesystem** — Minis-specific: models (FileModel, DirModel), nodes (FileNode, DirNode), components (DirComponent, FileComponent, FileJsonComponent), FilesystemContext, MinisDataSourceContext (ładuje moduleDefs/deviceDefs/projectDefs via MQTT do MemoryDataSource)
-    - **editor** — tylko `monacoWorkers.ts` (Vite-specific `?worker` imports dla Monaco web workers). Reszta edytora wyekstrahowana do `@mhersztowski/web-client/monaco`
-    - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, ConfigLoader, WorkspaceControls. Sub-moduły: blocks/ (io, serial, servo, stepper, spi, audio, time, map, variables), boards/ (BoardManager, BoardProfile z compilerFlag/flashConfig — profile pinów dla różnych płytek: ESP8266 Huzzah/Wemos D1, ESP32 DevKitC, Arduino Uno/Nano/Mega/Leonardo, socToBoardKey mapping SoC→board), generator/ (ArduinoGenerator — transpilacja bloków do C++, generatory per kategoria: io, logic, loops, math, text, serial, servo, spi, stepper, audio, time, map, variables, procedures)
-    - **upythonblockly** — wizualny edytor bloków MicroPython (Blockly): UPythonBlocklyService (generateCode(), serializeToXml(), loadFromXml(), changeBoard(), onWorkspaceChange()), UPythonBlocklyComponent. Sub-moduły: boards/ (UPythonBoardManager, UPythonBoardProfile — profile pinów dla: esp32_generic, esp32s3_generic, esp8266_wemos_d1, rp2040_pico, m5stack_core, m5stack_atom; socToUPythonBoardKey mapping SoC→board), blocks/ (pin, adc, pwm, time, uart, i2c, wifi, bits, control, event, math, typeconv, timer), generator/ (UPythonGenerator extends Blockly.CodeGenerator — imports_/inits_/userFunctions_ dicts, finish() generuje while True: loop; generatory per kategoria: pin, adc, pwm, time, uart, i2c, wifi, bits, control, event, timer, typeconv, logic, loops, math, text, variables, procedures), toolbox.ts (JSON toolbox z kategoriami Logic/Loops/Math/Text/Variables/Functions/Pin/ADC/PWM/Time/UART/I2C/WiFi), repl/ (MpySerialReplService — Web Serial API raw REPL Ctrl+A mode; MpyWebReplService — WebSocket WebREPL z auth, execCode, saveToFile, putFile — protokół binarny PUT wg specyfikacji WebREPL: 82-bajtowy header 'WA'+type+flags+offset+size+fname, odpowiedź 8-bajtowa 'WB'+type+result; MpyReplTerminal — React xterm.js terminal z Serial/WebREPL tabs i Run button; backendRef pattern eliminuje stale closure w onData; po connect Serial wysyła Ctrl+C Ctrl+B \r\n dla świeżego prompta; po WebREPL connect wysyła \r\n; Ctrl+Shift+C kopiuje zaznaczenie), upload/ (UploadDialog — MUI Dialog z Serial/WebREPL tabs, Run only / Save as main.py radio, log output)
-    - **serial** — komunikacja z mikrokontrolerami przez Web Serial API: WebSerialService (connect/disconnect, read/write), WebSerialTerminal (komponent xterm.js z Ctrl+Shift+C do kopiowania zaznaczenia), EspFlashService (flashowanie firmware przez esptool-js), FlashDialog (UI do flashowania, opcjonalne `initialFiles` z pre-loaded firmware z kompilacji)
-    - **iot-emulator** — emulator urządzeń IoT w przeglądarce: EmulatorService (MQTT pub/sub via `mqtt` package, jedno współdzielone połączenie, interwały telemetrii/heartbeat, command handling auto-ack/auto-fail/manual, entity command handling set_state/set_value/set_option/press z natychmiastowym republish telemetrii, activity log, localStorage persistence), generatory wartości (constant/random/sine/linear/step), presety urządzeń (Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device, Smart Thermostat, Smart Plug), typy
-- Hooks (`src/hooks/`):
-    - **useSourceUpload** — reusable hook do uploadu plików źródłowych (ZIP). Enkapsuluje stan uploadu, fileInputRef, trigger i handler. Używany w admin stronach (DevicesDefPage, ModulesDefPage, ProjectDefsPage).
-- Serwisy (`src/services/`):
-    - **MinisApiService** — singleton (`minisApi`), REST client do MinisHttpServer `/api/*`. `setAuthToken(token)` — Bearer token na requestach. Metody: login, getPublicUsers, CRUD users/deviceDefs/moduleDefs/projectDefs (admin), CRUD devices/projects per user, upload ZIP sources, 17 metod IoT, 3 metody API Keys, Arduino API (getArduinoBoards/Ports, compileProject, uploadFirmware, getProjectOutput, fetchOutputBinary), Sketch API (listSketches, readSketchFile, writeSketchFile), README API (readProjectReadme, writeProjectReadme), Localization API (getLocalizations, createLocalization, updateLocalization, deleteLocalization)
-    - **RpcClient** — singleton (`rpcClient`), type-safe klient RPC. `setAuthToken(token)` — Bearer token. `call<TName>(method, input): Promise<Output>` — pełny type inference z RpcMethodRegistry (IDE autocomplete na nazwy metod, input i output). Wire format: `POST /api/rpc/{method}` z JSON body.
-- **AdminOnly guard** (`App.tsx`): route guard sprawdzający `isAdmin && !impersonating`, redirectuje do `/user/:userName/main`
-- **ImpersonationBanner** (`components/ImpersonationBanner.tsx`): fixed żółty pasek na górze z "Viewing as: {name}" + Stop. Layout offsetuje AppBar/Drawer/content gdy aktywny
-- **GlobalMjdDefEditor** (`components/GlobalMjdDefEditor.tsx`): pływające okno do edycji plików definicji MJD (`.mjd`). Używa RemoteFS (`/api/vfs`). Load/Save/Save As via VfsFileDialog. Przy zapisie generuje jednocześnie `.mjd` i `.json` (JSON Schema). `openWithParams('mjdDefEditor', { mjdPath })`.
-- **GlobalMjdDataEditor** (`components/GlobalMjdDataEditor.tsx`): pływające okno do edycji danych wg schematu MJD. Ładuje definicję z `.mjd`, dane z `.data.json` (auto-derive path). Init z defaultValues gdy plik danych nie istnieje. `openWithParams('mjdDataEditor', { mjdPath, dataPath })`.
-- **GlobalWindowsContext** (`components/GlobalWindowsContext.tsx`): WindowName rozszerzone o `'mjdDefEditor' | 'mjdDataEditor'`. MjdDefEditorParams `{ mjdPath }`, MjdDataEditorParams `{ mjdPath, dataPath }`.
-- `softwarePlatform` w `MinisProjectDefModel`: `'Arduino'` (filtrowane na UserProjectsPage) | `'uPython'` (filtrowane na UserUPythonProjectsPage) | brak/pusty (traktowane jako Arduino dla kompatybilności wstecznej)
-- Strony: /, /login/:userName, /admin/:userName/main, /admin/:userName/users (z przyciskiem Impersonate), /admin/:userName/devicesdefs, /admin/:userName/modulesdefs, /admin/:userName/projectdefs, /admin/:userName/filesystem/list, /admin/:userName/filesystem/save, /user/:userName/main, /user/:userName/localization (LocalizationPage — tabela lokalizacji z filtrami name/place + type dropdown, Group by Place checkbox, AI Search accordion z OpenAI/Anthropic proxy, opis urządzenia jako Markdown popover, `react-markdown` + `remark-breaks`), /user/:userName/electronics/devices (UserDevicesPage — lista urządzeń z slide-out Drawer edycji po kliknięciu wiersza; auto-generowanie nazwy jako DefName-SN; pola: name/sn/description(markdown)/isAssembled/isIot), /user/:userName/electronics/arduino (UserProjectsPage — projekty Arduino/Blockly, filtruje po softwarePlatform==='Arduino'||brak), /user/:userName/electronics/upython (UserUPythonProjectsPage — projekty uPython, filtruje po softwarePlatform==='uPython'), /user/:userName/project/:projectId (ProjectPage — Blockly+Monaco split editor z serial terminal, server-side compile i flash z pre-loaded firmware; README panel boczny z podglądem Markdown + edycją inline), /user/:userName/upython-project/:projectId (UPythonProjectPage — Blockly+Monaco Python split editor, MpyReplTerminal panel, UploadDialog do uruchamiania/zapisywania kodu na urządzeniu via Serial REPL lub WebREPL; README panel boczny), /user/:userName/iot/dashboard (IotDashboardPage — entity-aware karty urządzeń: EntityWidgets z sparkline SVG, kontrolki switch/slider/select/button, fallback na capabilities, auto-refresh 10s + quick refresh po komendzie), /user/:userName/iot/devices (IotDevicesPage — lista urządzeń IoT z statusem), /user/:userName/iot/device/:deviceName (IotDevicePage — entity widgets sekcja, metryki ze sparkline, konfiguracja, historia telemetrii, komendy, alerty), /user/:userName/iot/alerts (IotAlertsPage — tabs: alerty + reguły CRUD), /user/:userName/iot/emulator (IotEmulatorPage — emulator urządzeń IoT), /user/:userName/tools/rpc (AdminOnly — RpcExplorerPage — auto-generowane formularze z Swagger/Zod schemas, smart autocomplete z x-autocomplete/x-depends-on metadata, Execute + response, Node-RED export NR Local/NR Remote), /user/:userName/tools/mqtt-explorer (AdminOnly — MqttExplorerPage — hierarchiczny topic tree z real-time messages, detail panel z type info z mqttTopics registry + Zod validation, publish form z topic autocomplete z registry + QoS/retain, wildcard subscriptions, Node-RED flow export via WebSocket ws://172.17.0.1:1902/mqtt / wss://minis.hersztowski.org/mqtt, throttled rendering via requestAnimationFrame), /user/:userName/tools/api-keys (AdminOnly — ApiKeysPage — CRUD kluczy API), /user/:userName/tools/testvfs (AdminOnly — TestVfsPage — VFS Explorer test page z CompositeFS/RemoteFS, file preview, manual ops, event log), /user/:userName/tools/docs (AdminOnly — DocsPage — TypeDoc API documentation viewer), /user/:userName/editor/monaco/* (MonacoMultiEditor z VFS Explorer + split editor)
 
 ### Aplikacja desktop (`app/desktop/`)
 - Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
@@ -192,7 +120,7 @@ mycastle/                           # Root monorepo
 ├── tsconfig.base.json              # Shared TS config (ES2022, bundler, react-jsx)
 ├── tsconfig.json                   # Project references
 ├── vitest.config.ts                # Root vitest config
-├── playwright.config.ts            # E2E test config (auto-start backends, baseURL minis-web)
+├── playwright.config.ts            # E2E test config (auto-start backends, baseURL mycastle-web)
 ├── docker-compose.yml              # Coolify deployment (backend + web)
 ├── .npmrc
 │
@@ -205,7 +133,7 @@ mycastle/                           # Root monorepo
 │   ├── core-backend/               # @mhersztowski/core-backend (shared backend modules)
 │   │   ├── src/{filesystem,httpserver,mqttserver,datasource,auth,rpc}/
 │   │   ├── src/auth/               # JwtService, PasswordService, ApiKeyService, checkAuth middleware
-│   │   ├── src/rpc/                # RpcRouter (wyekstrahowany z minis-backend), RpcContext
+│   │   ├── src/rpc/                # RpcRouter, RpcContext
 │   │   ├── src/interfaces.ts       # IAutomateService, IDataSource
 │   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM-only, target node20
@@ -260,61 +188,6 @@ mycastle/                           # Root monorepo
 │   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
 │   │   ├── vite.config.ts          # Dev port: 1895, VitePWA, path aliases (@, @modules, @components, @pages)
 │   │   └── package.json
-│   ├── minis-backend/              # Minis Backend Node.js
-│   │   ├── src/
-│   │   │   ├── index.ts            # Entry point (port 1902)
-│   │   │   ├── App.ts              # App singleton (FileSystem+MinisHttpServer+Mqtt+IotService+JwtService+ApiKeyService+ArduinoService)
-│   │   │   ├── MinisHttpServer.ts  # REST API (/api/*) + JWT auth middleware + RPC dispatch + Arduino/Sketch endpoints, extending HttpUploadServer
-│   │   │   ├── swagger.ts          # OpenAPI spec (auto-generated z Zod via buildSwaggerSpec)
-│   │   │   ├── arduino/            # Arduino CLI integration
-│   │   │   │   ├── ArduinoCli.ts       # Interface + types (BoardInfo, CompileResult, etc.)
-│   │   │   │   ├── ArduinoCliLocal.ts  # Local execution (child_process.execFile)
-│   │   │   │   ├── ArduinoCliDocker.ts # Docker execution (docker exec)
-│   │   │   │   ├── ArduinoProject.ts   # Project path management + compile/upload orchestration
-│   │   │   │   ├── ArduinoProject.test.ts  # Unit tests (7 tests, mock ArduinoCli)
-│   │   │   │   ├── ArduinoService.ts   # Orchestrator (creates Local/Docker based on env)
-│   │   │   │   ├── ArduinoEndpoints.test.ts # Integration tests (22 tests, MockArduinoCli + JWT auth)
-│   │   │   │   └── index.ts            # Barrel export
-│   │   │   ├── rpc/                # RPC system (RpcRouter wyekstrahowany do core-backend)
-│   │   │   │   ├── handlers.ts         # Handler implementations (ping, IoT methods)
-│   │   │   │   ├── index.ts            # Barrel (re-exports RpcRouter z core-backend + registerHandlers)
-│   │   │   │   ├── RpcRouter.test.ts   # Unit tests
-│   │   │   │   └── RpcEndpoints.test.ts # Integration tests
-│   │   │   └── iot/                # IoT service layer
-│   │   │       ├── IotDatabase.ts      # SQLite: schema init, WAL, db handle
-│   │   │       ├── TelemetryStore.ts   # INSERT/query telemetrii, config CRUD, agregacja
-│   │   │       ├── DevicePresence.ts   # Heartbeat tracking, timeout detection
-│   │   │       ├── CommandDispatcher.ts # Tworzenie komend, ACK tracking
-│   │   │       ├── AlertEngine.ts      # CRUD reguł, ewaluacja, cooldown
-│   │   │       ├── DeviceShareStore.ts # CRUD udostępnień urządzeń
-│   │   │       ├── IotService.ts       # Orchestrator: MQTT → stores, share forwarding
-│   │   │       ├── IotService.test.ts  # 26 testów
-│   │   │       └── IotEndpoints.test.ts # 19 testów REST IoT
-│   │   ├── .env                    # PORT=1902, ROOT_DIR=../../data
-│   │   ├── vitest.config.ts        # Unit tests
-│   │   ├── tsup.config.ts          # ESM, target node20
-│   │   └── package.json
-│   ├── minis-web/                  # Minis Frontend React
-│   │   ├── src/
-│   │   │   ├── main.tsx            # Entry (providers + GlobalWindows + App)
-│   │   │   ├── App.tsx             # Routes (all paths with :userName/:deviceName), AdminOnly guard
-│   │   │   ├── modules/{mqttclient,filesystem,auth,editor(monacoWorkers only),ardublockly2,upythonblockly,serial,iot-emulator}/
-│   │   │   ├── hooks/useSourceUpload.ts  # Reusable file upload hook
-│   │   │   ├── services/MinisApiService.ts  # REST client singleton (IoT + API Keys + Arduino + Sketch API)
-│   │   │   ├── services/RpcClient.ts       # Type-safe RPC client singleton (call z autocomplete, setAuthToken)
-│   │   │   ├── pages/{admin,user,user/iot,user/tools,filesystem,editor}/
-│   │   │   ├── test-setup.ts       # Vitest setup (@testing-library/jest-dom)
-│   │   │   ├── components/Layout.tsx        # Drawer + AppBar + AccountMenu + ImpersonationBanner
-│   │   │   ├── components/AccountMenu.tsx   # Hierarchical menu (View save/load/clear, Window API Docs/RPC/MQTT)
-│   │   │   ├── components/GlobalWindowsContext.tsx  # Floating windows state (Map<WindowName, 'open'|'minimized'>)
-│   │   │   ├── components/GlobalWindow.tsx  # Draggable/resizable floating window component
-│   │   │   ├── components/Global{ApiDocs,RpcExplorer,MqttExplorer}.tsx  # Lazy-loaded pages in GlobalWindow
-│   │   │   ├── components/BuildOutputPanel.tsx  # Draggable build output panel (monospace, status colors)
-│   │   │   └── components/ImpersonationBanner.tsx  # Fixed banner for admin impersonation
-│   │   ├── public/docs.json         # TypeDoc JSON output (for DocsPage viewer)
-│   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
-│   │   ├── vite.config.ts          # Dev port: 1903, proxy /api → :1902, proxy /mqtt → ws:1902
-│   │   └── package.json
 │   ├── demo-scene-3d/              # Scene3D demo app
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
@@ -336,8 +209,8 @@ mycastle/                           # Root monorepo
 │       └── user-projects.spec.ts   # User project CRUD tests
 │
 ├── typedoc.json                    # TypeDoc config (entryPointStrategy: packages, all packages + apps)
-├── data/                           # Runtime data (ROOT_DIR for both mycastle-backend and minis-backend)
-├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md, minis.md, minis-iot-dashboard-plan.md, minis-iot-device-implementation.md
+├── data/                           # Runtime data (ROOT_DIR for mycastle-backend)
+├── docs/                           # automate.md, desktop.md, conversation.md, uiforms.md
 │   ├── Dockerfile                  # Multi-stage: build all → typedoc → nginx:alpine
 │   └── nginx.conf                  # SPA routing for generated docs
 ├── docs-site/                      # Generated documentation output (gitignored)
@@ -347,15 +220,13 @@ mycastle/                           # Root monorepo
 ## Development Workflow & Commands
 - **Setup:** `pnpm install` (from root)
 - **Build all:** `pnpm build`
-- **Build specific:** `pnpm build:core`, `pnpm build:core-backend`, `pnpm build:web-client`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`, `pnpm build:minis-backend`, `pnpm build:minis-web`
+- **Build specific:** `pnpm build:core`, `pnpm build:core-backend`, `pnpm build:web-client`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`
 - **Run MyCastle backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
 - **Run MyCastle frontend:** `pnpm dev:web` (port 1895, Vite HMR)
-- **Run Minis backend:** `pnpm dev:minis-backend` (port 1902, HTTP + MQTT WebSocket at /mqtt)
-- **Run Minis frontend:** `pnpm dev:minis-web` (port 1903, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
 - **Run desktop agent:** `cd app/desktop && python agent.py`
 - **Test (unit):** `pnpm test` (all packages), `pnpm test:watch`, `pnpm test:coverage`
-- **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts minis-backend + minis-web)
+- **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts mycastle-backend + mycastle-web)
 - **Typecheck:** `pnpm typecheck`
 - **Clean:** `pnpm clean`
 - **Generate docs:** `pnpm gendocs` (JSON+HTML+Markdown), `pnpm gendocs:html`, `pnpm gendocs:md`
@@ -389,8 +260,8 @@ mycastle/                           # Root monorepo
 - Frontend: Vite handles ESM natively
 
 ## Testing Guidelines
-- **Unit/Integration tests:** Vitest 4 (globals enabled). Każdy package/app ma własny `vitest.config.ts`. Root `vitest.config.ts` agreguje wszystkie workspace projects. Frontend testy (mycastle-web, minis-web, ui-core) używają `jsdom` environment + React Testing Library (`@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`). Setup w `src/test-setup.ts`. Wszystkie `tsconfig.json` excludują `**/*.test.ts` / `**/*.test.tsx` z kompilacji.
-- **E2E tests:** Playwright. Config w `playwright.config.ts` (root). Testy w `tests/e2e/`. Auto-start `dev:minis-backend` + `dev:minis-web` z health check na Swagger endpoint. Fixtures w `tests/e2e/fixtures/data/` kopiowane do `data-test/` (global setup/teardown).
+- **Unit/Integration tests:** Vitest 4 (globals enabled). Każdy package/app ma własny `vitest.config.ts`. Root `vitest.config.ts` agreguje wszystkie workspace projects. Frontend testy (mycastle-web, ui-core) używają `jsdom` environment + React Testing Library (`@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`). Setup w `src/test-setup.ts`. Wszystkie `tsconfig.json` excludują `**/*.test.ts` / `**/*.test.tsx` z kompilacji.
+- **E2E tests:** Playwright. Config w `playwright.config.ts` (root). Testy w `tests/e2e/`. Auto-start `dev:backend` + `dev:web` z health check na Swagger endpoint. Fixtures w `tests/e2e/fixtures/data/` kopiowane do `data-test/` (global setup/teardown).
 - **Structure:** Testy collocated przy źródłach (`*.test.ts` / `*.test.tsx` obok implementacji). E2E w `tests/e2e/`.
 - **Coverage:** Prioritize critical business logic, API boundaries, and integrations
 - **Mocking/Stubs:** Frontend: mockowanie serwisów (np. `minisApi`), `vi.mock()`. Backend: temp directories z beforeEach/afterEach, dynamic port allocation (port 0) dla izolacji. React hooks: `renderHook()` z wrapper providers.
@@ -400,11 +271,11 @@ mycastle/                           # Root monorepo
 ## Environment & Dependencies
 - **Languages:** Node 20, TypeScript 5.9+, Python 3.14 (desktop)
 - **Package manager:** pnpm 10.28.2 (workspaces), pip (Python)
-- **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 6 (minis-web), Vite 7 (scene3d)
-- **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (mycastle-web, minis-web, ui-core)
+- **Build tools:** tsup (packages, backends), Vite 5 (mycastle-web), Vite 7 (scene3d)
+- **Testing:** Vitest 4 (unit/integration), Playwright (e2e), @vitest/coverage-v8, React Testing Library (mycastle-web, ui-core)
 - **Documentation:** TypeDoc 0.28 + typedoc-plugin-markdown (root devDependencies). Config: `typedoc.json` (entryPointStrategy: packages). Output: `docs-site/` (gitignored)
-- **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor. Minis-web additionally: mqtt (v5, raw pub/sub for IoT emulator)
-- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Core-backend additionally: jsonwebtoken, bcrypt. Minis-backend additionally: adm-zip, swagger-ui-dist, better-sqlite3 (IoT data)
+- **Frontend:** React 18, Material UI 5, ReactFlow, Tiptap 3, Monaco Editor
+- **Backend:** Aedes (MQTT), dotenv, dayjs, Tesseract.js, Sharp, node-cron. Core-backend additionally: jsonwebtoken, bcrypt
 - **Desktop:** paho-mqtt, psutil, pyperclip, Pillow, pygetwindow, pycaw, winotify
 
 ## Architecture Documentation

@@ -27,6 +27,67 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@20.19.33)(jsdom@28.1.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
 
+  app/demo-device-schematic:
+    dependencies:
+      '@emotion/react':
+        specifier: ^11.14.0
+        version: 11.14.0(@types/react@18.2.79)(react@18.2.0)
+      '@emotion/styled':
+        specifier: ^11.14.1
+        version: 11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0)
+      '@mhersztowski/core-device-schematic':
+        specifier: workspace:*
+        version: link:../../packages/core-device-schematic
+      '@mhersztowski/ui-components-device-schematic':
+        specifier: workspace:*
+        version: link:../../packages/ui-components-device-schematic
+      '@mhersztowski/ui-core':
+        specifier: workspace:*
+        version: link:../../packages/ui-core
+      '@mui/icons-material':
+        specifier: ^7.3.7
+        version: 7.3.8(@mui/material@7.3.8(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(@types/react@18.2.79)(react@18.2.0)
+      '@mui/material':
+        specifier: ^7.3.7
+        version: 7.3.8(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+      '@react-three/drei':
+        specifier: ^9.122.0
+        version: 9.122.0(@react-three/fiber@8.18.0(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0))(@types/react@18.2.79)(@types/three@0.182.0)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0)(use-sync-external-store@1.6.0(react@18.2.0))
+      '@react-three/fiber':
+        specifier: ^8.18.0
+        version: 8.18.0(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0)
+      allotment:
+        specifier: ^1.20.5
+        version: 1.20.5(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+      react:
+        specifier: 18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: 18.2.0
+        version: 18.2.0(react@18.2.0)
+      three:
+        specifier: ^0.182.0
+        version: 0.182.0
+    devDependencies:
+      '@types/react':
+        specifier: 18.2.79
+        version: 18.2.79
+      '@types/react-dom':
+        specifier: 18.2.25
+        version: 18.2.25
+      '@types/three':
+        specifier: ^0.182.0
+        version: 0.182.0
+      '@vitejs/plugin-react':
+        specifier: ^4.7.0
+        version: 4.7.0(vite@7.3.1(@types/node@20.19.33)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1(@types/node@20.19.33)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
   app/demo-scene-3d:
     dependencies:
       '@emotion/react':
@@ -601,6 +662,40 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/core-device-schematic:
+    dependencies:
+      three:
+        specifier: ^0.182.0
+        version: 0.182.0
+    devDependencies:
+      '@react-three/drei':
+        specifier: ^9.122.0
+        version: 9.122.0(@react-three/fiber@8.18.0(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0))(@types/react@18.2.79)(@types/three@0.182.0)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0)(use-sync-external-store@1.6.0(react@18.2.0))
+      '@react-three/fiber':
+        specifier: ^8.18.0
+        version: 8.18.0(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0)
+      '@types/react':
+        specifier: 18.2.79
+        version: 18.2.79
+      '@types/react-dom':
+        specifier: 18.2.25
+        version: 18.2.25
+      '@types/three':
+        specifier: ^0.182.0
+        version: 0.182.0
+      react:
+        specifier: 18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: 18.2.0
+        version: 18.2.0(react@18.2.0)
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   packages/core-scene3d:
     dependencies:
       '@mhersztowski/ui-core':
@@ -631,6 +726,58 @@ importers:
       react-dom:
         specifier: 18.2.0
         version: 18.2.0(react@18.2.0)
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  packages/ui-components-device-schematic:
+    dependencies:
+      '@emotion/react':
+        specifier: ^11.14.0
+        version: 11.14.0(@types/react@18.2.79)(react@18.2.0)
+      '@emotion/styled':
+        specifier: ^11.14.1
+        version: 11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0)
+      '@mhersztowski/core-device-schematic':
+        specifier: workspace:*
+        version: link:../core-device-schematic
+      '@mhersztowski/ui-core':
+        specifier: workspace:*
+        version: link:../ui-core
+      '@mui/icons-material':
+        specifier: ^7.3.7
+        version: 7.3.8(@mui/material@7.3.8(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(@types/react@18.2.79)(react@18.2.0)
+      '@mui/material':
+        specifier: ^7.3.7
+        version: 7.3.8(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+      allotment:
+        specifier: ^1.20.5
+        version: 1.20.5(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+    devDependencies:
+      '@react-three/fiber':
+        specifier: ^8.18.0
+        version: 8.18.0(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(three@0.182.0)
+      '@types/react':
+        specifier: 18.2.79
+        version: 18.2.79
+      '@types/react-dom':
+        specifier: 18.2.25
+        version: 18.2.25
+      '@types/three':
+        specifier: ^0.182.0
+        version: 0.182.0
+      react:
+        specifier: 18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: 18.2.0
+        version: 18.2.0(react@18.2.0)
+      three:
+        specifier: ^0.182.0
+        version: 0.182.0
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)

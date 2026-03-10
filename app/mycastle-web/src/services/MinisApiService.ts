@@ -400,6 +400,29 @@ class MinisApiService {
     return this.request<{ ticket: string }>('POST', '/terminal/ticket');
   }
 
+  // Admin - Scripts
+  async listScripts(): Promise<{ name: string; size: number; updatedAt: string }[]> {
+    const data = await this.request<{ scripts: { name: string; size: number; updatedAt: string }[] }>('GET', '/admin/scripts');
+    return data.scripts;
+  }
+
+  async getScript(name: string): Promise<string> {
+    const data = await this.request<{ content: string }>('GET', `/admin/scripts/${encodeURIComponent(name)}`);
+    return data.content;
+  }
+
+  async putScript(name: string, content: string): Promise<void> {
+    await this.request('PUT', `/admin/scripts/${encodeURIComponent(name)}`, { content });
+  }
+
+  async deleteScript(name: string): Promise<void> {
+    await this.request('DELETE', `/admin/scripts/${encodeURIComponent(name)}`);
+  }
+
+  async runScript(name: string): Promise<{ stdout: string; stderr: string; exitCode: number | null; duration: number }> {
+    return this.request('POST', `/admin/scripts/${encodeURIComponent(name)}/run`);
+  }
+
   /** Fetch a compiled output file as binary string (for esptool-js). */
   async fetchOutputBinary(userName: string, projectName: string, fileName: string): Promise<string> {
     const res = await fetch(`${this.getBaseUrl()}/api/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/output/${encodeURIComponent(fileName)}`, {

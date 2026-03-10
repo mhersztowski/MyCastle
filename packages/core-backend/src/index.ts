@@ -32,6 +32,10 @@ export { PasswordService, JwtService, ApiKeyService, extractBearerToken, checkAu
 export { RpcRouter } from './rpc/index';
 export type { RpcHandler, RpcContext } from './rpc/index';
 
+// scripts
+export { ScriptsService } from './scripts/ScriptsService';
+export type { ScriptInfo, RunResult } from './scripts/ScriptsService';
+
 // interfaces
 export type {
   IAutomateService,

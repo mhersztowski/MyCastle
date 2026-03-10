@@ -51,6 +51,7 @@ import {
   Settings as SettingsIcon,
   ExpandLess,
   ExpandMore,
+  Terminal as TerminalIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -60,6 +61,7 @@ const drawerWidth = 200;
 
 interface LayoutProps {
   children: React.ReactNode;
+  fullBleed?: boolean;
 }
 
 interface NavItem {
@@ -74,7 +76,7 @@ function extractUserName(pathname: string): string {
   return match ? match[2] : '';
 }
 
-function Layout({ children }: LayoutProps) {
+function Layout({ children, fullBleed }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     Electronics: true,
@@ -104,6 +106,7 @@ function Layout({ children }: LayoutProps) {
         { text: 'DevicesDef', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
         { text: 'ModulesDef', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
         { text: 'ProjectDefs', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
+        { text: 'Scripts', icon: <TerminalIcon />, path: `/admin/${userName}/scripts` },
       ];
     }
     if (isMinisView) {
@@ -289,13 +292,17 @@ function Layout({ children }: LayoutProps) {
             component="main"
             sx={{
               flex: 1,
-              overflow: 'auto',
-              p: 3,
+              overflow: fullBleed ? 'hidden' : 'auto',
+              p: fullBleed ? 0 : 3,
+              display: fullBleed ? 'flex' : undefined,
+              flexDirection: fullBleed ? 'column' : undefined,
             }}
           >
-            <Container maxWidth="lg">
-              {children}
-            </Container>
+            {fullBleed ? children : (
+              <Container maxWidth="lg">
+                {children}
+              </Container>
+            )}
           </Box>
         </Box>
       </Box>

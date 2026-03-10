@@ -3,3 +3,4 @@ export { default as UsersPage } from './UsersPage';
 export { default as DevicesDefPage } from './DevicesDefPage';
 export { default as ModulesDefPage } from './ModulesDefPage';
 export { default as ProjectDefsPage } from './ProjectDefsPage';
+export { default as ScriptsPage } from './ScriptsPage';

@@ -399,31 +399,6 @@ const AutomateDesignerPage: React.FC = () => {
     navigate(`/designer/automate/${selectedFlow.id}`, { replace: true });
   };
 
-  if (isConnecting) {
-    return (
-      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 2 }}>
-        <CircularProgress />
-        <Typography color="text.secondary">Łączenie z serwerem...</Typography>
-      </Box>
-    );
-  }
-
-  if (!isConnected) {
-    return (
-      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Alert severity="warning">Nie połączono z serwerem. Sprawdź czy backend jest uruchomiony.</Alert>
-      </Box>
-    );
-  }
-
-  if (loading) {
-    return (
-      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
   useMinimalTopBarSlot(
     <>
       <IconButton size="small" edge="start" onClick={() => navigate(`/user/${currentUser?.name}/pim/automate`)} color="inherit" sx={{ mr: 1 }}><ArrowBackIcon fontSize="small" /></IconButton>
@@ -446,6 +421,31 @@ const AutomateDesignerPage: React.FC = () => {
     </>,
     [flow, flowPath, isMobile, saving, currentUser, navigate, openSaveAsDialog],
   );
+
+  if (isConnecting) {
+    return (
+      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 2 }}>
+        <CircularProgress />
+        <Typography color="text.secondary">Connecting to server...</Typography>
+      </Box>
+    );
+  }
+
+  if (!isConnected) {
+    return (
+      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Alert severity="warning">Not connected to server. Make sure the backend is running.</Alert>
+      </Box>
+    );
+  }
+
+  if (loading) {
+    return (
+      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>

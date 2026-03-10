@@ -224,6 +224,38 @@ export function VfsExplorer({
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
+  /* ── Long-press (mobile context menu) ── */
+
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchMovedRef = useRef(false);
+
+  const startLongPress = useCallback((e: React.TouchEvent, node: VfsTreeNode | null) => {
+    touchMovedRef.current = false;
+    const touch = e.touches[0];
+    const x = touch.clientX;
+    const y = touch.clientY;
+    longPressTimerRef.current = setTimeout(() => {
+      if (!touchMovedRef.current) {
+        openContextMenu(
+          { clientX: x, clientY: y, preventDefault: () => {}, stopPropagation: () => {} } as unknown as React.MouseEvent,
+          node,
+        );
+      }
+    }, 500);
+  }, [openContextMenu]);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const onTouchMove = useCallback(() => {
+    touchMovedRef.current = true;
+    cancelLongPress();
+  }, [cancelLongPress]);
+
   const handleContainerContextMenu = useCallback(
     (e: React.MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -386,6 +418,9 @@ export function VfsExplorer({
                 onContextMenu: (e: React.MouseEvent) => {
                   openContextMenu(e, node);
                 },
+                onTouchStart: (e: React.TouchEvent) => startLongPress(e, node),
+                onTouchEnd: cancelLongPress,
+                onTouchMove: onTouchMove,
                 onDoubleClick: () => {
                   if (!node.isDirectory) onFileOpen?.(node.id);
                 },
@@ -405,7 +440,7 @@ export function VfsExplorer({
           </TreeItem>
         );
       }),
-    [tree.expandedItems, tree, openContextMenu, onFileOpen, readOnly, provider, dropTargetId],
+    [tree.expandedItems, tree, openContextMenu, onFileOpen, readOnly, provider, dropTargetId, startLongPress, cancelLongPress, onTouchMove],
   );
 
   /* ── Render ── */
@@ -428,7 +463,13 @@ export function VfsExplorer({
           onMountsChanged={handleMountsChanged}
         />
       )}
-      <div className="vfs-tree-container" onContextMenu={handleContainerContextMenu}>
+      <div
+        className="vfs-tree-container"
+        onContextMenu={handleContainerContextMenu}
+        onTouchStart={e => startLongPress(e, null)}
+        onTouchEnd={cancelLongPress}
+        onTouchMove={onTouchMove}
+      >
         <SimpleTreeView
           expandedItems={tree.expandedItems}
           onExpandedItemsChange={handleExpandedItemsChange}
@@ -440,7 +481,7 @@ export function VfsExplorer({
             expandIcon: ChevronRightIcon,
             collapseIcon: ChevronDownIcon,
           }}
-          itemChildrenIndentation="8px"
+          itemChildrenIndentation={0}
           sx={treeViewSx}
         >
           {renderTree(tree.items)}

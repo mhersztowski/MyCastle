@@ -45,7 +45,7 @@ import ShoppingPage from './pages/shopping/ShoppingPage';
 
 // Layout pages — minis
 import HomePage from './pages/HomePage';
-import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage } from './pages/admin';
+import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage, ScriptsPage } from './pages/admin';
 import {
   UserDashboardPage,
   UserDevicesPage,
@@ -105,6 +105,18 @@ function AppRoot() {
         <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage /></RequireAuth>} />
         <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><MinisUPythonProjectPage /></RequireAuth>} />
 
+        {/* Full-bleed layout routes */}
+        <Route
+          path="/user/:userName/tools/testvfs"
+          element={
+            <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+              <Layout fullBleed>
+                <AdminOnly><TestVfsPage /></AdminOnly>
+              </Layout>
+            </Box>
+          }
+        />
+
         {/* All layout routes — single Layout handles nav based on path */}
         <Route
           path="*"
@@ -118,6 +130,7 @@ function AppRoot() {
                   <Route path="/admin/:userName/devicesdefs" element={<DevicesDefPage />} />
                   <Route path="/admin/:userName/modulesdefs" element={<ModulesDefPage />} />
                   <Route path="/admin/:userName/projectdefs" element={<ProjectDefsPage />} />
+                  <Route path="/admin/:userName/scripts" element={<ScriptsPage />} />
 
 
                   {/* Minis user */}
@@ -134,7 +147,6 @@ function AppRoot() {
                   <Route path="/user/:userName/tools/rpc" element={<AdminOnly><RpcExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/mqtt-explorer" element={<AdminOnly><MqttExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/api-keys" element={<AdminOnly><ApiKeysPage /></AdminOnly>} />
-                  <Route path="/user/:userName/tools/testvfs" element={<AdminOnly><TestVfsPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/docs" element={<AdminOnly><DocsPage /></AdminOnly>} />
 
                   {/* Pim pages under /user/:userName */}

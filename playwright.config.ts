@@ -10,7 +10,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:1903',
+    baseURL: 'http://localhost:1895',
     trace: 'on-first-retry',
   },
   projects: [
@@ -21,14 +21,14 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'pnpm dev:minis-backend',
-      url: 'http://localhost:1902/api/swagger.json',
+      command: 'pnpm dev:backend',
+      url: 'http://localhost:1894/api/swagger.json',
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,
     },
     {
-      command: 'pnpm dev:minis-web',
-      url: 'http://localhost:1903',
+      command: 'pnpm dev:web',
+      url: 'http://localhost:1895',
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,
     },

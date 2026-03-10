@@ -11,6 +11,7 @@ import type { IotService } from './modules/iot/IotService.js';
 import type { TerminalService } from './modules/terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
 import type { ArduinoService } from './modules/arduino/index.js';
+import { ScriptsService } from '@mhersztowski/core-backend';
 
 interface CrudConfig {
   filePath: string;
@@ -39,6 +40,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private vfs: CompositeFS;
   private arduinoService: ArduinoService | null;
   private rootDir: string | null;
+  private scriptsService: ScriptsService | null = null;
 
   private static validateName(name: string): string | null {
     if (!name || name.length === 0) return 'Name is required';
@@ -60,6 +62,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.vfs = new CompositeFS();
     if (rootDir) {
       this.vfs.mount('/data', new NodeFS({ rootDir: path.resolve(rootDir) }));
+      this.scriptsService = new ScriptsService(path.resolve(rootDir));
     }
   }
 
@@ -378,6 +381,57 @@ export class MycastleHttpServer extends HttpUploadServer {
       const sSketchName = sketchMatch[3] ? decodeURIComponent(sketchMatch[3]) : undefined;
       const sFileName = sketchMatch[4] ? decodeURIComponent(sketchMatch[4]) : undefined;
       await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
+    // Scripts endpoints: /admin/scripts/* (admin-only, covered by /admin/ prefix check above)
+    const scriptRunMatch = apiPath.match(/^\/admin\/scripts\/([^/]+)\/run$/);
+    if (scriptRunMatch && method === 'POST') {
+      if (!this.scriptsService) {
+        this.sendJsonResponse(res, 503, { error: 'Scripts service not available (rootDir not configured)' });
+        return;
+      }
+      const name = decodeURIComponent(scriptRunMatch[1]);
+      try {
+        const body = await this.parseRequestBody(req) as { args?: string[]; env?: Record<string, string> };
+        const result = await this.scriptsService.runScript(name, body.args ?? [], body.env ?? {});
+        this.sendJsonResponse(res, 200, result);
+      } catch (err) {
+        this.sendJsonResponse(res, 400, { error: this.errorMessage(err) });
+      }
+      return;
+    }
+
+    const scriptsMatch = apiPath.match(/^\/admin\/scripts(?:\/([^/]+))?$/);
+    if (scriptsMatch) {
+      if (!this.scriptsService) {
+        this.sendJsonResponse(res, 503, { error: 'Scripts service not available (rootDir not configured)' });
+        return;
+      }
+      const name = scriptsMatch[1] ? decodeURIComponent(scriptsMatch[1]) : undefined;
+      try {
+        if (method === 'GET' && !name) {
+          this.sendJsonResponse(res, 200, { scripts: this.scriptsService.listScripts() });
+        } else if (method === 'GET' && name) {
+          const content = this.scriptsService.readScript(name);
+          this.sendJsonResponse(res, 200, { name, content });
+        } else if (method === 'PUT' && name) {
+          const body = await this.parseRequestBody(req) as { content: string };
+          if (typeof body.content !== 'string') {
+            this.sendJsonResponse(res, 400, { error: 'content (string) is required' });
+            return;
+          }
+          this.scriptsService.writeScript(name, body.content);
+          this.sendJsonResponse(res, 200, { ok: true });
+        } else if (method === 'DELETE' && name) {
+          this.scriptsService.deleteScript(name);
+          this.sendJsonResponse(res, 200, { ok: true });
+        } else {
+          this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+        }
+      } catch (err) {
+        this.sendJsonResponse(res, 400, { error: this.errorMessage(err) });
+      }
       return;
     }
 

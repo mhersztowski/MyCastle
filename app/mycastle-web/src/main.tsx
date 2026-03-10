@@ -15,6 +15,7 @@ import { GlobalMqttExplorer } from './components/GlobalMqttExplorer';
 import { GlobalMjdDefEditor } from './components/GlobalMjdDefEditor';
 import { GlobalMjdDataEditor } from './components/GlobalMjdDataEditor';
 import { GlobalTerminal } from './components/GlobalTerminal';
+import { GlobalVfs } from './components/GlobalVfs';
 import { MinimizedTaskbar } from './components/MinimizedTaskbar';
 import { DisplayProvider } from './components/DisplayContext';
 import './global.css';
@@ -49,6 +50,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                     <GlobalMjdDefEditor />
                     <GlobalMjdDataEditor />
                     <GlobalTerminal />
+                    <GlobalVfs />
                     <MinimizedTaskbar />
                   </GlobalWindowsProvider>
                 </MinisDataSourceProvider>
