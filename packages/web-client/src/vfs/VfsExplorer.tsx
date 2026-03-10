@@ -228,14 +228,18 @@ export function VfsExplorer({
 
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchMovedRef = useRef(false);
+  // Blocks the synthetic click that browsers fire after a long-press touchend
+  const longPressOccurredRef = useRef(false);
 
   const startLongPress = useCallback((e: React.TouchEvent, node: VfsTreeNode | null) => {
     touchMovedRef.current = false;
+    longPressOccurredRef.current = false;
     const touch = e.touches[0];
     const x = touch.clientX;
     const y = touch.clientY;
     longPressTimerRef.current = setTimeout(() => {
       if (!touchMovedRef.current) {
+        longPressOccurredRef.current = true;
         openContextMenu(
           { clientX: x, clientY: y, preventDefault: () => {}, stopPropagation: () => {} } as unknown as React.MouseEvent,
           node,
@@ -255,6 +259,15 @@ export function VfsExplorer({
     touchMovedRef.current = true;
     cancelLongPress();
   }, [cancelLongPress]);
+
+  // Swallows the synthetic click generated after a long-press touchend
+  const blockPostLongPressClick = useCallback((e: React.MouseEvent) => {
+    if (longPressOccurredRef.current) {
+      longPressOccurredRef.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, []);
 
   const handleContainerContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -421,6 +434,7 @@ export function VfsExplorer({
                 onTouchStart: (e: React.TouchEvent) => startLongPress(e, node),
                 onTouchEnd: cancelLongPress,
                 onTouchMove: onTouchMove,
+                onClickCapture: blockPostLongPressClick,
                 onDoubleClick: () => {
                   if (!node.isDirectory) onFileOpen?.(node.id);
                 },
@@ -440,7 +454,7 @@ export function VfsExplorer({
           </TreeItem>
         );
       }),
-    [tree.expandedItems, tree, openContextMenu, onFileOpen, readOnly, provider, dropTargetId, startLongPress, cancelLongPress, onTouchMove],
+    [tree.expandedItems, tree, openContextMenu, onFileOpen, readOnly, provider, dropTargetId, startLongPress, cancelLongPress, onTouchMove, blockPostLongPressClick],
   );
 
   /* ── Render ── */
@@ -469,6 +483,7 @@ export function VfsExplorer({
         onTouchStart={e => startLongPress(e, null)}
         onTouchEnd={cancelLongPress}
         onTouchMove={onTouchMove}
+        onClickCapture={blockPostLongPressClick}
       >
         <SimpleTreeView
           expandedItems={tree.expandedItems}

@@ -4,7 +4,6 @@ import {
   Devices as DevicesIcon,
   Memory as MemoryIcon,
   Assignment as AssignmentIcon,
-  Folder,
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 
@@ -17,7 +16,6 @@ function AdminDashboardPage() {
     { title: 'DevicesDef', desc: 'Manage device definitions', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
     { title: 'ModulesDef', desc: 'Manage module definitions', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
     { title: 'ProjectDefs', desc: 'Manage project definitions', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
-    { title: 'File Browser', desc: 'Browse and manage project files', icon: <Folder />, path: `/admin/${userName}/filesystem/list` },
   ];
 
   return (

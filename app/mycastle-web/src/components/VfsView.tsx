@@ -370,7 +370,7 @@ export function VfsView() {
           onClose={() => setMobileAgentOpen(false)}
           sx={{ '& .MuiDialog-paper': { display: 'flex', flexDirection: 'column' } }}
         >
-          <AppBar position="static" sx={{ bgcolor: '#2d2d2d', boxShadow: 'none', borderBottom: '1px solid #444', flexShrink: 0 }}>
+          <AppBar position="static" sx={{ bgcolor: '#2d2d2d', boxShadow: 'none', borderBottom: '1px solid #444', flexShrink: 0, pt: 'env(safe-area-inset-top)' }}>
             <Toolbar variant="dense" sx={{ gap: 1, minHeight: 48 }}>
               <IconButton edge="start" color="inherit" onClick={() => setMobileAgentOpen(false)} size="small">
                 <ArrowBackIcon />
@@ -396,7 +396,7 @@ export function VfsView() {
           sx={{ '& .MuiDialog-paper': { bgcolor: '#1e1e1e', display: 'flex', flexDirection: 'column' } }}
         >
           {/* Dialog AppBar */}
-          <AppBar position="static" sx={{ bgcolor: '#2d2d2d', boxShadow: 'none', borderBottom: '1px solid #444', flexShrink: 0 }}>
+          <AppBar position="static" sx={{ bgcolor: '#2d2d2d', boxShadow: 'none', borderBottom: '1px solid #444', flexShrink: 0, pt: 'env(safe-area-inset-top)' }}>
             <Toolbar variant="dense" sx={{ gap: 1, minHeight: 48 }}>
               <IconButton edge="start" color="inherit" onClick={() => setMobileEditorOpen(false)} size="small">
                 <ArrowBackIcon />

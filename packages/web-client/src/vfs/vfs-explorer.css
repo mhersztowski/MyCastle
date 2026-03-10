@@ -18,6 +18,10 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* Prevent iOS text-selection popup on long-press */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* ── Custom item rendering ── */
