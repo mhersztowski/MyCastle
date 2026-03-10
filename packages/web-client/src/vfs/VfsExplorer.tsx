@@ -230,8 +230,11 @@ export function VfsExplorer({
   const touchMovedRef = useRef(false);
   // Blocks the synthetic click that browsers fire after a long-press touchend
   const longPressOccurredRef = useRef(false);
+  // Detected once on first touch — disables onContextMenu (which fires on single tap on touch devices)
+  const isTouchDeviceRef = useRef(false);
 
   const startLongPress = useCallback((e: React.TouchEvent, node: VfsTreeNode | null) => {
+    isTouchDeviceRef.current = true;
     touchMovedRef.current = false;
     longPressOccurredRef.current = false;
     const touch = e.touches[0];
@@ -271,6 +274,7 @@ export function VfsExplorer({
 
   const handleContainerContextMenu = useCallback(
     (e: React.MouseEvent) => {
+      if (isTouchDeviceRef.current) { e.preventDefault(); return; }
       const target = e.target as HTMLElement;
       if (target.closest('.MuiTreeItem-root')) return;
       openContextMenu(e, null);
@@ -429,6 +433,7 @@ export function VfsExplorer({
                   setDropTargetId(null);
                 },
                 onContextMenu: (e: React.MouseEvent) => {
+                  if (isTouchDeviceRef.current) { e.preventDefault(); return; }
                   openContextMenu(e, node);
                 },
                 onTouchStart: (e: React.TouchEvent) => startLongPress(e, node),
