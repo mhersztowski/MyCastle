@@ -43,11 +43,12 @@ function IotDevicePage() {
         minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(),
       ]);
+      const iotId = allDevices.find((d) => d.name === deviceName)?.sn || deviceName;
       setConfig(cfg);
       setLatestTelemetry('metrics' in latest ? latest as TelemetryRecord : null);
       setHistory(hist);
       setCommands(cmds);
-      setAlerts(alertsList.filter((a) => a.deviceId === deviceName));
+      setAlerts(alertsList.filter((a) => a.deviceId === iotId));
       setDeviceStatuses(statuses);
       setDevices(allDevices);
       setDeviceDefs(defs);
@@ -59,7 +60,11 @@ function IotDevicePage() {
     }
   }, [userName, deviceName]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 10000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   const handleSendCommand = async () => {
     if (!userName || !deviceName || !cmdName) return;
@@ -97,10 +102,11 @@ function IotDevicePage() {
     }
   };
 
-  const deviceStatus = deviceStatuses.find((s) => s.deviceId === deviceName);
+  const currentDevice = devices.find((d) => d.name === deviceName);
+  const iotId = currentDevice?.sn || deviceName;
+  const deviceStatus = deviceStatuses.find((s) => s.deviceId === iotId);
   const statusLabel = deviceStatus?.status ?? 'UNKNOWN';
   const statusColor = statusLabel === 'ONLINE' ? 'success' : statusLabel === 'OFFLINE' ? 'error' : 'default';
-  const currentDevice = devices.find((d) => d.name === deviceName);
   const deviceDisplayName = currentDevice?.name || deviceDefs.find((d) => d.id === currentDevice?.deviceDefId)?.name || deviceName;
   const isOffline = statusLabel !== 'ONLINE';
 

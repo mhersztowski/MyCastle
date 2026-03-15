@@ -68,7 +68,6 @@ export class MqttServer {
   private setupUpgradeHandler(httpServer: HttpServer): void {
     httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       const pathname = url.parse(request.url || '', false).pathname;
-
       if (pathname === '/mqtt') {
         this.wss.handleUpgrade(request, socket, head, (ws) => {
           this.wss.emit('connection', ws, request);

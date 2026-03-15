@@ -13,9 +13,10 @@ const staticDirEnv = process.env.STATIC_DIR || path.resolve(process.cwd(), '..',
 const staticDir = fs.existsSync(staticDirEnv) ? staticDirEnv : null;
 const arduinoCliLocalPath = process.env.ARDUINO_CLI_LOCAL_PATH;
 const arduinoCliDockerName = process.env.ARDUINO_CLI_DOCKER_NAME;
+const upythonCliLocalPath = process.env.UPYTHON_CLI_LOCAL_PATH;
 const userDataPath = process.env.USER_DATA_PATH || 'Minis/Users/marcin';
 
-App.create({ httpPort, mqttPort, rootDir, staticDir, jwtSecret, arduinoCliLocalPath, arduinoCliDockerName, userDataPath });
+App.create({ httpPort, mqttPort, rootDir, staticDir, jwtSecret, arduinoCliLocalPath, arduinoCliDockerName, upythonCliLocalPath, userDataPath });
 
 async function main() {
   try {

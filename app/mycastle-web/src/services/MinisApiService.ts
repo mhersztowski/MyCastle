@@ -196,6 +196,10 @@ class MinisApiService {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}`);
   }
 
+  async getDeviceMinisConfig(userName: string, deviceName: string): Promise<{ serialNumber: string; wifiSsid: string; wifiPassword: string }> {
+    return this.request('GET', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/minis-config`);
+  }
+
   // User - Localizations
   async getLocalizations(userName: string): Promise<MinisLocalizationModel[]> {
     const data = await this.request<{ items: MinisLocalizationModel[] }>('GET', `/users/${encodeURIComponent(userName)}/localizations`);
@@ -216,16 +220,16 @@ class MinisApiService {
 
   // User - Projects
   async getUserProjects(userName: string): Promise<MinisProjectModel[]> {
-    const data = await this.request<{ items: MinisProjectModel[] }>('GET', `/users/${encodeURIComponent(userName)}/projects`);
+    const data = await this.request<{ items: MinisProjectModel[] }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino`);
     return data.items;
   }
 
   async createUserProject(userName: string, data: { name: string; projectDefId: string }): Promise<MinisProjectModel> {
-    return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userName)}/projects`, data);
+    return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userName)}/project-arduino`, data);
   }
 
   async deleteUserProject(userName: string, projectName: string): Promise<void> {
-    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}`);
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}`);
   }
   // IoT - Config
   async getIotConfig(userName: string, deviceName: string): Promise<IotDeviceConfig | null> {
@@ -322,6 +326,19 @@ class MinisApiService {
     return data.items;
   }
 
+  // Electronics - Configuration
+  async getIotArchitecture(userName: string): Promise<{ nodes: unknown[]; edges: unknown[]; updatedAt: number } | null> {
+    try {
+      return await this.request('GET', `/users/${encodeURIComponent(userName)}/electronics/configuration`);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveIotArchitecture(userName: string, arch: { nodes: unknown[]; edges: unknown[]; updatedAt: number }): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/electronics/configuration`, arch);
+  }
+
   // API Keys
   async getApiKeys(userName: string): Promise<ApiKeyPublic[]> {
     const data = await this.request<{ items: ApiKeyPublic[] }>('GET', `/users/${encodeURIComponent(userName)}/api-keys`);
@@ -347,40 +364,40 @@ class MinisApiService {
     return data.items;
   }
 
-  async compileProject(userName: string, projectName: string, sketchName: string, fqbn: string): Promise<{
+  async compileProject(userName: string, projectName: string, sketchName: string, fqbn: string, serialNumber?: string): Promise<{
     success: boolean; output: string; exitCode: number; outputFiles?: string[];
   }> {
-    return this.request('POST', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/compile`, {
-      sketchName, fqbn,
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/compile`, {
+      sketchName, fqbn, ...(serialNumber ? { serialNumber } : {}),
     });
   }
 
   async uploadFirmware(userName: string, projectName: string, sketchName: string, fqbn: string, port: string): Promise<{
     success: boolean; output: string; exitCode: number;
   }> {
-    return this.request('POST', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/upload`, {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/upload`, {
       sketchName, fqbn, port,
     });
   }
 
   // Sketch files
   async listSketches(userName: string, projectName: string): Promise<string[]> {
-    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches`);
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches`);
     return data.items;
   }
 
   async readSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<string> {
-    const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+    const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
     return data.content;
   }
 
   async writeSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
-    await this.request('PUT', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
   }
 
   async readProjectReadme(userName: string, projectName: string): Promise<string | null> {
     try {
-      const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/readme`);
+      const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/readme`);
       return data.content;
     } catch {
       return null;
@@ -388,11 +405,11 @@ class MinisApiService {
   }
 
   async writeProjectReadme(userName: string, projectName: string, content: string): Promise<void> {
-    await this.request('PUT', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/readme`, { content });
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/readme`, { content });
   }
 
   async getProjectOutput(userName: string, projectName: string): Promise<Array<{ name: string; size: number }>> {
-    const data = await this.request<{ items: Array<{ name: string; size: number }> }>('GET', `/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/output`);
+    const data = await this.request<{ items: Array<{ name: string; size: number }> }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/output`);
     return data.items;
   }
 
@@ -425,12 +442,31 @@ class MinisApiService {
 
   /** Fetch a compiled output file as binary string (for esptool-js). */
   async fetchOutputBinary(userName: string, projectName: string, fileName: string): Promise<string> {
-    const res = await fetch(`${this.getBaseUrl()}/api/users/${encodeURIComponent(userName)}/projects/${encodeURIComponent(projectName)}/output/${encodeURIComponent(fileName)}`, {
+    const res = await fetch(`${this.getBaseUrl()}/api/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/output/${encodeURIComponent(fileName)}`, {
       headers: this.getAuthHeaders(),
     });
     if (!res.ok) throw new Error(`Failed to fetch ${fileName}: HTTP ${res.status}`);
     const buf = await res.arrayBuffer();
     // Convert ArrayBuffer to binary string for esptool-js
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return binary;
+  }
+
+  async listFirmwareFiles(): Promise<Array<{ name: string; size: number }>> {
+    return this.request<{ items: Array<{ name: string; size: number }> }>('GET', '/admin/firmware')
+      .then(r => r.items);
+  }
+
+  async fetchFirmwareFile(fileName: string): Promise<string> {
+    const res = await fetch(`${this.getBaseUrl()}/api/admin/firmware/${encodeURIComponent(fileName)}`, {
+      headers: this.getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error(`Failed to fetch firmware ${fileName}: HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
     const bytes = new Uint8Array(buf);
     let binary = '';
     for (let i = 0; i < bytes.length; i++) {

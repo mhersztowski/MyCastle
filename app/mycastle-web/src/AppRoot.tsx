@@ -56,6 +56,7 @@ import {
   IotDevicePage,
   IotAlertsPage,
   IotEmulatorPage,
+  ElectronicsConfigurationPage,
   RpcExplorerPage,
   MqttExplorerPage,
   ApiKeysPage,
@@ -106,6 +107,16 @@ function AppRoot() {
         <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><MinisUPythonProjectPage /></RequireAuth>} />
 
         {/* Full-bleed layout routes */}
+        <Route
+          path="/user/:userName/electronics/configuration"
+          element={
+            <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+              <Layout fullBleed>
+                <ElectronicsConfigurationPage />
+              </Layout>
+            </Box>
+          }
+        />
         <Route
           path="/user/:userName/tools/testvfs"
           element={

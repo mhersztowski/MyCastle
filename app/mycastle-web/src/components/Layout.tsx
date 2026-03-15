@@ -31,6 +31,7 @@ import {
   NotificationsActive as NotificationsActiveIcon,
   BugReport as BugReportIcon,
   Router as RouterIcon,
+  Hub as HubIcon,
   Build as BuildIcon,
   VpnKey as VpnKeyIcon,
   AccountTree as AccountTreeIcon,
@@ -117,6 +118,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
             { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
             { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
+            { text: 'Configuration', icon: <HubIcon />, path: `/user/${userName}/electronics/configuration` },
           ],
         },
         {

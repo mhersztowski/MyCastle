@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import type { ArduinoCli, CompileResult, UploadResult } from './ArduinoCli.js';
+import type { ArduinoCli, CompileResult, MinisConfig, UploadResult } from './ArduinoCli.js';
 
 export class ArduinoProject {
   private readonly projectDir: string;
@@ -33,31 +33,50 @@ export class ArduinoProject {
     await fs.mkdir(this.librariesDir, { recursive: true });
   }
 
-  async compile(sketchName: string): Promise<CompileResult> {
+  async compile(sketchName: string, minisConfig?: MinisConfig): Promise<CompileResult> {
     await this.ensureConfig();
     await this.ensureDirs();
     await this.cleanDir(this.outputDir);
 
     const sketchPath = path.join(this.sketchesDir, sketchName, `${sketchName}.ino`);
+    const headerPath = path.join(this.sketchesDir, sketchName, 'MinisIotArchitecture.h');
 
-    const result = await this.cli.compile({
-      fqbn: this.fqbn,
-      sketchPath,
-      configFilePath: this.configFile,
-      outputDir: this.outputDir,
-      buildDir: this.buildDir,
-      verbose: true,
-    });
+    if (minisConfig) {
+      const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      const header = [
+        '#pragma once',
+        `#define MINIS_DEVICE_SN "${esc(minisConfig.serialNumber)}"`,
+        `#define MINIS_WIFI_SSID "${esc(minisConfig.wifiSsid)}"`,
+        `#define MINIS_WIFI_PASSWORD "${esc(minisConfig.wifiPassword)}"`,
+        `#define MINIS_IOT_ARCHITECTURE "${esc(minisConfig.architectureJson)}"`,
+      ].join('\n') + '\n';
+      await fs.writeFile(headerPath, header, 'utf-8');
+    }
 
-    await this.cleanDir(this.buildDir);
-
-    // List output files
     try {
-      const entries = await fs.readdir(this.outputDir);
-      result.outputFiles = entries;
-    } catch { /* empty */ }
+      const result = await this.cli.compile({
+        fqbn: this.fqbn,
+        sketchPath,
+        configFilePath: this.configFile,
+        outputDir: this.outputDir,
+        buildDir: this.buildDir,
+        verbose: true,
+      });
 
-    return result;
+      await this.cleanDir(this.buildDir);
+
+      // List output files
+      try {
+        const entries = await fs.readdir(this.outputDir);
+        result.outputFiles = entries;
+      } catch { /* empty */ }
+
+      return result;
+    } finally {
+      if (minisConfig) {
+        await fs.rm(headerPath, { force: true });
+      }
+    }
   }
 
   async upload(sketchName: string, port: string): Promise<UploadResult> {

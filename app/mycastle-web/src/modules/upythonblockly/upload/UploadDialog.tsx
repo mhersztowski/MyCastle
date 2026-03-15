@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -15,9 +15,13 @@ import {
   Tabs,
   TextField,
   Typography,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import { MpySerialReplService } from '../repl/MpySerialReplService';
 import { MpyWebReplService } from '../repl/MpyWebReplService';
+import { minisApi } from '../../../services/MinisApiService';
+import type { MinisDeviceModel } from '@mhersztowski/core';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400];
 
@@ -27,9 +31,13 @@ interface UploadDialogProps {
   open: boolean;
   onClose: () => void;
   code: string;
+  userName?: string;
+  board?: string;
+  projectId?: string;
+  deviceName?: string;
 }
 
-function UploadDialog({ open, onClose, code }: UploadDialogProps) {
+function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp }: UploadDialogProps) {
   const [tab, setTab] = useState(0);
   const [uploadMode, setUploadMode] = useState<UploadMode>('run');
   const [baudRate, setBaudRate] = useState(115200);
@@ -38,8 +46,18 @@ function UploadDialog({ open, onClose, code }: UploadDialogProps) {
   const [webPassword, setWebPassword] = useState('');
   const [log, setLog] = useState('');
   const [busy, setBusy] = useState(false);
+  const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
+  const [selectedDevice, setSelectedDevice] = useState('');
+
+  // If deviceName is passed from parent, use it directly
+  const effectiveDevice = deviceNameProp ?? selectedDevice;
 
   const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open || !userName || deviceNameProp) return;
+    minisApi.getUserDevices(userName).then(setDevices).catch(() => setDevices([]));
+  }, [open, userName, deviceNameProp]);
 
   const appendLog = (msg: string) => {
     setLog((prev) => prev + msg + '\n');
@@ -48,6 +66,15 @@ function UploadDialog({ open, onClose, code }: UploadDialogProps) {
         logRef.current.scrollTop = logRef.current.scrollHeight;
       }
     });
+  };
+
+  const recordLastBuild = async (success: boolean) => {
+    if (!userName || !effectiveDevice) return;
+    try {
+      await minisApi.updateUserDevice(userName, effectiveDevice, {
+        lastBuild: { platform: 'micropython', fqbn: board, success, at: Date.now(), projectId },
+      });
+    } catch { /* non-critical */ }
   };
 
   const handleUploadSerial = async () => {
@@ -65,15 +92,18 @@ function UploadDialog({ open, onClose, code }: UploadDialogProps) {
         const output = await svc.execCode(code);
         if (output) appendLog(output);
         appendLog('Done.');
+        await recordLastBuild(true);
       } else {
         appendLog('Saving as main.py...');
         await svc.saveToFile('main.py', code);
         appendLog('Saved. Resetting device...');
         await svc.execCode('import machine; machine.reset()');
         appendLog('Reset sent.');
+        await recordLastBuild(true);
       }
     } catch (err) {
       appendLog(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      await recordLastBuild(false);
     } finally {
       await svc.disconnect();
       setBusy(false);
@@ -95,15 +125,18 @@ function UploadDialog({ open, onClose, code }: UploadDialogProps) {
         const output = await svc.execCode(code);
         if (output) appendLog(output);
         appendLog('Done.');
+        await recordLastBuild(true);
       } else {
         appendLog('Saving as main.py...');
         await svc.saveToFile('main.py', code);
         appendLog('Saved. Resetting device...');
         await svc.execCode('import machine; machine.reset()');
         appendLog('Reset sent.');
+        await recordLastBuild(true);
       }
     } catch (err) {
       appendLog(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      await recordLastBuild(false);
     } finally {
       svc.disconnect();
       setBusy(false);
@@ -128,6 +161,30 @@ function UploadDialog({ open, onClose, code }: UploadDialogProps) {
           <Tab label="Serial REPL" />
           <Tab label="WebREPL" />
         </Tabs>
+
+        {deviceNameProp ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Device: <strong>{deviceNameProp}</strong>
+          </Typography>
+        ) : userName && devices.length > 0 && (
+          <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+            <InputLabel>Device (for Last Build tracking)</InputLabel>
+            <Select
+              value={selectedDevice}
+              label="Device (for Last Build tracking)"
+              onChange={(e) => setSelectedDevice(e.target.value)}
+              renderValue={(v) => {
+                const d = devices.find((x) => x.name === v);
+                return d ? `${d.name}${d.sn ? ` (${d.sn})` : ''}` : v;
+              }}
+            >
+              <MenuItem value=""><em>— skip tracking —</em></MenuItem>
+              {devices.map((d) => (
+                <MenuItem key={d.name} value={d.name}>{d.name}{d.sn ? ` (${d.sn})` : ''}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
 
         {tab === 0 && (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

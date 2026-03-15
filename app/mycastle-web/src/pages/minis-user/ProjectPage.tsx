@@ -10,10 +10,14 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  FormControl,
   IconButton,
+  InputLabel,
   List,
   ListItemButton,
   ListItemText,
+  MenuItem,
+  Select,
   TextField,
   Toolbar,
   Tooltip,
@@ -38,13 +42,14 @@ import {
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
 import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles, socToBoardKey } from '@modules/ardublockly2';
 import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/serial';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
+import type { MinisDeviceModel } from '@mhersztowski/core';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 
@@ -53,6 +58,7 @@ const MIN_PANEL_PX = 200;
 function ProjectPage() {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const serviceRef = useRef<ArduBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -79,6 +85,8 @@ function ProjectPage() {
   const [compileOutputOpen, setCompileOutputOpen] = useState(false);
   const [flashFiles, setFlashFiles] = useState<FlashFileEntry[] | undefined>(undefined);
   const [saveBeforeCompileOpen, setSaveBeforeCompileOpen] = useState(false);
+  const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
+  const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
   const compileOutputRef = useRef<HTMLDivElement>(null);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
@@ -194,6 +202,12 @@ function ProjectPage() {
     minisApi.readProjectReadme(userName, projectId).then(setReadmeContent);
   }, [userName, projectId]);
 
+  // Load devices for selector
+  useEffect(() => {
+    if (!userName) return;
+    minisApi.getUserDevices(userName).then(setDevices).catch(() => setDevices([]));
+  }, [userName]);
+
   const handleSaveReadme = async () => {
     if (!userName || !projectId) return;
     await minisApi.writeProjectReadme(userName, projectId, readmeEditValue);
@@ -285,7 +299,8 @@ function ProjectPage() {
         setCompileSuccess(false);
         return;
       }
-      const result = await minisApi.compileProject(userName, projectId, currentSketch, fqbn);
+      const deviceSn = selectedDeviceName ? devices.find(d => d.name === selectedDeviceName)?.sn || undefined : undefined;
+      const result = await minisApi.compileProject(userName, projectId, currentSketch, fqbn, deviceSn);
       setCompileOutput(result.output);
       setCompileSuccess(result.success);
     } catch (err) {
@@ -489,6 +504,24 @@ function ProjectPage() {
             <Typography variant="caption" color="text.secondary">
               FQBN: {board ? (boardProfiles[board]?.compilerFlag ?? 'unknown') : '—'}
             </Typography>
+
+            <FormControl fullWidth size="small" sx={{ mt: 2 }}>
+              <InputLabel>Device</InputLabel>
+              <Select
+                value={selectedDeviceName}
+                label="Device"
+                onChange={(e) => setSelectedDeviceName(e.target.value)}
+                renderValue={(v) => {
+                  const d = devices.find((x) => x.name === v);
+                  return d ? `${d.name}${d.sn ? ` (${d.sn})` : ''}` : v;
+                }}
+              >
+                <MenuItem value=""><em>— none —</em></MenuItem>
+                {devices.map((d) => (
+                  <MenuItem key={d.name} value={d.name}>{d.name}{d.sn ? ` (${d.sn})` : ''}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Box>
         )}
 
@@ -704,12 +737,12 @@ function ProjectPage() {
         sx={{ borderTop: 1, borderColor: 'divider' }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
-          <Tooltip title="Compile">
+          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Compile'}>
             <span>
               <IconButton
                 size="small"
                 onClick={handleCompile}
-                disabled={!currentSketch || compiling}
+                disabled={!currentSketch || compiling || !selectedDeviceName}
                 color={compileSuccess === false ? 'error' : compileSuccess === true ? 'success' : 'default'}
               >
                 {compiling ? <CircularProgress size={16} /> : <Build fontSize="small" />}
@@ -721,22 +754,22 @@ function ProjectPage() {
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Flash custom .bin file">
+          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Flash custom .bin file'}>
             <span>
               <IconButton
                 size="small"
-                disabled={!board || !boardProfiles[board]?.flashConfig}
+                disabled={!board || !boardProfiles[board]?.flashConfig || !selectedDeviceName}
                 onClick={() => { setFlashFiles(undefined); setFlashOpen(true); }}
               >
                 <UploadFile fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title={board && boardProfiles[board]?.flashConfig ? 'Flash Firmware' : 'Flash not supported for this board'}>
+          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : board && boardProfiles[board]?.flashConfig ? 'Flash Firmware' : 'Flash not supported for this board'}>
             <span>
               <IconButton
                 size="small"
-                disabled={!board || !boardProfiles[board]?.flashConfig || !compileSuccess}
+                disabled={!board || !boardProfiles[board]?.flashConfig || !compileSuccess || !selectedDeviceName}
                 onClick={async () => {
                   if (!userName || !projectId || !currentSketch || !board) return;
                   const fc = boardProfiles[board]?.flashConfig;
@@ -775,6 +808,10 @@ function ProjectPage() {
         open={flashOpen}
         onClose={() => { setFlashOpen(false); setFlashFiles(undefined); }}
         initialFiles={flashFiles}
+        userName={userName}
+        deviceName={selectedDeviceName || undefined}
+        fqbn={board ? (boardProfiles[board]?.compilerFlag ?? undefined) : undefined}
+        projectId={projectId}
       />
 
       {/* Save before compile dialog */}

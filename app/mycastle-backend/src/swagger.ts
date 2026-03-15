@@ -255,7 +255,7 @@ const swaggerSpec = {
         responses: { 200: { description: 'ProjectDef deleted' } },
       },
     },
-    '/users/{userName}/projects': {
+    '/users/{userName}/project-arduino': {
       get: {
         tags: ['User - Projects'],
         summary: 'List user projects',
@@ -277,7 +277,7 @@ const swaggerSpec = {
         responses: { 201: { description: 'Project created' } },
       },
     },
-    '/users/{userName}/projects/{id}': {
+    '/users/{userName}/project-arduino/{id}': {
       put: {
         tags: ['User - Projects'],
         summary: 'Update user project',
@@ -870,7 +870,7 @@ const swaggerSpec = {
         },
       },
     },
-    '/users/{userName}/projects/{projectName}/compile': {
+    '/users/{userName}/project-arduino/{projectName}/compile': {
       post: {
         tags: ['Arduino - Projects'],
         summary: 'Compile Arduino sketch',
@@ -889,7 +889,7 @@ const swaggerSpec = {
         },
       },
     },
-    '/users/{userName}/projects/{projectName}/upload': {
+    '/users/{userName}/project-arduino/{projectName}/upload': {
       post: {
         tags: ['Arduino - Projects'],
         summary: 'Upload firmware to device',
@@ -912,7 +912,7 @@ const swaggerSpec = {
         },
       },
     },
-    '/users/{userName}/projects/{projectName}/output': {
+    '/users/{userName}/project-arduino/{projectName}/output': {
       get: {
         tags: ['Arduino - Projects'],
         summary: 'List compiled output files',
@@ -928,7 +928,7 @@ const swaggerSpec = {
         },
       },
     },
-    '/users/{userName}/projects/{projectName}/output/{fileName}': {
+    '/users/{userName}/project-arduino/{projectName}/output/{fileName}': {
       get: {
         tags: ['Arduino - Projects'],
         summary: 'Download compiled output file',
@@ -943,7 +943,7 @@ const swaggerSpec = {
         },
       },
     },
-    '/users/{userName}/projects/{projectName}/readme': {
+    '/users/{userName}/project-arduino/{projectName}/readme': {
       get: {
         tags: ['Arduino - Projects'],
         summary: 'Get project README',
@@ -969,7 +969,7 @@ const swaggerSpec = {
         responses: { 200: { description: 'README saved' } },
       },
     },
-    '/users/{userName}/projects/{projectName}/sketches': {
+    '/users/{userName}/project-arduino/{projectName}/sketches': {
       get: {
         tags: ['Arduino - Projects'],
         summary: 'List sketches in project',
@@ -985,7 +985,7 @@ const swaggerSpec = {
         },
       },
     },
-    '/users/{userName}/projects/{projectName}/sketches/{sketchName}/{fileName}': {
+    '/users/{userName}/project-arduino/{projectName}/sketches/{sketchName}/{fileName}': {
       get: {
         tags: ['Arduino - Projects'],
         summary: 'Read sketch file content',

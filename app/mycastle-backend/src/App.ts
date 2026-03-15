@@ -7,6 +7,7 @@ import { MycastleHttpServer } from './MycastleHttpServer.js';
 import { IotService } from './modules/iot/IotService.js';
 import { TerminalService } from './modules/terminal/TerminalService.js';
 import { ArduinoService } from './modules/arduino/index.js';
+import { MicroPythonService } from './modules/upython/index.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -16,6 +17,7 @@ export interface AppConfig {
   jwtSecret: string;
   arduinoCliLocalPath?: string;
   arduinoCliDockerName?: string;
+  upythonCliLocalPath?: string;
   /** Base path for user PIM data, e.g. 'Minis/Users/marcin'. Defaults to env USER_DATA_PATH. */
   userDataPath?: string;
 }
@@ -31,6 +33,7 @@ export class App {
   readonly httpServer: MycastleHttpServer;
   readonly iotService: IotService;
   readonly arduinoService: ArduinoService;
+  readonly upythonService: MicroPythonService;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
   private jwtService: JwtService;
@@ -64,6 +67,10 @@ export class App {
       dockerContainer: config.arduinoCliDockerName,
       rootDir: config.rootDir,
     });
+    this.upythonService = new MicroPythonService({
+      localPath: config.upythonCliLocalPath,
+      rootDir: config.rootDir,
+    });
 
     this.httpServer = new MycastleHttpServer(
       config.httpPort,
@@ -74,6 +81,7 @@ export class App {
       config.staticDir || undefined,
       config.rootDir,
       this.arduinoService,
+      this.upythonService,
     );
   }
 

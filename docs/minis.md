@@ -16,9 +16,10 @@ MinisDevice — instancja urządzenia (per user)
 - MinisDeviceDefId
 - isAssembled
 - isIot
-- sn — serial number
+- sn — serial number (używany jako deviceId w MQTT topics i IoT presence)
 - description - string - markdown string
 - localization : string localizationId
+- lastBuild?: MinisDeviceBuild — ostatnia kompilacja { platform, fqbn?, success, at (epoch ms), projectId? }
 
 MinisModuleDef — definicja modułu (admin)
 - name — np. Esp32devkitC
@@ -194,9 +195,26 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 **Arduino API:**
 - `GET /api/arduino/boards` — lista dostępnych płytek (arduino-cli board listall)
 - `GET /api/arduino/ports` — lista otwartych portów COM
-- `POST /api/users/{userName}/projects/{projectName}/compile` — kompilacja sketcha (`{ sketchName, fqbn }`)
-- `POST /api/users/{userName}/projects/{projectName}/upload` — upload firmware na urządzenie (`{ sketchName, fqbn, port }`)
+- `POST /api/users/{userName}/projects/{projectName}/compile` — kompilacja sketcha (`{ sketchName, fqbn, serialNumber? }`) — gdy `serialNumber` podany, wstrzykuje `MinisIotArchitecture.h` z MINIS_DEVICE_SN/MINIS_WIFI_SSID/MINIS_WIFI_PASSWORD/MINIS_IOT_ARCHITECTURE; zapisuje `lastBuild` w Device.json
+- `POST /api/users/{userName}/projects/{projectName}/upload` — upload firmware na urządzenie (`{ sketchName, fqbn, port, serialNumber? }`)
 - `GET /api/users/{userName}/projects/{projectName}/output[/{fileName}]` — lista / pobranie skompilowanych plików (binary)
+
+**Predefined Firmware API:**
+- `GET /api/admin/firmware` — lista plików firmware z `data/Minis/Admin/Firmware/` (`{ items: [{ name, sizeKb }] }`)
+- `GET /api/admin/firmware/{fileName}` — pobranie binarnego pliku firmware
+
+**Electronics Configuration API:**
+- `GET /api/users/{userName}/electronics/configuration` — odczyt grafu architektury IoT (nodes, edges, updatedAt)
+- `PUT /api/users/{userName}/electronics/configuration` — zapis grafu
+
+**Device Minis Config API:**
+- `GET /api/users/{userName}/devices/{deviceName}/minis-config` — resolve WiFi credentials i SN dla urządzenia (odczytuje Electronics/configuration.json dla danego SN; zwraca `{ serialNumber, wifiSsid, wifiPassword }`)
+
+**uPython API:**
+- `GET /api/users/{userName}/project-upython` — lista projektów uPython
+- `POST /api/users/{userName}/project-upython` — tworzenie projektu uPython
+- `PUT/DELETE /api/users/{userName}/project-upython/{projectName}` — edycja / usunięcie
+- `POST /api/users/{userName}/project-upython/{projectName}/deploy` — deploy .py files na urządzenie przez mpremote (`{ port }`)
 
 **Sketch Files API:**
 - `GET /api/users/{userName}/projects/{projectName}/sketches` — lista katalogów sketchy
@@ -240,12 +258,20 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 
 ### Arduino Service Layer (src/arduino/)
 
+- **MinisConfig** — interface: `{ serialNumber, wifiSsid, wifiPassword, architectureJson }` — przekazywany do `compile()` gdy device SN znany
 - **ArduinoCli** — interfejs: `listBoards()`, `compile(options)`, `listPorts()`, `upload(options)`
 - **ArduinoCliLocal** — implementacja lokalna: `child_process.execFile` z promisify, ścieżka z `ARDUINO_CLI_LOCAL_PATH`
 - **ArduinoCliDocker** — implementacja Docker: `docker exec {container} arduino-cli ...`, container z `ARDUINO_CLI_DOCKER_NAME`
-- **ArduinoProject** — zarządzanie ścieżkami projektu i orchestracja: `ensureConfig()` (tworzy custom-config.yaml z `directories.user`), `ensureDirs()` (mkdir output/build/libraries), `compile()` → ensureConfig → ensureDirs → cli.compile → cleanBuildDir, `upload()` → cli.upload
-- **ArduinoService** — orchestrator: tworzy ArduinoCliLocal lub ArduinoCliDocker na podstawie env, `isAvailable` getter, `compile(userName, projectId, sketchName, fqbn)`, `upload(...)`, `listBoards()`, `listPorts()`
+- **ArduinoProject** — zarządzanie ścieżkami projektu i orchestracja: `ensureConfig()`, `ensureDirs()`, `compile(sketchName, minisConfig?)` — gdy `minisConfig` podany, zapisuje `MinisIotArchitecture.h` z `#define MINIS_DEVICE_SN/MINIS_WIFI_SSID/MINIS_WIFI_PASSWORD/MINIS_IOT_ARCHITECTURE` obok .ino przed kompilacją, usuwa po. `upload()` → cli.upload
+- **ArduinoService** — orchestrator: tworzy ArduinoCliLocal lub ArduinoCliDocker na podstawie env, `isAvailable` getter, `compile(userName, projectId, sketchName, fqbn, minisConfig?)`, `upload(...)`, `listBoards()`, `listPorts()`
 - **Env vars:** `ARDUINO_CLI_LOCAL_PATH` (ścieżka do binarki), `ARDUINO_CLI_DOCKER_NAME` (nazwa kontenera Docker)
+
+### uPython Service Layer (src/upython/)
+
+- **MicroPythonCli** — interfejs: `deploy(options: { port, files: {src, dest}[] })` → `DeployResult`
+- **MicroPythonCliLocal** — implementacja lokalna przez `mpremote`: `mpremote connect {port} cp file1 :dest1 + cp file2 :dest2 ...`, ścieżka z `UPYTHON_CLI_LOCAL_PATH`
+- **MicroPythonProject** — zarządzanie projektem: skanuje `src/` w katalogu projektu po `.py`, orchestruje deploy
+- **MicroPythonService** — orchestrator: `isAvailable` getter, `deploy(userName, projectId, port)`, env: `UPYTHON_CLI_LOCAL_PATH`
 
 ### IoT Service Layer (src/iot/)
 
@@ -255,7 +281,8 @@ Node.js, ESM, port 1902 (HTTP + MQTT WebSocket at `/mqtt`).
 - **CommandDispatcher** — tworzenie komend (PENDING → SENT), update statusu po ACK
 - **AlertEngine** — CRUD reguł, ewaluacja po każdej telemetrii, cooldown, acknowledge/resolve
 - **DeviceShareStore** — CRUD udostępnień urządzeń (prepared statements: create, delete, getSharesForDevice, getSharesByOwner, getSharesForTarget)
-- **IotService** — orchestrator: parsuje MQTT topics (`minis/{userName}/{deviceName}/{type}`), koordynuje stores, broadcast zmian statusu/alertów, forwarding telemetrii/statusu do shared users
+- **IotService** — orchestrator: parsuje MQTT topics (`minis/{userName}/{deviceName}/{type}` gdzie `deviceName` = SN urządzenia), koordynuje stores, broadcast zmian statusu/alertów, forwarding telemetrii/statusu do shared users. Logi diagnostyczne z prefixem `[IoT]` w console.
+- **Ważne:** Wszystkie handlery IoT w HTTP server używają `resolveIotId(userName, deviceName)` do tłumaczenia nazwy urządzenia na SN. DevicePresence keyed by SN. `GET /api/users/{userName}/iot/devices` zwraca `{ deviceId: SN, status, lastSeenAt }`.
 
 ### MQTT Integration
 
@@ -352,14 +379,17 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 
 **Electronics** (`/user/:userName/electronics/*`, collapsible group w sidebar):
 
-- `/user/:userName/electronics/devices` — UserDevicesPage: tabela urządzeń, dialogi Add/Assemble (auto-generowanie nazwy jako `DefName-SN`), Share (dialog z chipami użytkowników), sekcja "Shared with me". Kliknięcie wiersza → slide-out Drawer (prawa strona, 400px) z edycją: name (disabled), sn, description (markdown, multiline), isAssembled switch, isIot switch
+- `/user/:userName/electronics/devices` — UserDevicesPage: tabela urządzeń, dialogi Add/Assemble (auto-generowanie nazwy jako `DefName-SN`), Share (dialog z chipami użytkowników), sekcja "Shared with me". Kliknięcie wiersza → slide-out Drawer (prawa strona, 400px) z edycją: name (disabled), sn, description (markdown, multiline), isAssembled switch, isIot switch. Autocomplete urządzeń w ElectronicsConfigurationPage używa SN (nie nazwy) jako wartości.
 - `/user/:userName/electronics/arduino` — UserProjectsPage: karty projektów Arduino/Blockly, dialog Add (z wyborem ProjectDef)
-- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal, server-side kompilacja i flash. Board auto-detected z ProjectDef → ModuleDef → soc. Sketche ładowane/zapisywane przez REST API (nie MQTT). README panel boczny (przycisk README w AppBar) — podgląd Markdown + edycja inline + save. Compile button w bottom status bar → save & compile via REST → output panel (monospace, success/error border). Flash button → pobiera skompilowany .bin z REST → FlashDialog z pre-loaded files. AccountMenu w AppBar (zamiast board selector)
+- `/user/:userName/electronics/upython` — UserUPythonProjectsPage: karty projektów uPython, dialog Add
+- `/user/:userName/electronics/configuration` — **ElectronicsConfigurationPage**: wizualny edytor architektury sieci IoT (ReactFlow). 4 typy węzłów: `wifi-device` (niebieski), `wifi-uart-bridge` (fioletowy), `wifi-switch` (zielony), `uart-device` (pomarańczowy). ConfigPanel: dropdown urządzeń (nazwa + SN z Device.json), pole serialNumber, WiFi SSID/password, UART baud rate. WiFi credentials dziedziczone z węzła wifi-switch przez krawędź. Persistence: `GET/PUT /api/users/{userName}/electronics/configuration`. Używany przez `resolveMinisConfig()` do resolve WiFi dla danego SN.
+- `/user/:userName/project/:projectId` — ProjectPage: Blockly + Monaco split editor z serial terminal, server-side kompilacja i flash. Compile z wyborem urządzenia → wstrzykuje `MinisIotArchitecture.h` (WiFi credentials + SN). FlashDialog z 3 trybami: compiled output, custom .bin, predefined firmware z `data/Minis/Admin/Firmware/`.
+- `/user/:userName/upython-project/:projectId` — UPythonProjectPage: edytor kodu MicroPython z Blockly. Przed uplodem przez UploadDialog: asynchronicznie pobiera device minis-config i wstrzykuje Python header z `MINIS_WIFI_SSID`, `MINIS_WIFI_PASSWORD`, `MINIS_DEVICE_SN`. `recordLastBuild` wywoływane w trybach run i save.
 
 **IoT** (`/user/:userName/iot/*`, collapsible group w sidebar):
 - `/user/:userName/iot/dashboard` — IotDashboardPage: entity-aware karty urządzeń (EntityWidgets ze sparkline SVG, kontrolki switch/slider/select/button, komenda → quick refresh 2s), fallback na capabilities gdy brak entities, udostępnione urządzenia (chip "Shared by {owner}", niebieska krawędź), auto-refresh 10s
-- `/user/:userName/iot/devices` — IotDevicesPage: lista urządzeń z isIot=true, status (ONLINE/OFFLINE) po device.name, nawigacja do dashboardu, sekcja "Shared"
-- `/user/:userName/iot/device/:deviceName` — IotDevicePage: sekcja entity widgets (kontrolki + sparkline), metryki ze sparkline SVG, konfiguracja (z liczbą entities), historia telemetrii, komendy (send dialog), alerty (ACK)
+- `/user/:userName/iot/devices` — IotDevicesPage: lista urządzeń z isIot=true, status (ONLINE/OFFLINE) po **device.sn** (nie name), nawigacja do dashboardu, sekcja "Shared", auto-refresh 10s
+- `/user/:userName/iot/device/:deviceName` — IotDevicePage: sekcja entity widgets (kontrolki + sparkline), metryki ze sparkline SVG, konfiguracja (z liczbą entities), historia telemetrii, komendy (send dialog), alerty (ACK). Status lookup po **device.sn**, auto-refresh 10s.
 - `/user/:userName/iot/alerts` — IotAlertsPage: tabs — alerty (ACK/Resolve) + reguły alertów (CRUD dialog)
 - `/user/:userName/iot/emulator` — IotEmulatorPage: emulator urządzeń IoT (konfiguracja, start/stop, activity log)
 
@@ -393,13 +423,13 @@ React 18 + TypeScript, Vite 6, Material UI 6, port 1903 (proxy /api → :1902, /
 - **filesystem** — FilesystemContext (MQTT), MinisDataSourceContext (ładuje admin JSONy), modele/nody/komponenty
 - **editor** — tylko `monacoWorkers.ts` (Vite-specific `?worker` imports). Reszta edytora (EditorInstance, ModelManager, plugins, language services) wyekstrahowana do `@mhersztowski/web-client/monaco`. MonacoMultiEditor — gotowy komponent VS Code-like z VFS + split editor
 - **ardublockly2** — Blockly wizualny edytor Arduino: bloki (io, serial, servo, stepper, spi, audio, time, map, variables), profile płytek (ESP8266 Huzzah/Wemos D1, ESP32 DevKitC, Arduino Uno/Nano/Mega/Leonardo), generator Blockly → C++. BoardProfile zawiera `compilerFlag` (FQBN) i `flashConfig` (filePattern + offset, null = flash nie wspierane). `socToBoardKey` mapuje SoC (z ModuleDef) na klucz board profile
-- **serial** — Web Serial API (WebSerialService), terminal xterm.js (WebSerialTerminal), flashowanie firmware (EspFlashService + FlashDialog z opcjonalnymi `initialFiles` do pre-loaded firmware z kompilacji)
+- **serial** — Web Serial API (WebSerialService), terminal xterm.js (WebSerialTerminal), flashowanie firmware (EspFlashService + FlashDialog z 3 trybami: compiled output, custom .bin, predefined firmware z `listFirmwareFiles()/fetchFirmwareFile()`)
 - **mqttclient** — re-export z @mhersztowski/web-client
 - **iot-emulator** — EmulatorService (MQTT pub/sub, generatory wartości, interwały telemetrii/heartbeat, command handling z entity commands: set_state/set_value/set_option/press + natychmiastowy republish telemetrii), typy (EmulatedDeviceConfig z entities?), presety urządzeń (6: Temperature Sensor, Multi-Sensor, Relay Actuator, Battery Device, Smart Thermostat, Smart Plug — każdy z entities), persistence w localStorage
 
 ### Serwisy
 
-- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys + getPublicUsers + Arduino API (getArduinoBoards, getArduinoPorts, compileProject, uploadFirmware, getProjectOutput, fetchOutputBinary) + Sketch API (listSketches, readSketchFile, writeSketchFile) + README API (readProjectReadme → null gdy brak, writeProjectReadme) + Localization API (getLocalizations, createLocalization, updateLocalization, deleteLocalization)
+- **MinisApiService** (`minisApi` singleton) — REST client do wszystkich endpointów backendu. `setAuthToken(token)` ustawia Bearer token na wszystkich requestach. Parametry user-scoped metod: `userName`/`deviceName` (nazwy, nie UUID). 17 metod IoT + 3 metody API Keys + getPublicUsers + Arduino API (getArduinoBoards, getArduinoPorts, compileProject, uploadFirmware, getProjectOutput, fetchOutputBinary) + Sketch API (listSketches, readSketchFile, writeSketchFile) + README API (readProjectReadme → null gdy brak, writeProjectReadme) + Localization API + **nowe:** `getDeviceMinisConfig(userName, deviceName)` (WiFi/SN), `getIotArchitecture/saveIotArchitecture` (Electronics graph), `listFirmwareFiles/fetchFirmwareFile` (predefined firmware), uPython CRUD (`getUserUPythonProjects`, `createUserUPythonProject`, `deployUPythonProject`)
 
 ### Hooki
 - **useSourceUpload** — reusable hook do uploadu ZIP źródeł (stan, fileInputRef, trigger, handler)

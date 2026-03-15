@@ -104,6 +104,7 @@ export class IotService {
 
   // Called when MQTT message arrives on minis/+/+/heartbeat
   handleHeartbeat(userId: string, deviceId: string, _payload: { uptime?: number; rssi?: number; battery?: number }): void {
+    console.log(`[IoT] heartbeat: userId=${userId} deviceId=${deviceId}`);
     const config = this.telemetry.getConfig(deviceId);
     const heartbeatSec = config?.heartbeatIntervalSec ?? 60;
     this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
@@ -141,23 +142,32 @@ export class IotService {
     const deviceName = parts[2];
     const msgType = parts.slice(3).join('/');
 
+    console.log(`[IoT] MQTT msg: topic=${topic} type=${msgType}`);
+
     let raw: unknown;
     try {
       raw = JSON.parse(payload);
     } catch {
+      console.warn(`[IoT] Failed to parse JSON from topic=${topic}: ${payload}`);
       return;
     }
 
     switch (msgType) {
       case 'telemetry': {
         const result = mqttTopics.telemetry.payloadSchema.safeParse(raw);
-        if (!result.success) return;
+        if (!result.success) {
+          console.warn(`[IoT] telemetry schema mismatch:`, result.error.issues);
+          return;
+        }
         this.handleTelemetry(userName, deviceName, result.data);
         break;
       }
       case 'heartbeat': {
         const result = mqttTopics.heartbeat.payloadSchema.safeParse(raw);
-        if (!result.success) return;
+        if (!result.success) {
+          console.warn(`[IoT] heartbeat schema mismatch:`, result.error.issues);
+          return;
+        }
         this.handleHeartbeat(userName, deviceName, result.data);
         break;
       }

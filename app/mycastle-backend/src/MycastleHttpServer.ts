@@ -11,6 +11,8 @@ import type { IotService } from './modules/iot/IotService.js';
 import type { TerminalService } from './modules/terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
 import type { ArduinoService } from './modules/arduino/index.js';
+import type { MinisConfig } from './modules/arduino/ArduinoCli.js';
+import type { MicroPythonService } from './modules/upython/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
 
 interface CrudConfig {
@@ -39,6 +41,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private rpcRouter: RpcRouter;
   private vfs: CompositeFS;
   private arduinoService: ArduinoService | null;
+  private upythonService: MicroPythonService | null;
   private rootDir: string | null;
   private scriptsService: ScriptsService | null = null;
 
@@ -48,12 +51,13 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
     this.iotService = iotService ?? null;
     this.arduinoService = arduinoService ?? null;
+    this.upythonService = upythonService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
@@ -271,6 +275,14 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Electronics Configuration: /users/{userName}/electronics/configuration
+    const electronicsConfigMatch = apiPath.match(/^\/users\/([^/]+)\/electronics\/configuration$/);
+    if (electronicsConfigMatch) {
+      const userName = decodeURIComponent(electronicsConfigMatch[1]);
+      await this.handleIotArchitecture(req, res, method, userName);
+      return;
+    }
+
     // IoT device status: /users/{userName}/iot/devices
     const iotDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/iot\/devices$/);
     if (iotDevicesMatch) {
@@ -306,6 +318,15 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Device minis-config: /users/{userName}/devices/{deviceName}/minis-config
+    const minisConfigMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/minis-config$/);
+    if (minisConfigMatch && method === 'GET') {
+      const userName = decodeURIComponent(minisConfigMatch[1]);
+      const deviceName = decodeURIComponent(minisConfigMatch[2]);
+      await this.handleDeviceMinisConfig(res, userName, deviceName);
+      return;
+    }
+
     // User devices: /users/{userName}/devices and /users/{userName}/devices/{deviceName}
     const userDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/devices(?:\/([^/]+))?$/);
     if (userDevicesMatch) {
@@ -315,8 +336,8 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // User projects: /users/{userName}/projects and /users/{userName}/projects/{projectName}
-    const userProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/projects(?:\/([^/]+))?$/);
+    // User arduino projects: /users/{userName}/project-arduino and /users/{userName}/project-arduino/{projectName}
+    const userProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino(?:\/([^/]+))?$/);
     if (userProjectsMatch) {
       const userName = decodeURIComponent(userProjectsMatch[1]);
       const projectName = userProjectsMatch[2] ? decodeURIComponent(userProjectsMatch[2]) : undefined;
@@ -336,8 +357,8 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Arduino: compile (POST /api/users/{userName}/projects/{projectName}/compile)
-    const compileMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/compile$/);
+    // Arduino: compile (POST /api/users/{userName}/project-arduino/{projectName}/compile)
+    const compileMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/compile$/);
     if (compileMatch && method === 'POST') {
       const userName = decodeURIComponent(compileMatch[1]);
       const projectName = decodeURIComponent(compileMatch[2]);
@@ -345,8 +366,8 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Arduino: upload (POST /api/users/{userName}/projects/{projectName}/upload)
-    const uploadMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/upload$/);
+    // Arduino: upload (POST /api/users/{userName}/project-arduino/{projectName}/upload)
+    const uploadMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/upload$/);
     if (uploadMatch && method === 'POST') {
       const userName = decodeURIComponent(uploadMatch[1]);
       const projectName = decodeURIComponent(uploadMatch[2]);
@@ -354,8 +375,8 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Arduino: list output files (GET /api/users/{userName}/projects/{projectName}/output)
-    const outputMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/output(?:\/([^/]+))?$/);
+    // Arduino: list output files (GET /api/users/{userName}/project-arduino/{projectName}/output)
+    const outputMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/output(?:\/([^/]+))?$/);
     if (outputMatch) {
       const userName = decodeURIComponent(outputMatch[1]);
       const projectName = decodeURIComponent(outputMatch[2]);
@@ -364,8 +385,8 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // README: /users/{userName}/projects/{projectName}/readme
-    const readmeMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/readme$/);
+    // README: /users/{userName}/project-arduino/{projectName}/readme
+    const readmeMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/readme$/);
     if (readmeMatch) {
       const rUserName = decodeURIComponent(readmeMatch[1]);
       const rProjectName = decodeURIComponent(readmeMatch[2]);
@@ -373,14 +394,40 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Sketch files: /users/{userName}/projects/{projectName}/sketches[/{sketchName}/{fileName}]
-    const sketchMatch = apiPath.match(/^\/users\/([^/]+)\/projects\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
+    // Sketch files: /users/{userName}/project-arduino/{projectName}/sketches[/{sketchName}/{fileName}]
+    const sketchMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
     if (sketchMatch) {
       const sUserName = decodeURIComponent(sketchMatch[1]);
       const sProjectName = decodeURIComponent(sketchMatch[2]);
       const sSketchName = sketchMatch[3] ? decodeURIComponent(sketchMatch[3]) : undefined;
       const sFileName = sketchMatch[4] ? decodeURIComponent(sketchMatch[4]) : undefined;
       await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
+    // uPython: projects CRUD /users/{userName}/project-upython[/{projectName}]
+    const upythonProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython(?:\/([^/]+))?$/);
+    if (upythonProjectsMatch) {
+      const userName = decodeURIComponent(upythonProjectsMatch[1]);
+      const projectName = upythonProjectsMatch[2] ? decodeURIComponent(upythonProjectsMatch[2]) : undefined;
+      await this.handleUserProjects(req, res, method, userName, projectName);
+      return;
+    }
+
+    // uPython: deploy (POST /api/users/{userName}/project-upython/{projectName}/deploy)
+    const upythonDeployMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/deploy$/);
+    if (upythonDeployMatch && method === 'POST') {
+      const userName = decodeURIComponent(upythonDeployMatch[1]);
+      const projectName = decodeURIComponent(upythonDeployMatch[2]);
+      await this.handleUpythonDeploy(req, res, userName, projectName);
+      return;
+    }
+
+    // Firmware: /admin/firmware[/{fileName}]
+    const firmwareMatch = apiPath.match(/^\/admin\/firmware(?:\/([^/]+))?$/);
+    if (firmwareMatch) {
+      const fileName = firmwareMatch[1] ? decodeURIComponent(firmwareMatch[1]) : undefined;
+      await this.handleAdminFirmware(req, res, method, fileName);
       return;
     }
 
@@ -495,7 +542,7 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string };
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; serialNumber?: string };
     if (!body.sketchName || !body.fqbn) {
       this.sendJsonResponse(res, 400, { error: 'sketchName and fqbn are required' });
       return;
@@ -505,13 +552,62 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 404, { error: 'Project not found' });
       return;
     }
+
+    let minisConfig: MinisConfig | undefined;
+    if (body.serialNumber) {
+      minisConfig = await this.resolveMinisConfig(userName, body.serialNumber);
+    }
+
     try {
-      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn);
+      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn, minisConfig);
+      if (body.serialNumber) {
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success, projectId });
+      }
       this.sendJsonResponse(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Compilation failed';
+      if (body.serialNumber) {
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false, projectId });
+      }
       this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
+  }
+
+  private async resolveMinisConfig(userName: string, serialNumber: string): Promise<MinisConfig> {
+    interface ArchNode { id: string; data: { nodeType: string; serialNumber: string; wifiSsid: string; wifiPassword: string } }
+    interface ArchEdge { source: string; target: string }
+    interface Arch { nodes: ArchNode[]; edges: ArchEdge[] }
+
+    const arch = await this.readJsonFile(`Minis/Users/${userName}/Electronics/configuration.json`) as Arch;
+    const nodes: ArchNode[] = Array.isArray(arch?.nodes) ? arch.nodes : [];
+    const edges: ArchEdge[] = Array.isArray(arch?.edges) ? arch.edges : [];
+
+    const node = nodes.find(n => n.data?.serialNumber === serialNumber);
+    if (!node) {
+      console.warn(`[resolveMinisConfig] No architecture node found for SN="${serialNumber}". WiFi credentials will be empty. Check that the node serialNumber in Electronics matches the device SN in Device.json.`);
+    }
+    let wifiSsid = node?.data?.wifiSsid ?? '';
+    let wifiPassword = node?.data?.wifiPassword ?? '';
+
+    // If the node is not a wifi-switch itself, look for a connected wifi-switch parent.
+    // Edge direction: device (source) → wifi-switch (target)
+    if (node && node.data?.nodeType !== 'wifi-switch' && (!wifiSsid)) {
+      const parentEdge = edges.find(e => e.source === node.id);
+      if (parentEdge) {
+        const parentNode = nodes.find(n => n.id === parentEdge.target && n.data?.nodeType === 'wifi-switch');
+        if (parentNode) {
+          wifiSsid = parentNode.data.wifiSsid;
+          wifiPassword = parentNode.data.wifiPassword;
+        }
+      }
+    }
+
+    return {
+      serialNumber,
+      wifiSsid,
+      wifiPassword,
+      architectureJson: JSON.stringify(arch),
+    };
   }
 
   private async handleArduinoUpload(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
@@ -519,7 +615,7 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; port?: string };
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; port?: string; serialNumber?: string };
     if (!body.sketchName || !body.fqbn || !body.port) {
       this.sendJsonResponse(res, 400, { error: 'sketchName, fqbn and port are required' });
       return;
@@ -531,9 +627,15 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
     try {
       const result = await this.arduinoService.upload(userName, projectId, body.sketchName, body.fqbn, body.port);
+      if (body.serialNumber) {
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success });
+      }
       this.sendJsonResponse(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Upload failed';
+      if (body.serialNumber) {
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false });
+      }
       this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
   }
@@ -1097,7 +1199,99 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
   }
 
+  // --- Admin Firmware ---
+
+  private async handleAdminFirmware(_req: IncomingMessage, res: ServerResponse, method: string, fileName?: string): Promise<void> {
+    if (method !== 'GET') {
+      this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+    if (!this.rootDir) {
+      this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
+      return;
+    }
+    const firmwareDir = path.resolve(this.rootDir, 'Minis', 'Admin', 'Firmware');
+
+    if (!fileName) {
+      try {
+        const entries = await fs.promises.readdir(firmwareDir, { withFileTypes: true });
+        const items = entries
+          .filter(e => e.isFile() && e.name.endsWith('.bin'))
+          .map(e => {
+            const stat = fs.statSync(path.join(firmwareDir, e.name));
+            return { name: e.name, size: stat.size };
+          });
+        this.sendJsonResponse(res, 200, { items });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    if (fileName.includes('..') || fileName.includes('/')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid file name' });
+      return;
+    }
+    const filePath = path.join(firmwareDir, fileName);
+    try {
+      const data = await fs.promises.readFile(filePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Content-Length': data.length,
+      });
+      res.end(data);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'Firmware file not found' });
+    }
+  }
+
+  // --- uPython ---
+
+  private async handleUpythonDeploy(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.upythonService?.isAvailable) {
+      this.sendJsonResponse(res, 503, { error: 'MicroPython CLI not configured' });
+      return;
+    }
+    const body = await this.parseRequestBody(req) as { port?: string; serialNumber?: string };
+    if (!body.port) {
+      this.sendJsonResponse(res, 400, { error: 'port is required' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+    try {
+      const result = await this.upythonService.deploy(userName, projectId, body.port);
+      if (body.serialNumber) {
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'micropython', success: result.success });
+      }
+      this.sendJsonResponse(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Deploy failed';
+      if (body.serialNumber) {
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'micropython', success: false });
+      }
+      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
+    }
+  }
+
   // --- User Devices ---
+
+  private async saveDeviceLastBuild(userName: string, serialNumber: string, build: { platform: string; fqbn?: string; version?: string; success: boolean; projectId?: string }): Promise<void> {
+    try {
+      const filePath = `${MINIS_ROOT}/Users/${userName}/Device.json`;
+      const data = await this.readJsonFile(filePath) as Record<string, unknown>;
+      const devices = (data['devices'] || []) as Record<string, unknown>[];
+      const idx = devices.findIndex((d) => d['sn'] === serialNumber);
+      if (idx === -1) return;
+      devices[idx] = { ...devices[idx], lastBuild: { ...build, at: Date.now() } };
+      data['devices'] = devices;
+      await this.writeJsonFile(filePath, data);
+    } catch { /* non-critical */ }
+  }
 
   private async userExistsByName(name: string): Promise<boolean> {
     const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`);
@@ -1117,6 +1311,41 @@ export class MycastleHttpServer extends HttpUploadServer {
       lookupKey: 'id',
     };
     await this.handleCrud(req, res, method, config, locId);
+  }
+
+  /** Translates a device name to its SN (IoT deviceId).
+   *  MQTT topics use SN as deviceId, so all IoT storage (telemetry, presence, commands) is keyed by SN.
+   *  Falls back to deviceName if device has no SN or is not found. */
+  private async resolveIotId(userName: string, deviceName: string): Promise<string> {
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as Record<string, unknown>;
+      const devices = (data['devices'] || []) as Record<string, unknown>[];
+      const device = devices.find((d) => d['name'] === deviceName);
+      return (device?.['sn'] as string) || deviceName;
+    } catch {
+      return deviceName;
+    }
+  }
+
+  private async handleDeviceMinisConfig(res: ServerResponse, userName: string, deviceName: string): Promise<void> {
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as Record<string, unknown>;
+      const devices = (data['devices'] || []) as Record<string, unknown>[];
+      const device = devices.find((d) => d['name'] === deviceName);
+      if (!device) {
+        this.sendJsonResponse(res, 404, { error: 'Device not found' });
+        return;
+      }
+      const sn = device['sn'] as string | undefined;
+      if (!sn) {
+        this.sendJsonResponse(res, 200, { serialNumber: '', wifiSsid: '', wifiPassword: '' });
+        return;
+      }
+      const config = await this.resolveMinisConfig(userName, sn);
+      this.sendJsonResponse(res, 200, { serialNumber: config.serialNumber, wifiSsid: config.wifiSsid, wifiPassword: config.wifiPassword });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
   }
 
   private async handleUserDevices(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName?: string): Promise<void> {
@@ -1314,6 +1543,30 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
   }
 
+  // --- Electronics Configuration ---
+
+  private async handleIotArchitecture(req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+    const filePath = `${MINIS_ROOT}/Users/${userName}/Electronics/configuration.json`;
+    try {
+      if (method === 'GET') {
+        try {
+          const data = await this.readJsonFile(filePath);
+          this.sendJsonResponse(res, 200, data);
+        } catch {
+          this.sendJsonResponse(res, 200, { nodes: [], edges: [], updatedAt: 0 });
+        }
+      } else if (method === 'PUT') {
+        const body = await this.parseRequestBody(req);
+        await this.writeJsonFile(filePath, body);
+        this.sendJsonResponse(res, 200, body);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
   // --- IoT Config ---
 
   private async handleIotConfig(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string): Promise<void> {
@@ -1321,9 +1574,10 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
     }
+    const iotId = await this.resolveIotId(userName, deviceName);
     try {
       if (method === 'GET') {
-        const config = this.iotService.telemetry.getConfig(deviceName);
+        const config = this.iotService.telemetry.getConfig(iotId);
         if (!config) {
           this.sendJsonResponse(res, 404, { error: 'IoT config not found' });
           return;
@@ -1332,18 +1586,18 @@ export class MycastleHttpServer extends HttpUploadServer {
       } else if (method === 'PUT') {
         const body = await this.parseRequestBody(req) as Record<string, unknown>;
         const now = Date.now();
-        const existing = this.iotService.telemetry.getConfig(deviceName);
+        const existing = this.iotService.telemetry.getConfig(iotId);
         this.iotService.telemetry.upsertConfig({
-          deviceId: deviceName,
+          deviceId: iotId,
           userId: userName,
-          topicPrefix: (body.topicPrefix as string) ?? `minis/${userName}/${deviceName}`,
+          topicPrefix: (body.topicPrefix as string) ?? `minis/${userName}/${iotId}`,
           heartbeatIntervalSec: (body.heartbeatIntervalSec as number) ?? 60,
           capabilities: (body.capabilities as any[]) ?? [],
           entities: (body.entities as any[]) ?? [],
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         });
-        const config = this.iotService.telemetry.getConfig(deviceName);
+        const config = this.iotService.telemetry.getConfig(iotId);
         this.sendJsonResponse(res, 200, config);
       } else {
         this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
@@ -1355,7 +1609,7 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   // --- IoT Telemetry ---
 
-  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string, isLatest: boolean): Promise<void> {
+  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string, isLatest: boolean): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
@@ -1364,16 +1618,17 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
       return;
     }
+    const iotId = await this.resolveIotId(userName, deviceName);
     try {
       if (isLatest) {
-        const record = this.iotService.telemetry.getLatest(deviceName);
+        const record = this.iotService.telemetry.getLatest(iotId);
         this.sendJsonResponse(res, 200, record ?? { message: 'No telemetry data' });
       } else {
         const url = new URL(req.url!, `http://localhost`);
         const from = parseInt(url.searchParams.get('from') ?? '0', 10);
         const to = parseInt(url.searchParams.get('to') ?? String(Date.now()), 10);
         const limit = parseInt(url.searchParams.get('limit') ?? '1000', 10);
-        const records = this.iotService.telemetry.getHistory(deviceName, from, to, limit);
+        const records = this.iotService.telemetry.getHistory(iotId, from, to, limit);
         this.sendJsonResponse(res, 200, { items: records });
       }
     } catch (err) {
@@ -1383,16 +1638,17 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   // --- IoT Commands ---
 
-  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string): Promise<void> {
+  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
     }
+    const iotId = await this.resolveIotId(userName, deviceName);
     try {
       if (method === 'GET') {
         const url = new URL(req.url!, `http://localhost`);
         const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
-        const commands = this.iotService.commands.listCommands(deviceName, limit);
+        const commands = this.iotService.commands.listCommands(iotId, limit);
         this.sendJsonResponse(res, 200, { items: commands });
       } else if (method === 'POST') {
         const body = await this.parseRequestBody(req) as Record<string, unknown>;
@@ -1400,7 +1656,7 @@ export class MycastleHttpServer extends HttpUploadServer {
           this.sendJsonResponse(res, 400, { error: 'Command name required' });
           return;
         }
-        const command = this.iotService.sendCommand(deviceName, body.name as string, (body.payload as Record<string, unknown>) ?? {});
+        const command = this.iotService.sendCommand(iotId, body.name as string, (body.payload as Record<string, unknown>) ?? {});
         this.sendJsonResponse(res, 201, command);
       } else {
         this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });

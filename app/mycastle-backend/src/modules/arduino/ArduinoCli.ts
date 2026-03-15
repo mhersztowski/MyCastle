@@ -3,6 +3,13 @@ export interface BoardInfo {
   name: string;
 }
 
+export interface MinisConfig {
+  serialNumber: string;
+  wifiSsid: string;
+  wifiPassword: string;
+  architectureJson: string;
+}
+
 export interface CompileOptions {
   fqbn: string;
   sketchPath: string;

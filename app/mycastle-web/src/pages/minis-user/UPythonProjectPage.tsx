@@ -9,10 +9,14 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  FormControl,
   IconButton,
+  InputLabel,
   List,
   ListItemButton,
   ListItemText,
+  MenuItem,
+  Select,
   TextField,
   Toolbar,
   Tooltip,
@@ -35,7 +39,7 @@ import {
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
 import {
@@ -48,6 +52,7 @@ import { MpyReplTerminal } from '@modules/upythonblockly/repl';
 import { UploadDialog } from '@modules/upythonblockly/upload';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
+import type { MinisDeviceModel } from '@mhersztowski/core';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 
@@ -56,6 +61,7 @@ const MIN_PANEL_PX = 200;
 function UPythonProjectPage() {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const serviceRef = useRef<UPythonBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -80,6 +86,9 @@ function UPythonProjectPage() {
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
   const [readmeEditMode, setReadmeEditMode] = useState(false);
   const [readmeEditValue, setReadmeEditValue] = useState('');
+  const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
+  const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
+  const [uploadCode, setUploadCode] = useState('');
 
   // Keep ref in sync for use inside Blockly listener
   useEffect(() => {
@@ -190,6 +199,12 @@ function UPythonProjectPage() {
     minisApi.readProjectReadme(userName, projectId).then(setReadmeContent);
   }, [userName, projectId]);
 
+  // Load devices
+  useEffect(() => {
+    if (!userName) return;
+    minisApi.getUserDevices(userName).then(setDevices).catch(() => setDevices([]));
+  }, [userName]);
+
   const handleSaveReadme = async () => {
     if (!userName || !projectId) return;
     await minisApi.writeProjectReadme(userName, projectId, readmeEditValue);
@@ -248,6 +263,29 @@ function UPythonProjectPage() {
     ]);
     if (!sketches.includes(currentSketch)) setSketches((prev) => [...prev, currentSketch]);
     setCodeEdited(false);
+  };
+
+  const openUploadDialog = async () => {
+    const rawCode = editorRef.current?.getContent() ?? generatedCode;
+    let code = rawCode;
+    if (userName && selectedDeviceName) {
+      try {
+        const cfg = await minisApi.getDeviceMinisConfig(userName, selectedDeviceName);
+        if (cfg.wifiSsid || cfg.serialNumber) {
+          const header = [
+            '# === MyCastle Device Configuration (auto-generated) ===',
+            `MINIS_WIFI_SSID = ${JSON.stringify(cfg.wifiSsid)}`,
+            `MINIS_WIFI_PASSWORD = ${JSON.stringify(cfg.wifiPassword)}`,
+            `MINIS_DEVICE_SN = ${JSON.stringify(cfg.serialNumber)}`,
+            '# =========================================================',
+            '',
+          ].join('\n');
+          code = header + rawCode;
+        }
+      } catch { /* non-critical — upload without injection */ }
+    }
+    setUploadCode(code);
+    setUploadOpen(true);
   };
 
   const handleConfirmOverwrite = () => {
@@ -392,13 +430,13 @@ function UPythonProjectPage() {
           )}
           {/* Upload + Terminal — widoczne tylko na mobilnym */}
           <Box sx={{ display: { xs: 'flex', sm: 'none' } }}>
-            <Tooltip title="Upload to device">
+            <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Upload to device'}>
               <span>
                 <IconButton
                   color="inherit"
                   size="small"
-                  onClick={() => setUploadOpen(true)}
-                  disabled={!generatedCode && !codeEdited}
+                  onClick={openUploadDialog}
+                  disabled={(!generatedCode && !codeEdited) || !selectedDeviceName}
                 >
                   <UploadIcon fontSize="small" />
                 </IconButton>
@@ -435,6 +473,23 @@ function UPythonProjectPage() {
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
               Platform: MicroPython
             </Typography>
+            <FormControl fullWidth size="small" sx={{ mt: 2 }}>
+              <InputLabel>Device</InputLabel>
+              <Select
+                value={selectedDeviceName}
+                label="Device"
+                onChange={(e) => setSelectedDeviceName(e.target.value)}
+                renderValue={(v) => {
+                  const d = devices.find((x) => x.name === v);
+                  return d ? `${d.name}${d.sn ? ` (${d.sn})` : ''}` : v;
+                }}
+              >
+                <MenuItem value=""><em>— none —</em></MenuItem>
+                {devices.map((d) => (
+                  <MenuItem key={d.name} value={d.name}>{d.name}{d.sn ? ` (${d.sn})` : ''}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Box>
         )}
 
@@ -605,12 +660,12 @@ function UPythonProjectPage() {
       {/* Bottom status bar */}
       <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider', display: { xs: 'none', sm: 'block' } }}>
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
-          <Tooltip title="Upload to device">
+          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Upload to device'}>
             <span>
               <IconButton
                 size="small"
-                onClick={() => setUploadOpen(true)}
-                disabled={!generatedCode && !codeEdited}
+                onClick={openUploadDialog}
+                disabled={(!generatedCode && !codeEdited) || !selectedDeviceName}
               >
                 <UploadIcon fontSize="small" />
               </IconButton>
@@ -632,7 +687,11 @@ function UPythonProjectPage() {
       <UploadDialog
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        code={codeForUpload}
+        code={uploadCode}
+        userName={userName}
+        board={board}
+        projectId={projectId}
+        deviceName={selectedDeviceName || undefined}
       />
 
       {/* Confirm overwrite dialog */}

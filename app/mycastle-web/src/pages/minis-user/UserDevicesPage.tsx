@@ -7,7 +7,7 @@ import {
   Select, MenuItem, InputLabel, FormControl, Stack,
   Drawer, Divider,
 } from '@mui/material';
-import { Delete, Add, Build, SmartToy, Share, LocationOn, Close } from '@mui/icons-material';
+import { Delete, Add, Build, SmartToy, Share, LocationOn, Close, OpenInNew } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { UserPublic } from '../../services/MinisApiService';
@@ -284,8 +284,7 @@ function UserDevicesPage() {
               <TableCell>Name</TableCell>
               <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Serial Number</TableCell>
               <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Localization</TableCell>
-              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Status</TableCell>
-              <TableCell>IoT</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Last Build</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -306,12 +305,29 @@ function UserDevicesPage() {
                   })()}
                 </TableCell>
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
-                  {item.isAssembled
-                    ? <Chip label="Assembled" color="success" size="small" />
-                    : <Chip label="In Progress" color="warning" size="small" />}
-                </TableCell>
-                <TableCell>
-                  {item.isIot && <Chip label="IoT" color="info" size="small" />}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    {item.lastBuild
+                      ? <Chip
+                          label={`${item.lastBuild.platform}${item.lastBuild.version ? ` v${item.lastBuild.version}` : ''}`}
+                          color={item.lastBuild.success ? 'success' : 'error'}
+                          size="small"
+                          title={new Date(item.lastBuild.at).toLocaleString()}
+                        />
+                      : <Chip label="No build" size="small" />}
+                    {item.lastBuild?.projectId && (
+                      <IconButton
+                        size="small"
+                        title="Open project"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const route = item.lastBuild!.platform === 'micropython' ? 'upython-project' : 'project';
+                          navigate(`/user/${userName}/${route}/${item.lastBuild!.projectId}?device=${item.name}`);
+                        }}
+                      >
+                        <OpenInNew sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    )}
+                  </Box>
                 </TableCell>
                 <TableCell align="right">
                   {item.isIot && (
@@ -347,7 +363,7 @@ function UserDevicesPage() {
               </TableRow>
             ))}
             {!loading && items.length === 0 && (
-              <TableRow><TableCell colSpan={6} align="center">No devices yet</TableCell></TableRow>
+              <TableRow><TableCell colSpan={5} align="center">No devices yet</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
@@ -404,6 +420,24 @@ function UserDevicesPage() {
             onChange={(e) => setEditPanelForm((f) => ({ ...f, isIot: e.target.checked }))} />}
           label="IoT Device" sx={{ mb: 2, display: 'block' }}
         />
+        {editPanelDevice?.lastBuild && (
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" color="text.secondary">Last Build</Typography>
+            <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap' }}>
+              <Chip
+                label={`${editPanelDevice.lastBuild.platform}${editPanelDevice.lastBuild.version ? ` v${editPanelDevice.lastBuild.version}` : ''}`}
+                color={editPanelDevice.lastBuild.success ? 'success' : 'error'}
+                size="small"
+              />
+              {editPanelDevice.lastBuild.fqbn && (
+                <Chip label={editPanelDevice.lastBuild.fqbn} size="small" variant="outlined" />
+              )}
+              <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
+                {new Date(editPanelDevice.lastBuild.at).toLocaleString()}
+              </Typography>
+            </Box>
+          </Box>
+        )}
         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
           <Button onClick={() => setEditPanelDevice(null)}>Cancel</Button>
           <Button variant="contained" onClick={handleEditPanelSave} disabled={editPanelSaving}>

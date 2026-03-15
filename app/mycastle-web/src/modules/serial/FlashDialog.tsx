@@ -28,6 +28,7 @@ import {
   type FlashSettings,
   type FlashState,
 } from './EspFlashService';
+import { minisApi } from '../../services/MinisApiService';
 
 interface FileRow {
   id: number;
@@ -51,9 +52,13 @@ interface FlashDialogProps {
   onClose: () => void;
   /** Pre-loaded firmware files (from compiled output). Enables mode selector. */
   initialFiles?: FlashFileEntry[];
+  userName?: string;
+  deviceName?: string;
+  fqbn?: string;
+  projectId?: string;
 }
 
-export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
+export function FlashDialog({ open, onClose, initialFiles, userName, deviceName, fqbn, projectId }: FlashDialogProps) {
   const serviceRef = useRef<EspFlashService | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -62,10 +67,13 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
   const [log, setLog] = useState('');
   const [progress, setProgress] = useState<FlashProgress | null>(null);
 
-  // 'compiled' | 'custom' — only relevant when initialFiles is provided
-  const [fileMode, setFileMode] = useState<'compiled' | 'custom'>('compiled');
+  // 'compiled' | 'custom' | 'predefined' — only compiled relevant when initialFiles is provided
+  const [fileMode, setFileMode] = useState<'compiled' | 'custom' | 'predefined'>('compiled');
   const [customAddress, setCustomAddress] = useState('0x0000');
   const [customFile, setCustomFile] = useState<File | null>(null);
+
+  const [firmwareFiles, setFirmwareFiles] = useState<Array<{ name: string; size: number }>>([]);
+  const [selectedFirmware, setSelectedFirmware] = useState('');
 
   const [rows, setRows] = useState<FileRow[]>([createRow()]);
   const [settings, setSettings] = useState<FlashSettings>({
@@ -102,16 +110,17 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
     }
   }, [log]);
 
-  // Reset everything when dialog opens
+  // Reset everything when dialog opens + load firmware list
   useEffect(() => {
     if (open) {
       setLog('');
       setProgress(null);
       setState('idle');
       setChipName('');
-      setFileMode('compiled');
+      setFileMode(initialFiles && initialFiles.length > 0 ? 'compiled' : 'custom');
       setCustomAddress('0x0000');
       setCustomFile(null);
+      setSelectedFirmware('');
       setRows([createRow()]);
       setSettings({
         baudRate: 921600,
@@ -120,8 +129,18 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
         flashSize: 'keep',
         eraseAll: false,
       });
+      minisApi.listFirmwareFiles().then(setFirmwareFiles).catch(() => setFirmwareFiles([]));
     }
   }, [open]);
+
+  // Record lastBuild after flash completes
+  useEffect(() => {
+    if (!userName || !deviceName) return;
+    if (state !== 'done' && state !== 'error') return;
+    minisApi.updateUserDevice(userName, deviceName, {
+      lastBuild: { platform: 'arduino', fqbn, success: state === 'done', at: Date.now(), projectId },
+    }).catch(() => { /* non-critical */ });
+  }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleConnect = useCallback(async () => {
     try {
@@ -143,7 +162,19 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
 
     let fileEntries: FlashFileEntry[];
 
-    if (initialFiles && initialFiles.length > 0) {
+    if (fileMode === 'predefined') {
+      if (!selectedFirmware) {
+        setLog((prev) => prev + 'No predefined firmware selected.\n');
+        return;
+      }
+      try {
+        const data = await minisApi.fetchFirmwareFile(selectedFirmware);
+        fileEntries = [{ data, address: 0x0000, name: selectedFirmware }];
+      } catch (err) {
+        setLog((prev) => prev + `Failed to fetch firmware: ${err instanceof Error ? err.message : String(err)}\n`);
+        return;
+      }
+    } else if (initialFiles && initialFiles.length > 0) {
       if (fileMode === 'compiled') {
         fileEntries = initialFiles;
       } else {
@@ -185,7 +216,7 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
     } catch {
       // error already logged
     }
-  }, [rows, fileMode, customFile, customAddress, settings, initialFiles]);
+  }, [rows, fileMode, customFile, customAddress, settings, initialFiles, selectedFirmware]);
 
   const handleClose = useCallback(() => {
     if (state === 'flashing') return; // don't close during flash
@@ -217,9 +248,11 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
   const flashDisabled =
     !isConnected ||
     isFlashing ||
-    (hasInitialFiles
-      ? fileMode === 'custom' && !customFile
-      : rows.every((r) => !r.file));
+    (fileMode === 'predefined'
+      ? !selectedFirmware
+      : hasInitialFiles
+        ? fileMode === 'custom' && !customFile
+        : rows.every((r) => !r.file));
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
@@ -276,61 +309,85 @@ export function FlashDialog({ open, onClose, initialFiles }: FlashDialogProps) {
             Firmware Files
           </Typography>
 
-          {hasInitialFiles ? (
-            <>
-              <RadioGroup
-                row
-                value={fileMode}
-                onChange={(e) => setFileMode(e.target.value as 'compiled' | 'custom')}
-              >
-                <FormControlLabel
-                  value="compiled"
-                  control={<Radio size="small" disabled={isFlashing} />}
-                  label="Compiled output"
-                />
-                <FormControlLabel
-                  value="custom"
-                  control={<Radio size="small" disabled={isFlashing} />}
-                  label="Custom .bin"
-                />
-              </RadioGroup>
+          <RadioGroup
+            row
+            value={fileMode}
+            onChange={(e) => setFileMode(e.target.value as 'compiled' | 'custom' | 'predefined')}
+          >
+            {hasInitialFiles && (
+              <FormControlLabel
+                value="compiled"
+                control={<Radio size="small" disabled={isFlashing} />}
+                label="Compiled output"
+              />
+            )}
+            <FormControlLabel
+              value="custom"
+              control={<Radio size="small" disabled={isFlashing} />}
+              label="Custom .bin"
+            />
+            {firmwareFiles.length > 0 && (
+              <FormControlLabel
+                value="predefined"
+                control={<Radio size="small" disabled={isFlashing} />}
+                label="Predefined firmware"
+              />
+            )}
+          </RadioGroup>
 
-              {fileMode === 'compiled' ? (
-                <Box sx={{ mt: 0.5 }}>
-                  {initialFiles.map((f, i) => (
-                    <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>
-                      {f.name} @ 0x{f.address.toString(16).padStart(4, '0')}
+          {fileMode === 'predefined' ? (
+            <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+              <InputLabel>Firmware file</InputLabel>
+              <Select
+                value={selectedFirmware}
+                label="Firmware file"
+                onChange={(e) => setSelectedFirmware(e.target.value)}
+                disabled={isFlashing}
+              >
+                {firmwareFiles.map((f) => (
+                  <MenuItem key={f.name} value={f.name}>
+                    {f.name}
+                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                      ({Math.round(f.size / 1024)} KB)
                     </Typography>
-                  ))}
-                </Box>
-              ) : (
-                <Box sx={{ display: 'flex', gap: 1, mt: 0.5, alignItems: 'center' }}>
-                  <TextField
-                    label="Offset"
-                    value={customAddress}
-                    onChange={(e) => setCustomAddress(e.target.value)}
-                    size="small"
-                    sx={{ width: 110 }}
-                    disabled={isFlashing}
-                  />
-                  <Button
-                    variant="outlined"
-                    component="label"
-                    size="small"
-                    disabled={isFlashing}
-                    sx={{ textTransform: 'none', minWidth: 0, flexGrow: 1, justifyContent: 'flex-start' }}
-                  >
-                    {customFile ? customFile.name : 'Choose .bin file...'}
-                    <input
-                      type="file"
-                      accept=".bin"
-                      hidden
-                      onChange={(e) => setCustomFile(e.target.files?.[0] ?? null)}
-                    />
-                  </Button>
-                </Box>
-              )}
-            </>
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          ) : fileMode === 'compiled' && hasInitialFiles ? (
+            <Box sx={{ mt: 0.5 }}>
+              {initialFiles!.map((f, i) => (
+                <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>
+                  {f.name} @ 0x{f.address.toString(16).padStart(4, '0')}
+                </Typography>
+              ))}
+            </Box>
+          ) : fileMode === 'custom' && hasInitialFiles ? (
+            <Box sx={{ display: 'flex', gap: 1, mt: 0.5, alignItems: 'center' }}>
+              <TextField
+                label="Offset"
+                value={customAddress}
+                onChange={(e) => setCustomAddress(e.target.value)}
+                size="small"
+                sx={{ width: 110 }}
+                disabled={isFlashing}
+              />
+              <Button
+                variant="outlined"
+                component="label"
+                size="small"
+                disabled={isFlashing}
+                sx={{ textTransform: 'none', minWidth: 0, flexGrow: 1, justifyContent: 'flex-start' }}
+              >
+                {customFile ? customFile.name : 'Choose .bin file...'}
+                <input
+                  type="file"
+                  accept=".bin"
+                  hidden
+                  onChange={(e) => setCustomFile(e.target.files?.[0] ?? null)}
+                />
+              </Button>
+            </Box>
           ) : (
             <>
               {rows.map((row) => (

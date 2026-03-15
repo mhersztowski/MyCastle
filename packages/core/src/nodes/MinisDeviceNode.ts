@@ -1,5 +1,5 @@
 import { NodeBase } from './NodeBase';
-import { MinisDeviceModel } from '../models/MinisDeviceModel';
+import type { MinisDeviceModel, MinisDeviceBuild } from '../models/MinisDeviceModel';
 
 export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
   readonly type = 'device' as const;
@@ -11,6 +11,7 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
   sn: string;
   description?: string;
   localizationId?: string;
+  lastBuild?: MinisDeviceBuild;
 
   constructor(model: MinisDeviceModel) {
     super();
@@ -22,6 +23,7 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
     this.sn = model.sn;
     this.description = model.description;
     this.localizationId = model.localizationId;
+    this.lastBuild = model.lastBuild;
   }
 
   static fromModel(model: MinisDeviceModel): MinisDeviceNode { return new MinisDeviceNode(model); }
@@ -51,6 +53,7 @@ export class MinisDeviceNode extends NodeBase<MinisDeviceModel> {
       sn: this.sn,
       description: this.description,
       localizationId: this.localizationId,
+      lastBuild: this.lastBuild,
     };
   }
 

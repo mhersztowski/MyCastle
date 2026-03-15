@@ -1,5 +1,5 @@
 import * as path from 'path';
-import type { ArduinoCli, BoardInfo, PortInfo, CompileResult, UploadResult } from './ArduinoCli.js';
+import type { ArduinoCli, BoardInfo, PortInfo, CompileResult, MinisConfig, UploadResult } from './ArduinoCli.js';
 import { ArduinoCliLocal } from './ArduinoCliLocal.js';
 import { ArduinoCliDocker } from './ArduinoCliDocker.js';
 import { ArduinoProject } from './ArduinoProject.js';
@@ -41,10 +41,10 @@ export class ArduinoService {
     return this.cli.listPorts();
   }
 
-  async compile(userName: string, projectId: string, sketchName: string, fqbn: string): Promise<CompileResult> {
+  async compile(userName: string, projectId: string, sketchName: string, fqbn: string, minisConfig?: MinisConfig): Promise<CompileResult> {
     if (!this.cli) throw new Error('Arduino CLI not configured');
     const project = new ArduinoProject(this.cli, this.rootDir, userName, projectId, fqbn);
-    return project.compile(sketchName);
+    return project.compile(sketchName, minisConfig);
   }
 
   async upload(userName: string, projectId: string, sketchName: string, fqbn: string, port: string): Promise<UploadResult> {

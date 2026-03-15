@@ -9,6 +9,7 @@ export { default as IotDevicesPage } from './iot/IotDevicesPage';
 export { default as IotDevicePage } from './iot/IotDevicePage';
 export { default as IotAlertsPage } from './iot/IotAlertsPage';
 export { default as IotEmulatorPage } from './iot/IotEmulatorPage';
+export { default as ElectronicsConfigurationPage } from './electronics/ElectronicsConfigurationPage';
 export { default as RpcExplorerPage } from './tools/RpcExplorerPage';
 export { default as MqttExplorerPage } from './tools/MqttExplorerPage';
 export { default as ApiKeysPage } from './tools/ApiKeysPage';

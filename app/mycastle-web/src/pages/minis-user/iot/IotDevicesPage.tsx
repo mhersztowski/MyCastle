@@ -46,7 +46,11 @@ function IotDevicesPage() {
     }
   }, [userName]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 10000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   const getStatus = (deviceId: string) => {
     const info = statuses.find((s) => s.deviceId === deviceId);
@@ -98,12 +102,12 @@ function IotDevicesPage() {
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{device.sn || '-'}</TableCell>
                 <TableCell>
                   <Chip
-                    label={getStatus(device.name)}
-                    color={statusColor(getStatus(device.name)) as any}
+                    label={getStatus(device.sn)}
+                    color={statusColor(getStatus(device.sn)) as any}
                     size="small"
                   />
                 </TableCell>
-                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{getLastSeen(device.name)}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{getLastSeen(device.sn)}</TableCell>
               </TableRow>
             ))}
             {!loading && devices.length === 0 && (
