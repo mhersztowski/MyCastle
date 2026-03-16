@@ -126,7 +126,7 @@ describe('MemoryDataSource', () => {
       const data: MinisModuleDefsModel = {
         type: 'module_defs',
         moduleDefs: [
-          { type: 'module_def', id: 'md1', name: 'WiFi', soc: 'ESP32', isProgrammable: true },
+          { type: 'module_def', id: 'md1', name: 'WiFi', isProgrammable: true },
         ],
       };
       ds.loadMinisModuleDefs(data);

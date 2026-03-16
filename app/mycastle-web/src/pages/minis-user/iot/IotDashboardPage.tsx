@@ -48,7 +48,7 @@ function IotDashboardPage() {
     try {
       const [allDevices, defs, iotStatuses, sharedDevices] = await Promise.all([
         minisApi.getUserDevices(userName),
-        minisApi.getDeviceDefs(),
+        minisApi.getDeviceDefs(userName),
         minisApi.getIotDevices(userName),
         minisApi.getSharedDevices(userName),
       ]);

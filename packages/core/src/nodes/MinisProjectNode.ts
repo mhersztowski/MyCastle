@@ -5,13 +5,19 @@ export class MinisProjectNode extends NodeBase<MinisProjectModel> {
   readonly type = 'minis_project' as const;
   id: string;
   name: string;
-  projectDefId: string;
+  githubProjectId: string;
+  softwarePlatform: string;
+  moduleId?: string;
+  boardProfileKey?: string;
 
   constructor(model: MinisProjectModel) {
     super();
     this.id = model.id;
     this.name = model.name;
-    this.projectDefId = model.projectDefId;
+    this.githubProjectId = model.githubProjectId;
+    this.softwarePlatform = model.softwarePlatform;
+    this.moduleId = model.moduleId;
+    this.boardProfileKey = model.boardProfileKey;
   }
 
   static fromModel(model: MinisProjectModel): MinisProjectNode { return new MinisProjectNode(model); }
@@ -25,7 +31,7 @@ export class MinisProjectNode extends NodeBase<MinisProjectModel> {
     const q = query.toLowerCase();
     return (
       this.name.toLowerCase().includes(q) ||
-      this.projectDefId.toLowerCase().includes(q)
+      this.githubProjectId.toLowerCase().includes(q)
     );
   }
 
@@ -34,7 +40,10 @@ export class MinisProjectNode extends NodeBase<MinisProjectModel> {
       type: 'minis_project',
       id: this.id,
       name: this.name,
-      projectDefId: this.projectDefId,
+      githubProjectId: this.githubProjectId,
+      softwarePlatform: this.softwarePlatform,
+      moduleId: this.moduleId,
+      boardProfileKey: this.boardProfileKey,
     };
   }
 

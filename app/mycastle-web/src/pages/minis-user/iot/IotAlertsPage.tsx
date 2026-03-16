@@ -30,7 +30,7 @@ function IotAlertsPage() {
         minisApi.getAlerts(userName),
         minisApi.getAlertRules(userName),
         minisApi.getUserDevices(userName),
-        minisApi.getDeviceDefs(),
+        minisApi.getDeviceDefs(userName),
       ]);
       setAlerts(alertsList);
       setRules(rulesList);

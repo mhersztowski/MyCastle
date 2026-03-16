@@ -79,6 +79,15 @@ export class ArduinoCliLocal implements ArduinoCli {
     }
   }
 
+  async libInstall(lib: { name: string; version?: string; url?: string }, configFilePath: string): Promise<void> {
+    if (lib.url) {
+      await execFileAsync(this.resolvedPath, ['lib', 'install', '--git-url', lib.url, '--config-file', configFilePath], { maxBuffer: MAX_BUFFER });
+    } else {
+      const spec = lib.version ? `${lib.name}@${lib.version}` : lib.name;
+      await execFileAsync(this.resolvedPath, ['lib', 'install', spec, '--config-file', configFilePath], { maxBuffer: MAX_BUFFER });
+    }
+  }
+
   private formatOutput(stdout?: string, stderr?: string): string {
     let out = '';
     if (stdout) out += stdout;

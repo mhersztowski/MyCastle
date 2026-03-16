@@ -2,7 +2,11 @@ export interface MinisProjectModel {
   type: 'minis_project';
   id: string;
   name: string;
-  projectDefId: string;
+  githubProjectId: string;
+  githubRepoUrl?: string;
+  softwarePlatform: string;
+  moduleId?: string;
+  boardProfileKey?: string;
 }
 
 export interface MinisProjectsModel {

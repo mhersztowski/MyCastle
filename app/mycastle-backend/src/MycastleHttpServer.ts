@@ -26,9 +26,6 @@ const MINIS_ROOT = 'Minis';
 
 const CRUD_CONFIGS: Record<string, CrudConfig> = {
   users: { filePath: `${MINIS_ROOT}/Admin/Users.json`, itemsKey: 'items', typeValue: 'users', lookupKey: 'id' },
-  devicedefs: { filePath: `${MINIS_ROOT}/Admin/DeviceDefList.json`, itemsKey: 'deviceDefs', typeValue: 'device_defs', lookupKey: 'id' },
-  moduledefs: { filePath: `${MINIS_ROOT}/Admin/ModuleDefList.json`, itemsKey: 'moduleDefs', typeValue: 'module_defs', lookupKey: 'id' },
-  projectdefs: { filePath: `${MINIS_ROOT}/Admin/ProjectDefList.json`, itemsKey: 'projectDefs', typeValue: 'project_defs', lookupKey: 'id' },
 };
 
 export class MycastleHttpServer extends HttpUploadServer {
@@ -169,6 +166,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Next available serial number: GET /api/next-sn
+    if (method === 'GET' && apiPath === '/next-sn') {
+      await this.handleNextSn(res);
+      return;
+    }
+
     // Admin routes require isAdmin
     if (apiPath.startsWith('/admin/') && !user.isAdmin) {
       this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
@@ -195,6 +198,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       const body = await this.parseRequestBody(req);
       const result = await this.rpcRouter.dispatch(methodName, body, { user });
       this.sendJsonResponse(res, result.statusCode, result.body);
+      return;
+    }
+
+    // GitHub Import: /admin/github-projectdefs[/import]
+    if (apiPath.startsWith('/admin/github-projectdefs')) {
+      await this.handleGithubProjectdefs(req, res, method, apiPath);
       return;
     }
 
@@ -333,6 +342,34 @@ export class MycastleHttpServer extends HttpUploadServer {
       const userName = decodeURIComponent(userDevicesMatch[1]);
       const deviceName = userDevicesMatch[2] ? decodeURIComponent(userDevicesMatch[2]) : undefined;
       await this.handleUserDevices(req, res, method, userName, deviceName);
+      return;
+    }
+
+
+    // User device defs: /users/{userName}/devicedefs[/{id}]
+    const userDeviceDefsMatch = apiPath.match(/^\/users\/([^/]+)\/devicedefs(?:\/([^/]+))?$/);
+    if (userDeviceDefsMatch) {
+      const userName = decodeURIComponent(userDeviceDefsMatch[1]);
+      const defId = userDeviceDefsMatch[2] ? decodeURIComponent(userDeviceDefsMatch[2]) : undefined;
+      await this.handleUserDeviceDefs(req, res, method, userName, defId);
+      return;
+    }
+
+    // Clone arduino project from GitHub: POST /users/{userName}/project-arduino/{projectName}/clone-from-github
+    const cloneMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/clone-from-github$/);
+    if (cloneMatch && method === 'POST') {
+      const userName = decodeURIComponent(cloneMatch[1]);
+      const projectName = decodeURIComponent(cloneMatch[2]);
+      await this.handleProjectCloneFromGithub(req, res, userName, projectName);
+      return;
+    }
+
+    // Sync arduino project from GitHub: POST /users/{userName}/project-arduino/{projectName}/sync-from-github
+    const syncMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/sync-from-github$/);
+    if (syncMatch && method === 'POST') {
+      const userName = decodeURIComponent(syncMatch[1]);
+      const projectName = decodeURIComponent(syncMatch[2]);
+      await this.handleProjectSyncFromGithub(res, userName, projectName);
       return;
     }
 
@@ -542,7 +579,7 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; serialNumber?: string };
+    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; deviceName?: string };
     if (!body.sketchName || !body.fqbn) {
       this.sendJsonResponse(res, 400, { error: 'sketchName and fqbn are required' });
       return;
@@ -554,27 +591,35 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
 
     let minisConfig: MinisConfig | undefined;
-    if (body.serialNumber) {
-      minisConfig = await this.resolveMinisConfig(userName, body.serialNumber);
+    if (body.deviceName) {
+      minisConfig = await this.resolveMinisConfig(userName, body.deviceName);
     }
 
+    // Read libraries from project record
+    let libraries: Array<{ name: string; version?: string; url?: string }> | undefined;
     try {
-      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn, minisConfig);
-      if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success, projectId });
+      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; libraries?: Array<{ name: string; version?: string; url?: string }> }> };
+      const projectEntry = (projectData?.projects ?? []).find(p => p.id === projectId);
+      if (projectEntry?.libraries?.length) libraries = projectEntry.libraries;
+    } catch { /* ignore */ }
+
+    try {
+      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn, minisConfig, libraries);
+      if (body.deviceName && minisConfig?.serialNumber) {
+        await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success, projectId, sketchName: body.sketchName });
       }
       this.sendJsonResponse(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Compilation failed';
-      if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false, projectId });
+      if (body.deviceName && minisConfig?.serialNumber) {
+        await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false, projectId, sketchName: body.sketchName });
       }
       this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
   }
 
-  private async resolveMinisConfig(userName: string, serialNumber: string): Promise<MinisConfig> {
-    interface ArchNode { id: string; data: { nodeType: string; serialNumber: string; wifiSsid: string; wifiPassword: string } }
+  private async resolveMinisConfig(userName: string, deviceName: string): Promise<MinisConfig> {
+    interface ArchNode { id: string; data: { nodeType: string; deviceName: string; wifiSsid: string; wifiPassword: string } }
     interface ArchEdge { source: string; target: string }
     interface Arch { nodes: ArchNode[]; edges: ArchEdge[] }
 
@@ -582,15 +627,14 @@ export class MycastleHttpServer extends HttpUploadServer {
     const nodes: ArchNode[] = Array.isArray(arch?.nodes) ? arch.nodes : [];
     const edges: ArchEdge[] = Array.isArray(arch?.edges) ? arch.edges : [];
 
-    const node = nodes.find(n => n.data?.serialNumber === serialNumber);
+    const node = nodes.find(n => n.data?.deviceName === deviceName);
     if (!node) {
-      console.warn(`[resolveMinisConfig] No architecture node found for SN="${serialNumber}". WiFi credentials will be empty. Check that the node serialNumber in Electronics matches the device SN in Device.json.`);
+      console.warn(`[resolveMinisConfig] No architecture node found for device="${deviceName}". WiFi credentials will be empty.`);
     }
     let wifiSsid = node?.data?.wifiSsid ?? '';
     let wifiPassword = node?.data?.wifiPassword ?? '';
 
     // If the node is not a wifi-switch itself, look for a connected wifi-switch parent.
-    // Edge direction: device (source) → wifi-switch (target)
     if (node && node.data?.nodeType !== 'wifi-switch' && (!wifiSsid)) {
       const parentEdge = edges.find(e => e.source === node.id);
       if (parentEdge) {
@@ -601,6 +645,14 @@ export class MycastleHttpServer extends HttpUploadServer {
         }
       }
     }
+
+    // Resolve SN from device list
+    let serialNumber = '';
+    try {
+      const deviceData = await this.readJsonFile(`Minis/Users/${userName}/Device.json`) as { items?: Array<{ name: string; sn?: string }> };
+      const device = (deviceData?.items ?? []).find(d => d.name === deviceName);
+      serialNumber = device?.sn ?? '';
+    } catch { /* ignore */ }
 
     return {
       serialNumber,
@@ -628,13 +680,13 @@ export class MycastleHttpServer extends HttpUploadServer {
     try {
       const result = await this.arduinoService.upload(userName, projectId, body.sketchName, body.fqbn, body.port);
       if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success });
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success, sketchName: body.sketchName });
       }
       this.sendJsonResponse(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Upload failed';
       if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false });
+        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false, sketchName: body.sketchName });
       }
       this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
@@ -1020,6 +1072,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       if (duplicate) { this.sendJsonResponse(res, 409, { error: `Name '${body.name}' already exists` }); return; }
     }
 
+    // SN uniqueness check (global across all users)
+    if (config.itemsKey === 'devices' && body.sn && typeof body.sn === 'string' && body.sn !== '') {
+      const snExists = await this.isSnUsed(body.sn as string);
+      if (snExists) { this.sendJsonResponse(res, 409, { error: `Serial number '${body.sn}' is already in use` }); return; }
+    }
+
     body.id = body.id || randomUUID();
 
     // Hash password for user creation
@@ -1030,7 +1088,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     // Set type field based on resource
     const TYPE_MAP: Record<string, string> = {
       items: 'user', deviceDefs: 'device_def', moduleDefs: 'module_def',
-      projectDefs: 'project_def', devices: 'device', projects: 'minis_project',
+      devices: 'device', projects: 'minis_project',
     };
     if (TYPE_MAP[config.itemsKey]) body.type = TYPE_MAP[config.itemsKey];
 
@@ -1045,20 +1103,7 @@ export class MycastleHttpServer extends HttpUploadServer {
       await this.writeJsonFile(`${userDir}/.gitkeep`, '');
     }
 
-    // Copy project source files from definition when creating a user project
-    if (config.itemsKey === 'projects' && body.projectDefId) {
-      const userDir = path.dirname(config.filePath);
-      const srcPath = `${MINIS_ROOT}/Admin/ProjectsDefs/${body.projectDefId}`;
-      const dstPath = `${userDir}/Projects/${body.id}`;
-      try {
-        const srcTree = await this.fileSystem.listDirectory(srcPath);
-        await this.copyTree(srcTree, srcPath, dstPath);
-      } catch {
-        // Source doesn't exist — no files to copy, directory not needed
-      }
-    }
-
-    const { password, ...safeBody } = body;
+const { password, ...safeBody } = body;
     this.sendJsonResponse(res, 201, config.itemsKey === 'items' ? safeBody : body);
   }
 
@@ -1080,6 +1125,15 @@ export class MycastleHttpServer extends HttpUploadServer {
       // Check uniqueness (exclude current item)
       const duplicate = items.find((item, i) => i !== index && item.name === body.name);
       if (duplicate) { this.sendJsonResponse(res, 409, { error: `Name '${body.name}' already exists` }); return; }
+    }
+
+    // SN uniqueness check (global across all users, skip if unchanged)
+    if (config.itemsKey === 'devices' && body.sn && typeof body.sn === 'string' && body.sn !== '') {
+      const currentSn = (items[index]['sn'] as string) ?? '';
+      if (body.sn !== currentSn) {
+        const snExists = await this.isSnUsed(body.sn as string);
+        if (snExists) { this.sendJsonResponse(res, 409, { error: `Serial number '${body.sn}' is already in use` }); return; }
+      }
     }
 
     // Hash password on user update
@@ -1108,29 +1162,17 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    const deletedItem = items[index];
     items.splice(index, 1);
     data[config.itemsKey] = items;
     await this.writeJsonFile(config.filePath, data);
 
-    // Delete associated directory if it exists
-    const sourcesConfig = MycastleHttpServer.SOURCES_CONFIG[
-      config.itemsKey === 'deviceDefs' ? 'devicedefs' :
-      config.itemsKey === 'moduleDefs' ? 'moduledefs' :
-      config.itemsKey === 'projectDefs' ? 'projectdefs' : ''
-    ];
-    if (sourcesConfig) {
-      const dirPath = `${sourcesConfig.destDir}/${id}`;
-      try {
-        await this.fileSystem.deleteDirectory(dirPath);
-      } catch {
-        // Directory may not exist
-      }
-    }
-
     // Delete user project source files directory
     if (config.itemsKey === 'projects') {
       const userDir = path.dirname(config.filePath);
-      const projectDir = `${userDir}/Projects/${id}`;
+      const projectId = (deletedItem as Record<string, unknown>).id as string | undefined;
+      const dirName = projectId ?? id;
+      const projectDir = `${userDir}/Projects/${dirName}`;
       try {
         await this.fileSystem.deleteDirectory(projectDir);
       } catch {
@@ -1263,8 +1305,21 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 404, { error: 'Project not found' });
       return;
     }
+
+    // Read uPython libraries from project record
+    let upythonLibraries: Array<{ url: string; remoteName: string }> | undefined;
     try {
-      const result = await this.upythonService.deploy(userName, projectId, body.port);
+      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; libraries?: Array<{ url: string; remoteName?: string; name?: string }> }> };
+      const projectEntry = (projectData?.projects ?? []).find(p => p.id === projectId);
+      if (projectEntry?.libraries?.length) {
+        upythonLibraries = projectEntry.libraries
+          .filter(l => l.url)
+          .map(l => ({ url: l.url, remoteName: l.remoteName ?? (l.url.split('/').pop() ?? l.name ?? 'lib.py') }));
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const result = await this.upythonService.deploy(userName, projectId, body.port, upythonLibraries);
       if (body.serialNumber) {
         await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'micropython', success: result.success });
       }
@@ -1280,7 +1335,7 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   // --- User Devices ---
 
-  private async saveDeviceLastBuild(userName: string, serialNumber: string, build: { platform: string; fqbn?: string; version?: string; success: boolean; projectId?: string }): Promise<void> {
+  private async saveDeviceLastBuild(userName: string, serialNumber: string, build: { platform: string; fqbn?: string; version?: string; success: boolean; projectId?: string; sketchName?: string }): Promise<void> {
     try {
       const filePath = `${MINIS_ROOT}/Users/${userName}/Device.json`;
       const data = await this.readJsonFile(filePath) as Record<string, unknown>;
@@ -1291,6 +1346,36 @@ export class MycastleHttpServer extends HttpUploadServer {
       data['devices'] = devices;
       await this.writeJsonFile(filePath, data);
     } catch { /* non-critical */ }
+  }
+
+  private async isSnUsed(sn: string): Promise<boolean> {
+    let users: Array<{ name: string }> = [];
+    try {
+      const usersData = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`) as Record<string, unknown>;
+      users = (usersData['items'] || []) as Array<{ name: string }>;
+    } catch { return false; }
+    for (const user of users) {
+      try {
+        const deviceData = await this.readJsonFile(`${MINIS_ROOT}/Users/${user.name}/Device.json`) as Record<string, unknown>;
+        const devices = (deviceData['devices'] || []) as Array<{ sn?: string }>;
+        if (devices.some((d) => d.sn === sn)) return true;
+      } catch { /* skip missing */ }
+    }
+    return false;
+  }
+
+  private async handleNextSn(res: ServerResponse): Promise<void> {
+    const filePath = `${MINIS_ROOT}/Admin/snCounter.json`;
+    let counter: { lastSn: number };
+    try {
+      const raw = await this.readJsonFile(filePath) as { lastSn: number };
+      counter = typeof raw?.lastSn === 'number' ? raw : { lastSn: 1000 };
+    } catch {
+      counter = { lastSn: 1000 };
+    }
+    counter.lastSn += 1;
+    await this.writeJsonFile(filePath, counter);
+    this.sendJsonResponse(res, 200, { sn: String(counter.lastSn) });
   }
 
   private async userExistsByName(name: string): Promise<boolean> {
@@ -1380,27 +1465,24 @@ export class MycastleHttpServer extends HttpUploadServer {
     await this.handleCrud(req, res, method, config, projectName);
   }
 
-  private async copyTree(tree: { name: string; type: string; path: string; children?: any[] }, srcBase: string, dstBase: string): Promise<void> {
-    if (tree.type === 'file') {
-      const fileData = await this.fileSystem.readFile(tree.path);
-      const relativePath = tree.path.substring(srcBase.length);
-      await this.fileSystem.writeFile(`${dstBase}${relativePath}`, fileData.content);
+  private async handleUserDeviceDefs(req: IncomingMessage, res: ServerResponse, method: string, userName: string, defId?: string): Promise<void> {
+    if (!await this.userExistsByName(userName)) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
       return;
     }
-    if (tree.children) {
-      for (const child of tree.children) {
-        await this.copyTree(child, srcBase, dstBase);
-      }
-    }
+
+    const config: CrudConfig = {
+      filePath: `${MINIS_ROOT}/Users/${userName}/DeviceDefList.json`,
+      itemsKey: 'deviceDefs',
+      typeValue: 'device_defs',
+      lookupKey: 'id',
+    };
+    await this.handleCrud(req, res, method, config, defId);
   }
 
   // --- Def Sources Upload ---
 
-  private static readonly SOURCES_CONFIG: Record<string, { listFile: string; itemsKey: string; destDir: string }> = {
-    devicedefs: { listFile: `${MINIS_ROOT}/Admin/DeviceDefList.json`, itemsKey: 'deviceDefs', destDir: `${MINIS_ROOT}/Admin/DeviceDefs` },
-    moduledefs: { listFile: `${MINIS_ROOT}/Admin/ModuleDefList.json`, itemsKey: 'moduleDefs', destDir: `${MINIS_ROOT}/Admin/ModuleDefs` },
-    projectdefs: { listFile: `${MINIS_ROOT}/Admin/ProjectDefList.json`, itemsKey: 'projectDefs', destDir: `${MINIS_ROOT}/Admin/ProjectsDefs` },
-  };
+  private static readonly SOURCES_CONFIG: Record<string, { listFile: string; itemsKey: string; destDir: string }> = {};
 
   private async handleUploadDefSources(req: IncomingMessage, res: ServerResponse, resource: string, defId: string): Promise<void> {
     try {
@@ -1899,5 +1981,155 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   private errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : 'Internal server error';
+  }
+
+  // --- GitHub Import ---
+
+  private githubRawBase(repoUrl: string): string | null {
+    const m = repoUrl.match(/github\.com\/([^/]+)\/([^/\s]+?)(?:\.git)?(?:\/|$)/);
+    if (!m) return null;
+    return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main`;
+  }
+
+  private async fetchJson(url: string): Promise<unknown> {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
+    return r.json();
+  }
+
+  private async fetchText(url: string): Promise<string> {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
+    return r.text();
+  }
+
+  private async handleProjectCloneFromGithub(
+    req: IncomingMessage, res: ServerResponse, userName: string, projectName: string,
+  ): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+
+    const body = await this.parseRequestBody(req) as {
+      githubRepoUrl?: string;
+      sketches?: Array<{ name: string; files: string[] }>;
+      readmePath?: string | null;
+    };
+    const { githubRepoUrl, sketches, readmePath } = body;
+    if (!githubRepoUrl) {
+      this.sendJsonResponse(res, 400, { error: 'githubRepoUrl is required' });
+      return;
+    }
+
+    const rawBase = this.githubRawBase(githubRepoUrl);
+    if (!rawBase) { this.sendJsonResponse(res, 400, { error: 'Invalid GitHub URL' }); return; }
+
+    const projectDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId);
+
+    try {
+      // Download sketch files: src/{id}/src/{sketchName}/{file} → sketches/{sketchName}/{file}
+      for (const sketch of sketches ?? []) {
+        for (const filePath of sketch.files) {
+          const rel = filePath.replace(/^src\/[^/]+\/(?:src|sketches)\//, ''); // strip "src/{id}/src/" or "src/{id}/sketches/"
+          if (!rel || rel.includes('..')) continue;
+          const content = await this.fetchText(`${rawBase}/${filePath}`);
+          const dest = path.join(projectDir, 'sketches', rel);
+          await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+          await fs.promises.writeFile(dest, content, 'utf-8');
+        }
+      }
+
+      // Download README
+      if (readmePath) {
+        const content = await this.fetchText(`${rawBase}/${readmePath}`);
+        const dest = path.join(projectDir, 'README.md');
+        await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+        await fs.promises.writeFile(dest, content, 'utf-8');
+      }
+
+      this.sendJsonResponse(res, 200, { ok: true });
+    } catch (err) {
+      this.sendJsonResponse(res, 502, { error: `Clone failed: ${this.errorMessage(err)}` });
+    }
+  }
+
+  private async handleProjectSyncFromGithub(res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
+      const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
+      const project = projects.find(p => p.id === projectId);
+      if (!project) { this.sendJsonResponse(res, 404, { error: 'Project not found in Project.json' }); return; }
+
+      const githubRepoUrl = project.githubRepoUrl as string | undefined;
+      const githubProjectId = project.githubProjectId as string | undefined;
+      if (!githubRepoUrl || !githubProjectId) {
+        this.sendJsonResponse(res, 400, { error: 'Project has no githubRepoUrl or githubProjectId' });
+        return;
+      }
+
+      const rawBase = this.githubRawBase(githubRepoUrl);
+      if (!rawBase) { this.sendJsonResponse(res, 400, { error: 'Invalid GitHub URL' }); return; }
+
+      // Fetch current index.json from GitHub to get latest sketches + readmePath
+      const index = await this.fetchJson(`${rawBase}/index.json`) as { projects?: Array<Record<string, unknown>> };
+      const entry = (index.projects ?? []).find(p => p.id === githubProjectId);
+      if (!entry) { this.sendJsonResponse(res, 404, { error: `Project '${githubProjectId}' not found in GitHub index` }); return; }
+
+      const sketches = (entry.sketches ?? []) as Array<{ name: string; files: string[] }>;
+      const readmePath = (entry.readmePath ?? null) as string | null;
+      const libraries = (entry.libraries ?? []) as Array<{ name: string; version: string }>;
+
+      const projectDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId);
+
+      for (const sketch of sketches) {
+        for (const filePath of sketch.files) {
+          const rel = filePath.replace(/^src\/[^/]+\/(?:src|sketches)\//, '');
+          if (!rel || rel.includes('..')) continue;
+          const content = await this.fetchText(`${rawBase}/${filePath}`);
+          const dest = path.join(projectDir, 'sketches', rel);
+          await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+          await fs.promises.writeFile(dest, content, 'utf-8');
+        }
+      }
+
+      if (readmePath) {
+        const content = await this.fetchText(`${rawBase}/${readmePath}`);
+        const dest = path.join(projectDir, 'README.md');
+        await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+        await fs.promises.writeFile(dest, content, 'utf-8');
+      }
+
+      // Update libraries in Project.json from index
+      if (libraries.length > 0) {
+        project.libraries = libraries;
+        await this.writeJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`, data);
+      }
+
+      this.sendJsonResponse(res, 200, { ok: true, sketchCount: sketches.length, hasReadme: !!readmePath });
+    } catch (err) {
+      this.sendJsonResponse(res, 502, { error: `Sync failed: ${this.errorMessage(err)}` });
+    }
+  }
+
+  private async handleGithubProjectdefs(req: IncomingMessage, res: ServerResponse, method: string, apiPath: string): Promise<void> {
+    // GET /admin/github-projectdefs?url=...  → fetch index.json and return projects + modules
+    if (method === 'GET' && apiPath === '/admin/github-projectdefs') {
+      const reqUrl = new URL(`http://dummy${req.url}`);
+      const repoUrl = reqUrl.searchParams.get('url');
+      if (!repoUrl) { this.sendJsonResponse(res, 400, { error: 'url parameter required' }); return; }
+      const rawBase = this.githubRawBase(repoUrl);
+      if (!rawBase) { this.sendJsonResponse(res, 400, { error: 'Invalid GitHub URL' }); return; }
+      try {
+        const index = await this.fetchJson(`${rawBase}/index.json`) as Record<string, unknown>;
+        this.sendJsonResponse(res, 200, { ...index, rawBase });
+      } catch (err) {
+        this.sendJsonResponse(res, 502, { error: `Failed to fetch index: ${this.errorMessage(err)}` });
+      }
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
   }
 }

@@ -2,9 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect, ReactNode 
 import { useMqtt } from '../mqttclient';
 import {
   MemoryDataSource,
-  type MinisModuleDefsModel,
   type MinisDeviceDefsModel,
-  type MinisProjectDefsModel,
 } from '@mhersztowski/core';
 
 interface MinisDataSourceContextValue {
@@ -24,9 +22,7 @@ interface MinisDataSourceProviderProps {
 }
 
 const DATA_FILES: Record<string, (ds: MemoryDataSource, data: unknown) => void> = {
-  'admin/ModuleDefList.json': (ds, data) => ds.loadMinisModuleDefs(data as MinisModuleDefsModel),
-  'admin/DeviceDefList.json': (ds, data) => ds.loadMinisDeviceDefs(data as MinisDeviceDefsModel),
-  'admin/ProjectDefList.json': (ds, data) => ds.loadMinisProjectDefs(data as MinisProjectDefsModel),
+  'DeviceDefList.json': (ds, data) => ds.loadMinisDeviceDefs(data as MinisDeviceDefsModel),
 };
 
 export function MinisDataSourceProvider({ children }: MinisDataSourceProviderProps) {

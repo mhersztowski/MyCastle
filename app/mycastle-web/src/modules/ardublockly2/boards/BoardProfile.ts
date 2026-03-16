@@ -356,8 +356,7 @@ boardProfiles.esp32s3_devkitc = {
 boardProfiles.esp32s3_pico = {
   name: 'ESP32-S3 Pico',
   description: 'ESP32-S3 Pico board (8MB Flash, 2MB OPI PSRAM, native USB)',
-  // PSRAM=opi is critical for ESP32-S3R2 — omitting it causes boot crash
-  compilerFlag: 'esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=8M,FlashMode=qio,PSRAM=opi',
+  compilerFlag: 'esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PSRAM=opi',
   flashConfig: { filePattern: '{sketch}.ino.merged.bin', offset: 0x0000 },
   analogPins: [
     ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],

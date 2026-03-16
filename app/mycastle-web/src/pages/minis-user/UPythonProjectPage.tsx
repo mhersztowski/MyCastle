@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   ButtonGroup,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -31,6 +32,7 @@ import {
   Edit as EditIcon,
   Extension,
   FolderOpen,
+  Refresh,
   Save,
   Settings,
   Terminal as TerminalIcon,
@@ -46,7 +48,6 @@ import {
   UPythonBlocklyComponent,
   type UPythonBlocklyService,
   boardProfiles,
-  socToUPythonBoardKey,
 } from '@modules/upythonblockly';
 import { MpyReplTerminal } from '@modules/upythonblockly/repl';
 import { UploadDialog } from '@modules/upythonblockly/upload';
@@ -79,6 +80,7 @@ function UPythonProjectPage() {
   const [replOpen, setReplOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
   const [sketchesOpen, setSketchesOpen] = useState(true);
@@ -88,7 +90,9 @@ function UPythonProjectPage() {
   const [readmeEditValue, setReadmeEditValue] = useState('');
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
+  const initialSketch = searchParams.get('sketch');
   const [uploadCode, setUploadCode] = useState('');
+  const [projectLibraries, setProjectLibraries] = useState<Array<{ url: string; remoteName: string }>>([]);
 
   // Keep ref in sync for use inside Blockly listener
   useEffect(() => {
@@ -160,38 +164,45 @@ function UPythonProjectPage() {
     return () => clearTimeout(timer);
   }, [viewMode, splitRatio, configOpen, sketchesOpen]);
 
-  // Resolve board from ProjectDef → ModuleDef → soc
+  // Resolve board from project.boardProfileKey
   useEffect(() => {
     if (!userName || !projectId) return;
     (async () => {
       try {
-        const [projects, projectDefs, moduleDefs] = await Promise.all([
-          minisApi.getUserProjects(userName),
-          minisApi.getProjectDefs(),
-          minisApi.getModuleDefs(),
-        ]);
+        const projects = await minisApi.getUserProjects(userName);
         const project = projects.find((p) => p.id === projectId);
         if (!project) return;
-        const projectDef = projectDefs.find((d) => d.id === project.projectDefId);
-        if (!projectDef) return;
-        const moduleDef = moduleDefs.find((m) => m.id === projectDef.moduleDefId);
-        if (!moduleDef?.soc) return;
-        const boardKey = socToUPythonBoardKey[moduleDef.soc];
+        const boardKey = project.boardProfileKey;
         if (boardKey && boardProfiles[boardKey]) {
           setBoard(boardKey);
           serviceRef.current?.changeBoard(boardKey);
+        }
+        const libs = (project as unknown as Record<string, unknown>).libraries as Array<{ url?: string; remoteName?: string; name?: string }> | undefined;
+        if (libs?.length) {
+          setProjectLibraries(
+            libs.filter(l => l.url).map(l => ({
+              url: l.url!,
+              remoteName: l.remoteName ?? (l.url!.split('/').pop() ?? l.name ?? 'lib.py'),
+            }))
+          );
         }
       } catch { /* ignore */ }
     })();
   }, [userName, projectId]);
 
-  // Load sketches list
+  // Load sketches list, auto-open sketch from URL param or first
   useEffect(() => {
     if (!userName || !projectId) return;
     minisApi.listSketches(userName, projectId)
-      .then(setSketches)
+      .then((list) => {
+        setSketches(list);
+        if (list.length > 0) {
+          const target = initialSketch && list.includes(initialSketch) ? initialSketch : list[0];
+          handleLoadSketch(target);
+        }
+      })
       .catch(() => setSketches([]));
-  }, [userName, projectId]);
+  }, [userName, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load README
   useEffect(() => {
@@ -381,6 +392,32 @@ function UPythonProjectPage() {
           >
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sketches{currentSketch ? `: ${currentSketch}` : ''}</Box>
           </Button>
+
+          <Tooltip title="Sync sketches from GitHub">
+            <span>
+              <Button
+                size="small" variant="outlined" color="inherit"
+                startIcon={syncing ? <CircularProgress size={14} color="inherit" /> : <Refresh />}
+                onClick={async () => {
+                  if (!userName || !projectId) return;
+                  setSyncing(true);
+                  try {
+                    await minisApi.syncProjectFromGithub(userName, projectId);
+                    const list = await minisApi.listSketches(userName, projectId);
+                    setSketches(list);
+                  } catch (err) {
+                    console.error('Sync failed:', err);
+                  } finally {
+                    setSyncing(false);
+                  }
+                }}
+                disabled={syncing}
+                sx={{ ml: 1, ...btnSx(false) }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sync</Box>
+              </Button>
+            </span>
+          </Tooltip>
 
           <Button
             size="small" variant="outlined" color="inherit"
@@ -692,6 +729,7 @@ function UPythonProjectPage() {
         board={board}
         projectId={projectId}
         deviceName={selectedDeviceName || undefined}
+        libraries={projectLibraries}
       />
 
       {/* Confirm overwrite dialog */}

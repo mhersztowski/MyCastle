@@ -70,8 +70,9 @@ function LocFormFields({ form, devices, onChange, showDevice = true }: LocFormFi
         <TextField
           fullWidth select label="Device" value={form.device}
           onChange={(e) => {
-            const device = e.target.value;
-            onChange({ ...form, device, name: form.name || device });
+            const deviceId = e.target.value;
+            const deviceName = devices.find((d) => d.id === deviceId)?.name ?? '';
+            onChange({ ...form, device: deviceId, name: form.name || deviceName });
           }}
           sx={{ mt: 1, mb: 2 }}
           InputLabelProps={{ shrink: true }}
@@ -79,7 +80,7 @@ function LocFormFields({ form, devices, onChange, showDevice = true }: LocFormFi
         >
           <option value=""></option>
           {devices.map((d) => (
-            <option key={d.name} value={d.name}>{d.name}</option>
+            <option key={d.id} value={d.id}>{d.name}</option>
           ))}
         </TextField>
       )}
@@ -177,7 +178,8 @@ function LocalizationPage() {
       const created = await minisApi.createLocalization(userName, buildModel(addForm));
       // assign localizationId to the device
       if (addForm.device) {
-        await minisApi.updateUserDevice(userName, addForm.device, { localizationId: created.id });
+        const devName = devices.find((d) => d.id === addForm.device)?.name;
+        if (devName) await minisApi.updateUserDevice(userName, devName, { localizationId: created.id });
       }
       setAddOpen(false);
       load();
@@ -201,10 +203,12 @@ function LocalizationPage() {
       // if device changed, update old device to remove localizationId and new device to set it
       if (editForm.device !== editLoc.device) {
         if (editLoc.device) {
-          await minisApi.updateUserDevice(userName, editLoc.device, { localizationId: undefined });
+          const oldName = devices.find((d) => d.id === editLoc.device)?.name;
+          if (oldName) await minisApi.updateUserDevice(userName, oldName, { localizationId: undefined });
         }
         if (editForm.device) {
-          await minisApi.updateUserDevice(userName, editForm.device, { localizationId: editLoc.id });
+          const newName = devices.find((d) => d.id === editForm.device)?.name;
+          if (newName) await minisApi.updateUserDevice(userName, newName, { localizationId: editLoc.id });
         }
       }
       await minisApi.updateLocalization(userName, editLoc.id, updated);
@@ -224,7 +228,8 @@ function LocalizationPage() {
       const loc = localizations.find((l) => l.id === deleteId);
       // remove localizationId from the device it was attached to
       if (loc?.device) {
-        await minisApi.updateUserDevice(userName, loc.device, { localizationId: undefined });
+        const devName = devices.find((d) => d.id === loc.device)?.name;
+        if (devName) await minisApi.updateUserDevice(userName, devName, { localizationId: undefined });
       }
       await minisApi.deleteLocalization(userName, deleteId);
       setDeleteId(null);
@@ -236,11 +241,11 @@ function LocalizationPage() {
     }
   };
 
-  const getDeviceName = (deviceId: string) => devices.find((d) => d.name === deviceId)?.name ?? deviceId;
+  const getDeviceName = (deviceId: string) => devices.find((d) => d.id === deviceId)?.name ?? deviceId;
 
   const buildAiContext = () => {
     return localizations.map((loc) => {
-      const dev = devices.find((d) => d.name === loc.device);
+      const dev = devices.find((d) => d.id === loc.device);
       const lines = [
         `ID: ${loc.id}`,
         `Name: ${loc.name}`,
@@ -428,7 +433,7 @@ function LocalizationPage() {
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         {getDeviceName(loc.device)}
                         {(() => {
-                          const dev = devices.find((d) => d.name === loc.device);
+                          const dev = devices.find((d) => d.id === loc.device);
                           return dev?.description ? (
                             <IconButton size="small"
                               onClick={(e) => { e.stopPropagation(); setDescText(dev.description!); setDescAnchor(e.currentTarget); }}

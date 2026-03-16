@@ -76,38 +76,24 @@ describe('MinisApiService', () => {
   });
 
   describe('DeviceDefs CRUD', () => {
-    it('getDeviceDefs extracts items', async () => {
+    it('getDeviceDefs extracts items for user', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 'dd1', name: 'Light' }] }));
-      const defs = await minisApi.getDeviceDefs();
+      const defs = await minisApi.getDeviceDefs('u1');
       expect(defs[0].name).toBe('Light');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/devicedefs');
     });
 
-    it('createDeviceDef sends POST', async () => {
+    it('createDeviceDef sends POST for user', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'dd2', name: 'Motor' }));
-      const def = await minisApi.createDeviceDef({ name: 'Motor', modules: [] } as any);
+      const def = await minisApi.createDeviceDef('u1', { name: 'Motor', modules: [] } as any);
       expect(def.name).toBe('Motor');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/devicedefs');
     });
 
-    it('deleteDeviceDef sends DELETE', async () => {
+    it('deleteDeviceDef sends DELETE for user', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }));
-      await minisApi.deleteDeviceDef('dd1');
-      expect(mockFetch.mock.calls[0][0]).toContain('/admin/devicedefs/dd1');
-    });
-  });
-
-  describe('ModuleDefs CRUD', () => {
-    it('getModuleDefs extracts items', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 'md1', name: 'WiFi' }] }));
-      const defs = await minisApi.getModuleDefs();
-      expect(defs[0].name).toBe('WiFi');
-    });
-  });
-
-  describe('ProjectDefs CRUD', () => {
-    it('getProjectDefs extracts items', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ items: [{ id: 'pd1', name: 'Blinky' }] }));
-      const defs = await minisApi.getProjectDefs();
-      expect(defs[0].name).toBe('Blinky');
+      await minisApi.deleteDeviceDef('u1', 'dd1');
+      expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/devicedefs/dd1');
     });
   });
 
@@ -140,11 +126,11 @@ describe('MinisApiService', () => {
       expect(projects[0].name).toBe('Proj');
     });
 
-    it('createUserProject sends POST with name and projectDefId', async () => {
+    it('createUserProject sends POST with name and githubProjectId', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'p2', name: 'NewProj' }));
-      await minisApi.createUserProject('u1', { name: 'NewProj', projectDefId: 'pd1' });
+      await minisApi.createUserProject('u1', { name: 'NewProj', githubProjectId: 'Esp32AudioPlayer', softwarePlatform: 'Arduino' });
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.projectDefId).toBe('pd1');
+      expect(body.githubProjectId).toBe('Esp32AudioPlayer');
       expect(body.name).toBe('NewProj');
     });
 
@@ -152,17 +138,6 @@ describe('MinisApiService', () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }));
       await minisApi.deleteUserProject('u1', 'p1');
       expect(mockFetch.mock.calls[0][0]).toContain('/users/u1/projects/p1');
-    });
-  });
-
-  describe('uploadDefSources', () => {
-    it('sends file with Content-Type: application/zip', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, filesExtracted: 3 }));
-      const file = new File(['zipdata'], 'test.zip', { type: 'application/zip' });
-      const result = await minisApi.uploadDefSources('projectdefs', 'pd1', file);
-      expect(result.success).toBe(true);
-      expect(mockFetch.mock.calls[0][0]).toContain('/admin/projectdefs/pd1/sources');
-      expect(mockFetch.mock.calls[0][1].headers['Content-Type']).toBe('application/zip');
     });
   });
 

@@ -5,14 +5,12 @@ export class MinisModuleDefNode extends NodeBase<MinisModuleDefModel> {
   readonly type = 'module_def' as const;
   id: string;
   name: string;
-  soc: string;
   isProgrammable: boolean;
 
   constructor(model: MinisModuleDefModel) {
     super();
     this.id = model.id;
     this.name = model.name;
-    this.soc = model.soc;
     this.isProgrammable = model.isProgrammable;
   }
 
@@ -24,11 +22,7 @@ export class MinisModuleDefNode extends NodeBase<MinisModuleDefModel> {
   }
 
   matches(query: string): boolean {
-    const q = query.toLowerCase();
-    return (
-      this.name.toLowerCase().includes(q) ||
-      this.soc.toLowerCase().includes(q)
-    );
+    return this.name.toLowerCase().includes(query.toLowerCase());
   }
 
   toModel(): MinisModuleDefModel {
@@ -36,7 +30,6 @@ export class MinisModuleDefNode extends NodeBase<MinisModuleDefModel> {
       type: 'module_def',
       id: this.id,
       name: this.name,
-      soc: this.soc,
       isProgrammable: this.isProgrammable,
     };
   }

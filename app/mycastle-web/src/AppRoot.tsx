@@ -45,7 +45,7 @@ import ShoppingPage from './pages/shopping/ShoppingPage';
 
 // Layout pages — minis
 import HomePage from './pages/HomePage';
-import { AdminDashboardPage, UsersPage, DevicesDefPage, ModulesDefPage, ProjectDefsPage, ScriptsPage } from './pages/admin';
+import { AdminDashboardPage, UsersPage, ScriptsPage, GithubProjectDefsPage } from './pages/admin';
 import {
   UserDashboardPage,
   UserDevicesPage,
@@ -63,6 +63,7 @@ import {
   TestVfsPage,
   DocsPage,
   LocalizationPage,
+  DevicesDefPage,
 } from './pages/minis-user';
 
 import { useAuth } from './modules/auth';
@@ -138,16 +139,15 @@ function AppRoot() {
                   {/* Minis admin */}
                   <Route path="/admin/:userName/main" element={<AdminDashboardPage />} />
                   <Route path="/admin/:userName/users" element={<UsersPage />} />
-                  <Route path="/admin/:userName/devicesdefs" element={<DevicesDefPage />} />
-                  <Route path="/admin/:userName/modulesdefs" element={<ModulesDefPage />} />
-                  <Route path="/admin/:userName/projectdefs" element={<ProjectDefsPage />} />
-                  <Route path="/admin/:userName/scripts" element={<ScriptsPage />} />
+<Route path="/admin/:userName/scripts" element={<ScriptsPage />} />
+                  <Route path="/admin/:userName/github-projectdefs" element={<GithubProjectDefsPage />} />
 
 
                   {/* Minis user */}
                   <Route path="/user/:userName/main" element={<UserDashboardPage />} />
                   <Route path="/user/:userName/localization" element={<LocalizationPage />} />
                   <Route path="/user/:userName/electronics/devices" element={<UserDevicesPage />} />
+                  <Route path="/user/:userName/electronics/devicesdefs" element={<DevicesDefPage />} />
                   <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />
                   <Route path="/user/:userName/electronics/upython" element={<UserUPythonProjectsPage />} />
                   <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />

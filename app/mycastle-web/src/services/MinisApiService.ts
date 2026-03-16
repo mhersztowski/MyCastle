@@ -5,8 +5,6 @@ import type {
   MinisDeviceDefModel,
   MinisDeviceModel,
   MinisLocalizationModel,
-  MinisModuleDefModel,
-  MinisProjectDefModel,
   MinisProjectModel,
   IotDeviceConfig,
   TelemetryRecord,
@@ -19,6 +17,38 @@ import type {
 } from '@mhersztowski/core';
 
 export type UserPublic = Omit<UserModel, 'password'>;
+
+export interface GithubSketchEntry {
+  name: string;
+  files: string[];
+}
+
+export interface GithubProjectEntry {
+  id: string;
+  name: string;
+  description: string;
+  softwarePlatform: string | null;
+  moduleId: string | null;
+  version: string;
+  tags: string[];
+  path: string;
+  hasSrc: boolean;
+  hasDocs: boolean;
+  sketches: GithubSketchEntry[];
+  readmePath: string | null;
+  libraries: Array<{ name: string; version: string; url?: string }>;
+}
+
+export interface GithubModuleEntry {
+  id: string;
+  name: string;
+  vendor: string;
+  description: string;
+  platform: string;
+  boardProfileKey?: string;
+  fqbn?: string;
+  arduinoOptions?: Record<string, string>;
+}
 
 const STORAGE_KEY = 'minis_current_user';
 
@@ -107,75 +137,26 @@ class MinisApiService {
     await this.request('DELETE', `/admin/users/${encodeURIComponent(id)}`);
   }
 
-  // Admin - DeviceDefs
-  async getDeviceDefs(): Promise<MinisDeviceDefModel[]> {
-    const data = await this.request<{ items: MinisDeviceDefModel[] }>('GET', '/admin/devicedefs');
+  // User - DeviceDefs
+  async getDeviceDefs(userName: string): Promise<MinisDeviceDefModel[]> {
+    const data = await this.request<{ items: MinisDeviceDefModel[] }>('GET', `/users/${encodeURIComponent(userName)}/devicedefs`);
     return data.items;
   }
 
-  async createDeviceDef(def: Omit<MinisDeviceDefModel, 'type' | 'id'>): Promise<MinisDeviceDefModel> {
-    return this.request<MinisDeviceDefModel>('POST', '/admin/devicedefs', def);
+  async createDeviceDef(userName: string, def: Omit<MinisDeviceDefModel, 'type' | 'id'>): Promise<MinisDeviceDefModel> {
+    return this.request<MinisDeviceDefModel>('POST', `/users/${encodeURIComponent(userName)}/devicedefs`, def);
   }
 
-  async updateDeviceDef(id: string, def: Partial<MinisDeviceDefModel>): Promise<MinisDeviceDefModel> {
-    return this.request<MinisDeviceDefModel>('PUT', `/admin/devicedefs/${encodeURIComponent(id)}`, def);
+  async updateDeviceDef(userName: string, id: string, def: Partial<MinisDeviceDefModel>): Promise<MinisDeviceDefModel> {
+    return this.request<MinisDeviceDefModel>('PUT', `/users/${encodeURIComponent(userName)}/devicedefs/${encodeURIComponent(id)}`, def);
   }
 
-  async deleteDeviceDef(id: string): Promise<void> {
-    await this.request('DELETE', `/admin/devicedefs/${encodeURIComponent(id)}`);
+  async deleteDeviceDef(userName: string, id: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/devicedefs/${encodeURIComponent(id)}`);
   }
 
-  // Admin - ModuleDefs
-  async getModuleDefs(): Promise<MinisModuleDefModel[]> {
-    const data = await this.request<{ items: MinisModuleDefModel[] }>('GET', '/admin/moduledefs');
-    return data.items;
-  }
-
-  async createModuleDef(def: Omit<MinisModuleDefModel, 'type' | 'id'>): Promise<MinisModuleDefModel> {
-    return this.request<MinisModuleDefModel>('POST', '/admin/moduledefs', def);
-  }
-
-  async updateModuleDef(id: string, def: Partial<MinisModuleDefModel>): Promise<MinisModuleDefModel> {
-    return this.request<MinisModuleDefModel>('PUT', `/admin/moduledefs/${encodeURIComponent(id)}`, def);
-  }
-
-  async deleteModuleDef(id: string): Promise<void> {
-    await this.request('DELETE', `/admin/moduledefs/${encodeURIComponent(id)}`);
-  }
-
-  // Admin - ProjectDefs
-  async getProjectDefs(): Promise<MinisProjectDefModel[]> {
-    const data = await this.request<{ items: MinisProjectDefModel[] }>('GET', '/admin/projectdefs');
-    return data.items;
-  }
-
-  async createProjectDef(def: Omit<MinisProjectDefModel, 'type' | 'id'>): Promise<MinisProjectDefModel> {
-    return this.request<MinisProjectDefModel>('POST', '/admin/projectdefs', def);
-  }
-
-  async updateProjectDef(id: string, def: Partial<MinisProjectDefModel>): Promise<MinisProjectDefModel> {
-    return this.request<MinisProjectDefModel>('PUT', `/admin/projectdefs/${encodeURIComponent(id)}`, def);
-  }
-
-  async deleteProjectDef(id: string): Promise<void> {
-    await this.request('DELETE', `/admin/projectdefs/${encodeURIComponent(id)}`);
-  }
-
-  async uploadProjectDefSources(id: string, file: File): Promise<{ success: boolean; filesExtracted: number }> {
-    return this.uploadDefSources('projectdefs', id, file);
-  }
-
-  async uploadDefSources(resource: string, id: string, file: File): Promise<{ success: boolean; filesExtracted: number }> {
-    const res = await fetch(`${this.getBaseUrl()}/api/admin/${resource}/${encodeURIComponent(id)}/sources`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/zip', ...this.getAuthHeaders() },
-      body: file,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `HTTP ${res.status}`);
-    }
-    return res.json();
+  async getGithubProjectdefs(url: string): Promise<{ version: string; updatedAt: string; rawBase: string; projects: GithubProjectEntry[]; modules: GithubModuleEntry[] }> {
+    return this.request('GET', `/admin/github-projectdefs?url=${encodeURIComponent(url)}`);
   }
 
   // User - Devices
@@ -194,6 +175,10 @@ class MinisApiService {
 
   async deleteUserDevice(userName: string, deviceName: string): Promise<void> {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}`);
+  }
+
+  async getNextSn(): Promise<{ sn: string }> {
+    return this.request('GET', '/next-sn');
   }
 
   async getDeviceMinisConfig(userName: string, deviceName: string): Promise<{ serialNumber: string; wifiSsid: string; wifiPassword: string }> {
@@ -224,12 +209,25 @@ class MinisApiService {
     return data.items;
   }
 
-  async createUserProject(userName: string, data: { name: string; projectDefId: string }): Promise<MinisProjectModel> {
+  async createUserProject(userName: string, data: { name: string; githubProjectId: string; githubRepoUrl?: string; softwarePlatform: string; moduleId?: string; boardProfileKey?: string; libraries?: Array<{ name: string; version: string; url?: string }> }): Promise<MinisProjectModel> {
     return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userName)}/project-arduino`, data);
   }
 
   async deleteUserProject(userName: string, projectName: string): Promise<void> {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}`);
+  }
+
+  async syncProjectFromGithub(userName: string, projectName: string): Promise<void> {
+    await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sync-from-github`);
+  }
+
+  async cloneProjectFromGithub(
+    userName: string, projectName: string,
+    githubRepoUrl: string,
+    sketches: GithubSketchEntry[],
+    readmePath: string | null,
+  ): Promise<void> {
+    await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/clone-from-github`, { githubRepoUrl, sketches, readmePath });
   }
   // IoT - Config
   async getIotConfig(userName: string, deviceName: string): Promise<IotDeviceConfig | null> {
@@ -364,11 +362,11 @@ class MinisApiService {
     return data.items;
   }
 
-  async compileProject(userName: string, projectName: string, sketchName: string, fqbn: string, serialNumber?: string): Promise<{
+  async compileProject(userName: string, projectName: string, sketchName: string, fqbn: string, deviceName?: string): Promise<{
     success: boolean; output: string; exitCode: number; outputFiles?: string[];
   }> {
     return this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/compile`, {
-      sketchName, fqbn, ...(serialNumber ? { serialNumber } : {}),
+      sketchName, fqbn, ...(deviceName ? { deviceName } : {}),
     });
   }
 

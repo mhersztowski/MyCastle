@@ -1,50 +1,62 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  Box, Typography, Button, IconButton, Chip, Tooltip,
+  Box, Typography, Button, IconButton, Chip, Stack,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
   TableSortLabel,
   Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, Switch, FormControlLabel, Alert, CircularProgress,
+  TextField, Alert, CircularProgress,
+  Autocomplete,
 } from '@mui/material';
-import { Edit, Delete, Add, UploadFile } from '@mui/icons-material';
+import { Edit, Delete, Add } from '@mui/icons-material';
+import { useParams } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
-import { useSourceUpload } from '../../hooks/useSourceUpload';
-import type { MinisModuleDefModel } from '@mhersztowski/core';
+import type { GithubModuleEntry } from '../../services/MinisApiService';
+import type { MinisDeviceDefModel } from '@mhersztowski/core';
 
-type SortKey = 'name' | 'soc' | 'isProgrammable';
+const DEFAULT_REPO_URL = 'https://github.com/platform-minis/MinisProjects';
+const REPO_URL_KEY = 'minis_github_repo_url';
+
+type SortKey = 'name' | 'modules';
 type SortDir = 'asc' | 'desc';
 
 interface FormData {
   name: string;
-  soc: string;
-  isProgrammable: boolean;
+  modules: string[];
 }
 
-const emptyForm: FormData = { name: '', soc: '', isProgrammable: false };
+const emptyForm: FormData = { name: '', modules: [] };
 
-function ModulesDefPage() {
-  const [items, setItems] = useState<MinisModuleDefModel[]>([]);
+function DevicesDefPage() {
+  const { userName } = useParams<{ userName: string }>();
+  const [items, setItems] = useState<MinisDeviceDefModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [githubModules, setGithubModules] = useState<GithubModuleEntry[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormData>(emptyForm);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const { uploading, fileInputRef, triggerUpload, handleFileSelected } = useSourceUpload('moduledefs', (msg) => setError(msg));
 
   const load = useCallback(async () => {
+    if (!userName) return;
     setLoading(true);
     try {
-      setItems(await minisApi.getModuleDefs());
+      const repoUrl = localStorage.getItem(REPO_URL_KEY) ?? DEFAULT_REPO_URL;
+      const [defs, githubData] = await Promise.all([
+        minisApi.getDeviceDefs(userName),
+        minisApi.getGithubProjectdefs(repoUrl).catch(() => null),
+      ]);
+      setItems(defs);
+      if (githubData?.modules) setGithubModules(githubData.modules);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userName]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -55,29 +67,33 @@ function ModulesDefPage() {
 
   const sortedItems = useMemo(() => {
     const sorted = [...items].sort((a, b) => {
-      if (sortBy === 'isProgrammable') {
-        return (a.isProgrammable === b.isProgrammable) ? 0 : a.isProgrammable ? -1 : 1;
+      let va: string, vb: string;
+      if (sortBy === 'modules') {
+        va = (a.modules || []).join(',');
+        vb = (b.modules || []).join(',');
+      } else {
+        va = a.name;
+        vb = b.name;
       }
-      const va = String(a[sortBy] || '');
-      const vb = String(b[sortBy] || '');
       return va.localeCompare(vb);
     });
     return sortDir === 'desc' ? sorted.reverse() : sorted;
   }, [items, sortBy, sortDir]);
 
   const openAdd = () => { setEditId(null); setForm(emptyForm); setDialogOpen(true); };
-  const openEdit = (item: MinisModuleDefModel) => {
+  const openEdit = (item: MinisDeviceDefModel) => {
     setEditId(item.id);
-    setForm({ name: item.name, soc: item.soc, isProgrammable: item.isProgrammable });
+    setForm({ name: item.name, modules: item.modules || [] });
     setDialogOpen(true);
   };
 
   const handleSave = async () => {
+    if (!userName) return;
     try {
       if (editId) {
-        await minisApi.updateModuleDef(editId, form);
+        await minisApi.updateDeviceDef(userName, editId, { name: form.name, modules: form.modules });
       } else {
-        await minisApi.createModuleDef(form);
+        await minisApi.createDeviceDef(userName, { name: form.name, modules: form.modules });
       }
       setDialogOpen(false);
       load();
@@ -87,8 +103,9 @@ function ModulesDefPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!userName) return;
     try {
-      await minisApi.deleteModuleDef(id);
+      await minisApi.deleteDeviceDef(userName, id);
       setDeleteConfirm(null);
       load();
     } catch (err) {
@@ -99,8 +116,8 @@ function ModulesDefPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Module Definitions</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={openAdd}>Add ModuleDef</Button>
+        <Typography variant="h4">Device Definitions</Typography>
+        <Button variant="contained" startIcon={<Add />} onClick={openAdd}>Add DeviceDef</Button>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -114,11 +131,8 @@ function ModulesDefPage() {
                 <TableSortLabel active={sortBy === 'name'} direction={sortBy === 'name' ? sortDir : 'asc'} onClick={() => handleSort('name')}>Name</TableSortLabel>
               </TableCell>
               <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Id</TableCell>
-              <TableCell sortDirection={sortBy === 'soc' ? sortDir : false}>
-                <TableSortLabel active={sortBy === 'soc'} direction={sortBy === 'soc' ? sortDir : 'asc'} onClick={() => handleSort('soc')}>SoC</TableSortLabel>
-              </TableCell>
-              <TableCell sortDirection={sortBy === 'isProgrammable' ? sortDir : false}>
-                <TableSortLabel active={sortBy === 'isProgrammable'} direction={sortBy === 'isProgrammable' ? sortDir : 'asc'} onClick={() => handleSort('isProgrammable')}>Programmable</TableSortLabel>
+              <TableCell sortDirection={sortBy === 'modules' ? sortDir : false}>
+                <TableSortLabel active={sortBy === 'modules'} direction={sortBy === 'modules' ? sortDir : 'asc'} onClick={() => handleSort('modules')}>Modules</TableSortLabel>
               </TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -128,38 +142,47 @@ function ModulesDefPage() {
               <TableRow key={item.id}>
                 <TableCell>{item.name}</TableCell>
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}><Typography variant="caption" color="text.secondary">{item.id}</Typography></TableCell>
-                <TableCell>{item.soc || '-'}</TableCell>
                 <TableCell>
-                  {item.isProgrammable ? <Chip label="Yes" color="success" size="small" /> : <Chip label="No" size="small" />}
+                  <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                    {(item.modules || []).map((m) => <Chip key={m} label={m} size="small" variant="outlined" />)}
+                  </Stack>
                 </TableCell>
                 <TableCell align="right">
-                  <Tooltip title="Upload Sources (zip)">
-                    <span>
-                      <IconButton size="small" onClick={() => triggerUpload(item.id)} disabled={uploading === item.id}>
-                        {uploading === item.id ? <CircularProgress size={18} /> : <UploadFile />}
-                      </IconButton>
-                    </span>
-                  </Tooltip>
                   <IconButton size="small" onClick={() => openEdit(item)}><Edit /></IconButton>
                   <IconButton size="small" onClick={() => setDeleteConfirm(item.id)}><Delete /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
             {!loading && items.length === 0 && (
-              <TableRow><TableCell colSpan={5} align="center">No module definitions</TableCell></TableRow>
+              <TableRow><TableCell colSpan={4} align="center">No device definitions</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
       </TableContainer>
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editId ? 'Edit ModuleDef' : 'Add ModuleDef'}</DialogTitle>
+        <DialogTitle>{editId ? 'Edit DeviceDef' : 'Add DeviceDef'}</DialogTitle>
         <DialogContent>
           <TextField fullWidth label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ mt: 1, mb: 2 }} />
-          <TextField fullWidth label="SoC (e.g. Esp32)" value={form.soc}
-            onChange={(e) => setForm({ ...form, soc: e.target.value, isProgrammable: e.target.value !== '' })} sx={{ mb: 2 }}
-            helperText="If not empty, module is programmable" />
-          <FormControlLabel control={<Switch checked={form.isProgrammable} onChange={(e) => setForm({ ...form, isProgrammable: e.target.checked })} />} label="Programmable" />
+          <Autocomplete
+            multiple
+            freeSolo
+            options={githubModules.map((m) => m.id)}
+            getOptionLabel={(id) => {
+              const m = githubModules.find((m) => m.id === id);
+              return m ? `${m.id} — ${m.name}` : id;
+            }}
+            value={form.modules}
+            onChange={(_e, newValue) => setForm({ ...form, modules: newValue as string[] })}
+            renderTags={(value, getTagProps) =>
+              value.map((option, index) => (
+                <Chip label={option} size="small" {...getTagProps({ index })} key={option} />
+              ))
+            }
+            renderInput={(params) => (
+              <TextField {...params} label="Module IDs" placeholder="Select or type module id..." />
+            )}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -168,7 +191,7 @@ function ModulesDefPage() {
       </Dialog>
 
       <Dialog open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)}>
-        <DialogTitle>Delete ModuleDef?</DialogTitle>
+        <DialogTitle>Delete DeviceDef?</DialogTitle>
         <DialogContent><Typography>Are you sure?</Typography></DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteConfirm(null)}>Cancel</Button>
@@ -176,9 +199,8 @@ function ModulesDefPage() {
         </DialogActions>
       </Dialog>
 
-      <input type="file" accept=".zip" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileSelected} />
     </Box>
   );
 }
 
-export default ModulesDefPage;
+export default DevicesDefPage;

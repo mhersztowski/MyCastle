@@ -5,6 +5,7 @@ export interface MinisDeviceBuild {
   at: number;        // unix ms
   success: boolean;
   projectId?: string;
+  sketchName?: string;
 }
 
 export interface MinisDeviceModel {

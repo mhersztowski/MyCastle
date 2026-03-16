@@ -41,7 +41,7 @@ function IotDevicePage() {
         minisApi.getAlerts(userName),
         minisApi.getIotDevices(userName),
         minisApi.getUserDevices(userName),
-        minisApi.getDeviceDefs(),
+        minisApi.getDeviceDefs(userName),
       ]);
       const iotId = allDevices.find((d) => d.name === deviceName)?.sn || deviceName;
       setConfig(cfg);

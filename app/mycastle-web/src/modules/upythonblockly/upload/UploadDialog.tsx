@@ -35,9 +35,10 @@ interface UploadDialogProps {
   board?: string;
   projectId?: string;
   deviceName?: string;
+  libraries?: Array<{ url: string; remoteName: string }>;
 }
 
-function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp }: UploadDialogProps) {
+function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries }: UploadDialogProps) {
   const [tab, setTab] = useState(0);
   const [uploadMode, setUploadMode] = useState<UploadMode>('run');
   const [baudRate, setBaudRate] = useState(115200);
@@ -77,6 +78,17 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
     } catch { /* non-critical */ }
   };
 
+  const uploadLibraries = async (svc: { saveToFile: (name: string, content: string) => Promise<void> }) => {
+    for (const lib of libraries ?? []) {
+      appendLog(`Fetching ${lib.remoteName}...`);
+      const res = await fetch(lib.url);
+      if (!res.ok) throw new Error(`Failed to fetch ${lib.remoteName}: HTTP ${res.status}`);
+      const content = await res.text();
+      appendLog(`Saving ${lib.remoteName} to device...`);
+      await svc.saveToFile(lib.remoteName, content);
+    }
+  };
+
   const handleUploadSerial = async () => {
     setBusy(true);
     setLog('');
@@ -86,6 +98,8 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
       appendLog('Connecting via Serial...');
       await svc.connect(baudRate);
       appendLog('Connected.');
+
+      await uploadLibraries(svc);
 
       if (uploadMode === 'run') {
         appendLog('Running code...');
@@ -119,6 +133,8 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
       appendLog(`Connecting to ws://${webIp}:${webPort}...`);
       await svc.connect({ ip: webIp, port: webPort, password: webPassword });
       appendLog('Connected.');
+
+      await uploadLibraries(svc);
 
       if (uploadMode === 'run') {
         appendLog('Running code...');

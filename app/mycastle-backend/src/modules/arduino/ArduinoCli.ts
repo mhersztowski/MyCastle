@@ -51,4 +51,5 @@ export interface ArduinoCli {
   compile(options: CompileOptions): Promise<CompileResult>;
   listPorts(): Promise<PortInfo[]>;
   upload(options: UploadOptions): Promise<UploadResult>;
+  libInstall(lib: { name: string; version?: string; url?: string }, configFilePath: string): Promise<void>;
 }

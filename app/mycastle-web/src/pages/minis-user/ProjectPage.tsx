@@ -34,7 +34,7 @@ import {
   Extension,
   FlashOn,
   FolderOpen,
-  UploadFile,
+  Refresh,
   Save,
   Settings,
   VerticalSplit,
@@ -45,7 +45,7 @@ import remarkBreaks from 'remark-breaks';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
-import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles, socToBoardKey } from '@modules/ardublockly2';
+import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@modules/ardublockly2';
 import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/serial';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
@@ -75,6 +75,7 @@ function ProjectPage() {
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [flashOpen, setFlashOpen] = useState(false);
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
@@ -87,6 +88,7 @@ function ProjectPage() {
   const [saveBeforeCompileOpen, setSaveBeforeCompileOpen] = useState(false);
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
+  const initialSketch = searchParams.get('sketch');
   const compileOutputRef = useRef<HTMLDivElement>(null);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
@@ -163,23 +165,15 @@ function ProjectPage() {
     return () => clearTimeout(timer);
   }, [viewMode, splitRatio, configOpen, sketchesOpen]);
 
-  // Resolve board from ProjectDef → ModuleDef → soc
+  // Resolve board from project.boardProfileKey
   useEffect(() => {
     if (!userName || !projectId) return;
     (async () => {
       try {
-        const [projects, projectDefs, moduleDefs] = await Promise.all([
-          minisApi.getUserProjects(userName),
-          minisApi.getProjectDefs(),
-          minisApi.getModuleDefs(),
-        ]);
+        const projects = await minisApi.getUserProjects(userName);
         const project = projects.find(p => p.id === projectId);
         if (!project) return;
-        const projectDef = projectDefs.find(d => d.id === project.projectDefId);
-        if (!projectDef) return;
-        const moduleDef = moduleDefs.find(m => m.id === projectDef.moduleDefId);
-        if (!moduleDef?.soc) return;
-        const boardKey = socToBoardKey[moduleDef.soc];
+        const boardKey = project.boardProfileKey;
         if (boardKey && boardProfiles[boardKey]) {
           setBoard(boardKey);
           serviceRef.current?.changeBoard(boardKey);
@@ -188,13 +182,19 @@ function ProjectPage() {
     })();
   }, [userName, projectId]);
 
-  // Load sketches list via REST API
+  // Load sketches list via REST API, auto-open sketch from URL param or first
   useEffect(() => {
     if (!userName || !projectId) return;
     minisApi.listSketches(userName, projectId)
-      .then(setSketches)
+      .then((list) => {
+        setSketches(list);
+        if (list.length > 0) {
+          const target = initialSketch && list.includes(initialSketch) ? initialSketch : list[0];
+          handleLoadSketch(target);
+        }
+      })
       .catch(() => setSketches([]));
-  }, [userName, projectId]);
+  }, [userName, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load README
   useEffect(() => {
@@ -219,8 +219,17 @@ function ProjectPage() {
     if (!userName || !projectId) return;
     setCurrentSketch(sketchName);
     setCodeEdited(false);
+    codeEditedRef.current = false;
 
-    // Suppress workspace change events during programmatic load
+    // Read sketch metadata to know what was last modified
+    let lastModified: 'blockly' | 'cpp' = 'blockly';
+    try {
+      const meta = await minisApi.readSketchFile(userName, projectId, sketchName, `${sketchName}.meta.json`);
+      const parsed = JSON.parse(meta) as { lastModified?: string };
+      if (parsed.lastModified === 'cpp') lastModified = 'cpp';
+    } catch { /* no meta = default blockly */ }
+
+    // Suppress workspace change events during the entire load sequence
     suppressBlocklyChangeRef.current = true;
     serviceRef.current?.clearWorkspace();
     try {
@@ -231,17 +240,24 @@ function ProjectPage() {
     } catch {
       // File not found — workspace already cleared
     }
-    suppressBlocklyChangeRef.current = false;
 
     // Load .ino into code editor, or generate from loaded blockly
     try {
       const inoContent = await minisApi.readSketchFile(userName, projectId, sketchName, `${sketchName}.ino`);
       syncCodeToEditor(inoContent);
+      // If cpp was last modified, mark as edited so blockly won't silently overwrite
+      if (lastModified === 'cpp') {
+        setCodeEdited(true);
+        codeEditedRef.current = true;
+      }
     } catch {
       if (serviceRef.current) {
         const code = serviceRef.current.generateArduinoCode();
         syncCodeToEditor(code);
       }
+    } finally {
+      // Release suppress only after .ino is loaded — prevents async blockly events from overwriting
+      suppressBlocklyChangeRef.current = false;
     }
   };
 
@@ -258,10 +274,13 @@ function ProjectPage() {
 
     const blocklyXml = serviceRef.current?.serializeToXml() ?? '';
     const inoCode = editorRef.current?.getContent() ?? generatedCode;
+    const lastModified = codeEditedRef.current ? 'cpp' : 'blockly';
+    const meta = JSON.stringify({ lastModified });
 
     await Promise.all([
       minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
       minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.ino`, inoCode),
+      minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.meta.json`, meta),
     ]);
     setCodeEdited(false);
   };
@@ -299,8 +318,7 @@ function ProjectPage() {
         setCompileSuccess(false);
         return;
       }
-      const deviceSn = selectedDeviceName ? devices.find(d => d.name === selectedDeviceName)?.sn || undefined : undefined;
-      const result = await minisApi.compileProject(userName, projectId, currentSketch, fqbn, deviceSn);
+      const result = await minisApi.compileProject(userName, projectId, currentSketch, fqbn, selectedDeviceName || undefined);
       setCompileOutput(result.output);
       setCompileSuccess(result.success);
     } catch (err) {
@@ -372,7 +390,7 @@ function ProjectPage() {
       {/* Top AppBar */}
       <AppBar position="static" elevation={1} sx={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense">
-          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/electronics/arduino`)} sx={{ mr: 1 }}>
+          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/electronics/devices`)} sx={{ mr: 1 }}>
             <ArrowBack />
           </IconButton>
           <Typography variant="h6" sx={{ mr: 2, display: { xs: 'none', md: 'block' } }} noWrap>
@@ -414,6 +432,35 @@ function ProjectPage() {
           >
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sketches{currentSketch ? `: ${currentSketch}` : ''}</Box>
           </Button>
+
+          {/* Sync from GitHub */}
+          <Tooltip title="Sync sketches from GitHub">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                startIcon={syncing ? <CircularProgress size={14} color="inherit" /> : <Refresh />}
+                onClick={async () => {
+                  if (!userName || !projectId) return;
+                  setSyncing(true);
+                  try {
+                    await minisApi.syncProjectFromGithub(userName, projectId);
+                    const list = await minisApi.listSketches(userName, projectId);
+                    setSketches(list);
+                  } catch (err) {
+                    console.error('Sync failed:', err);
+                  } finally {
+                    setSyncing(false);
+                  }
+                }}
+                disabled={syncing}
+                sx={{ ml: 1, ...btnSx(false) }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sync</Box>
+              </Button>
+            </span>
+          </Tooltip>
 
           {/* Save */}
           <Button
@@ -754,18 +801,7 @@ function ProjectPage() {
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Flash custom .bin file'}>
-            <span>
-              <IconButton
-                size="small"
-                disabled={!board || !boardProfiles[board]?.flashConfig || !selectedDeviceName}
-                onClick={() => { setFlashFiles(undefined); setFlashOpen(true); }}
-              >
-                <UploadFile fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : board && boardProfiles[board]?.flashConfig ? 'Flash Firmware' : 'Flash not supported for this board'}>
+          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : board && boardProfiles[board]?.flashConfig ? 'Flash' : 'Flash not supported for this board'}>
             <span>
               <IconButton
                 size="small"

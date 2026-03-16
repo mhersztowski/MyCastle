@@ -1228,7 +1228,6 @@ const swaggerSpec = {
         required: ['name'],
         properties: {
           name: { type: 'string' },
-          soc: { type: 'string' },
           isProgrammable: { type: 'boolean' },
         },
       },

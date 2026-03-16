@@ -21,11 +21,9 @@ import {
   Home as HomeIcon,
   Folder as FolderIcon,
   People as PeopleIcon,
-  Memory as MemoryIcon,
   DeveloperBoard as DeveloperBoardIcon,
   Devices as DevicesIcon,
   Code as CodeIcon,
-  Assignment as AssignmentIcon,
   Dashboard as DashboardIcon,
   Sensors as SensorsIcon,
   NotificationsActive as NotificationsActiveIcon,
@@ -53,6 +51,7 @@ import {
   ExpandLess,
   ExpandMore,
   Terminal as TerminalIcon,
+  CloudDownload as CloudDownloadIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -104,10 +103,8 @@ function Layout({ children, fullBleed }: LayoutProps) {
       return [
         { text: 'Main', icon: <HomeIcon />, path: `/admin/${userName}/main` },
         { text: 'Users', icon: <PeopleIcon />, path: `/admin/${userName}/users` },
-        { text: 'DevicesDef', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
-        { text: 'ModulesDef', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
-        { text: 'ProjectDefs', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
-        { text: 'Scripts', icon: <TerminalIcon />, path: `/admin/${userName}/scripts` },
+{ text: 'Scripts', icon: <TerminalIcon />, path: `/admin/${userName}/scripts` },
+        { text: 'GitHub Import', icon: <CloudDownloadIcon />, path: `/admin/${userName}/github-projectdefs` },
       ];
     }
     if (isMinisView) {
@@ -116,6 +113,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
+            { text: 'DevicesDef', icon: <DevicesIcon />, path: `/user/${userName}/electronics/devicesdefs` },
             { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
             { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
             { text: 'Configuration', icon: <HubIcon />, path: `/user/${userName}/electronics/configuration` },

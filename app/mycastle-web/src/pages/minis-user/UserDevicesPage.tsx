@@ -68,6 +68,7 @@ function UserDevicesPage() {
   const [editPanelDevice, setEditPanelDevice] = useState<MinisDeviceModel | null>(null);
   const [editPanelForm, setEditPanelForm] = useState<EditPanelForm>({ name: '', sn: '', description: '', isAssembled: true, isIot: false });
   const [editPanelSaving, setEditPanelSaving] = useState(false);
+  const [snLoading, setSnLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!userName) return;
@@ -75,7 +76,7 @@ function UserDevicesPage() {
     try {
       const [devices, defs, myShares, sharedDevices, locs] = await Promise.all([
         minisApi.getUserDevices(userName),
-        minisApi.getDeviceDefs(),
+        minisApi.getDeviceDefs(userName),
         minisApi.getMyShares(userName),
         minisApi.getSharedDevices(userName),
         minisApi.getLocalizations(userName),
@@ -243,6 +244,32 @@ function UserDevicesPage() {
     });
   };
 
+  const handleAutoSnForAdd = async () => {
+    setSnLoading(true);
+    try {
+      const { sn } = await minisApi.getNextSn();
+      const defName = deviceDefs.find((d) => d.id === form.deviceDefId)?.name ?? '';
+      const autoName = defName && sn ? `${defName}-${sn}` : defName;
+      setForm((f) => ({ ...f, sn, name: autoName || f.name }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to get next SN');
+    } finally {
+      setSnLoading(false);
+    }
+  };
+
+  const handleAutoSnForEdit = async () => {
+    setSnLoading(true);
+    try {
+      const { sn } = await minisApi.getNextSn();
+      setEditPanelForm((f) => ({ ...f, sn }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to get next SN');
+    } finally {
+      setSnLoading(false);
+    }
+  };
+
   const handleEditPanelSave = async () => {
     if (!userName || !editPanelDevice) return;
     setEditPanelSaving(true);
@@ -308,7 +335,7 @@ function UserDevicesPage() {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     {item.lastBuild
                       ? <Chip
-                          label={`${item.lastBuild.platform}${item.lastBuild.version ? ` v${item.lastBuild.version}` : ''}`}
+                          label={`${item.lastBuild.platform}${item.lastBuild.sketchName ? `/${item.lastBuild.sketchName}` : ''}${item.lastBuild.version ? ` v${item.lastBuild.version}` : ''}`}
                           color={item.lastBuild.success ? 'success' : 'error'}
                           size="small"
                           title={new Date(item.lastBuild.at).toLocaleString()}
@@ -321,7 +348,8 @@ function UserDevicesPage() {
                         onClick={(e) => {
                           e.stopPropagation();
                           const route = item.lastBuild!.platform === 'micropython' ? 'upython-project' : 'project';
-                          navigate(`/user/${userName}/${route}/${item.lastBuild!.projectId}?device=${item.name}`);
+                          const sketchParam = item.lastBuild!.sketchName ? `&sketch=${encodeURIComponent(item.lastBuild!.sketchName)}` : '';
+                          navigate(`/user/${userName}/${route}/${item.lastBuild!.projectId}?device=${item.name}${sketchParam}`);
                         }}
                       >
                         <OpenInNew sx={{ fontSize: 14 }} />
@@ -404,10 +432,18 @@ function UserDevicesPage() {
         </Box>
         <Divider sx={{ mb: 2 }} />
         <TextField fullWidth label="Device Name" value={editPanelForm.name} disabled sx={{ mb: 2 }}
-          helperText="Name cannot be changed"
+          helperText="Used as IoT identifier — cannot be changed after creation"
         />
-        <TextField fullWidth label="Serial Number" value={editPanelForm.sn}
-          onChange={(e) => setEditPanelForm((f) => ({ ...f, sn: e.target.value }))} sx={{ mb: 2 }} />
+        <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 2 }}>
+          <TextField fullWidth label="Serial Number" value={editPanelForm.sn}
+            onChange={(e) => setEditPanelForm((f) => ({ ...f, sn: e.target.value }))}
+          />
+          <Button variant="outlined" size="small" onClick={handleAutoSnForEdit} disabled={snLoading}
+            sx={{ mt: 1, whiteSpace: 'nowrap' }}
+          >
+            {snLoading ? <CircularProgress size={16} /> : 'Auto'}
+          </Button>
+        </Stack>
         <TextField fullWidth multiline minRows={4} label="Description (Markdown)" value={editPanelForm.description}
           onChange={(e) => setEditPanelForm((f) => ({ ...f, description: e.target.value }))} sx={{ mb: 2 }} />
         <FormControlLabel
@@ -425,7 +461,7 @@ function UserDevicesPage() {
             <Typography variant="caption" color="text.secondary">Last Build</Typography>
             <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap' }}>
               <Chip
-                label={`${editPanelDevice.lastBuild.platform}${editPanelDevice.lastBuild.version ? ` v${editPanelDevice.lastBuild.version}` : ''}`}
+                label={`${editPanelDevice.lastBuild.platform}${editPanelDevice.lastBuild.sketchName ? `/${editPanelDevice.lastBuild.sketchName}` : ''}${editPanelDevice.lastBuild.version ? ` v${editPanelDevice.lastBuild.version}` : ''}`}
                 color={editPanelDevice.lastBuild.success ? 'success' : 'error'}
                 size="small"
               />
@@ -467,13 +503,21 @@ function UserDevicesPage() {
               <option key={def.id} value={def.id}>{def.name}</option>
             ))}
           </TextField>
-          <TextField fullWidth label="Serial Number" value={form.sn}
-            onChange={(e) => {
-              const sn = e.target.value;
-              const defName = deviceDefs.find((d) => d.id === form.deviceDefId)?.name ?? '';
-              const autoName = defName && sn ? `${defName}-${sn}` : defName;
-              setForm((f) => ({ ...f, sn, name: autoName || f.name }));
-            }} sx={{ mb: 2 }} />
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 2 }}>
+            <TextField fullWidth label="Serial Number" value={form.sn}
+              onChange={(e) => {
+                const sn = e.target.value;
+                const defName = deviceDefs.find((d) => d.id === form.deviceDefId)?.name ?? '';
+                const autoName = defName && sn ? `${defName}-${sn}` : defName;
+                setForm((f) => ({ ...f, sn, name: autoName || f.name }));
+              }}
+            />
+            <Button variant="outlined" size="small" onClick={handleAutoSnForAdd} disabled={snLoading}
+              sx={{ mt: 1, whiteSpace: 'nowrap' }}
+            >
+              {snLoading ? <CircularProgress size={16} /> : 'Auto'}
+            </Button>
+          </Stack>
           <TextField fullWidth label="Device Name" value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ mb: 2 }} />
           <FormControlLabel

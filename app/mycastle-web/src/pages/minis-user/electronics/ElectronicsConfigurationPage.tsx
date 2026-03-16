@@ -17,6 +17,7 @@ import {
   Handle,
   Position,
   ReactFlowProvider,
+  NodeMouseHandler,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -25,8 +26,11 @@ import {
   Box,
   Button,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
-  IconButton,
   Paper,
   TextField,
   Typography,
@@ -50,7 +54,7 @@ type DeviceNodeType = 'wifi-device' | 'wifi-uart-bridge' | 'wifi-switch' | 'uart
 interface DeviceNodeData extends Record<string, unknown> {
   nodeType: DeviceNodeType;
   label: string;
-  serialNumber: string;
+  deviceName: string;
   /** For wifi-device / wifi-uart-bridge: SSID to connect to.
    *  For wifi-switch: SSID of the network it provides. */
   wifiSsid: string;
@@ -90,17 +94,13 @@ function WifiDeviceNode({ data, selected }: { data: DeviceNodeData; selected?: b
     <Box sx={nodeBoxSx('#1976d2', '#1565c0', selected)}>
       <Handle type="target" position={Position.Left} />
       <Handle type="target" position={Position.Top} />
+      <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 160 }}>
+        {data.deviceName || data.label || 'WiFi Device'}
+      </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-        <WifiIcon fontSize="small" />
-        <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 140 }}>
-          {data.label || 'WiFi Device'}
-        </Typography>
+        <WifiIcon sx={{ fontSize: 12, opacity: 0.8 }} />
+        <Typography variant="caption" sx={{ opacity: 0.8 }}>WiFi Device</Typography>
       </Box>
-      {data.serialNumber && (
-        <Typography variant="caption" sx={{ opacity: 0.85, display: 'block' }}>
-          SN: {data.serialNumber}
-        </Typography>
-      )}
       {data.wifiSsid && (
         <Typography variant="caption" sx={{ opacity: 0.75, display: 'block' }}>
           📶 {data.wifiSsid}
@@ -119,17 +119,13 @@ function BridgeNode({ data, selected }: { data: DeviceNodeData; selected?: boole
     <Box sx={nodeBoxSx('#7b1fa2', '#6a1b9a', selected)}>
       <Handle type="target" position={Position.Left} />
       <Handle type="target" position={Position.Top} />
+      <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 160 }}>
+        {data.deviceName || data.label || 'WiFi/UART Bridge'}
+      </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-        <DeviceHubIcon fontSize="small" />
-        <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 155 }}>
-          {data.label || 'WiFi/UART Bridge'}
-        </Typography>
+        <DeviceHubIcon sx={{ fontSize: 12, opacity: 0.8 }} />
+        <Typography variant="caption" sx={{ opacity: 0.8 }}>WiFi/UART Bridge</Typography>
       </Box>
-      {data.serialNumber && (
-        <Typography variant="caption" sx={{ opacity: 0.85, display: 'block' }}>
-          SN: {data.serialNumber}
-        </Typography>
-      )}
       {data.wifiSsid && (
         <Typography variant="caption" sx={{ opacity: 0.75, display: 'block' }}>
           📶 {data.wifiSsid}
@@ -158,17 +154,13 @@ function WifiSwitchNode({ data, selected }: { data: DeviceNodeData; selected?: b
       <Handle type="target" position={Position.Bottom} />
       <Handle type="source" position={Position.Left} id="src-left" style={{ top: '70%' }} />
       <Handle type="source" position={Position.Right} id="src-right" style={{ top: '70%' }} />
+      <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 175 }}>
+        {data.deviceName || data.label || 'WiFi Switch'}
+      </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-        <WifiTetheringIcon fontSize="small" />
-        <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 155 }}>
-          {data.label || 'WiFi Switch'}
-        </Typography>
+        <WifiTetheringIcon sx={{ fontSize: 12, opacity: 0.8 }} />
+        <Typography variant="caption" sx={{ opacity: 0.8 }}>WiFi Switch</Typography>
       </Box>
-      {data.serialNumber && (
-        <Typography variant="caption" sx={{ opacity: 0.85, display: 'block' }}>
-          SN: {data.serialNumber}
-        </Typography>
-      )}
       {data.wifiSsid ? (
         <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 'bold' }}>
           📡 {data.wifiSsid}
@@ -192,17 +184,13 @@ function UartDeviceNode({ data, selected }: { data: DeviceNodeData; selected?: b
       <Handle type="target" position={Position.Top} />
       <Handle type="source" position={Position.Right} />
       <Handle type="source" position={Position.Bottom} />
+      <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 160 }}>
+        {data.deviceName || data.label || 'UART Device'}
+      </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-        <CableIcon fontSize="small" />
-        <Typography variant="body2" fontWeight="bold" noWrap sx={{ maxWidth: 140 }}>
-          {data.label || 'UART Device'}
-        </Typography>
+        <CableIcon sx={{ fontSize: 12, opacity: 0.8 }} />
+        <Typography variant="caption" sx={{ opacity: 0.8 }}>UART Device</Typography>
       </Box>
-      {data.serialNumber && (
-        <Typography variant="caption" sx={{ opacity: 0.85, display: 'block' }}>
-          SN: {data.serialNumber}
-        </Typography>
-      )}
       {data.uartBaudRate > 0 && (
         <Typography variant="caption" sx={{ opacity: 0.75, display: 'block' }}>
           {data.uartBaudRate} baud
@@ -222,8 +210,7 @@ const NODE_TYPES = {
 // ─── Config panel ─────────────────────────────────────────────────────────────
 
 interface DeviceOption {
-  label: string;  // "name (SN)" for display
-  sn: string;     // actual serial number — used as the serialNumber in node data
+  name: string;
 }
 
 interface ConfigPanelProps {
@@ -243,148 +230,133 @@ const NODE_META: Record<DeviceNodeType, { label: string; color: string; icon: Re
   'uart-device':      { label: 'UART Device',         color: '#e65100', icon: <CableIcon /> },
 };
 
-function ConfigPanel({ node, parentSwitch, deviceOptions, onUpdate, onDelete }: ConfigPanelProps) {
+interface ConfigDialogProps extends ConfigPanelProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+function ConfigDialog({ open, onClose, node, parentSwitch, deviceOptions, onUpdate, onDelete }: ConfigDialogProps) {
   const { data } = node;
   const meta      = NODE_META[data.nodeType];
   const showWifi  = data.nodeType !== 'uart-device';
   const showUart  = data.nodeType === 'wifi-uart-bridge' || data.nodeType === 'uart-device';
   const isSwitch  = data.nodeType === 'wifi-switch';
-  // WiFi fields are inherited (locked) when a non-switch node is connected to a switch
   const inherited = !isSwitch && parentSwitch !== null;
 
   return (
-    <Paper
-      elevation={2}
-      square
-      sx={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', p: 2, gap: 2, overflowY: 'auto', zIndex: 1 }}
-    >
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <Box sx={{ color: meta.color, display: 'flex' }}>{meta.icon}</Box>
-        <Typography variant="subtitle1" fontWeight="bold">{meta.label}</Typography>
-        <IconButton size="small" onClick={onDelete} sx={{ ml: 'auto', color: 'error.main' }} title="Delete node">
-          <DeleteIcon fontSize="small" />
-        </IconButton>
-      </Box>
+        {meta.label}
+      </DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
 
-      {/* Inherited banner */}
-      {inherited && (
-        <Box sx={{ bgcolor: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 1, px: 1.5, py: 0.75 }}>
-          <Typography variant="caption" sx={{ color: '#2e7d32', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <WifiTetheringIcon sx={{ fontSize: 14 }} />
-            WiFi inherited from <strong>&nbsp;{parentSwitch!.data.label || 'WiFi Switch'}</strong>
-          </Typography>
-        </Box>
-      )}
-
-      <Divider />
-
-      <TextField
-        label="Label"
-        value={data.label}
-        onChange={(e) => onUpdate('label', e.target.value)}
-        size="small"
-        fullWidth
-      />
-
-      <Autocomplete
-        freeSolo
-        options={deviceOptions}
-        getOptionLabel={(opt) => typeof opt === 'string' ? opt : opt.label}
-        value={data.serialNumber}
-        onChange={(_e, newValue) => {
-          if (newValue && typeof newValue !== 'string') {
-            onUpdate('serialNumber', newValue.sn);
-          }
-        }}
-        onInputChange={(_e, newValue, reason) => {
-          if (reason === 'input') onUpdate('serialNumber', newValue);
-        }}
-        renderInput={(params) => (
-          <TextField
-            {...params}
-            label="Serial Number"
-            size="small"
-            placeholder="Select device or type SN"
-            helperText="Select a device (sets SN) or type SN manually"
-          />
+        {inherited && (
+          <Box sx={{ bgcolor: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 1, px: 1.5, py: 0.75 }}>
+            <Typography variant="caption" sx={{ color: '#2e7d32', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <WifiTetheringIcon sx={{ fontSize: 14 }} />
+              WiFi inherited from <strong>&nbsp;{parentSwitch!.data.label || 'WiFi Switch'}</strong>
+            </Typography>
+          </Box>
         )}
-      />
 
-      {showWifi && (
-        <>
-          <Divider />
-          <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1 }}>
-            {isSwitch ? 'Provided Network' : 'WiFi Connection'}
-          </Typography>
+        <TextField
+          label="Label"
+          value={data.label}
+          onChange={(e) => onUpdate('label', e.target.value)}
+          size="small"
+          fullWidth
+        />
 
-          <TextField
-            label={isSwitch ? 'Network SSID (provided)' : 'WiFi SSID'}
-            value={data.wifiSsid}
-            onChange={(e) => onUpdate('wifiSsid', e.target.value)}
-            size="small"
-            fullWidth
-            disabled={inherited}
-            placeholder={isSwitch ? 'SSID this switch broadcasts' : 'Network name'}
-            helperText={
-              isSwitch
-                ? 'Connected devices inherit this SSID automatically'
-                : inherited
-                  ? `Inherited from "${parentSwitch!.data.label || 'WiFi Switch'}"`
-                  : undefined
+        <Autocomplete
+          freeSolo
+          options={deviceOptions}
+          getOptionLabel={(opt) => typeof opt === 'string' ? opt : opt.name}
+          value={data.deviceName}
+          onChange={(_e, newValue) => {
+            if (newValue && typeof newValue !== 'string') {
+              onUpdate('deviceName', newValue.name);
             }
-          />
+          }}
+          onInputChange={(_e, newValue, reason) => {
+            if (reason === 'input') onUpdate('deviceName', newValue);
+          }}
+          renderInput={(params) => (
+            <TextField {...params} label="Device" size="small" placeholder="Select device" />
+          )}
+        />
 
-          <TextField
-            label={isSwitch ? 'Network Password' : 'WiFi Password'}
-            type="password"
-            value={data.wifiPassword}
-            onChange={(e) => onUpdate('wifiPassword', e.target.value)}
-            size="small"
-            fullWidth
-            disabled={inherited}
-            placeholder="Network password"
-            autoComplete="new-password"
-            helperText={inherited ? 'Inherited — change on the WiFi Switch' : undefined}
-          />
-        </>
-      )}
+        {showWifi && (
+          <>
+            <Divider />
+            <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1 }}>
+              {isSwitch ? 'Provided Network' : 'WiFi Connection'}
+            </Typography>
+            <TextField
+              label={isSwitch ? 'Network SSID (provided)' : 'WiFi SSID'}
+              value={data.wifiSsid}
+              onChange={(e) => onUpdate('wifiSsid', e.target.value)}
+              size="small"
+              fullWidth
+              disabled={inherited}
+              placeholder={isSwitch ? 'SSID this switch broadcasts' : 'Network name'}
+              helperText={
+                isSwitch ? 'Connected devices inherit this SSID automatically'
+                  : inherited ? `Inherited from "${parentSwitch!.data.label || 'WiFi Switch'}"` : undefined
+              }
+            />
+            <TextField
+              label={isSwitch ? 'Network Password' : 'WiFi Password'}
+              type="password"
+              value={data.wifiPassword}
+              onChange={(e) => onUpdate('wifiPassword', e.target.value)}
+              size="small"
+              fullWidth
+              disabled={inherited}
+              placeholder="Network password"
+              autoComplete="new-password"
+              helperText={inherited ? 'Inherited — change on the WiFi Switch' : undefined}
+            />
+          </>
+        )}
 
-      {showUart && (
-        <>
-          <Divider />
-          <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1 }}>UART</Typography>
-          <TextField
-            label="Baud Rate"
-            select
-            value={data.uartBaudRate || 115200}
-            onChange={(e) => onUpdate('uartBaudRate', Number(e.target.value))}
-            size="small"
-            fullWidth
-          >
-            {BAUD_RATES.map((baud) => (
-              <MenuItem key={baud} value={baud}>{baud}</MenuItem>
-            ))}
-          </TextField>
-        </>
-      )}
-
-      <Box sx={{ mt: 'auto', pt: 1 }}>
-        <Typography variant="caption" color="text.secondary">
-          Node ID: {node.id}
-        </Typography>
-      </Box>
-    </Paper>
+        {showUart && (
+          <>
+            <Divider />
+            <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1 }}>UART</Typography>
+            <TextField
+              label="Baud Rate"
+              select
+              value={data.uartBaudRate || 115200}
+              onChange={(e) => onUpdate('uartBaudRate', Number(e.target.value))}
+              size="small"
+              fullWidth
+            >
+              {BAUD_RATES.map((baud) => (
+                <MenuItem key={baud} value={baud}>{baud}</MenuItem>
+              ))}
+            </TextField>
+          </>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button color="error" startIcon={<DeleteIcon />} onClick={() => { onDelete(); onClose(); }}>
+          Delete
+        </Button>
+        <Box sx={{ flexGrow: 1 }} />
+        <Button onClick={onClose} variant="contained">Done</Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
 // ─── Default data per node type ───────────────────────────────────────────────
 
 const DEFAULT_DATA: Record<DeviceNodeType, Omit<DeviceNodeData, 'nodeType'>> = {
-  'wifi-device':      { label: 'WiFi Device',      serialNumber: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 0 },
-  'wifi-uart-bridge': { label: 'WiFi/UART Bridge', serialNumber: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 115200 },
-  'wifi-switch':      { label: 'WiFi Switch',       serialNumber: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 0 },
-  'uart-device':      { label: 'UART Device',       serialNumber: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 115200 },
+  'wifi-device':      { label: 'WiFi Device',      deviceName: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 0 },
+  'wifi-uart-bridge': { label: 'WiFi/UART Bridge', deviceName: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 115200 },
+  'wifi-switch':      { label: 'WiFi Switch',       deviceName: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 0 },
+  'uart-device':      { label: 'UART Device',       deviceName: '', wifiSsid: '', wifiPassword: '', uartBaudRate: 115200 },
 };
 
 // ─── Editor (inside ReactFlowProvider) ───────────────────────────────────────
@@ -393,6 +365,7 @@ function ArchitectureEditor({ userName }: { userName: string }) {
   const [nodes, setNodes] = useState<DeviceNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -415,9 +388,7 @@ function ArchitectureEditor({ userName }: { userName: string }) {
         setEdges((arch.edges ?? []) as unknown as Edge[]);
       }
       setDeviceOptions(
-        devices
-          .filter((d: MinisDeviceModel) => d.sn)
-          .map((d: MinisDeviceModel) => ({ label: `${d.name} (${d.sn})`, sn: d.sn }))
+        devices.map((d: MinisDeviceModel) => ({ name: d.name }))
       );
     } catch {
       // 404 = no architecture yet, start fresh
@@ -477,6 +448,11 @@ function ArchitectureEditor({ userName }: { userName: string }) {
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     setSelectedId(node.id);
+  }, []);
+
+  const onNodeDoubleClick = useCallback<NodeMouseHandler>((_e, node) => {
+    setSelectedId(node.id);
+    setDialogOpen(true);
   }, []);
 
   const onPaneClick = useCallback(() => {
@@ -633,6 +609,7 @@ function ArchitectureEditor({ userName }: { userName: string }) {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeClick={onNodeClick}
+          onNodeDoubleClick={onNodeDoubleClick}
           onPaneClick={onPaneClick}
           fitView
           deleteKeyCode="Delete"
@@ -643,9 +620,11 @@ function ArchitectureEditor({ userName }: { userName: string }) {
         </ReactFlow>
       </Box>
 
-      {/* ── Config panel ─────────────────────────────────────────────────── */}
+      {/* ── Config dialog ─────────────────────────────────────────────────── */}
       {selectedNode && (
-        <ConfigPanel
+        <ConfigDialog
+          open={dialogOpen}
+          onClose={() => setDialogOpen(false)}
           node={selectedNode}
           parentSwitch={parentSwitch}
           deviceOptions={deviceOptions}

@@ -1,9 +1,6 @@
 import { Box, Typography, Card, CardContent, CardActionArea, Grid } from '@mui/material';
 import {
   People as PeopleIcon,
-  Devices as DevicesIcon,
-  Memory as MemoryIcon,
-  Assignment as AssignmentIcon,
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 
@@ -13,9 +10,6 @@ function AdminDashboardPage() {
 
   const cards = [
     { title: 'Users', desc: 'Manage users', icon: <PeopleIcon />, path: `/admin/${userName}/users` },
-    { title: 'DevicesDef', desc: 'Manage device definitions', icon: <DevicesIcon />, path: `/admin/${userName}/devicesdefs` },
-    { title: 'ModulesDef', desc: 'Manage module definitions', icon: <MemoryIcon />, path: `/admin/${userName}/modulesdefs` },
-    { title: 'ProjectDefs', desc: 'Manage project definitions', icon: <AssignmentIcon />, path: `/admin/${userName}/projectdefs` },
   ];
 
   return (

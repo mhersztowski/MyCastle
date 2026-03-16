@@ -2,6 +2,7 @@ import * as path from 'path';
 import type { MicroPythonCli } from './MicroPythonCli.js';
 import { MicroPythonCliLocal } from './MicroPythonCliLocal.js';
 import { MicroPythonProject } from './MicroPythonProject.js';
+import type { UpythonLibrary } from './MicroPythonProject.js';
 import type { DeployResult } from './MicroPythonCli.js';
 
 export interface MicroPythonServiceConfig {
@@ -27,9 +28,9 @@ export class MicroPythonService {
 
   get isAvailable(): boolean { return this.cli !== null; }
 
-  async deploy(userName: string, projectId: string, port: string): Promise<DeployResult> {
+  async deploy(userName: string, projectId: string, port: string, libraries?: UpythonLibrary[]): Promise<DeployResult> {
     if (!this.cli) throw new Error('MicroPython CLI not configured');
     const project = new MicroPythonProject(this.cli, this.rootDir, userName, projectId);
-    return project.deploy(port);
+    return project.deploy(port, libraries);
   }
 }

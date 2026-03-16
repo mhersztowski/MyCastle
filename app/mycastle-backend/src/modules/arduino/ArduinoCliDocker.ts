@@ -69,4 +69,13 @@ export class ArduinoCliDocker implements ArduinoCli {
       return { success: false, output: cmdLine + (e.stdout ?? '') + (e.stderr ?? ''), exitCode: e.code ?? 1 };
     }
   }
+
+  async libInstall(lib: { name: string; version?: string; url?: string }, configFilePath: string): Promise<void> {
+    if (lib.url) {
+      await this.exec(['lib', 'install', '--git-url', lib.url, '--config-file', configFilePath]);
+    } else {
+      const spec = lib.version ? `${lib.name}@${lib.version}` : lib.name;
+      await this.exec(['lib', 'install', spec, '--config-file', configFilePath]);
+    }
+  }
 }
