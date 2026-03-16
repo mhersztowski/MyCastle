@@ -100,19 +100,25 @@ export class MpySerialReplService {
 
   /**
    * Save code to a file on the device using raw REPL file operations.
-   * Uses chunked write to handle long scripts safely.
+   * Sends file in small chunks to avoid raw REPL timeout on large files.
    */
   async saveToFile(filename: string, code: string): Promise<void> {
-    // Escape single quotes in code so it can be passed inside f(write('...')
+    const LINES_PER_CHUNK = 20;
     const lines = code.split('\n');
-    let script = `f = open(${JSON.stringify(filename)}, 'w')\n`;
-    for (const line of lines) {
-      // Escape backslashes and quotes for safe embedding
-      const escaped = line.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      script += `f.write('${escaped}\\n')\n`;
+
+    await this.execCode(`f = open(${JSON.stringify(filename)}, 'w')`);
+
+    for (let i = 0; i < lines.length; i += LINES_PER_CHUNK) {
+      const chunk = lines.slice(i, i + LINES_PER_CHUNK);
+      let script = '';
+      for (const line of chunk) {
+        const escaped = line.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        script += `f.write('${escaped}\\n')\n`;
+      }
+      await this.execCode(script);
     }
-    script += `f.close()\n`;
-    await this.execCode(script);
+
+    await this.execCode(`f.close()`);
   }
 
   // ---------------------------------------------------------------------------

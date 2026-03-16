@@ -36,9 +36,10 @@ interface UploadDialogProps {
   projectId?: string;
   deviceName?: string;
   libraries?: Array<{ url: string; remoteName: string }>;
+  minisConfig?: { wifiSsid: string; wifiPassword: string; serialNumber: string };
 }
 
-function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries }: UploadDialogProps) {
+function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries, minisConfig }: UploadDialogProps) {
   const [tab, setTab] = useState(0);
   const [uploadMode, setUploadMode] = useState<UploadMode>('run');
   const [baudRate, setBaudRate] = useState(115200);
@@ -81,11 +82,23 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
   const uploadLibraries = async (svc: { saveToFile: (name: string, content: string) => Promise<void> }) => {
     for (const lib of libraries ?? []) {
       appendLog(`Fetching ${lib.remoteName}...`);
-      const res = await fetch(lib.url);
+      const url = lib.url.startsWith('data:')
+        ? lib.url
+        : lib.url + (lib.url.includes('?') ? '&' : '?') + '_cb=' + Date.now();
+      const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`Failed to fetch ${lib.remoteName}: HTTP ${res.status}`);
       const content = await res.text();
       appendLog(`Saving ${lib.remoteName} to device...`);
       await svc.saveToFile(lib.remoteName, content);
+    }
+    if (minisConfig) {
+      const configContent = [
+        `MINIS_DEVICE_SN = ${JSON.stringify(minisConfig.serialNumber)}`,
+        `MINIS_WIFI_SSID = ${JSON.stringify(minisConfig.wifiSsid)}`,
+        `MINIS_WIFI_PASSWORD = ${JSON.stringify(minisConfig.wifiPassword)}`,
+      ].join('\n') + '\n';
+      appendLog('Saving MinisConfig.py to device...');
+      await svc.saveToFile('MinisConfig.py', configContent);
     }
   };
 

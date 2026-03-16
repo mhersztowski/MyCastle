@@ -92,6 +92,7 @@ function UPythonProjectPage() {
   const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
   const initialSketch = searchParams.get('sketch');
   const [uploadCode, setUploadCode] = useState('');
+  const [uploadConfig, setUploadConfig] = useState<{ wifiSsid: string; wifiPassword: string; serialNumber: string } | undefined>(undefined);
   const [projectLibraries, setProjectLibraries] = useState<Array<{ url: string; remoteName: string }>>([]);
 
   // Keep ref in sync for use inside Blockly listener
@@ -278,24 +279,15 @@ function UPythonProjectPage() {
 
   const openUploadDialog = async () => {
     const rawCode = editorRef.current?.getContent() ?? generatedCode;
-    let code = rawCode;
+    let cfg: { wifiSsid: string; wifiPassword: string; serialNumber: string } | undefined;
     if (userName && selectedDeviceName) {
       try {
-        const cfg = await minisApi.getDeviceMinisConfig(userName, selectedDeviceName);
-        if (cfg.wifiSsid || cfg.serialNumber) {
-          const header = [
-            '# === MyCastle Device Configuration (auto-generated) ===',
-            `MINIS_WIFI_SSID = ${JSON.stringify(cfg.wifiSsid)}`,
-            `MINIS_WIFI_PASSWORD = ${JSON.stringify(cfg.wifiPassword)}`,
-            `MINIS_DEVICE_SN = ${JSON.stringify(cfg.serialNumber)}`,
-            '# =========================================================',
-            '',
-          ].join('\n');
-          code = header + rawCode;
-        }
-      } catch { /* non-critical — upload without injection */ }
+        const fetched = await minisApi.getDeviceMinisConfig(userName, selectedDeviceName);
+        if (fetched.wifiSsid || fetched.serialNumber) cfg = fetched;
+      } catch { /* non-critical */ }
     }
-    setUploadCode(code);
+    setUploadConfig(cfg);
+    setUploadCode(rawCode);
     setUploadOpen(true);
   };
 
@@ -730,6 +722,7 @@ function UPythonProjectPage() {
         projectId={projectId}
         deviceName={selectedDeviceName || undefined}
         libraries={projectLibraries}
+        minisConfig={uploadConfig}
       />
 
       {/* Confirm overwrite dialog */}

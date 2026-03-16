@@ -3,6 +3,7 @@ import type { Client as AedesClient, PublishPacket } from 'aedes';
 import aedes from 'aedes';
 const { createBroker } = aedes as unknown as { createBroker: () => AedesServer };
 import { createServer as createHttpServer, Server as HttpServer, IncomingMessage } from 'http';
+import { createServer as createTcpServer, Server as TcpServer } from 'net';
 import { WebSocketServer, WebSocket, createWebSocketStream } from 'ws';
 import { Duplex } from 'stream';
 import * as url from 'url';
@@ -37,6 +38,7 @@ export class MqttServer {
   private aedes: AedesServer;
   private httpServer: HttpServer;
   private wss: WebSocketServer;
+  private tcpServer: TcpServer | null = null;
   private externalHttpServer: boolean;
   private fileSystem: FileSystem;
   private automateService: IAutomateService | null = null;
@@ -259,15 +261,33 @@ export class MqttServer {
     });
   }
 
+  /** Start a plain TCP MQTT listener (for umqtt.simple / standard MQTT clients). */
+  async startTcp(port: number): Promise<void> {
+    this.tcpServer = createTcpServer((socket) => {
+      (this.aedes as any).handle(socket);
+    });
+
+    return new Promise((resolve, reject) => {
+      this.tcpServer!.listen(port, () => resolve());
+      this.tcpServer!.on('error', reject);
+    });
+  }
+
   async stop(): Promise<void> {
     return new Promise((resolve) => {
+      const closeTcp = () => {
+        if (this.tcpServer) {
+          this.tcpServer.close(() => resolve());
+        } else {
+          resolve();
+        }
+      };
+
       this.aedes.close(() => {
         if (this.externalHttpServer) {
-          resolve();
+          closeTcp();
         } else {
-          this.httpServer.close(() => {
-            resolve();
-          });
+          this.httpServer.close(() => closeTcp());
         }
       });
     });

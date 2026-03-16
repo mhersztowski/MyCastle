@@ -164,6 +164,11 @@ export class App {
       console.log(`HTTP Server started on port ${this.config.httpPort}`);
     }
 
+    // Plain TCP MQTT listener for embedded clients (umqtt.simple, standard MQTT)
+    const mqttTcpPort = process.env.MQTT_TCP_PORT ? parseInt(process.env.MQTT_TCP_PORT, 10) : 1884;
+    await this._mqttServer.startTcp(mqttTcpPort);
+    console.log(`MQTT TCP listener started on port ${mqttTcpPort}`);
+
     if (this.config.staticDir) {
       console.log(`Serving frontend from: ${this.config.staticDir}`);
     }

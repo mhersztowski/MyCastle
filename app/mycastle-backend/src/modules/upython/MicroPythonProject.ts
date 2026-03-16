@@ -22,7 +22,7 @@ export class MicroPythonProject {
   get srcDir(): string { return path.join(this.projectDir, 'src'); }
   get librariesDir(): string { return path.join(this.projectDir, 'libraries'); }
 
-  async deploy(port: string, libraries?: UpythonLibrary[]): Promise<DeployResult> {
+  async deploy(port: string, libraries?: UpythonLibrary[], inlineFiles?: Array<{ content: string; remoteName: string }>): Promise<DeployResult> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.srcDir);
@@ -56,6 +56,15 @@ export class MicroPythonProject {
         } catch (err) {
           libLogs.push(`[lib] fetch ${lib.remoteName} failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+      }
+    }
+
+    if (inlineFiles?.length) {
+      await fs.mkdir(this.librariesDir, { recursive: true });
+      for (const file of inlineFiles) {
+        const localPath = path.join(this.librariesDir, file.remoteName);
+        await fs.writeFile(localPath, file.content, 'utf-8');
+        files.push({ localPath, remoteName: file.remoteName });
       }
     }
 

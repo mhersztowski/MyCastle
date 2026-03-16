@@ -649,8 +649,8 @@ export class MycastleHttpServer extends HttpUploadServer {
     // Resolve SN from device list
     let serialNumber = '';
     try {
-      const deviceData = await this.readJsonFile(`Minis/Users/${userName}/Device.json`) as { items?: Array<{ name: string; sn?: string }> };
-      const device = (deviceData?.items ?? []).find(d => d.name === deviceName);
+      const deviceData = await this.readJsonFile(`Minis/Users/${userName}/Device.json`) as { devices?: Array<{ name: string; sn?: string }> };
+      const device = (deviceData?.devices ?? []).find(d => d.name === deviceName);
       serialNumber = device?.sn ?? '';
     } catch { /* ignore */ }
 
@@ -1318,8 +1318,25 @@ const { password, ...safeBody } = body;
       }
     } catch { /* ignore */ }
 
+    let minisConfigFile: Array<{ content: string; remoteName: string }> | undefined;
+    if (body.serialNumber) {
+      try {
+        const deviceData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as { devices?: Array<{ name?: string; sn?: string }> };
+        const device = (deviceData?.devices ?? []).find(d => d.sn === body.serialNumber);
+        if (device?.name) {
+          const config = await this.resolveMinisConfig(userName, device.name);
+          const content = [
+            `MINIS_DEVICE_SN = '${config.serialNumber}'`,
+            `MINIS_WIFI_SSID = '${config.wifiSsid}'`,
+            `MINIS_WIFI_PASSWORD = '${config.wifiPassword}'`,
+          ].join('\n') + '\n';
+          minisConfigFile = [{ content, remoteName: 'MinisConfig.py' }];
+        }
+      } catch { /* ignore */ }
+    }
+
     try {
-      const result = await this.upythonService.deploy(userName, projectId, body.port, upythonLibraries);
+      const result = await this.upythonService.deploy(userName, projectId, body.port, upythonLibraries, minisConfigFile);
       if (body.serialNumber) {
         await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'micropython', success: result.success });
       }
@@ -1426,7 +1443,7 @@ const { password, ...safeBody } = body;
         this.sendJsonResponse(res, 200, { serialNumber: '', wifiSsid: '', wifiPassword: '' });
         return;
       }
-      const config = await this.resolveMinisConfig(userName, sn);
+      const config = await this.resolveMinisConfig(userName, deviceName);
       this.sendJsonResponse(res, 200, { serialNumber: config.serialNumber, wifiSsid: config.wifiSsid, wifiPassword: config.wifiPassword });
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
