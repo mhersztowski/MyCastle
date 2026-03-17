@@ -18,19 +18,35 @@ TOPIC_PREFIX = f"minis/{MQTT_USER}/{MQTT_DEVICE}"
 
 TOPICS = {
     # device → server
-    "HEARTBEAT":   f"{TOPIC_PREFIX}/heartbeat",
-    "COMMAND_ACK": f"{TOPIC_PREFIX}/command/ack",
-    "EXT_VFS_RES": f"{TOPIC_PREFIX}/ext/vfs/res",
+    "HELLO":           f"{TOPIC_PREFIX}/hello",
+    "HEARTBEAT":       f"{TOPIC_PREFIX}/heartbeat",
+    "COMMAND_ACK":     f"{TOPIC_PREFIX}/command/ack",
+    "EXT_VFS_RES":     f"{TOPIC_PREFIX}/ext/vfs/res",
+    "EXT_VKBD_RES":    f"{TOPIC_PREFIX}/ext/vkbd/res",
+    "EXT_VMOUSE_RES":  f"{TOPIC_PREFIX}/ext/vmouse/res",
     # server → device
-    "COMMAND":     f"{TOPIC_PREFIX}/command",
-    "EXT_VFS_REQ": f"{TOPIC_PREFIX}/ext/vfs/req",
+    "COMMAND":         f"{TOPIC_PREFIX}/command",
+    "EXT_VFS_REQ":     f"{TOPIC_PREFIX}/ext/vfs/req",
+    "EXT_VKBD_REQ":    f"{TOPIC_PREFIX}/ext/vkbd/req",
+    "EXT_VMOUSE_REQ":  f"{TOPIC_PREFIX}/ext/vmouse/req",
 }
+
+# --- Extensions advertised in hello ---
+EXTENSIONS = [
+    {"type": "vfs",    "enabled": True},
+    {"type": "vkbd",   "enabled": True},
+    {"type": "vmouse", "enabled": True},
+]
 
 # --- Heartbeat ---
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))   # seconds
 
 # --- VFS extension ---
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+
+# --- Virtual input extensions ---
+# Set to "1" to log actions without executing them (useful when client runs on the same machine as the browser)
+VIRTUAL_INPUT_DRY_RUN = os.getenv("VIRTUAL_INPUT_DRY_RUN", "0") == "1"
 
 # --- Shell command execution limits ---
 SHELL_COMMAND_TIMEOUT = min(int(os.getenv("SHELL_COMMAND_TIMEOUT", "30")), 120)

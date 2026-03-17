@@ -13,6 +13,8 @@ import paho.mqtt.client as mqtt
 import config
 import operations
 from extensions.vfs import VfsExtension
+from extensions.virtual_keyboard import VirtualKeyboardExtension
+from extensions.virtual_mouse import VirtualMouseExtension
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +46,16 @@ class ClientAgent:
                 config.TOPICS["EXT_VFS_RES"], payload, qos=1
             ),
         )
+        self.vkbd = VirtualKeyboardExtension(
+            publish_fn=lambda payload: self.client.publish(
+                config.TOPICS["EXT_VKBD_RES"], payload, qos=1
+            ),
+        )
+        self.vmouse = VirtualMouseExtension(
+            publish_fn=lambda payload: self.client.publish(
+                config.TOPICS["EXT_VMOUSE_RES"], payload, qos=1
+            ),
+        )
 
     # --- MQTT callbacks ---
 
@@ -56,7 +68,10 @@ class ClientAgent:
             )
             client.subscribe(config.TOPICS["COMMAND"], qos=1)
             client.subscribe(config.TOPICS["EXT_VFS_REQ"], qos=1)
+            client.subscribe(config.TOPICS["EXT_VKBD_REQ"], qos=1)
+            client.subscribe(config.TOPICS["EXT_VMOUSE_REQ"], qos=1)
             log.info(f"Subscribed | prefix={config.TOPIC_PREFIX} | vfs root={config.DATA_DIR}")
+            self._send_hello()
             self._send_heartbeat()
         else:
             log.error(f"Connection failed with code: {reason_code}")
@@ -77,6 +92,10 @@ class ClientAgent:
             self._handle_command(data)
         elif topic == config.TOPICS["EXT_VFS_REQ"]:
             self.vfs.handle_request(data)
+        elif topic == config.TOPICS["EXT_VKBD_REQ"]:
+            self.vkbd.handle_request(data)
+        elif topic == config.TOPICS["EXT_VMOUSE_REQ"]:
+            self.vmouse.handle_request(data)
 
     # --- Command handling (maps MyCastle commands to operations) ---
 
@@ -103,6 +122,14 @@ class ClientAgent:
         if reason:
             packet["reason"] = reason
         self.client.publish(config.TOPICS["COMMAND_ACK"], json.dumps(packet), qos=1)
+
+    # --- Hello (state announcement on connect) ---
+
+    def _send_hello(self):
+        uptime = int(time.time() - self._start_time)
+        packet = {"uptime": uptime, "extensions": config.EXTENSIONS}
+        self.client.publish(config.TOPICS["HELLO"], json.dumps(packet), qos=1)
+        log.info(f"Hello sent (extensions={[e['type'] for e in config.EXTENSIONS]})")
 
     # --- Heartbeat ---
 

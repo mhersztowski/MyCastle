@@ -236,7 +236,7 @@ mycastle/                           # Root monorepo
 - **Run MyCastle backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
 - **Run MyCastle frontend:** `pnpm dev:web` (port 1895, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
-- **Run client agent:** `cd app/client && python agent.py`
+- **Run client agent:** `app/client/run.sh` (auto-creates `.venv` i instaluje zależności przy pierwszym uruchomieniu)
 - **Test (unit):** `pnpm test` (all packages), `pnpm test:watch`, `pnpm test:coverage`
 - **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts mycastle-backend + mycastle-web)
 - **Typecheck:** `pnpm typecheck`

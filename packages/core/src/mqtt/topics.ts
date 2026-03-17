@@ -55,6 +55,21 @@ export const heartbeat = defineMqttTopic({
   }),
 });
 
+export const hello = defineMqttTopic({
+  pattern: 'minis/{userName}/{deviceName}/hello',
+  description: 'Device announces itself on connect with current state; server syncs extensions if different',
+  direction: 'device→server',
+  tags: ['IoT', 'Presence'],
+  payloadSchema: z.object({
+    uptime: z.number().optional(),
+    extensions: z.array(z.object({
+      type: z.string(),
+      enabled: z.boolean(),
+      options: z.record(z.unknown()).optional(),
+    })).optional(),
+  }),
+});
+
 export const command = defineMqttTopic({
   pattern: 'minis/{userName}/{deviceName}/command',
   description: 'Command sent to device',
@@ -198,6 +213,7 @@ export const extRes = defineMqttTopic({
 export const mqttTopics = {
   telemetry,
   heartbeat,
+  hello,
   command,
   commandAck,
   status,

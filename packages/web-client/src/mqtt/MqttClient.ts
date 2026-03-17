@@ -319,6 +319,25 @@ export class MqttClient {
       xhr.send(file);
     });
   }
+
+  /** Publish a raw MQTT message on any topic */
+  rawPublish(topic: string, payload: string): void {
+    this.client?.publish(topic, payload);
+  }
+
+  /** Subscribe to a raw MQTT topic. Returns an unsubscribe function. */
+  rawSubscribe(topic: string, callback: (payload: string) => void): () => void {
+    if (!this.client) return () => {};
+    const handler = (_topic: string, message: Buffer) => {
+      if (_topic === topic) callback(message.toString());
+    };
+    this.client.subscribe(topic);
+    this.client.on('message', handler);
+    return () => {
+      this.client?.unsubscribe(topic);
+      this.client?.off('message', handler);
+    };
+  }
 }
 
 export const mqttClient = new MqttClient();

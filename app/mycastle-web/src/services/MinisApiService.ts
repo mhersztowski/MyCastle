@@ -238,6 +238,15 @@ class MinisApiService {
     }
   }
 
+  async getIotExtensions(userName: string, deviceName: string): Promise<Array<{ type: string }>> {
+    try {
+      const res = await this.request<{ extensions: Array<{ type: string }> }>('GET', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/iot-extensions`);
+      return res.extensions;
+    } catch {
+      return [];
+    }
+  }
+
   async saveIotConfig(userName: string, deviceName: string, config: Partial<IotDeviceConfig>): Promise<IotDeviceConfig> {
     return this.request<IotDeviceConfig>('PUT', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/iot-config`, config);
   }
@@ -255,6 +264,10 @@ class MinisApiService {
   // IoT - Commands
   async sendCommand(userName: string, deviceName: string, name: string, payload: Record<string, unknown> = {}): Promise<DeviceCommand> {
     return this.request<DeviceCommand>('POST', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/commands`, { name, payload });
+  }
+
+  async extRequest(userName: string, deviceName: string, extType: string, payload: Record<string, unknown>): Promise<{ ok: boolean; data?: unknown }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/ext/${extType}`, payload);
   }
 
   async getCommands(userName: string, deviceName: string, limit = 50): Promise<DeviceCommand[]> {

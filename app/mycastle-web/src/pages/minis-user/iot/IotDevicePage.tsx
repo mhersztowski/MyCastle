@@ -1,39 +1,50 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   Box, Typography, Chip, Paper, Grid, Alert, CircularProgress,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
-  Card, CardContent,
+  Card, CardContent, IconButton, Divider,
 } from '@mui/material';
-import { Refresh, Send } from '@mui/icons-material';
+import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
+import { RemoteFS } from '@mhersztowski/core';
+import { VfsExplorer } from '@mhersztowski/web-client';
 import { minisApi } from '../../../services/MinisApiService';
+import { useAuth } from '../../../modules/auth';
+import { useGlobalWindows } from '../../../components/GlobalWindowsContext';
 import { EntityWidget, Sparkline } from './EntityWidgets';
 import type { OnCommand } from './EntityWidgets';
 import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel, MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
 
 function IotDevicePage() {
   const { userName, deviceName } = useParams<{ userName: string; deviceName: string }>();
+  const { token } = useAuth();
+  const { openWithParams } = useGlobalWindows();
   const [config, setConfig] = useState<IotDeviceConfig | null>(null);
   const [latestTelemetry, setLatestTelemetry] = useState<TelemetryRecord | null>(null);
   const [history, setHistory] = useState<TelemetryRecord[]>([]);
   const [commands, setCommands] = useState<DeviceCommand[]>([]);
   const [alerts, setAlerts] = useState<AlertModel[]>([]);
+  const [extensions, setExtensions] = useState<Array<{ type: string }>>([]);
   const [loading, setLoading] = useState(true);
+  const initialLoadDone = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [cmdDialogOpen, setCmdDialogOpen] = useState(false);
   const [cmdName, setCmdName] = useState('');
   const [cmdPayload, setCmdPayload] = useState('{}');
+  const [vfsDialogOpen, setVfsDialogOpen] = useState(false);
+  const [vkbdDialogOpen, setVkbdDialogOpen] = useState(false);
+  const [vmouseDialogOpen, setVmouseDialogOpen] = useState(false);
   const [deviceStatuses, setDeviceStatuses] = useState<Array<{ deviceId: string; status: string; lastSeenAt: number }>>([]);
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [deviceDefs, setDeviceDefs] = useState<MinisDeviceDefModel[]>([]);
 
   const load = useCallback(async () => {
     if (!userName || !deviceName) return;
-    setLoading(true);
+    if (!initialLoadDone.current) setLoading(true);
     try {
       const now = Date.now();
-      const [cfg, latest, hist, cmds, alertsList, statuses, allDevices, defs] = await Promise.all([
+      const [cfg, latest, hist, cmds, alertsList, statuses, allDevices, defs, exts] = await Promise.all([
         minisApi.getIotConfig(userName, deviceName),
         minisApi.getTelemetryLatest(userName, deviceName),
         minisApi.getTelemetryHistory(userName, deviceName, now - 3600000, now, 100),
@@ -42,13 +53,15 @@ function IotDevicePage() {
         minisApi.getIotDevices(userName),
         minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(userName),
+        minisApi.getIotExtensions(userName, deviceName),
       ]);
       const iotId = allDevices.find((d) => d.name === deviceName)?.sn || deviceName;
       setConfig(cfg);
+      setExtensions(exts);
       setLatestTelemetry('metrics' in latest ? latest as TelemetryRecord : null);
       setHistory(hist);
       setCommands(cmds);
-      setAlerts(alertsList.filter((a) => a.deviceId === iotId));
+      setAlerts(alertsList.filter((a) => a.deviceId === iotId || a.deviceId === deviceName));
       setDeviceStatuses(statuses);
       setDevices(allDevices);
       setDeviceDefs(defs);
@@ -56,6 +69,7 @@ function IotDevicePage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
+      initialLoadDone.current = true;
       setLoading(false);
     }
   }, [userName, deviceName]);
@@ -104,14 +118,26 @@ function IotDevicePage() {
 
   const currentDevice = devices.find((d) => d.name === deviceName);
   const iotId = currentDevice?.sn || deviceName;
-  const deviceStatus = deviceStatuses.find((s) => s.deviceId === iotId);
-  const statusLabel = deviceStatus?.status ?? 'UNKNOWN';
+  const deviceStatus = deviceStatuses.find((s) => s.deviceId === iotId)
+    ?? deviceStatuses.find((s) => s.deviceId === deviceName);
+  const statusLabel = deviceStatus?.status ?? 'OFFLINE';
   const statusColor = statusLabel === 'ONLINE' ? 'success' : statusLabel === 'OFFLINE' ? 'error' : 'default';
   const deviceDisplayName = currentDevice?.name || deviceDefs.find((d) => d.id === currentDevice?.deviceDefId)?.name || deviceName;
   const isOffline = statusLabel !== 'ONLINE';
 
   const entities = config?.entities ?? [];
   const hasEntities = entities.length > 0;
+  const hasVfs = extensions.some((e) => e.type === 'vfs');
+  const hasVkbd = extensions.some((e) => e.type === 'vkbd');
+  const hasVmouse = extensions.some((e) => e.type === 'vmouse');
+
+  const vfsProvider = useMemo(() => {
+    if (!userName || !deviceName) return null;
+    return new RemoteFS({
+      baseUrl: `/api/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/vfs`,
+      token: token ?? undefined,
+    });
+  }, [userName, deviceName, token]);
 
   const getMetricHistory = (metricKey: string): number[] => {
     const values: number[] = [];
@@ -131,7 +157,32 @@ function IotDevicePage() {
           <Typography variant="h4">{deviceDisplayName}</Typography>
           <Chip label={statusLabel} color={statusColor as any} />
         </Box>
-        <Button startIcon={<Refresh />} onClick={load}>Refresh</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          {hasVfs && vfsProvider && (
+            <Button
+              startIcon={<Code />}
+              variant="outlined"
+              onClick={() => openWithParams('vfs', {
+                provider: vfsProvider,
+                mountPath: '/device',
+                label: deviceName!,
+              })}
+            >
+              Editor
+            </Button>
+          )}
+          {hasVkbd && (
+            <Button startIcon={<Keyboard />} variant="outlined" onClick={() => setVkbdDialogOpen(true)} disabled={isOffline}>
+              Keyboard
+            </Button>
+          )}
+          {hasVmouse && (
+            <Button startIcon={<Mouse />} variant="outlined" onClick={() => setVmouseDialogOpen(true)} disabled={isOffline}>
+              Mouse
+            </Button>
+          )}
+          <Button startIcon={<Refresh />} onClick={load}>Refresh</Button>
+        </Box>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -213,6 +264,35 @@ function IotDevicePage() {
             )}
           </Paper>
         </Grid>
+
+        {/* Extensions */}
+        {extensions.length > 0 && (
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>Extensions</Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                {extensions.map((ext) => (
+                  <Chip key={ext.type} label={ext.type} color="primary" size="small" />
+                ))}
+                {hasVfs && (
+                  <Button size="small" startIcon={<FolderOpen />} onClick={() => setVfsDialogOpen(true)} sx={{ ml: 1 }}>
+                    Browse Files
+                  </Button>
+                )}
+                {hasVkbd && (
+                  <Button size="small" startIcon={<Keyboard />} onClick={() => setVkbdDialogOpen(true)} disabled={isOffline} sx={{ ml: 1 }}>
+                    Keyboard
+                  </Button>
+                )}
+                {hasVmouse && (
+                  <Button size="small" startIcon={<Mouse />} onClick={() => setVmouseDialogOpen(true)} disabled={isOffline} sx={{ ml: 1 }}>
+                    Mouse
+                  </Button>
+                )}
+              </Box>
+            </Paper>
+          </Grid>
+        )}
 
         {/* Telemetry History */}
         <Grid item xs={12}>
@@ -321,6 +401,23 @@ function IotDevicePage() {
         </Grid>
       </Grid>
 
+      {/* VFS Browser Dialog */}
+      <Dialog open={vfsDialogOpen} onClose={() => setVfsDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          Device Files — {deviceName}
+          <IconButton size="small" onClick={() => setVfsDialogOpen(false)}><Close /></IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, height: 500 }}>
+          {vfsProvider && (
+            <VfsExplorer
+              provider={vfsProvider}
+              rootPath="/"
+              height="100%"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Send Command Dialog */}
       <Dialog open={cmdDialogOpen} onClose={() => setCmdDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Send Command</DialogTitle>
@@ -341,7 +438,261 @@ function IotDevicePage() {
           <Button variant="contained" onClick={handleSendCommand} disabled={!cmdName}>Send</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Virtual Keyboard Dialog */}
+      {hasVkbd && userName && deviceName && (
+        <VirtualKeyboardDialog
+          open={vkbdDialogOpen}
+          onClose={() => setVkbdDialogOpen(false)}
+          userName={userName}
+          deviceName={deviceName}
+        />
+      )}
+
+      {/* Virtual Mouse Dialog */}
+      {hasVmouse && userName && deviceName && (
+        <VirtualMouseDialog
+          open={vmouseDialogOpen}
+          onClose={() => setVmouseDialogOpen(false)}
+          userName={userName}
+          deviceName={deviceName}
+        />
+      )}
     </Box>
+  );
+}
+
+// ─── VirtualKeyboardDialog ────────────────────────────────────────────────────
+
+const HOTKEY_PRESETS: Array<{ label: string; keys: string[] }> = [
+  { label: 'Ctrl+C',   keys: ['ctrl', 'c'] },
+  { label: 'Ctrl+V',   keys: ['ctrl', 'v'] },
+  { label: 'Ctrl+Z',   keys: ['ctrl', 'z'] },
+  { label: 'Ctrl+A',   keys: ['ctrl', 'a'] },
+  { label: 'Ctrl+S',   keys: ['ctrl', 's'] },
+  { label: 'Ctrl+X',   keys: ['ctrl', 'x'] },
+  { label: 'Alt+F4',   keys: ['alt', 'f4'] },
+  { label: 'Alt+Tab',  keys: ['alt', 'tab'] },
+  { label: 'Win+D',    keys: ['win', 'd'] },
+  { label: 'Win+L',    keys: ['win', 'l'] },
+];
+
+const SPECIAL_KEYS: Array<{ label: string; key: string }> = [
+  { label: 'Esc',    key: 'esc' },
+  { label: 'Tab',    key: 'tab' },
+  { label: 'Enter',  key: 'enter' },
+  { label: '⌫',      key: 'backspace' },
+  { label: 'Del',    key: 'delete' },
+  { label: 'Space',  key: 'space' },
+  { label: '↑',      key: 'up' },
+  { label: '↓',      key: 'down' },
+  { label: '←',      key: 'left' },
+  { label: '→',      key: 'right' },
+  { label: 'Home',   key: 'home' },
+  { label: 'End',    key: 'end' },
+  { label: 'PgUp',   key: 'pageup' },
+  { label: 'PgDn',   key: 'pagedown' },
+];
+
+function VirtualKeyboardDialog({ open, onClose, userName, deviceName }: {
+  open: boolean; onClose: () => void; userName: string; deviceName: string;
+}) {
+  const [typeText, setTypeText] = useState('');
+  const [customKey, setCustomKey] = useState('');
+  const [status, setStatus] = useState<string | null>(null);
+
+  const send = async (op: string, params: Record<string, unknown>) => {
+    try {
+      await minisApi.extRequest(userName, deviceName, 'vkbd', { op, ...params });
+      setStatus(null);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Error');
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        Virtual Keyboard — {deviceName}
+        <IconButton size="small" onClick={onClose}><Close /></IconButton>
+      </DialogTitle>
+      <DialogContent>
+        {status && <Alert severity="error" sx={{ mb: 2 }}>{status}</Alert>}
+
+        {/* Type text */}
+        <Typography variant="subtitle2" gutterBottom>Type Text</Typography>
+        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+          <TextField
+            size="small" fullWidth label="Text to type" value={typeText}
+            onChange={(e) => setTypeText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { send('type_text', { text: typeText }); setTypeText(''); } }}
+          />
+          <Button variant="contained" onClick={() => { send('type_text', { text: typeText }); setTypeText(''); }} disabled={!typeText}>
+            Send
+          </Button>
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Special keys */}
+        <Typography variant="subtitle2" gutterBottom>Special Keys</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 2 }}>
+          {SPECIAL_KEYS.map(({ label, key }) => (
+            <Button key={key} size="small" variant="outlined" onClick={() => send('key_press', { key })}
+              sx={{ minWidth: 52, fontFamily: 'monospace' }}>
+              {label}
+            </Button>
+          ))}
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Hotkeys */}
+        <Typography variant="subtitle2" gutterBottom>Hotkeys</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 2 }}>
+          {HOTKEY_PRESETS.map(({ label, keys }) => (
+            <Button key={label} size="small" variant="outlined" onClick={() => send('hotkey', { keys })}
+              sx={{ fontFamily: 'monospace' }}>
+              {label}
+            </Button>
+          ))}
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Custom key */}
+        <Typography variant="subtitle2" gutterBottom>Custom Key</Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <TextField size="small" label="Key name (e.g. f5, ctrl)" value={customKey}
+            onChange={(e) => setCustomKey(e.target.value)} sx={{ flex: 1 }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && customKey) { send('key_press', { key: customKey }); } }}
+          />
+          <Button variant="outlined" onClick={() => send('key_press', { key: customKey })} disabled={!customKey}>Press</Button>
+        </Box>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── VirtualMouseDialog ───────────────────────────────────────────────────────
+
+function VirtualMouseDialog({ open, onClose, userName, deviceName }: {
+  open: boolean; onClose: () => void; userName: string; deviceName: string;
+}) {
+  const [posX, setPosX] = useState('');
+  const [posY, setPosY] = useState('');
+  const [step, setStep] = useState('50');
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [screenSize, setScreenSize] = useState<{ width: number; height: number } | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const send = async (op: string, params: Record<string, unknown> = {}) => {
+    try {
+      const res = await minisApi.extRequest(userName, deviceName, 'vmouse', { op, ...params });
+      setStatus(null);
+      return (res as { data?: unknown }).data;
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Error');
+      return undefined;
+    }
+  };
+
+  const refreshPos = async () => {
+    const data = await send('get_pos') as { x: number; y: number } | undefined;
+    if (data) setCursorPos(data);
+  };
+
+  const refreshSize = async () => {
+    const data = await send('get_size') as { width: number; height: number } | undefined;
+    if (data) setScreenSize(data);
+  };
+
+  const px = parseInt(step) || 50;
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        Virtual Mouse — {deviceName}
+        <IconButton size="small" onClick={onClose}><Close /></IconButton>
+      </DialogTitle>
+      <DialogContent>
+        {status && <Alert severity="error" sx={{ mb: 2 }}>{status}</Alert>}
+
+        {/* Info */}
+        <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+          <Typography variant="body2">
+            Cursor: {cursorPos ? `(${cursorPos.x}, ${cursorPos.y})` : '—'}
+          </Typography>
+          <Typography variant="body2">
+            Screen: {screenSize ? `${screenSize.width}×${screenSize.height}` : '—'}
+          </Typography>
+          <Button size="small" startIcon={<Refresh />} onClick={() => { refreshPos(); refreshSize(); }}>
+            Refresh
+          </Button>
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Click buttons */}
+        <Typography variant="subtitle2" gutterBottom>Click</Typography>
+        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+          <Button variant="outlined" onClick={() => send('click', { button: 'left' })}>Left</Button>
+          <Button variant="outlined" onClick={() => send('double_click', { button: 'left' })}>Double</Button>
+          <Button variant="outlined" onClick={() => send('click', { button: 'right' })}>Right</Button>
+          <Button variant="outlined" onClick={() => send('click', { button: 'middle' })}>Middle</Button>
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Scroll */}
+        <Typography variant="subtitle2" gutterBottom>Scroll</Typography>
+        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+          <Button variant="outlined" onClick={() => send('scroll', { dy: 3 })}>↑ Up</Button>
+          <Button variant="outlined" onClick={() => send('scroll', { dy: -3 })}>↓ Down</Button>
+          <Button variant="outlined" onClick={() => send('scroll', { dx: 3 })}>→ Right</Button>
+          <Button variant="outlined" onClick={() => send('scroll', { dx: -3 })}>← Left</Button>
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* D-pad move */}
+        <Typography variant="subtitle2" gutterBottom>
+          Move relative
+          <TextField size="small" label="step px" value={step} onChange={(e) => setStep(e.target.value)}
+            sx={{ ml: 1, width: 80 }} inputProps={{ style: { padding: '4px 8px' } }} />
+        </Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0.5, width: 160, mb: 2 }}>
+          <Box />
+          <Button variant="outlined" size="small" onClick={() => send('move_rel', { dx: 0, dy: -px })}>↑</Button>
+          <Box />
+          <Button variant="outlined" size="small" onClick={() => send('move_rel', { dx: -px, dy: 0 })}>←</Button>
+          <Button variant="outlined" size="small" onClick={() => { refreshPos(); }}>•</Button>
+          <Button variant="outlined" size="small" onClick={() => send('move_rel', { dx: px, dy: 0 })}>→</Button>
+          <Box />
+          <Button variant="outlined" size="small" onClick={() => send('move_rel', { dx: 0, dy: px })}>↓</Button>
+          <Box />
+        </Box>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Absolute move */}
+        <Typography variant="subtitle2" gutterBottom>Move to position</Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <TextField size="small" label="X" value={posX} onChange={(e) => setPosX(e.target.value)} sx={{ width: 80 }} />
+          <TextField size="small" label="Y" value={posY} onChange={(e) => setPosY(e.target.value)} sx={{ width: 80 }} />
+          <Button variant="contained"
+            onClick={() => send('move', { x: parseInt(posX), y: parseInt(posY) })}
+            disabled={!posX || !posY}>
+            Move
+          </Button>
+          <Button variant="outlined"
+            onClick={() => send('click', { button: 'left', x: parseInt(posX), y: parseInt(posY) })}
+            disabled={!posX || !posY}>
+            Click here
+          </Button>
+        </Box>
+      </DialogContent>
+    </Dialog>
   );
 }
 

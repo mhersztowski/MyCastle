@@ -22,6 +22,8 @@ interface MqttContextValue {
   uploadFile: (path: string, file: File | Blob, onProgress?: (progress: number) => void) => Promise<BinaryFileData>;
   readBinaryFile: (path: string) => Promise<BinaryFileData>;
   syncDirinfo: (path: string) => Promise<unknown>;
+  rawPublish: (topic: string, payload: string) => void;
+  rawSubscribe: (topic: string, callback: (payload: string) => void) => () => void;
 }
 
 const MqttContext = createContext<MqttContextValue | null>(null);
@@ -153,6 +155,8 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUserna
     uploadFile,
     readBinaryFile,
     syncDirinfo,
+    rawPublish: useCallback((topic: string, payload: string) => mqttClient.rawPublish(topic, payload), []),
+    rawSubscribe: useCallback((topic: string, callback: (payload: string) => void) => mqttClient.rawSubscribe(topic, callback), []),
   };
 
   return <MqttContext.Provider value={value}>{children}</MqttContext.Provider>;

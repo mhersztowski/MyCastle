@@ -106,6 +106,32 @@ export class IotService {
     }
   }
 
+  // Called when MQTT message arrives on minis/+/+/hello
+  // Device announces itself on connect — immediately mark online and sync extensions in-memory.
+  // Extensions are not persisted: the device re-announces on every reconnect.
+  handleHello(userId: string, deviceId: string, payload: { uptime?: number; extensions?: Array<{ type: string; enabled: boolean; options?: Record<string, unknown> }> }): void {
+    console.log(`[IoT] hello: userId=${userId} deviceId=${deviceId}`);
+    const config = this.telemetry.getConfig(deviceId);
+    const heartbeatSec = config?.heartbeatIntervalSec ?? 60;
+    this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
+
+    if (payload.extensions?.length) {
+      const topicPrefix = config?.topicPrefix ?? `minis/${userId}/${deviceId}`;
+      this.extensions.syncFromConfig({
+        deviceId,
+        userId,
+        topicPrefix,
+        heartbeatIntervalSec: heartbeatSec,
+        capabilities: config?.capabilities ?? [],
+        extensions: payload.extensions,
+        createdAt: config?.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+      });
+    } else if (config) {
+      this.extensions.syncFromConfig(config);
+    }
+  }
+
   // Called when MQTT message arrives on minis/+/+/heartbeat
   handleHeartbeat(userId: string, deviceId: string, _payload: { uptime?: number; rssi?: number; battery?: number }): void {
     console.log(`[IoT] heartbeat: userId=${userId} deviceId=${deviceId}`);
@@ -174,6 +200,15 @@ export class IotService {
           return;
         }
         this.handleHeartbeat(userName, deviceName, result.data);
+        break;
+      }
+      case 'hello': {
+        const result = mqttTopics.hello.payloadSchema.safeParse(raw);
+        if (!result.success) {
+          console.warn(`[IoT] hello schema mismatch:`, result.error.issues);
+          return;
+        }
+        this.handleHello(userName, deviceName, result.data);
         break;
       }
       case 'command/ack': {

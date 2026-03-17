@@ -122,6 +122,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
         {
           text: 'IoT', icon: <RouterIcon />, children: [
             { text: 'Dashboard', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard` },
+            { text: 'Dashboard 2', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard2` },
             { text: 'Devices', icon: <SensorsIcon />, path: `/user/${userName}/iot/devices` },
             { text: 'Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userName}/iot/alerts` },
             { text: 'Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },

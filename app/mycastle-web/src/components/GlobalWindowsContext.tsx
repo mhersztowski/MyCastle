@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
+import type { FileSystemProvider } from '@mhersztowski/core';
 
 export type WindowName = 'apiDocs' | 'rpcExplorer' | 'mqttExplorer' | 'mjdDefEditor' | 'mjdDataEditor' | 'terminal' | 'vfs';
 type WindowState = 'open' | 'minimized';
@@ -13,9 +14,19 @@ export interface MjdDataEditorParams {
   dataPath: string;
 }
 
+export interface VfsDeviceParams {
+  /** VFS provider to mount (e.g. RemoteFS pointing to a device's VFS endpoint) */
+  provider: FileSystemProvider;
+  /** Mount path inside the CompositeFS, e.g. '/device' */
+  mountPath: string;
+  /** Human-readable label shown in the mount list */
+  label: string;
+}
+
 export interface WindowParamsMap {
   mjdDefEditor: MjdDefEditorParams;
   mjdDataEditor: MjdDataEditorParams;
+  vfs: VfsDeviceParams;
 }
 
 export interface WindowConfig {

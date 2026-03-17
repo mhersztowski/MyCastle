@@ -52,6 +52,8 @@ import {
   UserProjectsPage,
   UserUPythonProjectsPage,
   IotDashboardPage,
+  IotDashboard2Page,
+  IotDashboard2ConfigPage,
   IotDevicesPage,
   IotDevicePage,
   IotAlertsPage,
@@ -151,6 +153,8 @@ function AppRoot() {
                   <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />
                   <Route path="/user/:userName/electronics/upython" element={<UserUPythonProjectsPage />} />
                   <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />
+                  <Route path="/user/:userName/iot/dashboard2" element={<IotDashboard2Page />} />
+                  <Route path="/user/:userName/iot/dashboard2/config" element={<IotDashboard2ConfigPage />} />
                   <Route path="/user/:userName/iot/devices" element={<IotDevicesPage />} />
                   <Route path="/user/:userName/iot/device/:deviceName" element={<IotDevicePage />} />
                   <Route path="/user/:userName/iot/alerts" element={<IotAlertsPage />} />

@@ -250,6 +250,34 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     // IoT endpoints (must be matched BEFORE generic user devices/projects routes)
 
+    // Virtual input extensions: POST /users/{userName}/devices/{deviceName}/ext/{vkbd|vmouse}
+    const extReqMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/ext\/(vkbd|vmouse)$/);
+    if (extReqMatch && method === 'POST') {
+      const userName = decodeURIComponent(extReqMatch[1]);
+      const deviceName = decodeURIComponent(extReqMatch[2]);
+      const extType = extReqMatch[3] as 'vkbd' | 'vmouse';
+      await this.handleVirtualInputExt(req, res, userName, deviceName, extType);
+      return;
+    }
+
+    // Device VFS: /users/{userName}/devices/{deviceName}/vfs/{operation} — user-scoped (no admin required)
+    const deviceVfsMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/vfs\/([a-zA-Z]+)$/);
+    if (deviceVfsMatch) {
+      const deviceName = decodeURIComponent(deviceVfsMatch[2]);
+      const operation = deviceVfsMatch[3];
+      await this.handleDeviceVfs(req, res, method, deviceName, operation);
+      return;
+    }
+
+    // IoT extensions (active, from hello): /users/{userName}/devices/{deviceName}/iot-extensions
+    const iotExtensionsMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-extensions$/);
+    if (iotExtensionsMatch) {
+      const deviceName = decodeURIComponent(iotExtensionsMatch[2]);
+      const types = this.iotService?.extensions.getActiveExtensions(deviceName) ?? [];
+      this.sendJsonResponse(res, 200, { extensions: types.map(type => ({ type })) });
+      return;
+    }
+
     // IoT config: /users/{userName}/devices/{deviceName}/iot-config
     const iotConfigMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-config$/);
     if (iotConfigMatch) {
@@ -863,6 +891,92 @@ export class MycastleHttpServer extends HttpUploadServer {
   }
 
   // --- VFS ---
+
+  /** Device VFS — user-scoped, no admin required. Paths are prefixed with /devices/{deviceName}. */
+  private async handleDeviceVfs(req: IncomingMessage, res: ServerResponse, _method: string, deviceName: string, operation: string): Promise<void> {
+    const urlObj = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+    const prefix = `/devices/${deviceName}`;
+    const prefix2 = (p: string) => (p === '/' ? prefix : `${prefix}${p}`);
+
+    try {
+      switch (operation) {
+        case 'capabilities':
+          this.sendJsonResponse(res, 200, this.vfs.capabilities); return;
+        case 'stat': {
+          const stat = await this.vfs.stat(prefix2(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, stat); return;
+        }
+        case 'readdir': {
+          const entries = await this.vfs.readDirectory(prefix2(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, { entries }); return;
+        }
+        case 'readFile': {
+          const data = await this.vfs.readFile(prefix2(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, { data: Buffer.from(data).toString('base64') }); return;
+        }
+        case 'writeFile': {
+          const wb = await this.parseRequestBody(req) as { data: string; options?: WriteFileOptions };
+          await this.vfs.writeFile!(prefix2(urlObj.searchParams.get('path') ?? '/'), new Uint8Array(Buffer.from(wb.data, 'base64')), wb.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'delete': {
+          const db = await this.parseRequestBody(req) as { options?: DeleteOptions };
+          await this.vfs.delete!(prefix2(urlObj.searchParams.get('path') ?? '/'), db.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'rename': {
+          const rb = await this.parseRequestBody(req) as { oldPath: string; newPath: string; options?: RenameOptions };
+          await this.vfs.rename!(prefix2(rb.oldPath), prefix2(rb.newPath), rb.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'mkdir': {
+          await this.vfs.mkdir!(prefix2(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        default:
+          this.sendJsonResponse(res, 400, { error: `Unknown operation: ${operation}` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  private async handleVirtualInputExt(
+    req: IncomingMessage,
+    res: ServerResponse,
+    _userName: string,
+    deviceName: string,
+    extType: 'vkbd' | 'vmouse',
+  ): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+
+    const ext = extType === 'vkbd'
+      ? this.iotService.extensions.getVkbd(deviceName)
+      : this.iotService.extensions.getVmouse(deviceName);
+
+    if (!ext) {
+      this.sendJsonResponse(res, 404, { error: `Extension '${extType}' not active for device '${deviceName}'` });
+      return;
+    }
+
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const { op, ...params } = body;
+
+    if (!op || typeof op !== 'string') {
+      this.sendJsonResponse(res, 400, { error: "Missing 'op' field" });
+      return;
+    }
+
+    try {
+      const data = await ext.sendRequest(op, params);
+      this.sendJsonResponse(res, 200, { ok: true, data });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { ok: false, error: this.errorMessage(err) });
+    }
+  }
 
   private async handleVfs(req: IncomingMessage, res: ServerResponse, method: string, operation: string): Promise<void> {
     const url = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);

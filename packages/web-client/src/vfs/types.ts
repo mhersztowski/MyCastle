@@ -8,6 +8,7 @@ export interface VfsExplorerProps {
   height?: number | string;
   onFileSelect?: (path: string) => void;
   onFileOpen?: (path: string) => void;
+  onDirectoryChange?: (path: string) => void;
   readOnly?: boolean;
   showBreadcrumbs?: boolean;
   className?: string;

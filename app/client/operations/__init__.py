@@ -42,5 +42,5 @@ async def execute(action: str, params: dict | None = None) -> Any:
 
 def load_all():
     """Import all operation modules to trigger @operation registrations."""
-    from operations import system, process, window, clipboard, shell, app, media  # noqa: F401
+    from operations import system, process, shell  # noqa: F401
     log.info(f"Loaded {len(_operations)} operations: {', '.join(list_operations())}")

@@ -2,6 +2,8 @@ import type { IotDeviceConfig, MqttFS } from '@mhersztowski/core';
 import type { IotExtension } from './IotExtension.js';
 import type { MqttPublishFn } from './IotService.js';
 import { VfsExtension } from './extensions/VfsExtension.js';
+import { VirtualKeyboardExtension } from './extensions/VirtualKeyboardExtension.js';
+import { VirtualMouseExtension } from './extensions/VirtualMouseExtension.js';
 
 /**
  * Manages IoT device extensions — one set per device.
@@ -89,6 +91,21 @@ export class IotExtensionRegistry {
     return this.get(deviceId, 'vfs') as VfsExtension | undefined;
   }
 
+  getVkbd(deviceId: string): VirtualKeyboardExtension | undefined {
+    return this.get(deviceId, 'vkbd') as VirtualKeyboardExtension | undefined;
+  }
+
+  getVmouse(deviceId: string): VirtualMouseExtension | undefined {
+    return this.get(deviceId, 'vmouse') as VirtualMouseExtension | undefined;
+  }
+
+  /** Returns the list of active extension types for a device. */
+  getActiveExtensions(deviceId: string): string[] {
+    const deviceExts = this.registry.get(deviceId);
+    if (!deviceExts) return [];
+    return Array.from(deviceExts.keys());
+  }
+
   // --- Generic accessors ---
 
   get(deviceId: string, type: string): IotExtension | undefined {
@@ -121,6 +138,12 @@ export class IotExtensionRegistry {
     switch (type) {
       case 'vfs':
         ext = new VfsExtension(deviceId, topicPrefix, this.publishFn);
+        break;
+      case 'vkbd':
+        ext = new VirtualKeyboardExtension(deviceId, topicPrefix, this.publishFn);
+        break;
+      case 'vmouse':
+        ext = new VirtualMouseExtension(deviceId, topicPrefix, this.publishFn);
         break;
       default:
         console.warn(`[IotExtensionRegistry] Unknown extension type: ${type} (device=${deviceId})`);

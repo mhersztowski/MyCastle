@@ -32,7 +32,19 @@ export function useVfsTree(provider: FileSystemProvider, rootPath: string = '/')
   const rp = normalize(rootPath);
   const [items, setItems] = useState<VfsTreeNode[]>([]);
   const [expandedItems, setExpandedItems] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
   const loadedDirsRef = useRef(new Set<string>());
+  const pendingRef = useRef(0);
+
+  const startLoading = useCallback(() => {
+    pendingRef.current += 1;
+    setLoading(true);
+  }, []);
+
+  const stopLoading = useCallback(() => {
+    pendingRef.current = Math.max(0, pendingRef.current - 1);
+    if (pendingRef.current === 0) setLoading(false);
+  }, []);
 
   /** Read a directory and return sorted VfsTreeNode children */
   const buildNodes = useCallback(async (dirPath: string): Promise<VfsTreeNode[]> => {
@@ -65,23 +77,27 @@ export function useVfsTree(provider: FileSystemProvider, rootPath: string = '/')
     let newTree: VfsTreeNode[] = [];
     const newLoaded = new Set<string>();
 
-    for (const dir of dirs) {
-      try {
-        const children = await buildNodes(dir);
-        newLoaded.add(dir);
-        if (dir === rp) {
-          newTree = children;
-        } else {
-          newTree = mergeChildren(newTree, dir, children);
+    startLoading();
+    try {
+      for (const dir of dirs) {
+        try {
+          const children = await buildNodes(dir);
+          newLoaded.add(dir);
+          if (dir === rp) {
+            newTree = children;
+          } else {
+            newTree = mergeChildren(newTree, dir, children);
+          }
+        } catch {
+          // Directory may have been deleted
         }
-      } catch {
-        // Directory may have been deleted
       }
+      loadedDirsRef.current = newLoaded;
+      setItems(newTree);
+    } finally {
+      stopLoading();
     }
-
-    loadedDirsRef.current = newLoaded;
-    setItems(newTree);
-  }, [rp, buildNodes]);
+  }, [rp, buildNodes, startLoading, stopLoading]);
 
   // Keep latest refresh in ref to avoid stale closures in event subscription
   const refreshRef = useRef(refresh);
@@ -91,13 +107,15 @@ export function useVfsTree(provider: FileSystemProvider, rootPath: string = '/')
   useEffect(() => {
     loadedDirsRef.current.clear();
     setExpandedItems([]);
+    startLoading();
     buildNodes(rp)
       .then(nodes => {
         loadedDirsRef.current.add(rp);
         setItems(nodes);
       })
-      .catch(() => setItems([]));
-  }, [provider, rp, buildNodes]);
+      .catch(() => setItems([]))
+      .finally(() => stopLoading());
+  }, [provider, rp, buildNodes, startLoading, stopLoading]);
 
   // Subscribe to VFS change events
   useEffect(() => {
@@ -112,21 +130,25 @@ export function useVfsTree(provider: FileSystemProvider, rootPath: string = '/')
   const handleItemExpansionToggle = useCallback(
     async (_event: React.SyntheticEvent | null, itemId: string, isExpanded: boolean) => {
       if (isExpanded && !loadedDirsRef.current.has(itemId)) {
+        startLoading();
         try {
           const children = await buildNodes(itemId);
           loadedDirsRef.current.add(itemId);
           setItems(prev => mergeChildren(prev, itemId, children));
         } catch {
           // Ignore errors for directories that can't be read
+        } finally {
+          stopLoading();
         }
       }
     },
-    [buildNodes],
+    [buildNodes, startLoading, stopLoading],
   );
 
   return {
     items,
     expandedItems,
+    loading,
     setExpandedItems,
     handleItemExpansionToggle,
     refresh,

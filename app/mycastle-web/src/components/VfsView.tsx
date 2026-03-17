@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Box, Button, Chip, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Tooltip, Dialog, AppBar, Toolbar, Typography, useMediaQuery, useTheme } from '@mui/material';
-import { Add as AddIcon, Storage as StorageIcon, Code as CodeIcon, Close as CloseIcon, Save as SaveIcon, ArrowBack as ArrowBackIcon, SmartToy as SmartToyIcon } from '@mui/icons-material';
+import { Box, Button, Chip, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Tooltip, Dialog, AppBar, Toolbar, Typography, useMediaQuery, useTheme, Snackbar, Alert, LinearProgress } from '@mui/material';
+import { Add as AddIcon, Storage as StorageIcon, Code as CodeIcon, Close as CloseIcon, Save as SaveIcon, ArrowBack as ArrowBackIcon, SmartToy as SmartToyIcon, CloudUpload as CloudUploadIcon } from '@mui/icons-material';
 import { CompositeFS, RemoteFS, GitHubFS, encodeText, decodeText } from '@mhersztowski/core';
 import type { FileSystemProvider, FileSystemCapabilities, FileStat, DirectoryEntry, VfsEvent, FileChangeEvent, WriteFileOptions, DeleteOptions, RenameOptions } from '@mhersztowski/core';
 import MonacoEditor from '@monaco-editor/react';
@@ -27,6 +27,7 @@ class SubpathFS implements FileSystemProvider {
 
 import { VfsExplorer, defaultProviderRegistry, remoteFsProvider, AgentPanel } from '@mhersztowski/web-client';
 import { useAuth } from '../modules/auth';
+import { useGlobalWindows } from './GlobalWindowsContext';
 
 interface PresetMount {
   id: string;
@@ -60,6 +61,7 @@ function getLanguage(path: string): string {
 
 export function VfsView() {
   const { token, isAdmin, currentUser } = useAuth();
+  const { getParams } = useGlobalWindows();
 
   const [{ cfs, remote }] = useState(() => {
     const cfs = new CompositeFS();
@@ -87,6 +89,24 @@ export function VfsView() {
     cfs.mount('/home', new SubpathFS(remote, `/data/Minis/Users/${currentUser.name}`));
     setMountVersion(v => v + 1);
   }, [currentUser, token, cfs, remote]);
+
+  // Auto-mount device VFS when opened via openWithParams('vfs', ...)
+  const deviceParams = getParams('vfs');
+  const prevDeviceMountRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!deviceParams) return;
+    // Unmount previous device mount if path changed
+    if (prevDeviceMountRef.current && prevDeviceMountRef.current !== deviceParams.mountPath) {
+      try { cfs.unmount(prevDeviceMountRef.current); } catch { /* ignore */ }
+    }
+    cfs.mount(deviceParams.mountPath, deviceParams.provider);
+    prevDeviceMountRef.current = deviceParams.mountPath;
+    setActiveMounts(prev => {
+      const filtered = prev.filter(m => m.id !== '__device__');
+      return [...filtered, { id: '__device__', label: deviceParams.label, mountPath: deviceParams.mountPath }];
+    });
+    setMountVersion(v => v + 1);
+  }, [deviceParams, cfs]);
 
   /* ── Preset mounts ── */
 
@@ -128,6 +148,61 @@ export function VfsView() {
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
   const [mobileEditorOpen, setMobileEditorOpen] = useState(false);
   const [mobileAgentOpen, setMobileAgentOpen] = useState(false);
+  const [opLoading, setOpLoading] = useState(false);
+
+  /* ── Drag-and-drop upload ── */
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [snackbar, setSnackbar] = useState<{ message: string; severity: 'success' | 'error' } | null>(null);
+  const dropTargetPathRef = useRef('/');
+
+  const uploadEntry = useCallback(async (entry: FileSystemEntry, basePath: string): Promise<number> => {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) =>
+        (entry as FileSystemFileEntry).file(resolve, reject),
+      );
+      const data = await file.arrayBuffer();
+      await cfs.writeFile!(`${basePath}/${entry.name}`, new Uint8Array(data), { overwrite: true });
+      return 1;
+    }
+    if (entry.isDirectory) {
+      const dirPath = `${basePath}/${entry.name}`;
+      try { await cfs.mkdir!(dirPath); } catch { /* already exists */ }
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      const children = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+        reader.readEntries(resolve, reject),
+      );
+      let count = 0;
+      for (const child of children) count += await uploadEntry(child, dirPath);
+      return count;
+    }
+    return 0;
+  }, [cfs]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const items = Array.from(e.dataTransfer.items).filter(i => i.kind === 'file');
+    if (!items.length) return;
+    const entries = items.map(i => i.webkitGetAsEntry()).filter(Boolean) as FileSystemEntry[];
+    const total = entries.length;
+    setUploadProgress({ done: 0, total });
+    let done = 0;
+    let totalFiles = 0;
+    try {
+      for (const entry of entries) {
+        totalFiles += await uploadEntry(entry, dropTargetPathRef.current);
+        done++;
+        setUploadProgress({ done, total });
+      }
+      setMountVersion(v => v + 1);
+      setSnackbar({ message: `Uploaded ${totalFiles} file${totalFiles !== 1 ? 's' : ''}`, severity: 'success' });
+    } catch (err) {
+      setSnackbar({ message: err instanceof Error ? err.message : 'Upload failed', severity: 'error' });
+    } finally {
+      setUploadProgress(null);
+    }
+  }, [uploadEntry]);
   const activeTab = tabs.find(t => t.path === activeTabPath);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
 
@@ -138,6 +213,7 @@ export function VfsView() {
       if (isMobile) setMobileEditorOpen(true);
       return;
     }
+    setOpLoading(true);
     try {
       const data = await cfs.readFile(path);
       const content = decodeText(data);
@@ -146,6 +222,8 @@ export function VfsView() {
       if (isMobile) setMobileEditorOpen(true);
     } catch {
       // Binary or unreadable — skip silently
+    } finally {
+      setOpLoading(false);
     }
   }, [cfs, tabs, isMobile]);
 
@@ -164,11 +242,14 @@ export function VfsView() {
   const handleSave = useCallback(async () => {
     if (!activeTabPath || !editorRef.current) return;
     const content = editorRef.current.getValue();
+    setOpLoading(true);
     try {
       await cfs.writeFile!(activeTabPath, encodeText(content), { overwrite: true });
       setTabs(prev => prev.map(t => t.path === activeTabPath ? { ...t, content, isDirty: false } : t));
     } catch {
       // ignore
+    } finally {
+      setOpLoading(false);
     }
   }, [activeTabPath, cfs]);
 
@@ -323,16 +404,24 @@ export function VfsView() {
         )}
       </Box>
 
+      {opLoading && <LinearProgress sx={{ height: 2, flexShrink: 0 }} />}
+
       {/* Main content row */}
       <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* VFS Explorer — full width on mobile, fixed 240px on desktop */}
-        <Box sx={{
-          width: isMobile ? '100%' : 240,
-          flexShrink: 0,
-          overflow: 'hidden',
-          borderRight: isMobile ? 0 : 1,
-          borderColor: 'divider',
-        }}>
+        <Box
+          sx={{
+            position: 'relative',
+            width: isMobile ? '100%' : 240,
+            flexShrink: 0,
+            overflow: 'hidden',
+            borderRight: isMobile ? 0 : 1,
+            borderColor: 'divider',
+          }}
+          onDragOver={e => { e.preventDefault(); setIsDragOver(true); }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={handleDrop}
+        >
           <VfsExplorer
             key={`${token ? 'authed' : 'anon'}-${mountVersion}`}
             provider={cfs as FileSystemProvider}
@@ -340,7 +429,28 @@ export function VfsView() {
             height="100%"
             onFileOpen={handleFileOpen}
             providerRegistry={registry}
+            onDirectoryChange={path => { dropTargetPathRef.current = path; }}
           />
+          {/* Drag-over overlay */}
+          {isDragOver && (
+            <Box sx={{
+              position: 'absolute', inset: 0, zIndex: 10,
+              bgcolor: 'action.hover', border: '2px dashed', borderColor: 'primary.main',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              pointerEvents: 'none',
+            }}>
+              <CloudUploadIcon color="primary" sx={{ fontSize: 40, mb: 1 }} />
+              <Typography variant="caption" color="primary">Drop to upload</Typography>
+            </Box>
+          )}
+          {/* Upload progress bar */}
+          {uploadProgress && (
+            <LinearProgress
+              variant="determinate"
+              value={(uploadProgress.done / uploadProgress.total) * 100}
+              sx={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}
+            />
+          )}
         </Box>
 
         {/* Desktop editor panel */}
@@ -425,6 +535,18 @@ export function VfsView() {
           </Box>
         </Dialog>
       )}
+      <Snackbar
+        open={Boolean(snackbar)}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {snackbar ? (
+          <Alert severity={snackbar.severity} onClose={() => setSnackbar(null)} sx={{ width: '100%' }}>
+            {snackbar.message}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
     </Box>
   );
 }

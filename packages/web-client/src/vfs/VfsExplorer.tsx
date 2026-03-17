@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { SyntheticEvent } from 'react';
 import { SimpleTreeView } from '@mui/x-tree-view/SimpleTreeView';
 import { TreeItem } from '@mui/x-tree-view/TreeItem';
@@ -6,6 +6,7 @@ import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import ListItemText from '@mui/material/ListItemText';
 import Divider from '@mui/material/Divider';
+import LinearProgress from '@mui/material/LinearProgress';
 import { normalize, dirname, encodeText } from '@mhersztowski/core';
 import type { CompositeFS } from '@mhersztowski/core';
 
@@ -155,6 +156,7 @@ export function VfsExplorer({
   height,
   onFileSelect,
   onFileOpen,
+  onDirectoryChange,
   readOnly: readOnlyProp,
   showBreadcrumbs = true,
   className,
@@ -167,6 +169,10 @@ export function VfsExplorer({
   const tree = useVfsTree(provider, rp);
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [currentPath, setCurrentPath] = useState(rp);
+
+  useEffect(() => {
+    onDirectoryChange?.(currentPath);
+  }, [currentPath, onDirectoryChange]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   /* ── Drag & drop ── */
@@ -490,6 +496,11 @@ export function VfsExplorer({
         onTouchMove={onTouchMove}
         onClickCapture={blockPostLongPressClick}
       >
+        {tree.loading && (
+          <LinearProgress
+            sx={{ height: 2, position: 'sticky', top: 0, zIndex: 1, bgcolor: 'transparent' }}
+          />
+        )}
         <SimpleTreeView
           expandedItems={tree.expandedItems}
           onExpandedItemsChange={handleExpandedItemsChange}
