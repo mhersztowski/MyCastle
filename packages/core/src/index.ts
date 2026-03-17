@@ -6,3 +6,4 @@ export * from './datasource';
 export * from './rpc';
 export * from './vfs';
 export * from './mjd';
+export * from './iot';

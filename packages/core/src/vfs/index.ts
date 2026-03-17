@@ -8,4 +8,5 @@ export * from './CompositeFS';
 export * from './NodeFS';
 export * from './BrowserFS';
 export * from './RemoteFS';
+export * from './MqttFS';
 export * from './utils';

@@ -1,3 +1,12 @@
+// --- IoT Extensions ---
+
+export interface IotExtensionConfig {
+  /** Extension type identifier, e.g. 'vfs' */
+  type: string;
+  enabled: boolean;
+  options?: Record<string, unknown>;
+}
+
 // --- IoT Device Config ---
 
 export interface IotSensorCapability {
@@ -23,6 +32,7 @@ export interface IotDeviceConfig {
   heartbeatIntervalSec: number;
   capabilities: IotCapability[];
   entities?: IotEntity[];
+  extensions?: IotExtensionConfig[];
   createdAt: number;
   updatedAt: number;
 }

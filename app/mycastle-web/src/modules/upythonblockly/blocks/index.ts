@@ -12,6 +12,7 @@ import { registerBitsBlocks } from './bits';
 import { registerTypeConvBlocks } from './typeconv';
 import { registerControlBlocks } from './control';
 import { registerMathBlocks } from './math';
+import { registerTextBlocks } from './text';
 
 export function registerAllBlocks(boardManager: UPythonBoardManager): void {
   registerEventBlocks();
@@ -27,4 +28,5 @@ export function registerAllBlocks(boardManager: UPythonBoardManager): void {
   registerTypeConvBlocks();
   registerControlBlocks();
   registerMathBlocks();
+  registerTextBlocks();
 }

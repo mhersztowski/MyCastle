@@ -7,14 +7,15 @@ pnpm monorepo managing personal information data, with shared packages and multi
 Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Shared packages
-- **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource, VFS. Dual ESM+CJS build (tsup).
-  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel (board? field), MinisDeviceModel (isIot field, description?: string, localizationId?: string, **lastBuild?: MinisDeviceBuild**), **MinisDeviceBuild** (platform: string, fqbn?: string, success: boolean, at: number, projectId?: string — zapisywany po każdej kompilacji), MinisLocalizationModel (id, name, type: 'place'|'geo', place?: string, geo?: {lat,lng}|null, device: string), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig, IotEntity, IotEntityType, IotSensorEntity, IotBinarySensorEntity, IotSwitchEntity, IotNumberEntity, IotButtonEntity, IotSelectEntity, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare), AuthModels (AuthTokenPayload, ApiKeyPublic)
+- **@mhersztowski/core** (`packages/core/`) — współdzielone modele, nody, automate models, MQTT types, datasource, VFS, IoT device building blocks. Dual ESM+CJS build (tsup).
+  - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel (board? field), MinisDeviceModel (isIot field, description?: string, localizationId?: string, **lastBuild?: MinisDeviceBuild**), **MinisDeviceBuild** (platform: string, fqbn?: string, success: boolean, at: number, projectId?: string — zapisywany po każdej kompilacji), MinisLocalizationModel (id, name, type: 'place'|'geo', place?: string, geo?: {lat,lng}|null, device: string), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig + **extensions?: IotExtensionConfig[]**, **IotExtensionConfig** {type, enabled, options?}, IotEntity, IotEntityType, IotSensorEntity, IotBinarySensorEntity, IotSwitchEntity, IotNumberEntity, IotButtonEntity, IotSelectEntity, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare), AuthModels (AuthTokenPayload, ApiKeyPublic)
   - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
-  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload. `topics.ts`: Zod-based MQTT topic registry (analogiczny do RPC). MqttTopicDef (pattern, description, direction, payloadSchema, tags), defineMqttTopic(), MqttPayload<T>. mqttTopics registry (telemetry, heartbeat, command, commandAck, status, telemetryLive, alert, sharedTelemetryLive, sharedStatus), MqttTopicRegistry, MqttTopicName. matchTopic(fullTopic) — dopasowuje topic do wzorca, zwraca def + wyekstrahowane params. Zod schemas = single source of truth for payload validation i type info w MQTT Explorer
+  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload. `topics.ts`: Zod-based MQTT topic registry (analogiczny do RPC). MqttTopicDef (pattern, description, direction, payloadSchema, tags), defineMqttTopic(), MqttPayload<T>. mqttTopics registry (telemetry, heartbeat, command, commandAck, status, telemetryLive, alert, sharedTelemetryLive, sharedStatus, **extReq** `minis/{userName}/{deviceName}/ext/{extType}/req` server→device, **extRes** `minis/{userName}/{deviceName}/ext/{extType}/res` device→server), MqttTopicRegistry, MqttTopicName. matchTopic(fullTopic) — dopasowuje topic do wzorca, zwraca def + wyekstrahowane params. Zod schemas = single source of truth for payload validation i type info w MQTT Explorer
   - `datasource/` — IDataSource interface (w tym kolekcje Minis: minisModuleDefs, minisModules, minisDeviceDefs, minisDevices, minisProjectDefs, minisProjects, users), MemoryDataSource (load* methods per kolekcję), CalendarItem, Calendar
   - `rpc/` — Zod-based RPC system (shared types + method registry). `types.ts`: RpcMethodDef (z fieldMeta?: Record<string, FieldMeta>), AutocompleteSource ('users' | 'userDevices'), FieldMeta (autocomplete?, dependsOn?), defineRpcMethod(), RpcResponse/RpcErrorResponse. `methods.ts`: rpcMethods registry (ping, getDeviceStatuses, sendCommand, getLatestTelemetry), RpcMethodRegistry, RpcMethodName types. fieldMeta na metodach definiuje autocomplete sources i zależności między polami (np. deviceName dependsOn userName). Zod schemas = single source of truth for validation, types, and auto-generated Swagger docs.
-  - `vfs/` — Virtual File System abstraction (VS Code-inspired). `types.ts`: FileSystemProvider interface (scheme, capabilities, stat, readDirectory, readFile, writeFile?, delete?, rename?, mkdir?, copy?, watch?, onDidChangeFile), FileType enum, FileChangeType enum, FileStat, DirectoryEntry, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions, isWritable(). `errors.ts`: VfsError, VfsErrorCode. `paths.ts`: VFS path utilities. Implementacje: MemoryFS (in-memory), CompositeFS (mount multiple providers pod różnymi ścieżkami), GitHubFS (GitHub API), BrowserFS (File System Access API), NodeFS (Node.js fs — backend only), RemoteFS (REST proxy do server-side VFS). `utils.ts`: encodeText/decodeText (UTF-8 Uint8Array ↔ string).
+  - `vfs/` — Virtual File System abstraction (VS Code-inspired). `types.ts`: FileSystemProvider interface (scheme, capabilities, stat, readDirectory, readFile, writeFile?, delete?, rename?, mkdir?, copy?, watch?, onDidChangeFile), FileType enum, FileChangeType enum, FileStat, DirectoryEntry, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions, isWritable(). `errors.ts`: VfsError, VfsErrorCode. `paths.ts`: VFS path utilities. Implementacje: MemoryFS (in-memory), CompositeFS (mount multiple providers pod różnymi ścieżkami), GitHubFS (GitHub API), BrowserFS (File System Access API), NodeFS (Node.js fs — backend only), RemoteFS (REST proxy do server-side VFS), **MqttFS** (tunneluje operacje VFS przez MQTT request-response; konstruktor: {reqTopic, timeoutMs?}; `handleResponse(response)` wywoływane gdy urządzenie odpowiada; pending Map z UUID correlation IDs; `dispose()` odrzuca wszystkie oczekujące Promises). `utils.ts`: encodeText/decodeText (UTF-8 Uint8Array ↔ string).
+  - `iot/` — **Device-side IoT building blocks** (framework-agnostic, używane przez urządzenia implementujące rozszerzenia). `device/IotDeviceExtension.ts`: interfejs `{ type: string; handleRequest(payload): void|Promise<void> }`. `device/IotDeviceVfsExtension.ts`: implementacja VFS extension — konstruktor `{ provider: FileSystemProvider, publishFn, resTopic }`, waliduje payload przez Zod, dispatchuje wszystkie operacje VFS (stat/readdir/readfile/writefile/delete/rename/mkdir), base64 encode/decode (btoa/atob — browser-compatible). `device/IotDeviceClient.ts`: framework-agnostic MQTT router — konstruktor `{ topicPrefix, publishFn }`, `addExtension(ext)` / `removeExtension(type)`, `handleMessage(subTopic, rawPayload)` — routuje `ext/{type}/req` wiadomości do zarejestrowanych extensions.
   - `mjd/` — Meta JSON Definition system. `types.ts`: MjdFieldType ('string'|'number'|'boolean'|'date'|'enum'|'array'), MjdViewType ('form'), MjdFieldDef (name, type, tags, label, description, defaultValue, required, options, itemType), MjdViewDef (name, type, tag), MjdDocument (version, tags, fields, views). `helpers.ts`: createMjdDocument(), createMjdField(), createMjdView(), getFieldsForView(). `jsonSchema.ts`: generateJsonSchema(doc) — konwertuje MjdDocument na JSON Schema draft-07 (typy, required, enum, array z itemType).
 - **@mhersztowski/web-client** (`packages/web-client/`) — reusable React client for MyCastle backend. Dual ESM+CJS build (tsup). React as peerDependency, monaco-editor as optional peerDependency.
   - `mqtt/` — MqttClient (MQTT over WebSocket, request-response, file ops), MqttContext/MqttProvider, useMqtt hook
@@ -51,7 +52,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **ocr** — Tesseract.js + Sharp preprocessing, PolishReceiptParser, non-blocking init
     - **automate** — AutomateService (implementuje IAutomateService), BackendAutomateEngine (graph traversal, merge nodes), BackendSystemApi, AutomateSandbox
     - **scheduler** — SchedulerService (node-cron), auto-reload z filesystem events
-    - **iot** — pełna warstwa IoT: IotDatabase (SQLite, WAL), TelemetryStore, DevicePresence, CommandDispatcher, AlertEngine, DeviceShareStore, IotService
+    - **iot** — pełna warstwa IoT: IotDatabase (SQLite, WAL), TelemetryStore, DevicePresence, CommandDispatcher, AlertEngine, DeviceShareStore, IotService. **Extensions system**: `IotExtension` interfejs `{ type, handleMessage(subTopic, payload), dispose() }`, `IotExtensionRegistry` (zarządza Map<deviceId, Map<extType, IotExtension>>, `syncFromConfig(config)` tworzy/usuwa extensions, `handleMessage(deviceId, userId, extType, subTopic, payload)` auto-tworzy extensions lazy, `getVfs(deviceId)` typowany accessor, callbacki `onVfsMounted?(deviceId, fs: MqttFS)` / `onVfsUnmounted?(deviceId)`), `extensions/VfsExtension.ts` (type='vfs', tworzy `MqttFS`, `handleMessage('res', payload)` → Zod validate → `fs.handleResponse()`). **IotService** ma pole `extensions: IotExtensionRegistry`; `handleHeartbeat()` wywołuje `extensions.syncFromConfig()`; `handleMqttMessage()` routuje `ext/{extType}/{subTopic}` do `extensions.handleMessage()`. **MycastleHttpServer**: `iotService.extensions.onVfsMounted = (deviceId, fs) => this.vfs.mount('/devices/${deviceId}', fs)` — VFS urządzenia dostępny przez REST API na `/api/vfs/readdir?path=/devices/{deviceId}/`
     - **arduino** — pełna warstwa Arduino: ArduinoCli (+ MinisConfig: serialNumber/wifiSsid/wifiPassword/architectureJson), ArduinoCliLocal, ArduinoCliDocker, ArduinoProject (compile wstrzykuje MinisIotArchitecture.h z MINIS_DEVICE_SN/MINIS_WIFI_SSID/MINIS_WIFI_PASSWORD/MINIS_IOT_ARCHITECTURE przed kompilacją), ArduinoService. **Instalacja bibliotek**: `libInstall({ name, version?, url? }, configFilePath)` — dla `url` używa `--git-url` (wymaga `library.enable_unsafe_install: true` w configu), dla `name` standardowy manager. `ensureConfig()` dodaje `library.enable_unsafe_install: true` do `custom-config.yaml`. `compile()` instaluje biblioteki z `project.json` do katalogu `{projectDir}/libraries/` (przez `directories.user` w configu). Po git-url instalacji: `readAllLibraryDeps()` skanuje wszystkie `library.properties` w `libraries/` i doinstalowuje brakujące zależności z pola `depends=`.
     - **upython** — MicroPython service: MicroPythonCli (interface), MicroPythonCliLocal (mpremote connect {port} cp), MicroPythonProject (deploy .py files z src/ + opcjonalnie biblioteki), MicroPythonService (orchestrator, env: UPYTHON_CLI_LOCAL_PATH). **Deploy bibliotek**: `deploy(port, libraries?)` — przed wgraniem kodu pobiera każdą bibliotekę z `lib.url` (GitHub raw URL) przez `fetch()`, zapisuje do `{projectDir}/libraries/`, dodaje do listy plików do wgrania na urządzenie (`lib.remoteName`).
     - **rpc** — handlers.ts (registerHandlers z deps: iotService, fileSystem). Importuje RpcRouter z `@mhersztowski/core-backend`
@@ -80,7 +81,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **shopping** — skanowanie paragonów (AI Vision / OCR / Hybrid), ReceiptScannerService
     - **editor** — tylko `monacoWorkers.ts` (Vite-specific `?worker` imports dla Monaco web workers)
     - **ardublockly2** — wizualny edytor bloków Arduino (Blockly): ArduBlocklyService, ArduBlocklyComponent, boards/ (BoardManager, BoardProfile), generator/ (ArduinoGenerator — C++), blocks/
-    - **upythonblockly** — wizualny edytor bloków MicroPython (Blockly): UPythonBlocklyService, UPythonBlocklyComponent, boards/, blocks/, generator/ (UPythonGenerator), repl/ (MpySerialReplService, MpyWebReplService, MpyReplTerminal), upload/ (UploadDialog — przyjmuje prop `libraries?: Array<{url, remoteName}>`, pobiera każdą bibliotekę przez `fetch()` i wgrywa na urządzenie przed uruchomieniem kodu — działa dla Serial i WebREPL)
+    - **upythonblockly** — wizualny edytor bloków MicroPython (Blockly): UPythonBlocklyService, UPythonBlocklyComponent, boards/, blocks/ (**blocks/text.ts**: 11 custom bloków Text — `upy_text_count`, `upy_text_index`, `upy_text_replace`, `upy_text_trim`, `upy_text_prompt`, `upy_text_to_str`, `upy_text_ord`, `upy_text_decode`, `upy_text_encode`, `upy_text_format_float`, `upy_text_to_hex`; kolor `#5ba58c`), generator/ (UPythonGenerator + **generator/text.ts**: generatory dla wszystkich custom bloków + `text_changeCase`, `text_isEmpty` → `not len(text)`, `upy_text_prompt` wstrzykuje helper `text_prompt()` przez `addFunction()`, `upy_text_to_hex` generuje f-string z polami ZEROS/PREFIX), repl/ (MpySerialReplService, MpyWebReplService, MpyReplTerminal), upload/ (UploadDialog — przyjmuje prop `libraries?: Array<{url, remoteName}>`, pobiera każdą bibliotekę przez `fetch()` i wgrywa na urządzenie przed uruchomieniem kodu — działa dla Serial i WebREPL)
     - **serial** — Web Serial API: WebSerialService, WebSerialTerminal (xterm.js), EspFlashService (esptool-js), FlashDialog (3 tryby: compiled output, custom .bin, **predefined firmware** z `GET /api/admin/firmware/files` — pliki z `data/Minis/Admin/Firmware/`)
     - **iot-emulator** — EmulatorService (MQTT pub/sub via `mqtt` package, interwały telemetrii/heartbeat, command handling, activity log, localStorage persistence), presety urządzeń, generatory wartości
 - Serwisy (`src/services/`):
@@ -104,10 +105,14 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - Layout pages (PIM — pod `/user/:userName/pim/`): `/calendar`, `/todolist`, `/person`, `/project`, `/shopping`, `/automate`, `/objectviewer`, `/components`, `/settings/ai`, `/settings/speech`, `/settings/receipt`, `/settings/page-hooks`, `/agent`
 - **Wzorzec dostępu do serwisów**: strony i komponenty używają `const { aiService } = App.instance;` zamiast bezpośrednich importów singletonów. React contexty (useMqtt, useFilesystem, useNotification, useAuth) pozostają dla reaktywnego stanu UI.
 
-### Aplikacja desktop (`app/desktop/`)
-- Python, Agent MQTT (paho-mqtt, WebSocket), operacje systemowe Windows
+### Aplikacja client (`app/client/`)
+- Python, Agent MQTT (paho-mqtt), operacje systemowe Windows + rozszerzenie VFS
+- **config.py**: MQTT_BROKER_PORT=1884 (TCP), MQTT_TRANSPORT='tcp'|'websockets', MQTT_USER/DEVICE → TOPIC_PREFIX `minis/{user}/{device}`, TOPICS: HEARTBEAT/COMMAND_ACK/EXT_VFS_RES/COMMAND/EXT_VFS_REQ, HEARTBEAT_INTERVAL, DATA_DIR
+- **agent.py** (`ClientAgent`): subskrybuje COMMAND + EXT_VFS_REQ, heartbeat przez `threading.Timer` (daemon), `_handle_command()` mapuje komendy `{id, name, payload}` na operations + ACK, `_ack_command(cmd_id, status, reason?)`, VfsExtension na DATA_DIR; WebSocket path ustawiane tylko gdy `MQTT_TRANSPORT == "websockets"`
+- **extensions/vfs.py** (`VfsExtension`): `handle_request(payload)` dispatch przez `match op:` (stat/readdir/readfile/writefile/delete/rename/mkdir), `_resolve(path)` — ochrona przed directory traversal przez `os.path.realpath` + `startswith(root_dir)`, FileType: FILE=1/DIR=2 (zgodnie z TypeScript enum), `_writefile` respektuje opcje create/overwrite, `_delete` obsługuje recursive przez `shutil.rmtree`, `_respond(req_id, ok, data, error)` publikuje JSON
+- **data/**: katalog VFS root (pusty, tworzony automatycznie)
 - operations/: system, process, window, clipboard, shell, app, media
-- Dokumentacja: docs/desktop.md
+- Dawna nazwa: `app/desktop/` (przemianowana)
 
 ### Aplikacja demo-scene-3d (`app/demo-scene-3d/`)
 - React + Three.js demo, Vite, depends on core-scene3d, ui-core, ui-components-scene3d
@@ -126,8 +131,9 @@ mycastle/                           # Root monorepo
 ├── .npmrc
 │
 ├── packages/
-│   ├── core/                       # @mhersztowski/core (shared models, nodes, mqtt, automate, datasource, rpc, vfs, mjd)
-│   │   ├── src/{models,nodes,automate,mqtt,datasource,rpc,vfs,mjd}/
+│   ├── core/                       # @mhersztowski/core (shared models, nodes, mqtt, automate, datasource, rpc, vfs, mjd, iot)
+│   │   ├── src/{models,nodes,automate,mqtt,datasource,rpc,vfs,mjd,iot}/
+│   │   │   └── iot/device/         # IotDeviceExtension, IotDeviceVfsExtension, IotDeviceClient
 │   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # Dual ESM+CJS
 │   │   └── package.json
@@ -162,7 +168,7 @@ mycastle/                           # Root monorepo
 │   │   │       ├── ocr/            # OcrService, PolishReceiptParser
 │   │   │       ├── automate/       # AutomateService, BackendAutomateEngine, AutomateSandbox
 │   │   │       ├── scheduler/      # SchedulerService (node-cron)
-│   │   │       ├── iot/            # IotDatabase, TelemetryStore, DevicePresence, CommandDispatcher, AlertEngine, DeviceShareStore, IotService
+│   │   │       ├── iot/            # IotDatabase, TelemetryStore, DevicePresence, CommandDispatcher, AlertEngine, DeviceShareStore, IotService, IotExtension, IotExtensionRegistry, extensions/VfsExtension
 │   │   │       ├── arduino/        # ArduinoCli (+ MinisConfig), ArduinoCliLocal, ArduinoCliDocker, ArduinoProject (header injection), ArduinoService
 │   │   │       ├── upython/        # MicroPythonCli, MicroPythonCliLocal (mpremote), MicroPythonProject, MicroPythonService
 │   │   │       ├── rpc/            # handlers.ts, index.ts (importuje RpcRouter z core-backend)
@@ -194,9 +200,13 @@ mycastle/                           # Root monorepo
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
 │   │   └── package.json
-│   └── desktop/                    # Python MQTT agent (Windows)
-│       ├── agent.py
-│       ├── config.py
+│   └── client/                     # Python MQTT agent (Windows) + VFS extension
+│       ├── agent.py                # ClientAgent: heartbeat, command routing, VFS
+│       ├── config.py               # MQTT config, topics, DATA_DIR
+│       ├── extensions/
+│       │   ├── __init__.py
+│       │   └── vfs.py              # VfsExtension: 7 ops, directory traversal guard
+│       ├── data/                   # VFS root directory
 │       ├── operations/
 │       └── requirements.txt
 │
@@ -226,7 +236,7 @@ mycastle/                           # Root monorepo
 - **Run MyCastle backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
 - **Run MyCastle frontend:** `pnpm dev:web` (port 1895, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
-- **Run desktop agent:** `cd app/desktop && python agent.py`
+- **Run client agent:** `cd app/client && python agent.py`
 - **Test (unit):** `pnpm test` (all packages), `pnpm test:watch`, `pnpm test:coverage`
 - **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts mycastle-backend + mycastle-web)
 - **Typecheck:** `pnpm typecheck`

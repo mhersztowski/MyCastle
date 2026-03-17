@@ -150,6 +150,49 @@ export const sharedStatus = defineMqttTopic({
   }),
 });
 
+// --- Extension topics ---
+
+/** Request sent from server to device to perform an extension operation */
+export const extReq = defineMqttTopic({
+  pattern: 'minis/{userName}/{deviceName}/ext/{extType}/req',
+  description: 'Extension request from server to device',
+  direction: 'server→device',
+  tags: ['IoT', 'Extension'],
+  payloadSchema: z.object({
+    /** Correlation ID — matched in the response */
+    id: z.string(),
+    /** Operation name, e.g. stat | readdir | readfile | writefile | delete | rename | mkdir */
+    op: z.string(),
+    /** Primary path argument */
+    path: z.string().optional(),
+    /** Secondary path (used by rename) */
+    newPath: z.string().optional(),
+    /** File content as base64 (used by writefile) */
+    data: z.string().optional(),
+    /** Operation options (create, overwrite, recursive, …) */
+    options: z.record(z.unknown()).optional(),
+  }),
+});
+
+/** Response sent from device to server with the result of an extension operation */
+export const extRes = defineMqttTopic({
+  pattern: 'minis/{userName}/{deviceName}/ext/{extType}/res',
+  description: 'Extension response from device to server',
+  direction: 'device→server',
+  tags: ['IoT', 'Extension'],
+  payloadSchema: z.object({
+    /** Correlation ID matching the request */
+    id: z.string(),
+    ok: z.boolean(),
+    /** Operation result (shape depends on op) */
+    data: z.unknown().optional(),
+    error: z.object({
+      code: z.string(),
+      message: z.string().optional(),
+    }).optional(),
+  }),
+});
+
 // --- Registry ---
 
 export const mqttTopics = {
@@ -162,6 +205,8 @@ export const mqttTopics = {
   alert,
   sharedTelemetryLive,
   sharedStatus,
+  extReq,
+  extRes,
 } as const;
 
 export type MqttTopicRegistry = typeof mqttTopics;

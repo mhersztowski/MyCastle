@@ -7,6 +7,7 @@ import type { DeviceStatusChange } from './DevicePresence.js';
 import { CommandDispatcher } from './CommandDispatcher.js';
 import { AlertEngine } from './AlertEngine.js';
 import { DeviceShareStore } from './DeviceShareStore.js';
+import { IotExtensionRegistry } from './IotExtensionRegistry.js';
 
 export interface MqttPublishFn {
   (topic: string, payload: string): void;
@@ -19,6 +20,7 @@ export class IotService {
   readonly commands: CommandDispatcher;
   readonly alerts: AlertEngine;
   readonly shares: DeviceShareStore;
+  readonly extensions: IotExtensionRegistry;
 
   private publishFn: MqttPublishFn | null = null;
 
@@ -29,6 +31,7 @@ export class IotService {
     this.commands = new CommandDispatcher(this.db);
     this.alerts = new AlertEngine(this.db);
     this.shares = new DeviceShareStore(this.db);
+    this.extensions = new IotExtensionRegistry((topic, payload) => this.publishFn?.(topic, payload));
   }
 
   start(publishFn: MqttPublishFn): void {
@@ -55,6 +58,7 @@ export class IotService {
 
   stop(): void {
     this.presence.stop();
+    this.extensions.dispose();
     this.db.close();
   }
 
@@ -108,6 +112,7 @@ export class IotService {
     const config = this.telemetry.getConfig(deviceId);
     const heartbeatSec = config?.heartbeatIntervalSec ?? 60;
     this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
+    if (config) this.extensions.syncFromConfig(config);
   }
 
   // Called when MQTT message arrives on minis/+/+/command/ack
@@ -175,6 +180,19 @@ export class IotService {
         const result = mqttTopics.commandAck.payloadSchema.safeParse(raw);
         if (!result.success) return;
         this.handleCommandAck(deviceName, result.data);
+        break;
+      }
+      default: {
+        // Extension messages: ext/{extType}/{subTopic}
+        // e.g. msgType = 'ext/vfs/res'
+        if (msgType.startsWith('ext/')) {
+          const extParts = msgType.split('/'); // ['ext', extType, subTopic]
+          if (extParts.length >= 3) {
+            const extType = extParts[1];
+            const subTopic = extParts.slice(2).join('/');
+            this.extensions.handleMessage(deviceName, userName, extType, subTopic, raw);
+          }
+        }
         break;
       }
     }

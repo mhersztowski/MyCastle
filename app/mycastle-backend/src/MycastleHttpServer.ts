@@ -65,6 +65,26 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.vfs.mount('/data', new NodeFS({ rootDir: path.resolve(rootDir) }));
       this.scriptsService = new ScriptsService(path.resolve(rootDir));
     }
+
+    // Auto-mount device VFS extensions into the CompositeFS at /devices/{deviceId}
+    if (this.iotService) {
+      this.iotService.extensions.onVfsMounted = (deviceId, mqttFs) => {
+        const mountPoint = `/devices/${deviceId}`;
+        try {
+          this.vfs.mount(mountPoint, mqttFs);
+          console.log(`[VFS] Mounted device VFS at ${mountPoint}`);
+        } catch {
+          // Already mounted — skip
+        }
+      };
+      this.iotService.extensions.onVfsUnmounted = (deviceId) => {
+        try {
+          this.vfs.unmount(`/devices/${deviceId}`);
+        } catch {
+          // Not mounted — skip
+        }
+      };
+    }
   }
 
   getRpcRouter(): RpcRouter { return this.rpcRouter; }

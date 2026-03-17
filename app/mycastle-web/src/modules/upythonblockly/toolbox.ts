@@ -165,6 +165,80 @@ export const TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
         },
         { kind: 'block', type: 'text_length' },
         { kind: 'block', type: 'text_isEmpty' },
+        {
+          kind: 'block',
+          type: 'text_changeCase',
+          inputs: { VALUE: { shadow: { type: 'text', fields: { TEXT: 'hello M5' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_count',
+          inputs: {
+            SUB: { shadow: { type: 'text', fields: { TEXT: 'te' } } },
+            TEXT: { shadow: { type: 'text', fields: { TEXT: 'tetete' } } },
+          },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_index',
+          inputs: {
+            IDX: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+          },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_replace',
+          inputs: {
+            OLD: { shadow: { type: 'text', fields: { TEXT: 'te' } } },
+            NEW: { shadow: { type: 'text', fields: { TEXT: 're' } } },
+            TEXT: { shadow: { type: 'text', fields: { TEXT: 'tetete' } } },
+          },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_trim',
+          inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: 'hello M5' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_prompt',
+          inputs: { MSG: { shadow: { type: 'text', fields: { TEXT: 'hello M5' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_to_str',
+          inputs: { VALUE: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_ord',
+          inputs: { CHAR: { shadow: { type: 'text', fields: { TEXT: 'A' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_decode',
+          inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: 'aaaaaa' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_encode',
+          inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: 'bbbbbb' } } } },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_format_float',
+          inputs: {
+            DECIMALS: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+          },
+        },
+        {
+          kind: 'block',
+          type: 'upy_text_to_hex',
+          inputs: {
+            NUM: { shadow: { type: 'math_number', fields: { NUM: 10 } } },
+            WIDTH: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+          },
+        },
       ],
     },
     { kind: 'sep' },
