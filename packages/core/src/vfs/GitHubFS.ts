@@ -12,6 +12,7 @@ import { FileType, FileChangeType } from './types';
 import { VfsError } from './errors';
 import { VfsEventEmitter } from './EventEmitter';
 import { normalize } from './paths';
+import { base64ToUint8Array, uint8ArrayToBase64 } from './utils';
 
 export interface GitHubFSOptions {
   owner: string;
@@ -38,21 +39,21 @@ interface GitHubContentItem {
 }
 
 export class GitHubFS implements FileSystemProvider {
-  readonly scheme = 'github';
+  readonly scheme: string = 'github';
 
   get capabilities(): FileSystemCapabilities {
     return { readonly: !this.token, watch: false };
   }
 
-  private readonly owner: string;
-  private readonly repo: string;
-  private readonly ref: string;
-  private readonly token?: string;
+  protected readonly owner: string;
+  protected readonly repo: string;
+  protected readonly ref: string;
+  protected readonly token?: string;
   private readonly fetchFn: typeof globalThis.fetch;
   private readonly cacheTtlMs: number;
   private readonly cache = new Map<string, CacheEntry>();
 
-  private emitter = new VfsEventEmitter<FileChangeEvent[]>();
+  protected emitter = new VfsEventEmitter<FileChangeEvent[]>();
   readonly onDidChangeFile: VfsEvent<FileChangeEvent[]> = this.emitter.event;
 
   constructor(options: GitHubFSOptions) {
@@ -227,7 +228,7 @@ export class GitHubFS implements FileSystemProvider {
     }
   }
 
-  private invalidatePath(apiPath: string): void {
+  protected invalidatePath(apiPath: string): void {
     // Remove from cache: the file itself and its parent directory listing
     this.cache.delete(`contents:${apiPath}`);
     const parentPath = apiPath.includes('/') ? apiPath.slice(0, apiPath.lastIndexOf('/')) : '';
@@ -273,7 +274,7 @@ export class GitHubFS implements FileSystemProvider {
     return content;
   }
 
-  private async request(url: string, method = 'GET', body?: unknown): Promise<Response> {
+  protected async request(url: string, method = 'GET', body?: unknown): Promise<Response> {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github.v3+json',
     };
@@ -303,20 +304,3 @@ export class GitHubFS implements FileSystemProvider {
   }
 }
 
-function base64ToUint8Array(base64: string): Uint8Array {
-  const cleaned = base64.replace(/\s/g, '');
-  const binary = atob(cleaned);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function uint8ArrayToBase64(data: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]);
-  }
-  return btoa(binary);
-}

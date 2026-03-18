@@ -4,6 +4,7 @@ export * from './paths';
 export * from './EventEmitter';
 export * from './MemoryFS';
 export * from './GitHubFS';
+export * from './WritableGitHubFS';
 export * from './CompositeFS';
 export * from './NodeFS';
 export * from './BrowserFS';

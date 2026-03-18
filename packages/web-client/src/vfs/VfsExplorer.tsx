@@ -7,13 +7,14 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemText from '@mui/material/ListItemText';
 import Divider from '@mui/material/Divider';
 import LinearProgress from '@mui/material/LinearProgress';
-import { normalize, dirname, encodeText } from '@mhersztowski/core';
+import { normalize, dirname, encodeText, WritableGitHubFS } from '@mhersztowski/core';
 import type { CompositeFS } from '@mhersztowski/core';
 
 import { useVfsTree } from './useVfsTree';
 import { useVfsClipboard } from './clipboard';
 import { VfsBreadcrumbs } from './VfsBreadcrumbs';
 import { VfsMountManager } from './VfsMountManager';
+import { VfsCommitDialog } from './VfsCommitDialog';
 import { getFileIcon } from './icons';
 import type { VfsExplorerProps, VfsTreeNode } from './types';
 import './vfs-explorer.css';
@@ -183,6 +184,35 @@ export function VfsExplorer({
   /* ── Mount manager ── */
 
   const showMountManager = !readOnly && !!providerRegistry && providerRegistry.length > 0 && provider.scheme === 'composite';
+
+  /* ── Writable GitHub commit bar ── */
+
+  const writableGitHub = provider instanceof WritableGitHubFS ? provider : null;
+  const [pendingCount, setPendingCount] = useState(0);
+  const [showCommitDialog, setShowCommitDialog] = useState(false);
+
+  useEffect(() => {
+    if (!writableGitHub) return;
+    setPendingCount(writableGitHub.pendingCount());
+    const disposable = writableGitHub.onDidChangeFile(() => {
+      setPendingCount(writableGitHub.pendingCount());
+    });
+    return () => disposable.dispose();
+  }, [writableGitHub]);
+
+  const handleCommit = useCallback(async (message: string) => {
+    if (!writableGitHub) return;
+    await writableGitHub.commit(message);
+    setPendingCount(0);
+    tree.refresh();
+  }, [writableGitHub, tree]);
+
+  const handleDiscard = useCallback(() => {
+    if (!writableGitHub) return;
+    writableGitHub.discardPending();
+    setPendingCount(0);
+    tree.refresh();
+  }, [writableGitHub, tree]);
 
   const handleMountsChanged = useCallback(() => {
     tree.refresh();
@@ -486,6 +516,41 @@ export function VfsExplorer({
           compositeFs={provider as CompositeFS}
           providerRegistry={providerRegistry!}
           onMountsChanged={handleMountsChanged}
+        />
+      )}
+      {writableGitHub && pendingCount > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 8px',
+          background: '#1e3a1e', borderBottom: '1px solid #2d5a2d',
+          fontSize: 12, color: '#89d185',
+        }}>
+          <span style={{ flex: 1 }}>{pendingCount} pending change{pendingCount !== 1 ? 's' : ''}</span>
+          <button
+            onClick={() => setShowCommitDialog(true)}
+            style={{
+              padding: '2px 8px', fontSize: 11, cursor: 'pointer',
+              background: '#2d7a2d', color: '#fff', border: 'none', borderRadius: 3,
+            }}
+          >
+            Commit…
+          </button>
+          <button
+            onClick={handleDiscard}
+            style={{
+              padding: '2px 6px', fontSize: 11, cursor: 'pointer',
+              background: 'transparent', color: '#89d185', border: '1px solid #2d5a2d', borderRadius: 3,
+            }}
+          >
+            Discard
+          </button>
+        </div>
+      )}
+      {showCommitDialog && writableGitHub && (
+        <VfsCommitDialog
+          provider={writableGitHub}
+          onClose={() => setShowCommitDialog(false)}
+          onCommit={handleCommit}
         />
       )}
       <div

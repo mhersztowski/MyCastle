@@ -1,5 +1,5 @@
 import type { FileSystemProvider } from '@mhersztowski/core';
-import { MemoryFS, GitHubFS, BrowserFS, RemoteFS } from '@mhersztowski/core';
+import { MemoryFS, GitHubFS, WritableGitHubFS, BrowserFS, RemoteFS } from '@mhersztowski/core';
 
 /* ── Types ── */
 
@@ -52,6 +52,25 @@ export const githubFsProvider: VfsProviderDef = {
     }),
 };
 
+export const writableGithubFsProvider: VfsProviderDef = {
+  type: 'github-writable',
+  label: 'GitHub (writable)',
+  description: 'GitHub repository with batched commits — changes staged locally, committed on demand',
+  configFields: [
+    { name: 'owner', label: 'Owner', required: true, placeholder: 'e.g. myorg' },
+    { name: 'repo', label: 'Repository', required: true, placeholder: 'e.g. myrepo' },
+    { name: 'ref', label: 'Branch', placeholder: 'main', defaultValue: 'main' },
+    { name: 'token', label: 'Token', type: 'password', required: true, placeholder: 'ghp_...' },
+  ],
+  factory: (config) =>
+    new WritableGitHubFS({
+      owner: config.owner,
+      repo: config.repo,
+      ref: config.ref || 'main',
+      token: config.token,
+    }),
+};
+
 export const browserFsProvider: VfsProviderDef = {
   type: 'browser',
   label: 'Local Directory',
@@ -89,5 +108,6 @@ export function isBrowserFSSupported(): boolean {
 export const defaultProviderRegistry: VfsProviderDef[] = [
   memoryFsProvider,
   githubFsProvider,
+  writableGithubFsProvider,
   ...(isBrowserFSSupported() ? [browserFsProvider] : []),
 ];
