@@ -191,9 +191,21 @@ export function ChatMessages({ messages, processing, onFileClick }: ChatMessages
                 borderRadius: '12px 12px 2px 12px',
                 maxWidth: '85%',
               }}>
-                <Typography sx={{ fontSize: 12.5, color: '#e0e0e0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {msg.content}
-                </Typography>
+                {msg.attachments?.map((att, i) =>
+                  att.mimeType.startsWith('image/') ? (
+                    <Box key={i} component="img" src={att.dataUrl}
+                      sx={{ maxWidth: 200, maxHeight: 150, borderRadius: 0.5, display: 'block', mb: 0.5 }} />
+                  ) : (
+                    <Box key={i} sx={{ fontSize: 11, color: '#a0c4f8', fontFamily: 'monospace', mb: 0.25 }}>
+                      📎 {att.name}
+                    </Box>
+                  )
+                )}
+                {msg.content && (
+                  <Typography sx={{ fontSize: 12.5, color: '#e0e0e0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {msg.content}
+                  </Typography>
+                )}
               </Box>
             </Box>
           );

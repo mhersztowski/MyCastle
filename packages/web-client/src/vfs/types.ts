@@ -13,6 +13,7 @@ export interface VfsExplorerProps {
   showBreadcrumbs?: boolean;
   className?: string;
   providerRegistry?: VfsProviderDef[];
+  onMountsChanged?: () => void;
 }
 
 export interface VfsTreeNode {

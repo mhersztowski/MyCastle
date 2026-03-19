@@ -67,6 +67,7 @@ export interface AiChatRequest {
   maxTokens?: number;
   tools?: AiToolDefinition[];
   tool_choice?: 'auto' | 'none' | 'required';
+  signal?: AbortSignal;
 }
 
 export interface AiChatResponse {
@@ -95,6 +96,12 @@ export interface AgentConfig {
   maxTokens: number;
 }
 
+export interface ChatAttachment {
+  name: string;
+  dataUrl: string; // base64 data URL
+  mimeType: string;
+}
+
 export interface AgentMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -104,6 +111,13 @@ export interface AgentMessage {
   toolCallId?: string;
   toolName?: string;
   affectedFiles?: string[];
+  attachments?: ChatAttachment[];
+}
+
+export interface ChatSession {
+  type: 'chat_session';
+  savedAt: number;
+  messages: AgentMessage[];
 }
 
 export const DEFAULT_AGENT_CONFIG: AgentConfig = {

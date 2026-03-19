@@ -25,7 +25,8 @@ class SubpathFS implements FileSystemProvider {
   rename(o: string, n: string, opts?: RenameOptions) { return this.inner.rename!(this.p(o), this.p(n), opts); }
 }
 
-import { VfsExplorer, defaultProviderRegistry, remoteFsProvider, AgentPanel } from '@mhersztowski/web-client';
+import { VfsExplorer, defaultProviderRegistry, remoteFsProvider, AgentPanel, ChatSessionViewer } from '@mhersztowski/web-client';
+import type { ChatSession } from '@mhersztowski/web-client';
 import { useAuth } from '../modules/auth';
 import { useGlobalWindows } from './GlobalWindowsContext';
 
@@ -45,6 +46,8 @@ interface EditorTab {
   path: string;
   content: string;
   isDirty: boolean;
+  tabType?: 'code' | 'chat';
+  chatSession?: ChatSession;
 }
 
 function getLanguage(path: string): string {
@@ -217,6 +220,18 @@ export function VfsView() {
     try {
       const data = await cfs.readFile(path);
       const content = decodeText(data);
+      // Detect chat session files
+      if (path.endsWith('.chat.json')) {
+        try {
+          const session = JSON.parse(content) as ChatSession;
+          if (session.type === 'chat_session') {
+            setTabs(prev => [...prev, { path, content, isDirty: false, tabType: 'chat', chatSession: session }]);
+            setActiveTabPath(path);
+            if (isMobile) setMobileEditorOpen(true);
+            return;
+          }
+        } catch { /* fall through to normal code tab */ }
+      }
       setTabs(prev => [...prev, { path, content, isDirty: false }]);
       setActiveTabPath(path);
       if (isMobile) setMobileEditorOpen(true);
@@ -333,7 +348,9 @@ export function VfsView() {
 
   const renderEditor = () => (
     <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#1e1e1e', height: '100%' }}>
-      {activeTab ? (
+      {activeTab?.tabType === 'chat' && activeTab.chatSession ? (
+        <ChatSessionViewer session={activeTab.chatSession} onFileClick={handleFileOpen} />
+      ) : activeTab ? (
         <MonacoEditor
           key={activeTabPath}
           defaultValue={activeTab.content}
@@ -430,6 +447,7 @@ export function VfsView() {
             onFileOpen={handleFileOpen}
             providerRegistry={registry}
             onDirectoryChange={path => { dropTargetPathRef.current = path; }}
+            onMountsChanged={() => setMountVersion(v => v + 1)}
           />
           {/* Drag-over overlay */}
           {isDragOver && (
@@ -467,6 +485,7 @@ export function VfsView() {
             <AgentPanel
               provider={cfs as FileSystemProvider}
               onFileOpen={handleFileOpen}
+              providerVersion={mountVersion}
             />
           </Box>
         )}
@@ -492,6 +511,7 @@ export function VfsView() {
             <AgentPanel
               provider={cfs as FileSystemProvider}
               onFileOpen={(path) => { setMobileAgentOpen(false); handleFileOpen(path); }}
+              providerVersion={mountVersion}
             />
           </Box>
         </Dialog>

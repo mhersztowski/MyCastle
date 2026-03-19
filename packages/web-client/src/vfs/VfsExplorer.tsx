@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { SyntheticEvent } from 'react';
 import { SimpleTreeView } from '@mui/x-tree-view/SimpleTreeView';
 import { TreeItem } from '@mui/x-tree-view/TreeItem';
@@ -162,6 +162,7 @@ export function VfsExplorer({
   showBreadcrumbs = true,
   className,
   providerRegistry,
+  onMountsChanged: onMountsChangedProp,
 }: VfsExplorerProps) {
   const clipboard = useVfsClipboard();
   const readOnly = readOnlyProp ?? provider.capabilities.readonly;
@@ -187,7 +188,19 @@ export function VfsExplorer({
 
   /* ── Writable GitHub commit bar ── */
 
-  const writableGitHub = provider instanceof WritableGitHubFS ? provider : null;
+  const [mountVersion, setMountVersion] = useState(0);
+
+  const writableGitHub = useMemo(() => {
+    if (provider instanceof WritableGitHubFS) return provider;
+    if (provider.scheme === 'composite') {
+      const mounts = (provider as CompositeFS).getMounts();
+      for (const m of mounts) {
+        if (m.provider instanceof WritableGitHubFS) return m.provider as WritableGitHubFS;
+      }
+    }
+    return null;
+  }, [provider, mountVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [pendingCount, setPendingCount] = useState(0);
   const [showCommitDialog, setShowCommitDialog] = useState(false);
 
@@ -216,7 +229,9 @@ export function VfsExplorer({
 
   const handleMountsChanged = useCallback(() => {
     tree.refresh();
-  }, [tree]);
+    setMountVersion(v => v + 1);
+    onMountsChangedProp?.();
+  }, [tree, onMountsChangedProp]);
 
   /* ── Selection ── */
 

@@ -37,6 +37,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal: request.signal,
     });
 
     if (!response.ok) {

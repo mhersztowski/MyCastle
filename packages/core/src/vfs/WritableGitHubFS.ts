@@ -1,7 +1,7 @@
 import { GitHubFS } from './GitHubFS';
 import type { GitHubFSOptions } from './GitHubFS';
 import { FileChangeType, FileType } from './types';
-import type { WriteFileOptions, DeleteOptions, FileStat } from './types';
+import type { WriteFileOptions, DeleteOptions, FileStat, DirectoryEntry } from './types';
 import { normalize } from './paths';
 import { VfsError } from './errors';
 import { uint8ArrayToBase64 } from './utils';
@@ -76,6 +76,34 @@ export class WritableGitHubFS extends GitHubFS {
       return content;
     }
     return super.readFile(path);
+  }
+
+  override async readDirectory(path: string): Promise<DirectoryEntry[]> {
+    const p = normalize(path);
+
+    let baseEntries: DirectoryEntry[] = [];
+    try {
+      baseEntries = await super.readDirectory(path);
+    } catch {
+      // directory may not exist on GitHub yet
+    }
+
+    const entries = new Map(baseEntries.map(e => [e.name, e]));
+
+    for (const [pendingPath, content] of this.pending) {
+      const pp = normalize(pendingPath);
+      const parentIdx = pp.lastIndexOf('/');
+      const parentPath = parentIdx <= 0 ? '/' : pp.slice(0, parentIdx);
+      if (parentPath !== p) continue;
+      const name = pp.slice(parentIdx + 1);
+      if (content === null) {
+        entries.delete(name);
+      } else {
+        entries.set(name, { name, type: FileType.File });
+      }
+    }
+
+    return Array.from(entries.values());
   }
 
   override async stat(path: string): Promise<FileStat> {
