@@ -27,6 +27,7 @@ import LoginPage from './pages/LoginPage';
 import MinisMonacoEditorPage from './pages/editor/MinisMonacoEditorPage';
 import MinisProjectPage from './pages/minis-user/ProjectPage';
 import MinisUPythonProjectPage from './pages/minis-user/UPythonProjectPage';
+import MinisPygameProjectPage from './pages/minis-user/PygameProjectPage';
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -51,6 +52,7 @@ import {
   UserDevicesPage,
   UserProjectsPage,
   UserUPythonProjectsPage,
+  UserPygameProjectsPage,
   IotDashboardPage,
   IotDashboard2Page,
   IotDashboard2ConfigPage,
@@ -108,6 +110,7 @@ function AppRoot() {
         <Route path="/user/:userName/editor/monaco/*" element={<RequireAuth><MinisMonacoEditorPage /></RequireAuth>} />
         <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage /></RequireAuth>} />
         <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><MinisUPythonProjectPage /></RequireAuth>} />
+        <Route path="/user/:userName/pygame-project/:projectId" element={<RequireAuth><MinisPygameProjectPage /></RequireAuth>} />
 
         {/* Full-bleed layout routes */}
         <Route
@@ -152,6 +155,7 @@ function AppRoot() {
                   <Route path="/user/:userName/electronics/devicesdefs" element={<DevicesDefPage />} />
                   <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />
                   <Route path="/user/:userName/electronics/upython" element={<UserUPythonProjectsPage />} />
+                  <Route path="/user/:userName/electronics/pygame" element={<UserPygameProjectsPage />} />
                   <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />
                   <Route path="/user/:userName/iot/dashboard2" element={<IotDashboard2Page />} />
                   <Route path="/user/:userName/iot/dashboard2/config" element={<IotDashboard2ConfigPage />} />

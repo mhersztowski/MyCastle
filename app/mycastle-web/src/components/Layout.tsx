@@ -116,6 +116,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'DevicesDef', icon: <DevicesIcon />, path: `/user/${userName}/electronics/devicesdefs` },
             { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
             { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
+            { text: 'Pygame', icon: <CodeIcon />, path: `/user/${userName}/electronics/pygame` },
             { text: 'Configuration', icon: <HubIcon />, path: `/user/${userName}/electronics/configuration` },
           ],
         },
