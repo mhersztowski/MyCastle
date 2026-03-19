@@ -44,6 +44,7 @@ function UserPygameProjectsPage() {
     try {
       const created = await minisApi.createUserProject(userName, {
         name: projectName.trim(),
+        githubProjectId: projectName.trim(),
         softwarePlatform: 'pygame',
       });
       setAddDialogOpen(false);

@@ -70,106 +70,144 @@ function PygameProjectPage() {
 
   useEffect(() => { codeEditedRef.current = codeEdited; }, [codeEdited]);
 
+  // ---- sync code to editor ----
+  const syncCodeToEditor = useCallback((code: string) => {
+    setGeneratedCode(code);
+    if (editorRef.current) {
+      suppressEditorChangeRef.current = true;
+      editorRef.current.setContent(code);
+      suppressEditorChangeRef.current = false;
+    }
+  }, []);
+
+  // ---- service ready ----
+  const handleServiceReady = useCallback((service: PygameBlocklyService) => {
+    serviceRef.current = service;
+    service.onWorkspaceChange(() => {
+      if (suppressBlocklyChangeRef.current) return;
+      if (!codeEditedRef.current) {
+        syncCodeToEditor(service.generateCode());
+      }
+    });
+    syncCodeToEditor(service.generateCode());
+  }, [syncCodeToEditor]);
+
+  // ---- Monaco editor lifecycle ----
+  const showCode = viewMode === 'code' || viewMode === 'split';
+
+  useEffect(() => {
+    if (!showCode || !editorContainerRef.current) return;
+
+    const editor = EditorInstance.create(editorContainerRef.current, {
+      value: generatedCode,
+      language: 'python',
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      fontSize: 13,
+      wordWrap: 'off',
+    });
+
+    editor.on('contentChanged', () => {
+      if (suppressEditorChangeRef.current) return;
+      setCodeEdited(true);
+      codeEditedRef.current = true;
+    });
+
+    editorRef.current = editor;
+
+    return () => {
+      editor.dispose();
+      editorRef.current = null;
+    };
+  }, [showCode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- resize blockly when panels change ----
+  useEffect(() => {
+    const timer = setTimeout(() => { serviceRef.current?.resize(); }, 50);
+    return () => clearTimeout(timer);
+  }, [viewMode, splitRatio, sketchesOpen]);
+
   // ---- load sketch list ----
   const loadSketches = useCallback(async () => {
     if (!userName || !projectId) return;
     try {
-      const list = await minisApi.listProjectSketches(userName, projectId);
+      const list = await minisApi.listSketches(userName, projectId);
       setSketches(list);
     } catch (e) {
       console.error('[PygameProject] Failed to load sketches', e);
     }
   }, [userName, projectId]);
 
-  useEffect(() => { loadSketches(); }, [loadSketches]);
-
-  // ---- open sketch ----
-  const openSketch = useCallback(async (sketchName: string) => {
-    if (!userName || !projectId || !serviceRef.current) return;
-    try {
-      const content = await minisApi.getProjectSketch(userName, projectId, sketchName);
-      setCurrentSketch(sketchName);
-      const isXml = content.trimStart().startsWith('<xml') || content.trimStart().startsWith('<block');
-
-      suppressBlocklyChangeRef.current = true;
-      if (isXml) {
-        serviceRef.current.loadFromXml(content);
-      } else {
-        serviceRef.current.clearWorkspace();
-        suppressEditorChangeRef.current = true;
-        editorRef.current?.setValue(content);
-        suppressEditorChangeRef.current = false;
-        setGeneratedCode(content);
-      }
-      suppressBlocklyChangeRef.current = false;
-
-      const code = serviceRef.current.generateCode();
-      setGeneratedCode(code);
-      suppressEditorChangeRef.current = true;
-      editorRef.current?.setValue(code);
-      suppressEditorChangeRef.current = false;
-      setCodeEdited(false);
-      codeEditedRef.current = false;
-    } catch (e) {
-      console.error('[PygameProject] Failed to open sketch', e);
-    }
-  }, [userName, projectId]);
-
-  // ---- auto-open initial sketch ----
   useEffect(() => {
-    if (initialSketch && serviceRef.current?.isInitialized) {
-      openSketch(initialSketch);
-    }
-  }, [initialSketch, openSketch]);
+    if (!userName || !projectId) return;
+    minisApi.listSketches(userName, projectId)
+      .then((list) => {
+        setSketches(list);
+        if (list.length > 0) {
+          const target = initialSketch && list.includes(initialSketch) ? initialSketch : list[0];
+          handleLoadSketch(target);
+        }
+      })
+      .catch(() => setSketches([]));
+  }, [userName, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---- blockly change → update editor ----
-  const handleBlocklyChange = useCallback(() => {
-    if (suppressBlocklyChangeRef.current || !serviceRef.current) return;
-    const code = serviceRef.current.generateCode();
-    setGeneratedCode(code);
-    if (!codeEditedRef.current) {
-      suppressEditorChangeRef.current = true;
-      editorRef.current?.setValue(code);
-      suppressEditorChangeRef.current = false;
-    }
-  }, []);
+  // ---- load sketch ----
+  const handleLoadSketch = async (sketchName: string) => {
+    if (!userName || !projectId) return;
+    setCurrentSketch(sketchName);
+    setCodeEdited(false);
+    codeEditedRef.current = false;
 
-  const handleServiceReady = useCallback((service: PygameBlocklyService) => {
-    serviceRef.current = service;
-    service.onWorkspaceChange(handleBlocklyChange);
-    if (initialSketch) openSketch(initialSketch);
-  }, [handleBlocklyChange, initialSketch, openSketch]);
-
-  // ---- editor mount ----
-  const handleEditorMount = useCallback((instance: EditorInstance) => {
-    editorRef.current = instance;
-    instance.onDidChangeContent(() => {
-      if (suppressEditorChangeRef.current) return;
-      setCodeEdited(true);
-      codeEditedRef.current = true;
-      setGeneratedCode(instance.getValue());
-    });
-    if (generatedCode) {
-      suppressEditorChangeRef.current = true;
-      instance.setValue(generatedCode);
-      suppressEditorChangeRef.current = false;
+    suppressBlocklyChangeRef.current = true;
+    serviceRef.current?.clearWorkspace();
+    try {
+      const xmlContent = await minisApi.readSketchFile(
+        userName, projectId, sketchName, `${sketchName}.blockly`,
+      );
+      if (serviceRef.current && xmlContent) {
+        serviceRef.current.loadFromXml(xmlContent);
+      }
+    } catch {
+      // File not found — workspace already cleared
     }
-  }, [generatedCode]);
+    suppressBlocklyChangeRef.current = false;
+
+    try {
+      const pyContent = await minisApi.readSketchFile(
+        userName, projectId, sketchName, `${sketchName}.py`,
+      );
+      syncCodeToEditor(pyContent);
+    } catch {
+      if (serviceRef.current) {
+        syncCodeToEditor(serviceRef.current.generateCode());
+      }
+    }
+  };
+
+  // ---- new sketch ----
+  const handleNewSketch = () => {
+    const name = newSketchName.trim();
+    if (!name) return;
+    setCurrentSketch(name);
+    if (!sketches.includes(name)) setSketches((prev) => [...prev, name]);
+    setNewSketchName('');
+    serviceRef.current?.clearWorkspace?.();
+    if (serviceRef.current) syncCodeToEditor(serviceRef.current.generateCode());
+  };
 
   // ---- save sketch ----
-  const saveSketch = useCallback(async () => {
-    if (!userName || !projectId || !currentSketch || !serviceRef.current) return;
+  const handleSaveSketch = useCallback(async () => {
+    if (!userName || !projectId || !currentSketch) return;
     setSyncing(true);
     try {
-      // Save XML blocks
-      const xml = serviceRef.current.serializeToXml();
-      await minisApi.saveProjectSketch(userName, projectId, currentSketch, xml);
-      // Save generated code alongside (with .py extension)
-      const pyName = currentSketch.replace(/\.xml$/, '') + '.py';
-      const code = codeEditedRef.current
-        ? editorRef.current?.getValue() ?? generatedCode
-        : generatedCode;
-      await minisApi.saveProjectSketch(userName, projectId, pyName, code).catch(() => {/* optional */});
+      const blocklyXml = serviceRef.current?.serializeToXml() ?? '';
+      const pyCode = editorRef.current?.getContent() ?? generatedCode;
+      await Promise.all([
+        minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
+        minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.py`, pyCode),
+      ]);
+      if (!sketches.includes(currentSketch)) setSketches((prev) => [...prev, currentSketch]);
       setCodeEdited(false);
       codeEditedRef.current = false;
     } catch (e) {
@@ -177,40 +215,22 @@ function PygameProjectPage() {
     } finally {
       setSyncing(false);
     }
-  }, [userName, projectId, currentSketch, generatedCode]);
-
-  // ---- new sketch ----
-  const createSketch = useCallback(async () => {
-    if (!userName || !projectId || !newSketchName.trim()) return;
-    const name = newSketchName.trim().replace(/\.xml$/, '') + '.xml';
-    try {
-      await minisApi.saveProjectSketch(userName, projectId, name, '<xml xmlns="https://developers.google.com/blockly/xml"></xml>');
-      setNewSketchName('');
-      await loadSketches();
-      if (serviceRef.current) openSketch(name);
-    } catch (e) {
-      console.error('[PygameProject] Failed to create sketch', e);
-    }
-  }, [userName, projectId, newSketchName, loadSketches, openSketch]);
+  }, [userName, projectId, currentSketch, generatedCode, sketches]);
 
   // ---- mode switch ----
   const handleModeChange = (mode: PygameMode) => {
     setPygameMode(mode);
     serviceRef.current?.setMode(mode);
     if (!codeEditedRef.current && serviceRef.current) {
-      const code = serviceRef.current.generateCode();
-      setGeneratedCode(code);
-      suppressEditorChangeRef.current = true;
-      editorRef.current?.setValue(code);
-      suppressEditorChangeRef.current = false;
+      syncCodeToEditor(serviceRef.current.generateCode());
     }
   };
 
   // ---- download ----
   const downloadCode = () => {
-    const code = editorRef.current?.getValue() ?? generatedCode;
+    const code = editorRef.current?.getContent() ?? generatedCode;
     const ext = pygameMode === 'web' ? 'web.py' : 'py';
-    const fname = (currentSketch ?? 'game').replace(/\.xml$/, '') + '.' + ext;
+    const fname = (currentSketch ?? 'game') + '.' + ext;
     const blob = new Blob([code], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -220,37 +240,39 @@ function PygameProjectPage() {
 
   // ---- copy ----
   const copyCode = () => {
-    const code = editorRef.current?.getValue() ?? generatedCode;
+    const code = editorRef.current?.getContent() ?? generatedCode;
     navigator.clipboard.writeText(code).catch(() => {});
   };
 
   // ---- draggable split ----
-  const dragging = useRef(false);
-  const containerWidthRef = useRef(0);
-  const onMouseDown = (e: React.MouseEvent) => {
-    dragging.current = true;
-    containerWidthRef.current = (e.currentTarget.parentElement?.offsetWidth ?? 800);
+  const splitterContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = splitterContainerRef.current;
+    if (!container) return;
+    const startX = e.clientX;
+    const containerRect = container.getBoundingClientRect();
+    const startRatio = splitRatio;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const newRatio = startRatio + dx / containerRect.width;
+      const minRatio = MIN_PANEL_PX / containerRect.width;
+      const maxRatio = 1 - minRatio;
+      setSplitRatio(Math.max(minRatio, Math.min(maxRatio, newRatio)));
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
-    e.preventDefault();
-  };
-  const onMouseMove = (e: MouseEvent) => {
-    if (!dragging.current) return;
-    const rect = document.getElementById('pg-split-container')?.getBoundingClientRect();
-    if (!rect) return;
-    const ratio = Math.max(MIN_PANEL_PX, Math.min(e.clientX - rect.left, rect.width - MIN_PANEL_PX)) / rect.width;
-    setSplitRatio(ratio);
-    serviceRef.current?.resize();
-    editorRef.current?.layout();
-  };
-  const onMouseUp = () => {
-    dragging.current = false;
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
   };
 
   const showBlockly = viewMode !== 'code';
-  const showCode = viewMode !== 'blockly';
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1e1e1e' }}>
@@ -318,7 +340,7 @@ function PygameProjectPage() {
               <IconButton
                 size="small"
                 color={codeEdited ? 'warning' : 'inherit'}
-                onClick={saveSketch}
+                onClick={handleSaveSketch}
                 disabled={!currentSketch || syncing}
               >
                 {syncing ? <CircularProgress size={16} color="inherit" /> : <Save fontSize="small" />}
@@ -348,26 +370,31 @@ function PygameProjectPage() {
                 placeholder="New sketch…"
                 value={newSketchName}
                 onChange={(e) => setNewSketchName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && createSketch()}
-                inputProps={{ style: { fontSize: 12, padding: '4px 6px' } }}
-                sx={{ flex: 1, '& .MuiOutlinedInput-root': { bgcolor: '#1e1e1e' } }}
+                onKeyDown={(e) => e.key === 'Enter' && handleNewSketch()}
+                inputProps={{ style: { fontSize: 12, padding: '4px 6px', color: '#ccc' } }}
+                sx={{
+                  flex: 1,
+                  '& .MuiOutlinedInput-root': { bgcolor: '#1e1e1e' },
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#555' },
+                  '& input::placeholder': { color: '#666', opacity: 1 },
+                }}
               />
-              <IconButton size="small" onClick={createSketch} disabled={!newSketchName.trim()} sx={{ color: '#ccc' }}>
+              <IconButton size="small" onClick={handleNewSketch} disabled={!newSketchName.trim()} sx={{ color: '#ccc' }}>
                 <Add fontSize="small" />
               </IconButton>
             </Box>
             <List dense sx={{ flex: 1, overflow: 'auto' }}>
-              {sketches.filter((s) => s.endsWith('.xml')).map((s) => (
+              {sketches.map((s) => (
                 <ListItemButton
                   key={s}
                   selected={currentSketch === s}
                   onClick={() => {
                     if (codeEditedRef.current) { setConfirmOpen(true); return; }
-                    openSketch(s);
+                    handleLoadSketch(s);
                   }}
                   sx={{ py: 0.5, px: 1 }}
                 >
-                  <ListItemText primary={s.replace(/\.xml$/, '')} primaryTypographyProps={{ fontSize: 12, color: '#ccc' }} />
+                  <ListItemText primary={s} primaryTypographyProps={{ fontSize: 12, color: '#ccc' }} />
                 </ListItemButton>
               ))}
             </List>
@@ -384,7 +411,7 @@ function PygameProjectPage() {
 
         {/* Main area: Blockly + Code */}
         <Box
-          id="pg-split-container"
+          ref={splitterContainerRef}
           sx={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}
         >
           {/* Blockly */}
@@ -401,7 +428,7 @@ function PygameProjectPage() {
           {/* Drag handle */}
           {viewMode === 'split' && (
             <Box
-              onMouseDown={onMouseDown}
+              onMouseDown={handleSplitterMouseDown}
               sx={{
                 width: 6, bgcolor: '#3e3e42', cursor: 'col-resize', flexShrink: 0,
                 '&:hover': { bgcolor: '#0e639c' },
@@ -414,14 +441,7 @@ function PygameProjectPage() {
             <Box
               ref={editorContainerRef}
               sx={{ width: showBlockly ? `${(1 - splitRatio) * 100}%` : '100%', overflow: 'hidden' }}
-            >
-              <EditorInstance
-                language="python"
-                theme="vs-dark"
-                onMount={handleEditorMount}
-                options={{ fontSize: 13, minimap: { enabled: false }, wordWrap: 'on' }}
-              />
-            </Box>
+            />
           )}
         </Box>
       </Box>
@@ -434,7 +454,11 @@ function PygameProjectPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
-          <Button color="error" onClick={() => { setConfirmOpen(false); setCodeEdited(false); codeEditedRef.current = false; }}>
+          <Button color="error" onClick={() => {
+            setConfirmOpen(false);
+            setCodeEdited(false);
+            codeEditedRef.current = false;
+          }}>
             Discard
           </Button>
         </DialogActions>

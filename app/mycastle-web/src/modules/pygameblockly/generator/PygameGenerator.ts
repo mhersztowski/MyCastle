@@ -51,6 +51,9 @@ export class PygameGenerator extends Blockly.CodeGenerator {
   /** Code from pg_loop hat blocks → def loop() / async def main() body */
   loop_stmts_: Record<string, string> = Object.create(null);
 
+  /** Code from pg_on_events hat blocks → placed inside for _event loop */
+  event_stmts_: Record<string, string> = Object.create(null);
+
   /** User variable names */
   variables_: Set<string> = new Set();
 
@@ -69,6 +72,7 @@ export class PygameGenerator extends Blockly.CodeGenerator {
     this.userFunctions_ = Object.create(null);
     this.setup_stmts_ = Object.create(null);
     this.loop_stmts_ = Object.create(null);
+    this.event_stmts_ = Object.create(null);
     this.variables_ = new Set();
 
     // Default window config — overridden by pg_set_window block
@@ -143,12 +147,20 @@ export class PygameGenerator extends Blockly.CodeGenerator {
     // ---- setup() ----
     const setupFn = `\ndef setup():\n${buildFuncBody(setupBody, '')}`;
 
-    // ---- quit event handling (always injected into loop) ----
+    // ---- event loop (quit always injected + user event_stmts_) ----
+    const userEventCode = Object.values(this.event_stmts_).join('');
+    // user event code is from statementToCode — already has 1 indent level (relative to loop body)
+    // inside the for _event loop we need 2 indent levels total, so shift by I
+    const shiftedUserEvent = userEventCode
+      .split('\n')
+      .map((l) => (l ? I + l : l))
+      .join('\n');
     const quitCheck =
       I + 'for _event in pygame.event.get():\n' +
       I2 + 'if _event.type == pygame.QUIT:\n' +
       I3 + 'pygame.quit()\n' +
-      I3 + 'sys.exit()\n';
+      I3 + 'sys.exit()\n' +
+      (shiftedUserEvent.trim() ? shiftedUserEvent + '\n' : '');
 
     // ---- loop body (loop_stmts + loose code) ----
     const trimmedLoose = code.trimEnd();
