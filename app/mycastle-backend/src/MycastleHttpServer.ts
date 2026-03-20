@@ -13,6 +13,7 @@ import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
 import type { ArduinoService } from './modules/arduino/index.js';
 import type { MinisConfig } from './modules/arduino/ArduinoCli.js';
 import type { MicroPythonService } from './modules/upython/index.js';
+import type { PygameService } from './modules/pygame/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
 
 interface CrudConfig {
@@ -39,6 +40,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private vfs: CompositeFS;
   private arduinoService: ArduinoService | null;
   private upythonService: MicroPythonService | null;
+  private pygameService: PygameService | null;
   private rootDir: string | null;
   private scriptsService: ScriptsService | null = null;
 
@@ -48,13 +50,14 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
     this.iotService = iotService ?? null;
     this.arduinoService = arduinoService ?? null;
     this.upythonService = upythonService ?? null;
+    this.pygameService = pygameService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
@@ -154,6 +157,18 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
     if (apiPath.startsWith('/docs/')) {
       this.serveSwaggerAsset(apiPath.replace('/docs/', ''), res);
+      return;
+    }
+
+    // Pygame web build static files: GET /users/{userName}/project-pygame/{projectId}/sketches/{sketchName}/web-build/**
+    // Public — opened in a new tab without JWT token
+    const pygameWebBuildMatchPublic = apiPath.match(/^\/users\/([^/]+)\/project-pygame\/([^/]+)\/sketches\/([^/]+)\/web-build(?:\/(.*))?$/);
+    if (pygameWebBuildMatchPublic && method === 'GET') {
+      const wUserName = decodeURIComponent(pygameWebBuildMatchPublic[1]);
+      const wProjectId = decodeURIComponent(pygameWebBuildMatchPublic[2]);
+      const wSketchName = decodeURIComponent(pygameWebBuildMatchPublic[3]);
+      const wFilePath = pygameWebBuildMatchPublic[4] ? decodeURIComponent(pygameWebBuildMatchPublic[4]) : 'index.html';
+      await this.handlePygameWebBuildFile(res, wUserName, wProjectId, wSketchName, wFilePath);
       return;
     }
 
@@ -486,6 +501,28 @@ export class MycastleHttpServer extends HttpUploadServer {
       const sProjectName = decodeURIComponent(sketchMatch[2]);
       const sSketchName = sketchMatch[3] ? decodeURIComponent(sketchMatch[3]) : undefined;
       const sFileName = sketchMatch[4] ? decodeURIComponent(sketchMatch[4]) : undefined;
+      await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
+    // Pygame web build: POST /users/{userName}/project-pygame/{projectId}/sketches/{sketchName}/build
+    // Must be before pygameSketchMatch — otherwise /sketches/{name}/build is mismatched as sketch file
+    const pygameBuildMatch = apiPath.match(/^\/users\/([^/]+)\/project-pygame\/([^/]+)\/sketches\/([^/]+)\/build$/);
+    if (pygameBuildMatch && method === 'POST') {
+      const bUserName = decodeURIComponent(pygameBuildMatch[1]);
+      const bProjectId = decodeURIComponent(pygameBuildMatch[2]);
+      const bSketchName = decodeURIComponent(pygameBuildMatch[3]);
+      await this.handlePygameBuild(req, res, bUserName, bProjectId, bSketchName);
+      return;
+    }
+
+    // Sketch files (pygame): /users/{userName}/project-pygame/{projectName}/sketches[/{sketchName}/{fileName}]
+    const pygameSketchMatch = apiPath.match(/^\/users\/([^/]+)\/project-pygame\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
+    if (pygameSketchMatch) {
+      const sUserName = decodeURIComponent(pygameSketchMatch[1]);
+      const sProjectName = decodeURIComponent(pygameSketchMatch[2]);
+      const sSketchName = pygameSketchMatch[3] ? decodeURIComponent(pygameSketchMatch[3]) : undefined;
+      const sFileName = pygameSketchMatch[4] ? decodeURIComponent(pygameSketchMatch[4]) : undefined;
       await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
       return;
     }
@@ -827,6 +864,77 @@ export class MycastleHttpServer extends HttpUploadServer {
   }
 
   // --- Sketch files ---
+
+  private async handlePygameBuild(req: IncomingMessage, res: ServerResponse, userName: string, projectId: string, sketchName: string): Promise<void> {
+    if (!this.pygameService) {
+      this.sendJsonResponse(res, 503, { error: 'Pygame service not configured' });
+      return;
+    }
+    if (sketchName.includes('..')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid sketch name' });
+      return;
+    }
+    try {
+      const body = await this.parseRequestBody(req) as { code?: string };
+      if (body?.code !== undefined) {
+        // Pygbag requires the entry file to be named main.py
+        const sketchDir = this.pygameService.sketchDir(userName, projectId, sketchName);
+        await fs.promises.mkdir(sketchDir, { recursive: true });
+        await fs.promises.writeFile(path.join(sketchDir, 'main.py'), body.code, 'utf-8');
+        // Remove stale build so pygbag starts fresh
+        await fs.promises.rm(path.join(sketchDir, 'build'), { recursive: true, force: true });
+      }
+      const result = await this.pygameService.build(userName, projectId, sketchName);
+      this.sendJsonResponse(res, result.success ? 200 : 422, result);
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  private static readonly PYGAME_MIME_TYPES: Record<string, string> = {
+    '.html': 'text/html',
+    '.js': 'application/javascript',
+    '.css': 'text/css',
+    '.wasm': 'application/wasm',
+    '.py': 'text/plain',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+    '.zip': 'application/zip',
+    '.whl': 'application/zip',
+    '.data': 'application/octet-stream',
+    '.json': 'application/json',
+    '.txt': 'text/plain',
+  };
+
+  private async handlePygameWebBuildFile(res: ServerResponse, userName: string, projectId: string, sketchName: string, filePath: string): Promise<void> {
+    if (!this.pygameService) {
+      this.sendJsonResponse(res, 503, { error: 'Pygame service not configured' });
+      return;
+    }
+    if (sketchName.includes('..') || filePath.includes('..')) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid path' });
+      return;
+    }
+    const webBuildDir = this.pygameService.webBuildDir(userName, projectId, sketchName);
+    const fullPath = path.resolve(path.join(webBuildDir, filePath || 'index.html'));
+
+    // Directory traversal guard
+    if (!fullPath.startsWith(path.resolve(webBuildDir))) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid path' });
+      return;
+    }
+
+    try {
+      const content = await fs.promises.readFile(fullPath);
+      const ext = path.extname(fullPath).toLowerCase();
+      const mimeType = MycastleHttpServer.PYGAME_MIME_TYPES[ext] ?? 'application/octet-stream';
+      // COOP/COEP headers required for SharedArrayBuffer (WebAssembly threads)
+      res.writeHead(200, { 'Content-Type': mimeType });
+      res.end(content);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'File not found' });
+    }
+  }
 
   private async handleSketches(
     req: IncomingMessage, res: ServerResponse, method: string,

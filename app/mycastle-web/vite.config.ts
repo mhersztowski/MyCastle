@@ -90,5 +90,6 @@ export default defineConfig({
   },
   build: {
     outDir: 'build',
+    target: ['chrome63', 'safari13', 'firefox78'],
   },
 });

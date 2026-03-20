@@ -2,11 +2,13 @@ import * as path from 'path';
 import type { ArduinoCli, BoardInfo, PortInfo, CompileResult, MinisConfig, UploadResult } from './ArduinoCli.js';
 import { ArduinoCliLocal } from './ArduinoCliLocal.js';
 import { ArduinoCliDocker } from './ArduinoCliDocker.js';
+import { ArduinoCliDockerRun } from './ArduinoCliDockerRun.js';
 import { ArduinoProject } from './ArduinoProject.js';
 
 export interface ArduinoServiceConfig {
   localPath?: string;
   dockerContainer?: string;
+  dockerImage?: string;
   rootDir: string;
 }
 
@@ -17,15 +19,18 @@ export class ArduinoService {
   constructor(config: ArduinoServiceConfig) {
     this.rootDir = path.resolve(config.rootDir);
 
-    if (config.localPath) {
-      this.cli = new ArduinoCliLocal(config.localPath);
-      console.log(`Arduino CLI: local mode (${config.localPath})`);
+    if (config.dockerImage) {
+      this.cli = new ArduinoCliDockerRun(config.dockerImage, this.rootDir);
+      console.log(`Arduino CLI: docker run mode (${config.dockerImage})`);
     } else if (config.dockerContainer) {
       this.cli = new ArduinoCliDocker(config.dockerContainer);
-      console.log(`Arduino CLI: docker mode (${config.dockerContainer})`);
+      console.log(`Arduino CLI: docker exec mode (${config.dockerContainer})`);
+    } else if (config.localPath) {
+      this.cli = new ArduinoCliLocal(config.localPath);
+      console.log(`Arduino CLI: local mode (${config.localPath})`);
     } else {
       this.cli = null;
-      console.log('Arduino CLI: not configured (set ARDUINO_CLI_LOCAL_PATH or ARDUINO_CLI_DOCKER_NAME)');
+      console.log('Arduino CLI: not configured (set ARDUINO_CLI_DOCKER_IMAGE, ARDUINO_CLI_DOCKER_NAME, or ARDUINO_CLI_LOCAL_PATH)');
     }
   }
 

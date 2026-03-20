@@ -13,10 +13,16 @@ const staticDirEnv = process.env.STATIC_DIR || path.resolve(process.cwd(), '..',
 const staticDir = fs.existsSync(staticDirEnv) ? staticDirEnv : null;
 const arduinoCliLocalPath = process.env.ARDUINO_CLI_LOCAL_PATH;
 const arduinoCliDockerName = process.env.ARDUINO_CLI_DOCKER_NAME;
+const arduinoCliDockerImage = process.env.ARDUINO_CLI_DOCKER_IMAGE;
 const upythonCliLocalPath = process.env.UPYTHON_CLI_LOCAL_PATH;
+const upythonDockerName = process.env.UPYTHON_DOCKER_NAME;
+const upythonDockerImage = process.env.UPYTHON_DOCKER_IMAGE;
+const pygbagPath = process.env.PYGBAG_PATH;
+const pygameDockerName = process.env.PYGAME_DOCKER_NAME;
+const pygameDockerImage = process.env.PYGAME_DOCKER_IMAGE;
 const userDataPath = process.env.USER_DATA_PATH || 'Minis/Users/marcin';
 
-App.create({ httpPort, mqttPort, rootDir, staticDir, jwtSecret, arduinoCliLocalPath, arduinoCliDockerName, upythonCliLocalPath, userDataPath });
+App.create({ httpPort, mqttPort, rootDir, staticDir, jwtSecret, arduinoCliLocalPath, arduinoCliDockerName, arduinoCliDockerImage, upythonCliLocalPath, upythonDockerName, upythonDockerImage, pygbagPath, pygameDockerName, pygameDockerImage, userDataPath });
 
 async function main() {
   try {

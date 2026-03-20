@@ -1,0 +1,44 @@
+# CLI tool images for Minis — backend uses `docker run --rm`, no persistent containers needed
+# Usage:
+#   docker compose -f docker-compose.cli.yml build
+#
+# Backend env vars (set in .env):
+#   ARDUINO_CLI_DOCKER_IMAGE=mycastle-arduino:local
+#   PYGAME_DOCKER_IMAGE=mycastle-pygame:local
+#   UPYTHON_DOCKER_IMAGE=mycastle-pico:local
+#
+# Requires:
+#   ~/pico-sdk — pico SDK v2.1.1 (git clone https://github.com/raspberrypi/pico-sdk)
+
+services:
+  arduino:
+    image: mycastle-arduino:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cli
+      target: arduino
+      args:
+        ARDUINO_ARCH: Linux_64bit
+
+  pico:
+    image: mycastle-pico:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cli
+      target: pico
+
+  pygame:
+    image: mycastle-pygame:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cli
+      target: pygame
+
+  android:
+    image: mycastle-android:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.android
+
+volumes:
+  android-sdk-cache:

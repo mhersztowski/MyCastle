@@ -19,23 +19,23 @@ export class ArduinoProject {
   get examplesDir(): string { return path.join(this.projectDir, 'examples'); }
   get librariesDir(): string { return path.join(this.projectDir, 'libraries'); }
   get outputDir(): string { return path.join(this.projectDir, 'output'); }
-  get buildDir(): string { return path.join(this.projectDir, 'build'); }
   get configFile(): string { return path.join(this.projectDir, 'custom-config.yaml'); }
+  sketchBuildDir(sketchName: string): string { return path.join(this.sketchesDir, sketchName, '.build'); }
 
   async ensureConfig(): Promise<void> {
     const content = `directories:\n  user: ${this.projectDir}\nlibrary:\n  enable_unsafe_install: true\n`;
     await fs.writeFile(this.configFile, content, 'utf-8');
   }
 
-  async ensureDirs(): Promise<void> {
+  async ensureDirs(sketchName: string): Promise<void> {
     await fs.mkdir(this.outputDir, { recursive: true });
-    await fs.mkdir(this.buildDir, { recursive: true });
+    await fs.mkdir(this.sketchBuildDir(sketchName), { recursive: true });
     await fs.mkdir(this.librariesDir, { recursive: true });
   }
 
   async compile(sketchName: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>): Promise<CompileResult> {
     await this.ensureConfig();
-    await this.ensureDirs();
+    await this.ensureDirs(sketchName);
     await this.cleanDir(this.outputDir);
 
     // Install required libraries into project-local libraries dir
@@ -79,12 +79,13 @@ export class ArduinoProject {
       await fs.writeFile(headerPath, header, 'utf-8');
     }
 
+    const buildDir = this.sketchBuildDir(sketchName);
     const result = await this.cli.compile({
       fqbn: this.fqbn,
       sketchPath,
       configFilePath: this.configFile,
       outputDir: this.outputDir,
-      buildDir: this.buildDir,
+      buildDir,
       verbose: true,
     });
 
@@ -92,7 +93,7 @@ export class ArduinoProject {
       result.output = libLogs.join('\n') + '\n\n' + result.output;
     }
 
-    await this.cleanDir(this.buildDir);
+    await this.cleanDir(buildDir);
 
     // List output files
     try {

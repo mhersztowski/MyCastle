@@ -63,6 +63,7 @@ function ProjectPage() {
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const codeEditedRef = useRef(false);
+  const currentSketchRef = useRef<string | null>(null);
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
 
@@ -95,10 +96,14 @@ function ProjectPage() {
   const [readmeEditMode, setReadmeEditMode] = useState(false);
   const [readmeEditValue, setReadmeEditValue] = useState('');
 
-  // Keep ref in sync with state for use inside Blockly listener
+  // Keep refs in sync with state for use inside async callbacks / stale closures
   useEffect(() => {
     codeEditedRef.current = codeEdited;
   }, [codeEdited]);
+
+  useEffect(() => {
+    currentSketchRef.current = currentSketch;
+  }, [currentSketch]);
 
   // Sync generated code to Monaco editor
   const syncCodeToEditor = useCallback((code: string) => {
@@ -218,8 +223,12 @@ function ProjectPage() {
   const handleLoadSketch = async (sketchName: string) => {
     if (!userName || !projectId) return;
     setCurrentSketch(sketchName);
+    currentSketchRef.current = sketchName;
     setCodeEdited(false);
     codeEditedRef.current = false;
+    setCompileOutput('');
+    setCompileSuccess(null);
+    setCompileOutputOpen(false);
 
     // Read sketch metadata to know what was last modified
     let lastModified: 'blockly' | 'cpp' = 'blockly';
@@ -304,6 +313,7 @@ function ProjectPage() {
   };
 
   const doCompile = async () => {
+    const currentSketch = currentSketchRef.current;
     if (!currentSketch || !userName || !projectId || !board) return;
     setCompiling(true);
     setCompileOutput('');

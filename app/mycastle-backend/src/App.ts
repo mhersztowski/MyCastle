@@ -8,6 +8,7 @@ import { IotService } from './modules/iot/IotService.js';
 import { TerminalService } from './modules/terminal/TerminalService.js';
 import { ArduinoService } from './modules/arduino/index.js';
 import { MicroPythonService } from './modules/upython/index.js';
+import { PygameService } from './modules/pygame/index.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -17,7 +18,13 @@ export interface AppConfig {
   jwtSecret: string;
   arduinoCliLocalPath?: string;
   arduinoCliDockerName?: string;
+  arduinoCliDockerImage?: string;
   upythonCliLocalPath?: string;
+  upythonDockerName?: string;
+  upythonDockerImage?: string;
+  pygbagPath?: string;
+  pygameDockerName?: string;
+  pygameDockerImage?: string;
   /** Base path for user PIM data, e.g. 'Minis/Users/marcin'. Defaults to env USER_DATA_PATH. */
   userDataPath?: string;
 }
@@ -34,6 +41,7 @@ export class App {
   readonly iotService: IotService;
   readonly arduinoService: ArduinoService;
   readonly upythonService: MicroPythonService;
+  readonly pygameService: PygameService;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
   private jwtService: JwtService;
@@ -65,10 +73,19 @@ export class App {
     this.arduinoService = new ArduinoService({
       localPath: config.arduinoCliLocalPath,
       dockerContainer: config.arduinoCliDockerName,
+      dockerImage: config.arduinoCliDockerImage,
       rootDir: config.rootDir,
     });
     this.upythonService = new MicroPythonService({
       localPath: config.upythonCliLocalPath,
+      dockerContainer: config.upythonDockerName,
+      dockerImage: config.upythonDockerImage,
+      rootDir: config.rootDir,
+    });
+    this.pygameService = new PygameService({
+      pygbagPath: config.pygbagPath,
+      dockerContainer: config.pygameDockerName,
+      dockerImage: config.pygameDockerImage,
       rootDir: config.rootDir,
     });
 
@@ -82,6 +99,7 @@ export class App {
       config.rootDir,
       this.arduinoService,
       this.upythonService,
+      this.pygameService,
     );
   }
 

@@ -406,6 +406,29 @@ class MinisApiService {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
   }
 
+  // Pygame sketch files
+  async listPygameSketches(userName: string, projectName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches`);
+    return data.items;
+  }
+
+  async readPygameSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<string> {
+    const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+    return data.content;
+  }
+
+  async writePygameSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  async buildPygameSketch(userName: string, projectId: string, sketchName: string, webCode: string): Promise<{ success: boolean; output: string }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectId)}/sketches/${encodeURIComponent(sketchName)}/build`, { code: webCode });
+  }
+
+  getPygameWebBuildUrl(userName: string, projectId: string, sketchName: string): string {
+    return `/api/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectId)}/sketches/${encodeURIComponent(sketchName)}/web-build/index.html`;
+  }
+
   async readProjectReadme(userName: string, projectName: string): Promise<string | null> {
     try {
       const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/readme`);

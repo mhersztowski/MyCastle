@@ -1,0 +1,71 @@
+# Multi-stage CLI image for Minis tools
+# Build targets: arduino, pico, pygame
+# Usage: docker compose -f docker-compose.cli.yml build
+
+# ─── Shared base ────────────────────────────────────────────────────────────
+FROM ubuntu:24.04 AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    git \
+    ca-certificates \
+    unzip \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+CMD ["tail", "-f", "/dev/null"]
+
+
+# ─── Arduino CLI ────────────────────────────────────────────────────────────
+FROM base AS arduino
+
+# build-essential needed by some Arduino cores at compile time
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Override at build time: --build-arg ARDUINO_ARCH=Linux_ARM64
+ARG ARDUINO_ARCH=Linux_64bit
+
+RUN curl -L https://github.com/arduino/arduino-cli/releases/download/v1.4.1/arduino-cli_1.4.1_${ARDUINO_ARCH}.tar.gz \
+        -o /tmp/arduino-cli.tar.gz \
+    && tar -xzf /tmp/arduino-cli.tar.gz -C /tmp \
+    && mv /tmp/arduino-cli /usr/local/bin/ \
+    && rm /tmp/arduino-cli.tar.gz
+
+RUN arduino-cli core update-index \
+    && arduino-cli config init \
+    && arduino-cli config add board_manager.additional_urls https://arduino.esp8266.com/stable/package_esp8266com_index.json \
+    && arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json \
+    && arduino-cli core update-index \
+    && arduino-cli core install arduino:avr@1.8.7 \
+    && arduino-cli core install esp8266:esp8266@3.1.2 \
+    && arduino-cli core install esp32:esp32@3.3.7
+
+
+# ─── Raspberry Pi Pico / MicroPython ────────────────────────────────────────
+FROM base AS pico
+
+# ARM toolchain for compiling Pico SDK projects
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    gcc-arm-none-eabi \
+    libnewlib-arm-none-eabi \
+    && rm -rf /var/lib/apt/lists/*
+
+# mpremote for deploying MicroPython scripts over serial
+# (USB serial passthrough: add `devices: [/dev/ttyUSB0:/dev/ttyUSB0]` in compose)
+RUN pip3 install --break-system-packages --no-cache-dir mpremote
+
+
+# ─── Pygame / pygbag web builder ─────────────────────────────────────────────
+FROM base AS pygame
+
+# pygbag converts pygame projects to WebAssembly — headless, no display needed
+RUN pip3 install --break-system-packages --no-cache-dir pygbag pygame

@@ -28,10 +28,15 @@ import {
   ContentCopy,
   Download,
   FolderOpen,
+  MoreVert,
+  OpenInNew,
   Refresh,
   Save,
   VerticalSplit,
 } from '@mui/icons-material';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import ListItemIcon from '@mui/material/ListItemIcon';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
@@ -39,6 +44,7 @@ import { PygameBlocklyComponent, type PygameBlocklyService } from '@modules/pyga
 import type { PygameMode } from '@modules/pygameblockly';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
+import { BuildOutputPanel } from '../../components/BuildOutputPanel';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 const MIN_PANEL_PX = 200;
@@ -63,6 +69,11 @@ function PygameProjectPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [syncing, setSyncing] = useState(false);
+  const [building, setBuilding] = useState(false);
+  const [buildOutput, setBuildOutput] = useState('');
+  const [buildSuccess, setBuildSuccess] = useState<boolean | null>(null);
+  const [buildPanelOpen, setBuildPanelOpen] = useState(false);
+  const [moreMenuAnchor, setMoreMenuAnchor] = useState<null | HTMLElement>(null);
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
   const [sketchesOpen, setSketchesOpen] = useState(true);
@@ -132,7 +143,7 @@ function PygameProjectPage() {
   const loadSketches = useCallback(async () => {
     if (!userName || !projectId) return;
     try {
-      const list = await minisApi.listSketches(userName, projectId);
+      const list = await minisApi.listPygameSketches(userName, projectId);
       setSketches(list);
     } catch (e) {
       console.error('[PygameProject] Failed to load sketches', e);
@@ -141,7 +152,7 @@ function PygameProjectPage() {
 
   useEffect(() => {
     if (!userName || !projectId) return;
-    minisApi.listSketches(userName, projectId)
+    minisApi.listPygameSketches(userName, projectId)
       .then((list) => {
         setSketches(list);
         if (list.length > 0) {
@@ -162,7 +173,7 @@ function PygameProjectPage() {
     suppressBlocklyChangeRef.current = true;
     serviceRef.current?.clearWorkspace();
     try {
-      const xmlContent = await minisApi.readSketchFile(
+      const xmlContent = await minisApi.readPygameSketchFile(
         userName, projectId, sketchName, `${sketchName}.blockly`,
       );
       if (serviceRef.current && xmlContent) {
@@ -174,7 +185,7 @@ function PygameProjectPage() {
     suppressBlocklyChangeRef.current = false;
 
     try {
-      const pyContent = await minisApi.readSketchFile(
+      const pyContent = await minisApi.readPygameSketchFile(
         userName, projectId, sketchName, `${sketchName}.py`,
       );
       syncCodeToEditor(pyContent);
@@ -204,8 +215,8 @@ function PygameProjectPage() {
       const blocklyXml = serviceRef.current?.serializeToXml() ?? '';
       const pyCode = editorRef.current?.getContent() ?? generatedCode;
       await Promise.all([
-        minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
-        minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.py`, pyCode),
+        minisApi.writePygameSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
+        minisApi.writePygameSketchFile(userName, projectId, currentSketch, `${currentSketch}.py`, pyCode),
       ]);
       if (!sketches.includes(currentSketch)) setSketches((prev) => [...prev, currentSketch]);
       setCodeEdited(false);
@@ -216,6 +227,37 @@ function PygameProjectPage() {
       setSyncing(false);
     }
   }, [userName, projectId, currentSketch, generatedCode, sketches]);
+
+  // ---- run in browser (pygbag build) ----
+  const handleRunInBrowser = useCallback(async () => {
+    if (!userName || !projectId || !currentSketch) return;
+    setBuilding(true);
+    setBuildOutput('');
+    setBuildSuccess(null);
+    setBuildPanelOpen(true);
+    try {
+      // Generate web-mode code without changing the current UI mode
+      const service = serviceRef.current;
+      let webCode = generatedCode;
+      if (service) {
+        const prevMode = service.mode;
+        service.setMode('web');
+        webCode = service.generateCode();
+        service.setMode(prevMode);
+      }
+      const result = await minisApi.buildPygameSketch(userName, projectId, currentSketch, webCode);
+      setBuildOutput(result.output);
+      setBuildSuccess(result.success);
+      if (result.success) {
+        window.location.href = minisApi.getPygameWebBuildUrl(userName, projectId, currentSketch);
+      }
+    } catch (e) {
+      setBuildOutput(String(e));
+      setBuildSuccess(false);
+    } finally {
+      setBuilding(false);
+    }
+  }, [userName, projectId, currentSketch]);
 
   // ---- mode switch ----
   const handleModeChange = (mode: PygameMode) => {
@@ -275,9 +317,9 @@ function PygameProjectPage() {
   const showBlockly = viewMode !== 'code';
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1e1e1e' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0, bgcolor: '#1e1e1e' }}>
       {/* AppBar */}
-      <AppBar position="static" sx={{ bgcolor: '#252526', boxShadow: 1 }}>
+      <AppBar position="static" sx={{ bgcolor: '#252526', boxShadow: 1, paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense" sx={{ gap: 1 }}>
           <IconButton size="small" color="inherit" onClick={() => navigate(`/user/${userName}/electronics/pygame`)}>
             <ArrowBack />
@@ -329,24 +371,41 @@ function PygameProjectPage() {
             </Tooltip>
           </ButtonGroup>
 
-          <Tooltip title="Copy code">
-            <IconButton size="small" color="inherit" onClick={copyCode}><ContentCopy fontSize="small" /></IconButton>
+          <Tooltip title="Actions">
+            <IconButton size="small" color="inherit" onClick={(e) => setMoreMenuAnchor(e.currentTarget)}>
+              <MoreVert fontSize="small" />
+            </IconButton>
           </Tooltip>
-          <Tooltip title="Download .py">
-            <IconButton size="small" color="inherit" onClick={downloadCode}><Download fontSize="small" /></IconButton>
-          </Tooltip>
-          <Tooltip title={currentSketch ? 'Save sketch' : 'Select a sketch first'}>
-            <span>
-              <IconButton
-                size="small"
-                color={codeEdited ? 'warning' : 'inherit'}
-                onClick={handleSaveSketch}
-                disabled={!currentSketch || syncing}
-              >
-                {syncing ? <CircularProgress size={16} color="inherit" /> : <Save fontSize="small" />}
-              </IconButton>
-            </span>
-          </Tooltip>
+          <Menu
+            anchorEl={moreMenuAnchor}
+            open={Boolean(moreMenuAnchor)}
+            onClose={() => setMoreMenuAnchor(null)}
+          >
+            <MenuItem onClick={() => { copyCode(); setMoreMenuAnchor(null); }}>
+              <ListItemIcon><ContentCopy fontSize="small" /></ListItemIcon>Copy code
+            </MenuItem>
+            <MenuItem onClick={() => { downloadCode(); setMoreMenuAnchor(null); }}>
+              <ListItemIcon><Download fontSize="small" /></ListItemIcon>Download .py
+            </MenuItem>
+            <MenuItem
+              disabled={!currentSketch || syncing}
+              onClick={() => { handleSaveSketch(); setMoreMenuAnchor(null); }}
+              sx={{ color: codeEdited ? 'warning.main' : undefined }}
+            >
+              <ListItemIcon sx={{ color: codeEdited ? 'warning.main' : undefined }}>
+                {syncing ? <CircularProgress size={16} /> : <Save fontSize="small" />}
+              </ListItemIcon>Save sketch
+            </MenuItem>
+            <MenuItem
+              disabled={!currentSketch || building}
+              onClick={() => { handleRunInBrowser(); setMoreMenuAnchor(null); }}
+              sx={{ color: 'success.main' }}
+            >
+              <ListItemIcon sx={{ color: 'success.main' }}>
+                {building ? <CircularProgress size={16} color="inherit" /> : <OpenInNew fontSize="small" />}
+              </ListItemIcon>Run in browser
+            </MenuItem>
+          </Menu>
           <AccountMenu />
         </Toolbar>
       </AppBar>
@@ -445,6 +504,14 @@ function PygameProjectPage() {
           )}
         </Box>
       </Box>
+
+      <BuildOutputPanel
+        open={buildPanelOpen}
+        onClose={() => setBuildPanelOpen(false)}
+        output={buildOutput}
+        compiling={building}
+        success={buildSuccess}
+      />
 
       {/* Confirm discard dialog */}
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>

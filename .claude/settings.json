@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pipx --version)",
+      "Bash(pipx install:*)",
+      "Bash(python3 -c \"import pygbag; print\\(''ok''\\)\")",
+      "Bash(pnpm --filter mycastle-web add -D regenerator-runtime)",
+      "Read(//home/mhersztowski/pico-sdk/**)",
+      "Read(//home/mhersztowski/**)"
+    ],
+    "additionalDirectories": [
+      "/home/mhersztowski/myprojects/claude/MyCastle/data/Minis/Users/marcin/Projects/ea9db28a-dfcb-4ec2-9ff0-74f1c2f90f54/sketches"
+    ]
+  }
+}

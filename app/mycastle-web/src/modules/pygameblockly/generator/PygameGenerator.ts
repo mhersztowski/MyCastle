@@ -186,18 +186,20 @@ export class PygameGenerator extends Blockly.CodeGenerator {
       return importSection + pygameInitSection + varNoneSection + funcSection + setupFn + loopFn + entryPoint;
     } else {
       // async def main() with await asyncio.sleep(0)
+      // Inline setup code at the top of main() so all game vars are local — no global needed.
+      const inlineSetup = setupBody; // already has 1-level indent from statementToCode
       const mainBody =
-        I + 'setup()\n' +
+        inlineSetup +
         I + 'while True:\n' +
         quitCheck.split('\n').map((l) => (l ? I + l : l)).join('\n') + '\n' +
         userLoopCode.split('\n').map((l) => (l ? I + l : l)).join('\n') + '\n' +
         I2 + 'pygame.display.flip()\n' +
         I2 + '_clock.tick(_fps)\n' +
         I2 + 'await asyncio.sleep(0)\n';
-      const mainFn = `\nasync def main():\n${mainBody}`;
+      const mainFn = `\nasync def main():\n${mainBody || I + 'pass\n'}`;
       entryPoint = '\nasyncio.run(main())\n';
       this.nameDB_?.reset();
-      return importSection + pygameInitSection + varNoneSection + funcSection + setupFn + mainFn + entryPoint;
+      return importSection + pygameInitSection + funcSection + mainFn + entryPoint;
     }
   }
 
