@@ -117,7 +117,11 @@ export class FileSystem extends EventEmitter {
 
     const cached = this.cache.get(relativePath);
     if (cached) {
-      return cached;
+      const stats = await fs.stat(absolutePath);
+      if (stats.mtime <= cached.lastModified) {
+        return cached;
+      }
+      // File modified externally — invalidate cache entry
     }
 
     const content = await fs.readFile(absolutePath, 'utf-8');

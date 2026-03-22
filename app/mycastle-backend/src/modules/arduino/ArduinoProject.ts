@@ -71,7 +71,7 @@ export class ArduinoProject {
       const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
       const header = [
         '#pragma once',
-        `#define MINIS_DEVICE_SN "${esc(minisConfig.serialNumber)}"`,
+        `#define MINIS_DEVICE_SN "${esc(minisConfig.deviceName)}"`,
         `#define MINIS_WIFI_SSID "${esc(minisConfig.wifiSsid)}"`,
         `#define MINIS_WIFI_PASSWORD "${esc(minisConfig.wifiPassword)}"`,
         `#define MINIS_CONFIG "${esc(minisConfig.architectureJson)}"`,

@@ -740,6 +740,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     } catch { /* ignore */ }
 
     return {
+      deviceName,
       serialNumber,
       wifiSsid,
       wifiPassword,
@@ -1568,7 +1569,7 @@ const { password, ...safeBody } = body;
         if (device?.name) {
           const config = await this.resolveMinisConfig(userName, device.name);
           const content = [
-            `MINIS_DEVICE_SN = '${config.serialNumber}'`,
+            `MINIS_DEVICE_SN = '${device.name}'`,
             `MINIS_WIFI_SSID = '${config.wifiSsid}'`,
             `MINIS_WIFI_PASSWORD = '${config.wifiPassword}'`,
           ].join('\n') + '\n';

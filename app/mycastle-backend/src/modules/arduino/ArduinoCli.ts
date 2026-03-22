@@ -4,7 +4,8 @@ export interface BoardInfo {
 }
 
 export interface MinisConfig {
-  serialNumber: string;
+  deviceName: string;   // human name used in MQTT topics
+  serialNumber: string; // hardware SN, used internally for build tracking
   wifiSsid: string;
   wifiPassword: string;
   architectureJson: string;
