@@ -36,10 +36,9 @@ interface UploadDialogProps {
   projectId?: string;
   deviceName?: string;
   libraries?: Array<{ url: string; remoteName: string }>;
-  minisConfig?: { wifiSsid: string; wifiPassword: string; serialNumber: string };
 }
 
-function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries, minisConfig }: UploadDialogProps) {
+function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries }: UploadDialogProps) {
   const [tab, setTab] = useState(0);
   const [uploadMode, setUploadMode] = useState<UploadMode>('run');
   const [baudRate, setBaudRate] = useState(115200);
@@ -50,16 +49,30 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
   const [busy, setBusy] = useState(false);
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [selectedDevice, setSelectedDevice] = useState('');
+  const [minisConfig, setMinisConfig] = useState<{ deviceName: string; wifiSsid: string; wifiPassword: string; serialNumber: string } | undefined>();
 
-  // If deviceName is passed from parent, use it directly
   const effectiveDevice = deviceNameProp ?? selectedDevice;
 
   const logRef = useRef<HTMLDivElement>(null);
 
+  // Load device list when dialog opens (only if no device passed from parent)
   useEffect(() => {
     if (!open || !userName || deviceNameProp) return;
     minisApi.getUserDevices(userName).then(setDevices).catch(() => setDevices([]));
   }, [open, userName, deviceNameProp]);
+
+  // Auto-fetch minisConfig whenever we know the device
+  useEffect(() => {
+    if (!open || !userName || !effectiveDevice) {
+      setMinisConfig(undefined);
+      return;
+    }
+    minisApi.getDeviceMinisConfig(userName, effectiveDevice)
+      .then((cfg) => {
+        if (cfg.wifiSsid || cfg.serialNumber) setMinisConfig(cfg);
+      })
+      .catch(() => setMinisConfig(undefined));
+  }, [open, userName, effectiveDevice]);
 
   const appendLog = (msg: string) => {
     setLog((prev) => prev + msg + '\n');
@@ -79,7 +92,7 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
     } catch { /* non-critical */ }
   };
 
-  const uploadLibraries = async (svc: { saveToFile: (name: string, content: string) => Promise<void> }) => {
+  const uploadLibraries = async (svc: { saveToFile: (name: string, content: string) => Promise<void>; execCode: (code: string) => Promise<string> }) => {
     for (const lib of libraries ?? []) {
       appendLog(`Fetching ${lib.remoteName}...`);
       const url = lib.url.startsWith('data:')
@@ -93,13 +106,29 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
     }
     if (minisConfig) {
       const configContent = [
-        `MINIS_DEVICE_SN = ${JSON.stringify(minisConfig.serialNumber)}`,
+        `MINIS_DEVICE_NAME = ${JSON.stringify(minisConfig.deviceName)}`,
         `MINIS_WIFI_SSID = ${JSON.stringify(minisConfig.wifiSsid)}`,
         `MINIS_WIFI_PASSWORD = ${JSON.stringify(minisConfig.wifiPassword)}`,
       ].join('\n') + '\n';
       appendLog('Saving MinisConfig.py to device...');
       await svc.saveToFile('MinisConfig.py', configContent);
     }
+  };
+
+  // Returns a preamble that injects MinisConfig into sys.modules so the import
+  // in the sketch gets the correct values regardless of cached modules on device.
+  const buildCodeWithConfig = (originalCode: string) => {
+    if (!minisConfig) return originalCode;
+    const preamble = [
+      'import sys as _sys',
+      'class _MC:',
+      ` MINIS_DEVICE_NAME=${JSON.stringify(minisConfig.deviceName)}`,
+      ` MINIS_WIFI_SSID=${JSON.stringify(minisConfig.wifiSsid)}`,
+      ` MINIS_WIFI_PASSWORD=${JSON.stringify(minisConfig.wifiPassword)}`,
+      '_sys.modules["MinisConfig"]=_MC',
+      '',
+    ].join('\n');
+    return preamble + originalCode;
   };
 
   const handleUploadSerial = async () => {
@@ -116,7 +145,7 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
 
       if (uploadMode === 'run') {
         appendLog('Running code...');
-        const output = await svc.execCode(code);
+        const output = await svc.execCode(buildCodeWithConfig(code));
         if (output) appendLog(output);
         appendLog('Done.');
         await recordLastBuild(true);
@@ -151,7 +180,7 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
 
       if (uploadMode === 'run') {
         appendLog('Running code...');
-        const output = await svc.execCode(code);
+        const output = await svc.execCode(buildCodeWithConfig(code));
         if (output) appendLog(output);
         appendLog('Done.');
         await recordLastBuild(true);
@@ -194,20 +223,21 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
         {deviceNameProp ? (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Device: <strong>{deviceNameProp}</strong>
+            {minisConfig && <> · WiFi: <strong>{minisConfig.wifiSsid}</strong></>}
           </Typography>
         ) : userName && devices.length > 0 && (
           <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-            <InputLabel>Device (for Last Build tracking)</InputLabel>
+            <InputLabel>Device</InputLabel>
             <Select
               value={selectedDevice}
-              label="Device (for Last Build tracking)"
+              label="Device"
               onChange={(e) => setSelectedDevice(e.target.value)}
               renderValue={(v) => {
                 const d = devices.find((x) => x.name === v);
                 return d ? `${d.name}${d.sn ? ` (${d.sn})` : ''}` : v;
               }}
             >
-              <MenuItem value=""><em>— skip tracking —</em></MenuItem>
+              <MenuItem value=""><em>— skip —</em></MenuItem>
               {devices.map((d) => (
                 <MenuItem key={d.name} value={d.name}>{d.name}{d.sn ? ` (${d.sn})` : ''}</MenuItem>
               ))}

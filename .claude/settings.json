@@ -11,7 +11,8 @@
       "Bash(find /mnt/c/Projekty/claude/MyCastle/data -type f -name *.py)"
     ],
     "additionalDirectories": [
-      "/home/mhersztowski/myprojects/claude/MyCastle/data/Minis/Users/marcin/Projects/ea9db28a-dfcb-4ec2-9ff0-74f1c2f90f54/sketches"
+      "/home/mhersztowski/myprojects/claude/MyCastle/data/Minis/Users/marcin/Projects/ea9db28a-dfcb-4ec2-9ff0-74f1c2f90f54/sketches",
+      "/home/mhersztowski/myprojects/claude/MinisProjects/src/Esp32S3uPythonIot/sketches/basic_sensor"
     ]
   }
 }

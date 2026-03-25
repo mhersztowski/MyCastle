@@ -287,6 +287,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     // IoT extensions (active, from hello): /users/{userName}/devices/{deviceName}/iot-extensions
     const iotExtensionsMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-extensions$/);
     if (iotExtensionsMatch) {
+      const userName = decodeURIComponent(iotExtensionsMatch[1]);
       const deviceName = decodeURIComponent(iotExtensionsMatch[2]);
       const types = this.iotService?.extensions.getActiveExtensions(deviceName) ?? [];
       this.sendJsonResponse(res, 200, { extensions: types.map(type => ({ type })) });
@@ -1538,7 +1539,7 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 503, { error: 'MicroPython CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { port?: string; serialNumber?: string };
+    const body = await this.parseRequestBody(req) as { port?: string; deviceName?: string; serialNumber?: string };
     if (!body.port) {
       this.sendJsonResponse(res, 400, { error: 'port is required' });
       return;
@@ -1547,6 +1548,16 @@ const { password, ...safeBody } = body;
     if (!projectId) {
       this.sendJsonResponse(res, 404, { error: 'Project not found' });
       return;
+    }
+
+    // Resolve deviceName — accept either deviceName or serialNumber (legacy)
+    let resolvedDeviceName = body.deviceName;
+    if (!resolvedDeviceName && body.serialNumber) {
+      try {
+        const deviceData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as { devices?: Array<{ name?: string; sn?: string }> };
+        const device = (deviceData?.devices ?? []).find(d => d.sn === body.serialNumber);
+        resolvedDeviceName = device?.name;
+      } catch { /* ignore */ }
     }
 
     // Read uPython libraries from project record
@@ -1562,32 +1573,28 @@ const { password, ...safeBody } = body;
     } catch { /* ignore */ }
 
     let minisConfigFile: Array<{ content: string; remoteName: string }> | undefined;
-    if (body.serialNumber) {
+    if (resolvedDeviceName) {
       try {
-        const deviceData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as { devices?: Array<{ name?: string; sn?: string }> };
-        const device = (deviceData?.devices ?? []).find(d => d.sn === body.serialNumber);
-        if (device?.name) {
-          const config = await this.resolveMinisConfig(userName, device.name);
-          const content = [
-            `MINIS_DEVICE_SN = '${device.name}'`,
-            `MINIS_WIFI_SSID = '${config.wifiSsid}'`,
-            `MINIS_WIFI_PASSWORD = '${config.wifiPassword}'`,
-          ].join('\n') + '\n';
-          minisConfigFile = [{ content, remoteName: 'MinisConfig.py' }];
-        }
+        const config = await this.resolveMinisConfig(userName, resolvedDeviceName);
+        const content = [
+          `MINIS_DEVICE_NAME = ${JSON.stringify(resolvedDeviceName)}`,
+          `MINIS_WIFI_SSID = ${JSON.stringify(config.wifiSsid)}`,
+          `MINIS_WIFI_PASSWORD = ${JSON.stringify(config.wifiPassword)}`,
+        ].join('\n') + '\n';
+        minisConfigFile = [{ content, remoteName: 'MinisConfig.py' }];
       } catch { /* ignore */ }
     }
 
     try {
       const result = await this.upythonService.deploy(userName, projectId, body.port, upythonLibraries, minisConfigFile);
-      if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'micropython', success: result.success });
+      if (resolvedDeviceName) {
+        await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: result.success });
       }
       this.sendJsonResponse(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Deploy failed';
-      if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'micropython', success: false });
+      if (resolvedDeviceName) {
+        await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: false });
       }
       this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
@@ -1601,6 +1608,19 @@ const { password, ...safeBody } = body;
       const data = await this.readJsonFile(filePath) as Record<string, unknown>;
       const devices = (data['devices'] || []) as Record<string, unknown>[];
       const idx = devices.findIndex((d) => d['sn'] === serialNumber);
+      if (idx === -1) return;
+      devices[idx] = { ...devices[idx], lastBuild: { ...build, at: Date.now() } };
+      data['devices'] = devices;
+      await this.writeJsonFile(filePath, data);
+    } catch { /* non-critical */ }
+  }
+
+  private async saveDeviceLastBuildByName(userName: string, deviceName: string, build: { platform: string; fqbn?: string; version?: string; success: boolean; projectId?: string; sketchName?: string }): Promise<void> {
+    try {
+      const filePath = `${MINIS_ROOT}/Users/${userName}/Device.json`;
+      const data = await this.readJsonFile(filePath) as Record<string, unknown>;
+      const devices = (data['devices'] || []) as Record<string, unknown>[];
+      const idx = devices.findIndex((d) => d['name'] === deviceName);
       if (idx === -1) return;
       devices[idx] = { ...devices[idx], lastBuild: { ...build, at: Date.now() } };
       data['devices'] = devices;
@@ -1687,7 +1707,7 @@ const { password, ...safeBody } = body;
         return;
       }
       const config = await this.resolveMinisConfig(userName, deviceName);
-      this.sendJsonResponse(res, 200, { serialNumber: config.serialNumber, wifiSsid: config.wifiSsid, wifiPassword: config.wifiPassword });
+      this.sendJsonResponse(res, 200, { deviceName: config.deviceName, serialNumber: config.serialNumber, wifiSsid: config.wifiSsid, wifiPassword: config.wifiPassword });
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
     }

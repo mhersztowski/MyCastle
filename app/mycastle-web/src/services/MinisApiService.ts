@@ -181,7 +181,7 @@ class MinisApiService {
     return this.request('GET', '/next-sn');
   }
 
-  async getDeviceMinisConfig(userName: string, deviceName: string): Promise<{ serialNumber: string; wifiSsid: string; wifiPassword: string }> {
+  async getDeviceMinisConfig(userName: string, deviceName: string): Promise<{ deviceName: string; serialNumber: string; wifiSsid: string; wifiPassword: string }> {
     return this.request('GET', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/minis-config`);
   }
 

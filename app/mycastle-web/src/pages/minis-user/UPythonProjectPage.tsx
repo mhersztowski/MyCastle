@@ -92,7 +92,6 @@ function UPythonProjectPage() {
   const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
   const initialSketch = searchParams.get('sketch');
   const [uploadCode, setUploadCode] = useState('');
-  const [uploadConfig, setUploadConfig] = useState<{ wifiSsid: string; wifiPassword: string; serialNumber: string } | undefined>(undefined);
   const [projectLibraries, setProjectLibraries] = useState<Array<{ url: string; remoteName: string }>>([]);
 
   // Keep ref in sync for use inside Blockly listener
@@ -217,6 +216,22 @@ function UPythonProjectPage() {
     minisApi.getUserDevices(userName).then(setDevices).catch(() => setDevices([]));
   }, [userName]);
 
+  // Auto-generate MinisConfig.py in sketch directory when device or sketch changes
+  useEffect(() => {
+    if (!userName || !projectId || !selectedDeviceName || !currentSketch) return;
+    minisApi.getDeviceMinisConfig(userName, selectedDeviceName)
+      .then((cfg) => {
+        if (!cfg.deviceName && !cfg.serialNumber) return;
+        const configContent = [
+          `MINIS_DEVICE_NAME = ${JSON.stringify(cfg.deviceName || cfg.serialNumber)}`,
+          `MINIS_WIFI_SSID = ${JSON.stringify(cfg.wifiSsid)}`,
+          `MINIS_WIFI_PASSWORD = ${JSON.stringify(cfg.wifiPassword)}`,
+        ].join('\n') + '\n';
+        return minisApi.writeSketchFile(userName, projectId, currentSketch, 'MinisConfig.py', configContent);
+      })
+      .catch(() => { /* non-critical */ });
+  }, [selectedDeviceName, currentSketch]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSaveReadme = async () => {
     if (!userName || !projectId) return;
     await minisApi.writeProjectReadme(userName, projectId, readmeEditValue);
@@ -277,17 +292,8 @@ function UPythonProjectPage() {
     setCodeEdited(false);
   };
 
-  const openUploadDialog = async () => {
-    const rawCode = editorRef.current?.getContent() ?? generatedCode;
-    let cfg: { wifiSsid: string; wifiPassword: string; serialNumber: string } | undefined;
-    if (userName && selectedDeviceName) {
-      try {
-        const fetched = await minisApi.getDeviceMinisConfig(userName, selectedDeviceName);
-        if (fetched.wifiSsid || fetched.serialNumber) cfg = fetched;
-      } catch { /* non-critical */ }
-    }
-    setUploadConfig(cfg);
-    setUploadCode(rawCode);
+  const openUploadDialog = () => {
+    setUploadCode(editorRef.current?.getContent() ?? generatedCode);
     setUploadOpen(true);
   };
 
@@ -722,7 +728,6 @@ function UPythonProjectPage() {
         projectId={projectId}
         deviceName={selectedDeviceName || undefined}
         libraries={projectLibraries}
-        minisConfig={uploadConfig}
       />
 
       {/* Confirm overwrite dialog */}
