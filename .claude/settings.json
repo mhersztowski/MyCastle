@@ -8,7 +8,9 @@
       "Read(//home/mhersztowski/pico-sdk/**)",
       "Read(//home/mhersztowski/**)",
       "Bash(find /mnt/c/Projekty/claude/MyCastle -type d -name *uMinis* -o -type d -name *micro*)",
-      "Bash(find /mnt/c/Projekty/claude/MyCastle/data -type f -name *.py)"
+      "Bash(find /mnt/c/Projekty/claude/MyCastle/data -type f -name *.py)",
+      "Bash(pnpm --filter mycastle-web exec tsc --noEmit)",
+      "Bash(pnpm --filter mycastle-backend typecheck)"
     ],
     "additionalDirectories": [
       "/home/mhersztowski/myprojects/claude/MyCastle/data/Minis/Users/marcin/Projects/ea9db28a-dfcb-4ec2-9ff0-74f1c2f90f54/sketches",

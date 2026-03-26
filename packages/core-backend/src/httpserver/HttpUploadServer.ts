@@ -222,8 +222,11 @@ export class HttpUploadServer {
         return;
       }
 
+      // FileSystem rootDir is the data/ directory, so strip the leading data/ prefix
+      const readPath = normalizedPath.startsWith('data/') ? normalizedPath.slice('data/'.length) : normalizedPath;
+
       // Read the file
-      const fileData = await this.fileSystem.readBinaryFile(filePath);
+      const fileData = await this.fileSystem.readBinaryFile(readPath);
 
       // Get the correct mime type
       const ext = path.extname(filePath).toLowerCase();

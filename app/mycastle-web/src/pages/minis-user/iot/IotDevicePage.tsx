@@ -5,8 +5,8 @@ import {
   Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
   Card, CardContent, IconButton, Divider,
 } from '@mui/material';
-import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse } from '@mui/icons-material';
-import { useParams } from 'react-router-dom';
+import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse, Tv } from '@mui/icons-material';
+import { useParams, useNavigate } from 'react-router-dom';
 import { RemoteFS } from '@mhersztowski/core';
 import { VfsExplorer } from '@mhersztowski/web-client';
 import { minisApi } from '../../../services/MinisApiService';
@@ -18,6 +18,7 @@ import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertMod
 
 function IotDevicePage() {
   const { userName, deviceName } = useParams<{ userName: string; deviceName: string }>();
+  const navigate = useNavigate();
   const { token } = useAuth();
   const { openWithParams } = useGlobalWindows();
   const [config, setConfig] = useState<IotDeviceConfig | null>(null);
@@ -130,6 +131,7 @@ function IotDevicePage() {
   const hasVfs = extensions.some((e) => e.type === 'vfs');
   const hasVkbd = extensions.some((e) => e.type === 'vkbd');
   const hasVmouse = extensions.some((e) => e.type === 'vmouse');
+  const hasSmartDisplay = extensions.some((e) => e.type === 'smart-display');
 
   const vfsProvider = useMemo(() => {
     if (!userName || !deviceName) return null;
@@ -158,6 +160,15 @@ function IotDevicePage() {
           <Chip label={statusLabel} color={statusColor as any} />
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          {hasSmartDisplay && (
+            <Button
+              startIcon={<Tv />}
+              variant="contained"
+              onClick={() => navigate(`/user/${userName}/iot/smart-display/${deviceName}`)}
+            >
+              Smart Display
+            </Button>
+          )}
           {hasVfs && vfsProvider && (
             <Button
               startIcon={<Code />}

@@ -4,6 +4,7 @@ import type { MqttPublishFn } from './IotService.js';
 import { VfsExtension } from './extensions/VfsExtension.js';
 import { VirtualKeyboardExtension } from './extensions/VirtualKeyboardExtension.js';
 import { VirtualMouseExtension } from './extensions/VirtualMouseExtension.js';
+import { SmartDisplayExtension } from './extensions/SmartDisplayExtension.js';
 
 /**
  * Manages IoT device extensions — one set per device.
@@ -99,6 +100,10 @@ export class IotExtensionRegistry {
     return this.get(deviceId, 'vmouse') as VirtualMouseExtension | undefined;
   }
 
+  getSmartDisplay(deviceId: string): SmartDisplayExtension | undefined {
+    return this.get(deviceId, 'smart-display') as SmartDisplayExtension | undefined;
+  }
+
   /** Returns the list of active extension types for a device. */
   getActiveExtensions(deviceId: string): string[] {
     const deviceExts = this.registry.get(deviceId);
@@ -144,6 +149,9 @@ export class IotExtensionRegistry {
         break;
       case 'vmouse':
         ext = new VirtualMouseExtension(deviceId, topicPrefix, this.publishFn);
+        break;
+      case 'smart-display':
+        ext = new SmartDisplayExtension(deviceId, topicPrefix, this.publishFn);
         break;
       default:
         console.warn(`[IotExtensionRegistry] Unknown extension type: ${type} (device=${deviceId})`);

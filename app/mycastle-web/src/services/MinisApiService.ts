@@ -14,6 +14,7 @@ import type {
   DeviceShare,
   ApiKeyPublic,
   ApiKeyCreateResponse,
+  SmartDisplayConfig,
 } from '@mhersztowski/core';
 
 export type UserPublic = Omit<UserModel, 'password'>;
@@ -245,6 +246,14 @@ class MinisApiService {
     } catch {
       return [];
     }
+  }
+
+  async getSmartDisplayConfig(userName: string, deviceName: string): Promise<SmartDisplayConfig> {
+    return this.request<SmartDisplayConfig>('GET', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/smart-display`);
+  }
+
+  async saveSmartDisplayConfig(userName: string, deviceName: string, config: SmartDisplayConfig): Promise<SmartDisplayConfig> {
+    return this.request<SmartDisplayConfig>('PUT', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/smart-display`, config);
   }
 
   async saveIotConfig(userName: string, deviceName: string, config: Partial<IotDeviceConfig>): Promise<IotDeviceConfig> {

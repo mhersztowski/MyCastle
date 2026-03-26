@@ -25,7 +25,8 @@ log = logging.getLogger("agent")
 
 
 class ClientAgent:
-    def __init__(self):
+    def __init__(self, display=None):
+        self._display = display
         self.client = mqtt.Client(
             client_id=config.MQTT_CLIENT_ID,
             transport=config.MQTT_TRANSPORT,
@@ -57,10 +58,20 @@ class ClientAgent:
             ),
         )
 
+        if display is not None:
+            display.set_publish_fn(
+                lambda payload: self.client.publish(
+                    config.TOPICS["EXT_SMART_DISPLAY_RES"], payload, qos=1
+                )
+            )
+        self.smart_display_ext = display
+
     # --- MQTT callbacks ---
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
+            if self._display:
+                self._display.update({"connected": True})
             log.info(
                 f"Connected to MQTT broker at "
                 f"{config.MQTT_BROKER_HOST}:{config.MQTT_BROKER_PORT} "
@@ -70,6 +81,8 @@ class ClientAgent:
             client.subscribe(config.TOPICS["EXT_VFS_REQ"], qos=1)
             client.subscribe(config.TOPICS["EXT_VKBD_REQ"], qos=1)
             client.subscribe(config.TOPICS["EXT_VMOUSE_REQ"], qos=1)
+            if self.smart_display_ext is not None:
+                client.subscribe(config.TOPICS["EXT_SMART_DISPLAY_REQ"], qos=1)
             log.info(f"Subscribed | prefix={config.TOPIC_PREFIX} | vfs root={config.DATA_DIR}")
             self._send_hello()
             self._send_heartbeat()
@@ -77,6 +90,8 @@ class ClientAgent:
             log.error(f"Connection failed with code: {reason_code}")
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
+        if self._display:
+            self._display.update({"connected": False})
         if reason_code != 0:
             log.warning(f"Unexpected disconnect (code: {reason_code}), reconnecting...")
 
@@ -96,6 +111,9 @@ class ClientAgent:
             self.vkbd.handle_request(data)
         elif topic == config.TOPICS["EXT_VMOUSE_REQ"]:
             self.vmouse.handle_request(data)
+        elif topic == config.TOPICS["EXT_SMART_DISPLAY_REQ"]:
+            if self.smart_display_ext is not None:
+                self.smart_display_ext.handle_request(data)
 
     # --- Command handling (maps MyCastle commands to operations) ---
 
@@ -127,9 +145,12 @@ class ClientAgent:
 
     def _send_hello(self):
         uptime = int(time.time() - self._start_time)
-        packet = {"uptime": uptime, "extensions": config.EXTENSIONS}
+        extensions = list(config.EXTENSIONS)
+        if self.smart_display_ext is not None:
+            extensions.append({"type": "smart-display", "enabled": True})
+        packet = {"uptime": uptime, "extensions": extensions}
         self.client.publish(config.TOPICS["HELLO"], json.dumps(packet), qos=1)
-        log.info(f"Hello sent (extensions={[e['type'] for e in config.EXTENSIONS]})")
+        log.info(f"Hello sent (extensions={[e['type'] for e in extensions]})")
 
     # --- Heartbeat ---
 
@@ -173,18 +194,32 @@ class ClientAgent:
             self.stop()
 
     def stop(self):
+        if not self.running and not self._heartbeat_timer:
+            return   # already stopped
         log.info("Shutting down...")
         self.running = False
         if self._heartbeat_timer:
             self._heartbeat_timer.cancel()
+            self._heartbeat_timer = None
         self.client.loop_stop()
         self.client.disconnect()
-        self.loop.close()
+        try:
+            self.loop.close()
+        except Exception:
+            pass
         log.info("Client Agent stopped.")
 
 
 def main():
-    agent = ClientAgent()
+    args = sys.argv[1:]
+    app_mode = next((a for a in args if a.startswith("app:")), None)
+
+    display = None
+    if app_mode == "app:smart-display":
+        from apps.smart_display import SmartDisplay
+        display = SmartDisplay()
+
+    agent = ClientAgent(display=display)
 
     def signal_handler(sig, frame):
         agent.stop()
@@ -193,7 +228,14 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    agent.start()
+    if display is not None:
+        # pygame requires the main thread — run agent in background
+        agent_thread = threading.Thread(target=agent.start, daemon=True)
+        agent_thread.start()
+        display.run()          # blocks until window is closed
+        agent.stop()
+    else:
+        agent.start()
 
 
 if __name__ == "__main__":

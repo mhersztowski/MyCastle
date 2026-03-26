@@ -1,5 +1,6 @@
 .venv/
 .env
+.env.smart-display
 __pycache__/
 *.pyc
 data/

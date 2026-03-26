@@ -8,6 +8,7 @@ export { default as UPythonProjectPage } from './UPythonProjectPage';
 export { default as IotDashboardPage } from './iot/IotDashboardPage';
 export { default as IotDevicesPage } from './iot/IotDevicesPage';
 export { default as IotDevicePage } from './iot/IotDevicePage';
+export { default as SmartDisplayPage } from './iot/SmartDisplayPage';
 export { default as IotAlertsPage } from './iot/IotAlertsPage';
 export { default as IotEmulatorPage } from './iot/IotEmulatorPage';
 export { default as IotDashboard2Page } from './iot/IotDashboard2Page';

@@ -1,4 +1,5 @@
 import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth } from '@mhersztowski/core-backend';
+import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
 import { CompositeFS, NodeFS, VfsError } from '@mhersztowski/core';
@@ -23,6 +24,22 @@ interface CrudConfig {
   lookupKey: 'id' | 'name';
 }
 
+interface OpenMeteoResponse {
+  current: {
+    temperature_2m: number;
+    apparent_temperature: number;
+    relative_humidity_2m: number;
+    windspeed_10m: number;
+    weathercode: number;
+  };
+  daily: {
+    time: string[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+    weathercode: number[];
+  };
+}
+
 const MINIS_ROOT = 'Minis';
 
 const CRUD_CONFIGS: Record<string, CrudConfig> = {
@@ -43,6 +60,13 @@ export class MycastleHttpServer extends HttpUploadServer {
   private pygameService: PygameService | null;
   private rootDir: string | null;
   private scriptsService: ScriptsService | null = null;
+  // shareUrl → { assets (id+description), baseUrl, key, cachedAt }
+  private immichAlbumCache = new Map<string, { assets: { id: string; description: string }[]; baseUrl: string; key: string; cachedAt: number }>();
+  private static readonly IMMICH_CACHE_TTL = 3_600_000; // 1 hour
+
+  // "lat,lon" → { data, cachedAt }
+  private weatherCache = new Map<string, { data: OpenMeteoResponse; cachedAt: number }>();
+  private static readonly WEATHER_CACHE_TTL = 900_000; // 15 min
 
   private static validateName(name: string): string | null {
     if (!name || name.length === 0) return 'Name is required';
@@ -172,6 +196,277 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Data file listing — public, used by SmartDisplay image picker
+    // GET /api/data-files  returns { files: string[] } — images from public/public/, paths prefixed with data/
+    if (apiPath === '/data-files' && method === 'GET') {
+      const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']);
+      try {
+        const tree = await this.fileSystem.listDirectory('public/public');
+        const files: string[] = [];
+        const flatten = (node: { name: string; path: string; type: string; children?: typeof tree['children'] }) => {
+          if (node.type === 'file' && IMAGE_EXTS.has(path.extname(node.name).toLowerCase())) {
+            // Prefix with data/ so the path passes /files/ security check (which expects data/public/...)
+            files.push('data/' + node.path.replace(/\\/g, '/'));
+          } else {
+            node.children?.forEach(flatten);
+          }
+        };
+        flatten(tree);
+        this.sendJsonResponse(res, 200, { files: files.sort() });
+      } catch {
+        this.sendJsonResponse(res, 200, { files: [] });
+      }
+      return;
+    }
+
+    // Smart display config GET — public so devices can fetch without a token
+    const smartDisplayPublicMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/smart-display$/);
+    if (smartDisplayPublicMatch && method === 'GET') {
+      const userName   = decodeURIComponent(smartDisplayPublicMatch[1]);
+      const deviceName = decodeURIComponent(smartDisplayPublicMatch[2]);
+      await this.handleSmartDisplayConfig(req, res, 'GET', userName, deviceName);
+      return;
+    }
+
+    // Immich proxy — all /api/immich/* routes proxy to the Immich server (avoids CORS in browser)
+
+    // POST /api/immich/login  { immichUrl, email, password } → { accessToken }
+    if (apiPath === '/immich/login' && method === 'POST') {
+      try {
+        const body = await this.parseRequestBody(req) as { immichUrl: string; email: string; password: string };
+        const resp = await fetch(`${body.immichUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: body.email, password: body.password }),
+        });
+        const data = await resp.json();
+        this.sendJsonResponse(res, resp.status, data);
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/immich/albums?immichUrl=...&accessToken=...
+    if (apiPath === '/immich/albums' && method === 'GET') {
+      try {
+        const p = new URL(req.url!, 'http://localhost').searchParams;
+        const resp = await fetch(`${p.get('immichUrl')}/api/albums`, {
+          headers: { Authorization: `Bearer ${p.get('accessToken')}` },
+        });
+        const data = await resp.json();
+        this.sendJsonResponse(res, resp.status, data);
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/immich/albums/:albumId?immichUrl=...&accessToken=...
+    const albumMatch = apiPath.match(/^\/immich\/albums\/([^/]+)$/);
+    if (albumMatch && method === 'GET') {
+      try {
+        const p = new URL(req.url!, 'http://localhost').searchParams;
+        const resp = await fetch(`${p.get('immichUrl')}/api/albums/${albumMatch[1]}`, {
+          headers: { Authorization: `Bearer ${p.get('accessToken')}` },
+        });
+        const data = await resp.json();
+        this.sendJsonResponse(res, resp.status, data);
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/immich/assets/:assetId/thumbnail?immichUrl=...&accessToken=...&size=thumbnail
+    const thumbMatch = apiPath.match(/^\/immich\/assets\/([^/]+)\/thumbnail$/);
+    if (thumbMatch && method === 'GET') {
+      try {
+        const p = new URL(req.url!, 'http://localhost').searchParams;
+        const size = p.get('size') ?? 'thumbnail';
+        const imgResp = await fetch(`${p.get('immichUrl')}/api/assets/${thumbMatch[1]}/thumbnail?size=${size}`, {
+          headers: { Authorization: `Bearer ${p.get('accessToken')}` },
+        });
+        const buffer = Buffer.from(await imgResp.arrayBuffer());
+        res.writeHead(imgResp.status, {
+          'Content-Type': imgResp.headers.get('content-type') ?? 'image/jpeg',
+          'Cache-Control': 'public, max-age=3600',
+        });
+        res.end(buffer);
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/immich/album-image?shareUrl=...  — returns a random thumbnail from a shared album
+    // Asset ID list is cached server-side for 1h; only one thumbnail is fetched per request.
+    if (apiPath === '/immich/album-image' && method === 'GET') {
+      try {
+        const params = new URL(req.url!, 'http://localhost').searchParams;
+        const shareUrl = params.get('shareUrl') ?? '';
+        if (!shareUrl) { this.sendJsonResponse(res, 400, { error: 'Missing shareUrl' }); return; }
+        const clientW = parseInt(params.get('w') ?? '800', 10);
+        const clientH = parseInt(params.get('h') ?? '480', 10);
+        // Pick Immich thumbnail size based on largest client dimension
+        const immichSize = Math.max(clientW, clientH) <= 300 ? 'thumbnail' : 'preview';
+
+        let cached = this.immichAlbumCache.get(shareUrl);
+        if (!cached || Date.now() - cached.cachedAt > MycastleHttpServer.IMMICH_CACHE_TTL) {
+          const parsed = new URL(shareUrl);
+          const baseUrl = `${parsed.protocol}//${parsed.host}`;
+          const key = parsed.pathname.split('/').pop()!;
+          const slResp = await fetch(`${baseUrl}/api/shared-links/me?key=${encodeURIComponent(key)}`);
+          if (!slResp.ok) {
+            console.error(`[immich] shared-links fetch failed: ${slResp.status} ${slResp.statusText} for ${baseUrl}`);
+            this.sendJsonResponse(res, 502, { error: `Immich shared-links ${slResp.status}` }); return;
+          }
+          const slData = await slResp.json() as { album?: { id?: string } };
+          const albumId = slData.album?.id;
+          if (!albumId) { this.sendJsonResponse(res, 502, { error: 'No albumId in shared link' }); return; }
+          const albumResp = await fetch(`${baseUrl}/api/albums/${albumId}?key=${encodeURIComponent(key)}`);
+          if (!albumResp.ok) {
+            console.error(`[immich] album fetch failed: ${albumResp.status} ${albumResp.statusText} albumId=${albumId}`);
+            this.sendJsonResponse(res, 502, { error: `Album fetch ${albumResp.status}` }); return;
+          }
+          const albumData = await albumResp.json() as { assets?: { id: string; type: string; description?: string }[] };
+          const assets = (albumData.assets ?? [])
+            .filter(a => a.type === 'IMAGE')
+            .map(a => ({ id: a.id, description: a.description ?? '' }));
+          cached = { assets, baseUrl, key, cachedAt: Date.now() };
+          this.immichAlbumCache.set(shareUrl, cached);
+        }
+
+        if (cached.assets.length === 0) { this.sendJsonResponse(res, 404, { error: 'No images in album' }); return; }
+
+        // Retry up to 3 times with different random assets (handles occasional Immich 502/503)
+        const maxTries = Math.min(3, cached.assets.length);
+        const triedIndices = new Set<number>();
+        let lastError = '';
+        let sent = false;
+        for (let attempt = 0; attempt < maxTries; attempt++) {
+          let idx: number;
+          do { idx = Math.floor(Math.random() * cached.assets.length); } while (triedIndices.has(idx));
+          triedIndices.add(idx);
+          const { id: assetId, description } = cached.assets[idx];
+          const thumbUrl = `${cached.baseUrl}/api/assets/${assetId}/thumbnail?size=${immichSize}&key=${encodeURIComponent(cached.key)}`;
+          try {
+            const thumbResp = await fetch(thumbUrl);
+            if (!thumbResp.ok) {
+              lastError = `Thumbnail ${thumbResp.status} for asset ${assetId}`;
+              console.warn(`[immich] attempt ${attempt + 1}/${maxTries}: ${lastError}`);
+              continue;
+            }
+            const buffer = Buffer.from(await thumbResp.arrayBuffer());
+            const headers: Record<string, string> = {
+              'Content-Type': thumbResp.headers.get('content-type') ?? 'image/jpeg',
+              'Cache-Control': 'no-store',
+            };
+            if (description) headers['X-Immich-Description'] = encodeURIComponent(description);
+            res.writeHead(200, headers);
+            res.end(buffer);
+            sent = true;
+            break;
+          } catch (fetchErr) {
+            lastError = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+            console.warn(`[immich] attempt ${attempt + 1}/${maxTries} fetch error: ${lastError}`);
+          }
+        }
+        if (!sent) {
+          this.sendJsonResponse(res, 502, { error: `All thumbnail attempts failed. Last: ${lastError}` });
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[immich] album-image error: ${msg}`);
+        this.sendJsonResponse(res, 500, { error: msg });
+      }
+      return;
+    }
+
+    // POST /api/immich/download  — downloads an asset from Immich and saves it to local public storage
+    if (apiPath === '/immich/download' && method === 'POST') {
+      try {
+        const body = await this.parseRequestBody(req) as { immichUrl: string; assetId: string; accessToken: string };
+        const { immichUrl, assetId, accessToken } = body;
+        if (!immichUrl || !assetId || !accessToken) {
+          this.sendJsonResponse(res, 400, { error: 'Missing immichUrl, assetId or accessToken' });
+          return;
+        }
+        const imgResp = await fetch(`${immichUrl}/api/assets/${assetId}/original`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!imgResp.ok) {
+          this.sendJsonResponse(res, 502, { error: `Immich returned ${imgResp.status}` });
+          return;
+        }
+        const contentType = imgResp.headers.get('content-type') || 'image/jpeg';
+        const ext = contentType.includes('png') ? '.png' : contentType.includes('webp') ? '.webp' : '.jpg';
+        const localPath = `public/public/immich/${assetId}${ext}`;
+        const buffer = Buffer.from(await imgResp.arrayBuffer());
+        await this.fileSystem.writeBinaryFile(localPath, buffer.toString('base64'), contentType);
+        this.sendJsonResponse(res, 200, { path: `data/public/public/immich/${assetId}${ext}` });
+      } catch (e) {
+        this.sendJsonResponse(res, 500, { error: e instanceof Error ? e.message : 'Download failed' });
+      }
+      return;
+    }
+
+    // GET /api/weather-image?lat=52.23&lon=21.01&w=800&h=480&locationName=Warsaw
+    // Fetches from Open-Meteo (no key needed), renders SVG card → PNG via sharp. Cached 15 min.
+    if (apiPath === '/weather-image' && method === 'GET') {
+      try {
+        const params = new URL(req.url!, 'http://localhost').searchParams;
+        const lat = parseFloat(params.get('lat') ?? '');
+        const lon = parseFloat(params.get('lon') ?? '');
+        const w = Math.min(Math.max(parseInt(params.get('w') ?? '800', 10), 100), 3000);
+        const h = Math.min(Math.max(parseInt(params.get('h') ?? '480', 10), 100), 2000);
+        const locationName = params.get('locationName') || 'Weather';
+
+        if (isNaN(lat) || isNaN(lon)) {
+          this.sendJsonResponse(res, 400, { error: 'lat and lon query params are required' });
+          return;
+        }
+
+        const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+        let cached = this.weatherCache.get(cacheKey);
+        if (!cached || Date.now() - cached.cachedAt > MycastleHttpServer.WEATHER_CACHE_TTL) {
+          const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+            `&current=temperature_2m,apparent_temperature,relative_humidity_2m,windspeed_10m,weathercode` +
+            `&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=4`;
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            this.sendJsonResponse(res, 502, { error: `Open-Meteo ${resp.status}` });
+            return;
+          }
+          const data = await resp.json() as OpenMeteoResponse;
+          cached = { data, cachedAt: Date.now() };
+          this.weatherCache.set(cacheKey, cached);
+        }
+
+        const { current, daily } = cached.data;
+        const svgBuf = this.buildWeatherSvg(w, h, {
+          locationName,
+          temp: current.temperature_2m,
+          feelsLike: current.apparent_temperature,
+          humidity: current.relative_humidity_2m,
+          windspeed: current.windspeed_10m,
+          code: current.weathercode,
+          daily: daily.time.map((date, i) => ({
+            date, max: daily.temperature_2m_max[i], min: daily.temperature_2m_min[i], code: daily.weathercode[i],
+          })),
+        });
+
+        const pngBuf = await sharp(svgBuf).png().toBuffer();
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+        res.end(pngBuf);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[weather] error: ${msg}`);
+        this.sendJsonResponse(res, 500, { error: msg });
+      }
+      return;
+    }
+
     // --- Protected endpoints (auth required) ---
 
     const user = checkAuth(req, this.jwtService, this.apiKeyService);
@@ -287,7 +582,6 @@ export class MycastleHttpServer extends HttpUploadServer {
     // IoT extensions (active, from hello): /users/{userName}/devices/{deviceName}/iot-extensions
     const iotExtensionsMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-extensions$/);
     if (iotExtensionsMatch) {
-      const userName = decodeURIComponent(iotExtensionsMatch[1]);
       const deviceName = decodeURIComponent(iotExtensionsMatch[2]);
       const types = this.iotService?.extensions.getActiveExtensions(deviceName) ?? [];
       this.sendJsonResponse(res, 200, { extensions: types.map(type => ({ type })) });
@@ -388,6 +682,15 @@ export class MycastleHttpServer extends HttpUploadServer {
       const userName = decodeURIComponent(userLocalizationsMatch[1]);
       const locId = userLocalizationsMatch[2] ? decodeURIComponent(userLocalizationsMatch[2]) : undefined;
       await this.handleUserLocalizations(req, res, method, userName, locId);
+      return;
+    }
+
+    // Smart display config PUT — protected
+    const smartDisplayMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/smart-display$/);
+    if (smartDisplayMatch && method === 'PUT') {
+      const userName   = decodeURIComponent(smartDisplayMatch[1]);
+      const deviceName = decodeURIComponent(smartDisplayMatch[2]);
+      await this.handleSmartDisplayConfig(req, res, 'PUT', userName, deviceName);
       return;
     }
 
@@ -1663,6 +1966,20 @@ const { password, ...safeBody } = body;
     return ((data as any).items || []).some((u: any) => u.name === name);
   }
 
+  private async handleSmartDisplayConfig(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string): Promise<void> {
+    const filePath = `${MINIS_ROOT}/Users/${userName}/SmartDisplay/${deviceName}.json`;
+    if (method === 'GET') {
+      const data = await this.readJsonFile(filePath);
+      this.sendJsonResponse(res, 200, Object.keys(data as object).length ? data : { type: 'smart-display-config', cycleDurationMs: 900000, views: [] });
+    } else if (method === 'PUT') {
+      const body = await this.parseRequestBody(req);
+      await this.writeJsonFile(filePath, body);
+      this.sendJsonResponse(res, 200, body);
+    } else {
+      this.sendJsonResponse(res, 405, { error: 'Method Not Allowed' });
+    }
+  }
+
   private async handleUserLocalizations(req: IncomingMessage, res: ServerResponse, method: string, userName: string, locId?: string): Promise<void> {
     if (!await this.userExistsByName(userName)) {
       this.sendJsonResponse(res, 404, { error: 'User not found' });
@@ -2411,5 +2728,94 @@ const { password, ...safeBody } = body;
     }
 
     this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  private buildWeatherSvg(w: number, h: number, p: {
+    locationName: string;
+    temp: number;
+    feelsLike: number;
+    humidity: number;
+    windspeed: number;
+    code: number;
+    daily: Array<{ date: string; max: number; min: number; code: number }>;
+  }): Buffer {
+    const e = (v: string | number) => String(v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const sc = Math.min(w / 800, h / 480);
+    const cx = w / 2;
+
+    const wmoDesc = (c: number): string => {
+      if (c === 0) return 'Clear sky';
+      if (c === 1) return 'Mainly clear';
+      if (c === 2) return 'Partly cloudy';
+      if (c === 3) return 'Overcast';
+      if (c <= 48) return 'Foggy';
+      if (c <= 55) return 'Drizzle';
+      if (c <= 65) return 'Rain';
+      if (c <= 77) return 'Snow';
+      if (c <= 82) return 'Showers';
+      if (c <= 99) return 'Thunderstorm';
+      return '';
+    };
+
+    // BMP-plane Unicode symbols supported by most monospace/sans-serif fonts
+    const wmoIcon = (c: number): string => {
+      if (c === 0) return '\u2600';   // ☀
+      if (c <= 2)  return '\u26C5';   // ⛅
+      if (c <= 3)  return '\u2601';   // ☁
+      if (c <= 48) return '\u2248';   // ≈ (fog approximation)
+      if (c <= 65) return '\u2614';   // ☔
+      if (c <= 77) return '\u2744';   // ❄
+      if (c <= 82) return '\u2614';   // ☔
+      if (c <= 99) return '\u26A1';   // ⚡
+      return '?';
+    };
+
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const divY = Math.round(h * 0.72);
+    const fH = h - divY;
+
+    const forecastSvg = p.daily.slice(0, 4).map((d, i) => {
+      const fx = Math.round(w * (i + 0.5) / 4);
+      const dayName = dayNames[new Date(d.date + 'T00:00:00Z').getUTCDay()];
+      return `
+      <text x="${fx}" y="${divY + Math.round(fH * 0.32)}" text-anchor="middle"
+            fill="#64a0dc" font-size="${Math.round(19 * sc)}" font-weight="bold"
+            font-family="'DejaVu Sans Mono',monospace">${e(dayName)}</text>
+      <text x="${fx}" y="${divY + Math.round(fH * 0.60)}" text-anchor="middle"
+            fill="#c8c8e0" font-size="${Math.round(20 * sc)}"
+            font-family="'DejaVu Sans',sans-serif">${e(wmoIcon(d.code))}</text>
+      <text x="${fx}" y="${divY + Math.round(fH * 0.90)}" text-anchor="middle"
+            fill="#e6e6f5" font-size="${Math.round(17 * sc)}"
+            font-family="'DejaVu Sans Mono',monospace">${e(Math.round(d.max))}/${e(Math.round(d.min))}°C</text>`;
+    }).join('\n');
+
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
+  <rect width="${w}" height="${h}" fill="#12121c"/>
+  <text x="${cx}" y="${Math.round(h * 0.115)}" text-anchor="middle"
+        fill="#64a0dc" font-size="${Math.round(26 * sc)}" font-weight="bold"
+        font-family="'DejaVu Sans Mono',monospace">${e(p.locationName.toUpperCase())}</text>
+  <text x="${cx}" y="${Math.round(h * 0.50)}" text-anchor="middle"
+        fill="#ffdc64" font-size="${Math.round(115 * sc)}" font-weight="bold"
+        font-family="'DejaVu Sans Mono',monospace">${e(Math.round(p.temp))}°C</text>
+  <text x="${cx}" y="${Math.round(h * 0.615)}" text-anchor="middle"
+        fill="#8c8ca5" font-size="${Math.round(25 * sc)}"
+        font-family="'DejaVu Sans',sans-serif">${e(wmoIcon(p.code))} ${e(wmoDesc(p.code))}</text>
+  <text x="${Math.round(w * 0.18)}" y="${Math.round(h * 0.695)}" text-anchor="middle"
+        fill="#8c8ca5" font-size="${Math.round(19 * sc)}"
+        font-family="'DejaVu Sans Mono',monospace">Feels ${e(Math.round(p.feelsLike))}°C</text>
+  <text x="${cx}" y="${Math.round(h * 0.695)}" text-anchor="middle"
+        fill="#8c8ca5" font-size="${Math.round(19 * sc)}"
+        font-family="'DejaVu Sans Mono',monospace">Wind ${e(Math.round(p.windspeed))} km/h</text>
+  <text x="${Math.round(w * 0.82)}" y="${Math.round(h * 0.695)}" text-anchor="middle"
+        fill="#8c8ca5" font-size="${Math.round(19 * sc)}"
+        font-family="'DejaVu Sans Mono',monospace">Hum ${e(p.humidity)}%</text>
+  <line x1="0" y1="${divY}" x2="${w}" y2="${divY}" stroke="#3a3a5a" stroke-width="1"/>
+  ${forecastSvg}
+</svg>`;
+
+    return Buffer.from(svg, 'utf-8');
   }
 }
