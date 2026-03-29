@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -37,6 +38,8 @@ import { UIFormEmbed } from './extensions/UIFormExtension';
 import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
 import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
+import { BlockActionMenu } from './BlockActionMenu';
+import { BlockIdExtension } from './extensions/BlockIdExtension';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
 import 'katex/dist/katex.min.css';
 import './MdEditor.css';
@@ -47,6 +50,7 @@ export interface MdEditorProps {
   initialContent?: string;
   onSave?: (markdown: string) => void;
   onLinkClick?: (href: string) => void;
+  onCreatePage?: (path: string) => Promise<void>;
   placeholder?: string;
   editable?: boolean;
   autoFocus?: boolean;
@@ -57,6 +61,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
   initialContent = '',
   onSave,
   onLinkClick,
+  onCreatePage,
   placeholder = 'Type \'/\' for commands...',
   editable = true,
   autoFocus = false,
@@ -67,6 +72,12 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   const initialContentRef = useRef(initialContent);
   const isInitializedRef = useRef(false);
+  const onCreatePageRef = useRef(onCreatePage);
+
+  // Block action menu — one button per block
+  const [blockPositions, setBlockPositions] = useState<Array<{ el: HTMLElement; top: number; left: number }>>([]);
+  const blockMenuOpenRef = useRef(false);
+  useEffect(() => { onCreatePageRef.current = onCreatePage; }, [onCreatePage]);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
   const [bubbleMenuAnchor, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
@@ -89,6 +100,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
     extensions: [
       StarterKit.configure({
         codeBlock: false,
+        link: false,
       }),
       Placeholder.configure({
         placeholder,
@@ -135,7 +147,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       TextAlign.configure({
         types: ['heading', 'paragraph', 'tableCell', 'tableHeader'],
       }),
-      SlashCommands,
+      SlashCommands.configure({ createPageRef: onCreatePageRef }),
       InlineMath,
       MathBlock,
       ComponentEmbed,
@@ -146,6 +158,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       UIFormEmbed,
       AutomateFlowEmbed,
       AutomateScriptBlock,
+      BlockIdExtension,
     ],
     content: '',
     editable,
@@ -254,6 +267,32 @@ const MdEditor: React.FC<MdEditorProps> = ({
     return () => document.removeEventListener('click', handler, true);
   }, [editor]);
 
+  const updateBlockPositions = useCallback(() => {
+    if (!editable || !editor) return;
+    const container = contentWrapperRef.current;
+    if (!container) return;
+    const prosemirror = container.querySelector('.ProseMirror') as HTMLElement | null;
+    if (!prosemirror) return;
+    const containerBr = container.getBoundingClientRect();
+    const children = Array.from(prosemirror.children) as HTMLElement[];
+
+    // Sync blockId from ProseMirror node attrs to DOM so getBlockId() can find it
+    // (needed for NodeView-based blocks like automateScriptBlock where renderHTML ≠ actual DOM)
+    let idx = 0;
+    editor.state.doc.forEach((node) => {
+      const el = children[idx++];
+      if (el && node.attrs.blockId && !el.getAttribute('data-block-id')) {
+        el.setAttribute('data-block-id', node.attrs.blockId);
+      }
+    });
+
+    setBlockPositions(children.map(el => ({
+      el,
+      top: el.getBoundingClientRect().top,
+      left: containerBr.left + 4,
+    })));
+  }, [editable, editor]);
+
   const handleSave = useCallback(() => {
     if (editor && onSave) {
       const html = editor.getHTML();
@@ -282,6 +321,18 @@ const MdEditor: React.FC<MdEditorProps> = ({
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
   }, [editor, autoSaveDelay]);
+
+  // Update block positions on editor changes, scroll, and resize
+  useEffect(() => {
+    if (!editor || !editable) return;
+    updateBlockPositions();
+    editor.on('update', updateBlockPositions);
+    editor.on('transaction', updateBlockPositions);
+    return () => {
+      editor.off('update', updateBlockPositions);
+      editor.off('transaction', updateBlockPositions);
+    };
+  }, [editor, editable, updateBlockPositions]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -525,7 +576,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
     }
 
     lastScrollTop.current = scrollTop;
-  }, [isMobile, toolbarVisible]);
+    updateBlockPositions();
+  }, [isMobile, toolbarVisible, updateBlockPositions]);
 
   // Update toolbar visibility when switching between mobile/desktop
   useEffect(() => {
@@ -537,6 +589,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
   }
 
   return (
+    <>
     <AutomateDocumentProvider>
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Collapsible toolbar for mobile */}
@@ -752,7 +805,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
         sx={{
           flexGrow: 1,
           overflow: 'auto',
-          p: 2,
+          position: 'relative',
+          pt: 2,
+          pb: 2,
+          pr: 2,
+          pl: editable ? 4 : 2,
           '& .ProseMirror': {
             outline: 'none',
             minHeight: '100%',
@@ -763,6 +820,21 @@ const MdEditor: React.FC<MdEditorProps> = ({
       </Box>
     </Box>
     </AutomateDocumentProvider>
+    {editable && blockPositions.length > 0 && ReactDOM.createPortal(
+      <>
+        {blockPositions.map(({ el, top, left }, i) => (
+          <BlockActionMenu
+            key={i}
+            viewportTop={top}
+            viewportLeft={left}
+            blockEl={el}
+            onMenuOpenChange={(open) => { blockMenuOpenRef.current = open; }}
+          />
+        ))}
+      </>,
+      document.body,
+    )}
+    </>
   );
 };
 

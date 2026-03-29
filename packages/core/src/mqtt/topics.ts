@@ -67,6 +67,24 @@ export const hello = defineMqttTopic({
       enabled: z.boolean(),
       options: z.record(z.unknown()).optional(),
     })).optional(),
+    entities: z.array(z.object({
+      id: z.string(),
+      type: z.enum(['sensor', 'binary_sensor', 'switch', 'number', 'button', 'select']),
+      name: z.string(),
+      icon: z.string().optional(),
+      deviceClass: z.string().optional(),
+      // sensor
+      unit: z.string().optional(),
+      // binary_sensor
+      onLabel: z.string().optional(),
+      offLabel: z.string().optional(),
+      // number
+      min: z.number().optional(),
+      max: z.number().optional(),
+      step: z.number().optional(),
+      // select
+      options: z.array(z.string()).optional(),
+    })).optional(),
   }),
 });
 

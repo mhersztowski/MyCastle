@@ -69,6 +69,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(STORAGE_KEY);
   }, []);
 
+  // Listen for 401 events from MinisApiService and logout gracefully
+  useEffect(() => {
+    const handler = () => logout();
+    window.addEventListener('minis:session-expired', handler);
+    return () => window.removeEventListener('minis:session-expired', handler);
+  }, [logout]);
+
   const startImpersonating = useCallback((user: UserPublic) => {
     if (session?.user?.isAdmin) {
       setImpersonating(user);

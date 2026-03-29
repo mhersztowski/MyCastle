@@ -62,6 +62,68 @@ function getLanguage(path: string): string {
   return map[ext] ?? 'plaintext';
 }
 
+function ResizeDivider({ onResize }: { onResize: (delta: number) => void }) {
+  const [dragging, setDragging] = useState(false);
+
+  const startDrag = (initialX: number) => {
+    let prevX = initialX;
+    setDragging(true);
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - prevX;
+      prevX = ev.clientX;
+      onResize(delta);
+    };
+    const onMouseUp = () => {
+      setDragging(false);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  const startTouchDrag = (initialX: number) => {
+    let prevX = initialX;
+
+    const onTouchMove = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const delta = ev.touches[0].clientX - prevX;
+      prevX = ev.touches[0].clientX;
+      onResize(delta);
+    };
+    const onTouchEnd = () => {
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', onTouchEnd);
+    };
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd);
+  };
+
+  return (
+    <>
+      {/* Overlay during drag — stops Monaco/iframes from capturing mouse events */}
+      {dragging && (
+        <Box sx={{ position: 'fixed', inset: 0, zIndex: 9999, cursor: 'col-resize' }} />
+      )}
+      <Box
+        onMouseDown={e => { e.preventDefault(); startDrag(e.clientX); }}
+        onTouchStart={e => startTouchDrag(e.touches[0].clientX)}
+        sx={{
+          width: 8,
+          flexShrink: 0,
+          cursor: 'col-resize',
+          bgcolor: dragging ? 'primary.main' : 'divider',
+          transition: 'background-color 0.15s',
+          '&:hover': { bgcolor: 'primary.main' },
+          userSelect: 'none',
+          touchAction: 'none',
+        }}
+      />
+    </>
+  );
+}
+
 export function VfsView() {
   const { token, isAdmin, currentUser } = useAuth();
   const { getParams } = useGlobalWindows();
@@ -142,10 +204,15 @@ export function VfsView() {
     return !activeMounts.some(m => m.id === p.id);
   });
 
-  /* ── Editor tabs ── */
+  /* ── Panel sizing ── */
 
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
+  const [vfsWidth, setVfsWidth] = useState(240);
+  const [agentWidth, setAgentWidth] = useState(320);
+
+  /* ── Editor tabs ── */
 
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
@@ -425,15 +492,13 @@ export function VfsView() {
 
       {/* Main content row */}
       <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* VFS Explorer — full width on mobile, fixed 240px on desktop */}
+        {/* VFS Explorer */}
         <Box
           sx={{
             position: 'relative',
-            width: isMobile ? '100%' : 240,
+            width: isMobile ? '100%' : vfsWidth,
             flexShrink: 0,
             overflow: 'hidden',
-            borderRight: isMobile ? 0 : 1,
-            borderColor: 'divider',
           }}
           onDragOver={e => { e.preventDefault(); setIsDragOver(true); }}
           onDragLeave={() => setIsDragOver(false)}
@@ -449,7 +514,6 @@ export function VfsView() {
             onDirectoryChange={path => { dropTargetPathRef.current = path; }}
             onMountsChanged={() => setMountVersion(v => v + 1)}
           />
-          {/* Drag-over overlay */}
           {isDragOver && (
             <Box sx={{
               position: 'absolute', inset: 0, zIndex: 10,
@@ -461,7 +525,6 @@ export function VfsView() {
               <Typography variant="caption" color="primary">Drop to upload</Typography>
             </Box>
           )}
-          {/* Upload progress bar */}
           {uploadProgress && (
             <LinearProgress
               variant="determinate"
@@ -471,7 +534,12 @@ export function VfsView() {
           )}
         </Box>
 
-        {/* Desktop editor panel */}
+        {/* Resize handle: VFS | Editor */}
+        {!isMobile && (
+          <ResizeDivider onResize={delta => setVfsWidth(w => Math.max(120, w + delta))} />
+        )}
+
+        {/* Editor panel */}
         {!isMobile && (
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
             {renderTabBar()}
@@ -479,9 +547,14 @@ export function VfsView() {
           </Box>
         )}
 
-        {/* Desktop agent panel */}
+        {/* Resize handle: Editor | Agent */}
         {!isMobile && (
-          <Box sx={{ width: 320, flexShrink: 0, borderLeft: 1, borderColor: 'divider', overflow: 'hidden' }}>
+          <ResizeDivider onResize={delta => setAgentWidth(w => Math.max(160, w - delta))} />
+        )}
+
+        {/* Agent panel — tablet + desktop */}
+        {!isMobile && (
+          <Box sx={{ width: agentWidth, flexShrink: 0, overflow: 'hidden' }}>
             <AgentPanel
               provider={cfs as FileSystemProvider}
               onFileOpen={handleFileOpen}

@@ -56,13 +56,12 @@ function IotDevicePage() {
         minisApi.getDeviceDefs(userName),
         minisApi.getIotExtensions(userName, deviceName),
       ]);
-      const iotId = allDevices.find((d) => d.name === deviceName)?.sn || deviceName;
       setConfig(cfg);
       setExtensions(exts);
       setLatestTelemetry('metrics' in latest ? latest as TelemetryRecord : null);
       setHistory(hist);
       setCommands(cmds);
-      setAlerts(alertsList.filter((a) => a.deviceId === iotId || a.deviceId === deviceName));
+      setAlerts(alertsList.filter((a) => a.deviceId === deviceName));
       setDeviceStatuses(statuses);
       setDevices(allDevices);
       setDeviceDefs(defs);
@@ -118,9 +117,7 @@ function IotDevicePage() {
   };
 
   const currentDevice = devices.find((d) => d.name === deviceName);
-  const iotId = currentDevice?.sn || deviceName;
-  const deviceStatus = deviceStatuses.find((s) => s.deviceId === iotId)
-    ?? deviceStatuses.find((s) => s.deviceId === deviceName);
+  const deviceStatus = deviceStatuses.find((s) => s.deviceId === deviceName);
   const statusLabel = deviceStatus?.status ?? 'OFFLINE';
   const statusColor = statusLabel === 'ONLINE' ? 'success' : statusLabel === 'OFFLINE' ? 'error' : 'default';
   const deviceDisplayName = currentDevice?.name || deviceDefs.find((d) => d.id === currentDevice?.deviceDefId)?.name || deviceName;

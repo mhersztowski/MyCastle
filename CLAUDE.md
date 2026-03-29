@@ -11,7 +11,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `models/` — PersonModel, TaskModel, ProjectModel, EventModel, ShoppingModel, FileModel, DirModel, MinisModuleDefModel, MinisModuleModel, MinisDeviceDefModel (board? field), MinisDeviceModel (isIot field, description?: string, localizationId?: string, **lastBuild?: MinisDeviceBuild**), **MinisDeviceBuild** (platform: string, fqbn?: string, success: boolean, at: number, projectId?: string — zapisywany po każdej kompilacji), MinisLocalizationModel (id, name, type: 'place'|'geo', place?: string, geo?: {lat,lng}|null, device: string), MinisProjectDefModel, MinisProjectModel, UserModel, IotModels (IotDeviceConfig + **extensions?: IotExtensionConfig[]**, **IotExtensionConfig** {type, enabled, options?}, IotEntity, IotEntityType, IotSensorEntity, IotBinarySensorEntity, IotSwitchEntity, IotNumberEntity, IotButtonEntity, IotSelectEntity, TelemetryRecord, TelemetryMetric, TelemetryAggregate, DeviceCommand, AlertRule, Alert, IotDeviceStatus, DeviceShare), AuthModels (AuthTokenPayload, ApiKeyPublic), **SmartDisplayModel** (SmartDisplayViewType: `'clock'|'text'|'metric'|'image'|'random-image'|'weather'`, SmartDisplayView {id, type, label?, text?, subtext?, metricKey?, metricUnit?, metricDevice?, imagePath?, albumShareUrl?, ttsDescription?, weatherLat?, weatherLon?, weatherLocationName?}, SmartDisplayConfig {type:'smart-display-config', cycleDurationMs, views[]}, DEFAULT_SMART_DISPLAY_CONFIG)
   - `nodes/` — NodeBase (z UI state: _isSelected, _isExpanded, _isEditing, _isDirty; metoda `copyBaseStateTo()` do kopiowania UI state przy clone), PersonNode, TaskNode, ProjectNode, EventNode, ShoppingListNode, MinisModuleDefNode, MinisModuleNode, MinisDeviceDefNode, MinisDeviceNode, MinisProjectDefNode, MinisProjectNode, UserNode. Wszystkie nody używają `copyBaseStateTo()` w `clone()` zamiast ręcznego kopiowania pól.
   - `automate/` — AutomateFlowModel, AutomateNodeModel (+ NODE_RUNTIME_MAP, createNode), AutomateEdgeModel, AutomatePortModel
-  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload. `topics.ts`: Zod-based MQTT topic registry (analogiczny do RPC). MqttTopicDef (pattern, description, direction, payloadSchema, tags), defineMqttTopic(), MqttPayload<T>. mqttTopics registry (telemetry, heartbeat, command, commandAck, status, telemetryLive, alert, sharedTelemetryLive, sharedStatus, **extReq** `minis/{userName}/{deviceName}/ext/{extType}/req` server→device, **extRes** `minis/{userName}/{deviceName}/ext/{extType}/res` device→server), MqttTopicRegistry, MqttTopicName. matchTopic(fullTopic) — dopasowuje topic do wzorca, zwraca def + wyekstrahowane params. Zod schemas = single source of truth for payload validation i type info w MQTT Explorer
+  - `mqtt/` — PacketType enum, PacketData, FileData, BinaryFileData, DirectoryTree, ResponsePayload, ErrorPayload, FileChangedPayload. `topics.ts`: Zod-based MQTT topic registry (analogiczny do RPC). MqttTopicDef (pattern, description, direction, payloadSchema, tags), defineMqttTopic(), MqttPayload<T>. mqttTopics registry (telemetry, heartbeat, command, commandAck, status, telemetryLive, alert, sharedTelemetryLive, sharedStatus, **extReq** `minis/{userName}/{deviceName}/ext/{extType}/req` server→device, **extRes** `minis/{userName}/{deviceName}/ext/{extType}/res` device→server), MqttTopicRegistry, MqttTopicName. matchTopic(fullTopic) — dopasowuje topic do wzorca, zwraca def + wyekstrahowane params. Zod schemas = single source of truth for payload validation i type info w MQTT Explorer. **hello payload** zawiera teraz `entities?: IotEntity[]` — urządzenie deklaruje encje przy każdym reconnect; backend persystuje je przez `upsertConfig`
   - `datasource/` — IDataSource interface (w tym kolekcje Minis: minisModuleDefs, minisModules, minisDeviceDefs, minisDevices, minisProjectDefs, minisProjects, users), MemoryDataSource (load* methods per kolekcję), CalendarItem, Calendar
   - `rpc/` — Zod-based RPC system (shared types + method registry). `types.ts`: RpcMethodDef (z fieldMeta?: Record<string, FieldMeta>), AutocompleteSource ('users' | 'userDevices'), FieldMeta (autocomplete?, dependsOn?), defineRpcMethod(), RpcResponse/RpcErrorResponse. `methods.ts`: rpcMethods registry (ping, getDeviceStatuses, sendCommand, getLatestTelemetry), RpcMethodRegistry, RpcMethodName types. fieldMeta na metodach definiuje autocomplete sources i zależności między polami (np. deviceName dependsOn userName). Zod schemas = single source of truth for validation, types, and auto-generated Swagger docs.
   - `vfs/` — Virtual File System abstraction (VS Code-inspired). `types.ts`: FileSystemProvider interface (scheme, capabilities, stat, readDirectory, readFile, writeFile?, delete?, rename?, mkdir?, copy?, watch?, onDidChangeFile), FileType enum, FileChangeType enum, FileStat, DirectoryEntry, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions, isWritable(). `errors.ts`: VfsError, VfsErrorCode. `paths.ts`: VFS path utilities. Implementacje: MemoryFS (in-memory), CompositeFS (mount multiple providers pod różnymi ścieżkami), GitHubFS (GitHub API), BrowserFS (File System Access API), NodeFS (Node.js fs — backend only), RemoteFS (REST proxy do server-side VFS), **MqttFS** (tunneluje operacje VFS przez MQTT request-response; konstruktor: {reqTopic, timeoutMs?}; `handleResponse(response)` wywoływane gdy urządzenie odpowiada; pending Map z UUID correlation IDs; `dispose()` odrzuca wszystkie oczekujące Promises), **WritableGitHubFS** (extends GitHubFS, scheme=`github-writable`; buforuje zmiany lokalnie w `pending: Map<path, Uint8Array|null>` — null = pending delete; `commit(message)` pushuje wszystko jako jeden Git commit przez Trees API; `hasPendingChanges()`, `pendingCount()`, `getPendingEntries()`, `discardPending()`, `getBaseContent(path)` — omija pending buffer). `utils.ts`: encodeText/decodeText (UTF-8 Uint8Array ↔ string).
@@ -31,7 +31,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `filesystem/` — FileSystem (in-memory cache, EventEmitter fileChanged, atomic writes, per-file locking, deleteDirectory)
   - `httpserver/` — HttpUploadServer (CORS, POST /upload, GET /files/, POST /ocr, GET /ocr/status, POST/GET /webhook). Klasa rozszerzalna: protected server, fileSystem, setCorsHeaders, handleRequest, sendJsonResponse — umożliwia subclassing (np. MinisHttpServer, MycastleHttpServer). **Fix**: `GET /files/{path}` teraz automatycznie stripuje prefix `data/` z path przed wywołaniem `readBinaryFile` — pozwala klientom przekazywać ścieżki z prefixem `data/public/...`
   - `mqttserver/` — MqttServer (Aedes, publishMessage(), onMessage(handler) for custom topic routing, setAuthenticate(callback) for MQTT auth), MqttMessageHandler type, Client, Packet classes per type
-  - `auth/` — JwtService (sign/verify JWT, jsonwebtoken), PasswordService (bcrypt hash/verify, isBcrypt detection), ApiKeyService (CRUD kluczy API z prefix `minis_`, SHA-256 hash, per-user, dane w JSON file), checkAuth() middleware (Bearer token: JWT lub API key → AuthTokenPayload | null)
+  - `auth/` — JwtService (sign/verify JWT, jsonwebtoken, **domyślne TTL = 7 dni** / 604800s), PasswordService (bcrypt hash/verify, isBcrypt detection), ApiKeyService (CRUD kluczy API z prefix `minis_`, SHA-256 hash, per-user, dane w JSON file), checkAuth() middleware (Bearer token: JWT lub API key → AuthTokenPayload | null)
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
   - `rpc/` — **RpcRouter**. `RpcRouter`: register/dispatch/getRegisteredMethods. `RpcContext` z `user?: AuthTokenPayload`. Używany przez mycastle-backend.
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
@@ -48,6 +48,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **MQTT auth**: anonymous allowed (web client), lub API key, JWT token, lub username+password
 - **MycastleHttpServer** (`src/MycastleHttpServer.ts`): rozszerza HttpUploadServer, dodaje pełne REST API (`/api/*`). JWT auth middleware (checkAuth) na wszystkie endpointy poza publicznymi. Admin routes wymagają `isAdmin`. Generyczny `handleCrud(config: CrudConfig)`. `resolveMinisConfig(userName, deviceName)` — czyta Electronics/configuration.json, zwraca `MinisConfig` (deviceName, serialNumber, wifiSsid, wifiPassword, architectureJson) dla danego deviceName (uwzględnia topologię: wifi-device → wifi-switch). **WAŻNE: wszędzie używamy deviceName jako identyfikatora urządzenia — w MQTT topics, rejestrach backendu, API. SN jest tylko do wewnętrznego śledzenia buildów.** Publiczne endpointy (bez auth): `GET /api/data-files` (lista obrazów z `public/public/`, zwraca `{files: string[]}` z prefixem `data/`), `GET /api/users/{u}/devices/{d}/smart-display` (config Smart Display dla urządzenia — pobierany przez Python client), `GET /api/immich/*` (proxy do serwera Immich: login, albums, thumbnail, `album-image?shareUrl=` — losowy thumbnail z shared album, cache assetów 1h w `immichAlbumCache`, retry 3x dla 5xx, header `X-Immich-Description` z URLencoded opisem assetu), `POST /api/immich/download` (download asset → local storage), `GET /api/weather-image?lat=&lon=&w=&h=&locationName=` (pobiera prognozę z Open-Meteo — darmowe API bez klucza, renderuje kartę pogodową SVG→PNG via `sharp`, cache 15min w `weatherCache`). Prywatna metoda `buildWeatherSvg(w, h, params)` — generuje SVG z: nazwą lokalizacji, dużą temperaturą, ikoną+opisem warunków, feels like/wiatr/wilgotność, 4-dniową prognozą.
 - **TerminalService** (`src/modules/terminal/TerminalService.ts`): WebSocket PTY (node-pty, xterm-compatible). Ticket-based auth (one-time 30s ticket). Attach do HTTP server na `/ws/terminal`. `createTicket(payload)` — wywoływane z HTTP endpoint po weryfikacji JWT.
+- **IoT hello + entities**: `handleHello()` w `IotService` teraz persystuje encje przez `upsertConfig()` — urządzenie deklaruje entities w hello payload, backend zapisuje je do SQLite (były tylko in-memory). IoT endpoints wydzielone do prywatnych metod `handleIotTelemetry()` i `handleIotCommands()` dla czytelności.
 - Moduły w `src/modules/`:
     - **ocr** — Tesseract.js + Sharp preprocessing, PolishReceiptParser, non-blocking init
     - **automate** — AutomateService (implementuje IAutomateService), BackendAutomateEngine (graph traversal, merge nodes), BackendSystemApi, AutomateSandbox
@@ -72,7 +73,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **mqttclient** — re-exports z @mhersztowski/web-client (MqttClient, MqttContext, useMqtt)
     - **filesystem** — re-exports z @mhersztowski/web-client (FilesystemService, FilesystemContext, DirData, FileData, etc.) + app-specific models/nodes barrels
     - **minis-filesystem** — MinisDataSourceContext (ładuje moduleDefs/deviceDefs/projectDefs via MQTT do MemoryDataSource)
-    - **auth** — AuthContext/AuthProvider, useAuth hook. JWT token + sesja w sessionStorage. `setAuthToken()` propaguje token do MinisApiService i RpcClient. Stan: currentUser, token, isAdmin, login(), logout(), impersonating, startImpersonating(), stopImpersonating()
+    - **auth** — AuthContext/AuthProvider, useAuth hook. JWT token + sesja w sessionStorage. `setAuthToken()` propaguje token do MinisApiService i RpcClient. Stan: currentUser, token, isAdmin, login(), logout(), impersonating, startImpersonating(), stopImpersonating(). **Auth redirect**: `RequireAuth` przy braku auth zapisuje `location.pathname+search` do `sessionStorage('auth_redirect')` → po zalogowaniu `LoginPage` odczytuje i przekierowuje tam zamiast do `/user/:userName/main`. Używane przez `/watch` i inne deep-link routes.
     - **uiforms** — system UI (Godot-like): models, nodes, renderer (21 kontrolek), designer (drag & drop), binding (oneWay/twoWay), services
     - **automate** — graficzny język (NodeRed-like): designer (responsive mobile), engine, registry (NODE_TYPE_METADATA), services. Runtime: client/backend/universal. Merge node, Manual Trigger
     - **notification** — NotificationService, NotificationProvider
@@ -98,13 +99,19 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
     - **AccountMenu** — hierarchiczne menu (View save/load/clear, Window API Docs/RPC/MQTT/Terminal)
     - **BuildOutputPanel**, **ImpersonationBanner**, **MinimalTopBar**, **MinimalTopBarContext** — komponenty UI
     - **DisplayContext** — ThemeProvider wrapper z trybem ciemnym i rozmiarem czcionki
+    - **Layout** — dodany tablet drawer (breakpoint `sm`—`lg`): osobny `Drawer variant="temporary"` dla tabletów, trigger po prawej stronie AppBar. Mobile i tablet zamykają drawer po nawigacji. Collapsible nav groups z `openGroups` state.
+    - **VfsView** — `ResizeDivider` component: przeciągany separator między panelami (mouse + touch), overlay `position:fixed` podczas drag zapobiega przechwytywaniu eventów przez Monaco/iframe. Persystowany rozmiar paneli przez `useState`.
 - Strony:
     - Full-page (bez Layout): `/workspace/md/*` (WorkspaceMdPage), `/editor/simple/*` (SimpleEditorPage), `/editor/md/*` (MdEditorPage), `/viewer/md/*` (MdViewerPage), `/designer/ui/:id?` (UIDesignerPage), `/designer/automate/:id?` (AutomateDesignerPage), `/viewer/ui/:id` (UIViewerPage) — owinięte `MinimalTopBar`, wymaga auth
-    - Public: `/` (HomePage), `/login/:userName` (LoginPage)
+    - Public: `/` (HomePage), `/login/:userName` (LoginPage), `/watch` (**WatchPage** — wymaga auth z redirect; duży okrągły przycisk, publikuje `{pressed:true, at:timestamp}` na MQTT topic `watch` przez `mqttClient.rawPublish()`; przeznaczone dla Galaxy Watch / urządzeń IoT)
     - Full-page bez Layout (Minis): `/user/:userName/editor/monaco/*` (MinisMonacoEditorPage), `/user/:userName/project/:projectId` (MinisProjectPage), `/user/:userName/upython-project/:projectId` (MinisUPythonProjectPage — wstrzykuje WiFi credentials jako Python header przed uplodem; ładuje `projectLibraries` z pola `libraries` rekordu projektu i przekazuje do UploadDialog), `/user/:userName/pygame-project/:projectId` (PygameProjectPage — Blockly/split/code view, PygameMode toggle native/web, lista szkiców, build przez `POST .../build`, podgląd web-build w iframe)
     - Layout pages (Minis admin): `/admin/:userName/main`, `/admin/:userName/users`, `/admin/:userName/devicesdefs`, `/admin/:userName/modulesdefs`, `/admin/:userName/projectdefs`
     - Layout pages (Minis user): `/user/:userName/main`, `/user/:userName/localization`, `/user/:userName/electronics/devices`, `/user/:userName/electronics/arduino`, `/user/:userName/electronics/upython`, `/user/:userName/electronics/pygame` (UserPygameProjectsPage — lista projektów Pygame, tworzenie nowych), `/user/:userName/electronics/configuration` (ElectronicsConfigurationPage — ReactFlow IoT network editor: 4 node types wifi-device/wifi-uart-bridge/wifi-switch/uart-device, ConfigPanel z dropdownem urządzeń, WiFi inheritance, drag-and-drop, persistence przez `GET/PUT /api/users/{userName}/electronics/configuration`), `/user/:userName/iot/dashboard`, `/user/:userName/iot/devices`, `/user/:userName/iot/device/:deviceName` (IotDevicePage — przycisk "Smart Display" widoczny gdy device ma extension `smart-display`), `/user/:userName/iot/smart-display/:deviceName` (**SmartDisplayPage** — konfiguracja widoków Smart Display: typy clock/text/metric/image/random-image/weather, cycleDuration, persystancja przez `GET/PUT /api/users/{u}/devices/{d}/smart-display`), `/user/:userName/iot/alerts`, `/user/:userName/iot/emulator`, `/user/:userName/tools/rpc` (AdminOnly), `/user/:userName/tools/mqtt-explorer` (AdminOnly), `/user/:userName/tools/api-keys` (AdminOnly), `/user/:userName/tools/testvfs` (AdminOnly), `/user/:userName/tools/docs` (AdminOnly)
     - Layout pages (PIM — pod `/user/:userName/pim/`): `/calendar`, `/todolist`, `/person`, `/project`, `/shopping`, `/automate`, `/objectviewer`, `/components`, `/settings/ai`, `/settings/speech`, `/settings/receipt`, `/settings/page-hooks`, `/agent`
+- **MdEditor** — `BlockActionMenu`: jeden przycisk na blok (pozycje obliczane przez `updateBlockPositions()` — sync ProseMirror node attrs do DOM dla NodeView-based bloków). `SlashCommands` otrzymuje `onCreatePage` callback (ref pattern dla stabilności). `BlockIdExtension` dołączony bezpośrednio w MdEditor. **SlashCommands** — nowe komendy: `Link` (prompt URL + tekst, wstawia link), `Page` (prompt ścieżka, tworzy plik .md + wstawia link); scrollowalna lista z keyboard nav (auto-scroll do zaznaczonego elementu). **WorkspaceMdPage** — `handleCreatePage(path)`: tworzy plik przez `writeFile`, inkrementuje `treeVersion` do odświeżenia drzewa; lista plików pokazuje folder jako secondary text.
+- **Markdown editor fixes**: `markdownConverter.ts` — regex `%%BID:xxx%%` akceptuje dowolny format ID (nie tylko UUID); `BlockIdExtension` — split na `STANDARD_BLOCK_TYPES` (addGlobalAttributes) i `CUSTOM_BLOCK_TYPES` (appendTransaction only) żeby naprawić "no id yet" na blokach NodeView; `AutomateScriptExtension` — `data-block-id` na `NodeViewWrapper`.
+- **MinisApiService** — odpowiedź 401 dispatches `window.dispatchEvent(new Event('minis:session-expired'))` zamiast hard redirect; **AuthContext** — nasłuchuje `minis:session-expired` i wywołuje `logout()` przez React.
+- **IoT pages** — kolumny ukryte na `xs` (`display: { xs: 'none', sm: 'table-cell' }`), status devices pokazuje last-seen timestamp.
 - **Wzorzec dostępu do serwisów**: strony i komponenty używają `const { aiService } = App.instance;` zamiast bezpośrednich importów singletonów. React contexty (useMqtt, useFilesystem, useNotification, useAuth) pozostają dla reaktywnego stanu UI.
 
 ### Aplikacja client (`app/client/`)
@@ -118,7 +125,24 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 - **data/**: katalog VFS root (pusty, tworzony automatycznie)
 - operations/: system, process, window, clipboard, shell, app, media
 - **requirements.txt**: paho-mqtt, **pygame>=2.5.0**, psutil, pyperclip, Pillow, pygetwindow, pycaw, comtypes, python-dotenv, **anthropic>=0.40.0**, **pyttsx3>=2.90**, winotify
+- **entities/** (`app/client/entities/__init__.py`): Python mirror TypeScript IotEntity hierarchy. Klasy: `IotEntity` (base, `to_dict()`, `handle_command()`), `SensorEntity` (unit), `BinarySensorEntity` (on/off_label), `SwitchEntity` (callback bool), `NumberEntity` (min/max/step/unit, callback float), `ButtonEntity` (callback void), `SelectEntity` (options list, callback str). Rejestracja: `agent.add_entity(entity)` przed `start()` — encje dołączane do hello payload i auto-dispatchowane gdy nadchodzi command z pasującym id.
+- `ClientAgent.send_telemetry(metrics)` — publikuje odczyty sensorów na topic TELEMETRY; `metrics`: lista `(key, value)` lub `(key, value, unit)` tupli.
 - Dawna nazwa: `app/desktop/` (przemianowana)
+
+### Aplikacja mycastle-mobile (`app/mycastle-mobile/`)
+- React Native (Expo ~52), WebView wrapper na `http://192.168.0.207:1894`
+- Pełna aplikacja MyCastle na telefon — back button obsługuje historię WebView
+- `jsEngine: "jsc"` (wyłączony Hermes — kompatybilność z ARM64 Docker build)
+- Build: `docker compose -f docker-compose.cli.yml run --rm android /workspace/app/mycastle-mobile/build.sh`
+- APK: `app/mycastle-mobile/android/app/build/outputs/apk/release/app-release.apk`
+- **Kluczowe patche w build.sh**: AndroidManifest `usesCleartextTraffic=true` (HTTP na lokalnej sieci), Gradle init script suppress Compose Kotlin version check (expo-modules-core 2.2.3 wymaga Kotlin 1.9.25, generowany projekt ma 1.9.24)
+
+### Aplikacja mycastle-watch (`app/mycastle-watch/`)
+- React Native (Expo ~52), WebView wrapper na `http://192.168.0.207:1894/watch`
+- Przeznaczona dla Samsung Galaxy Watch 7 (Wear OS) — instalacja przez Wear Installer 2 lub ADB WiFi
+- Build: `docker compose -f docker-compose.cli.yml run --rm watch /workspace/app/mycastle-watch/build.sh`
+- APK: `app/mycastle-watch/android/app/build/outputs/apk/release/app-release.apk`
+- Te same patche co mycastle-mobile (cleartext + Compose Kotlin suppression)
 
 ### Aplikacja demo-scene-3d (`app/demo-scene-3d/`)
 - React + Three.js demo, Vite, depends on core-scene3d, ui-core, ui-components-scene3d
@@ -134,10 +158,10 @@ mycastle/                           # Root monorepo
 ├── vitest.config.ts                # Root vitest config
 ├── playwright.config.ts            # E2E test config (auto-start backends, baseURL mycastle-web)
 ├── docker-compose.yml              # Coolify deployment (backend + web)
-├── docker-compose.cli.yml          # Build CLI tool images (arduino/pico/pygame/android); `docker compose -f docker-compose.cli.yml build`
+├── docker-compose.cli.yml          # Build CLI tool images (arduino/pico/pygame/android/watch); services: android, watch (używają tego samego mycastle-android:local image)
 ├── docker/
 │   ├── Dockerfile.cli              # Multi-target: arduino / pico / pygame (z pygbag)
-│   └── Dockerfile.android          # Android build environment
+│   └── Dockerfile.android          # Android build environment (Ubuntu 24.04, Node 20, JDK 17, Android SDK 34, multiarch amd64+arm64 dla QEMU)
 ├── .npmrc
 │
 ├── packages/
@@ -206,6 +230,16 @@ mycastle/                           # Root monorepo
 │   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
 │   │   ├── vite.config.ts          # Dev port: 1895, VitePWA, path aliases (@, @modules, @components, @pages)
 │   │   └── package.json
+│   ├── mycastle-mobile/            # React Native WebView app (telefon) → http://192.168.0.207:1894
+│   │   ├── App.tsx                 # WebView + back button handler
+│   │   ├── app.json                # Expo config (jsEngine:jsc, usesCleartextTraffic)
+│   │   ├── build.sh                # Build APK w Docker (cleartext patch, Kotlin compat)
+│   │   └── package.json
+│   ├── mycastle-watch/             # React Native WebView app (zegarek) → http://192.168.0.207:1894/watch
+│   │   ├── App.tsx                 # WebView + back button handler
+│   │   ├── app.json                # Expo config
+│   │   ├── build.sh                # Build APK w Docker
+│   │   └── package.json
 │   ├── demo-scene-3d/              # Scene3D demo app
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
@@ -254,6 +288,8 @@ mycastle/                           # Root monorepo
 - **Generate docs:** `pnpm gendocs` (JSON+HTML+Markdown), `pnpm gendocs:html`, `pnpm gendocs:md`
 - **Sync data (files):** `pnpm sync:push [--force]` (local→server, wyklucza iot.db + Arduino build/libs), `pnpm sync:pull [--force]` (server→local)
 - **Sync data (SQLite):** `pnpm sync:db-push` (local iot.db → server via sqlite3 .backup + scp), `pnpm sync:db-pull` (server iot.db → local)
+- **Build APK (mobile):** `docker compose -f docker-compose.cli.yml run --rm android /workspace/app/mycastle-mobile/build.sh`
+- **Build APK (watch):** `docker compose -f docker-compose.cli.yml run --rm watch /workspace/app/mycastle-watch/build.sh`
 - **Docker (MyCastle):** `docker compose build && docker compose up -d`
 - **Docker (Scene3D):** `docker build -f app/demo-scene-3d/Dockerfile -t demo-scene-3d .`
 - **Docker (Docs):** `docker build -f docs/Dockerfile -t mycastle-docs .`

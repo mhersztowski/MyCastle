@@ -39,6 +39,15 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.android
+    volumes:
+      - .:/workspace
+    privileged: true
+
+  watch:
+    image: mycastle-android:local
+    volumes:
+      - .:/workspace
+    privileged: true
 
 volumes:
   android-sdk-cache:

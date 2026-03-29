@@ -135,8 +135,8 @@ function IotDashboardPage() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [refreshTelemetry, cards.length]);
 
-  const getStatus = (sn: string, name: string) =>
-    (statuses.find((s) => s.deviceId === sn) ?? statuses.find((s) => s.deviceId === name))?.status ?? 'UNKNOWN';
+  const getStatus = (name: string) =>
+    statuses.find((s) => s.deviceId === name)?.status ?? 'UNKNOWN';
 
   const statusColor = (status: string) => {
     switch (status) {
@@ -189,7 +189,7 @@ function IotDashboardPage() {
 
   const renderDeviceCard = (cardData: DeviceCardData) => {
     const { device, config, latest, history, isShared, ownerUserId } = cardData;
-    const status = isShared ? 'UNKNOWN' : getStatus(device.sn, device.name);
+    const status = isShared ? 'UNKNOWN' : getStatus(device.name);
     const isOffline = status !== 'ONLINE';
     const entities = config?.entities ?? [];
     const hasEntities = entities.length > 0;

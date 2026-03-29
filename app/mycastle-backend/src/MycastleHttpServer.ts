@@ -1995,19 +1995,6 @@ const { password, ...safeBody } = body;
     await this.handleCrud(req, res, method, config, locId);
   }
 
-  /** Translates a device name to its SN (IoT deviceId).
-   *  MQTT topics use SN as deviceId, so all IoT storage (telemetry, presence, commands) is keyed by SN.
-   *  Falls back to deviceName if device has no SN or is not found. */
-  private async resolveIotId(userName: string, deviceName: string): Promise<string> {
-    try {
-      const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as Record<string, unknown>;
-      const devices = (data['devices'] || []) as Record<string, unknown>[];
-      const device = devices.find((d) => d['name'] === deviceName);
-      return (device?.['sn'] as string) || deviceName;
-    } catch {
-      return deviceName;
-    }
-  }
 
   private async handleDeviceMinisConfig(res: ServerResponse, userName: string, deviceName: string): Promise<void> {
     try {
@@ -2253,10 +2240,9 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
     }
-    const iotId = await this.resolveIotId(userName, deviceName);
     try {
       if (method === 'GET') {
-        const config = this.iotService.telemetry.getConfig(iotId);
+        const config = this.iotService.telemetry.getConfig(deviceName);
         if (!config) {
           this.sendJsonResponse(res, 404, { error: 'IoT config not found' });
           return;
@@ -2265,18 +2251,18 @@ const { password, ...safeBody } = body;
       } else if (method === 'PUT') {
         const body = await this.parseRequestBody(req) as Record<string, unknown>;
         const now = Date.now();
-        const existing = this.iotService.telemetry.getConfig(iotId);
+        const existing = this.iotService.telemetry.getConfig(deviceName);
         this.iotService.telemetry.upsertConfig({
-          deviceId: iotId,
+          deviceId: deviceName,
           userId: userName,
-          topicPrefix: (body.topicPrefix as string) ?? `minis/${userName}/${iotId}`,
+          topicPrefix: (body.topicPrefix as string) ?? `minis/${userName}/${deviceName}`,
           heartbeatIntervalSec: (body.heartbeatIntervalSec as number) ?? 60,
           capabilities: (body.capabilities as any[]) ?? [],
           entities: (body.entities as any[]) ?? [],
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         });
-        const config = this.iotService.telemetry.getConfig(iotId);
+        const config = this.iotService.telemetry.getConfig(deviceName);
         this.sendJsonResponse(res, 200, config);
       } else {
         this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
@@ -2288,7 +2274,7 @@ const { password, ...safeBody } = body;
 
   // --- IoT Telemetry ---
 
-  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string, isLatest: boolean): Promise<void> {
+  private async handleIotTelemetry(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string, isLatest: boolean): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
@@ -2297,17 +2283,16 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
       return;
     }
-    const iotId = await this.resolveIotId(userName, deviceName);
     try {
       if (isLatest) {
-        const record = this.iotService.telemetry.getLatest(iotId);
+        const record = this.iotService.telemetry.getLatest(deviceName);
         this.sendJsonResponse(res, 200, record ?? { message: 'No telemetry data' });
       } else {
         const url = new URL(req.url!, `http://localhost`);
         const from = parseInt(url.searchParams.get('from') ?? '0', 10);
         const to = parseInt(url.searchParams.get('to') ?? String(Date.now()), 10);
         const limit = parseInt(url.searchParams.get('limit') ?? '1000', 10);
-        const records = this.iotService.telemetry.getHistory(iotId, from, to, limit);
+        const records = this.iotService.telemetry.getHistory(deviceName, from, to, limit);
         this.sendJsonResponse(res, 200, { items: records });
       }
     } catch (err) {
@@ -2317,17 +2302,16 @@ const { password, ...safeBody } = body;
 
   // --- IoT Commands ---
 
-  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName: string): Promise<void> {
+  private async handleIotCommands(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string): Promise<void> {
     if (!this.iotService) {
       this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
       return;
     }
-    const iotId = await this.resolveIotId(userName, deviceName);
     try {
       if (method === 'GET') {
         const url = new URL(req.url!, `http://localhost`);
         const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
-        const commands = this.iotService.commands.listCommands(iotId, limit);
+        const commands = this.iotService.commands.listCommands(deviceName, limit);
         this.sendJsonResponse(res, 200, { items: commands });
       } else if (method === 'POST') {
         const body = await this.parseRequestBody(req) as Record<string, unknown>;
@@ -2335,7 +2319,7 @@ const { password, ...safeBody } = body;
           this.sendJsonResponse(res, 400, { error: 'Command name required' });
           return;
         }
-        const command = this.iotService.sendCommand(iotId, body.name as string, (body.payload as Record<string, unknown>) ?? {});
+        const command = this.iotService.sendCommand(deviceName, body.name as string, (body.payload as Record<string, unknown>) ?? {});
         this.sendJsonResponse(res, 201, command);
       } else {
         this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });

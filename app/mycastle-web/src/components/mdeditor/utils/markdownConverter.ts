@@ -210,6 +210,19 @@ const turndownService = new TurndownService({
   strongDelimiter: '**',
 });
 
+// Preserve relative hrefs — DOMParser resolves relative URLs to absolute,
+// but getAttribute('href') returns the original attribute value.
+// We use it explicitly to avoid losing relative workspace links.
+turndownService.addRule('links', {
+  filter: (node) => node.nodeName === 'A' && !!(node as HTMLAnchorElement).getAttribute('href'),
+  replacement: (content, node) => {
+    const href = (node as HTMLAnchorElement).getAttribute('href') ?? '';
+    const title = (node as HTMLAnchorElement).getAttribute('title');
+    const titlePart = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
+    return `[${content}](${href}${titlePart})`;
+  },
+});
+
 turndownService.addRule('taskListItems', {
   filter: (node) => {
     return (
@@ -850,8 +863,24 @@ export function markdownToHtml(markdown: string): string {
     return '';
   }
 
+  // Strip any stray %%BID:xxx%% literals that may appear in files saved by old/broken code
+  markdown = markdown.replace(/%%BID:[^%\n]*%%\n?/g, '');
+
+  // Protect <!-- bid:id --> block ID markers from showdown processing
+  // Accept any ID format (UUID or legacy slug)
+  const blockIds: string[] = [];
+  const markdownWithBlockIds = markdown.replace(
+    /^<!--\s*bid:([^\s>-][^\s>]*)?\s*-->[ \t]*$/gm,
+    (_, id) => {
+      if (!id) return '';
+      const ph = `%%BID${blockIds.length}%%`;
+      blockIds.push(id);
+      return ph;
+    },
+  );
+
   // First, protect automate script blocks (code fences) from showdown processing
-  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdown);
+  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithBlockIds);
   const { result: markdownWithoutScripts, automateScripts } = JSON.parse(automateScriptDataStr);
 
   // Protect automate flow embeds from showdown processing
@@ -900,6 +929,21 @@ export function markdownToHtml(markdown: string): string {
 
   html = html.replace(/==([^=]+)==/g, '<mark>$1</mark>');
 
+  // Restore block IDs: apply each %%BIDn%% placeholder's UUID to the next block tag
+  if (blockIds.length > 0) {
+    // Placeholders may be wrapped in <p> by showdown
+    blockIds.forEach((id, i) => {
+      html = html
+        .replace(`<p>%%BID${i}%%</p>`, `%%BIDREADY:${id}%%`)
+        .replace(`%%BID${i}%%`, `%%BIDREADY:${id}%%`);
+    });
+    html = html.replace(
+      /%%BIDREADY:([^%]+)%%\s*(<(?:h[1-6]|p|ul|ol|blockquote|pre|table)[^>]*>)/gi,
+      (_, id, openTag) => openTag.replace(/^(<\w+)/, `$1 data-block-id="${id}"`),
+    );
+    html = html.replace(/%%BIDREADY:[^%]*%%/g, '');
+  }
+
   return html;
 }
 
@@ -908,10 +952,27 @@ export function htmlToMarkdown(html: string): string {
     return '';
   }
 
+  // Pre-process: extract data-block-id from top-level blocks and insert text placeholders
+  // (empty divs are skipped by Turndown's isBlank check, so we use <p> with text content)
+  let processedHtml = (() => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    Array.from(doc.body.children).forEach((el) => {
+      const id = el.getAttribute('data-block-id');
+      if (id) {
+        el.removeAttribute('data-block-id');
+        const marker = doc.createElement('p');
+        marker.textContent = `%%BID:${id}%%`;
+        doc.body.insertBefore(marker, el);
+      }
+    });
+    return doc.body.innerHTML;
+  })();
+
   // Pre-process: Replace UI form embeds with placeholders before Turndown
   const uiForms: { id: string; inline?: string }[] = [];
 
-  let processedHtml = html.replace(
+  processedHtml = processedHtml.replace(
     /<div[^>]*data-type="ui-form-embed"[^>]*data-form-id="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
     (_, formId) => {
       uiForms.push({ id: formId });
@@ -987,6 +1048,10 @@ export function htmlToMarkdown(html: string): string {
   processedHtml = preprocessColumnContent(processedHtml);
 
   let markdown = turndownService.turndown(processedHtml);
+
+  // Post-process: replace %%BID:id%% text placeholders with <!-- bid:id --> comments
+  // Accept any ID format (UUID or legacy slug) so old documents round-trip correctly
+  markdown = markdown.replace(/%%BID:([^%\n]+)%%/g, (_, id) => `<!-- bid:${id} -->`);
 
   // Post-process: Restore UI form embeds as @[uiform:...] syntax
   uiForms.forEach((form, index) => {

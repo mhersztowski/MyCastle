@@ -29,12 +29,21 @@ interface MdFile {
 // Returns path for URL (relative to MD_DIR, without MD_DIR/ prefix)
 function collectMdFiles(tree: DirectoryTree): MdFile[] {
   const prefix = `${MD_DIR}/`;
-  return (tree.children ?? [])
-    .filter(child => child.type === 'file' && child.name.endsWith('.md'))
-    .map(child => {
-      const urlPath = child.path.startsWith(prefix) ? child.path.slice(prefix.length) : child.path;
-      return { name: child.name.slice(0, -3), path: urlPath, folder: '' };
-    });
+  const results: MdFile[] = [];
+  function walk(node: DirectoryTree) {
+    for (const child of node.children ?? []) {
+      if (child.type === 'file' && child.name.endsWith('.md')) {
+        const urlPath = child.path.startsWith(prefix) ? child.path.slice(prefix.length) : child.path;
+        const parts = urlPath.split('/');
+        const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+        results.push({ name: child.name.slice(0, -3), path: urlPath, folder });
+      } else if (child.type === 'directory') {
+        walk(child);
+      }
+    }
+  }
+  walk(tree);
+  return results;
 }
 
 // Prefix a URL-relative path with MD_DIR for MQTT operations
@@ -78,6 +87,7 @@ const WorkspaceMdPage: React.FC = () => {
   const [loadingFile, setLoadingFile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [treeVersion, setTreeVersion] = useState(0);
 
   const isFavorite = favorites.includes(filePath);
 
@@ -145,7 +155,7 @@ const WorkspaceMdPage: React.FC = () => {
       .catch(console.error)
       .finally(() => setLoadingTree(false));
     loadFavorites();
-  }, [isConnected, listDirectory, loadFavorites]);
+  }, [isConnected, listDirectory, loadFavorites, treeVersion]);
 
   const loadFile = useCallback(async (path: string) => {
     if (!path) return;
@@ -171,6 +181,12 @@ const WorkspaceMdPage: React.FC = () => {
     if (filePath) loadFile(filePath);
     else setContent('');
   }, [filePath, loadFile]);
+
+  const handleCreatePage = useCallback(async (path: string) => {
+    const title = path.replace(/\.md$/, '').split('/').pop() ?? path;
+    await writeFile(mqttPath(path), `# ${title}\n`);
+    setTreeVersion(v => v + 1);
+  }, [writeFile]);
 
   const handleSave = useCallback(async (markdown: string) => {
     if (!filePath) return;
@@ -287,7 +303,9 @@ const WorkspaceMdPage: React.FC = () => {
                   <FileIcon sx={{ fontSize: 14, mr: 1, color: 'text.secondary', flexShrink: 0 }} />
                   <ListItemText
                     primary={file.name}
+                    secondary={file.folder || undefined}
                     primaryTypographyProps={{ variant: 'body2', noWrap: true, fontSize: 13 }}
+                    secondaryTypographyProps={{ variant: 'caption', noWrap: true, fontSize: 10 }}
                   />
                 </ListItemButton>
               ))}
@@ -312,6 +330,7 @@ const WorkspaceMdPage: React.FC = () => {
             initialContent={content}
             onSave={handleSave}
             onLinkClick={handleLinkClick}
+            onCreatePage={handleCreatePage}
           />
         )}
       </Box>

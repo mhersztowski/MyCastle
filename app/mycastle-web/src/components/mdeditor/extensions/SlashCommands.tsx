@@ -6,6 +6,7 @@ import React, {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -36,12 +37,19 @@ import FolderIcon from '@mui/icons-material/Folder';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import TerminalIcon from '@mui/icons-material/Terminal';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import LinkIcon from '@mui/icons-material/Link';
 
 interface CommandItem {
   title: string;
   description: string;
   icon: React.ReactNode;
   command: (props: { editor: any; range: any }) => void;
+}
+
+export interface SlashCommandsOptions {
+  suggestion: Omit<SuggestionOptions, 'editor'>;
+  createPageRef?: { current: ((path: string) => Promise<void>) | undefined };
 }
 
 const commands: CommandItem[] = [
@@ -123,6 +131,26 @@ const commands: CommandItem[] = [
     icon: <HorizontalRuleIcon />,
     command: ({ editor, range }) => {
       editor.chain().focus().deleteRange(range).setHorizontalRule().run();
+    },
+  },
+  {
+    title: 'Link',
+    description: 'Insert a hyperlink',
+    icon: <LinkIcon />,
+    command: ({ editor, range }) => {
+      const url = window.prompt('URL');
+      if (!url) return;
+      const text = window.prompt('Link text', url) ?? url;
+      const from = range.from;
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContentAt(from, text)
+        .setTextSelection({ from, to: from + text.length })
+        .setLink({ href: url })
+        .setTextSelection(from + text.length)
+        .run();
     },
   },
   {
@@ -341,6 +369,8 @@ interface CommandListRef {
 const CommandList = forwardRef<CommandListRef, CommandListProps>(
   ({ items, command }, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
     const selectItem = (index: number) => {
       const item = items[index];
@@ -365,6 +395,21 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
       setSelectedIndex(0);
     }, [items]);
 
+    useEffect(() => {
+      const container = containerRef.current;
+      const item = itemRefs.current[selectedIndex];
+      if (!container || !item) return;
+      const itemTop = item.offsetTop;
+      const itemBottom = itemTop + item.offsetHeight;
+      const containerTop = container.scrollTop;
+      const containerBottom = containerTop + container.clientHeight;
+      if (itemTop < containerTop) {
+        container.scrollTop = itemTop;
+      } else if (itemBottom > containerBottom) {
+        container.scrollTop = itemBottom - container.clientHeight;
+      }
+    }, [selectedIndex]);
+
     useImperativeHandle(ref, () => ({
       onKeyDown: ({ event }: { event: KeyboardEvent }) => {
         if (event.key === 'ArrowUp') {
@@ -385,6 +430,7 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
 
     return (
       <Paper
+        ref={containerRef}
         elevation={4}
         sx={{
           width: 280,
@@ -401,7 +447,7 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
         <List dense disablePadding>
           {items.length > 0 ? (
             items.map((item, index) => (
-              <ListItem key={item.title} disablePadding>
+              <ListItem key={item.title} disablePadding ref={(el) => { itemRefs.current[index] = el as HTMLDivElement | null; }}>
                 <ListItemButton
                   selected={index === selectedIndex}
                   onClick={() => selectItem(index)}
@@ -437,17 +483,44 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
 
 CommandList.displayName = 'CommandList';
 
-const suggestionConfig: Omit<SuggestionOptions, 'editor'> = {
-  char: '/',
-  command: ({ editor, range, props }) => {
-    props.command({ editor, range });
-  },
-  items: ({ query }) => {
-    return commands.filter((item) =>
-      item.title.toLowerCase().startsWith(query.toLowerCase())
-    );
-  },
-  render: () => {
+function buildSuggestionConfig(
+  createPageRef?: { current: ((path: string) => Promise<void>) | undefined }
+): Omit<SuggestionOptions, 'editor'> {
+  const pageCommand: CommandItem = {
+    title: 'Page',
+    description: 'Create and link a new page',
+    icon: <InsertDriveFileIcon color="primary" />,
+    command: ({ editor, range }) => {
+      const input = window.prompt('Page path (e.g. notes/my-page or my-page)');
+      if (!input) return;
+      const path = input.endsWith('.md') ? input : `${input}.md`;
+      const label = path.replace(/\.md$/, '').split('/').pop() ?? path;
+      const from = range.from;
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContentAt(from, label)
+        .setTextSelection({ from, to: from + label.length })
+        .setLink({ href: path })
+        .setTextSelection(from + label.length)
+        .run();
+      createPageRef?.current?.(path);
+    },
+  };
+
+  return {
+    char: '/',
+    command: ({ editor, range, props }) => {
+      props.command({ editor, range });
+    },
+    items: ({ query }) => {
+      const all = [pageCommand, ...commands];
+      return all.filter((item) =>
+        item.title.toLowerCase().startsWith(query.toLowerCase())
+      );
+    },
+    render: () => {
     let component: ReactRenderer | null = null;
     let popup: TippyInstance[] | null = null;
 
@@ -473,6 +546,16 @@ const suggestionConfig: Omit<SuggestionOptions, 'editor'> = {
           // iOS Safari fixes
           touch: true,
           hideOnClick: false,
+          onShow(instance) {
+            const vv = window.visualViewport;
+            if (!vv) return;
+            const update = () => instance.popperInstance?.update();
+            vv.addEventListener('resize', update);
+            (instance as any)._vvCleanup = () => vv.removeEventListener('resize', update);
+          },
+          onHide(instance) {
+            (instance as any)._vvCleanup?.();
+          },
           popperOptions: {
             strategy: 'fixed',
             modifiers: [
@@ -487,6 +570,31 @@ const suggestionConfig: Omit<SuggestionOptions, 'editor'> = {
                 options: {
                   boundary: 'viewport',
                   padding: 8,
+                },
+              },
+              // Keep popup above the virtual keyboard using Visual Viewport API
+              {
+                name: 'visualViewportFix',
+                enabled: true,
+                phase: 'beforeWrite' as const,
+                requires: ['computeStyles'],
+                fn({ state }: { state: any }) {
+                  const vv = window.visualViewport;
+                  if (!vv) return;
+                  const visibleBottom = vv.offsetTop + vv.height - 8;
+                  const styles = state.styles?.popper;
+                  if (!styles) return;
+                  const top = parseFloat(styles.top ?? '0');
+                  const popperHeight = state.rects?.popper?.height ?? 0;
+                  if (top + popperHeight > visibleBottom) {
+                    const refTop = state.rects?.reference?.top ?? top;
+                    const aboveTop = refTop - popperHeight - 8;
+                    if (aboveTop >= vv.offsetTop + 8) {
+                      styles.top = `${aboveTop}px`;
+                    } else {
+                      styles.top = `${Math.max(vv.offsetTop + 8, visibleBottom - popperHeight)}px`;
+                    }
+                  }
                 },
               },
             ],
@@ -521,14 +629,16 @@ const suggestionConfig: Omit<SuggestionOptions, 'editor'> = {
       },
     };
   },
-};
+  };
+}
 
-const SlashCommands = Extension.create({
+const SlashCommands = Extension.create<SlashCommandsOptions>({
   name: 'slashCommands',
 
   addOptions() {
     return {
-      suggestion: suggestionConfig,
+      suggestion: buildSuggestionConfig(),
+      createPageRef: undefined,
     };
   },
 
@@ -536,7 +646,7 @@ const SlashCommands = Extension.create({
     return [
       Suggestion({
         editor: this.editor,
-        ...this.options.suggestion,
+        ...buildSuggestionConfig(this.options.createPageRef),
       }),
     ];
   },

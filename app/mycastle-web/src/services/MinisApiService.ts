@@ -51,7 +51,6 @@ export interface GithubModuleEntry {
   arduinoOptions?: Record<string, string>;
 }
 
-const STORAGE_KEY = 'minis_current_user';
 
 class MinisApiService {
   private authToken: string | null = null;
@@ -83,8 +82,7 @@ class MinisApiService {
     });
 
     if (res.status === 401) {
-      localStorage.removeItem(STORAGE_KEY);
-      window.location.href = '/';
+      window.dispatchEvent(new Event('minis:session-expired'));
       throw new Error('Session expired');
     }
 

@@ -24,6 +24,7 @@ import UIViewerPage from './pages/viewer/UIViewerPage';
 
 // Minis full-page routes (no layout)
 import LoginPage from './pages/LoginPage';
+import WatchPage from './pages/WatchPage';
 import MinisMonacoEditorPage from './pages/editor/MinisMonacoEditorPage';
 import MinisProjectPage from './pages/minis-user/ProjectPage';
 import MinisUPythonProjectPage from './pages/minis-user/UPythonProjectPage';
@@ -76,7 +77,13 @@ import { usePageHooks } from './modules/automate/hooks/usePageHooks';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
-  if (!currentUser) return <Navigate to="/" replace />;
+  const location = useLocation();
+  if (!currentUser) {
+    if (location.pathname !== '/') {
+      sessionStorage.setItem('auth_redirect', location.pathname + location.search);
+    }
+    return <Navigate to="/" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -107,6 +114,7 @@ function AppRoot() {
 
         {/* Public full-page routes */}
         <Route path="/" element={<HomePage />} />
+        <Route path="/watch" element={<RequireAuth><WatchPage /></RequireAuth>} />
         <Route path="/login/:userName" element={<LoginPage />} />
         <Route path="/user/:userName/editor/monaco/*" element={<RequireAuth><MinisMonacoEditorPage /></RequireAuth>} />
         <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage /></RequireAuth>} />

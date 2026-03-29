@@ -52,14 +52,14 @@ function IotDevicesPage() {
     return () => clearInterval(interval);
   }, [load]);
 
-  const findStatus = (sn: string, name: string) =>
-    statuses.find((s) => s.deviceId === sn) ?? statuses.find((s) => s.deviceId === name);
+  const findStatus = (name: string) =>
+    statuses.find((s) => s.deviceId === name);
 
-  const getStatus = (sn: string, name: string) =>
-    findStatus(sn, name)?.status ?? 'OFFLINE';
+  const getStatus = (name: string) =>
+    findStatus(name)?.status ?? 'OFFLINE';
 
-  const getLastSeen = (sn: string, name: string) => {
-    const info = findStatus(sn, name);
+  const getLastSeen = (name: string) => {
+    const info = findStatus(name);
     if (!info || !info.lastSeenAt) return '-';
     return new Date(info.lastSeenAt).toLocaleString();
   };
@@ -103,12 +103,12 @@ function IotDevicesPage() {
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{device.sn || '-'}</TableCell>
                 <TableCell>
                   <Chip
-                    label={getStatus(device.sn, device.name)}
-                    color={statusColor(getStatus(device.sn, device.name)) as any}
+                    label={getStatus(device.name)}
+                    color={statusColor(getStatus(device.name)) as any}
                     size="small"
                   />
                 </TableCell>
-                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{getLastSeen(device.sn, device.name)}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{getLastSeen(device.name)}</TableCell>
               </TableRow>
             ))}
             {!loading && devices.length === 0 && (

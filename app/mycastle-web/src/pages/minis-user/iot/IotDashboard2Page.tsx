@@ -101,16 +101,13 @@ function EntityTile({ card, entity, metric, isOnline, isSending, onCommand }: En
 
   const handleClick = () => {
     if (!canToggle) return;
-    onCommand(card.ownerUserId ?? '', card.deviceId, 'set_state', {
-      entity_id: card.entityId,
-      state: !isActive,
-    });
+    onCommand(card.ownerUserId ?? '', card.deviceId, card.entityId, { state: !isActive });
   };
 
   const handleButtonPress = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isOnline || isSending) return;
-    onCommand(card.ownerUserId ?? '', card.deviceId, 'press', { entity_id: card.entityId });
+    onCommand(card.ownerUserId ?? '', card.deviceId, card.entityId, {});
   };
 
   const activeBg = isSwitch && isActive ? 'rgba(255, 193, 7, 0.12)' : undefined;

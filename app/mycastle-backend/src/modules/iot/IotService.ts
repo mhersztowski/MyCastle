@@ -107,29 +107,34 @@ export class IotService {
   }
 
   // Called when MQTT message arrives on minis/+/+/hello
-  // Device announces itself on connect — immediately mark online and sync extensions in-memory.
-  // Extensions are not persisted: the device re-announces on every reconnect.
-  handleHello(userId: string, deviceId: string, payload: { uptime?: number; extensions?: Array<{ type: string; enabled: boolean; options?: Record<string, unknown> }> }): void {
+  // Device announces itself on connect — mark online, persist entities, sync extensions in-memory.
+  handleHello(userId: string, deviceId: string, payload: { uptime?: number; extensions?: Array<{ type: string; enabled: boolean; options?: Record<string, unknown> }>; entities?: unknown[] }): void {
     console.log(`[IoT] hello: userId=${userId} deviceId=${deviceId}`);
-    const config = this.telemetry.getConfig(deviceId);
-    const heartbeatSec = config?.heartbeatIntervalSec ?? 60;
-    this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
+    const existing = this.telemetry.getConfig(deviceId);
+    const heartbeatSec = existing?.heartbeatIntervalSec ?? 60;
+    const topicPrefix = existing?.topicPrefix ?? `minis/${userId}/${deviceId}`;
+    const now = Date.now();
 
-    if (payload.extensions?.length) {
-      const topicPrefix = config?.topicPrefix ?? `minis/${userId}/${deviceId}`;
-      this.extensions.syncFromConfig({
+    // Persist entities if the device sent any — entities are re-declared on every reconnect
+    if (payload.entities?.length || payload.extensions?.length) {
+      const merged = {
         deviceId,
         userId,
         topicPrefix,
         heartbeatIntervalSec: heartbeatSec,
-        capabilities: config?.capabilities ?? [],
-        extensions: payload.extensions,
-        createdAt: config?.createdAt ?? Date.now(),
-        updatedAt: Date.now(),
-      });
-    } else if (config) {
-      this.extensions.syncFromConfig(config);
+        capabilities: existing?.capabilities ?? [],
+        entities: (payload.entities ?? existing?.entities ?? []) as import('@mhersztowski/core').IotEntity[],
+        extensions: payload.extensions ?? existing?.extensions,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      this.telemetry.upsertConfig(merged);
+      this.extensions.syncFromConfig(merged);
+    } else if (existing) {
+      this.extensions.syncFromConfig(existing);
     }
+
+    this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
   }
 
   // Called when MQTT message arrives on minis/+/+/heartbeat

@@ -117,7 +117,7 @@ function SwitchWidget({ entity, metric, onCommand, disabled }: SwitchWidgetProps
   const isOn = metric ? Boolean(metric.value) : false;
 
   const handleToggle = () => {
-    onCommand(entity.id, 'set_state', { entity_id: entity.id, state: !isOn });
+    onCommand(entity.id, entity.id, { state: !isOn });
   };
 
   return (
@@ -155,7 +155,7 @@ function NumberWidget({ entity, metric, onCommand, disabled }: NumberWidgetProps
     setLocalValue(v);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      onCommand(entity.id, 'set_value', { entity_id: entity.id, value: v });
+      onCommand(entity.id, entity.id, { value: v });
     }, 500);
   }, [entity.id, onCommand]);
 
@@ -199,7 +199,7 @@ function ButtonWidget({ entity, onCommand, disabled }: ButtonWidgetProps) {
           size="small"
           variant="outlined"
           disabled={disabled}
-          onClick={() => onCommand(entity.id, 'press', { entity_id: entity.id })}
+          onClick={() => onCommand(entity.id, entity.id, {})}
         >
           Press
         </Button>
@@ -235,7 +235,7 @@ function SelectWidget({ entity, metric, onCommand, disabled }: SelectWidgetProps
         <FormControl size="small" sx={{ minWidth: 100 }}>
           <Select
             value={currentOption}
-            onChange={(e) => onCommand(entity.id, 'set_option', { entity_id: entity.id, option: e.target.value })}
+            onChange={(e) => onCommand(entity.id, entity.id, { option: e.target.value })}
             disabled={disabled}
             size="small"
           >

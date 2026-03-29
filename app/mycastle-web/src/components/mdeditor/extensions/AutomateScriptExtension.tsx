@@ -329,7 +329,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const hasOutput = output.length > 0 || logs.length > 0 || !!error || result !== undefined;
 
   return (
-    <NodeViewWrapper>
+    <NodeViewWrapper data-block-id={node.attrs.blockId || undefined}>
       <Paper
         elevation={selected ? 3 : 1}
         sx={{

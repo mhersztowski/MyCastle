@@ -5,7 +5,7 @@ export class JwtService {
   private secret: string;
   private ttlSeconds: number;
 
-  constructor(secret: string, ttlSeconds = 86400) {
+  constructor(secret: string, ttlSeconds = 604800) {
     this.secret = secret;
     this.ttlSeconds = ttlSeconds;
   }

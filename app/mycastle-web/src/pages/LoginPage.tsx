@@ -19,7 +19,13 @@ function LoginPage() {
     setError(null);
     try {
       await login(userName, password);
-      navigate(`/user/${userName}/main`);
+      const redirect = sessionStorage.getItem('auth_redirect');
+      if (redirect) {
+        sessionStorage.removeItem('auth_redirect');
+        navigate(redirect);
+      } else {
+        navigate(`/user/${userName}/main`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

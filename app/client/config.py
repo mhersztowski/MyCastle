@@ -20,6 +20,7 @@ TOPICS = {
     # device → server
     "HELLO":                   f"{TOPIC_PREFIX}/hello",
     "HEARTBEAT":               f"{TOPIC_PREFIX}/heartbeat",
+    "TELEMETRY":               f"{TOPIC_PREFIX}/telemetry",
     "COMMAND_ACK":             f"{TOPIC_PREFIX}/command/ack",
     "EXT_VFS_RES":             f"{TOPIC_PREFIX}/ext/vfs/res",
     "EXT_VKBD_RES":            f"{TOPIC_PREFIX}/ext/vkbd/res",
@@ -41,7 +42,10 @@ EXTENSIONS = [
 ]
 
 # --- Heartbeat ---
-HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))   # seconds
+HEARTBEAT_INTERVAL  = int(os.getenv("HEARTBEAT_INTERVAL",  "30"))  # seconds
+
+# --- Telemetry ---
+TELEMETRY_INTERVAL  = int(os.getenv("TELEMETRY_INTERVAL",  "30"))  # seconds
 
 # --- VFS extension ---
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))

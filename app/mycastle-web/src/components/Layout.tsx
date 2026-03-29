@@ -78,14 +78,8 @@ function extractUserName(pathname: string): string {
 
 function Layout({ children, fullBleed }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    Electronics: true,
-    IoT: true,
-    Pim: true,
-    Server: true,
-    Tools: true,
-    Settings: false,
-  });
+  const [tabletOpen, setTabletOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser, isAdmin, impersonating } = useAuth();
@@ -198,7 +192,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
                       <ListItemButton
                         sx={{ pl: 4 }}
                         selected={location.pathname === child.path}
-                        onClick={() => { navigate(child.path!); setMobileOpen(false); }}
+                        onClick={() => { navigate(child.path!); setMobileOpen(false); setTabletOpen(false); }}
                       >
                         <ListItemIcon sx={{ minWidth: 32 }}>{child.icon}</ListItemIcon>
                         <ListItemText primary={child.text} />
@@ -212,7 +206,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             <ListItem key={item.text} disablePadding>
               <ListItemButton
                 selected={location.pathname === item.path}
-                onClick={() => { navigate(item.path!); setMobileOpen(false); }}
+                onClick={() => { navigate(item.path!); setMobileOpen(false); setTabletOpen(false); }}
               >
                 <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
                 <ListItemText primary={item.text} />
@@ -240,11 +234,21 @@ function Layout({ children, fullBleed }: LayoutProps) {
           }}
         >
           <Toolbar>
+            {/* Mobile hamburger — left drawer */}
             <IconButton
               color="inherit"
               edge="start"
               onClick={() => setMobileOpen(!mobileOpen)}
-              sx={{ mr: 2, display: { sm: 'none' } }}
+              sx={{ mr: 2, display: { xs: 'flex', sm: 'none' } }}
+            >
+              <MenuIcon />
+            </IconButton>
+            {/* Tablet trigger — right drawer */}
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setTabletOpen(!tabletOpen)}
+              sx={{ mr: 2, display: { xs: 'none', sm: 'flex', lg: 'none' } }}
             >
               <MenuIcon />
             </IconButton>
@@ -258,7 +262,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
 
         {/* Body row: sidebar + content */}
         <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {/* Temporary drawer for mobile */}
+          {/* Mobile — temporary left drawer */}
           <Drawer
             variant="temporary"
             open={mobileOpen}
@@ -272,11 +276,26 @@ function Layout({ children, fullBleed }: LayoutProps) {
             {drawer}
           </Drawer>
 
-          {/* Permanent sidebar for desktop — relative positioning so it fits the flex layout */}
+          {/* Tablet — temporary left drawer */}
+          <Drawer
+            variant="temporary"
+            anchor="left"
+            open={tabletOpen}
+            onClose={() => setTabletOpen(false)}
+            ModalProps={{ keepMounted: true }}
+            sx={{
+              display: { xs: 'none', sm: 'block', lg: 'none' },
+              '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            }}
+          >
+            {drawer}
+          </Drawer>
+
+          {/* Desktop — permanent left sidebar */}
           <Box
             component="nav"
             sx={{
-              display: { xs: 'none', sm: 'flex' },
+              display: { xs: 'none', lg: 'flex' },
               flexDirection: 'column',
               width: drawerWidth,
               flexShrink: 0,

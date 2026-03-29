@@ -34,7 +34,7 @@ export function GlobalWindow({
   defaultHeight = 600,
 }: GlobalWindowProps) {
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isMobile = useMediaQuery(theme.breakpoints.down('lg'));
   const { savedConfigs, layoutVersion, registerWindow, registerTitle } = useGlobalWindows();
   const initConfig = windowName ? savedConfigs.get(windowName) : undefined;
   const [pos, setPos] = useState(initConfig?.pos ?? { x: 100, y: 80 });

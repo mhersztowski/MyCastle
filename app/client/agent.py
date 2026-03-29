@@ -9,9 +9,11 @@ import threading
 import time
 
 import paho.mqtt.client as mqtt
+import psutil
 
 import config
 import operations
+from entities import IotEntity
 from extensions.vfs import VfsExtension
 from extensions.virtual_keyboard import VirtualKeyboardExtension
 from extensions.virtual_mouse import VirtualMouseExtension
@@ -40,6 +42,8 @@ class ClientAgent:
         self.loop = asyncio.new_event_loop()
         self._start_time = time.time()
         self._heartbeat_timer: threading.Timer | None = None
+        self._telemetry_timer: threading.Timer | None = None
+        self._entities: dict[str, IotEntity] = {}
 
         self.vfs = VfsExtension(
             root_dir=config.DATA_DIR,
@@ -66,6 +70,36 @@ class ClientAgent:
             )
         self.smart_display_ext = display
 
+    # --- Entity registration ---
+
+    def add_entity(self, entity: IotEntity) -> None:
+        """Register an IotEntity before start().
+
+        Entities are announced in the hello message. Writable entities
+        (Switch, Number, Button, Select) intercept incoming commands whose
+        name matches the entity id and auto-acknowledge them.
+
+        Read-only entities (Sensor, BinarySensor) are metadata only — push
+        their values via send_telemetry().
+        """
+        self._entities[entity.id] = entity
+
+    # --- Telemetry publishing ---
+
+    def send_telemetry(self, metrics: list[tuple]) -> None:
+        """Publish sensor readings to MyCastle.
+
+        :param metrics: list of ``(key, value)`` or ``(key, value, unit)`` tuples.
+        """
+        payload: dict = {"metrics": []}
+        for m in metrics:
+            entry: dict = {"key": m[0], "value": m[1]}
+            if len(m) >= 3:
+                entry["unit"] = m[2]
+            payload["metrics"].append(entry)
+        self.client.publish(config.TOPICS["TELEMETRY"], json.dumps(payload), qos=1)
+        log.debug(f"Telemetry sent: {[m[0] for m in metrics]}")
+
     # --- MQTT callbacks ---
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
@@ -86,6 +120,9 @@ class ClientAgent:
             log.info(f"Subscribed | prefix={config.TOPIC_PREFIX} | vfs root={config.DATA_DIR}")
             self._send_hello()
             self._send_heartbeat()
+            if self._entities:
+                self._publish_system_telemetry()
+                self._schedule_telemetry()
         else:
             log.error(f"Connection failed with code: {reason_code}")
 
@@ -118,14 +155,27 @@ class ClientAgent:
     # --- Command handling (maps MyCastle commands to operations) ---
 
     def _handle_command(self, data: dict):
-        cmd_id = data.get("id")
-        name = data.get("name")
+        cmd_id  = data.get("id")
+        name    = data.get("name")
         payload = data.get("payload", {})
 
         if not name:
             self._ack_command(cmd_id, "FAILED", "Missing 'name' in command")
             return
 
+        # Entity commands: auto-dispatch + auto-ack, skip operations
+        entity = self._entities.get(name)
+        if entity is not None:
+            log.info(f"Entity command: {name} (id={cmd_id})")
+            try:
+                entity.handle_command(payload)
+                self._ack_command(cmd_id, "ACKNOWLEDGED")
+            except Exception as e:
+                log.error(f"Entity command failed: {name} — {e}")
+                self._ack_command(cmd_id, "FAILED", str(e))
+            return
+
+        # Regular operations
         log.info(f"Executing command: {name} (id={cmd_id})")
         try:
             self.loop.run_until_complete(operations.execute(name, payload))
@@ -148,9 +198,14 @@ class ClientAgent:
         extensions = list(config.EXTENSIONS)
         if self.smart_display_ext is not None:
             extensions.append({"type": "smart-display", "enabled": True})
-        packet = {"uptime": uptime, "extensions": extensions}
+        packet: dict = {"uptime": uptime, "extensions": extensions}
+        if self._entities:
+            packet["entities"] = [e.to_dict() for e in self._entities.values()]
         self.client.publish(config.TOPICS["HELLO"], json.dumps(packet), qos=1)
-        log.info(f"Hello sent (extensions={[e['type'] for e in extensions]})")
+        log.info(
+            f"Hello sent (extensions={[e['type'] for e in extensions]}"
+            f" entities={list(self._entities.keys())})"
+        )
 
     # --- Heartbeat ---
 
@@ -166,6 +221,36 @@ class ClientAgent:
         )
         self._heartbeat_timer.daemon = True
         self._heartbeat_timer.start()
+
+    # --- Telemetry timer ---
+
+    def _schedule_telemetry(self):
+        if not self.running:
+            return
+        self._telemetry_timer = threading.Timer(
+            config.TELEMETRY_INTERVAL, self._telemetry_tick
+        )
+        self._telemetry_timer.daemon = True
+        self._telemetry_timer.start()
+
+    def _telemetry_tick(self):
+        if not self.running:
+            return
+        try:
+            self._publish_system_telemetry()
+        except Exception as e:
+            log.warning(f"Telemetry tick error: {e}")
+        self._schedule_telemetry()
+
+    def _publish_system_telemetry(self):
+        """Read system metrics and publish them. Called periodically by the timer."""
+        cpu = psutil.cpu_percent(interval=0.5)
+        ram = psutil.virtual_memory().percent
+        self.send_telemetry([
+            ("cpu",      cpu,        "%"),
+            ("ram",      ram,        "%"),
+            ("cpu_high", cpu >= 80),
+        ])
 
     # --- Lifecycle ---
 
@@ -201,6 +286,9 @@ class ClientAgent:
         if self._heartbeat_timer:
             self._heartbeat_timer.cancel()
             self._heartbeat_timer = None
+        if self._telemetry_timer:
+            self._telemetry_timer.cancel()
+            self._telemetry_timer = None
         self.client.loop_stop()
         self.client.disconnect()
         try:
@@ -208,6 +296,95 @@ class ClientAgent:
         except Exception:
             pass
         log.info("Client Agent stopped.")
+
+
+def _setup_example_entities(agent: ClientAgent) -> None:
+    """Register example IotEntities on the agent.
+
+    Read-only sensors (cpu, ram) are reported via the built-in telemetry
+    timer. Writable entities have callbacks that execute platform commands.
+    """
+    import subprocess
+    import platform
+
+    from entities import (
+        SensorEntity, BinarySensorEntity,
+        SwitchEntity, NumberEntity, ButtonEntity, SelectEntity,
+    )
+
+    # ── Read-only ─────────────────────────────────────────────────────────────
+    # Values sent automatically by _publish_system_telemetry() every
+    # TELEMETRY_INTERVAL seconds. Entity declarations tell MyCastle what
+    # unit and device class to use for the sparkline / history views.
+
+    agent.add_entity(SensorEntity("cpu", "CPU Usage", unit="%"))
+    agent.add_entity(SensorEntity("ram", "RAM Usage", unit="%"))
+    agent.add_entity(BinarySensorEntity(
+        "cpu_high", "CPU High Load",
+        on_label="High", off_label="Normal",
+    ))
+
+    # ── Writable ──────────────────────────────────────────────────────────────
+
+    def on_lock_screen():
+        if platform.system() == "Windows":
+            import ctypes
+            ctypes.windll.user32.LockWorkStation()
+        else:
+            subprocess.run(["loginctl", "lock-session"], check=False)
+
+    def on_mute(state: bool):
+        if platform.system() == "Windows":
+            # Toggle system mute via PowerShell (no external tools needed)
+            ps = (
+                "$obj = New-Object -ComObject WScript.Shell;"
+                "$obj.SendKeys([char]173)"  # VK_VOLUME_MUTE
+            )
+            subprocess.run(["powershell", "-Command", ps], check=False)
+        log.info(f"Mute toggled: {state}")
+
+    def on_volume(value: float):
+        vol = max(0, min(100, int(value)))
+        if platform.system() == "Windows":
+            ps = (
+                f"$wsh = New-Object -ComObject WScript.Shell;"
+                f"1..50 | ForEach-Object {{ $wsh.SendKeys([char]174) }};"  # mute all the way down
+                f"1..{vol // 2} | ForEach-Object {{ $wsh.SendKeys([char]175) }}"  # raise to target
+            )
+            subprocess.run(["powershell", "-Command", ps], check=False)
+        log.info(f"Volume set to {vol}%")
+
+    def on_power_plan(value: str):
+        plans = {
+            "balanced":    "381b4222-f694-41f0-9685-ff5bb260df2e",
+            "performance": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+            "power_saver": "a1841308-3541-4fab-bc81-f71556f20b4a",
+        }
+        guid = plans.get(value)
+        if guid and platform.system() == "Windows":
+            subprocess.run(["powercfg", "/setactive", guid], check=False)
+        log.info(f"Power plan set to {value}")
+
+    agent.add_entity(ButtonEntity(
+        "lock_screen", "Lock Screen",
+        callback=on_lock_screen,
+        device_class="restart",
+    ))
+    agent.add_entity(SwitchEntity(
+        "mute", "Mute Audio",
+        callback=on_mute,
+    ))
+    agent.add_entity(NumberEntity(
+        "volume", "Volume",
+        min_val=0, max_val=100, step=5,
+        unit="%",
+        callback=on_volume,
+    ))
+    agent.add_entity(SelectEntity(
+        "power_plan", "Power Plan",
+        options=["balanced", "performance", "power_saver"],
+        callback=on_power_plan,
+    ))
 
 
 def main():
@@ -220,6 +397,7 @@ def main():
         display = SmartDisplay()
 
     agent = ClientAgent(display=display)
+    _setup_example_entities(agent)
 
     def signal_handler(sig, frame):
         agent.stop()
