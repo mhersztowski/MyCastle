@@ -114,7 +114,7 @@ function AppRoot() {
 
         {/* Public full-page routes */}
         <Route path="/" element={<HomePage />} />
-        <Route path="/watch" element={<RequireAuth><WatchPage /></RequireAuth>} />
+        <Route path="/watch" element={<WatchPage />} />
         <Route path="/login/:userName" element={<LoginPage />} />
         <Route path="/user/:userName/editor/monaco/*" element={<RequireAuth><MinisMonacoEditorPage /></RequireAuth>} />
         <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage /></RequireAuth>} />
