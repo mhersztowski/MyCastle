@@ -5,7 +5,7 @@ import {
   Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
   Card, CardContent, IconButton, Divider,
 } from '@mui/material';
-import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse, Tv } from '@mui/icons-material';
+import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse, Tv, Monitor } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RemoteFS } from '@mhersztowski/core';
 import { VfsExplorer } from '@mhersztowski/web-client';
@@ -129,6 +129,7 @@ function IotDevicePage() {
   const hasVkbd = extensions.some((e) => e.type === 'vkbd');
   const hasVmouse = extensions.some((e) => e.type === 'vmouse');
   const hasSmartDisplay = extensions.some((e) => e.type === 'smart-display');
+  const hasDisplay = extensions.some((e) => e.type === 'display');
 
   const vfsProvider = useMemo(() => {
     if (!userName || !deviceName) return null;
@@ -164,6 +165,15 @@ function IotDevicePage() {
               onClick={() => navigate(`/user/${userName}/iot/smart-display/${deviceName}`)}
             >
               Smart Display
+            </Button>
+          )}
+          {hasDisplay && (
+            <Button
+              startIcon={<Monitor />}
+              variant="contained"
+              onClick={() => navigate(`/user/${userName}/iot/virtual-display/${deviceName}`)}
+            >
+              Virtual Display
             </Button>
           )}
           {hasVfs && vfsProvider && (

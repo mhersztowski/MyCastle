@@ -102,6 +102,13 @@ export class IotDatabase {
     } catch {
       // Column already exists
     }
+
+    // Migration: add extensions column to iot_device_config
+    try {
+      this.db.exec(`ALTER TABLE iot_device_config ADD COLUMN extensions TEXT NOT NULL DEFAULT '[]'`);
+    } catch {
+      // Column already exists
+    }
   }
 
   get raw(): Database.Database {

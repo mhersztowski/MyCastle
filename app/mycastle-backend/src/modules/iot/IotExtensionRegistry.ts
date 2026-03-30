@@ -5,6 +5,7 @@ import { VfsExtension } from './extensions/VfsExtension.js';
 import { VirtualKeyboardExtension } from './extensions/VirtualKeyboardExtension.js';
 import { VirtualMouseExtension } from './extensions/VirtualMouseExtension.js';
 import { SmartDisplayExtension } from './extensions/SmartDisplayExtension.js';
+import { DisplayExtension } from './extensions/DisplayExtension.js';
 
 /**
  * Manages IoT device extensions — one set per device.
@@ -104,6 +105,10 @@ export class IotExtensionRegistry {
     return this.get(deviceId, 'smart-display') as SmartDisplayExtension | undefined;
   }
 
+  getDisplay(deviceId: string): DisplayExtension | undefined {
+    return this.get(deviceId, 'display') as DisplayExtension | undefined;
+  }
+
   /** Returns the list of active extension types for a device. */
   getActiveExtensions(deviceId: string): string[] {
     const deviceExts = this.registry.get(deviceId);
@@ -152,6 +157,9 @@ export class IotExtensionRegistry {
         break;
       case 'smart-display':
         ext = new SmartDisplayExtension(deviceId, topicPrefix, this.publishFn);
+        break;
+      case 'display':
+        ext = new DisplayExtension(deviceId, topicPrefix, this.publishFn);
         break;
       default:
         console.warn(`[IotExtensionRegistry] Unknown extension type: ${type} (device=${deviceId})`);

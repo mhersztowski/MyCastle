@@ -33,14 +33,15 @@ export class TelemetryStore {
     );
 
     this.stmtConfigUpsert = db.prepare(
-      `INSERT INTO iot_device_config (device_id, user_id, topic_prefix, heartbeat_interval_sec, capabilities, entities, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO iot_device_config (device_id, user_id, topic_prefix, heartbeat_interval_sec, capabilities, entities, extensions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(device_id) DO UPDATE SET
          user_id = excluded.user_id,
          topic_prefix = excluded.topic_prefix,
          heartbeat_interval_sec = excluded.heartbeat_interval_sec,
          capabilities = excluded.capabilities,
          entities = excluded.entities,
+         extensions = excluded.extensions,
          updated_at = excluded.updated_at`,
     );
 
@@ -134,6 +135,7 @@ export class TelemetryStore {
       config.heartbeatIntervalSec,
       JSON.stringify(config.capabilities),
       JSON.stringify(config.entities ?? []),
+      JSON.stringify(config.extensions ?? []),
       config.createdAt,
       config.updatedAt,
     );
@@ -161,14 +163,16 @@ export class TelemetryStore {
   }
 
   private rowToConfig(row: any): IotDeviceConfig {
-    const entities = row.entities ? JSON.parse(row.entities) : [];
+    const entities   = row.entities   ? JSON.parse(row.entities)   : [];
+    const extensions = row.extensions ? JSON.parse(row.extensions) : [];
     return {
       deviceId: row.device_id,
       userId: row.user_id,
       topicPrefix: row.topic_prefix,
       heartbeatIntervalSec: row.heartbeat_interval_sec,
       capabilities: JSON.parse(row.capabilities),
-      ...(entities.length > 0 ? { entities } : {}),
+      ...(entities.length   > 0 ? { entities }   : {}),
+      ...(extensions.length > 0 ? { extensions } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

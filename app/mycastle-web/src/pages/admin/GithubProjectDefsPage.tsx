@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Button, TextField, Alert, CircularProgress,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
@@ -17,11 +17,11 @@ function GithubProjectDefsPage() {
   const [fetching, setFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleFetch = async () => {
+  const handleFetch = useCallback(async (url = repoUrl) => {
     setFetching(true);
     setError(null);
     try {
-      const data = await minisApi.getGithubProjectdefs(repoUrl);
+      const data = await minisApi.getGithubProjectdefs(url);
       setModules(data.modules ?? []);
       setUpdatedAt(data.updatedAt);
     } catch (err) {
@@ -29,7 +29,9 @@ function GithubProjectDefsPage() {
     } finally {
       setFetching(false);
     }
-  };
+  }, [repoUrl]);
+
+  useEffect(() => { handleFetch(DEFAULT_URL); }, []);
 
   return (
     <Box>
@@ -47,7 +49,7 @@ function GithubProjectDefsPage() {
         <Button
           variant="contained"
           startIcon={fetching ? <CircularProgress size={16} color="inherit" /> : <Refresh />}
-          onClick={handleFetch}
+          onClick={() => handleFetch()}
           disabled={fetching || !repoUrl}
           sx={{ whiteSpace: 'nowrap' }}
         >
