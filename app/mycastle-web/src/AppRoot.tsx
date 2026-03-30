@@ -117,7 +117,8 @@ function AppRoot() {
         <Route path="/watch" element={<WatchPage />} />
         <Route path="/login/:userName" element={<LoginPage />} />
         <Route path="/user/:userName/editor/monaco/*" element={<RequireAuth><MinisMonacoEditorPage /></RequireAuth>} />
-        <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage /></RequireAuth>} />
+        <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage key="blockly" /></RequireAuth>} />
+        <Route path="/user/:userName/project/:projectId/code" element={<RequireAuth><MinisProjectPage key="code" mode="code" /></RequireAuth>} />
         <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><MinisUPythonProjectPage /></RequireAuth>} />
         <Route path="/user/:userName/pygame-project/:projectId" element={<RequireAuth><MinisPygameProjectPage /></RequireAuth>} />
 

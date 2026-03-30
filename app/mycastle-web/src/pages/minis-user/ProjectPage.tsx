@@ -55,7 +55,7 @@ type ViewMode = 'blockly' | 'split' | 'code';
 
 const MIN_PANEL_PX = 200;
 
-function ProjectPage() {
+function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -66,10 +66,11 @@ function ProjectPage() {
   const currentSketchRef = useRef<string | null>(null);
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
+  const savedBlocklyXmlRef = useRef<string | null>(null);
 
   const [board, setBoard] = useState<string | null>(null);
   const [newSketchName, setNewSketchName] = useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('blockly');
+  const [viewMode, setViewMode] = useState<ViewMode>(mode === 'code' ? 'code' : 'blockly');
   const [codeEdited, setCodeEdited] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -127,6 +128,14 @@ function ProjectPage() {
       const code = service.generateArduinoCode();
       syncCodeToEditor(code);
     });
+
+    // Restore workspace XML if returning from code-only view
+    if (savedBlocklyXmlRef.current) {
+      suppressBlocklyChangeRef.current = true;
+      service.loadFromXml(savedBlocklyXmlRef.current);
+      suppressBlocklyChangeRef.current = false;
+      savedBlocklyXmlRef.current = null;
+    }
 
     const code = service.generateArduinoCode();
     syncCodeToEditor(code);
@@ -294,9 +303,26 @@ function ProjectPage() {
     setCodeEdited(false);
   };
 
-  const switchToView = (mode: ViewMode) => {
-    if (mode === viewMode) return;
-    setViewMode(mode);
+  const switchToView = (target: ViewMode) => {
+    if (target === viewMode) return;
+    // Navigate to separate page to avoid Blockly+Monaco in memory simultaneously
+    if (target === 'code' && mode === 'blockly') {
+      handleSaveSketch().then(() => {
+        navigate(`/user/${userName}/project/${projectId}/code?sketch=${currentSketch ?? ''}`);
+      });
+      return;
+    }
+    if (target === 'blockly' && mode === 'code') {
+      handleSaveSketch().then(() => {
+        navigate(`/user/${userName}/project/${projectId}?sketch=${currentSketch ?? ''}`);
+      });
+      return;
+    }
+    // Split view (desktop only, both components on same page)
+    if (showBlockly && target === 'code' && serviceRef.current) {
+      savedBlocklyXmlRef.current = serviceRef.current.serializeToXml();
+    }
+    setViewMode(target);
   };
 
   const handleConfirmOverwrite = () => {
@@ -700,23 +726,24 @@ function ProjectPage() {
             position: 'relative',
           }}
         >
-        {/* Blockly panel */}
-        <Box
-          sx={{
-            position: 'relative',
-            overflow: 'hidden',
-            display: showBlockly ? 'block' : 'none',
-            width: viewMode === 'split' ? `${splitRatio * 100}%` : '100%',
-            flexShrink: 0,
-          }}
-        >
-          {board && (
-            <ArduBlocklyComponent
-              onServiceReady={handleServiceReady}
-              initialBoard={board}
-            />
-          )}
-        </Box>
+        {/* Blockly panel — unmounted in code-only view to free memory */}
+        {showBlockly && (
+          <Box
+            sx={{
+              position: 'relative',
+              overflow: 'hidden',
+              width: viewMode === 'split' ? `${splitRatio * 100}%` : '100%',
+              flexShrink: 0,
+            }}
+          >
+            {board && (
+              <ArduBlocklyComponent
+                onServiceReady={handleServiceReady}
+                initialBoard={board}
+              />
+            )}
+          </Box>
+        )}
 
         {/* Splitter handle */}
         {viewMode === 'split' && (
