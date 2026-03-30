@@ -225,8 +225,9 @@ class MinisApiService {
     githubRepoUrl: string,
     sketches: GithubSketchEntry[],
     readmePath: string | null,
+    libraries?: Array<{ name: string; version: string; url?: string }>,
   ): Promise<void> {
-    await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/clone-from-github`, { githubRepoUrl, sketches, readmePath });
+    await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/clone-from-github`, { githubRepoUrl, sketches, readmePath, libraries });
   }
   // IoT - Config
   async getIotConfig(userName: string, deviceName: string): Promise<IotDeviceConfig | null> {

@@ -2594,8 +2594,9 @@ const { password, ...safeBody } = body;
       githubRepoUrl?: string;
       sketches?: Array<{ name: string; files: string[] }>;
       readmePath?: string | null;
+      libraries?: Array<{ url?: string; remoteName?: string; name?: string }>;
     };
-    const { githubRepoUrl, sketches, readmePath } = body;
+    const { githubRepoUrl, sketches, readmePath, libraries } = body;
     if (!githubRepoUrl) {
       this.sendJsonResponse(res, 400, { error: 'githubRepoUrl is required' });
       return;
@@ -2625,6 +2626,17 @@ const { password, ...safeBody } = body;
         const dest = path.join(projectDir, 'README.md');
         await fs.promises.mkdir(path.dirname(dest), { recursive: true });
         await fs.promises.writeFile(dest, content, 'utf-8');
+      }
+
+      // Save libraries to Project.json
+      if (libraries && libraries.length > 0) {
+        const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
+        const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
+        const project = projects.find(p => p.id === projectId);
+        if (project) {
+          project.libraries = libraries;
+          await this.writeJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`, data);
+        }
       }
 
       this.sendJsonResponse(res, 200, { ok: true });

@@ -92,6 +92,25 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
     } catch { /* non-critical */ }
   };
 
+  const sha256hex = async (text: string): Promise<string> => {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const deviceSha256 = async (svc: { execCode: (code: string) => Promise<string> }, remoteName: string): Promise<string | null> => {
+    const snippet = [
+      'try:',
+      ' import uhashlib,ubinascii',
+      ` h=uhashlib.sha256(open(${JSON.stringify(remoteName)},'rb').read())`,
+      ' print(ubinascii.hexlify(h.digest()).decode())',
+      'except Exception as e: print("ERR:"+str(e))',
+    ].join('\n');
+    const out = (await svc.execCode(snippet)).trim();
+    // extract 64-char hex from output (ignore REPL prompt noise)
+    const m = out.match(/[0-9a-f]{64}/);
+    return m ? m[0] : null;
+  };
+
   const uploadLibraries = async (svc: { saveToFile: (name: string, content: string) => Promise<void>; execCode: (code: string) => Promise<string> }) => {
     for (const lib of libraries ?? []) {
       appendLog(`Fetching ${lib.remoteName}...`);
@@ -101,6 +120,13 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`Failed to fetch ${lib.remoteName}: HTTP ${res.status}`);
       const content = await res.text();
+      const localHash = await sha256hex(content);
+      appendLog(`Checking ${lib.remoteName} on device...`);
+      const devHash = await deviceSha256(svc, lib.remoteName);
+      if (devHash === localHash) {
+        appendLog(`${lib.remoteName} unchanged, skipping.`);
+        continue;
+      }
       appendLog(`Saving ${lib.remoteName} to device...`);
       await svc.saveToFile(lib.remoteName, content);
     }
