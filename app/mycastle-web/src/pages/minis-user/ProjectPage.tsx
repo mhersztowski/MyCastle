@@ -71,6 +71,10 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const [board, setBoard] = useState<string | null>(null);
   const [newSketchName, setNewSketchName] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>(mode === 'code' ? 'code' : 'blockly');
+
+  useEffect(() => {
+    setViewMode(mode === 'code' ? 'code' : 'blockly');
+  }, [mode]);
   const [codeEdited, setCodeEdited] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -142,7 +146,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   }, [syncCodeToEditor]);
 
   // Initialize/dispose Monaco editor when code panel is visible
-  const showCode = viewMode === 'code' || viewMode === 'split';
+  const showCode = mode === 'code' || viewMode === 'split';
 
   useEffect(() => {
     if (!showCode || !editorContainerRef.current) return;
@@ -419,7 +423,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     '& .MuiButton-startIcon': { mr: { xs: 0, sm: 1 } },
   });
 
-  const showBlockly = viewMode === 'blockly' || viewMode === 'split';
+  const showBlockly = mode !== 'code' && (viewMode === 'blockly' || viewMode === 'split');
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0 }}>
