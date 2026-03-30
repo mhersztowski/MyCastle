@@ -97,6 +97,9 @@ export class EspFlashService {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log(`Connection error: ${msg}`);
+      if (msg.toLowerCase().includes('invalid header') || msg.toLowerCase().includes('failed to connect')) {
+        this.log('Tip: hold BOOT button, press RESET, release BOOT — then click Connect again.');
+      }
       this.setState('error');
       throw err;
     }

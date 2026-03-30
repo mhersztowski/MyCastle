@@ -1,9 +1,11 @@
 import dotenv from 'dotenv';
 import * as path from 'path';
 import * as fs from 'fs';
+import { fileURLToPath } from 'url';
 import { App } from './App';
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const httpPort = parseInt(process.env.PORT || '1894', 10);
 const mqttPort = process.env.MQTT_PORT ? parseInt(process.env.MQTT_PORT, 10) : null;

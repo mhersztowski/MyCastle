@@ -74,6 +74,7 @@ export function FlashDialog({ open, onClose, initialFiles, userName, deviceName,
 
   const [firmwareFiles, setFirmwareFiles] = useState<Array<{ name: string; size: number }>>([]);
   const [selectedFirmware, setSelectedFirmware] = useState('');
+  const [predefinedAddress, setPredefinedAddress] = useState('0x1000');
 
   const [rows, setRows] = useState<FileRow[]>([createRow()]);
   const [settings, setSettings] = useState<FlashSettings>({
@@ -121,6 +122,7 @@ export function FlashDialog({ open, onClose, initialFiles, userName, deviceName,
       setCustomAddress('0x0000');
       setCustomFile(null);
       setSelectedFirmware('');
+      setPredefinedAddress('0x1000');
       setRows([createRow()]);
       setSettings({
         baudRate: 921600,
@@ -168,8 +170,13 @@ export function FlashDialog({ open, onClose, initialFiles, userName, deviceName,
         return;
       }
       try {
+        const address = parseInt(predefinedAddress, 16);
+        if (isNaN(address)) {
+          setLog((prev) => prev + `Invalid address: ${predefinedAddress}\n`);
+          return;
+        }
         const data = await minisApi.fetchFirmwareFile(selectedFirmware);
-        fileEntries = [{ data, address: 0x0000, name: selectedFirmware }];
+        fileEntries = [{ data, address, name: selectedFirmware }];
       } catch (err) {
         setLog((prev) => prev + `Failed to fetch firmware: ${err instanceof Error ? err.message : String(err)}\n`);
         return;
@@ -336,24 +343,35 @@ export function FlashDialog({ open, onClose, initialFiles, userName, deviceName,
           </RadioGroup>
 
           {fileMode === 'predefined' ? (
-            <FormControl fullWidth size="small" sx={{ mt: 1 }}>
-              <InputLabel>Firmware file</InputLabel>
-              <Select
-                value={selectedFirmware}
-                label="Firmware file"
-                onChange={(e) => setSelectedFirmware(e.target.value)}
+            <Box sx={{ display: 'flex', gap: 1, mt: 1, alignItems: 'flex-start' }}>
+              <TextField
+                label="Offset"
+                value={predefinedAddress}
+                onChange={(e) => setPredefinedAddress(e.target.value)}
+                size="small"
+                sx={{ width: 110, flexShrink: 0 }}
                 disabled={isFlashing}
-              >
-                {firmwareFiles.map((f) => (
-                  <MenuItem key={f.name} value={f.name}>
-                    {f.name}
-                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                      ({Math.round(f.size / 1024)} KB)
-                    </Typography>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+                helperText="ESP32=0x1000, S3/C3=0x0"
+              />
+              <FormControl fullWidth size="small">
+                <InputLabel>Firmware file</InputLabel>
+                <Select
+                  value={selectedFirmware}
+                  label="Firmware file"
+                  onChange={(e) => setSelectedFirmware(e.target.value)}
+                  disabled={isFlashing}
+                >
+                  {firmwareFiles.map((f) => (
+                    <MenuItem key={f.name} value={f.name}>
+                      {f.name}
+                      <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                        ({Math.round(f.size / 1024)} KB)
+                      </Typography>
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
           ) : fileMode === 'compiled' && hasInitialFiles ? (
             <Box sx={{ mt: 0.5 }}>
               {initialFiles!.map((f, i) => (
