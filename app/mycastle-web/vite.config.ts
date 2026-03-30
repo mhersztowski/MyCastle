@@ -38,9 +38,9 @@ export default defineConfig({
             handler: 'NetworkOnly',
           },
           {
-            // JS bundles — serve from cache, update in background
+            // JS bundles — network first so new builds are picked up immediately
             urlPattern: /\.js$/,
-            handler: 'StaleWhileRevalidate',
+            handler: 'NetworkFirst',
             options: { cacheName: 'js-bundles' },
           },
           {

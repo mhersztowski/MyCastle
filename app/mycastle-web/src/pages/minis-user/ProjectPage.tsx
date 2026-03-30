@@ -311,14 +311,16 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     if (target === viewMode) return;
     // Navigate to separate page to avoid Blockly+Monaco in memory simultaneously
     if (target === 'code' && mode === 'blockly') {
+      // Full page reload — clears Blockly bundle from memory before loading Monaco
       handleSaveSketch().then(() => {
-        navigate(`/user/${userName}/project/${projectId}/code?sketch=${currentSketch ?? ''}`);
+        window.location.href = `/user/${userName}/project/${projectId}/code?sketch=${currentSketch ?? ''}`;
       });
       return;
     }
     if (target === 'blockly' && mode === 'code') {
+      // Full page reload — clears Monaco bundle from memory before loading Blockly
       handleSaveSketch().then(() => {
-        navigate(`/user/${userName}/project/${projectId}?sketch=${currentSketch ?? ''}`);
+        window.location.href = `/user/${userName}/project/${projectId}?sketch=${currentSketch ?? ''}`;
       });
       return;
     }

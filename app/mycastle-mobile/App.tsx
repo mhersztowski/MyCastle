@@ -40,6 +40,7 @@ export default function App() {
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         applicationNameForUserAgent="MyCastleMobile/1.0"
+        cacheMode="LOAD_NO_CACHE"
       />
     </SafeAreaView>
   );
