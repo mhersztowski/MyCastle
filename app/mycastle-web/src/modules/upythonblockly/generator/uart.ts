@@ -2,6 +2,121 @@ import * as Blockly from 'blockly';
 import { Order } from './Order';
 import type { UPythonGenerator } from './UPythonGenerator';
 
+function getVarName(block: Blockly.Block, field: string): string {
+  return (block.getField(field) as Blockly.FieldVariable)?.getText() || field.toLowerCase();
+}
+
+/** Register UIFlow2-style variable-based UART generators. */
+export function registerUartV2Generators(gen: UPythonGenerator): void {
+  function buildConfig(block: Blockly.Block): string {
+    const baud = block.getFieldValue('BAUD') as string;
+    const bits = block.getFieldValue('BITS') as string;
+    const parity = block.getFieldValue('PARITY') as string;
+    const stop = block.getFieldValue('STOP') as string;
+    const tx = block.getFieldValue('TX') as string;
+    const rx = block.getFieldValue('RX') as string;
+    return `baudrate=${baud}, bits=${bits}, parity=${parity}, stop=${stop}, tx=${tx}, rx=${rx}`;
+  }
+
+  gen.forBlock['upy_uart2_init'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    g.addImport('hardware_uart', 'from hardware import UART');
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    const id = block.getFieldValue('ID') as string;
+    const config = buildConfig(block);
+    return `${varName} = UART(${id}, ${config})\n${varName}.init(${config})\n`;
+  };
+
+  gen.forBlock['upy_uart2_setup'] = function (block: Blockly.Block): string {
+    const varName = getVarName(block, 'VAR');
+    const config = buildConfig(block);
+    return `${varName}.init(${config})\n`;
+  };
+
+  gen.forBlock['upy_uart2_deinit'] = function (block: Blockly.Block): string {
+    const varName = getVarName(block, 'VAR');
+    return `${varName}.deinit()\n`;
+  };
+
+  gen.forBlock['upy_uart2_any'] = function (block: Blockly.Block): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.any()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_uart2_read_all'] = function (block: Blockly.Block): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.read()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_uart2_read_bytes'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    const n = g.valueToCode(block, 'NBYTES', Order.NONE) || '1';
+    return [`${varName}.read(${n})`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_uart2_readline'] = function (block: Blockly.Block): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.readline()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_uart2_read_raw'] = function (block: Blockly.Block): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.read(1)[0]`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_uart2_readinto'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const buf = g.valueToCode(block, 'BUF', Order.NONE) || 'buf';
+    return `${varName}.readinto(${buf})\n`;
+  };
+
+  gen.forBlock['upy_uart2_txdone'] = function (block: Blockly.Block): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.txdone()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_uart2_write_str'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const text = g.valueToCode(block, 'TEXT', Order.NONE) || "''";
+    return `${varName}.write(${text})\n`;
+  };
+
+  gen.forBlock['upy_uart2_write_line'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const text = g.valueToCode(block, 'TEXT', Order.NONE) || "''";
+    return `${varName}.write(${text}+'\\r\\n')\n`;
+  };
+
+  gen.forBlock['upy_uart2_write_var'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const val = g.valueToCode(block, 'VAL', Order.NONE) || 'None';
+    return `${varName}.write(${val})\n`;
+  };
+
+  gen.forBlock['upy_uart2_write_bytes_var'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): string {
+    const varName = getVarName(block, 'VAR');
+    const val = g.valueToCode(block, 'VAL', Order.NONE) || '[]';
+    return `${varName}.write(bytes(${val}))\n`;
+  };
+
+  gen.forBlock['upy_uart2_write_raw'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const val = g.valueToCode(block, 'VAL', Order.NONE) || '0';
+    return `${varName}.write(bytes([${val}]))\n`;
+  };
+
+  gen.forBlock['upy_uart2_sendbreak'] = function (block: Blockly.Block): string {
+    const varName = getVarName(block, 'VAR');
+    return `${varName}.sendbreak()\n`;
+  };
+}
+
 /** Add machine.UART import and lazy-init the UART object with default baud. */
 function ensureUart(g: UPythonGenerator, id: string): void {
   g.addImport('machine.UART', 'from machine import UART');

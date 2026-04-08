@@ -2,6 +2,74 @@ import * as Blockly from 'blockly';
 import { Order } from './Order';
 import type { UPythonGenerator } from './UPythonGenerator';
 
+function getVarName(block: Blockly.Block, field: string): string {
+  return (block.getField(field) as Blockly.FieldVariable)?.getText() || field.toLowerCase();
+}
+
+/** Register UIFlow2-style variable-based Pin generators. */
+export function registerPinV2Generators(gen: UPythonGenerator): void {
+  gen.forBlock['upy_pin2_init'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): string {
+    g.addImport('hardware_pin', 'from hardware import Pin');
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    const pin = g.valueToCode(block, 'PIN', Order.NONE) || '0';
+    const mode = block.getFieldValue('MODE') as string;
+    const pull = block.getFieldValue('PULL') as string;
+    const pullStr = pull === 'NONE' ? '' : `, pull=Pin.${pull}`;
+    return `${varName} = Pin(${pin}, mode=Pin.${mode}${pullStr})\n`;
+  };
+
+  gen.forBlock['upy_pin2_get_value'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    return [`${varName}.value()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_pin2_on'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): string {
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    return `${varName}.on()\n`;
+  };
+
+  gen.forBlock['upy_pin2_off'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): string {
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    return `${varName}.off()\n`;
+  };
+
+  gen.forBlock['upy_pin2_set_bool'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): string {
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    const val = block.getFieldValue('BOOL_VAL') as string; // '1' or '0'
+    return `${varName}.value(${val})\n`;
+  };
+
+  gen.forBlock['upy_pin2_set_value'] = function (
+    block: Blockly.Block,
+    g: UPythonGenerator,
+  ): string {
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    const val = g.valueToCode(block, 'VAL', Order.NONE) || '0';
+    return `${varName}.value(${val})\n`;
+  };
+}
+
 /** Add import + lazy module-level init for a named _pin_X object. */
 function ensurePin(g: UPythonGenerator, pin: string, mode: string): void {
   g.addImport('machine.Pin', 'from machine import Pin');

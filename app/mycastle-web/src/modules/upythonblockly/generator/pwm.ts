@@ -2,6 +2,70 @@ import * as Blockly from 'blockly';
 import { Order } from './Order';
 import type { UPythonGenerator } from './UPythonGenerator';
 
+function getVarName(block: Blockly.Block, field: string): string {
+  return (block.getField(field) as Blockly.FieldVariable)?.getText() || field.toLowerCase();
+}
+
+/** Register UIFlow2-style variable-based PWM generators. */
+export function registerPwmV2Generators(gen: UPythonGenerator): void {
+  gen.forBlock['upy_pwm2_init'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    g.addImport('hardware_pwm', 'from hardware import PWM');
+    g.addImport('hardware_pin', 'from hardware import Pin');
+    const varName = getVarName(block, 'VAR');
+    g.variables_.add(varName);
+    const pin = g.valueToCode(block, 'PIN', Order.NONE) || '0';
+    const freq = g.valueToCode(block, 'FREQ', Order.NONE) || '1000';
+    const duty = g.valueToCode(block, 'DUTY', Order.NONE) || '512';
+    const dtype = block.getFieldValue('DTYPE') as string;
+    const dutyArg = dtype === 'DUTY_U16' ? `duty_u16=${duty}` : `duty=${duty}`;
+    return `${varName} = PWM(Pin(${pin}), freq=${freq}, ${dutyArg})\n`;
+  };
+
+  gen.forBlock['upy_pwm2_deinit'] = function (block: Blockly.Block): string {
+    const varName = getVarName(block, 'VAR');
+    return `${varName}.deinit()\n`;
+  };
+
+  gen.forBlock['upy_pwm2_get_duty'] = function (
+    block: Blockly.Block,
+  ): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.duty()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_pwm2_get_duty_u16'] = function (
+    block: Blockly.Block,
+  ): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.duty_u16()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_pwm2_get_freq'] = function (
+    block: Blockly.Block,
+  ): [string, Order] {
+    const varName = getVarName(block, 'VAR');
+    return [`${varName}.freq()`, Order.ATOMIC];
+  };
+
+  gen.forBlock['upy_pwm2_set_duty'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const duty = g.valueToCode(block, 'DUTY', Order.NONE) || '0';
+    return `${varName}.duty(${duty})\n`;
+  };
+
+  gen.forBlock['upy_pwm2_set_duty_u16'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const duty = g.valueToCode(block, 'DUTY', Order.NONE) || '0';
+    return `${varName}.duty_u16(${duty})\n`;
+  };
+
+  gen.forBlock['upy_pwm2_set_freq'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = getVarName(block, 'VAR');
+    const freq = g.valueToCode(block, 'FREQ', Order.NONE) || '1000';
+    return `${varName}.freq(${freq})\n`;
+  };
+}
+
 /** Add machine.Pin + machine.PWM imports and lazy-init the PWM object. */
 function ensurePwm(g: UPythonGenerator, pin: string): void {
   g.addImport('machine.Pin', 'from machine import Pin');

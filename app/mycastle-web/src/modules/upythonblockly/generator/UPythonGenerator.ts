@@ -43,6 +43,9 @@ export class UPythonGenerator extends Blockly.CodeGenerator {
   /** Variable names used in workspace — added as `global` in setup()/loop() */
   variables_: Set<string> = new Set();
 
+  /** Callback function definitions: fnName → {args, body} — assembled in finish() with globalDecl */
+  callbackFns_: Record<string, { args: string; body: string }> = Object.create(null);
+
   constructor() {
     super('uPython');
     // PEP 8: 4-space indentation
@@ -66,6 +69,7 @@ export class UPythonGenerator extends Blockly.CodeGenerator {
     this.setup_stmts_ = Object.create(null);
     this.forever_stmts_ = Object.create(null);
     this.variables_ = new Set();
+    this.callbackFns_ = Object.create(null);
 
     if (!this.nameDB_) {
       this.nameDB_ = new Blockly.Names(PYTHON_RESERVED_WORDS);
@@ -114,15 +118,24 @@ export class UPythonGenerator extends Blockly.CodeGenerator {
       .filter((v) => this.inits_[v] === undefined)
       .map((v) => `${v} = None`);
 
-    const importSection = importLines.length > 0 ? importLines.join('\n') + '\n' : '';
-    const initSection = initLines.length > 0 ? '\n' + initLines.join('\n') + '\n' : '';
-    const varNoneSection = varNoneLines.length > 0 ? varNoneLines.join('\n') + '\n' : '';
-    const funcSection = funcDefs.length > 0 ? '\n' + funcDefs.join('\n\n') + '\n' : '';
-
-    // global declaration for all user variables (shared between setup/loop)
+    // global declaration for all user variables (shared between setup/loop/callbacks)
     const globalDecl = this.variables_.size > 0
       ? this.INDENT + 'global ' + [...this.variables_].join(', ') + '\n'
       : '';
+
+    // Callback function defs need the globalDecl — assembled here after variables are known.
+    const callbackDefs = Object.entries(this.callbackFns_).map(([name, { args, body }]) => {
+      const funcBody = body.trim()
+        ? globalDecl + body
+        : globalDecl + this.INDENT + 'pass\n';
+      return `def ${name}(${args}):\n${funcBody}`;
+    });
+
+    const importSection = importLines.length > 0 ? importLines.join('\n') + '\n' : '';
+    const initSection = initLines.length > 0 ? '\n' + initLines.join('\n') + '\n' : '';
+    const varNoneSection = varNoneLines.length > 0 ? varNoneLines.join('\n') + '\n' : '';
+    const allFuncDefs = [...funcDefs, ...callbackDefs];
+    const funcSection = allFuncDefs.length > 0 ? '\n' + allFuncDefs.join('\n\n') + '\n' : '';
 
     /**
      * Build the body of a def block.
@@ -210,6 +223,17 @@ export class UPythonGenerator extends Blockly.CodeGenerator {
     if (this.userFunctions_[funcName] === undefined) {
       this.userFunctions_[funcName] = code;
     }
+  }
+
+  /**
+   * Register a callback function that needs the global variable declaration.
+   * The globalDecl is injected in finish() once all variables are known.
+   * @param name  Function name (e.g. 'btnA_wasClicked_event')
+   * @param args  Argument list string (e.g. 'state')
+   * @param body  Indented body from statementToCode (may be empty string)
+   */
+  addCallback(name: string, args: string, body: string): void {
+    this.callbackFns_[name] = { args, body };
   }
 
   /** Escape and quote a string for Python. */

@@ -13,7 +13,7 @@ export { Order } from './generator/Order';
 export { createUPythonGenerator } from './generator';
 
 // Toolbox
-export { TOOLBOX } from './toolbox';
+export { TOOLBOX, HARDWARE_CATEGORY_NAMES } from './toolbox';
 
 // REPL
 export { MpySerialReplService } from './repl/MpySerialReplService';

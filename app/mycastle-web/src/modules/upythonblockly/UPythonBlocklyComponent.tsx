@@ -25,6 +25,8 @@ function UPythonBlocklyComponent({
     service.init(containerRef.current).then(() => {
       if (disposed) return;
       onServiceReady?.(service);
+    }).catch((err) => {
+      console.error('[UPythonBlockly] Initialization error:', err);
     });
 
     const observer = new ResizeObserver(() => {

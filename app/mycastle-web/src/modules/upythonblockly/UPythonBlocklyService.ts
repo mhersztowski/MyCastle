@@ -3,7 +3,7 @@ import * as Blockly from 'blockly';
 import { UPythonBoardManager } from './boards/BoardManager';
 import { registerAllBlocks } from './blocks';
 import { createUPythonGenerator, type UPythonGenerator } from './generator';
-import { TOOLBOX } from './toolbox';
+import { TOOLBOX, buildToolbox } from './toolbox';
 import { WorkspaceControls } from '../ardublockly2/WorkspaceControls';
 
 export class UPythonBlocklyService {
@@ -142,5 +142,10 @@ export class UPythonBlocklyService {
     if (this.workspace) {
       Blockly.svgResize(this.workspace);
     }
+  }
+
+  updateToolboxVisibility(hidden: ReadonlySet<string>): void {
+    if (!this.workspace) return;
+    this.workspace.updateToolbox(buildToolbox(hidden));
   }
 }

@@ -3,6 +3,231 @@ import type { UPythonBoardManager } from '../boards/BoardManager';
 
 const HUE = 160;
 
+/** Register UIFlow2-style variable-based UART blocks. */
+export function registerUartV2Blocks(): void {
+  // shared dropdown options
+  const BAUD2: Array<[string, string]> = [
+    ['9600', '9600'], ['19200', '19200'], ['38400', '38400'],
+    ['57600', '57600'], ['115200', '115200'], ['230400', '230400'],
+    ['460800', '460800'], ['921600', '921600'],
+  ];
+  const BITS2: Array<[string, string]> = [['7', '7'], ['8', '8']];
+  const STOP2: Array<[string, string]> = [['1', '1'], ['2', '2']];
+  const PARITY2: Array<[string, string]> = [
+    ['None', 'None'], ['Even (0)', '0'], ['Odd (1)', '1'],
+  ];
+
+  function uartConfigInputs(block: Blockly.Block) {
+    block.appendDummyInput()
+      .appendField('baudrate')
+      .appendField(new Blockly.FieldDropdown(BAUD2), 'BAUD');
+    block.appendDummyInput()
+      .appendField('bits')
+      .appendField(new Blockly.FieldDropdown(BITS2), 'BITS')
+      .appendField('parity')
+      .appendField(new Blockly.FieldDropdown(PARITY2), 'PARITY')
+      .appendField('stop')
+      .appendField(new Blockly.FieldDropdown(STOP2), 'STOP');
+    block.appendDummyInput()
+      .appendField('TX')
+      .appendField(new Blockly.FieldNumber(9, 0, 47), 'TX')
+      .appendField('RX')
+      .appendField(new Blockly.FieldNumber(10, 0, 47), 'RX');
+  }
+
+  Blockly.Blocks['upy_uart2_init'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Init UART')
+        .appendField(new Blockly.FieldNumber(1, 0, 9), 'ID')
+        .appendField('with')
+        .appendField('→')
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      uartConfigInputs(this);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Create UART object: uart = UART(id, baudrate=..., bits=..., ...)');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_setup'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('setup');
+      uartConfigInputs(this);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Reconfigure UART: uart.init(baudrate=..., bits=..., ...)');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_deinit'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('deinit');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Stop UART: uart.deinit()');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_any'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('count of available');
+      this.setOutput(true, 'Number');
+      this.setTooltip('Number of bytes available to read: uart.any()');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_read_all'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('read all bytes (return bytes)');
+      this.setOutput(true, null);
+      this.setTooltip('Read all available bytes: uart.read()');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_read_bytes'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('NBYTES').appendField('read');
+      this.appendDummyInput().appendField('bytes (return bytes)');
+      this.setInputsInline(true);
+      this.setOutput(true, null);
+      this.setTooltip('Read N bytes: uart.read(N)');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_readline'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('read line (return bytes)');
+      this.setOutput(true, null);
+      this.setTooltip('Read a line: uart.readline()');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_read_raw'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('read a raw data (return 0~255)');
+      this.setOutput(true, 'Number');
+      this.setTooltip('Read single byte as int: uart.read(1)[0]');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_readinto'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('BUF').appendField('read into buf');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Read into buffer: uart.readinto(buf)');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_txdone'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('is transfer done (return True or False)');
+      this.setOutput(true, 'Boolean');
+      this.setTooltip('TX buffer drained: uart.txdone()');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_write_str'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('TEXT').appendField('write');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip("Write text: uart.write(text)");
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_write_line'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('TEXT').appendField('write line');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip("Write text + CRLF: uart.write(text+'\\r\\n')");
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_write_var'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('VAL').appendField('write');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Write bytes/bytearray variable: uart.write(val)');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_write_bytes_var'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('VAL').appendField('write list or tuple');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Write list/tuple as bytes: uart.write(bytes(val))');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_write_raw'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField(new Blockly.FieldVariable('uart'), 'VAR');
+      this.appendValueInput('VAL').appendField('write raw data').setCheck('Number');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Write single raw byte: uart.write(bytes([N]))');
+    },
+  };
+
+  Blockly.Blocks['upy_uart2_sendbreak'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('uart'), 'VAR')
+        .appendField('send break single');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Send break: uart.sendbreak()');
+    },
+  };
+}
+
 const BAUD_RATES: [string, string][] = [
   ['9600', '9600'], ['19200', '19200'], ['38400', '38400'],
   ['57600', '57600'], ['115200', '115200'], ['230400', '230400'],

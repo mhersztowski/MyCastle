@@ -61,3 +61,40 @@ export function registerTimerGenerators(gen: UPythonGenerator): void {
     return `_timer${id}.deinit()\n`;
   };
 }
+
+export function registerTimerV2Generators(gen: UPythonGenerator): void {
+  gen.forBlock['upy_timer2_new'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    g.addImport('machine_timer', 'from machine import Timer');
+    const varName = (block.getField('VAR') as Blockly.FieldVariable)?.getText() || 'timer';
+    const id = block.getFieldValue('ID');
+    g.variables_.add(varName);
+    return `${varName} = Timer(${id})\n`;
+  };
+
+  gen.forBlock['upy_timer2_init'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    g.addImport('machine_timer', 'from machine import Timer');
+    const varName = (block.getField('VAR') as Blockly.FieldVariable)?.getText() || 'timer';
+    const mode = block.getFieldValue('MODE');
+    const period = g.valueToCode(block, 'PERIOD', Order.NONE) || '1000';
+    g.variables_.add(varName);
+    return `${varName}.init(mode=Timer.${mode}, period=${period}, callback=${varName}_cb)\n`;
+  };
+
+  gen.forBlock['upy_timer2_deinit'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = (block.getField('VAR') as Blockly.FieldVariable)?.getText() || 'timer';
+    g.variables_.add(varName);
+    return `${varName}.deinit()\n`;
+  };
+
+  gen.forBlock['upy_timer2_callback'] = function (block: Blockly.Block, g: UPythonGenerator): string {
+    const varName = (block.getField('VAR') as Blockly.FieldVariable)?.getText() || 'timer';
+    g.variables_.add(varName);
+    const body = g.statementToCode(block, 'BODY') || (g.INDENT + 'pass\n');
+    const funcCode =
+      `def ${varName}_cb(t):\n` +
+      `${g.INDENT}global ${varName}\n` +
+      body;
+    g.userFunctions_[`${varName}_cb`] = funcCode;
+    return '';
+  };
+}

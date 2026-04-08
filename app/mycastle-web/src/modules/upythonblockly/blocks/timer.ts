@@ -89,3 +89,74 @@ export function registerTimerBlocks(): void {
     },
   };
 }
+
+const TIMER_IDS_V2: [string, string][] = [
+  ['0', '0'], ['1', '1'], ['2', '2'], ['3', '3'],
+];
+
+const MODE_OPTIONS_V2: [string, string][] = [
+  ['PERIODIC', 'PERIODIC'],
+  ['ONE_SHOT', 'ONE_SHOT'],
+];
+
+export function registerTimerV2Blocks(): void {
+  /** New [VAR] id [ID] — creates timer variable */
+  Blockly.Blocks['upy_timer2_new'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('New')
+        .appendField(new Blockly.FieldVariable('timer'), 'VAR')
+        .appendField('id')
+        .appendField(new Blockly.FieldDropdown(TIMER_IDS_V2), 'ID');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setInputsInline(true);
+      this.setTooltip('Create Timer object: timer = Timer(id)');
+    },
+  };
+
+  /** [VAR] mode [MODE] period [PERIOD] milliseconds */
+  Blockly.Blocks['upy_timer2_init'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('timer'), 'VAR')
+        .appendField('mode')
+        .appendField(new Blockly.FieldDropdown(MODE_OPTIONS_V2), 'MODE')
+        .appendField('period');
+      this.appendValueInput('PERIOD').setCheck('Number');
+      this.appendDummyInput().appendField('milliseconds');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setInputsInline(true);
+      this.setTooltip('timer.init(mode=Timer.MODE, period=ms, callback=timer_cb)');
+    },
+  };
+
+  /** [VAR] deinit */
+  Blockly.Blocks['upy_timer2_deinit'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('timer'), 'VAR')
+        .appendField('deinit');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setTooltip('timer.deinit()');
+    },
+  };
+
+  /** [VAR] callback — C-shaped, defines the callback function */
+  Blockly.Blocks['upy_timer2_callback'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendStatementInput('BODY')
+        .appendField(new Blockly.FieldVariable('timer'), 'VAR')
+        .appendField('callback');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setTooltip('Define callback function: def timer_cb(t): ...');
+    },
+  };
+}

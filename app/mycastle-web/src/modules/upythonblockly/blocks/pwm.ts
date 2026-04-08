@@ -3,6 +3,134 @@ import type { UPythonBoardManager } from '../boards/BoardManager';
 
 const HUE = 60;
 
+const DTYPE_OPTIONS: Array<[string, string]> = [
+  ['duty (0~1023)', 'DUTY'],
+  ['duty_u16 (0~65535)', 'DUTY_U16'],
+];
+
+/** Register UIFlow2-style variable-based PWM blocks. */
+export function registerPwmV2Blocks(): void {
+  Blockly.Blocks['upy_pwm2_init'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField('Init Pin');
+      this.appendValueInput('PIN');
+      this.appendDummyInput().appendField('freq');
+      this.appendValueInput('FREQ');
+      this.appendDummyInput()
+        .appendField('Hz (1~40000000)')
+        .appendField(new Blockly.FieldDropdown(DTYPE_OPTIONS), 'DTYPE');
+      this.appendValueInput('DUTY');
+      this.appendDummyInput()
+        .appendField('→')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Initialize PWM: pwm = PWM(Pin(n), freq=f, duty=d)');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_deinit'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('deinit');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setTooltip('Stop PWM: pwm.deinit()');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_get_duty'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('get')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('duty');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read 10-bit duty cycle: pwm.duty()');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_get_duty_u16'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('get')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('duty u16');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read 16-bit duty cycle: pwm.duty_u16()');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_get_freq'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('get')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('freq');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read PWM frequency: pwm.freq()');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_set_duty'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('duty');
+      this.appendValueInput('DUTY');
+      this.appendDummyInput().appendField('(0~1023)');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Set 10-bit duty cycle: pwm.duty(value)');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_set_duty_u16'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('duty u16');
+      this.appendValueInput('DUTY');
+      this.appendDummyInput().appendField('(0~65536)');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Set 16-bit duty cycle: pwm.duty_u16(value)');
+    },
+  };
+
+  Blockly.Blocks['upy_pwm2_set_freq'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('pwm'), 'VAR')
+        .appendField('freq');
+      this.appendValueInput('FREQ');
+      this.appendDummyInput().appendField('Hz (1~40000000)');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Set PWM frequency: pwm.freq(value)');
+    },
+  };
+}
+
 export function registerPwmBlocks(boardManager: UPythonBoardManager): void {
   const pins = () => boardManager.selected.pwmPins;
 

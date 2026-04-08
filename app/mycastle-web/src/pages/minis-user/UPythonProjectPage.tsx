@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Divider,
   FormControl,
   IconButton,
   InputLabel,
@@ -48,6 +49,7 @@ import {
   UPythonBlocklyComponent,
   type UPythonBlocklyService,
   boardProfiles,
+  HARDWARE_CATEGORY_NAMES,
 } from '@modules/upythonblockly';
 import { MpyReplTerminal } from '@modules/upythonblockly/repl';
 import { UploadDialog } from '@modules/upythonblockly/upload';
@@ -69,11 +71,20 @@ function UPythonProjectPage() {
   const codeEditedRef = useRef(false);
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
+  const isLoadingSketchRef = useRef(false);
+  const hiddenCategoriesRef = useRef<Set<string>>(
+    (() => {
+      const stored = localStorage.getItem('upython_hidden_cats');
+      if (stored !== null) return new Set<string>(JSON.parse(stored) as string[]);
+      return new Set<string>(HARDWARE_CATEGORY_NAMES);
+    })(),
+  );
 
   const [board, setBoard] = useState<string>('rp2040_pico');
   const [newSketchName, setNewSketchName] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('blockly');
   const [codeEdited, setCodeEdited] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.5);
@@ -93,11 +104,30 @@ function UPythonProjectPage() {
   const initialSketch = searchParams.get('sketch');
   const [uploadCode, setUploadCode] = useState('');
   const [projectLibraries, setProjectLibraries] = useState<Array<{ url: string; remoteName: string }>>([]);
+  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(() => {
+    const stored = localStorage.getItem('upython_hidden_cats');
+    if (stored !== null) return new Set<string>(JSON.parse(stored) as string[]);
+    // Default: all hardware categories hidden
+    return new Set<string>(HARDWARE_CATEGORY_NAMES);
+  });
+  const [loadKey, setLoadKey] = useState(0);
 
   // Keep ref in sync for use inside Blockly listener
   useEffect(() => {
     codeEditedRef.current = codeEdited;
   }, [codeEdited]);
+
+  // After each sketch load, keep isLoadingSketchRef true for a bit longer to absorb any
+  // deferred Blockly workspace events, then do a final isDirty reset.
+  useEffect(() => {
+    if (loadKey === 0) return;
+    setIsDirty(false);
+    const t = setTimeout(() => {
+      isLoadingSketchRef.current = false;
+      setIsDirty(false);
+    }, 100);
+    return () => clearTimeout(t);
+  }, [loadKey]);
 
   // Sync generated code to Monaco editor
   const syncCodeToEditor = useCallback((code: string) => {
@@ -112,6 +142,11 @@ function UPythonProjectPage() {
   const handleServiceReady = useCallback((service: UPythonBlocklyService) => {
     serviceRef.current = service;
 
+    // Apply persisted toolbox visibility on init
+    if (hiddenCategoriesRef.current.size > 0) {
+      service.updateToolboxVisibility(hiddenCategoriesRef.current);
+    }
+
     service.onWorkspaceChange(() => {
       if (suppressBlocklyChangeRef.current) return;
       if (codeEditedRef.current) {
@@ -120,10 +155,12 @@ function UPythonProjectPage() {
       }
       const code = service.generateCode();
       syncCodeToEditor(code);
+      if (!isLoadingSketchRef.current) setIsDirty(true);
     });
 
     const code = service.generateCode();
     syncCodeToEditor(code);
+    setIsDirty(false);
   }, [syncCodeToEditor]);
 
   // Initialize/dispose Monaco editor when code panel is visible
@@ -145,7 +182,9 @@ function UPythonProjectPage() {
 
     editor.on('contentChanged', () => {
       if (suppressEditorChangeRef.current) return;
+      if (isLoadingSketchRef.current) return;
       setCodeEdited(true);
+      setIsDirty(true);
     });
 
     editorRef.current = editor;
@@ -243,31 +282,42 @@ function UPythonProjectPage() {
     if (!userName || !projectId) return;
     setCurrentSketch(sketchName);
     setCodeEdited(false);
+    setIsDirty(false);
+    isLoadingSketchRef.current = true;
 
     suppressBlocklyChangeRef.current = true;
     serviceRef.current?.clearWorkspace();
+    let xmlLoaded = false;
     try {
       const xmlContent = await minisApi.readSketchFile(
         userName, projectId, sketchName, `${sketchName}.blockly`,
       );
       if (serviceRef.current && xmlContent) {
         serviceRef.current.loadFromXml(xmlContent);
+        xmlLoaded = true;
       }
     } catch {
       // File not found — workspace already cleared
     }
     suppressBlocklyChangeRef.current = false;
 
-    try {
-      const pyContent = await minisApi.readSketchFile(
-        userName, projectId, sketchName, `${sketchName}.py`,
-      );
-      syncCodeToEditor(pyContent);
-    } catch {
-      if (serviceRef.current) {
-        syncCodeToEditor(serviceRef.current.generateCode());
+    if (xmlLoaded && serviceRef.current) {
+      // Regenerate from blockly so code always matches current blocks (handles legacy shadows etc.)
+      syncCodeToEditor(serviceRef.current.generateCode());
+    } else {
+      try {
+        const pyContent = await minisApi.readSketchFile(
+          userName, projectId, sketchName, `${sketchName}.py`,
+        );
+        syncCodeToEditor(pyContent);
+      } catch {
+        if (serviceRef.current) syncCodeToEditor(serviceRef.current.generateCode());
       }
     }
+    // Increment loadKey — the useEffect on loadKey will do the final isDirty reset and
+    // clear isLoadingSketchRef after 100ms (enough to absorb deferred Blockly events).
+    setIsDirty(false);
+    setLoadKey((k) => k + 1);
   };
 
   const handleNewSketch = () => {
@@ -290,6 +340,7 @@ function UPythonProjectPage() {
     ]);
     if (!sketches.includes(currentSketch)) setSketches((prev) => [...prev, currentSketch]);
     setCodeEdited(false);
+    setIsDirty(false);
   };
 
   const openUploadDialog = () => {
@@ -300,6 +351,7 @@ function UPythonProjectPage() {
   const handleConfirmOverwrite = () => {
     setConfirmOpen(false);
     setCodeEdited(false);
+    setIsDirty(false);
     if (serviceRef.current) {
       syncCodeToEditor(serviceRef.current.generateCode());
     }
@@ -417,15 +469,21 @@ function UPythonProjectPage() {
             </span>
           </Tooltip>
 
-          <Button
-            size="small" variant="outlined" color="inherit"
-            startIcon={<Save />}
-            onClick={handleSaveSketch}
-            disabled={!currentSketch}
-            sx={{ ml: 1, ...btnSx(false) }}
-          >
-            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save</Box>
-          </Button>
+          <Tooltip title={isDirty && currentSketch ? 'Unsaved changes' : ''}>
+            <span>
+              <Button
+                size="small"
+                variant={isDirty && currentSketch ? 'contained' : 'outlined'}
+                color={isDirty && currentSketch ? 'warning' : 'inherit'}
+                startIcon={<Save />}
+                onClick={handleSaveSketch}
+                disabled={!currentSketch}
+                sx={{ ml: 1, ...(isDirty && currentSketch ? {} : btnSx(false)) }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save</Box>
+              </Button>
+            </span>
+          </Tooltip>
 
           <Box sx={{ flexGrow: 1 }} />
 
@@ -525,6 +583,31 @@ function UPythonProjectPage() {
                 ))}
               </Select>
             </FormControl>
+            <Divider sx={{ mt: 2, mb: 1 }} />
+            <Typography variant="subtitle2" gutterBottom>Hardware Categories</Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+              {HARDWARE_CATEGORY_NAMES.map((name) => {
+                const visible = !hiddenCategories.has(name);
+                return (
+                  <Button
+                    key={name}
+                    size="small"
+                    variant={visible ? 'contained' : 'outlined'}
+                    onClick={() => {
+                      const next = new Set(hiddenCategories);
+                      if (visible) { next.add(name); } else { next.delete(name); }
+                      hiddenCategoriesRef.current = next;
+                      setHiddenCategories(next);
+                      localStorage.setItem('upython_hidden_cats', JSON.stringify([...next]));
+                      serviceRef.current?.updateToolboxVisibility(next);
+                    }}
+                    sx={{ textTransform: 'none', fontSize: '0.7rem', px: 0.75, py: 0.25, minWidth: 0 }}
+                  >
+                    {name}
+                  </Button>
+                );
+              })}
+            </Box>
           </Box>
         )}
 

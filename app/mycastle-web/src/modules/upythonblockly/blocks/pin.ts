@@ -15,6 +15,107 @@ const PULL_OPTIONS: Blockly.MenuGenerator = [
   ['DOWN', 'PULL_DOWN'],
 ];
 
+/** Register UIFlow2-style variable-based Pin blocks (no boardManager needed). */
+export function registerPinV2Blocks(): void {
+  /** Initialize a pin object stored in a user variable */
+  Blockly.Blocks['upy_pin2_init'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField('Init Pin');
+      this.appendValueInput('PIN');
+      this.appendDummyInput()
+        .appendField('mode')
+        .appendField(new Blockly.FieldDropdown(MODE_OPTIONS), 'MODE')
+        .appendField('pull')
+        .appendField(new Blockly.FieldDropdown(PULL_OPTIONS), 'PULL')
+        .appendField('→')
+        .appendField(new Blockly.FieldVariable('pin'), 'VAR');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Initialize Pin object: pin = Pin(n, mode=Pin.IN)');
+    },
+  };
+
+  Blockly.Blocks['upy_pin2_get_value'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('get')
+        .appendField(new Blockly.FieldVariable('pin'), 'VAR')
+        .appendField('value');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read pin level: pin.value()');
+    },
+  };
+
+  Blockly.Blocks['upy_pin2_on'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('pin'), 'VAR')
+        .appendField('on');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Drive pin HIGH: pin.on()');
+    },
+  };
+
+  Blockly.Blocks['upy_pin2_off'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField(new Blockly.FieldVariable('pin'), 'VAR')
+        .appendField('off');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Drive pin LOW: pin.off()');
+    },
+  };
+
+  /** Set pin value via boolean dropdown → pin.value(1) or pin.value(0) */
+  Blockly.Blocks['upy_pin2_set_bool'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('pin'), 'VAR')
+        .appendField('value')
+        .appendField(
+          new Blockly.FieldDropdown([
+            ['True', '1'],
+            ['False', '0'],
+          ]),
+          'BOOL_VAL',
+        );
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Set pin output: pin.value(1) or pin.value(0)');
+    },
+  };
+
+  /** Set pin value via numeric input → pin.value(x) */
+  Blockly.Blocks['upy_pin2_set_value'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('pin'), 'VAR')
+        .appendField('value');
+      this.appendValueInput('VAL');
+      this.appendDummyInput().appendField('(0 or 1)');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Set pin output to value: pin.value(x)');
+    },
+  };
+}
+
 export function registerPinBlocks(boardManager: UPythonBoardManager): void {
   // ── Simple output/input blocks (legacy, use _pin_out_X / _pin_in_X) ────────
 

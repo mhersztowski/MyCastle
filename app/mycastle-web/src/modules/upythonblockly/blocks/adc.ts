@@ -10,12 +10,108 @@ const ATTEN_OPTIONS: Blockly.MenuGenerator = [
   ['11DB (0~3.6V)', 'ATTN_11DB'],
 ];
 
+const ATTEN2_OPTIONS: Array<[string, string]> = [
+  ['0dB (0~1.2V)', 'ATTN_0DB'],
+  ['2.5dB (0~1.5V)', 'ATTN_2_5DB'],
+  ['6dB (0~2.2V)', 'ATTN_6DB'],
+  ['11dB (0~3.3V)', 'ATTN_11DB'],
+];
+
 const WIDTH_OPTIONS: Blockly.MenuGenerator = [
   ['9bit (0~511)', 'WIDTH_9BIT'],
   ['10bit (0~1023)', 'WIDTH_10BIT'],
   ['11bit (0~2047)', 'WIDTH_11BIT'],
   ['12bit (0~4095)', 'WIDTH_12BIT'],
 ];
+
+/** Register UIFlow2-style variable-based ADC blocks (no boardManager needed). */
+export function registerAdcV2Blocks(): void {
+  /** Init ADC from pin number → stored in a user-named variable */
+  Blockly.Blocks['upy_adc2_init'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput().appendField('Init Pin');
+      this.appendValueInput('PIN');
+      this.appendDummyInput()
+        .appendField('attenuation')
+        .appendField(new Blockly.FieldDropdown(ATTEN2_OPTIONS), 'ATTEN')
+        .appendField('→')
+        .appendField(new Blockly.FieldVariable('adc'), 'VAR');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Initialize ADC from pin: adc = ADC(Pin(n), atten=ADC.ATTN_11DB)');
+    },
+  };
+
+  Blockly.Blocks['upy_adc2_read'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('read')
+        .appendField(new Blockly.FieldVariable('adc'), 'VAR');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read raw ADC value: adc.read()');
+    },
+  };
+
+  Blockly.Blocks['upy_adc2_read_u16'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('read')
+        .appendField(new Blockly.FieldVariable('adc'), 'VAR')
+        .appendField('u16');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read ADC 0-65535: adc.read_u16()');
+    },
+  };
+
+  Blockly.Blocks['upy_adc2_read_uv'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('read')
+        .appendField(new Blockly.FieldVariable('adc'), 'VAR')
+        .appendField('microvolts');
+      this.setOutput(true, 'Number');
+      this.setInputsInline(true);
+      this.setTooltip('Read ADC in µV: adc.read_uv()');
+    },
+  };
+
+  Blockly.Blocks['upy_adc2_atten'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('adc'), 'VAR')
+        .appendField('atten')
+        .appendField(new Blockly.FieldDropdown(ATTEN2_OPTIONS), 'ATTEN');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Change ADC attenuation: adc.atten(ADC.ATTN_11DB)');
+    },
+  };
+
+  Blockly.Blocks['upy_adc2_width'] = {
+    init(this: Blockly.Block) {
+      this.setColour(HUE);
+      this.appendDummyInput()
+        .appendField('Set')
+        .appendField(new Blockly.FieldVariable('adc'), 'VAR')
+        .appendField('width')
+        .appendField(new Blockly.FieldDropdown(WIDTH_OPTIONS), 'WIDTH');
+      this.setPreviousStatement(true);
+      this.setNextStatement(true);
+      this.setInputsInline(true);
+      this.setTooltip('Set ADC resolution: adc.width(ADC.WIDTH_9BIT)');
+    },
+  };
+}
 
 export function registerAdcBlocks(boardManager: UPythonBoardManager): void {
   /** Initialize an ADC pin with a chosen attenuation (voltage range) */

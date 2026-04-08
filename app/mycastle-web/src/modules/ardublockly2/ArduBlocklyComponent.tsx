@@ -28,6 +28,8 @@ function ArduBlocklyComponent({
     service.init(containerRef.current, readFile).then(() => {
       if (disposed) return;
       onServiceReady?.(service);
+    }).catch((err) => {
+      console.error('[ArduBlockly] Initialization error:', err);
     });
 
     // Resize when container size changes
