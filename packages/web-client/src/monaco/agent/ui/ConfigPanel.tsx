@@ -15,8 +15,18 @@ export function loadAgentConfig(defaults?: Partial<AgentConfig>): AgentConfig {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored);
-      return { ...DEFAULT_AGENT_CONFIG, ...defaults, ...parsed };
+      const parsed = JSON.parse(stored) as AgentConfig;
+      const merged: AgentConfig = { ...DEFAULT_AGENT_CONFIG, ...defaults, ...parsed };
+      // defaults.providers[type].apiKey always wins — lets caller inject key from backend env
+      if (defaults?.providers) {
+        for (const type of Object.keys(defaults.providers) as AiProviderType[]) {
+          const defaultKey = defaults.providers[type]?.apiKey;
+          if (defaultKey) {
+            merged.providers[type] = { ...merged.providers[type], apiKey: defaultKey };
+          }
+        }
+      }
+      return merged;
     }
   } catch { /* ignore */ }
   return { ...DEFAULT_AGENT_CONFIG, ...defaults };

@@ -40,6 +40,23 @@ export default function App() {
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         applicationNameForUserAgent="MyCastleMobile/1.0"
+        overScrollMode="never"
+        bounces={false}
+        contentInsetAdjustmentBehavior="never"
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
+        cacheEnabled={false}
+        // Trigger resize events after page load so Blockly can re-measure blocks
+        // once native layout has settled. Spread across 3 s to cover variable init timing.
+        injectedJavaScript={`
+          (function() {
+            function triggerResize() { window.dispatchEvent(new Event('resize')); }
+            [100, 500, 900, 1400, 2000, 3000].forEach(function(ms) {
+              setTimeout(triggerResize, ms);
+            });
+          })();
+          true;
+        `}
       />
     </SafeAreaView>
   );

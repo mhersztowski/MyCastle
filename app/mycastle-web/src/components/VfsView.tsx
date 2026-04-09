@@ -104,7 +104,7 @@ function ResizeDivider({ onResize }: { onResize: (delta: number) => void }) {
     <>
       {/* Overlay during drag — stops Monaco/iframes from capturing mouse events */}
       {dragging && (
-        <Box sx={{ position: 'fixed', inset: 0, zIndex: 9999, cursor: 'col-resize' }} />
+        <Box sx={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, cursor: 'col-resize' }} />
       )}
       <Box
         onMouseDown={e => { e.preventDefault(); startDrag(e.clientX); }}
@@ -516,7 +516,7 @@ export function VfsView() {
           />
           {isDragOver && (
             <Box sx={{
-              position: 'absolute', inset: 0, zIndex: 10,
+              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10,
               bgcolor: 'action.hover', border: '2px dashed', borderColor: 'primary.main',
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               pointerEvents: 'none',

@@ -317,7 +317,7 @@ function PygameProjectPage() {
   const showBlockly = viewMode !== 'code';
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0, bgcolor: '#1e1e1e' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, bgcolor: '#1e1e1e' }}>
       {/* AppBar */}
       <AppBar position="static" sx={{ bgcolor: '#252526', boxShadow: 1, paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense" sx={{ gap: 1 }}>

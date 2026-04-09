@@ -291,7 +291,7 @@ export function GlobalTerminal() {
               ref={(el) => setDivRef(tab.id, el as HTMLDivElement | null)}
               sx={{
                 position: 'absolute',
-                inset: 0,
+                top: 0, left: 0, right: 0, bottom: 0,
                 display: activeId === tab.id ? 'block' : 'none',
                 '& .xterm': { height: '100%', padding: '4px' },
                 '& .xterm-viewport': { overflowY: 'auto' },

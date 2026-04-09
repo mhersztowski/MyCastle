@@ -25,6 +25,10 @@ function UPythonBlocklyComponent({
     service.init(containerRef.current).then(() => {
       if (disposed) return;
       onServiceReady?.(service);
+      // Re-render after init to fix block layout in WebView (getBBox/text measurement timing).
+      setTimeout(() => { if (!disposed) service.rerenderBlocks(); }, 200);
+      setTimeout(() => { if (!disposed) service.rerenderBlocks(); }, 800);
+      setTimeout(() => { if (!disposed) service.rerenderBlocks(); }, 1500);
     }).catch((err) => {
       console.error('[UPythonBlockly] Initialization error:', err);
     });
@@ -34,15 +38,21 @@ function UPythonBlocklyComponent({
     });
     observer.observe(containerRef.current);
 
+    // Re-render blocks on every window resize — catches injected resize events
+    // fired by the React Native WebView after native layout settles.
+    const onWindowResize = () => { if (!disposed) service.rerenderBlocks(); };
+    window.addEventListener('resize', onWindowResize);
+
     return () => {
       disposed = true;
       observer.disconnect();
+      window.removeEventListener('resize', onWindowResize);
       service.dispose();
       serviceRef.current = null;
     };
   }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+  return <div ref={containerRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />;
 }
 
 export default UPythonBlocklyComponent;

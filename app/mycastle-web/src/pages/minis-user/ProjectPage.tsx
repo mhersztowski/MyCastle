@@ -428,7 +428,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const showBlockly = mode !== 'code' && (viewMode === 'blockly' || viewMode === 'split');
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
       {/* Top AppBar */}
       <AppBar position="static" elevation={1} sx={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense">

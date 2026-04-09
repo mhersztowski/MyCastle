@@ -27,7 +27,7 @@ function MonacoEditorPage() {
   );
 
   return (
-    <Box sx={{ position: 'fixed', inset: 0 }}>
+    <Box sx={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
       <MonacoMultiEditor
         provider={cfs as FileSystemProvider}
         height="100%"

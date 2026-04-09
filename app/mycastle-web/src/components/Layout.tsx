@@ -223,7 +223,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
   return (
     <>
       <ImpersonationBanner />
-      <Box sx={{ position: 'fixed', inset: 0, top: bannerOffset, display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ position: 'fixed', top: bannerOffset, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column' }}>
         {/* AppBar — static, part of the flex column, no hardcoded margins needed */}
         <AppBar
           position="static"

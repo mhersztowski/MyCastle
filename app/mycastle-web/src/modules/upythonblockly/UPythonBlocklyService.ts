@@ -144,6 +144,28 @@ export class UPythonBlocklyService {
     }
   }
 
+  /** Force re-render of all blocks — fixes layout issues in WebView environments
+   *  where SVG text measurements (getBBox) may return wrong values on first render.
+   *  Uses double-rAF so rendering happens after the browser has actually painted. */
+  rerenderBlocks(): void {
+    if (!this.workspace) return;
+    Blockly.svgResize(this.workspace);
+    // Double requestAnimationFrame ensures we run after two paint frames,
+    // giving WebView time to complete its layout before Blockly measures text.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!this.workspace) return;
+        // Force reflow before measuring
+        void this.workspace.getParentSvg().getBoundingClientRect();
+        this.workspace.getAllBlocks(false).forEach((block) => {
+          try {
+            (block as Blockly.BlockSvg).render();
+          } catch { /* ignore */ }
+        });
+      });
+    });
+  }
+
   updateToolboxVisibility(hidden: ReadonlySet<string>): void {
     if (!this.workspace) return;
     this.workspace.updateToolbox(buildToolbox(hidden));

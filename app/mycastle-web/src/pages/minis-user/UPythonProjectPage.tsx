@@ -36,6 +36,7 @@ import {
   Refresh,
   Save,
   Settings,
+  SmartToy,
   Terminal as TerminalIcon,
   Upload as UploadIcon,
   VerticalSplit,
@@ -56,6 +57,8 @@ import { UploadDialog } from '@modules/upythonblockly/upload';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
 import type { MinisDeviceModel } from '@mhersztowski/core';
+import { MemoryFS } from '@mhersztowski/core';
+import { AgentPanel, DEFAULT_AGENT_CONFIG } from '@mhersztowski/web-client';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 
@@ -72,6 +75,9 @@ function UPythonProjectPage() {
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
   const isLoadingSketchRef = useRef(false);
+  // When Blockly init is delayed (WebView), sketch API call may complete first.
+  // Store the XML here and apply it once the service is ready.
+  const queuedSketchXmlRef = useRef<string | null>(null);
   const hiddenCategoriesRef = useRef<Set<string>>(
     (() => {
       const stored = localStorage.getItem('upython_hidden_cats');
@@ -79,6 +85,16 @@ function UPythonProjectPage() {
       return new Set<string>(HARDWARE_CATEGORY_NAMES);
     })(),
   );
+
+  // In React Native WebView the native layout may not be finalised when JS starts,
+  // so Blockly.inject() would read height=0. Delay init until layout settles.
+  const isWebView = typeof navigator !== 'undefined' && navigator.userAgent.includes('MyCastleMobile');
+  const [blocklyReady, setBlocklyReady] = useState(!isWebView);
+  useEffect(() => {
+    if (!isWebView) return;
+    const t = setTimeout(() => setBlocklyReady(true), 600);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [board, setBoard] = useState<string>('rp2040_pico');
   const [newSketchName, setNewSketchName] = useState('');
@@ -94,7 +110,9 @@ function UPythonProjectPage() {
   const [syncing, setSyncing] = useState(false);
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
-  const [sketchesOpen, setSketchesOpen] = useState(true);
+  const [sketchesOpen, setSketchesOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 900 : true,
+  );
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
   const [readmeEditMode, setReadmeEditMode] = useState(false);
@@ -111,6 +129,10 @@ function UPythonProjectPage() {
     return new Set<string>(HARDWARE_CATEGORY_NAMES);
   });
   const [loadKey, setLoadKey] = useState(0);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentFs, setAgentFs] = useState<MemoryFS | null>(null);
+  const [agentFsVersion, setAgentFsVersion] = useState(0);
+  const [agentApiKey, setAgentApiKey] = useState('');
 
   // Keep ref in sync for use inside Blockly listener
   useEffect(() => {
@@ -145,6 +167,16 @@ function UPythonProjectPage() {
     // Apply persisted toolbox visibility on init
     if (hiddenCategoriesRef.current.size > 0) {
       service.updateToolboxVisibility(hiddenCategoriesRef.current);
+    }
+
+    // If a sketch was fetched before Blockly was ready (WebView delay), load it now.
+    if (queuedSketchXmlRef.current) {
+      const xml = queuedSketchXmlRef.current;
+      queuedSketchXmlRef.current = null;
+      suppressBlocklyChangeRef.current = true;
+      service.loadFromXml(xml);
+      suppressBlocklyChangeRef.current = false;
+      setTimeout(() => service.rerenderBlocks(), 300);
     }
 
     service.onWorkspaceChange(() => {
@@ -292,9 +324,15 @@ function UPythonProjectPage() {
       const xmlContent = await minisApi.readSketchFile(
         userName, projectId, sketchName, `${sketchName}.blockly`,
       );
-      if (serviceRef.current && xmlContent) {
-        serviceRef.current.loadFromXml(xmlContent);
-        xmlLoaded = true;
+      if (xmlContent) {
+        if (serviceRef.current) {
+          serviceRef.current.loadFromXml(xmlContent);
+          xmlLoaded = true;
+        } else {
+          // Blockly not ready yet (WebView delay) — queue for handleServiceReady
+          queuedSketchXmlRef.current = xmlContent;
+          xmlLoaded = true;
+        }
       }
     } catch {
       // File not found — workspace already cleared
@@ -318,6 +356,9 @@ function UPythonProjectPage() {
     // clear isLoadingSketchRef after 100ms (enough to absorb deferred Blockly events).
     setIsDirty(false);
     setLoadKey((k) => k + 1);
+    // Re-render blocks after loading to fix layout issues in WebView where getBBox()
+    // may return stale/zero values causing blocks to overlap.
+    setTimeout(() => serviceRef.current?.rerenderBlocks(), 300);
   };
 
   const handleNewSketch = () => {
@@ -356,6 +397,27 @@ function UPythonProjectPage() {
       syncCodeToEditor(serviceRef.current.generateCode());
     }
   };
+
+  const handleOpenAgent = useCallback(async () => {
+    const code = editorRef.current?.getContent() ?? generatedCode;
+    const xml = serviceRef.current?.serializeToXml() ?? '';
+    const sketchName = currentSketch ?? 'sketch';
+
+    const apiKey = await minisApi.getAnthropicKey().catch(() => '');
+
+    const fs = new MemoryFS();
+    const enc = new TextEncoder();
+    await fs.mkdir(`/${sketchName}`);
+    await fs.writeFile(`/${sketchName}/${sketchName}.py`, enc.encode(code), { create: true, overwrite: true });
+    if (xml) {
+      await fs.writeFile(`/${sketchName}/${sketchName}.blockly`, enc.encode(xml), { create: true, overwrite: true });
+    }
+
+    setAgentApiKey(apiKey);
+    setAgentFs(fs);
+    setAgentFsVersion((v) => v + 1);
+    setAgentOpen(true);
+  }, [generatedCode, currentSketch]);
 
   // --- Splitter drag ---
   const splitterContainerRef = useRef<HTMLDivElement>(null);
@@ -400,7 +462,7 @@ function UPythonProjectPage() {
   const codeForUpload = editorRef.current?.getContent() ?? generatedCode;
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
       {/* Top AppBar */}
       <AppBar position="static" elevation={1} sx={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense">
@@ -432,6 +494,17 @@ function UPythonProjectPage() {
             sx={{ ml: 1, ...btnSx(readmeOpen) }}
           >
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>README</Box>
+          </Button>
+
+          <Button
+            size="small" variant={agentOpen ? 'contained' : 'outlined'} color="inherit"
+            startIcon={<SmartToy />}
+            onClick={() => {
+              if (agentOpen) { setAgentOpen(false); } else { void handleOpenAgent(); }
+            }}
+            sx={{ ml: 1, ...btnSx(agentOpen) }}
+          >
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>AI</Box>
           </Button>
 
           <Button
@@ -546,12 +619,16 @@ function UPythonProjectPage() {
       </AppBar>
 
       {/* Content area */}
-      <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden' }}>
+      <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
         {/* Configuration panel */}
         {configOpen && (
           <Box
             sx={{
-              width: 280, flexShrink: 0,
+              width: { xs: '100%', sm: 280 }, maxWidth: { xs: 320, sm: 'none' },
+              flexShrink: 0,
+              position: { xs: 'absolute', sm: 'relative' },
+              zIndex: { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0,
               borderRight: 1, borderColor: 'divider',
               overflow: 'auto', bgcolor: 'background.paper', p: 2,
             }}
@@ -615,7 +692,11 @@ function UPythonProjectPage() {
         {readmeOpen && (
           <Box
             sx={{
-              width: 360, flexShrink: 0,
+              width: { xs: '100%', sm: 360 }, maxWidth: { xs: 400, sm: 'none' },
+              flexShrink: 0,
+              position: { xs: 'absolute', sm: 'relative' },
+              zIndex: { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0,
               borderRight: 1, borderColor: 'divider',
               display: 'flex', flexDirection: 'column',
               bgcolor: 'background.paper',
@@ -665,11 +746,47 @@ function UPythonProjectPage() {
           </Box>
         )}
 
+        {/* AI Agent panel */}
+        {agentOpen && agentFs && (
+          <Box
+            sx={{
+              width: { xs: '100%', sm: 380 }, maxWidth: { xs: 420, sm: 'none' },
+              flexShrink: 0,
+              position: { xs: 'absolute', sm: 'relative' },
+              zIndex: { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0,
+              borderRight: 1, borderColor: 'divider',
+              display: 'flex', flexDirection: 'column',
+              bgcolor: 'background.paper',
+            }}
+          >
+            <AgentPanel
+              key={agentFsVersion}
+              provider={agentFs}
+              providerVersion={agentFsVersion}
+              defaultConfig={{
+                providerType: 'anthropic',
+                providers: {
+                  ...DEFAULT_AGENT_CONFIG.providers,
+                  anthropic: {
+                    ...DEFAULT_AGENT_CONFIG.providers.anthropic,
+                    apiKey: agentApiKey,
+                  },
+                },
+              }}
+            />
+          </Box>
+        )}
+
         {/* Sketches panel */}
         {sketchesOpen && (
           <Box
             sx={{
-              width: 220, flexShrink: 0,
+              width: { xs: '100%', sm: 220 }, maxWidth: { xs: 280, sm: 'none' },
+              flexShrink: 0,
+              position: { xs: 'absolute', sm: 'relative' },
+              zIndex: { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0,
               borderRight: 1, borderColor: 'divider',
               display: 'flex', flexDirection: 'column',
               bgcolor: 'background.paper',
@@ -724,12 +841,14 @@ function UPythonProjectPage() {
               position: 'relative', overflow: 'hidden',
               display: showBlockly ? 'block' : 'none',
               width: viewMode === 'split' ? `${splitRatio * 100}%` : '100%',
+              height: '100%',
               flexShrink: 0,
             }}
           >
             <UPythonBlocklyComponent
               onServiceReady={handleServiceReady}
               initialBoard={board}
+              ready={blocklyReady}
             />
           </Box>
 

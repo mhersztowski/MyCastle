@@ -20,12 +20,10 @@ function LoginPage() {
     try {
       await login(userName, password);
       const redirect = sessionStorage.getItem('auth_redirect');
-      if (redirect) {
-        sessionStorage.removeItem('auth_redirect');
-        navigate(redirect);
-      } else {
-        navigate(`/user/${userName}/main`);
-      }
+      sessionStorage.removeItem('auth_redirect');
+      // Only follow redirect if it's not another user's page
+      const redirectOk = redirect && (!redirect.startsWith('/user/') || redirect.startsWith(`/user/${userName}/`));
+      navigate(redirectOk ? redirect : `/user/${userName}/main`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

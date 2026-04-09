@@ -496,9 +496,21 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Config: GET /api/config/anthropic-key — returns Anthropic API key from env
+    if (method === 'GET' && apiPath === '/config/anthropic-key') {
+      this.sendJsonResponse(res, 200, { apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
+      return;
+    }
+
     // Next available serial number: GET /api/next-sn
     if (method === 'GET' && apiPath === '/next-sn') {
       await this.handleNextSn(res);
+      return;
+    }
+
+    // GitHub Project Defs: accessible to all authenticated users
+    if (apiPath.startsWith('/github-projectdefs')) {
+      await this.handleGithubProjectdefs(req, res, method, apiPath.replace('/github-projectdefs', '/admin/github-projectdefs'));
       return;
     }
 
@@ -708,6 +720,10 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (userDevicesMatch) {
       const userName = decodeURIComponent(userDevicesMatch[1]);
       const deviceName = userDevicesMatch[2] ? decodeURIComponent(userDevicesMatch[2]) : undefined;
+      if (method !== 'GET' && user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: can only manage your own devices' });
+        return;
+      }
       await this.handleUserDevices(req, res, method, userName, deviceName);
       return;
     }
@@ -718,6 +734,10 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (userDeviceDefsMatch) {
       const userName = decodeURIComponent(userDeviceDefsMatch[1]);
       const defId = userDeviceDefsMatch[2] ? decodeURIComponent(userDeviceDefsMatch[2]) : undefined;
+      if (method !== 'GET' && user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: can only manage your own device definitions' });
+        return;
+      }
       await this.handleUserDeviceDefs(req, res, method, userName, defId);
       return;
     }
@@ -2061,6 +2081,28 @@ const { password, ...safeBody } = body;
       typeValue: 'device_defs',
       lookupKey: 'id',
     };
+
+    // For GET list: merge admin's global defs with user's own defs (admin defs first, user defs override by id)
+    if (req.method === 'GET' && !defId) {
+      try {
+        const usersData = (await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`)) as Record<string, unknown[]>;
+        const users = (usersData['items'] ?? []) as Array<Record<string, unknown>>;
+        const adminUser = users.find((u) => u['isAdmin'] === true);
+        const adminName = adminUser ? String(adminUser['name']) : null;
+        const userDefs = ((await this.readJsonFile(config.filePath)) as Record<string, unknown[]>)['deviceDefs'] ?? [];
+        const adminDefs = adminName && adminName !== userName
+          ? (((await this.readJsonFile(`${MINIS_ROOT}/Users/${adminName}/DeviceDefList.json`)) as Record<string, unknown[]>)['deviceDefs'] ?? [])
+          : [];
+        const merged = [...adminDefs as object[], ...userDefs as object[]].filter(
+          (item, idx, arr) => arr.findIndex((o) => (o as Record<string, unknown>).id === (item as Record<string, unknown>).id) === idx,
+        );
+        this.sendJsonResponse(res, 200, { items: merged });
+        return;
+      } catch {
+        // fall through to standard CRUD on error
+      }
+    }
+
     await this.handleCrud(req, res, method, config, defId);
   }
 

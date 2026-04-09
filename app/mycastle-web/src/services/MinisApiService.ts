@@ -155,7 +155,7 @@ class MinisApiService {
   }
 
   async getGithubProjectdefs(url: string): Promise<{ version: string; updatedAt: string; rawBase: string; projects: GithubProjectEntry[]; modules: GithubModuleEntry[] }> {
-    return this.request('GET', `/admin/github-projectdefs?url=${encodeURIComponent(url)}`);
+    return this.request('GET', `/github-projectdefs?url=${encodeURIComponent(url)}`);
   }
 
   // User - Devices
@@ -515,6 +515,11 @@ class MinisApiService {
       binary += String.fromCharCode(bytes[i]);
     }
     return binary;
+  }
+
+  async getAnthropicKey(): Promise<string> {
+    const res = await this.request<{ apiKey: string }>('GET', '/config/anthropic-key');
+    return res.apiKey ?? '';
   }
 }
 

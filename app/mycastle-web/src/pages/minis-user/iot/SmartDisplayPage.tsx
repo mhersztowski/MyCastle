@@ -441,7 +441,7 @@ function ImmichSection({ onAddView }: { onAddView: (view: SmartDisplayView) => v
                     <Box
                       onClick={() => !downloading && usePhoto(asset)}
                       sx={{
-                        position: 'absolute', inset: 0, borderRadius: 1,
+                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 1,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         bgcolor: 'rgba(0,0,0,0.55)',
                         opacity: 0, transition: 'opacity .15s',
