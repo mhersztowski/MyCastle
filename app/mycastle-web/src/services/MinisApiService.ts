@@ -37,7 +37,7 @@ export interface GithubProjectEntry {
   hasDocs: boolean;
   sketches: GithubSketchEntry[];
   readmePath: string | null;
-  libraries: Array<{ name: string; version: string; url?: string }>;
+  libraries: Array<{ name?: string; version?: string; url?: string; remoteName?: string }>;
 }
 
 export interface GithubModuleEntry {
@@ -208,7 +208,7 @@ class MinisApiService {
     return data.items;
   }
 
-  async createUserProject(userName: string, data: { name: string; githubProjectId: string; githubRepoUrl?: string; softwarePlatform: string; moduleId?: string; boardProfileKey?: string; libraries?: Array<{ name: string; version: string; url?: string }> }): Promise<MinisProjectModel> {
+  async createUserProject(userName: string, data: { name: string; githubProjectId: string; githubRepoUrl?: string; softwarePlatform: string; moduleId?: string; boardProfileKey?: string; libraries?: Array<{ name?: string; version?: string; url?: string; remoteName?: string }> }): Promise<MinisProjectModel> {
     return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userName)}/project-arduino`, data);
   }
 
@@ -225,7 +225,7 @@ class MinisApiService {
     githubRepoUrl: string,
     sketches: GithubSketchEntry[],
     readmePath: string | null,
-    libraries?: Array<{ name: string; version: string; url?: string }>,
+    libraries?: Array<{ name?: string; version?: string; url?: string; remoteName?: string }>,
   ): Promise<void> {
     await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/clone-from-github`, { githubRepoUrl, sketches, readmePath, libraries });
   }

@@ -2714,7 +2714,7 @@ const { password, ...safeBody } = body;
 
       const sketches = (entry.sketches ?? []) as Array<{ name: string; files: string[] }>;
       const readmePath = (entry.readmePath ?? null) as string | null;
-      const libraries = (entry.libraries ?? []) as Array<{ name: string; version: string }>;
+      const libraries = (entry.libraries ?? []) as Array<{ name?: string; version?: string; url?: string; remoteName?: string }>;
 
       const projectDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId);
 
