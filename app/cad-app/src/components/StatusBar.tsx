@@ -1,21 +1,33 @@
-import { Box, Typography } from '@mui/material';
-import type { Project } from '@mhersztowski/core-cad';
+import { Box, Chip, Typography } from '@mui/material';
+import type { Project, ViewMode } from '@mhersztowski/core-cad';
 import type { ToolName } from '../tools/types';
 
 interface Props {
   project: Project;
   activeTool: ToolName;
+  viewMode: ViewMode;
 }
 
 const TOOL_HINTS: Record<ToolName, string> = {
-  select: 'Click to select · Shift+click multi-select · Drag box-select · Delete removes selection',
-  line: 'Click start point · Click end point · Esc to cancel · chains automatically',
-  circle: 'Click center · Click radius point · Esc to cancel',
-  rect: 'Click first corner · Click second corner · Esc to cancel',
-  polyline: 'Click points · Enter to finish · C to close · Esc to cancel',
+  select: 'Click · Shift+click multi · Drag box-select · Del removes',
+  line: 'Click start · Click end · chains automatically · Esc to cancel',
+  circle: 'Click center · Click edge · Esc to cancel',
+  arc: 'Click center · Click start point · Click end point (CCW) · Esc to cancel',
+  rect: 'Click corner A · Click corner B · Esc to cancel',
+  polyline: 'Click points · Enter=finish · C=close · Esc to cancel',
+  move: 'Select first · Click base point · Click destination · Esc to cancel',
+  copy: 'Select first · Click base point · Click destination · Esc to cancel',
+  rotate: 'Select first · Click center · Drag or type angle in cmdline · Enter/click to confirm',
+  offset: 'Click entity · Move cursor to set distance & side · Click to commit · Esc to cancel',
+  trim: 'Click boundary entity · Click part to remove · Enter=done · Esc to cancel',
+  fillet: 'Click first line · Click second line · Type radius before clicking (0=sharp) · Esc to cancel',
+  dimension: 'Click point 1 · Click point 2 · Click offset position · chains automatically',
+  box3d: 'Click corner A · Click corner B to place box · Esc to cancel',
+  cylinder3d: 'Click center · Click edge for radius · Esc to cancel',
+  sphere3d: 'Click center · Click edge for radius · Esc to cancel',
 };
 
-export function StatusBar({ project, activeTool }: Props) {
+export function StatusBar({ project, activeTool, viewMode }: Props) {
   const entityCount = project.entityRegistry.getAll().length;
   const selectedCount = project.selectionManager.count();
   const activeLayer = project.layerSystem.getActive();
@@ -28,6 +40,9 @@ export function StatusBar({ project, activeTool }: Props) {
       <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 600 }}>
         {activeTool.toUpperCase()}
       </Typography>
+      {viewMode === '3d' && (
+        <Chip label="3D" size="small" sx={{ height: 16, fontSize: 9, bgcolor: 'rgba(79,195,247,0.2)', color: 'primary.main', '& .MuiChip-label': { px: 0.75 } }} />
+      )}
       <Typography variant="caption" sx={{ color: 'text.secondary', flex: 1 }}>
         {TOOL_HINTS[activeTool]}
       </Typography>

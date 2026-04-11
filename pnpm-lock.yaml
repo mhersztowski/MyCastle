@@ -35,6 +35,9 @@ importers:
       '@emotion/styled':
         specifier: ^11.14.1
         version: 11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0)
+      '@mhersztowski/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@mhersztowski/core-cad':
         specifier: workspace:*
         version: link:../../packages/core-cad
@@ -47,6 +50,9 @@ importers:
       '@mhersztowski/ui-core':
         specifier: workspace:*
         version: link:../../packages/ui-core
+      '@mhersztowski/web-client':
+        specifier: workspace:*
+        version: link:../../packages/web-client
       '@mui/icons-material':
         specifier: ^7.3.7
         version: 7.3.8(@mui/material@7.3.8(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react@18.2.0))(@types/react@18.2.79)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(@types/react@18.2.79)(react@18.2.0)
@@ -90,6 +96,28 @@ importers:
       vite:
         specifier: ^7.3.1
         version: 7.3.1(@types/node@20.19.33)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  app/cad-backend:
+    dependencies:
+      '@mhersztowski/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      dotenv:
+        specifier: ^16.3.1
+        version: 16.6.1
+    devDependencies:
+      '@types/node':
+        specifier: ^20.10.0
+        version: 20.19.33
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.0.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   app/demo-scene-3d:
     dependencies:

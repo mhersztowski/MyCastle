@@ -1,0 +1,286 @@
+import React, { useCallback } from 'react';
+import {
+  Box, Typography, TextField, Divider, FormControlLabel,
+  Checkbox, Select, MenuItem, InputLabel, FormControl,
+} from '@mui/material';
+import type { Entity, Project } from '@mhersztowski/core-cad';
+
+interface Props {
+  project: Project;
+  version: number;
+}
+
+function NumField({
+  label, value, onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <TextField
+      label={label}
+      size="small"
+      variant="outlined"
+      type="number"
+      value={value.toFixed(2)}
+      onChange={e => {
+        const n = parseFloat(e.target.value);
+        if (!isNaN(n)) onChange(n);
+      }}
+      sx={{ width: '100%', '& .MuiInputBase-input': { fontSize: 11, py: 0.5 } }}
+      InputLabelProps={{ sx: { fontSize: 11 } }}
+    />
+  );
+}
+
+function EntityFields({ entity, project }: { entity: Entity; project: Project }) {
+  const update = useCallback(
+    (changes: Partial<Entity>) => project.updateEntity(entity.id, changes),
+    [entity.id, project],
+  );
+
+  const fields: React.ReactNode[] = [];
+
+  // Common: color
+  fields.push(
+    <Box key="color" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary', width: 50 }}>Color</Typography>
+      {entity.color === 'bylayer' ? (
+        <Typography variant="caption" sx={{ color: 'text.disabled', fontStyle: 'italic' }}>bylayer</Typography>
+      ) : (
+        <Box
+          component="input"
+          type="color"
+          value={entity.color as string}
+          onChange={e => update({ color: e.target.value } as Partial<Entity>)}
+          sx={{ width: 28, height: 20, border: 'none', p: 0, cursor: 'pointer', bgcolor: 'transparent' }}
+        />
+      )}
+    </Box>,
+  );
+
+  // Type-specific fields
+  switch (entity.type) {
+    case 'line':
+      fields.push(
+        <NumField key="x1" label="X1" value={entity.x1} onChange={v => update({ x1: v } as Partial<Entity>)} />,
+        <NumField key="y1" label="Y1" value={entity.y1} onChange={v => update({ y1: v } as Partial<Entity>)} />,
+        <NumField key="x2" label="X2" value={entity.x2} onChange={v => update({ x2: v } as Partial<Entity>)} />,
+        <NumField key="y2" label="Y2" value={entity.y2} onChange={v => update({ y2: v } as Partial<Entity>)} />,
+      );
+      break;
+
+    case 'circle':
+      fields.push(
+        <NumField key="cx" label="Center X" value={entity.cx} onChange={v => update({ cx: v } as Partial<Entity>)} />,
+        <NumField key="cy" label="Center Y" value={entity.cy} onChange={v => update({ cy: v } as Partial<Entity>)} />,
+        <NumField key="r" label="Radius" value={entity.radius} onChange={v => update({ radius: v } as Partial<Entity>)} />,
+      );
+      break;
+
+    case 'rect':
+      fields.push(
+        <NumField key="x" label="X" value={entity.x} onChange={v => update({ x: v } as Partial<Entity>)} />,
+        <NumField key="y" label="Y" value={entity.y} onChange={v => update({ y: v } as Partial<Entity>)} />,
+        <NumField key="w" label="Width" value={entity.width} onChange={v => update({ width: v } as Partial<Entity>)} />,
+        <NumField key="h" label="Height" value={entity.height} onChange={v => update({ height: v } as Partial<Entity>)} />,
+      );
+      break;
+
+    case 'polyline':
+      fields.push(
+        <Typography key="pts" variant="caption" sx={{ color: 'text.secondary' }}>
+          Points: {entity.points.length}
+        </Typography>,
+        <FormControlLabel
+          key="closed"
+          control={
+            <Checkbox
+              size="small"
+              checked={entity.closed}
+              onChange={e => update({ closed: e.target.checked } as Partial<Entity>)}
+            />
+          }
+          label={<Typography variant="caption">Closed</Typography>}
+          sx={{ mx: 0 }}
+        />,
+      );
+      break;
+
+    case 'arc':
+      fields.push(
+        <NumField key="cx" label="Center X" value={entity.cx} onChange={v => update({ cx: v } as Partial<Entity>)} />,
+        <NumField key="cy" label="Center Y" value={entity.cy} onChange={v => update({ cy: v } as Partial<Entity>)} />,
+        <NumField key="r" label="Radius" value={entity.radius} onChange={v => update({ radius: v } as Partial<Entity>)} />,
+        <NumField key="sa" label="Start°" value={(entity.startAngle * 180) / Math.PI} onChange={v => update({ startAngle: (v * Math.PI) / 180 } as Partial<Entity>)} />,
+        <NumField key="ea" label="End°" value={(entity.endAngle * 180) / Math.PI} onChange={v => update({ endAngle: (v * Math.PI) / 180 } as Partial<Entity>)} />,
+      );
+      break;
+
+    case 'dimension': {
+      const len = Math.sqrt(
+        (entity.x2 - entity.x1) ** 2 + (entity.y2 - entity.y1) ** 2,
+      );
+      fields.push(
+        <Typography key="len" variant="caption" sx={{ color: 'primary.main', fontWeight: 600 }}>
+          Length: {len.toFixed(3)}
+        </Typography>,
+        <NumField key="x1" label="X1" value={entity.x1} onChange={v => update({ x1: v } as Partial<Entity>)} />,
+        <NumField key="y1" label="Y1" value={entity.y1} onChange={v => update({ y1: v } as Partial<Entity>)} />,
+        <NumField key="x2" label="X2" value={entity.x2} onChange={v => update({ x2: v } as Partial<Entity>)} />,
+        <NumField key="y2" label="Y2" value={entity.y2} onChange={v => update({ y2: v } as Partial<Entity>)} />,
+        <NumField key="off" label="Offset" value={entity.offset} onChange={v => update({ offset: v } as Partial<Entity>)} />,
+      );
+      break;
+    }
+
+    case 'box3d':
+      fields.push(
+        <NumField key="cx" label="Center X" value={entity.cx} onChange={v => update({ cx: v } as Partial<Entity>)} />,
+        <NumField key="cy" label="Center Y" value={entity.cy} onChange={v => update({ cy: v } as Partial<Entity>)} />,
+        <NumField key="w" label="Width" value={entity.width} onChange={v => update({ width: v } as Partial<Entity>)} />,
+        <NumField key="d" label="Depth" value={entity.depth} onChange={v => update({ depth: v } as Partial<Entity>)} />,
+        <NumField key="h" label="Height" value={entity.height} onChange={v => update({ height: v } as Partial<Entity>)} />,
+      );
+      break;
+
+    case 'cylinder3d':
+      fields.push(
+        <NumField key="cx" label="Center X" value={entity.cx} onChange={v => update({ cx: v } as Partial<Entity>)} />,
+        <NumField key="cy" label="Center Y" value={entity.cy} onChange={v => update({ cy: v } as Partial<Entity>)} />,
+        <NumField key="r" label="Radius" value={entity.radius} onChange={v => update({ radius: v } as Partial<Entity>)} />,
+        <NumField key="h" label="Height" value={entity.height} onChange={v => update({ height: v } as Partial<Entity>)} />,
+      );
+      break;
+
+    case 'sphere3d':
+      fields.push(
+        <NumField key="cx" label="Center X" value={entity.cx} onChange={v => update({ cx: v } as Partial<Entity>)} />,
+        <NumField key="cy" label="Center Y" value={entity.cy} onChange={v => update({ cy: v } as Partial<Entity>)} />,
+        <NumField key="r" label="Radius" value={entity.radius} onChange={v => update({ radius: v } as Partial<Entity>)} />,
+      );
+      break;
+  }
+
+  // Extrude height — only for 2D entities
+  const is3dPrimitive = entity.type === 'box3d' || entity.type === 'cylinder3d' || entity.type === 'sphere3d';
+  if (!is3dPrimitive) {
+    fields.push(
+      <NumField
+        key="extrude"
+        label="Extrude H"
+        value={entity.extrudeHeight}
+        onChange={v => update({ extrudeHeight: v } as Partial<Entity>)}
+      />,
+    );
+  }
+
+  return <>{fields}</>;
+}
+
+export function PropertiesPanel({ project, version }: Props) {
+  void version; // triggers re-render on changes
+  const selectedIds = project.selectionManager.getSelected();
+
+  if (selectedIds.length === 0) {
+    return (
+      <Box sx={{ p: 1.5 }}>
+        <Typography variant="caption" sx={{ color: 'text.disabled', fontStyle: 'italic' }}>
+          No selection
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (selectedIds.length > 1) {
+    // Multi-selection: show layer assignment and count
+    const layers = project.layerSystem.getAll();
+    return (
+      <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          {selectedIds.length} entities selected
+        </Typography>
+        <FormControl size="small" fullWidth>
+          <InputLabel sx={{ fontSize: 11 }}>Move to layer</InputLabel>
+          <Select
+            label="Move to layer"
+            value=""
+            size="small"
+            onChange={e => {
+              const layerId = e.target.value as string;
+              for (const id of selectedIds) {
+                project.updateEntity(id, { layerId } as Partial<Entity>);
+              }
+            }}
+            sx={{ fontSize: 11 }}
+          >
+            {layers.map(l => (
+              <MenuItem key={l.id} value={l.id} sx={{ fontSize: 11 }}>
+                <Box component="span" sx={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', bgcolor: l.color, mr: 1 }} />
+                {l.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Box>
+    );
+  }
+
+  const entity = project.entityRegistry.get(selectedIds[0]);
+  if (!entity) return null;
+  const layers = project.layerSystem.getAll();
+
+  return (
+    <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.75, overflowY: 'auto' }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 600, textTransform: 'uppercase', fontSize: 10 }}>
+          {entity.type}
+        </Typography>
+        <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10 }}>
+          {entity.id.slice(0, 8)}
+        </Typography>
+      </Box>
+
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)' }} />
+
+      {/* Layer */}
+      <FormControl size="small" fullWidth>
+        <InputLabel sx={{ fontSize: 11 }}>Layer</InputLabel>
+        <Select
+          label="Layer"
+          value={entity.layerId}
+          size="small"
+          onChange={e => project.updateEntity(entity.id, { layerId: e.target.value as string } as Partial<Entity>)}
+          sx={{ fontSize: 11 }}
+        >
+          {layers.map(l => (
+            <MenuItem key={l.id} value={l.id} sx={{ fontSize: 11 }}>
+              <Box component="span" sx={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', bgcolor: l.color, mr: 1 }} />
+              {l.name}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      {/* Visibility */}
+      <FormControlLabel
+        control={
+          <Checkbox
+            size="small"
+            checked={entity.visible}
+            onChange={e => project.updateEntity(entity.id, { visible: e.target.checked } as Partial<Entity>)}
+          />
+        }
+        label={<Typography variant="caption">Visible</Typography>}
+        sx={{ mx: 0 }}
+      />
+
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)' }} />
+
+      {/* Type-specific fields */}
+      <EntityFields entity={entity} project={project} />
+    </Box>
+  );
+}

@@ -1,5 +1,5 @@
 import type { Point2D } from '@mhersztowski/core-cad';
-import type { PreviewGeometry, Tool, ToolContext } from './types';
+import type { DimensionLabel, PreviewGeometry, Tool, ToolContext } from './types';
 
 export class RectTool implements Tool {
   name = 'rect' as const;
@@ -9,6 +9,21 @@ export class RectTool implements Tool {
   getPreview(): PreviewGeometry | null {
     if (!this.corner || !this.current) return null;
     return { type: 'rect', points: [this.corner, this.current] };
+  }
+
+  getDimensionLabels(): DimensionLabel[] {
+    if (!this.corner || !this.current) return [];
+    const w = Math.abs(this.current.x - this.corner.x);
+    const h = Math.abs(this.current.y - this.corner.y);
+    if (w < 0.01 || h < 0.01) return [];
+    const x0 = Math.min(this.corner.x, this.current.x);
+    const y0 = Math.min(this.corner.y, this.current.y);
+    return [
+      // Width: below bottom edge, horizontal center
+      { worldX: x0 + w / 2, worldY: y0, text: `W: ${w.toFixed(2)}`, offsetY: 16, variant: 'primary' },
+      // Height: right of right edge, vertical center
+      { worldX: x0 + w, worldY: y0 + h / 2, text: `H: ${h.toFixed(2)}`, offsetX: 8, variant: 'secondary' },
+    ];
   }
 
   onPointerDown(point: Point2D, ctx: ToolContext): void {

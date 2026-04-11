@@ -1,0 +1,168 @@
+import 'dotenv/config';
+import http from 'node:http';
+import { URL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { NodeFS, VfsError } from '@mhersztowski/core';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const DATA_DIR = process.env.CAD_DATA_DIR ?? resolve(__dirname, '../data');
+const PORT = parseInt(process.env.CAD_BACKEND_PORT ?? '1898', 10);
+// Allow any origin in dev; in production set CAD_CORS_ORIGIN explicitly
+const CORS_ORIGIN = process.env.CAD_CORS_ORIGIN ?? '*';
+
+// Root VFS — all paths are /users/{userId}/projects/{name}.cad.json
+// NodeFS auto-creates parent dirs on writeFile, so no bootstrapping needed.
+const vfs = new NodeFS({ rootDir: DATA_DIR });
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function setCors(req: http.IncomingMessage, res: http.ServerResponse) {
+  const origin = (CORS_ORIGIN === '*' ? req.headers.origin : CORS_ORIGIN) ?? '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Cad-User');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+}
+
+function json(res: http.ServerResponse, data: unknown, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+function sendVfsError(res: http.ServerResponse, err: unknown) {
+  if (err instanceof VfsError) {
+    const statusMap: Record<string, number> = {
+      FileNotFound: 404,
+      FileExists: 409,
+      NoPermissions: 403,
+      NotADirectory: 400,
+      IsADirectory: 400,
+      Unavailable: 503,
+    };
+    const status = statusMap[err.code] ?? 500;
+    json(res, { error: err.message, code: err.code, path: err.path }, status);
+  } else {
+    console.error('[cad-backend]', err);
+    json(res, { error: String(err), code: 'Unknown' }, 500);
+  }
+}
+
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', c => chunks.push(c as Buffer));
+    req.on('end', () => {
+      try {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve(text ? (JSON.parse(text) as Record<string, unknown>) : {});
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+// ── request handler ───────────────────────────────────────────────────────────
+
+const server = http.createServer(async (req, res) => {
+  setCors(req, res);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  const url = new URL(req.url!, `http://localhost:${PORT}`);
+  // Strip /api/vfs prefix so the route is just /stat, /readdir, etc.
+  const route = url.pathname.replace(/^\/api\/vfs/, '');
+  const path = url.searchParams.get('path') ?? '/';
+
+  try {
+    if (req.method === 'GET') {
+      switch (route) {
+        case '/capabilities':
+          json(res, { readonly: false, watch: false });
+          break;
+
+        case '/stat': {
+          const stat = await vfs.stat(path);
+          json(res, stat);
+          break;
+        }
+
+        case '/readdir': {
+          const entries = await vfs.readDirectory(path);
+          json(res, { entries });
+          break;
+        }
+
+        case '/readFile': {
+          const bytes = await vfs.readFile(path);
+          json(res, { data: Buffer.from(bytes).toString('base64') });
+          break;
+        }
+
+        default:
+          json(res, { error: `Unknown route: ${route}` }, 404);
+      }
+    } else if (req.method === 'POST') {
+      const body = await readBody(req);
+
+      switch (route) {
+        case '/writeFile': {
+          const b64 = body.data as string;
+          const bytes = new Uint8Array(Buffer.from(b64, 'base64'));
+          await vfs.writeFile(path, bytes, body.options as never);
+          json(res, { ok: true });
+          break;
+        }
+
+        case '/delete': {
+          await vfs.delete(path, body.options as never);
+          json(res, { ok: true });
+          break;
+        }
+
+        case '/rename': {
+          const oldPath = body.oldPath as string;
+          const newPath = body.newPath as string;
+          await vfs.rename(oldPath, newPath, body.options as never);
+          json(res, { ok: true });
+          break;
+        }
+
+        case '/mkdir': {
+          await vfs.mkdir(path);
+          json(res, { ok: true });
+          break;
+        }
+
+        case '/copy': {
+          const source = body.source as string;
+          const destination = body.destination as string;
+          await vfs.copy(source, destination, body.options as never);
+          json(res, { ok: true });
+          break;
+        }
+
+        default:
+          json(res, { error: `Unknown route: ${route}` }, 404);
+      }
+    } else {
+      json(res, { error: 'Method not allowed' }, 405);
+    }
+  } catch (err) {
+    sendVfsError(res, err);
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`CAD Backend  →  http://localhost:${PORT}`);
+  console.log(`Data dir     →  ${DATA_DIR}`);
+  console.log(`VFS root     →  /users/{userId}/projects/{name}.cad.json`);
+});

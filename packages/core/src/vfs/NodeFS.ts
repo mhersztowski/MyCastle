@@ -275,7 +275,7 @@ export class NodeFS implements FileSystemProvider {
 
   private async getFs(): Promise<any> {
     if (this.fsModule) return this.fsModule;
-    this.fsModule = await import(NodeFS._FS_MOD);
+    this.fsModule = await import(/* @vite-ignore */ NodeFS._FS_MOD);
     return this.fsModule;
   }
 }

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode, MouseEvent } from 'react';
+import type { CSSProperties, MutableRefObject, ReactNode, MouseEvent } from 'react';
 
 // ─── Theme Configuration ──────────────────────────────────────────
 
@@ -208,6 +208,10 @@ export interface RichEditorProps {
   style?: CSSProperties;
   /** Serialized SceneGraph JSON (from SceneSerializer.toJSON) used to pre-populate the scene on mount. */
   initialSceneData?: string;
+  /** Pass a ref; its `.current` will be set to a `fitScene()` function for imperative camera fit. */
+  fitSceneRef?: MutableRefObject<(() => void) | null>;
+  /** Called on mount and after every scene change with the current serialized SceneGraph JSON. */
+  onSceneChange?: (json: string) => void;
 }
 
 // ─── Viewer Prop Types ────────────────────────────────────────────

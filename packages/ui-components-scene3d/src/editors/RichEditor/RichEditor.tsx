@@ -92,11 +92,22 @@ interface ClipboardData {
 
 const MESH_COLORS = ['#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8', '#4dd0e1', '#aed581', '#ff8a65'];
 
-export function RichEditor({ className, style, initialSceneData }: RichEditorProps) {
+export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, onSceneChange }: RichEditorProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [showGrid, setShowGrid] = useState(true);
+  const internalFitRef = useRef<(() => void) | null>(null);
+  // Merge internal and external ref: when SimpleViewer sets internalFitRef.current,
+  // propagate to externalFitRef so callers can trigger fit from outside.
+  const fitSceneRef = useMemo(() => ({
+    get current() { return internalFitRef.current; },
+    set current(fn) {
+      internalFitRef.current = fn;
+      if (externalFitRef) externalFitRef.current = fn;
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [externalFitRef]) as React.MutableRefObject<(() => void) | null>;
   const clipboardRef = useRef<ClipboardData | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneFileInputRef = useRef<HTMLInputElement>(null);
@@ -150,7 +161,16 @@ export function RichEditor({ className, style, initialSceneData }: RichEditorPro
     return graph;
   });
 
-  const bump = useCallback(() => setVersion((v) => v + 1), []);
+  const bump = useCallback(() => {
+    setVersion((v) => v + 1);
+    onSceneChange?.(SceneSerializer.serialize(sceneGraph));
+  }, [sceneGraph, onSceneChange]);
+
+  // Emit initial scene JSON on mount so the parent always has up-to-date data
+  useEffect(() => {
+    onSceneChange?.(SceneSerializer.serialize(sceneGraph));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     sceneGraph.onChange = bump;
@@ -632,6 +652,7 @@ export function RichEditor({ className, style, initialSceneData }: RichEditorPro
                 transformMode={transformMode}
                 cameraPreset={cameraPreset}
                 onNodeSelect={handleViewportSelect}
+                fitSceneRef={fitSceneRef}
               />
               <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                 <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>

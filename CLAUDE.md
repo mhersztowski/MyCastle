@@ -39,17 +39,17 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `scene/` — `SceneNode` (base: id UUID, name, type, visible, position/rotation/scale [number,number,number], parent/children, addChild/removeChild/findById/traverse, setPosition/Rotation/Scale, getLocalMatrix/WorldMatrix, lookAt, toData/fromData), `SceneGraph` (root GroupNode, addNode/removeNode/findNode, onChange: debounced microtask callback, toData/fromData)
   - `nodes/` — `MeshNode` (geometry: GeometryDescriptor {type: GeometryType, params?, bufferData?, fileName?}, material: MaterialDescriptor {color, opacity, wireframe}; GeometryType: `'box'|'sphere'|'cylinder'|'plane'|'cone'|'torus'|'custom'`; setMaterialColor/Opacity/Wireframe, setGeometry, cylinder params: {radiusTop, radiusBottom, height, radialSegments}, box params: {width, height, depth}), `LightNode` (lightType: `'ambient'|'directional'|'point'|'spot'`, color, intensity), `CameraNode` (fov, near, far), `GroupNode` (container)
   - `rendering/` — `RenderEngine` (WebGL, sync from SceneGraph, mesh/light creation, resize, dispose), `RenderLoop` (requestAnimationFrame + callbacks)
-  - `components/` — `SimpleViewer` (React, @react-three/fiber Canvas + OrbitControls + TransformControls gizmo; props: sceneGraph, selectedNodeId, transformMode, showGrid, cameraPreset, onObjectClick), `CAMERA_PRESETS` (standard/blender/maya/cad)
+  - `components/` — `SimpleViewer` (React, @react-three/fiber Canvas + OrbitControls + TransformControls gizmo; props: sceneGraph, selectedNodeId, transformMode, showGrid, cameraPreset, onObjectClick, **`autoFit?: boolean`** — dopasowuje kamerę do wszystkich meshów przy montowaniu/zmianie sceny (jeden frame delay przez `requestAnimationFrame`), **`fitSceneRef?: MutableRefObject<(() => void) | null>`** — imperatywny trigger fit z zewnątrz), `CAMERA_PRESETS` (standard/blender/maya/cad); **FitCameraEffect** — wewnętrzny komponent R3F (`useThree()`): oblicza Box3 wszystkich Mesh-ów, przesuwa kamerę wzdłuż bieżącego kierunku patrzenia, aktualizuje `OrbitControls.target`
   - `io/` — `GLTFImporter/Exporter`, `OBJExporter`, `STLExporter`, `GeometryLoader` (parseOBJText, parseSTLBuffer, parseGLTFBuffer → BufferGeometryData {positions, normals?, indices?}), `SceneBuilder` (SceneGraph → THREE.Scene)
   - `serialization/` — `SceneSerializer.serialize(graph): string` (JSON), `SceneDeserializer.deserialize(json): SceneGraph`
 - **@mhersztowski/ui-core** (`packages/ui-core/`) — hooks, theme, context. Dual ESM+CJS. No external deps (only React peer).
-  - `types/` — 230+ lines: ThemeColors/Spacing/Typography/Shadows/BorderRadius/ThemeConfig, ButtonProps, InputProps, DialogProps, SceneTreePanelProps, PropertiesPanelProps, ToolbarProps, SelectedNodeData (id, name, type, visible, transform{position/rotation/scale}, material?, light?), TransformMode (`'translate'|'rotate'|'scale'`), CameraPresetName, **RichEditorProps** {className?, style?, `initialSceneData?: string` — serialized SceneGraph JSON do pre-populate sceny przy mount}
+  - `types/` — 230+ lines: ThemeColors/Spacing/Typography/Shadows/BorderRadius/ThemeConfig, ButtonProps, InputProps, DialogProps, SceneTreePanelProps, PropertiesPanelProps, ToolbarProps, SelectedNodeData (id, name, type, visible, transform{position/rotation/scale}, material?, light?), TransformMode (`'translate'|'rotate'|'scale'`), CameraPresetName, **RichEditorProps** {className?, style?, `initialSceneData?: string` — serialized SceneGraph JSON do pre-populate sceny przy mount, `fitSceneRef?: MutableRefObject<(() => void) | null>` — imperatywny trigger fit kamery z zewnątrz, `onSceneChange?: (json: string) => void` — wywoływany przy każdej zmianie sceny i przy montowaniu z aktualnym JSON-em sceny}
   - `theme/` — `defaultTheme` (dark: primary #4fc3f7, bg #1a1a1a, surface #252526), `themeToCustomProperties()`
   - `context/` — `ConfigProvider` (injects CSS custom properties `--mhersztowski-*`), `useConfig()`, `useTheme()`, `useDefaults()`
   - `hooks/` — `useDialog()` {isOpen, open, close, toggle}, `useToast()` {toasts, addToast, removeToast, clearAll}, `useToggle()`
   - `utils/` — generic `deepMerge(target, source)` utility
 - **@mhersztowski/ui-components-scene3d** (`packages/ui-components-scene3d/`) — scene3d UI components. Dual ESM+CJS + CSS. Deps: core-scene3d, ui-core, MUI 7, allotment.
-  - `editors/RichEditor/` — pełny edytor 3D (722 linii): Allotment 3-pane (SceneTree 220px | Viewport | Properties 260px), menu bar (File: Open/Save/Export OBJ+STL+GLTF), toolbar (Move/Rotate/Scale + Grid), SimpleViewer z gizmo, file I/O JSON scene, settings (camera preset). `RichEditor` przyjmuje `initialSceneData?: string` — gdy podany, SceneDeserializer.deserialize() przy inicjalizacji zamiast domyślnej sceny. `key` prop wymusza remount z nowymi danymi.
+  - `editors/RichEditor/` — pełny edytor 3D: Allotment 3-pane (SceneTree 220px | Viewport | Properties 260px), menu bar (File: Open/Save/Export OBJ+STL+GLTF), toolbar (Move/Rotate/Scale + Grid), SimpleViewer z gizmo, file I/O JSON scene, settings (camera preset). `RichEditor` przyjmuje `initialSceneData?: string` — gdy podany, SceneDeserializer.deserialize() przy inicjalizacji zamiast domyślnej sceny. `key` prop wymusza remount z nowymi danymi. **`fitSceneRef`**: merged ref pattern (getter/setter) propagujący do externalFitRef przekazanego z zewnątrz. **`onSceneChange`**: wywoływany w `bump()` (przy każdej zmianie sceny przez `sceneGraph.onChange`) oraz na mount przez `useEffect([], [])` — dostarcza aktualny JSON do rodzica bez pollingu.
   - `panels/SceneTreePanel/` — drzewo hierarchii (expand/collapse, inline rename dblclick, drag&drop reorder, context menu: rename/cut/copy/duplicate/delete/paste/add submenu, visibility toggle)
   - `panels/PropertiesPanel/` — inspector: transform (Vector3Row per axis, X=red/Y=green/Z=blue), material (color picker + opacity + wireframe), light (type readonly, color, intensity)
   - `toolbar/Toolbar/` — MUI IconButton items + separators
@@ -174,28 +174,137 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 ### Aplikacja demo-scene-3d (`app/demo-scene-3d/`)
 - React + Three.js demo, Vite, depends on core-scene3d, ui-core, ui-components-scene3d
 
+### Aplikacja cad-backend (`app/cad-backend/`)
+
+- Node.js HTTP server, ESM, port **1898**. Dev: `pnpm dev:cad-backend`. Używa `NodeFS` z `@mhersztowski/core` jako backend magazynu plików.
+- **VFS REST API** — implementuje dokładnie te endpointy których oczekuje `RemoteFS` z `@mhersztowski/core`:
+  - `GET /api/vfs/capabilities` → `{readonly, watch}`
+  - `GET /api/vfs/stat?path=` → `FileStat`
+  - `GET /api/vfs/readdir?path=` → `{entries: DirectoryEntry[]}`
+  - `GET /api/vfs/readFile?path=` → `{data: base64}`
+  - `POST /api/vfs/writeFile?path=` body `{data: base64, options?}` — tworzy katalogi nadrzędne automatycznie
+  - `POST /api/vfs/delete?path=`, `/rename`, `/mkdir`, `/copy`
+- **Struktura ścieżek (multi-user):** `/users/{userId}/projects/{name}.cad.json`
+  - `userId` domyślnie `'default'` — gotowe na przyszłą autentykację (wywołaj `setCurrentUserId()` z auth contextu)
+  - Każdy użytkownik ma izolowaną przestrzeń projektów
+- **CORS:** domyślnie `*` dla deweloperki; produkcja — `CAD_CORS_ORIGIN` env var
+- **Env vars:** `CAD_DATA_DIR` (domyślnie `app/cad-backend/data/`), `CAD_BACKEND_PORT` (1898), `CAD_CORS_ORIGIN`
+- **Frontend integracja** (`app/cad-app/`):
+  - `src/vfs/cadProjectApi.ts` — cienki fetch client (`listProjects`, `readProject`, `writeProject`, `deleteProject`, `renameProject`, `setCurrentUserId`)
+  - `src/components/ProjectBrowser.tsx` — dialog wyboru/zapisu projektów: lista z datą i rozmiarem, inline rename, delete, double-click open; name field w trybie save
+  - `src/io/CadExporter.ts:loadProjectFromText()` — mutuje istniejący singleton projekt z JSON stringa (używane przez ProjectBrowser i importJSON)
+  - `vite.config.ts` proxy: `/api/vfs` → `http://localhost:1898`
+  - `FileMenu.tsx` — "Open from Server…" / "Save to Server…" otwierają ProjectBrowser
+
 ### Aplikacja cad-app (`app/cad-app/`)
 
-- React 18 + TypeScript, Vite 7, MUI 7, Three.js — edytor CAD 2D/3D. Dev port: 1897.
+- React 18 + TypeScript, Vite 7, MUI 7, Three.js — edytor CAD 2D/3D. Dev port: 1897. Wymaga `pnpm dev:cad-backend` (port 1898) dla funkcji serwera.
 - Dwa tryby pracy przełączane zakładkami na górze:
-  - **CAD 2D** — tryb kreślarski (kamera ortograficzna, narzędzia rysunkowe, warstwy)
+  - **CAD 2D/3D** — tryb kreślarski z przełącznikiem widoku 2D (ortho) / 3D (perspektywa + OrbitControls)
   - **Scene 3D** — pełny edytor Three.js (`RichEditor` z `@mhersztowski/ui-components-scene3d`)
-- `src/bridge/CadToScene.ts` — **most CAD → Scene 3D**: `cadProjectToSceneGraph(project)` konwertuje widoczne encje CAD na `MeshNode`/`LightNode` w `SceneGraph`; `cadProjectToSceneJson(project)` serializuje wynik do JSON gotowego dla `RichEditor.initialSceneData`. Mapowanie osi: CAD X→Three.js X, CAD Y→Three.js Z (top-down view), ekstruzja→Three.js Y. Konwersja per typ: circle→cylinder (params: radiusTop/Bottom, height), rect→box (width/height/depth), line→cienki box rotowany o kąt odcinka, polyline→seria boxów per segment, arc→cylinder wireframe (przybliżenie). Encje bez extrudeHeight dostają height=0.05 (płaskie).
-- `src/renderer/CadRenderer.ts` — Three.js renderer (orthographic camera, 1px=1 unit @ zoom=1). Pan: środkowy/prawy przycisk myszy. Zoom: kółko myszy (zoom-at-cursor). `screenToWorld(sx,sy)` przelicza współrzędne ekranu na przestrzeń świata. `pickEntity(sx,sy)` raycast geometryczny (dystans punkt–encja, threshold 8px w world units). `syncAll()` pełna synchronizacja; `syncEntity(id)` partial update. `setPreview(geometry)` rysuje żółty podgląd w trakcie rysowania. `showSnapMarker(point)` — zielony krzyżyk przy snap pointach.
-- `src/renderer/EntityMeshBuilder.ts` — buduje `THREE.Line` (BufferGeometry) per typ encji. Kolor: bylayer → kolor z Layer, inaczej własny kolor encji. Zaznaczenie: kolor `#4fc3f7`. Preview: kolor `#ffcc00`. Circle: 64 segmenty. `buildPreviewObject()` — osobna funkcja dla podglądu narzędzia.
-- `src/tools/` — maszyny stanów (interface `Tool`: getPreview/onPointerDown/onPointerMove/onPointerUp/onKeyDown/reset):
-  - **SelectTool** — klik: pick entity (geometryczny raycasting w CadRenderer) + Shift dla multi-select; drag box: selectInBox; Delete usuwa zaznaczenie
-  - **LineTool** — klik A → klik B → commit + chain (nowa linia zaczyna się od poprzedniego końca); Esc anuluje; Enter potwierdza
-  - **CircleTool** — klik center → klik edge (radius = dist(center, edge)); Esc anuluje
-  - **RectTool** — klik corner A → klik corner B; Esc anuluje
-  - **PolylineTool** — kliki kolejnych punktów; Enter kończy (open); 'c' kończy (closed); Esc anuluje
-- `src/components/CadCanvas.tsx` — główny canvas: inicjalizuje CadRenderer, obsługuje pointer events (snap → tool dispatch), wheel (zoom), ResizeObserver (resize renderer), klawiatura (Ctrl+Z/Y, tool keys). Snap przelicza kursor→world, pobiera nearby entities (bounding box query), wywołuje SnapEngine.
-- `src/components/Toolbar.tsx` — lewy pasek narzędzi (Select/Line/Circle/Rect/Polyline + Undo/Redo/Delete)
-- `src/components/LayerPanel.tsx` — prawy panel warstw (lista z kolorowymi kropkami, visibility/lock toggle, aktywna warstwa, dodawanie nowej warstwy)
-- `src/components/StatusBar.tsx` — dolny pasek (aktywne narzędzie, hint, aktywna warstwa, liczba encji/zaznaczonych)
-- `src/components/Scene3DView.tsx` — wrapper Scene 3D: przycisk "Import from CAD (N entities)" → cadProjectToSceneJson → setSceneData + nowy `key` → remount RichEditor z initialSceneData
-- `src/hooks/useProject.ts` — `useProject(project)` subskrybuje wszystkie eventy EventBus i zwraca `version` counter (do triggerowania re-renderów React)
-- Skróty globalne: Ctrl+Z undo, Ctrl+Y redo, Delete usuwa zaznaczenie, Escape anuluje narzędzie; narzędzia: S=select, L=line, C=circle, R=rect, P=polyline (tooltips w toolbar)
+
+#### Renderer
+
+- `src/renderer/CadRenderer.ts` — Three.js renderer (orthographic camera w 2D, perspective + OrbitControls w 3D). Pan 2D: środkowy/prawy klik. Zoom: kółko myszy (zoom-at-cursor). Metody: `screenToWorld(sx,sy)`, `worldToScreen(wx,wy)` (do nakładania HTML overlays), `screenToWorldPlane(sx,sy)` (raycasting na płaszczyznę XY w 3D), `pickEntity(sx,sy)` (raycast 2D, threshold 8px), `pickEntity3d(sx,sy)` (THREE.Raycaster dla 3D meshów), `setViewMode('2d'|'3d')` / `getViewMode()`, `syncAll()`, `setPreview(geometry)` (żółty podgląd), `showSnapMarker(point)` (zielony krzyżyk), `zoomAt(sx,sy,factor)`, `pan(dx,dy)`.
+- `src/renderer/EntityMeshBuilder.ts` — buduje `THREE.Line` per typ encji (2D: BufferGeometry; 3D: ExtrudeGeometry gdy `extrudeHeight > 0`). Kolor: bylayer → kolor z Layer, inaczej własny kolor. Zaznaczenie: `#4fc3f7`. Preview: `#ffcc00`. Circle/Arc: 64 segmenty. `buildPreviewObject(type, points, radius?, ghostSegments?, options?)` — obsługuje typy: `line`, `circle`, `arc` (startAngle/endAngle), `rect`, `polyline`, `ghost` (fioletowe segmenty podglądu transformacji).
+
+#### Narzędzia (`src/tools/`)
+
+Interfejs `Tool`: `getPreview() → PreviewGeometry|null`, `getDimensionLabels?() → DimensionLabel[]`, `onPointerDown/Move/Up`, `onKeyDown`, `reset()`.
+
+**Rysowanie 2D:**
+
+- **LineTool** — klik A → klik B → commit + chain (nowa linia startuje od końca poprzedniej); Esc anuluje; Enter potwierdza. Dimension: długość przy środku, kąt przy kursorze.
+- **CircleTool** — center → edge; Dimension: R: przy kursorze.
+- **ArcTool** — 3 kliki: center → start (definiuje radius) → end (sweep CCW); Dimension: R: + kąt zakresu.
+- **RectTool** — corner A → corner B; Dimension: W: poniżej, H: po prawej.
+- **PolylineTool** — sekwencja punktów; Enter → open polyline; 'c' → closed; Dimension: długość segmentu przy środku + Σ łączna przy kursorze.
+
+**Edycja 2D:**
+
+- **SelectTool** — klik + Shift multi-select; drag: selectInBox; Delete usuwa zaznaczenie; działa w 2D i 3D (pickEntity3d).
+- **MoveTool** — wymaga zaznaczenia; klik base → klik dest; ghost preview; Dimension: Δx/Δy + D: dystans.
+- **CopyTool** — jak MoveTool, ale tworzy kopie zamiast przesuwać oryginały.
+- **RotateTool** — klik center → ruch myszy → klik commit; `rotateByDegrees(deg, ctx)` dla CommandLine; Dimension: ∠ stopnie przy centrum.
+- **OffsetTool** — klik entity (line/circle) → kursor definiuje stronę/dystans → klik commit; Dimension: D: odległość; `pickNearestEntity` helper (reużywany przez TrimTool, FilletTool).
+- **TrimTool** — klik boundary (line/circle) → klik segment do ucięcia; obsługuje line-vs-line i line-vs-circle; wiele segmentów (split na 2 linie); Enter reset.
+- **FilletTool** — klik pierwsza linia → klik druga linia; `radius=0` → sharp corner (utnij do intersection); `radius>0` → tangent arc (pół-kąt formuła, wstaw łuk); `filletTool.radius` jest publiczne — CommandLine wstrzykuje wartość przez `injectedAngle`.
+- **DimensionTool** — wstawia encje wymiarowe (linear dimension między dwoma punktami).
+
+**Narzędzia 3D:**
+
+- **Box3dTool**, **Cylinder3dTool**, **Sphere3dTool** — klik placuje prymityw 3D na siatce XY z `extrudeHeight > 0`; podgląd podczas ruchu myszy.
+
+#### `src/tools/types.ts`
+
+- `ToolName` — unia wszystkich narzędzi: `'select'|'line'|'circle'|'arc'|'rect'|'polyline'|'move'|'copy'|'rotate'|'offset'|'trim'|'fillet'|'dimension'|'box3d'|'cylinder3d'|'sphere3d'`
+- `PreviewGeometry` — `{type: 'line'|'circle'|'arc'|'rect'|'polyline'|'ghost', points, radius?, startAngle?, endAngle?, ghostSegments?}`
+- `DimensionLabel` — `{worldX, worldY, text, offsetX?, offsetY?, variant?: 'primary'|'secondary'}` — pozycja w świecie CAD, tekst, przesunięcie w px od projekcji
+
+#### Nakładka wymiarów (`src/components/DimensionOverlay.tsx`)
+
+Absolutnie pozycjonowany `<div>` (pointer-events: none) nakładany na canvas. Każdy `DimensionLabel` jest konwertowany przez `renderer.worldToScreen()` i renderowany jako styled div. Primary: niebieski bold; secondary: jaśniejszy. Widoczny tylko w trybie 2D — znika przy przełączeniu na 3D lub zmianie narzędzia.
+
+#### Główny canvas (`src/components/CadCanvas.tsx`)
+
+Inicjalizuje `CadRenderer`, obsługuje: pointer events (snap → dispatch do aktywnego narzędzia), wheel (zoom w 2D; OrbitControls przejmuje w 3D), ResizeObserver. Snap: `getInBoundingBox` na nearby entities → `SnapEngine.snap()` (2D) lub grid snap (3D). Klawiatura: Ctrl+Z/Y, Escape, `:` focus CommandLine. Integracja CommandLine: `injectedPoint` → `tool.onPointerDown`, `injectedAngle` → `rotateTool.rotateByDegrees()` lub `filletTool.radius`. Stan `dimLabels` aktualizowany przy pointerMove i pointerDown — czyszczony przy zmianie narzędzia lub w trybie 3D.
+
+#### Snap (`packages/core-cad/src/snap/SnapEngine.ts`)
+
+Domyślnie aktywne tryby: `grid`, `endpoint`, `midpoint`, `center`, `intersection`. **Intersection snap** — pairwise O(n²) na nearby entities: line-line (`lineLineIntersection`) i line-circle (`lineSegmentCircleIntersections`). Próg: 12px przeliczone przez `pixelToWorld`.
+
+#### Geometria (`packages/core-cad/src/utils/geometry.ts`)
+
+Nowy moduł eksportowany z `@mhersztowski/core-cad`. Funkcje: `lineLineIntersection`, `signedDistPointToLine`, `closestPointOnSegment`, `distPointToSegment`, `lineSegmentCircleIntersections`, `circumscribedCircle`, `normalizeAngle`, `offsetLineCoords`, `dist2d`.
+
+#### UI komponenty
+
+- `src/components/Toolbar.tsx` — lewy pasek: Draw (Select/Line/Circle/Arc/Rect/Polyline), Edit (Move/Copy/Rotate/Offset/Trim/Fillet/Dimension), 3D (Box/Cylinder/Sphere), Undo/Redo/Delete. Skróty klawiaturowe widoczne w tooltipach.
+- `src/components/CommandLine.tsx` — dolny pasek wejścia (`:` focus, Esc blur). Parsuje: współrzędne `x,y` / `@dx,dy` (relative) / `<kąt` (kąt), liczby (np. promień filletu), skróty narzędzi (`l`=line, `c`=circle, `a`=arc, `o`=offset, `tr`=trim, `f`=fillet…). Wyświetla prompt per aktywne narzędzie.
+- `src/components/StatusBar.tsx` — dolny pasek: aktywne narzędzie + hint, aktywna warstwa, liczba encji/zaznaczonych, tryb widoku.
+- `src/components/LayerPanel.tsx` — prawy panel warstw: lista z kolorowymi kropkami, visibility/lock toggle, aktywna warstwa, dodawanie nowej.
+- `src/components/PropertiesPanel.tsx` — panel właściwości zaznaczonych encji (kolor, lineType, lineWidth, extrudeHeight).
+- `src/components/FileMenu.tsx` — menu File: New, **Open from Server…** / **Save to Server…** (otwierają `ProjectBrowser`), Open JSON (local), Save JSON (local), Export SVG/DXF/OBJ/glTF/glTF Binary. Props: `getSceneData?: () => string | null` (zwraca bieżący JSON sceny), `onSceneData?: (json: string) => void` (ładuje scenę po otwarciu projektu z serwera).
+- `src/components/ProjectBrowser.tsx` — dialog wyboru projektów serwerowych. Tryby: `open` / `save`. Przy **save**: zapisuje `.cad.json` + opcjonalnie `{name}.scene.json` gdy `getSceneData()` zwraca dane. Przy **open**: ładuje `.cad.json` + próbuje załadować `{name}.scene.json` (wywołuje `onSceneData`, non-fatal gdy brak). Per wiersz: przyciski **Scene Viewer** (ViewInArIcon, `window.open('/viewer/scene/...')`) i **VR Viewer** (VrpanoIcon, `window.open('/viewer/vr/...')`). Inline rename, delete z potwierdzeniem, sortowanie newest-first.
+- `src/components/Scene3DView.tsx` — wrapper Scene 3D. Przycisk "Import from CAD (N entities)" → cadProjectToSceneJson → remount RichEditor. Prop **`externalSceneData?: string`** — gdy zmienia się (AI agent pisze `/scene.json`), remountuje RichEditor z nowym JSON-em. Przycisk **"Fit to scene"** — imperatywnie wywołuje `fitSceneRef.current()`. Prop **`onSceneDataChange?: (json: string) => void`** — przekazywany jako `onSceneChange` do RichEditor, czyli wywoływany przy każdej zmianie sceny (manualne edycje, import, AI) — App.tsx zapamiętuje bieżący JSON w `savedSceneJson` state.
+
+#### I/O (`src/io/CadExporter.ts`)
+
+`exportJSON`, `importJSON` (z File), **`loadProjectFromText(jsonText, project)`** (mutuje istniejący singleton — używane przez ProjectBrowser), `exportSVG` (Y-flip transform, obsługuje line/circle/arc/rect/polyline), `exportDXF`, `exportOBJ`, `exportGLTF(binary)`.
+
+#### Integracja serwera (`src/vfs/cadProjectApi.ts`)
+
+Cienki fetch client bez dodatkowych zależności. API: `listProjects(userId?)`, `readProject(name, userId?)`, `writeProject(name, json, userId?)`, `deleteProject`, `renameProject`, `getCurrentUserId()`, **`setCurrentUserId(id)`** — hook na przyszłą autentykację. Ścieżki VFS CAD: `/users/{userId}/projects/{name}.cad.json`. **`readSceneProject(name, userId?)`** / **`writeSceneProject(name, json, userId?)`** — plik towarzyszący z danymi Scene3D: `/users/{userId}/projects/{name}.scene.json`; zapisywany obok `.cad.json` gdy scena 3D była edytowana; ładowany przy otwieraniu projektu (rzuca gdy nieistniejący — caller obsługuje).
+
+#### Bridge CAD → Scene 3D (`src/bridge/CadToScene.ts`)
+
+`cadProjectToSceneGraph(project)` → `SceneGraph`; `cadProjectToSceneJson(project)` → JSON string dla `RichEditor.initialSceneData`. Mapowanie osi: CAD X→X, CAD Y→Z (top-down), ekstruzja→Y. Konwersja: circle→cylinder, rect→box, line→cienki box, polyline→seria boxów per segment, arc→wireframe cylinder.
+
+#### Routing (`src/main.tsx`)
+
+URL-based routing (bez react-router) — regex na `window.location.pathname`:
+
+- `/viewer/scene/:name` → `SceneViewerPage` — pełnoekranowy read-only viewer Three.js: próbuje załadować `{name}.scene.json` (`SceneDeserializer.deserialize`); fallback do konwersji z `.cad.json` przez `cadProjectToSceneGraph`. `SimpleViewer` z `autoFit` i `cameraPreset="cad"`.
+- `/viewer/vr/:name` → `VrViewerPage` — WebXR VR viewer: R3F Canvas z `gl.xr.enabled = true`, `VRButton` z Three.js examples, `VrCameraSetup` normalizuje skalę sceny do 3m (VR_TARGET_SIZE) dla room-scale VR.
+- `/` → `App` (główna aplikacja)
+
+#### `App.tsx` — stan aplikacji
+
+- `aiSceneData` — JSON sceny z AI agenta (przez `AiPanel.onSceneData`) → przekazywany do `Scene3DView.externalSceneData`
+- `savedSceneJson` — bieżący JSON sceny (aktualizowany przez `Scene3DView.onSceneDataChange` przy każdej zmianie) → przekazywany do `FileMenu.getSceneData`
+- `cadViewMode` (`'2d'|'3d'`) — przełącznik widoku w zakładce CAD
+- `aiOpen` — widoczność panelu AI (wspólny dla wszystkich zakładek)
+- Zakładki: **CAD** (2D/3D toggle, Toolbar, CadCanvas, Layers/Props panel, AiPanel), **Scene 3D** (Scene3DView + AiPanel z `onSceneData`), **Electronics** (ComponentLibrary + BreadboardCanvas + AiPanel)
+
+#### Vite config (`vite.config.ts`)
+
+- React aliases (`react`, `react-dom`, `@emotion/*`) — zapobiegają wielokrotnym instancjom React z workspace paczek
+- `optimizeDeps.exclude` dla wszystkich lokalnych workspace paczek (`@mhersztowski/ui-core`, `@mhersztowski/ui-components-scene3d`, `@mhersztowski/core-scene3d`, `@mhersztowski/core-cad`) — Vite nie cachuje pre-bundled versions, zawsze ładuje świeże `dist/`
+- `/api/vfs` proxy → `http://localhost:1898` (cad-backend)
+
+#### Skróty globalne
+
+Ctrl+Z/Y undo/redo; Delete usuwa zaznaczenie; Escape anuluje narzędzie; `:` otwiera CommandLine; skróty narzędzi: S/L/C/A/R/P/M/O/TR/F.
 
 ## Directory Structure
 ```
@@ -299,16 +408,23 @@ mycastle/                           # Root monorepo
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
 │   │   └── package.json
+│   ├── cad-backend/                # CAD VFS server (port 1898)
+│   │   ├── src/index.ts            # HTTP server: VFS REST API (/api/vfs/*), NodeFS storage, CORS
+│   │   ├── data/                   # VFS root: users/{userId}/projects/{name}.cad.json (gitignored)
+│   │   ├── tsup.config.ts          # ESM, target node20
+│   │   └── package.json
 │   ├── cad-app/                    # CAD 2D/3D editor (port 1897)
 │   │   ├── src/
-│   │   │   ├── App.tsx             # Tabs: CAD 2D / Scene 3D; project singleton
+│   │   │   ├── App.tsx             # Tabs: CAD 2D (2D/3D toggle) / Scene 3D; project singleton
 │   │   │   ├── main.tsx            # ThemeProvider + ConfigProvider + allotment CSS
 │   │   │   ├── bridge/CadToScene.ts # cadProjectToSceneGraph/Json — CAD→Three.js bridge
-│   │   │   ├── renderer/           # CadRenderer (Three.js ortho), EntityMeshBuilder
-│   │   │   ├── tools/              # SelectTool, LineTool, CircleTool, RectTool, PolylineTool
-│   │   │   ├── components/         # CadCanvas, Toolbar, LayerPanel, StatusBar, Scene3DView
+│   │   │   ├── renderer/           # CadRenderer (ortho+perspective), EntityMeshBuilder
+│   │   │   ├── tools/              # 16 narzędzi: Select/Line/Circle/Arc/Rect/Polyline/Move/Copy/Rotate/Offset/Trim/Fillet/Dimension/Box3d/Cylinder3d/Sphere3d + entityTransform.ts + types.ts
+│   │   │   ├── components/         # CadCanvas, Toolbar, CommandLine, LayerPanel, StatusBar, PropertiesPanel, FileMenu, ProjectBrowser, DimensionOverlay, Scene3DView
+│   │   │   ├── io/CadExporter.ts   # exportJSON/SVG/DXF/OBJ/GLTF, importJSON, loadProjectFromText
+│   │   │   ├── vfs/cadProjectApi.ts # fetch client dla cad-backend (listProjects/read/write/delete/rename)
 │   │   │   └── hooks/useProject.ts # version counter from EventBus
-│   │   ├── vite.config.ts          # Port 1897, alias @→src/
+│   │   ├── vite.config.ts          # Port 1897, proxy /api/vfs→localhost:1898, alias @→src/
 │   │   └── package.json
 │   └── client/                     # Python MQTT agent (Windows) + VFS extension
 │       ├── agent.py                # ClientAgent: heartbeat, command routing, VFS
@@ -342,10 +458,13 @@ mycastle/                           # Root monorepo
 ## Development Workflow & Commands
 - **Setup:** `pnpm install` (from root)
 - **Build all:** `pnpm build`
-- **Build specific:** `pnpm build:core`, `pnpm build:core-backend`, `pnpm build:web-client`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`
+- **Build specific:** `pnpm build:core`, `pnpm build:core-backend`, `pnpm build:web-client`, `pnpm build:backend`, `pnpm build:web`, `pnpm build:scene3d`, `pnpm build:core-cad`, `pnpm build:cad`
+- **Build CAD stack (w kolejności):** `pnpm build:cadall` = `core-cad` → `ui-core` → `core-scene3d` → `ui-components-scene3d` → `cad-backend` → `cad-app`
 - **Run MyCastle backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
 - **Run MyCastle frontend:** `pnpm dev:web` (port 1895, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
+- **Run CAD editor:** `pnpm dev:cad` (port 1897, requires `pnpm build:core-cad` first)
+- **Run CAD backend:** `pnpm dev:cad-backend` (port 1898, VFS server for project storage)
 - **Run client agent:** `app/client/run.sh` (auto-creates `.venv` i instaluje zależności przy pierwszym uruchomieniu)
 - **Test (unit):** `pnpm test` (all packages), `pnpm test:watch`, `pnpm test:coverage`
 - **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts mycastle-backend + mycastle-web)

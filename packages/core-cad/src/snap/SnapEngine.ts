@@ -1,5 +1,6 @@
 import type { Entity } from '../entity/types';
 import type { Point2D, SnapMode } from '../types';
+import { lineLineIntersection, lineSegmentCircleIntersections } from '../utils/geometry';
 
 export interface SnapResult {
   point: Point2D;
@@ -10,7 +11,7 @@ export interface SnapResult {
 const SNAP_DISTANCE = 12; // pixels (to be scaled by zoom)
 
 export class SnapEngine {
-  private modes = new Set<SnapMode>(['grid', 'endpoint', 'midpoint', 'center']);
+  private modes = new Set<SnapMode>(['grid', 'endpoint', 'midpoint', 'center', 'intersection']);
   private gridSize = 10;
 
   setGridSize(size: number): void {
@@ -71,6 +72,16 @@ export class SnapEngine {
       }
     }
 
+    if (this.modes.has('intersection') && entities.length >= 2) {
+      for (let i = 0; i < entities.length; i++) {
+        for (let j = i + 1; j < entities.length; j++) {
+          for (const pt of getIntersections(entities[i], entities[j])) {
+            check(pt, 'intersection');
+          }
+        }
+      }
+    }
+
     if (!best && this.modes.has('grid')) {
       const gx = Math.round(cursor.x / this.gridSize) * this.gridSize;
       const gy = Math.round(cursor.y / this.gridSize) * this.gridSize;
@@ -110,6 +121,28 @@ function getMidpoints(e: Entity): Point2D[] {
     }
     default: return [];
   }
+}
+
+/** Returns intersection points between two entities (segment-only, not extended). */
+function getIntersections(a: Entity, b: Entity): Point2D[] {
+  const pts: Point2D[] = [];
+
+  if (a.type === 'line' && b.type === 'line') {
+    const r = lineLineIntersection(a.x1, a.y1, a.x2, a.y2, b.x1, b.y1, b.x2, b.y2);
+    if (r && r.t >= -0.01 && r.t <= 1.01 && r.u >= -0.01 && r.u <= 1.01) {
+      pts.push({ x: r.x, y: r.y });
+    }
+  } else if (a.type === 'line' && b.type === 'circle') {
+    for (const hit of lineSegmentCircleIntersections(a.x1, a.y1, a.x2, a.y2, b.cx, b.cy, b.radius)) {
+      pts.push(hit.point);
+    }
+  } else if (a.type === 'circle' && b.type === 'line') {
+    for (const hit of lineSegmentCircleIntersections(b.x1, b.y1, b.x2, b.y2, a.cx, a.cy, a.radius)) {
+      pts.push(hit.point);
+    }
+  }
+
+  return pts;
 }
 
 function getCenter(e: Entity): Point2D | null {

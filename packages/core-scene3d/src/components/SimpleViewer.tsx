@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect, useCallback } from 'react';
+import { useRef, useMemo, useEffect, useCallback, MutableRefObject } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -23,6 +23,10 @@ export interface SimpleViewerProps {
   backgroundColor?: string;
   className?: string;
   style?: CSSProperties;
+  /** Fit camera to encompass all scene meshes on mount / when sceneGraph changes. */
+  autoFit?: boolean;
+  /** Pass a ref; its `.current` will be set to a `fitScene()` function for imperative triggering. */
+  fitSceneRef?: MutableRefObject<(() => void) | null>;
 }
 
 function SelectableMesh({
@@ -285,6 +289,80 @@ function MeshGeometry({
   }
 }
 
+/** Fits the perspective camera to encompass all meshes in the scene. */
+function FitCameraEffect({
+  sceneGraph,
+  autoFit,
+  fitSceneRef,
+}: {
+  sceneGraph?: SceneGraph;
+  autoFit?: boolean;
+  fitSceneRef?: MutableRefObject<(() => void) | null>;
+}) {
+  const { camera, controls, scene } = useThree();
+
+  const doFit = useCallback(() => {
+    const box = new THREE.Box3();
+    let hasMesh = false;
+    scene.traverse(obj => {
+      if (obj instanceof THREE.Mesh) {
+        // ensure world matrices are up to date
+        obj.updateWorldMatrix(true, false);
+        obj.geometry.computeBoundingBox();
+        if (obj.geometry.boundingBox) {
+          box.union(obj.geometry.boundingBox.clone().applyMatrix4(obj.matrixWorld));
+          hasMesh = true;
+        }
+      }
+    });
+    if (!hasMesh) return;
+
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
+    const dist = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.8;
+
+    // Keep current view direction, just move along it to fit
+    const dir = camera.position.clone().sub(center);
+    if (dir.lengthSq() < 0.001) dir.set(1, 1, 1);
+    dir.normalize();
+
+    camera.position.copy(center.clone().addScaledVector(dir, dist));
+    camera.near = dist * 0.01;
+    camera.far = dist * 100;
+    camera.updateProjectionMatrix();
+
+    if (controls && 'target' in controls) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const orbitControls = controls as unknown as { target: THREE.Vector3; update(): void };
+      orbitControls.target.copy(center);
+      orbitControls.update();
+    }
+  }, [camera, controls, scene]);
+
+  // Expose imperative handle to parent
+  useEffect(() => {
+    if (fitSceneRef) fitSceneRef.current = doFit;
+    return () => { if (fitSceneRef) fitSceneRef.current = null; };
+  }, [fitSceneRef, doFit]);
+
+  // Auto-fit when sceneGraph is loaded or changes
+  const childCount = sceneGraph?.root?.children?.length ?? 0;
+  useEffect(() => {
+    if (!autoFit || !sceneGraph) return;
+    // Delay one frame so Three.js finishes building geometry
+    const id = requestAnimationFrame(doFit);
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFit, sceneGraph, childCount]);
+
+  return null;
+}
+
 function SceneContent({
   sceneGraph,
   version,
@@ -293,6 +371,8 @@ function SceneContent({
   transformMode,
   cameraPreset = 'standard',
   onNodeSelect,
+  autoFit,
+  fitSceneRef,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -301,6 +381,8 @@ function SceneContent({
   transformMode: 'translate' | 'rotate' | 'scale';
   cameraPreset?: CameraPresetName;
   onNodeSelect?: (nodeId: string | null) => void;
+  autoFit?: boolean;
+  fitSceneRef?: MutableRefObject<(() => void) | null>;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
   const showGizmo = selectedNode?.type === 'mesh';
@@ -325,6 +407,7 @@ function SceneContent({
           transformMode={transformMode}
         />
       )}
+      <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
     </>
   );
 }
@@ -342,6 +425,8 @@ export function SimpleViewer({
   backgroundColor = '#2a2a2a',
   className,
   style,
+  autoFit,
+  fitSceneRef,
 }: SimpleViewerProps) {
   return (
     <div
@@ -366,6 +451,8 @@ export function SimpleViewer({
           transformMode={transformMode}
           cameraPreset={cameraPreset}
           onNodeSelect={onNodeSelect}
+          autoFit={autoFit}
+          fitSceneRef={fitSceneRef}
         />
       </Canvas>
     </div>

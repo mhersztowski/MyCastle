@@ -1,36 +1,67 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box } from '@mui/material';
-import type { Project, SnapResult } from '@mhersztowski/core-cad';
+import type { Point2D, Project, SnapResult } from '@mhersztowski/core-cad';
+import type { ViewMode } from '@mhersztowski/core-cad';
 import { CadRenderer } from '../renderer/CadRenderer';
+import { DimensionOverlay } from './DimensionOverlay';
 import { SelectTool } from '../tools/SelectTool';
 import { LineTool } from '../tools/LineTool';
 import { CircleTool } from '../tools/CircleTool';
+import { ArcTool } from '../tools/ArcTool';
 import { RectTool } from '../tools/RectTool';
 import { PolylineTool } from '../tools/PolylineTool';
-import type { Tool, ToolName } from '../tools/types';
+import { MoveTool } from '../tools/MoveTool';
+import { CopyTool } from '../tools/CopyTool';
+import { RotateTool } from '../tools/RotateTool';
+import { OffsetTool } from '../tools/OffsetTool';
+import { TrimTool } from '../tools/TrimTool';
+import { FilletTool } from '../tools/FilletTool';
+import { DimensionTool } from '../tools/DimensionTool';
+import { Box3dTool } from '../tools/Box3dTool';
+import { Cylinder3dTool } from '../tools/Cylinder3dTool';
+import { Sphere3dTool } from '../tools/Sphere3dTool';
+import type { DimensionLabel, Tool, ToolName } from '../tools/types';
 
 interface Props {
   project: Project;
   activeTool: ToolName;
   version: number;
+  viewMode: ViewMode;
+  injectedPoint?: Point2D | null;
+  injectedAngle?: number | null;
+  onLastPoint?: (p: Point2D) => void;
 }
+
+const filletTool = new FilletTool();
 
 const tools: Record<ToolName, Tool> = {
   select: new SelectTool(),
   line: new LineTool(),
   circle: new CircleTool(),
+  arc: new ArcTool(),
   rect: new RectTool(),
   polyline: new PolylineTool(),
+  move: new MoveTool(),
+  copy: new CopyTool(),
+  rotate: new RotateTool(),
+  offset: new OffsetTool(),
+  trim: new TrimTool(),
+  fillet: filletTool,
+  dimension: new DimensionTool(),
+  box3d: new Box3dTool(),
+  cylinder3d: new Cylinder3dTool(),
+  sphere3d: new Sphere3dTool(),
 };
 
-export function CadCanvas({ project, activeTool, version }: Props) {
+export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CadRenderer | null>(null);
   const prevToolRef = useRef<ToolName>(activeTool);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
 
-  // Mouse state for pan
   const mouseRef = useRef({ isPanning: false, lastX: 0, lastY: 0, isDown: false });
+  const [dimLabels, setDimLabels] = useState<DimensionLabel[]>([]);
+
 
   // Init renderer
   useEffect(() => {
@@ -38,6 +69,10 @@ export function CadCanvas({ project, activeTool, version }: Props) {
     if (!canvas) return;
     const renderer = new CadRenderer(canvas, project);
     rendererRef.current = renderer;
+    const parent = canvas.parentElement!;
+    if (parent.clientWidth > 0 && parent.clientHeight > 0) {
+      renderer.resize(parent.clientWidth, parent.clientHeight);
+    }
     renderer.syncAll();
 
     const ro = new ResizeObserver(entries => {
@@ -54,18 +89,66 @@ export function CadCanvas({ project, activeTool, version }: Props) {
     };
   }, [project]);
 
-  // Sync renderer when project changes
+  // Sync renderer on project changes
   useEffect(() => {
     rendererRef.current?.syncAll();
   }, [version]);
+
+  // Apply view mode changes
+  useEffect(() => {
+    rendererRef.current?.setViewMode(viewMode);
+  }, [viewMode]);
 
   // Reset previous tool when tool changes
   useEffect(() => {
     if (prevToolRef.current !== activeTool) {
       tools[prevToolRef.current].reset();
       prevToolRef.current = activeTool;
+      setDimLabels([]);
     }
   }, [activeTool]);
+
+  // Handle injected point from CommandLine
+  useEffect(() => {
+    if (!injectedPoint) return;
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    const snap: SnapResult = { point: injectedPoint, mode: 'nearest' };
+    const ctx = { project, snapResult: snap };
+    const tool = tools[activeTool];
+    tool.onPointerDown(injectedPoint, ctx);
+    renderer.setPreview(tool.getPreview());
+    renderer.syncAll();
+    onLastPoint?.(injectedPoint);
+  }, [injectedPoint]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle injected angle (RotateTool or FilletTool from CommandLine)
+  useEffect(() => {
+    if (injectedAngle == null) return;
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    if (activeTool === 'rotate') {
+      const rotateTool = tools['rotate'] as RotateTool;
+      const snap: SnapResult = { point: cursorWorld, mode: 'nearest' };
+      const ctx = { project, snapResult: snap };
+      rotateTool.rotateByDegrees(injectedAngle, ctx);
+      renderer.setPreview(rotateTool.getPreview());
+      renderer.syncAll();
+    } else if (activeTool === 'fillet') {
+      // Number input sets the fillet radius
+      filletTool.radius = Math.max(0, injectedAngle);
+    }
+  }, [injectedAngle]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resolve screen point → CAD world point (handles both 2D and 3D mode)
+  const resolveWorldPoint = useCallback((sx: number, sy: number): Point2D | null => {
+    const renderer = rendererRef.current;
+    if (!renderer) return null;
+    if (renderer.getViewMode() === '3d') {
+      return renderer.screenToWorldPlane(sx, sy);
+    }
+    return renderer.screenToWorld(sx, sy);
+  }, []);
 
   const getSnapPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const renderer = rendererRef.current;
@@ -73,20 +156,32 @@ export function CadCanvas({ project, activeTool, version }: Props) {
     const rect = canvasRef.current!.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
-    const worldPt = renderer.screenToWorld(sx, sy);
+    const worldPt = resolveWorldPoint(sx, sy);
+    if (!worldPt) return null;
+
+    if (renderer.getViewMode() === '3d') {
+      // In 3D mode: only grid snap (no entity snap on XY plane for now)
+      const gridSize = project.settings.gridSize;
+      const snapped: Point2D = {
+        x: Math.round(worldPt.x / gridSize) * gridSize,
+        y: Math.round(worldPt.y / gridSize) * gridSize,
+      };
+      return { point: snapped, mode: 'grid' as const };
+    }
+
     const nearby = project.entityRegistry.getInBoundingBox({
       minX: worldPt.x - 50, minY: worldPt.y - 50,
       maxX: worldPt.x + 50, maxY: worldPt.y + 50,
     });
     return project.snapEngine.snap(worldPt, nearby, renderer.getPixelToWorld());
-  }, [project]);
+  }, [project, resolveWorldPoint]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const renderer = rendererRef.current;
     if (!renderer) return;
 
-    // Pan with middle button or right button
-    if (mouseRef.current.isPanning) {
+    // In 3D mode, OrbitControls handles pan/zoom — skip manual pan
+    if (renderer.getViewMode() !== '3d' && mouseRef.current.isPanning) {
       const dx = e.clientX - mouseRef.current.lastX;
       const dy = e.clientY - mouseRef.current.lastY;
       renderer.pan(dx, dy);
@@ -98,11 +193,14 @@ export function CadCanvas({ project, activeTool, version }: Props) {
     const snap = getSnapPoint(e);
     if (!snap) return;
     setCursorWorld(snap.point);
-    renderer.showSnapMarker(snap.mode !== 'nearest' ? snap.point : null);
+    if (renderer.getViewMode() !== '3d') {
+      renderer.showSnapMarker(snap.mode !== 'nearest' ? snap.point : null);
+    }
 
     const tool = tools[activeTool];
     tool.onPointerMove(snap.point, { project, snapResult: snap });
     renderer.setPreview(tool.getPreview());
+    setDimLabels(tool.getDimensionLabels?.() ?? []);
   }, [activeTool, project, getSnapPoint]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -110,26 +208,30 @@ export function CadCanvas({ project, activeTool, version }: Props) {
     const renderer = rendererRef.current;
     if (!renderer) return;
 
-    // Middle mouse = pan
-    if (e.button === 1 || (e.button === 2)) {
+    const is3d = renderer.getViewMode() === '3d';
+
+    // 2D pan with middle/right click
+    if (!is3d && (e.button === 1 || e.button === 2)) {
       mouseRef.current.isPanning = true;
       mouseRef.current.lastX = e.clientX;
       mouseRef.current.lastY = e.clientY;
       return;
     }
 
+    // In 3D mode, right/middle click is handled by OrbitControls
+    if (is3d && e.button !== 0) return;
+
     mouseRef.current.isDown = true;
     const snap = getSnapPoint(e);
     if (!snap) return;
 
-    const tool = tools[activeTool];
-
     if (activeTool === 'select') {
-      // Check if clicking on an entity
       const rect = canvasRef.current!.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
-      const picked = renderer.pickEntity(sx, sy);
+      const picked = is3d
+        ? renderer.pickEntity3d(sx, sy)
+        : renderer.pickEntity(sx, sy);
       if (picked) {
         project.selectionManager.select(picked, e.shiftKey);
         project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
@@ -138,13 +240,17 @@ export function CadCanvas({ project, activeTool, version }: Props) {
       }
     }
 
+    const tool = tools[activeTool];
     tool.onPointerDown(snap.point, { project, snapResult: snap });
     renderer.setPreview(tool.getPreview());
     renderer.syncAll();
-  }, [activeTool, project, getSnapPoint]);
+    setDimLabels(tool.getDimensionLabels?.() ?? []);
+    onLastPoint?.(snap.point);
+  }, [activeTool, project, getSnapPoint, onLastPoint]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     canvasRef.current?.releasePointerCapture(e.pointerId);
+    const renderer = rendererRef.current;
 
     if (mouseRef.current.isPanning) {
       mouseRef.current.isPanning = false;
@@ -156,15 +262,15 @@ export function CadCanvas({ project, activeTool, version }: Props) {
 
     const tool = tools[activeTool];
     tool.onPointerUp(snap.point, { project, snapResult: snap });
-    rendererRef.current?.setPreview(tool.getPreview());
-    rendererRef.current?.syncAll();
+    renderer?.setPreview(tool.getPreview());
+    renderer?.syncAll();
     mouseRef.current.isDown = false;
   }, [activeTool, project, getSnapPoint]);
 
   const handleWheel = useCallback((e: WheelEvent) => {
-    e.preventDefault();
     const renderer = rendererRef.current;
-    if (!renderer) return;
+    if (!renderer || renderer.getViewMode() === '3d') return; // OrbitControls handles 3D zoom
+    e.preventDefault();
     const rect = canvasRef.current!.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
@@ -172,7 +278,6 @@ export function CadCanvas({ project, activeTool, version }: Props) {
     renderer.zoomAt(sx, sy, factor);
   }, []);
 
-  // Attach wheel listener (non-passive for preventDefault)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -181,18 +286,22 @@ export function CadCanvas({ project, activeTool, version }: Props) {
   }, [handleWheel]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
     const tool = tools[activeTool];
     const snap: SnapResult = { point: cursorWorld, mode: 'nearest' };
     tool.onKeyDown(e.key, { project, snapResult: snap });
     rendererRef.current?.setPreview(tool.getPreview());
     rendererRef.current?.syncAll();
 
-    // Global shortcuts
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); project.undo(); }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); project.redo(); }
+
+    if (e.key === ':') window.dispatchEvent(new Event('cad:focus-cmdline'));
   }, [activeTool, project, cursorWorld]);
 
-  const cursor = activeTool === 'select' ? 'default' : 'crosshair';
+  const is3d = viewMode === '3d';
+  const cursor = is3d ? 'default' : activeTool === 'select' ? 'default' : 'crosshair';
 
   return (
     <Box
@@ -208,6 +317,9 @@ export function CadCanvas({ project, activeTool, version }: Props) {
         onPointerUp={handlePointerUp}
         onContextMenu={e => e.preventDefault()}
       />
+      {!is3d && rendererRef.current && dimLabels.length > 0 && (
+        <DimensionOverlay labels={dimLabels} renderer={rendererRef.current} />
+      )}
       {/* Cursor coordinates overlay */}
       <Box sx={{
         position: 'absolute', bottom: 8, right: 8,
@@ -215,6 +327,7 @@ export function CadCanvas({ project, activeTool, version }: Props) {
         px: 1, py: 0.25, borderRadius: 1, fontSize: 12, fontFamily: 'monospace', pointerEvents: 'none',
       }}>
         {cursorWorld.x.toFixed(2)}, {cursorWorld.y.toFixed(2)}
+        {is3d && <span style={{ marginLeft: 8, color: '#4fc3f7' }}>3D</span>}
       </Box>
     </Box>
   );

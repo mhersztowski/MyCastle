@@ -1,5 +1,5 @@
 import type { Point2D } from '@mhersztowski/core-cad';
-import type { PreviewGeometry, Tool, ToolContext } from './types';
+import type { DimensionLabel, PreviewGeometry, Tool, ToolContext } from './types';
 
 function dist(a: Point2D, b: Point2D) {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
@@ -13,6 +13,19 @@ export class CircleTool implements Tool {
   getPreview(): PreviewGeometry | null {
     if (!this.center || !this.current) return null;
     return { type: 'circle', points: [this.center, this.current], radius: dist(this.center, this.current) };
+  }
+
+  getDimensionLabels(): DimensionLabel[] {
+    if (!this.center || !this.current) return [];
+    const r = dist(this.center, this.current);
+    if (r < 0.01) return [];
+    // Label near cursor, slightly offset
+    const angle = Math.atan2(this.current.y - this.center.y, this.current.x - this.center.x);
+    const midX = this.center.x + Math.cos(angle) * r * 0.6;
+    const midY = this.center.y + Math.sin(angle) * r * 0.6;
+    return [
+      { worldX: midX, worldY: midY, text: `R: ${r.toFixed(2)}`, offsetY: -14, variant: 'primary' },
+    ];
   }
 
   onPointerDown(point: Point2D, ctx: ToolContext): void {

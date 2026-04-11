@@ -3,6 +3,8 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { ConfigProvider } from '@mhersztowski/ui-core';
 import App from './App';
+import { SceneViewerPage } from './pages/SceneViewerPage';
+import { VrViewerPage } from './pages/VrViewerPage';
 import 'allotment/dist/style.css';
 import '@mhersztowski/ui-components-scene3d/styles.css';
 
@@ -24,11 +26,25 @@ const theme = createTheme({
   },
 });
 
+// Simple path-based routing without react-router.
+// /viewer/scene/:projectName  → SceneViewerPage
+// /viewer/vr/:projectName     → VrViewerPage
+// everything else             → App (editor)
+const path = window.location.pathname;
+const sceneMatch = /^\/viewer\/scene\/(.+)$/.exec(path);
+const vrMatch    = /^\/viewer\/vr\/(.+)$/.exec(path);
+
+function Root() {
+  if (sceneMatch) return <SceneViewerPage projectName={decodeURIComponent(sceneMatch[1])} />;
+  if (vrMatch)    return <VrViewerPage    projectName={decodeURIComponent(vrMatch[1])} />;
+  return <App />;
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ThemeProvider theme={theme}>
     <CssBaseline />
     <ConfigProvider>
-      <App />
+      <Root />
     </ConfigProvider>
   </ThemeProvider>
 );

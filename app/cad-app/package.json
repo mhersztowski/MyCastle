@@ -10,10 +10,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mhersztowski/core": "workspace:*",
     "@mhersztowski/core-cad": "workspace:*",
     "@mhersztowski/core-scene3d": "workspace:*",
     "@mhersztowski/ui-components-scene3d": "workspace:*",
     "@mhersztowski/ui-core": "workspace:*",
+    "@mhersztowski/web-client": "workspace:*",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.7",

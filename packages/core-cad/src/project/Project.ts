@@ -115,6 +115,73 @@ export class Project {
     this.eventBus.emit('entity:updated', after);
   }
 
+  batchUpdate(operations: Array<{ id: string; changes: Partial<Entity> }>, description = 'Batch update'): void {
+    const befores: Entity[] = [];
+    const afters: Entity[] = [];
+
+    for (const op of operations) {
+      const before = this.entityRegistry.get(op.id);
+      if (!before) continue;
+      const after = this.entityRegistry.update(op.id, op.changes);
+      if (!after) continue;
+      befores.push(before);
+      afters.push(after);
+      this.eventBus.emit('entity:updated', after);
+    }
+
+    if (befores.length === 0) return;
+
+    this.historyManager.push({
+      type: 'batch-update',
+      description,
+      undo: () => {
+        for (const before of befores) {
+          this.entityRegistry.update(before.id, before);
+          this.eventBus.emit('entity:updated', before);
+        }
+      },
+      redo: () => {
+        for (const after of afters) {
+          this.entityRegistry.update(after.id, after);
+          this.eventBus.emit('entity:updated', after);
+        }
+      },
+    });
+  }
+
+  batchAdd(inputs: EntityInput[], description = 'Copy entities'): Entity[] {
+    const entities: Entity[] = [];
+
+    for (const input of inputs) {
+      const layerId = input.layerId || this.layerSystem.getActiveId();
+      const entity = this.entityRegistry.add({ ...input, layerId });
+      entities.push(entity);
+      this.eventBus.emit('entity:added', entity);
+    }
+
+    if (entities.length === 0) return [];
+
+    this.historyManager.push({
+      type: 'batch-add',
+      description,
+      undo: () => {
+        for (const e of entities) {
+          this.entityRegistry.remove(e.id);
+          this.selectionManager.deselect(e.id);
+          this.eventBus.emit('entity:removed', { id: e.id });
+        }
+      },
+      redo: () => {
+        for (const e of entities) {
+          this.entityRegistry.addWithId(e);
+          this.eventBus.emit('entity:added', e);
+        }
+      },
+    });
+
+    return entities;
+  }
+
   removeSelected(): void {
     const ids = this.selectionManager.getSelected();
     const entities = ids.map(id => this.entityRegistry.get(id)).filter(Boolean) as Entity[];
