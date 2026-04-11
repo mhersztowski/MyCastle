@@ -206,6 +206,8 @@ export interface SimpleEditorProps {
 export interface RichEditorProps {
   className?: string;
   style?: CSSProperties;
+  /** Serialized SceneGraph JSON (from SceneSerializer.toJSON) used to pre-populate the scene on mount. */
+  initialSceneData?: string;
 }
 
 // ─── Viewer Prop Types ────────────────────────────────────────────

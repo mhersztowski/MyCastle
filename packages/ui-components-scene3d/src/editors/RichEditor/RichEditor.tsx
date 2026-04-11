@@ -92,7 +92,7 @@ interface ClipboardData {
 
 const MESH_COLORS = ['#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8', '#4dd0e1', '#aed581', '#ff8a65'];
 
-export function RichEditor({ className, style }: RichEditorProps) {
+export function RichEditor({ className, style, initialSceneData }: RichEditorProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
@@ -109,6 +109,9 @@ export function RichEditor({ className, style }: RichEditorProps) {
   const settingsDialog = useDialog();
 
   const [sceneGraph, setSceneGraph] = useState(() => {
+    if (initialSceneData) {
+      try { return SceneDeserializer.deserialize(initialSceneData); } catch { /* fall through */ }
+    }
     const graph = new SceneGraph();
 
     graph.addNode(new MeshNode({
@@ -215,8 +218,8 @@ export function RichEditor({ className, style }: RichEditorProps) {
       clone = new MeshNode({
         name: node.name + ' Copy',
         position: [node.position[0] + 1.5, node.position[1], node.position[2]],
-        rotation: [...node.rotation],
-        scale: [...node.scale],
+        rotation: [node.rotation[0], node.rotation[1], node.rotation[2]],
+        scale: [node.scale[0], node.scale[1], node.scale[2]],
         geometry: { ...meshNode.geometry },
         material: { ...meshNode.material },
       });

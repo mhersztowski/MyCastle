@@ -346,7 +346,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
 
   const doCompile = async () => {
     const currentSketch = currentSketchRef.current;
-    if (!currentSketch || !userName || !projectId || !board) return;
+    if (!currentSketch || !userName || !projectId) return;
     setCompiling(true);
     setCompileOutput('');
     setCompileSuccess(null);
@@ -354,6 +354,11 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
 
     try {
       await handleSaveSketch();
+      if (!board) {
+        setCompileOutput('Error: No board configured. Set board profile in project settings.');
+        setCompileSuccess(false);
+        return;
+      }
       const fqbn = boardProfiles[board]?.compilerFlag;
       if (!fqbn) {
         setCompileOutput('Error: Unknown board FQBN');
@@ -827,12 +832,12 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         sx={{ borderTop: 1, borderColor: 'divider' }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
-          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Compile'}>
+          <Tooltip title="Compile">
             <span>
               <IconButton
                 size="small"
                 onClick={handleCompile}
-                disabled={!currentSketch || compiling || !selectedDeviceName}
+                disabled={!currentSketch || compiling}
                 color={compileSuccess === false ? 'error' : compileSuccess === true ? 'success' : 'default'}
               >
                 {compiling ? <CircularProgress size={16} /> : <Build fontSize="small" />}

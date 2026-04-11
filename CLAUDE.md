@@ -35,10 +35,36 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
   - `rpc/` — **RpcRouter**. `RpcRouter`: register/dispatch/getRegisteredMethods. `RpcContext` z `user?: AuthTokenPayload`. Używany przez mycastle-backend.
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
-- **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core (SceneGraph, SceneNode, RenderEngine, IO)
-- **@mhersztowski/ui-core** (`packages/ui-core/`) — hooks, theme, utils for scene3d UI
-- **@mhersztowski/ui-components-scene3d** (`packages/ui-components-scene3d/`) — scene3d UI components (RichEditor, panels, toolbar)
-
+- **@mhersztowski/core-scene3d** (`packages/core-scene3d/`) — 3D scene core. Dual ESM+CJS build (tsup). Deps: three, @react-three/fiber, ui-core.
+  - `scene/` — `SceneNode` (base: id UUID, name, type, visible, position/rotation/scale [number,number,number], parent/children, addChild/removeChild/findById/traverse, setPosition/Rotation/Scale, getLocalMatrix/WorldMatrix, lookAt, toData/fromData), `SceneGraph` (root GroupNode, addNode/removeNode/findNode, onChange: debounced microtask callback, toData/fromData)
+  - `nodes/` — `MeshNode` (geometry: GeometryDescriptor {type: GeometryType, params?, bufferData?, fileName?}, material: MaterialDescriptor {color, opacity, wireframe}; GeometryType: `'box'|'sphere'|'cylinder'|'plane'|'cone'|'torus'|'custom'`; setMaterialColor/Opacity/Wireframe, setGeometry, cylinder params: {radiusTop, radiusBottom, height, radialSegments}, box params: {width, height, depth}), `LightNode` (lightType: `'ambient'|'directional'|'point'|'spot'`, color, intensity), `CameraNode` (fov, near, far), `GroupNode` (container)
+  - `rendering/` — `RenderEngine` (WebGL, sync from SceneGraph, mesh/light creation, resize, dispose), `RenderLoop` (requestAnimationFrame + callbacks)
+  - `components/` — `SimpleViewer` (React, @react-three/fiber Canvas + OrbitControls + TransformControls gizmo; props: sceneGraph, selectedNodeId, transformMode, showGrid, cameraPreset, onObjectClick), `CAMERA_PRESETS` (standard/blender/maya/cad)
+  - `io/` — `GLTFImporter/Exporter`, `OBJExporter`, `STLExporter`, `GeometryLoader` (parseOBJText, parseSTLBuffer, parseGLTFBuffer → BufferGeometryData {positions, normals?, indices?}), `SceneBuilder` (SceneGraph → THREE.Scene)
+  - `serialization/` — `SceneSerializer.serialize(graph): string` (JSON), `SceneDeserializer.deserialize(json): SceneGraph`
+- **@mhersztowski/ui-core** (`packages/ui-core/`) — hooks, theme, context. Dual ESM+CJS. No external deps (only React peer).
+  - `types/` — 230+ lines: ThemeColors/Spacing/Typography/Shadows/BorderRadius/ThemeConfig, ButtonProps, InputProps, DialogProps, SceneTreePanelProps, PropertiesPanelProps, ToolbarProps, SelectedNodeData (id, name, type, visible, transform{position/rotation/scale}, material?, light?), TransformMode (`'translate'|'rotate'|'scale'`), CameraPresetName, **RichEditorProps** {className?, style?, `initialSceneData?: string` — serialized SceneGraph JSON do pre-populate sceny przy mount}
+  - `theme/` — `defaultTheme` (dark: primary #4fc3f7, bg #1a1a1a, surface #252526), `themeToCustomProperties()`
+  - `context/` — `ConfigProvider` (injects CSS custom properties `--mhersztowski-*`), `useConfig()`, `useTheme()`, `useDefaults()`
+  - `hooks/` — `useDialog()` {isOpen, open, close, toggle}, `useToast()` {toasts, addToast, removeToast, clearAll}, `useToggle()`
+  - `utils/` — generic `deepMerge(target, source)` utility
+- **@mhersztowski/ui-components-scene3d** (`packages/ui-components-scene3d/`) — scene3d UI components. Dual ESM+CJS + CSS. Deps: core-scene3d, ui-core, MUI 7, allotment.
+  - `editors/RichEditor/` — pełny edytor 3D (722 linii): Allotment 3-pane (SceneTree 220px | Viewport | Properties 260px), menu bar (File: Open/Save/Export OBJ+STL+GLTF), toolbar (Move/Rotate/Scale + Grid), SimpleViewer z gizmo, file I/O JSON scene, settings (camera preset). `RichEditor` przyjmuje `initialSceneData?: string` — gdy podany, SceneDeserializer.deserialize() przy inicjalizacji zamiast domyślnej sceny. `key` prop wymusza remount z nowymi danymi.
+  - `panels/SceneTreePanel/` — drzewo hierarchii (expand/collapse, inline rename dblclick, drag&drop reorder, context menu: rename/cut/copy/duplicate/delete/paste/add submenu, visibility toggle)
+  - `panels/PropertiesPanel/` — inspector: transform (Vector3Row per axis, X=red/Y=green/Z=blue), material (color picker + opacity + wireframe), light (type readonly, color, intensity)
+  - `toolbar/Toolbar/` — MUI IconButton items + separators
+  - `viewers/RichViewer/` — demo viewer z Reset/ZoomIn/ZoomOut/Fullscreen
+  - `components/` — Button, Input, Dialog
+  - `icons/` — Cube, Sphere, Light, Camera, Folder, Move, Rotate, Scale, Grid icons (MUI wrappers)
+- **@mhersztowski/core-cad** (`packages/core-cad/`) — **CAD 2D/3D core engine** (bez renderingu, bez React, bez Three.js). Dual ESM+CJS build (tsup). Brak zewnętrznych zależności (tylko crypto.randomUUID).
+  - `types.ts` — `Point2D`, `Point3D`, `BoundingBox2D`, `EntityType` (`'line'|'circle'|'polyline'|'rect'|'arc'`), `SnapMode` (`'grid'|'endpoint'|'midpoint'|'center'|'nearest'|'intersection'|'perpendicular'|'tangent'`), `LineType` (`'solid'|'dashed'|'dotted'|'dashdot'`), `Units` (`'mm'|'cm'|'m'|'in'`), `ViewMode` (`'2d'|'3d'`)
+  - `entity/` — **EntityBase** {id, type, layerId, color (`string|'bylayer'`), lineType, lineWidth, visible, locked, extrudeHeight (0=flat, >0=ekstruzja 3D), boundingBox}; typy: **LineEntity** {x1,y1,x2,y2}, **CircleEntity** {cx,cy,radius}, **PolylineEntity** {points: Point2D[], closed}, **RectEntity** {x,y,width,height}, **ArcEntity** {cx,cy,radius,startAngle,endAngle}; **EntityRegistry** (Map<id,Entity>; add/addWithId/remove/update/get/getAll/getByLayer/getByType/getInBoundingBox; update automatycznie przelicza boundingBox przez computeBoundingBox); **computeBoundingBox(entity)** — per typ geometrii
+  - `layer/` — **Layer** {id, name, color, lineType, lineWidth, visible, locked}; DEFAULT_LAYER id='0'; **LayerSystem** (Map<id,Layer>; add/addWithId/remove/update; getActive/setActive/getActiveId/getAll; toData/fromData; nie można usunąć domyślnej warstwy)
+  - `history/` — **HistoryManager** (bounded stack, maxSize=100; **Operation** {type, description, undo(), redo()}; push/undo/redo/canUndo/canRedo/clear; getDescription() → {undoLabel?, redoLabel?})
+  - `selection/` — **SelectionManager** (Set of string ids; select(id, multi?)/deselect/toggle/selectAll/clear/getSelected/isSelected/count; **selectInBox(BoundingBox2D)** — pobiera encje z EntityRegistry)
+  - `snap/` — **SnapEngine** (configurable Set of SnapMode; gridSize default 10; snap(cursor, entities, pixelToWorld?) → **SnapResult** {point, mode, entityId?}; threshold=12px scaled by pixelToWorld; getEndpoints/getMidpoints/getCenter per entity type)
+  - `events/` — **EventBus** (Map of CadEventType → Set of Handler; on/off/emit/clear; zwraca unsubscribe fn); **CadEventType**: `'entity:added|updated|removed'`, `'layer:added|updated|removed'`, `'selection:changed'`, `'history:changed'`, `'project:loaded'`, `'viewmode:changed'`
+  - `project/` — **Project** (fasada; tworzy i łączy wszystkie subsystemy; addEntity/removeEntity/updateEntity → przez history; removeSelected(); undo/redo → EventBus emit; setViewMode; toJSON/fromJSON → ProjectData {version, settings, layers, entities}; reset()); **ProjectSettings** {name, units, gridSize, precision}
 
 ### Aplikacja backend (`app/mycastle-backend/`)
 
@@ -148,6 +174,29 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 ### Aplikacja demo-scene-3d (`app/demo-scene-3d/`)
 - React + Three.js demo, Vite, depends on core-scene3d, ui-core, ui-components-scene3d
 
+### Aplikacja cad-app (`app/cad-app/`)
+
+- React 18 + TypeScript, Vite 7, MUI 7, Three.js — edytor CAD 2D/3D. Dev port: 1897.
+- Dwa tryby pracy przełączane zakładkami na górze:
+  - **CAD 2D** — tryb kreślarski (kamera ortograficzna, narzędzia rysunkowe, warstwy)
+  - **Scene 3D** — pełny edytor Three.js (`RichEditor` z `@mhersztowski/ui-components-scene3d`)
+- `src/bridge/CadToScene.ts` — **most CAD → Scene 3D**: `cadProjectToSceneGraph(project)` konwertuje widoczne encje CAD na `MeshNode`/`LightNode` w `SceneGraph`; `cadProjectToSceneJson(project)` serializuje wynik do JSON gotowego dla `RichEditor.initialSceneData`. Mapowanie osi: CAD X→Three.js X, CAD Y→Three.js Z (top-down view), ekstruzja→Three.js Y. Konwersja per typ: circle→cylinder (params: radiusTop/Bottom, height), rect→box (width/height/depth), line→cienki box rotowany o kąt odcinka, polyline→seria boxów per segment, arc→cylinder wireframe (przybliżenie). Encje bez extrudeHeight dostają height=0.05 (płaskie).
+- `src/renderer/CadRenderer.ts` — Three.js renderer (orthographic camera, 1px=1 unit @ zoom=1). Pan: środkowy/prawy przycisk myszy. Zoom: kółko myszy (zoom-at-cursor). `screenToWorld(sx,sy)` przelicza współrzędne ekranu na przestrzeń świata. `pickEntity(sx,sy)` raycast geometryczny (dystans punkt–encja, threshold 8px w world units). `syncAll()` pełna synchronizacja; `syncEntity(id)` partial update. `setPreview(geometry)` rysuje żółty podgląd w trakcie rysowania. `showSnapMarker(point)` — zielony krzyżyk przy snap pointach.
+- `src/renderer/EntityMeshBuilder.ts` — buduje `THREE.Line` (BufferGeometry) per typ encji. Kolor: bylayer → kolor z Layer, inaczej własny kolor encji. Zaznaczenie: kolor `#4fc3f7`. Preview: kolor `#ffcc00`. Circle: 64 segmenty. `buildPreviewObject()` — osobna funkcja dla podglądu narzędzia.
+- `src/tools/` — maszyny stanów (interface `Tool`: getPreview/onPointerDown/onPointerMove/onPointerUp/onKeyDown/reset):
+  - **SelectTool** — klik: pick entity (geometryczny raycasting w CadRenderer) + Shift dla multi-select; drag box: selectInBox; Delete usuwa zaznaczenie
+  - **LineTool** — klik A → klik B → commit + chain (nowa linia zaczyna się od poprzedniego końca); Esc anuluje; Enter potwierdza
+  - **CircleTool** — klik center → klik edge (radius = dist(center, edge)); Esc anuluje
+  - **RectTool** — klik corner A → klik corner B; Esc anuluje
+  - **PolylineTool** — kliki kolejnych punktów; Enter kończy (open); 'c' kończy (closed); Esc anuluje
+- `src/components/CadCanvas.tsx` — główny canvas: inicjalizuje CadRenderer, obsługuje pointer events (snap → tool dispatch), wheel (zoom), ResizeObserver (resize renderer), klawiatura (Ctrl+Z/Y, tool keys). Snap przelicza kursor→world, pobiera nearby entities (bounding box query), wywołuje SnapEngine.
+- `src/components/Toolbar.tsx` — lewy pasek narzędzi (Select/Line/Circle/Rect/Polyline + Undo/Redo/Delete)
+- `src/components/LayerPanel.tsx` — prawy panel warstw (lista z kolorowymi kropkami, visibility/lock toggle, aktywna warstwa, dodawanie nowej warstwy)
+- `src/components/StatusBar.tsx` — dolny pasek (aktywne narzędzie, hint, aktywna warstwa, liczba encji/zaznaczonych)
+- `src/components/Scene3DView.tsx` — wrapper Scene 3D: przycisk "Import from CAD (N entities)" → cadProjectToSceneJson → setSceneData + nowy `key` → remount RichEditor z initialSceneData
+- `src/hooks/useProject.ts` — `useProject(project)` subskrybuje wszystkie eventy EventBus i zwraca `version` counter (do triggerowania re-renderów React)
+- Skróty globalne: Ctrl+Z undo, Ctrl+Y redo, Delete usuwa zaznaczenie, Escape anuluje narzędzie; narzędzia: S=select, L=line, C=circle, R=rect, P=polyline (tooltips w toolbar)
+
 ## Directory Structure
 ```
 mycastle/                           # Root monorepo
@@ -190,7 +239,12 @@ mycastle/                           # Root monorepo
 │   ├── ui-core/                    # @mhersztowski/ui-core
 │   │   ├── vitest.config.ts        # Unit tests (jsdom env, React Testing Library)
 │   │   ├── src/test-setup.ts       # Vitest setup (@testing-library/jest-dom)
-│   └── ui-components-scene3d/      # @mhersztowski/ui-components-scene3d
+│   ├── ui-components-scene3d/      # @mhersztowski/ui-components-scene3d
+│   └── core-cad/                   # @mhersztowski/core-cad (CAD 2D/3D engine, no rendering)
+│       ├── src/{types,events,entity,layer,history,selection,snap,project,utils}/
+│       ├── tsconfig.json + tsconfig.build.json
+│       ├── tsup.config.ts          # Dual ESM+CJS, tsconfig.build.json
+│       └── package.json
 │
 ├── app/
 │   ├── mycastle-backend/           # Backend Node.js (pełne API — PIM + Minis + IoT + Arduino + Terminal)
@@ -244,6 +298,17 @@ mycastle/                           # Root monorepo
 │   ├── demo-scene-3d/              # Scene3D demo app
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
+│   │   └── package.json
+│   ├── cad-app/                    # CAD 2D/3D editor (port 1897)
+│   │   ├── src/
+│   │   │   ├── App.tsx             # Tabs: CAD 2D / Scene 3D; project singleton
+│   │   │   ├── main.tsx            # ThemeProvider + ConfigProvider + allotment CSS
+│   │   │   ├── bridge/CadToScene.ts # cadProjectToSceneGraph/Json — CAD→Three.js bridge
+│   │   │   ├── renderer/           # CadRenderer (Three.js ortho), EntityMeshBuilder
+│   │   │   ├── tools/              # SelectTool, LineTool, CircleTool, RectTool, PolylineTool
+│   │   │   ├── components/         # CadCanvas, Toolbar, LayerPanel, StatusBar, Scene3DView
+│   │   │   └── hooks/useProject.ts # version counter from EventBus
+│   │   ├── vite.config.ts          # Port 1897, alias @→src/
 │   │   └── package.json
 │   └── client/                     # Python MQTT agent (Windows) + VFS extension
 │       ├── agent.py                # ClientAgent: heartbeat, command routing, VFS

@@ -9,6 +9,8 @@
     { "path": "./packages/ui-components-scene3d" },
     { "path": "./app/mycastle-backend" },
     { "path": "./app/mycastle-web" },
-    { "path": "./app/demo-scene-3d" }
+    { "path": "./app/demo-scene-3d" },
+    { "path": "./packages/core-cad" },
+    { "path": "./app/cad-app" }
   ]
 }
