@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   ButtonGroup,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -28,22 +29,32 @@ import {
   Add,
   ArrowBack,
   Close,
+  CloseFullscreen,
   Code,
+  Delete as DeleteIcon,
   Description,
   Edit as EditIcon,
   Extension,
   FolderOpen,
-  Refresh,
+  OpenInFull,
   Save,
+  SaveOutlined,
   Settings,
   SmartToy,
   Terminal as TerminalIcon,
   Upload as UploadIcon,
   VerticalSplit,
+  CloudUpload,
+  ExpandMore,
+  ExpandLess,
+  InsertDriveFile,
 } from '@mui/icons-material';
+import Collapse from '@mui/material/Collapse';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
+import remarkGfm from 'remark-gfm';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../modules/auth';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
 import {
@@ -57,7 +68,7 @@ import { UploadDialog } from '@modules/upythonblockly/upload';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
 import type { MinisDeviceModel } from '@mhersztowski/core';
-import { MemoryFS } from '@mhersztowski/core';
+import { MemoryFS, FileType } from '@mhersztowski/core';
 import { AgentPanel, DEFAULT_AGENT_CONFIG } from '@mhersztowski/web-client';
 
 type ViewMode = 'blockly' | 'split' | 'code';
@@ -68,9 +79,11 @@ function UPythonProjectPage() {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { isAdmin, token } = useAuth();
   const serviceRef = useRef<UPythonBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const generatedCodeRef = useRef('');
   const codeEditedRef = useRef(false);
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
@@ -78,6 +91,7 @@ function UPythonProjectPage() {
   // When Blockly init is delayed (WebView), sketch API call may complete first.
   // Store the XML here and apply it once the service is ready.
   const queuedSketchXmlRef = useRef<string | null>(null);
+  const currentSketchRef = useRef<string | null>(null);
   const hiddenCategoriesRef = useRef<Set<string>>(
     (() => {
       const stored = localStorage.getItem('upython_hidden_cats');
@@ -103,17 +117,23 @@ function UPythonProjectPage() {
   const [isDirty, setIsDirty] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [backConfirmOpen, setBackConfirmOpen] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [replOpen, setReplOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [githubRepoUrl, setGithubRepoUrl] = useState<string | undefined>();
+  const [pushTokenOpen, setPushTokenOpen] = useState(false);
+  const [pushToken, setPushToken] = useState('');
+  const [pushError, setPushError] = useState('');
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
   const [sketchesOpen, setSketchesOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 900 : true,
   );
   const [readmeOpen, setReadmeOpen] = useState(false);
+  const [readmeExpanded, setReadmeExpanded] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
   const [readmeEditMode, setReadmeEditMode] = useState(false);
   const [readmeEditValue, setReadmeEditValue] = useState('');
@@ -121,7 +141,12 @@ function UPythonProjectPage() {
   const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
   const initialSketch = searchParams.get('sketch');
   const [uploadCode, setUploadCode] = useState('');
+  const [uploadExtraFiles, setUploadExtraFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [projectLibraries, setProjectLibraries] = useState<Array<{ url: string; remoteName: string }>>([]);
+  const [scriptCategories, setScriptCategories] = useState<Array<{ name: string; colour: string; blocks: string[] }>>([]);
+  const [libSaving, setLibSaving] = useState(false);
+  // undefined = still fetching, null = no script found, string = script content
+  const [projectScript, setProjectScript] = useState<string | null | undefined>(undefined);
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(() => {
     const stored = localStorage.getItem('upython_hidden_cats');
     if (stored !== null) return new Set<string>(JSON.parse(stored) as string[]);
@@ -130,14 +155,89 @@ function UPythonProjectPage() {
   });
   const [loadKey, setLoadKey] = useState(0);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [sketchFiles, setSketchFiles] = useState<Map<string, string[]>>(new Map());
+  const [expandedSketches, setExpandedSketches] = useState<Set<string>>(new Set());
+  const [dropTarget, setDropTarget] = useState<string | null>(null); // sketchName being dragged over
+  const lastSourceStorageKey = projectId ? `upython_last_source_${projectId}` : null;
+  const [sketchLastSource, setSketchLastSource] = useState<Map<string, 'blockly' | 'code'>>(() => {
+    if (!projectId) return new Map();
+    try {
+      const raw = localStorage.getItem(`upython_last_source_${projectId}`);
+      if (raw) return new Map(JSON.parse(raw) as [string, 'blockly' | 'code'][]);
+    } catch { /* ignore */ }
+    return new Map();
+  });
   const [agentFs, setAgentFs] = useState<MemoryFS | null>(null);
   const [agentFsVersion, setAgentFsVersion] = useState(0);
   const [agentApiKey, setAgentApiKey] = useState('');
 
-  // Keep ref in sync for use inside Blockly listener
+  // Sync agent FS writes back to the server project + refresh sketches list
+  useEffect(() => {
+    if (!agentFs || !userName || !projectId) return;
+
+    // Full sync: scan all MemoryFS sketch dirs and write code files to server, then refresh list
+    const syncAll = async () => {
+      console.log('[agent sync] syncAll start, project:', projectId);
+      try {
+        const rootEntries = await agentFs.readDirectory('/');
+        console.log('[agent sync] root entries:', rootEntries.map(e => `${e.name}(${e.type === FileType.Directory ? 'dir' : 'file'})`));
+        for (const entry of rootEntries) {
+          if (entry.type !== FileType.Directory) continue;
+          const sketchName = entry.name;
+          let fileEntries: { name: string; type: FileType }[] = [];
+          try { fileEntries = await agentFs.readDirectory(`/${sketchName}`); } catch { continue; }
+          for (const fileEntry of fileEntries) {
+            if (fileEntry.type !== FileType.File) continue;
+            const fileName = fileEntry.name;
+            if (!fileName.endsWith('.py') && !fileName.endsWith('.blockly')) continue;
+            try {
+              const data = await agentFs.readFile(`/${sketchName}/${fileName}`);
+              const content = new TextDecoder().decode(data);
+              console.log('[agent sync] writing', sketchName, '/', fileName, '(', content.length, 'chars)');
+              await minisApi.writeUpythonSketchFile(userName, projectId, sketchName, fileName, content);
+              console.log('[agent sync] wrote OK', sketchName, '/', fileName);
+            } catch (e) { console.error('[agent sync] failed to write', sketchName, '/', fileName, e); }
+          }
+        }
+        const list = await minisApi.listUpythonSketches(userName, projectId);
+        console.log('[agent sync] refresh done, sketches:', list);
+        setSketches(list);
+      } catch (e) { console.error('[agent sync] full sync error:', e); }
+    };
+
+    let syncTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleSyncAll = () => {
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = setTimeout(syncAll, 1000);
+    };
+
+    const sub = agentFs.onDidChangeFile((events) => {
+      console.log('[agent sync] onDidChangeFile:', events.map(e => e.path));
+      scheduleSyncAll();
+    });
+
+    return () => {
+      sub.dispose();
+      if (syncTimer) clearTimeout(syncTimer);
+    };
+  }, [agentFs, userName, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep refs in sync for use inside Blockly listener
   useEffect(() => {
     codeEditedRef.current = codeEdited;
   }, [codeEdited]);
+
+  useEffect(() => {
+    currentSketchRef.current = currentSketch;
+  }, [currentSketch]);
+
+  // Persist sketchLastSource to localStorage
+  useEffect(() => {
+    if (!lastSourceStorageKey) return;
+    try {
+      localStorage.setItem(lastSourceStorageKey, JSON.stringify([...sketchLastSource]));
+    } catch { /* ignore */ }
+  }, [sketchLastSource, lastSourceStorageKey]);
 
   // After each sketch load, keep isLoadingSketchRef true for a bit longer to absorb any
   // deferred Blockly workspace events, then do a final isDirty reset.
@@ -153,6 +253,7 @@ function UPythonProjectPage() {
 
   // Sync generated code to Monaco editor
   const syncCodeToEditor = useCallback((code: string) => {
+    generatedCodeRef.current = code;
     setGeneratedCode(code);
     if (editorRef.current) {
       suppressEditorChangeRef.current = true;
@@ -163,6 +264,11 @@ function UPythonProjectPage() {
 
   const handleServiceReady = useCallback((service: UPythonBlocklyService) => {
     serviceRef.current = service;
+
+    // Libraries declared in project.js take priority over those stored in Project.json
+    const scriptLibs = service.getLibraries();
+    if (scriptLibs.length > 0) setProjectLibraries(scriptLibs);
+    setScriptCategories(service.getCategories());
 
     // Apply persisted toolbox visibility on init
     if (hiddenCategoriesRef.current.size > 0) {
@@ -187,45 +293,22 @@ function UPythonProjectPage() {
       }
       const code = service.generateCode();
       syncCodeToEditor(code);
-      if (!isLoadingSketchRef.current) setIsDirty(true);
+      if (!isLoadingSketchRef.current) {
+        setIsDirty(true);
+        setSketchLastSource((prev) => {
+          const s = currentSketchRef.current;
+          if (!s) return prev;
+          const next = new Map(prev);
+          next.set(s, 'blockly');
+          return next;
+        });
+      }
     });
 
     const code = service.generateCode();
     syncCodeToEditor(code);
     setIsDirty(false);
   }, [syncCodeToEditor]);
-
-  // Initialize/dispose Monaco editor when code panel is visible
-  const showCode = viewMode === 'code' || viewMode === 'split';
-
-  useEffect(() => {
-    if (!showCode || !editorContainerRef.current) return;
-
-    const editor = EditorInstance.create(editorContainerRef.current, {
-      value: generatedCode,
-      language: 'python',
-      theme: 'vs-dark',
-      automaticLayout: true,
-      minimap: { enabled: false },
-      fontSize: 14,
-      wordWrap: 'off',
-      readOnly: false,
-    });
-
-    editor.on('contentChanged', () => {
-      if (suppressEditorChangeRef.current) return;
-      if (isLoadingSketchRef.current) return;
-      setCodeEdited(true);
-      setIsDirty(true);
-    });
-
-    editorRef.current = editor;
-
-    return () => {
-      editor.dispose();
-      editorRef.current = null;
-    };
-  }, [showCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resize Blockly when panels change
   useEffect(() => {
@@ -235,15 +318,21 @@ function UPythonProjectPage() {
     return () => clearTimeout(timer);
   }, [viewMode, splitRatio, configOpen, sketchesOpen]);
 
-  // Resolve board from project.boardProfileKey
+  // Resolve board, libraries and project.js script from project record
   useEffect(() => {
     if (!userName || !projectId) return;
     (async () => {
       try {
-        const projects = await minisApi.getUserProjects(userName);
+        const [projects, script] = await Promise.all([
+          minisApi.getUserProjects(userName),
+          minisApi.getProjectScript(userName, projectId),
+        ]);
+        setProjectScript(script);
+
         const project = projects.find((p) => p.id === projectId);
         if (!project) return;
-        const boardKey = project.boardProfileKey;
+        setGithubRepoUrl(project.githubRepoUrl);
+        const boardKey = project.boardProfileKey ?? (project as unknown as Record<string, unknown>).moduleId as string | undefined;
         if (boardKey && boardProfiles[boardKey]) {
           setBoard(boardKey);
           serviceRef.current?.changeBoard(boardKey);
@@ -257,14 +346,16 @@ function UPythonProjectPage() {
             }))
           );
         }
-      } catch { /* ignore */ }
+      } catch {
+        setProjectScript(null);
+      }
     })();
   }, [userName, projectId]);
 
   // Load sketches list, auto-open sketch from URL param or first
   useEffect(() => {
     if (!userName || !projectId) return;
-    minisApi.listSketches(userName, projectId)
+    minisApi.listUpythonSketches(userName, projectId)
       .then((list) => {
         setSketches(list);
         if (list.length > 0) {
@@ -298,10 +389,30 @@ function UPythonProjectPage() {
           `MINIS_WIFI_SSID = ${JSON.stringify(cfg.wifiSsid)}`,
           `MINIS_WIFI_PASSWORD = ${JSON.stringify(cfg.wifiPassword)}`,
         ].join('\n') + '\n';
-        return minisApi.writeSketchFile(userName, projectId, currentSketch, 'MinisConfig.py', configContent);
+        return minisApi.writeUpythonSketchFile(userName, projectId, currentSketch, 'MinisConfig.py', configContent);
       })
       .catch(() => { /* non-critical */ });
   }, [selectedDeviceName, currentSketch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSaveLibraries = async () => {
+    if (!userName || !projectId) return;
+    setLibSaving(true);
+    try {
+      // Patch projectScript: strip old addLibrary / var RAW lines, prepend new ones
+      const base = (projectScript ?? '').split('\n')
+        .filter(l => !l.trimStart().startsWith('addLibrary(') && !l.trimStart().startsWith('var RAW ='))
+        .join('\n')
+        .trimStart();
+      const libLines = projectLibraries
+        .map(l => `addLibrary({ url: '${l.url}', remoteName: '${l.remoteName}' });`)
+        .join('\n');
+      const newContent = libLines ? libLines + '\n\n' + base : base;
+      await minisApi.saveProjectScript(userName, projectId, newContent);
+      setProjectScript(newContent);
+    } finally {
+      setLibSaving(false);
+    }
+  };
 
   const handleSaveReadme = async () => {
     if (!userName || !projectId) return;
@@ -321,7 +432,7 @@ function UPythonProjectPage() {
     serviceRef.current?.clearWorkspace();
     let xmlLoaded = false;
     try {
-      const xmlContent = await minisApi.readSketchFile(
+      const xmlContent = await minisApi.readUpythonSketchFile(
         userName, projectId, sketchName, `${sketchName}.blockly`,
       );
       if (xmlContent) {
@@ -344,7 +455,7 @@ function UPythonProjectPage() {
       syncCodeToEditor(serviceRef.current.generateCode());
     } else {
       try {
-        const pyContent = await minisApi.readSketchFile(
+        const pyContent = await minisApi.readUpythonSketchFile(
           userName, projectId, sketchName, `${sketchName}.py`,
         );
         syncCodeToEditor(pyContent);
@@ -359,6 +470,79 @@ function UPythonProjectPage() {
     // Re-render blocks after loading to fix layout issues in WebView where getBBox()
     // may return stale/zero values causing blocks to overlap.
     setTimeout(() => serviceRef.current?.rerenderBlocks(), 300);
+  };
+
+  const handleToggleSketchExpand = async (sketchName: string) => {
+    if (!userName || !projectId) return;
+    setExpandedSketches((prev) => {
+      const next = new Set(prev);
+      if (next.has(sketchName)) { next.delete(sketchName); return next; }
+      next.add(sketchName);
+      return next;
+    });
+    if (!sketchFiles.has(sketchName)) {
+      const files = await minisApi.listUpythonSketchFiles(userName, projectId, sketchName).catch(() => [] as string[]);
+      setSketchFiles((prev) => new Map(prev).set(sketchName, files));
+    }
+  };
+
+  const handleLoadSketchFile = async (sketchName: string, fileName: string) => {
+    if (!userName || !projectId) return;
+    setCurrentSketch(sketchName);
+    setCodeEdited(false);
+    setIsDirty(false);
+    isLoadingSketchRef.current = true;
+
+    if (fileName.endsWith('.blockly')) {
+      suppressBlocklyChangeRef.current = true;
+      serviceRef.current?.clearWorkspace();
+      try {
+        const xml = await minisApi.readUpythonSketchFile(userName, projectId, sketchName, fileName);
+        if (xml && serviceRef.current) {
+          serviceRef.current.loadFromXml(xml);
+          syncCodeToEditor(serviceRef.current.generateCode());
+        }
+      } catch { /* ignore */ }
+      suppressBlocklyChangeRef.current = false;
+      setViewMode('blockly');
+    } else if (fileName.endsWith('.py')) {
+      try {
+        const content = await minisApi.readUpythonSketchFile(userName, projectId, sketchName, fileName);
+        syncCodeToEditor(content);
+      } catch { /* ignore */ }
+      setViewMode('code');
+    }
+    setIsDirty(false);
+    setLoadKey((k) => k + 1);
+  };
+
+
+  const handleDeleteSketchFile = async (sketchName: string, fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!userName || !projectId) return;
+    if (!window.confirm(`Delete ${fileName} from sketch "${sketchName}"?`)) return;
+    try {
+      await minisApi.deleteUpythonSketchFile(userName, projectId, sketchName, fileName);
+      setSketchFiles((prev) => {
+        const next = new Map(prev);
+        next.set(sketchName, (next.get(sketchName) ?? []).filter((f) => f !== fileName));
+        return next;
+      });
+    } catch { /* ignore */ }
+  };
+
+  const handleDropOnSketch = async (sketchName: string, dt: DataTransfer) => {
+    if (!userName || !projectId) return;
+    const files = Array.from(dt.files);
+    for (const file of files) {
+      const text = await file.text().catch(() => null);
+      if (text === null) continue;
+      await minisApi.writeUpythonSketchFile(userName, projectId, sketchName, file.name, text).catch(() => {});
+    }
+    // Refresh file list for this sketch
+    const updated = await minisApi.listUpythonSketchFiles(userName, projectId, sketchName).catch(() => [] as string[]);
+    setSketchFiles((prev) => new Map(prev).set(sketchName, updated));
+    setExpandedSketches((prev) => new Set(prev).add(sketchName));
   };
 
   const handleNewSketch = () => {
@@ -376,16 +560,30 @@ function UPythonProjectPage() {
     const pyCode = editorRef.current?.getContent() ?? generatedCode;
 
     await Promise.all([
-      minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
-      minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.py`, pyCode),
+      minisApi.writeUpythonSketchFile(userName, projectId, currentSketch, `${currentSketch}.blockly`, blocklyXml),
+      minisApi.writeUpythonSketchFile(userName, projectId, currentSketch, `${currentSketch}.py`, pyCode),
     ]);
     if (!sketches.includes(currentSketch)) setSketches((prev) => [...prev, currentSketch]);
     setCodeEdited(false);
     setIsDirty(false);
   };
 
-  const openUploadDialog = () => {
+  const openUploadDialog = async () => {
     setUploadCode(editorRef.current?.getContent() ?? generatedCode);
+    // Load extra .py files from the sketch (exclude the main sketch file)
+    const extras: Array<{ name: string; content: string }> = [];
+    if (userName && projectId && currentSketch) {
+      try {
+        const files = await minisApi.listUpythonSketchFiles(userName, projectId, currentSketch);
+        const mainFile = `${currentSketch}.py`;
+        for (const file of files) {
+          if (file.endsWith('.blockly') || file === mainFile) continue;
+          const content = await minisApi.readUpythonSketchFile(userName, projectId, currentSketch, file).catch(() => null);
+          if (content !== null) extras.push({ name: file, content });
+        }
+      } catch { /* non-critical */ }
+    }
+    setUploadExtraFiles(extras);
     setUploadOpen(true);
   };
 
@@ -407,7 +605,45 @@ function UPythonProjectPage() {
 
     const fs = new MemoryFS();
     const enc = new TextEncoder();
-    await fs.mkdir(`/${sketchName}`);
+
+    // Project instructions for the agent — describe sketch structure so it creates files correctly
+    const claudeMd = [
+      '# MicroPython Project',
+      '',
+      'This is a MicroPython (uPython) project. The file system contains sketch directories.',
+      '',
+      '## File system structure',
+      '```',
+      '/{sketchName}/          ← sketch directory (one per sketch)',
+      '  {sketchName}.py       ← main MicroPython code file',
+      '  {sketchName}.blockly  ← optional Blockly XML (do not edit manually)',
+      '```',
+      '',
+      `## Current sketch: \`${sketchName}\``,
+      `The active sketch is at \`/${sketchName}/${sketchName}.py\`.`,
+      '',
+      '## Rules',
+      '- To create a new sketch called `foo`: create directory `/foo/` and file `/foo/foo.py`.',
+      '- The main code file MUST have the same name as its parent directory (e.g. `/foo/foo.py`).',
+      '- Never place `.py` files directly at the root `/` — they must be inside a sketch directory.',
+      '- Do not create files outside of sketch directories.',
+    ].join('\n');
+    await fs.writeFile('/CLAUDE.md', enc.encode(claudeMd), { create: true, overwrite: true });
+
+    // Load ALL sketches from server so agent can see the full project
+    const allSketches = await minisApi.listUpythonSketches(userName!, projectId!).catch(() => [] as string[]);
+    for (const sName of allSketches) {
+      await fs.mkdir(`/${sName}`);
+      const files = await minisApi.listUpythonSketchFiles(userName!, projectId!, sName).catch(() => [] as string[]);
+      for (const fileName of files) {
+        if (sName === sketchName && (fileName === `${sketchName}.py` || fileName === `${sketchName}.blockly`)) continue; // use in-editor version
+        const content = await minisApi.readUpythonSketchFile(userName!, projectId!, sName, fileName).catch(() => null);
+        if (content !== null) await fs.writeFile(`/${sName}/${fileName}`, enc.encode(content), { create: true, overwrite: true });
+      }
+    }
+
+    // Current sketch uses the in-editor (possibly unsaved) version
+    if (!allSketches.includes(sketchName)) await fs.mkdir(`/${sketchName}`);
     await fs.writeFile(`/${sketchName}/${sketchName}.py`, enc.encode(code), { create: true, overwrite: true });
     if (xml) {
       await fs.writeFile(`/${sketchName}/${sketchName}.blockly`, enc.encode(xml), { create: true, overwrite: true });
@@ -458,6 +694,45 @@ function UPythonProjectPage() {
   });
 
   const showBlockly = viewMode === 'blockly' || viewMode === 'split';
+  const showCode = viewMode === 'code' || viewMode === 'split';
+
+  // Initialize Monaco when code panel mounts, dispose when it unmounts
+  useEffect(() => {
+    if (!showCode || !editorContainerRef.current) return;
+
+    const editor = EditorInstance.create(editorContainerRef.current, {
+      value: generatedCodeRef.current,
+      language: 'python',
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      fontSize: 14,
+      wordWrap: 'off',
+      readOnly: false,
+    });
+
+    editor.on('contentChanged', () => {
+      if (suppressEditorChangeRef.current) return;
+      if (isLoadingSketchRef.current) return;
+      setCodeEdited(true);
+      setSketchLastSource((prev) => {
+        const s = currentSketchRef.current;
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(s, 'code');
+        return next;
+      });
+      setIsDirty(true);
+    });
+
+    editorRef.current = editor;
+
+    return () => {
+      editor.dispose();
+      editorRef.current = null;
+    };
+  }, [showCode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Current Python code for upload
   const codeForUpload = editorRef.current?.getContent() ?? generatedCode;
 
@@ -469,7 +744,7 @@ function UPythonProjectPage() {
           <IconButton
             color="inherit"
             edge="start"
-            onClick={() => navigate(`/user/${userName}/electronics/upython`)}
+            onClick={() => isDirty ? setBackConfirmOpen(true) : navigate(`/user/${userName}/electronics/upython`)}
             sx={{ mr: 1 }}
           >
             <ArrowBack />
@@ -496,16 +771,18 @@ function UPythonProjectPage() {
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>README</Box>
           </Button>
 
-          <Button
-            size="small" variant={agentOpen ? 'contained' : 'outlined'} color="inherit"
-            startIcon={<SmartToy />}
-            onClick={() => {
-              if (agentOpen) { setAgentOpen(false); } else { void handleOpenAgent(); }
-            }}
-            sx={{ ml: 1, ...btnSx(agentOpen) }}
-          >
-            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>AI</Box>
-          </Button>
+          {isAdmin && (
+            <Button
+              size="small" variant={agentOpen ? 'contained' : 'outlined'} color="inherit"
+              startIcon={<SmartToy />}
+              onClick={() => {
+                if (agentOpen) { setAgentOpen(false); } else { void handleOpenAgent(); }
+              }}
+              sx={{ ml: 1, ...btnSx(agentOpen) }}
+            >
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>AI</Box>
+            </Button>
+          )}
 
           <Button
             size="small" variant={sketchesOpen ? 'contained' : 'outlined'} color="inherit"
@@ -516,31 +793,21 @@ function UPythonProjectPage() {
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sketches{currentSketch ? `: ${currentSketch}` : ''}</Box>
           </Button>
 
-          <Tooltip title="Sync sketches from GitHub">
-            <span>
-              <Button
-                size="small" variant="outlined" color="inherit"
-                startIcon={syncing ? <CircularProgress size={14} color="inherit" /> : <Refresh />}
-                onClick={async () => {
-                  if (!userName || !projectId) return;
-                  setSyncing(true);
-                  try {
-                    await minisApi.syncProjectFromGithub(userName, projectId);
-                    const list = await minisApi.listSketches(userName, projectId);
-                    setSketches(list);
-                  } catch (err) {
-                    console.error('Sync failed:', err);
-                  } finally {
-                    setSyncing(false);
-                  }
-                }}
-                disabled={syncing}
-                sx={{ ml: 1, ...btnSx(false) }}
-              >
-                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Sync</Box>
-              </Button>
-            </span>
-          </Tooltip>
+          {isAdmin && githubRepoUrl && (<>
+            <Tooltip title="Push sketches to GitHub">
+              <span>
+                <Button
+                  size="small" variant="outlined" color="inherit"
+                  startIcon={pushing ? <CircularProgress size={14} color="inherit" /> : <CloudUpload />}
+                  onClick={() => { setPushError(''); setPushTokenOpen(true); }}
+                  disabled={pushing}
+                  sx={{ ml: 1, ...btnSx(false) }}
+                >
+                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Push</Box>
+                </Button>
+              </span>
+            </Tooltip>
+          </>)}
 
           <Tooltip title={isDirty && currentSketch ? 'Unsaved changes' : ''}>
             <span>
@@ -634,6 +901,9 @@ function UPythonProjectPage() {
             }}
           >
             <Typography variant="subtitle2" gutterBottom>Configuration</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+              ID: {projectId}
+            </Typography>
             <Typography variant="body2" sx={{ mb: 1 }}>
               Board: {board ? (boardProfiles[board]?.name ?? board) : 'Loading...'}
             </Typography>
@@ -685,6 +955,88 @@ function UPythonProjectPage() {
                 );
               })}
             </Box>
+
+            {scriptCategories.length > 0 && (
+              <>
+                <Divider sx={{ mt: 2, mb: 1 }} />
+                <Typography variant="subtitle2" gutterBottom>Script Categories</Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {scriptCategories.map((cat) => (
+                    <Chip
+                      key={cat.name}
+                      label={cat.name}
+                      size="small"
+                      sx={{ bgcolor: cat.colour, color: '#fff', fontSize: '0.7rem' }}
+                    />
+                  ))}
+                </Box>
+              </>
+            )}
+
+            <Divider sx={{ mt: 2, mb: 1 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+              <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>Libraries</Typography>
+              <Tooltip title="Add library">
+                <IconButton
+                  size="small"
+                  onClick={() => setProjectLibraries((prev) => [...prev, { url: '', remoteName: '' }])}
+                >
+                  <Add fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Save to project.js">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={handleSaveLibraries}
+                    disabled={libSaving || projectScript === undefined || projectScript === null}
+                  >
+                    {libSaving ? <CircularProgress size={16} /> : <SaveOutlined fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+            {projectLibraries.length === 0 && (
+              <Typography variant="caption" color="text.secondary">No libraries</Typography>
+            )}
+            {projectLibraries.map((lib, idx) => (
+              <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <TextField
+                    size="small"
+                    label="Remote name"
+                    value={lib.remoteName}
+                    onChange={(e) => {
+                      const next = [...projectLibraries];
+                      next[idx] = { ...next[idx], remoteName: e.target.value };
+                      setProjectLibraries(next);
+                    }}
+                    sx={{ flex: 1, fontSize: '0.75rem' }}
+                    inputProps={{ style: { fontSize: '0.75rem' } }}
+                  />
+                  <Tooltip title="Remove">
+                    <IconButton
+                      size="small"
+                      onClick={() => setProjectLibraries((prev) => prev.filter((_, i) => i !== idx))}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                <TextField
+                  size="small"
+                  label="URL"
+                  value={lib.url}
+                  onChange={(e) => {
+                    const next = [...projectLibraries];
+                    next[idx] = { ...next[idx], url: e.target.value };
+                    setProjectLibraries(next);
+                  }}
+                  fullWidth
+                  inputProps={{ style: { fontSize: '0.75rem' } }}
+                />
+              </Box>
+            ))}
           </Box>
         )}
 
@@ -692,12 +1044,13 @@ function UPythonProjectPage() {
         {readmeOpen && (
           <Box
             sx={{
-              width: { xs: '100%', sm: 360 }, maxWidth: { xs: 400, sm: 'none' },
-              flexShrink: 0,
-              position: { xs: 'absolute', sm: 'relative' },
-              zIndex: { xs: 10, sm: 'auto' },
-              top: 0, bottom: 0, left: 0,
-              borderRight: 1, borderColor: 'divider',
+              width: readmeExpanded ? '100%' : { xs: '100%', sm: 360 },
+              maxWidth: readmeExpanded ? '100%' : { xs: 400, sm: 'none' },
+              flexShrink: readmeExpanded ? 1 : 0,
+              position: { xs: 'absolute', sm: readmeExpanded ? 'absolute' : 'relative' },
+              zIndex: readmeExpanded ? 1200 : { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0, right: readmeExpanded ? 0 : 'auto',
+              borderRight: readmeExpanded ? 0 : 1, borderColor: 'divider',
               display: 'flex', flexDirection: 'column',
               bgcolor: 'background.paper',
             }}
@@ -714,11 +1067,18 @@ function UPythonProjectPage() {
                   </Tooltip>
                 </>
               ) : (
-                <Tooltip title="Edit">
-                  <IconButton size="small" onClick={() => { setReadmeEditValue(readmeContent ?? ''); setReadmeEditMode(true); }}>
-                    <EditIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                <>
+                  <Tooltip title={readmeExpanded ? 'Collapse' : 'Expand'}>
+                    <IconButton size="small" onClick={() => setReadmeExpanded((v) => !v)}>
+                      {readmeExpanded ? <CloseFullscreen fontSize="small" /> : <OpenInFull fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Edit">
+                    <IconButton size="small" onClick={() => { setReadmeEditValue(readmeContent ?? ''); setReadmeEditMode(true); }}>
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </>
               )}
             </Box>
             <Box sx={{ flexGrow: 1, overflow: 'auto', p: 2 }}>
@@ -734,8 +1094,8 @@ function UPythonProjectPage() {
                   inputProps={{ style: { fontFamily: 'monospace', fontSize: 13 } }}
                 />
               ) : readmeContent ? (
-                <Box sx={{ '& h1,h2,h3': { mt: 1, mb: 0.5 }, '& p': { mt: 0, mb: 1 }, '& pre': { bgcolor: 'action.hover', p: 1, borderRadius: 1, overflow: 'auto', fontSize: 12 }, '& code': { bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5, fontSize: 12 } }}>
-                  <ReactMarkdown remarkPlugins={[remarkBreaks]}>{readmeContent}</ReactMarkdown>
+                <Box sx={{ '& h1,h2,h3': { mt: 1, mb: 0.5 }, '& p': { mt: 0, mb: 1 }, '& pre': { bgcolor: 'action.hover', p: 1, borderRadius: 1, overflow: 'auto', fontSize: 12 }, '& code': { bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5, fontSize: 12 }, '& table': { borderCollapse: 'collapse', width: '100%', fontSize: 12, mb: 1 }, '& th,td': { border: 1, borderColor: 'divider', px: 1, py: 0.5 }, '& th': { bgcolor: 'action.hover', fontWeight: 'bold' } }}>
+                  <ReactMarkdown remarkPlugins={[remarkBreaks, remarkGfm]}>{readmeContent}</ReactMarkdown>
                 </Box>
               ) : (
                 <Typography variant="body2" color="text.secondary">
@@ -747,7 +1107,7 @@ function UPythonProjectPage() {
         )}
 
         {/* AI Agent panel */}
-        {agentOpen && agentFs && (
+        {isAdmin && agentOpen && agentFs && (
           <Box
             sx={{
               width: { xs: '100%', sm: 380 }, maxWidth: { xs: 420, sm: 'none' },
@@ -764,6 +1124,8 @@ function UPythonProjectPage() {
               key={agentFsVersion}
               provider={agentFs}
               providerVersion={agentFsVersion}
+              webFetchUrl="/api/web-fetch"
+              authToken={token ?? undefined}
               defaultConfig={{
                 providerType: 'anthropic',
                 providers: {
@@ -812,15 +1174,77 @@ function UPythonProjectPage() {
               </Tooltip>
             </Box>
             <List dense sx={{ flexGrow: 1, overflow: 'auto' }}>
-              {sketches.map((name) => (
-                <ListItemButton
-                  key={name}
-                  selected={currentSketch === name}
-                  onClick={() => handleLoadSketch(name)}
-                >
-                  <ListItemText primary={name} />
-                </ListItemButton>
-              ))}
+              {sketches.map((name) => {
+                const expanded = expandedSketches.has(name);
+                const files = sketchFiles.get(name) ?? [];
+                const lastSrc = sketchLastSource.get(name) ?? 'blockly';
+                return (
+                  <Box key={name}>
+                    <ListItemButton
+                      selected={currentSketch === name}
+                      onClick={() => handleLoadSketch(name)}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropTarget(name); }}
+                      onDragLeave={() => setDropTarget(null)}
+                      onDrop={(e) => { e.preventDefault(); setDropTarget(null); void handleDropOnSketch(name, e.dataTransfer); }}
+                      sx={{
+                        pr: 0.5,
+                        outline: dropTarget === name ? '2px dashed' : 'none',
+                        outlineColor: 'primary.main',
+                      }}
+                    >
+                      <ListItemText
+                        primary={name}
+                        primaryTypographyProps={{ fontSize: 13, noWrap: true }}
+                        sx={{ flexGrow: 1, minWidth: 0 }}
+                      />
+                      <IconButton
+                        size="small"
+                        onClick={(e) => { e.stopPropagation(); void handleToggleSketchExpand(name); }}
+                        sx={{ ml: 0.5, p: 0.25 }}
+                      >
+                        {expanded ? <ExpandLess fontSize="inherit" /> : <ExpandMore fontSize="inherit" />}
+                      </IconButton>
+                    </ListItemButton>
+                    <Collapse in={expanded} unmountOnExit>
+                      <List dense disablePadding>
+                        {files.map((file) => {
+                          const isLastEdited =
+                            (lastSrc === 'code' && file === `${name}.py`) ||
+                            (lastSrc === 'blockly' && file === `${name}.blockly`);
+                          const isOpen = isLastEdited && name === currentSketch;
+                          const fileColor = isOpen ? 'error.main' : isLastEdited ? 'primary.main' : 'text.primary';
+                          return (
+                          <ListItemButton
+                            key={file}
+                            onClick={() => void handleLoadSketchFile(name, file)}
+                            sx={{ pl: 3.5, py: 0.25, pr: 0.5 }}
+                          >
+                            <InsertDriveFile sx={{ fontSize: 14, mr: 0.75, color: fileColor, flexShrink: 0 }} />
+                            <ListItemText
+                              primary={file}
+                              primaryTypographyProps={{ fontSize: 11, noWrap: true, color: fileColor, fontWeight: isLastEdited ? 600 : 400 }}
+                              sx={{ flexGrow: 1, minWidth: 0 }}
+                            />
+                            <IconButton
+                              size="small"
+                              onClick={(e) => void handleDeleteSketchFile(name, file, e)}
+                              sx={{ p: 0.25, opacity: 0.5, '&:hover': { opacity: 1, color: 'error.main' } }}
+                            >
+                              <DeleteIcon sx={{ fontSize: 13 }} />
+                            </IconButton>
+                          </ListItemButton>
+                          );
+                        })}
+                        {files.length === 0 && (
+                          <Typography sx={{ pl: 4, py: 0.5, fontSize: 11, color: 'text.disabled' }}>
+                            empty
+                          </Typography>
+                        )}
+                      </List>
+                    </Collapse>
+                  </Box>
+                );
+              })}
               {sketches.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1 }}>
                   No sketches yet
@@ -848,7 +1272,8 @@ function UPythonProjectPage() {
             <UPythonBlocklyComponent
               onServiceReady={handleServiceReady}
               initialBoard={board}
-              ready={blocklyReady}
+              ready={blocklyReady && projectScript !== undefined}
+              projectScript={projectScript ?? undefined}
             />
           </Box>
 
@@ -868,7 +1293,7 @@ function UPythonProjectPage() {
           {showCode && (
             <Box
               ref={editorContainerRef}
-              sx={{ flexGrow: 1, overflow: 'hidden', minWidth: MIN_PANEL_PX }}
+              sx={{ flexGrow: 1, overflow: 'hidden', minWidth: MIN_PANEL_PX, height: '100%' }}
             />
           )}
         </Box>
@@ -930,9 +1355,79 @@ function UPythonProjectPage() {
         projectId={projectId}
         deviceName={selectedDeviceName || undefined}
         libraries={projectLibraries}
+        extraFiles={uploadExtraFiles}
       />
 
       {/* Confirm overwrite dialog */}
+      {/* Push to GitHub dialog */}
+      <Dialog open={pushTokenOpen} onClose={() => setPushTokenOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Push to GitHub</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Enter a GitHub Personal Access Token with write access to <strong>{githubRepoUrl}</strong>.<br />
+            Leave empty to use the server&apos;s <code>GITHUB_TOKEN</code> env var.
+          </DialogContentText>
+          <TextField
+            label="GitHub Token (optional)"
+            type="password"
+            fullWidth size="small"
+            value={pushToken}
+            onChange={(e) => setPushToken(e.target.value)}
+            placeholder="ghp_..."
+          />
+          {pushError && <DialogContentText color="error" sx={{ mt: 1 }}>{pushError}</DialogContentText>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPushTokenOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={pushing}
+            startIcon={pushing ? <CircularProgress size={14} /> : <CloudUpload />}
+            onClick={async () => {
+              if (!userName || !projectId) return;
+              setPushError('');
+              setPushing(true);
+              try {
+                const result = await minisApi.pushProjectToGithub(userName, projectId, pushToken || undefined);
+                setPushTokenOpen(false);
+                setPushToken('');
+                console.log(`Pushed ${result.fileCount} files, commit: ${result.commitSha}`);
+              } catch (err) {
+                setPushError(err instanceof Error ? err.message : String(err));
+              } finally {
+                setPushing(false);
+              }
+            }}
+          >
+            Push
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={backConfirmOpen} onClose={() => setBackConfirmOpen(false)}>
+        <DialogTitle>Unsaved changes</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            You have unsaved changes. Save before leaving?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setBackConfirmOpen(false); navigate(`/user/${userName}/electronics/upython`); }}>
+            Discard
+          </Button>
+          <Button
+            onClick={async () => {
+              setBackConfirmOpen(false);
+              await handleSaveSketch().catch(() => {});
+              navigate(`/user/${userName}/electronics/upython`);
+            }}
+            color="primary" variant="contained"
+          >
+            Save &amp; go back
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
         <DialogTitle>Overwrite manual changes?</DialogTitle>
         <DialogContent>

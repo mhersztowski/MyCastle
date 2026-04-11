@@ -38,6 +38,7 @@ export interface GithubProjectEntry {
   sketches: GithubSketchEntry[];
   readmePath: string | null;
   libraries: Array<{ name?: string; version?: string; url?: string; remoteName?: string }>;
+  projectScriptPath: string | null;
 }
 
 export interface GithubModuleEntry {
@@ -208,7 +209,7 @@ class MinisApiService {
     return data.items;
   }
 
-  async createUserProject(userName: string, data: { name: string; githubProjectId: string; githubRepoUrl?: string; softwarePlatform: string; moduleId?: string; boardProfileKey?: string; libraries?: Array<{ name?: string; version?: string; url?: string; remoteName?: string }> }): Promise<MinisProjectModel> {
+  async createUserProject(userName: string, data: { name: string; githubProjectId?: string; githubRepoUrl?: string; softwarePlatform: string; moduleId?: string; boardProfileKey?: string; libraries?: Array<{ name?: string; version?: string; url?: string; remoteName?: string }> }): Promise<MinisProjectModel> {
     return this.request<MinisProjectModel>('POST', `/users/${encodeURIComponent(userName)}/project-arduino`, data);
   }
 
@@ -220,14 +221,32 @@ class MinisApiService {
     await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sync-from-github`);
   }
 
+  async pushProjectToGithub(userName: string, projectName: string, token?: string, branch?: string): Promise<{ commitSha: string; fileCount: number }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/push-to-github`, { token, branch });
+  }
+
   async cloneProjectFromGithub(
     userName: string, projectName: string,
     githubRepoUrl: string,
     sketches: GithubSketchEntry[],
     readmePath: string | null,
     libraries?: Array<{ name?: string; version?: string; url?: string; remoteName?: string }>,
+    projectScriptPath?: string | null,
   ): Promise<void> {
-    await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/clone-from-github`, { githubRepoUrl, sketches, readmePath, libraries });
+    await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/clone-from-github`, { githubRepoUrl, sketches, readmePath, libraries, projectScriptPath });
+  }
+
+  async getProjectScript(userName: string, projectName: string): Promise<string | null> {
+    try {
+      const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/project-script`);
+      return data.content;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveProjectScript(userName: string, projectName: string, content: string): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/project-script`, { content });
   }
   // IoT - Config
   async getIotConfig(userName: string, deviceName: string): Promise<IotDeviceConfig | null> {
@@ -405,6 +424,11 @@ class MinisApiService {
     return data.items;
   }
 
+  async listSketchFiles(userName: string, projectName: string, sketchName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}`);
+    return data.items;
+  }
+
   async readSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<string> {
     const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
     return data.content;
@@ -412,6 +436,30 @@ class MinisApiService {
 
   async writeSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  // uPython sketch files
+  async listUpythonSketches(userName: string, projectName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches`);
+    return data.items;
+  }
+
+  async listUpythonSketchFiles(userName: string, projectName: string, sketchName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}`);
+    return data.items;
+  }
+
+  async readUpythonSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<string> {
+    const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+    return data.content;
+  }
+
+  async writeUpythonSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  async deleteUpythonSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
   }
 
   // Pygame sketch files
@@ -427,6 +475,15 @@ class MinisApiService {
 
   async writePygameSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  async listPygameSketchFiles(userName: string, projectName: string, sketchName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}`);
+    return data.items;
+  }
+
+  async deletePygameSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
   }
 
   async buildPygameSketch(userName: string, projectId: string, sketchName: string, webCode: string): Promise<{ success: boolean; output: string }> {

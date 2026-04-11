@@ -33,7 +33,12 @@ export class EditorInstance implements Disposable {
     container: HTMLElement,
     options: EditorOptions & monaco.editor.IStandaloneEditorConstructionOptions
   ) {
-    this.id = createEditorId(crypto.randomUUID());
+    const uuid = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)))
+          .map((b, i) => ([4, 6, 8, 10].includes(i) ? '-' : '') + (i === 6 ? ((b & 0x0f) | 0x40).toString(16) : i === 8 ? ((b & 0x3f) | 0x80).toString(16) : b.toString(16).padStart(2, '0')))
+          .join('');
+    this.id = createEditorId(uuid);
 
     this.editor = monaco.editor.create(container, {
       automaticLayout: true,

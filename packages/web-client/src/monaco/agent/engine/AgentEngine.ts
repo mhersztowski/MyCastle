@@ -6,6 +6,7 @@ import type { FileSystemProvider } from '@mhersztowski/core';
 import type { AiProvider, AiProviderConfig, AiChatMessage, AiContentBlock, AgentMessage, ChatAttachment } from '../types';
 import { buildVfsToolDefinitions } from '../tools/vfsTools';
 import { executeVfsTool } from '../tools/toolExecutor';
+import { buildWebToolDefinitions, executeWebTool } from '../tools/webTools';
 
 export interface AgentEngineCallbacks {
   onMessage: (message: AgentMessage) => void;
@@ -27,6 +28,8 @@ export class AgentEngine {
   private claudeMdLoaded = false;
   private abortController: AbortController | null = null;
   private skills = new Map<string, string>(); // name → content
+  private webFetchUrl: string | null = null;
+  private authToken: string | null = null;
 
   constructor(
     private provider: FileSystemProvider,
@@ -36,12 +39,16 @@ export class AgentEngine {
     maxIterations = 15,
     temperature = 0.2,
     maxTokens = 4096,
+    webFetchUrl?: string,
+    authToken?: string,
   ) {
     this.aiProvider = aiProvider;
     this.config = config;
     this.maxIterations = maxIterations;
     this.temperature = temperature;
     this.maxTokens = maxTokens;
+    this.webFetchUrl = webFetchUrl ?? null;
+    this.authToken = authToken ?? null;
   }
 
   updateConfig(
@@ -50,12 +57,16 @@ export class AgentEngine {
     maxIterations?: number,
     temperature?: number,
     maxTokens?: number,
+    webFetchUrl?: string,
+    authToken?: string,
   ): void {
     this.aiProvider = aiProvider;
     this.config = config;
     if (maxIterations !== undefined) this.maxIterations = maxIterations;
     if (temperature !== undefined) this.temperature = temperature;
     if (maxTokens !== undefined) this.maxTokens = maxTokens;
+    if (webFetchUrl !== undefined) this.webFetchUrl = webFetchUrl;
+    if (authToken !== undefined) this.authToken = authToken;
   }
 
   /** Scans VFS root dirs for CLAUDE.md + skills (skills-lock.json + .claude/commands/). */
@@ -197,7 +208,10 @@ export class AgentEngine {
       this.history.push(userMsg);
       this.callbacks.onMessage(userMsg);
 
-      const tools = buildVfsToolDefinitions(this.provider);
+      const tools = [
+        ...buildVfsToolDefinitions(this.provider),
+        ...(this.webFetchUrl ? buildWebToolDefinitions() : []),
+      ];
       const systemPrompt = this.buildSystemPrompt();
 
       let iteration = 0;
@@ -224,7 +238,15 @@ export class AgentEngine {
 
           for (const toolCall of response.toolCalls) {
             if (signal.aborted) break;
-            const { result, affectedFiles } = await executeVfsTool(toolCall, this.provider);
+            let result: string;
+            let affectedFiles: string[];
+            if (toolCall.function.name === 'web_fetch' && this.webFetchUrl) {
+              const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+              result = await executeWebTool(toolCall.function.name, args, this.webFetchUrl, this.authToken ?? undefined);
+              affectedFiles = [];
+            } else {
+              ({ result, affectedFiles } = await executeVfsTool(toolCall, this.provider));
+            }
             for (const f of affectedFiles) this.allAffectedFiles.add(f);
 
             const toolMsg = this.createMessage('tool', result);

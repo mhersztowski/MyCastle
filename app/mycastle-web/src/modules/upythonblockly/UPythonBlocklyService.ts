@@ -3,7 +3,8 @@ import * as Blockly from 'blockly';
 import { UPythonBoardManager } from './boards/BoardManager';
 import { registerAllBlocks } from './blocks';
 import { createUPythonGenerator, type UPythonGenerator } from './generator';
-import { TOOLBOX, buildToolbox } from './toolbox';
+import { buildToolbox, type ExtraToolboxCategory } from './toolbox';
+import { Order } from './generator/Order';
 import { WorkspaceControls } from '../ardublockly2/WorkspaceControls';
 
 export class UPythonBlocklyService {
@@ -11,16 +12,68 @@ export class UPythonBlocklyService {
   private generator: UPythonGenerator | null = null;
   private controls: WorkspaceControls | null = null;
   private changeListeners: Array<() => void> = [];
+  private extraCategories: ExtraToolboxCategory[] = [];
+  private extraLibraries: Array<{ url: string; remoteName: string }> = [];
   readonly boardManager: UPythonBoardManager;
 
   constructor(initialBoard = 'esp32_generic') {
     this.boardManager = new UPythonBoardManager(initialBoard);
   }
 
-  /** Initialize Blockly workspace. */
-  async init(container: HTMLElement): Promise<void> {
+  /** Register Cut / Copy / Paste context menu items (once per session). */
+  private static registerClipboardContextMenu(): void {
+    const reg = Blockly.ContextMenuRegistry.registry;
+    if (reg.getItem('blockCopy')) return; // already registered
+
+    // Copy — block scope
+    reg.register({
+      id: 'blockCopy',
+      displayText: 'Copy',
+      scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+      weight: 1.5,
+      preconditionFn: (scope) => (scope.block && !scope.block.isShadow()) ? 'enabled' : 'hidden',
+      callback: (scope) => { if (scope.block) Blockly.clipboard.copy(scope.block); },
+    });
+
+    // Cut — block scope
+    reg.register({
+      id: 'blockCut',
+      displayText: 'Cut',
+      scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+      weight: 1.6,
+      preconditionFn: (scope) =>
+        (scope.block && !scope.block.isShadow() && scope.block.isDeletable()) ? 'enabled' : 'hidden',
+      callback: (scope) => {
+        if (!scope.block) return;
+        Blockly.clipboard.copy(scope.block);
+        scope.block.dispose(true);
+      },
+    });
+
+    // Paste — workspace scope (shown on right-click on empty canvas)
+    reg.register({
+      id: 'workspacePaste',
+      displayText: 'Paste',
+      scopeType: Blockly.ContextMenuRegistry.ScopeType.WORKSPACE,
+      weight: 0,
+      preconditionFn: () => Blockly.clipboard.getLastCopiedData() ? 'enabled' : 'disabled',
+      callback: (scope) => {
+        const data = Blockly.clipboard.getLastCopiedData();
+        if (data && scope.workspace) Blockly.clipboard.paste(data, scope.workspace);
+      },
+    });
+  }
+
+  /** Initialize Blockly workspace. Optionally runs project.js to register custom blocks. */
+  async init(container: HTMLElement, projectScript?: string): Promise<void> {
     registerAllBlocks(this.boardManager);
     this.generator = createUPythonGenerator(this.boardManager);
+
+    this.extraCategories = [];
+    this.extraLibraries = [];
+    if (projectScript) {
+      this.runProjectScript(projectScript);
+    }
 
     Blockly.Scrollbar.scrollbarThickness = 13;
 
@@ -34,7 +87,7 @@ export class UPythonBlocklyService {
       rtl: false,
       scrollbars: true,
       sounds: false,
-      toolbox: TOOLBOX,
+      toolbox: buildToolbox(new Set(), this.extraCategories),
       trashcan: true,
       zoom: {
         controls: true,
@@ -45,6 +98,8 @@ export class UPythonBlocklyService {
         scaleSpeed: 1.2,
       },
     });
+
+    UPythonBlocklyService.registerClipboardContextMenu();
 
     this.controls = new WorkspaceControls(this.workspace);
     const controlsDom = this.controls.createDom();
@@ -168,6 +223,36 @@ export class UPythonBlocklyService {
 
   updateToolboxVisibility(hidden: ReadonlySet<string>): void {
     if (!this.workspace) return;
-    this.workspace.updateToolbox(buildToolbox(hidden));
+    this.workspace.updateToolbox(buildToolbox(hidden, this.extraCategories));
+  }
+
+  /** Returns libraries declared by project.js via addLibrary(). */
+  getLibraries(): Array<{ url: string; remoteName: string }> {
+    return this.extraLibraries;
+  }
+
+  /** Returns toolbox categories declared by project.js via addCategory(). */
+  getCategories(): Array<{ name: string; colour: string; blocks: string[] }> {
+    return this.extraCategories;
+  }
+
+  /**
+   * Execute a project.js script with Blockly + generator context.
+   * Available variables: `Blockly`, `generator`, `addCategory`, `Order`, `addLibrary`.
+   * - `addCategory({ name, colour, blocks })` — adds a toolbox section
+   * - `addLibrary({ url, remoteName })` — declares a library to upload to the device
+   * - `Order.ATOMIC` etc. — precedence constants for value generators
+   */
+  private runProjectScript(scriptContent: string): void {
+    const addCategory = (cat: ExtraToolboxCategory) => this.extraCategories.push(cat);
+    const addLibrary = (lib: { url: string; remoteName: string }) => this.extraLibraries.push(lib);
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function('Blockly', 'generator', 'addCategory', 'Order', 'addLibrary', scriptContent)(
+        Blockly, this.generator, addCategory, Order, addLibrary,
+      );
+    } catch (e) {
+      console.error('[UPythonBlockly] project.js error:', e);
+    }
   }
 }

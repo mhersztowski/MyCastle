@@ -37,9 +37,10 @@ interface UploadDialogProps {
   projectId?: string;
   deviceName?: string;
   libraries?: Array<{ url: string; remoteName: string }>;
+  extraFiles?: Array<{ name: string; content: string }>;
 }
 
-function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries }: UploadDialogProps) {
+function UploadDialog({ open, onClose, code, userName, board, projectId, deviceName: deviceNameProp, libraries, extraFiles }: UploadDialogProps) {
   const [tab, setTab] = useState(0);
   const [uploadMode, setUploadMode] = useState<UploadMode>('run');
   const [baudRate, setBaudRate] = useState(115200);
@@ -93,6 +94,13 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
     } catch { /* non-critical */ }
   };
 
+  const uploadExtraFiles = async (svc: { saveToFile: (name: string, content: string) => Promise<void> }) => {
+    for (const file of extraFiles ?? []) {
+      appendLog(`Uploading ${file.name}...`);
+      await svc.saveToFile(file.name, file.content);
+    }
+  };
+
   const uploadLibraries = async (svc: { saveToFile: (name: string, content: string) => Promise<void> }) => {
     for (const lib of libraries ?? []) {
       appendLog(`Fetching ${lib.remoteName}...`);
@@ -143,6 +151,7 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
       appendLog('Connected.');
 
       await uploadLibraries(svc);
+      await uploadExtraFiles(svc);
 
       if (uploadMode === 'run') {
         appendLog('Running code...');
@@ -178,6 +187,7 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
       appendLog('Connected.');
 
       await uploadLibraries(svc);
+      await uploadExtraFiles(svc);
 
       if (uploadMode === 'run') {
         appendLog('Running code...');
@@ -296,6 +306,11 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
           {uploadMode === 'run' && !!libraries?.length && (
             <Alert severity="warning" sx={{ mt: 1 }}>
               Libraries ({libraries.map(l => l.remoteName).join(', ')}) will be saved to the device filesystem even in Run mode — required for imports.
+            </Alert>
+          )}
+          {!!extraFiles?.length && (
+            <Alert severity="info" sx={{ mt: 1 }}>
+              Extra files will also be uploaded: {extraFiles.map(f => f.name).join(', ')}
             </Alert>
           )}
         </Box>

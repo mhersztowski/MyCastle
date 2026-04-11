@@ -1044,6 +1044,13 @@ export const TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
 // Import needed for type only
 import type * as Blockly from 'blockly';
 
+/** A custom toolbox category contributed by a project's project.js script. */
+export interface ExtraToolboxCategory {
+  name: string;
+  colour: string;
+  blocks: string[];
+}
+
 /** Hardware subcategory names that can be toggled in the Configuration panel. */
 export const HARDWARE_CATEGORY_NAMES: readonly string[] = [
   'Pin',
@@ -1064,9 +1071,10 @@ export const HARDWARE_CATEGORY_NAMES: readonly string[] = [
 ];
 
 /**
- * Build a filtered toolbox definition, hiding specified Hardware subcategories.
+ * Build a filtered toolbox definition, hiding specified Hardware subcategories,
+ * and optionally appending extra categories from a project.js script.
  */
-export function buildToolbox(hidden: ReadonlySet<string>): Blockly.utils.toolbox.ToolboxDefinition {
+export function buildToolbox(hidden: ReadonlySet<string>, extra?: ExtraToolboxCategory[]): Blockly.utils.toolbox.ToolboxDefinition {
   const sections = (TOOLBOX as { kind: string; contents: unknown[] }).contents as Array<{ kind: string; name?: string; contents?: unknown[] } & Record<string, unknown>>;
 
   const mapped = sections.map((section) => {
@@ -1077,5 +1085,12 @@ export function buildToolbox(hidden: ReadonlySet<string>): Blockly.utils.toolbox
     return { ...section, contents: filtered };
   });
 
-  return { kind: 'categoryToolbox', contents: mapped };
+  const extraSections = (extra ?? []).map((cat) => ({
+    kind: 'category',
+    name: cat.name,
+    colour: cat.colour,
+    contents: cat.blocks.map((type) => ({ kind: 'block', type })),
+  }));
+
+  return { kind: 'categoryToolbox', contents: [...mapped, ...extraSections] };
 }

@@ -5,12 +5,14 @@ interface UPythonBlocklyComponentProps {
   onServiceReady?: (service: UPythonBlocklyService) => void;
   initialBoard?: string;
   ready?: boolean;
+  projectScript?: string;
 }
 
 function UPythonBlocklyComponent({
   onServiceReady,
   initialBoard = 'esp32_generic',
   ready = true,
+  projectScript,
 }: UPythonBlocklyComponentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const serviceRef = useRef<UPythonBlocklyService | null>(null);
@@ -22,7 +24,7 @@ function UPythonBlocklyComponent({
     serviceRef.current = service;
     let disposed = false;
 
-    service.init(containerRef.current).then(() => {
+    service.init(containerRef.current, projectScript).then(() => {
       if (disposed) return;
       onServiceReady?.(service);
       // Re-render after init to fix block layout in WebView (getBBox/text measurement timing).

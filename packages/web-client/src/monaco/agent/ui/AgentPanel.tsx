@@ -35,9 +35,11 @@ interface AgentPanelProps {
   defaultConfig?: Partial<AgentConfig>;
   onFileOpen?: (path: string) => void;
   providerVersion?: number;
+  webFetchUrl?: string;
+  authToken?: string;
 }
 
-export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersion }: AgentPanelProps) {
+export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersion, webFetchUrl, authToken }: AgentPanelProps) {
   const [config, setConfig] = useState<AgentConfig>(() => loadAgentConfig(defaultConfig));
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -56,6 +58,8 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         config.maxIterations,
         config.temperature,
         config.maxTokens,
+        webFetchUrl,
+        authToken,
       );
     } else {
       const engine = new AgentEngine(
@@ -69,6 +73,8 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         config.maxIterations,
         config.temperature,
         config.maxTokens,
+        webFetchUrl,
+        authToken,
       );
       engineRef.current = engine;
       // Eagerly load CLAUDE.md + skills so autocomplete works immediately
@@ -76,7 +82,7 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         setSkills(new Map(engine.getSkills()));
       }).catch(() => {/* ignore */});
     }
-  }, [config, provider]);
+  }, [config, provider, webFetchUrl, authToken]);
 
   const handleSend = useCallback(async (text: string, files: File[]) => {
     if (!engineRef.current) return;

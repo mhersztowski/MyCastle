@@ -6,6 +6,7 @@ import {
   ButtonGroup,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -26,12 +27,17 @@ import {
   Close,
   Code,
   ContentCopy,
+  Delete as DeleteIcon,
   Download,
+  ExpandLess,
+  ExpandMore,
   FolderOpen,
+  InsertDriveFile,
   MoreVert,
   OpenInNew,
   Refresh,
   Save,
+  SmartToy,
   VerticalSplit,
 } from '@mui/icons-material';
 import Menu from '@mui/material/Menu';
@@ -40,11 +46,14 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
+import { AgentPanel, DEFAULT_AGENT_CONFIG } from '@mhersztowski/web-client';
+import { MemoryFS, FileType } from '@mhersztowski/core';
 import { PygameBlocklyComponent, type PygameBlocklyService } from '@modules/pygameblockly';
 import type { PygameMode } from '@modules/pygameblockly';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
 import { BuildOutputPanel } from '../../components/BuildOutputPanel';
+import { useAuth } from '../../modules/auth';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 const MIN_PANEL_PX = 200;
@@ -53,6 +62,7 @@ function PygameProjectPage() {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { isAdmin, token } = useAuth();
 
   const serviceRef = useRef<PygameBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
@@ -79,7 +89,59 @@ function PygameProjectPage() {
   const [sketchesOpen, setSketchesOpen] = useState(true);
   const initialSketch = searchParams.get('sketch');
 
+  // Sketch file expand/collapse
+  const [sketchFiles, setSketchFiles] = useState<Map<string, string[]>>(new Map());
+  const [expandedSketches, setExpandedSketches] = useState<Set<string>>(new Set());
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  // AI Agent
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentFs, setAgentFs] = useState<MemoryFS | null>(null);
+  const [agentFsVersion, setAgentFsVersion] = useState(0);
+  const [agentApiKey, setAgentApiKey] = useState('');
+
   useEffect(() => { codeEditedRef.current = codeEdited; }, [codeEdited]);
+
+  // ---- sync agent FS writes back to server ----
+  useEffect(() => {
+    if (!agentFs || !userName || !projectId) return;
+
+    const syncAll = async () => {
+      try {
+        const rootEntries = await agentFs.readDirectory('/');
+        for (const entry of rootEntries) {
+          if (entry.type !== FileType.Directory) continue;
+          const sketchName = entry.name;
+          let fileEntries: { name: string; type: FileType }[] = [];
+          try { fileEntries = await agentFs.readDirectory(`/${sketchName}`); } catch { continue; }
+          for (const fileEntry of fileEntries) {
+            if (fileEntry.type !== FileType.File) continue;
+            const fileName = fileEntry.name;
+            if (!fileName.endsWith('.py') && !fileName.endsWith('.blockly')) continue;
+            try {
+              const data = await agentFs.readFile(`/${sketchName}/${fileName}`);
+              const content = new TextDecoder().decode(data);
+              await minisApi.writePygameSketchFile(userName, projectId, sketchName, fileName, content);
+            } catch { /* ignore */ }
+          }
+        }
+        const list = await minisApi.listPygameSketches(userName, projectId);
+        setSketches(list);
+      } catch { /* ignore */ }
+    };
+
+    let syncTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleSyncAll = () => {
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = setTimeout(syncAll, 1000);
+    };
+
+    const sub = agentFs.onDidChangeFile(() => scheduleSyncAll());
+    return () => {
+      sub.dispose();
+      if (syncTimer) clearTimeout(syncTimer);
+    };
+  }, [agentFs, userName, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- sync code to editor ----
   const syncCodeToEditor = useCallback((code: string) => {
@@ -137,7 +199,7 @@ function PygameProjectPage() {
   useEffect(() => {
     const timer = setTimeout(() => { serviceRef.current?.resize(); }, 50);
     return () => clearTimeout(timer);
-  }, [viewMode, splitRatio, sketchesOpen]);
+  }, [viewMode, splitRatio, sketchesOpen, agentOpen]);
 
   // ---- load sketch list ----
   const loadSketches = useCallback(async () => {
@@ -228,6 +290,78 @@ function PygameProjectPage() {
     }
   }, [userName, projectId, currentSketch, generatedCode, sketches]);
 
+  // ---- toggle sketch expand ----
+  const handleToggleSketchExpand = async (sketchName: string) => {
+    if (!userName || !projectId) return;
+    setExpandedSketches((prev) => {
+      const next = new Set(prev);
+      if (next.has(sketchName)) { next.delete(sketchName); return next; }
+      next.add(sketchName);
+      return next;
+    });
+    if (!sketchFiles.has(sketchName)) {
+      const files = await minisApi.listPygameSketchFiles(userName, projectId, sketchName).catch(() => [] as string[]);
+      setSketchFiles((prev) => new Map(prev).set(sketchName, files));
+    }
+  };
+
+  // ---- load specific sketch file ----
+  const handleLoadSketchFile = async (sketchName: string, fileName: string) => {
+    if (!userName || !projectId) return;
+    setCurrentSketch(sketchName);
+    setCodeEdited(false);
+    codeEditedRef.current = false;
+
+    if (fileName.endsWith('.blockly')) {
+      suppressBlocklyChangeRef.current = true;
+      serviceRef.current?.clearWorkspace();
+      try {
+        const xml = await minisApi.readPygameSketchFile(userName, projectId, sketchName, fileName);
+        if (xml && serviceRef.current) {
+          serviceRef.current.loadFromXml(xml);
+          syncCodeToEditor(serviceRef.current.generateCode());
+        }
+      } catch { /* ignore */ }
+      suppressBlocklyChangeRef.current = false;
+      setViewMode('blockly');
+    } else if (fileName.endsWith('.py')) {
+      try {
+        const content = await minisApi.readPygameSketchFile(userName, projectId, sketchName, fileName);
+        syncCodeToEditor(content);
+      } catch { /* ignore */ }
+      setViewMode('code');
+    }
+  };
+
+  // ---- delete sketch file ----
+  const handleDeleteSketchFile = async (sketchName: string, fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!userName || !projectId) return;
+    if (!window.confirm(`Delete ${fileName} from sketch "${sketchName}"?`)) return;
+    try {
+      await minisApi.deletePygameSketchFile(userName, projectId, sketchName, fileName);
+      setSketchFiles((prev) => {
+        const next = new Map(prev);
+        next.set(sketchName, (next.get(sketchName) ?? []).filter((f) => f !== fileName));
+        return next;
+      });
+    } catch { /* ignore */ }
+  };
+
+  // ---- drag & drop files onto sketch ----
+  const handleDropOnSketch = async (sketchName: string, dt: DataTransfer) => {
+    if (!userName || !projectId) return;
+    const files = Array.from(dt.files);
+    for (const file of files) {
+      const text = await file.text().catch(() => null);
+      if (text === null) continue;
+      await minisApi.writePygameSketchFile(userName, projectId, sketchName, file.name, text).catch(() => {});
+    }
+    const updated = await minisApi.listPygameSketchFiles(userName, projectId, sketchName).catch(() => [] as string[]);
+    setSketchFiles((prev) => new Map(prev).set(sketchName, updated));
+    setExpandedSketches((prev) => new Set(prev).add(sketchName));
+  };
+
   // ---- run in browser (pygbag build) ----
   const handleRunInBrowser = useCallback(async () => {
     if (!userName || !projectId || !currentSketch) return;
@@ -236,10 +370,10 @@ function PygameProjectPage() {
     setBuildSuccess(null);
     setBuildPanelOpen(true);
     try {
-      // Generate web-mode code without changing the current UI mode
+      // Use editor content if manually edited, otherwise regenerate from Blockly in web mode
       const service = serviceRef.current;
-      let webCode = generatedCode;
-      if (service) {
+      let webCode = editorRef.current?.getContent() ?? generatedCode;
+      if (service && !codeEditedRef.current) {
         const prevMode = service.mode;
         service.setMode('web');
         webCode = service.generateCode();
@@ -258,6 +392,64 @@ function PygameProjectPage() {
       setBuilding(false);
     }
   }, [userName, projectId, currentSketch]);
+
+  // ---- open AI agent ----
+  const handleOpenAgent = useCallback(async () => {
+    const code = editorRef.current?.getContent() ?? generatedCode;
+    const xml = serviceRef.current?.serializeToXml() ?? '';
+    const sketchName = currentSketch ?? 'sketch';
+
+    const apiKey = await minisApi.getAnthropicKey().catch(() => '');
+
+    const memFs = new MemoryFS();
+    const enc = new TextEncoder();
+
+    const claudeMd = [
+      '# Pygame Project',
+      '',
+      'This is a Pygame / pygbag project. The file system contains sketch directories.',
+      '',
+      '## File system structure',
+      '```',
+      '/{sketchName}/          ← sketch directory (one per sketch)',
+      '  {sketchName}.py       ← main Python/Pygame code file',
+      '  {sketchName}.blockly  ← optional Blockly XML (do not edit manually)',
+      '```',
+      '',
+      `## Current sketch: \`${sketchName}\``,
+      `The active sketch is at \`/${sketchName}/${sketchName}.py\`.`,
+      '',
+      '## Rules',
+      '- To create a new sketch called `foo`: create directory `/foo/` and file `/foo/foo.py`.',
+      '- The main code file MUST have the same name as its parent directory (e.g. `/foo/foo.py`).',
+      '- Never place `.py` files directly at the root `/` — they must be inside a sketch directory.',
+      '- Do not create files outside of sketch directories.',
+      '- For pygbag (web) compatibility use `async def main()` + `asyncio.run(main())`.',
+    ].join('\n');
+    await memFs.writeFile('/CLAUDE.md', enc.encode(claudeMd), { create: true, overwrite: true });
+
+    const allSketches = await minisApi.listPygameSketches(userName!, projectId!).catch(() => [] as string[]);
+    for (const sName of allSketches) {
+      await memFs.mkdir(`/${sName}`);
+      const files = await minisApi.listPygameSketchFiles(userName!, projectId!, sName).catch(() => [] as string[]);
+      for (const fileName of files) {
+        if (sName === sketchName && (fileName === `${sketchName}.py` || fileName === `${sketchName}.blockly`)) continue;
+        const content = await minisApi.readPygameSketchFile(userName!, projectId!, sName, fileName).catch(() => null);
+        if (content !== null) await memFs.writeFile(`/${sName}/${fileName}`, enc.encode(content), { create: true, overwrite: true });
+      }
+    }
+
+    if (!allSketches.includes(sketchName)) await memFs.mkdir(`/${sketchName}`);
+    await memFs.writeFile(`/${sketchName}/${sketchName}.py`, enc.encode(code), { create: true, overwrite: true });
+    if (xml) {
+      await memFs.writeFile(`/${sketchName}/${sketchName}.blockly`, enc.encode(xml), { create: true, overwrite: true });
+    }
+
+    setAgentApiKey(apiKey);
+    setAgentFs(memFs);
+    setAgentFsVersion((v) => v + 1);
+    setAgentOpen(true);
+  }, [generatedCode, currentSketch]);
 
   // ---- mode switch ----
   const handleModeChange = (mode: PygameMode) => {
@@ -371,6 +563,18 @@ function PygameProjectPage() {
             </Tooltip>
           </ButtonGroup>
 
+          {isAdmin && (
+            <Tooltip title="AI Agent">
+              <IconButton
+                size="small" color="inherit"
+                onClick={() => { if (agentOpen) { setAgentOpen(false); } else { void handleOpenAgent(); } }}
+                sx={{ bgcolor: agentOpen ? 'action.selected' : undefined }}
+              >
+                <SmartToy fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+
           <Tooltip title="Actions">
             <IconButton size="small" color="inherit" onClick={(e) => setMoreMenuAnchor(e.currentTarget)}>
               <MoreVert fontSize="small" />
@@ -411,6 +615,40 @@ function PygameProjectPage() {
       </AppBar>
 
       <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* AI Agent panel */}
+        {isAdmin && agentOpen && agentFs && (
+          <Box sx={{
+            width: 380, flexShrink: 0, bgcolor: '#1e1e1e',
+            borderRight: '1px solid #3e3e42',
+            display: 'flex', flexDirection: 'column',
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', px: 1, pt: 1, pb: 0.5, borderBottom: '1px solid #3e3e42' }}>
+              <SmartToy sx={{ fontSize: 16, color: '#ccc', mr: 0.5 }} />
+              <Typography variant="caption" sx={{ color: '#ccc', flex: 1 }}>AI Agent</Typography>
+              <IconButton size="small" onClick={() => setAgentOpen(false)} sx={{ color: '#ccc' }}><Close fontSize="small" /></IconButton>
+            </Box>
+            <Box sx={{ flex: 1, overflow: 'hidden' }}>
+              <AgentPanel
+                key={agentFsVersion}
+                provider={agentFs}
+                providerVersion={agentFsVersion}
+                webFetchUrl="/api/web-fetch"
+                authToken={token ?? undefined}
+                defaultConfig={{
+                  providerType: 'anthropic',
+                  providers: {
+                    ...DEFAULT_AGENT_CONFIG.providers,
+                    anthropic: {
+                      ...DEFAULT_AGENT_CONFIG.providers.anthropic,
+                      apiKey: agentApiKey,
+                    },
+                  },
+                }}
+              />
+            </Box>
+          </Box>
+        )}
+
         {/* Sketches sidebar */}
         {sketchesOpen && (
           <Box sx={{
@@ -443,19 +681,66 @@ function PygameProjectPage() {
               </IconButton>
             </Box>
             <List dense sx={{ flex: 1, overflow: 'auto' }}>
-              {sketches.map((s) => (
-                <ListItemButton
-                  key={s}
-                  selected={currentSketch === s}
-                  onClick={() => {
-                    if (codeEditedRef.current) { setConfirmOpen(true); return; }
-                    handleLoadSketch(s);
-                  }}
-                  sx={{ py: 0.5, px: 1 }}
-                >
-                  <ListItemText primary={s} primaryTypographyProps={{ fontSize: 12, color: '#ccc' }} />
-                </ListItemButton>
-              ))}
+              {sketches.map((s) => {
+                const expanded = expandedSketches.has(s);
+                const files = sketchFiles.get(s) ?? [];
+                return (
+                  <Box key={s}>
+                    <ListItemButton
+                      selected={currentSketch === s}
+                      onClick={() => {
+                        if (codeEditedRef.current) { setConfirmOpen(true); return; }
+                        handleLoadSketch(s);
+                      }}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropTarget(s); }}
+                      onDragLeave={() => setDropTarget(null)}
+                      onDrop={(e) => { e.preventDefault(); setDropTarget(null); void handleDropOnSketch(s, e.dataTransfer); }}
+                      sx={{
+                        py: 0.5, px: 1, pr: 0.5,
+                        outline: dropTarget === s ? '2px dashed' : 'none',
+                        outlineColor: '#0e639c',
+                      }}
+                    >
+                      <ListItemText primary={s} primaryTypographyProps={{ fontSize: 12, color: '#ccc', noWrap: true }} sx={{ flexGrow: 1, minWidth: 0 }} />
+                      <IconButton
+                        size="small"
+                        onClick={(e) => { e.stopPropagation(); void handleToggleSketchExpand(s); }}
+                        sx={{ color: '#ccc', p: 0.25 }}
+                      >
+                        {expanded ? <ExpandLess fontSize="inherit" /> : <ExpandMore fontSize="inherit" />}
+                      </IconButton>
+                    </ListItemButton>
+                    <Collapse in={expanded} unmountOnExit>
+                      <List dense disablePadding>
+                        {files.map((file) => (
+                          <ListItemButton
+                            key={file}
+                            onClick={() => void handleLoadSketchFile(s, file)}
+                            sx={{ pl: 3, py: 0.25, pr: 0.5 }}
+                          >
+                            <InsertDriveFile sx={{ fontSize: 13, mr: 0.5, color: '#888', flexShrink: 0 }} />
+                            <ListItemText
+                              primary={file}
+                              primaryTypographyProps={{ fontSize: 11, color: '#aaa', noWrap: true }}
+                              sx={{ flexGrow: 1, minWidth: 0 }}
+                            />
+                            <IconButton
+                              size="small"
+                              onClick={(e) => void handleDeleteSketchFile(s, file, e)}
+                              sx={{ p: 0.25, opacity: 0.5, color: '#ccc', '&:hover': { opacity: 1, color: '#f44' } }}
+                            >
+                              <DeleteIcon sx={{ fontSize: 12 }} />
+                            </IconButton>
+                          </ListItemButton>
+                        ))}
+                        {files.length === 0 && (
+                          <Typography sx={{ pl: 3.5, py: 0.5, fontSize: 11, color: '#666' }}>empty</Typography>
+                        )}
+                      </List>
+                    </Collapse>
+                  </Box>
+                );
+              })}
             </List>
           </Box>
         )}

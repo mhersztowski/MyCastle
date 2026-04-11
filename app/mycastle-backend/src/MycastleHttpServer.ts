@@ -496,6 +496,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Web fetch proxy: POST /api/web-fetch  { url } → { url, text, title?, statusCode }
+    if (apiPath === '/web-fetch' && method === 'POST') {
+      await this.handleWebFetch(req, res);
+      return;
+    }
+
     // Config: GET /api/config/anthropic-key — returns Anthropic API key from env
     if (method === 'GET' && apiPath === '/config/anthropic-key') {
       this.sendJsonResponse(res, 200, { apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
@@ -742,6 +748,21 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Project script: GET|PUT /users/{userName}/project-arduino/{projectName}/project-script
+    const projectScriptMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/project-script$/);
+    if (projectScriptMatch && method === 'GET') {
+      const sUserName = decodeURIComponent(projectScriptMatch[1]);
+      const sProjectName = decodeURIComponent(projectScriptMatch[2]);
+      await this.handleProjectScript(res, sUserName, sProjectName);
+      return;
+    }
+    if (projectScriptMatch && method === 'PUT') {
+      const sUserName = decodeURIComponent(projectScriptMatch[1]);
+      const sProjectName = decodeURIComponent(projectScriptMatch[2]);
+      await this.handleSaveProjectScript(res, req, sUserName, sProjectName);
+      return;
+    }
+
     // Clone arduino project from GitHub: POST /users/{userName}/project-arduino/{projectName}/clone-from-github
     const cloneMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/clone-from-github$/);
     if (cloneMatch && method === 'POST') {
@@ -757,6 +778,16 @@ export class MycastleHttpServer extends HttpUploadServer {
       const userName = decodeURIComponent(syncMatch[1]);
       const projectName = decodeURIComponent(syncMatch[2]);
       await this.handleProjectSyncFromGithub(res, userName, projectName);
+      return;
+    }
+
+    // Push arduino project to GitHub: POST /users/{userName}/project-arduino/{projectName}/push-to-github
+    const pushMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/push-to-github$/);
+    if (pushMatch && method === 'POST') {
+      if (!user.isAdmin) { this.sendJsonResponse(res, 403, { error: 'Admin only' }); return; }
+      const userName = decodeURIComponent(pushMatch[1]);
+      const projectName = decodeURIComponent(pushMatch[2]);
+      await this.handleProjectPushToGithub(req, res, userName, projectName);
       return;
     }
 
@@ -818,6 +849,25 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // List files in a sketch: GET /users/{userName}/project-arduino/{projectName}/sketches/{sketchName}
+    const sketchFilesMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/sketches\/([^/]+)$/);
+    if (sketchFilesMatch && method === 'GET') {
+      const userName = decodeURIComponent(sketchFilesMatch[1]);
+      const projectId = decodeURIComponent(sketchFilesMatch[2]);
+      const sketchName = decodeURIComponent(sketchFilesMatch[3]);
+      if (sketchName.includes('..')) { this.sendJsonResponse(res, 400, { error: 'Invalid path' }); return; }
+      if (!this.rootDir) { this.sendJsonResponse(res, 503, { error: 'rootDir not configured' }); return; }
+      const dir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', projectId, 'sketches', sketchName);
+      try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        const items = entries.filter(e => e.isFile()).map(e => e.name).sort();
+        this.sendJsonResponse(res, 200, { items });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
     // Sketch files: /users/{userName}/project-arduino/{projectName}/sketches[/{sketchName}/{fileName}]
     const sketchMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
     if (sketchMatch) {
@@ -840,6 +890,22 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // List files in a pygame sketch: GET /users/{userName}/project-pygame/{projectName}/sketches/{sketchName}
+    const pygameSketchFilesMatch = apiPath.match(/^\/users\/([^/]+)\/project-pygame\/([^/]+)\/sketches\/([^/]+)$/);
+    if (pygameSketchFilesMatch && method === 'GET') {
+      const [, sUserName, sProjectName, sSketchName] = pygameSketchFilesMatch.map(decodeURIComponent);
+      const projectId = await this.resolveProjectId(sUserName, sProjectName);
+      if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+      const dir = path.resolve(this.rootDir!, 'Minis', 'Users', sUserName, 'Projects', projectId, 'sketches', sSketchName);
+      try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        this.sendJsonResponse(res, 200, { items: entries.filter(e => e.isFile()).map(e => e.name).sort() });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
     // Sketch files (pygame): /users/{userName}/project-pygame/{projectName}/sketches[/{sketchName}/{fileName}]
     const pygameSketchMatch = apiPath.match(/^\/users\/([^/]+)\/project-pygame\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
     if (pygameSketchMatch) {
@@ -848,6 +914,33 @@ export class MycastleHttpServer extends HttpUploadServer {
       const sSketchName = pygameSketchMatch[3] ? decodeURIComponent(pygameSketchMatch[3]) : undefined;
       const sFileName = pygameSketchMatch[4] ? decodeURIComponent(pygameSketchMatch[4]) : undefined;
       await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
+    // uPython: sketch files /users/{userName}/project-upython/{projectName}/sketches[/{sketchName}/{fileName}]
+    const upythonSketchMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/sketches(?:\/([^/]+)\/([^/]+))?$/);
+    if (upythonSketchMatch) {
+      const sUserName = decodeURIComponent(upythonSketchMatch[1]);
+      const sProjectName = decodeURIComponent(upythonSketchMatch[2]);
+      const sSketchName = upythonSketchMatch[3] ? decodeURIComponent(upythonSketchMatch[3]) : undefined;
+      const sFileName = upythonSketchMatch[4] ? decodeURIComponent(upythonSketchMatch[4]) : undefined;
+      await this.handleSketches(req, res, method, sUserName, sProjectName, sSketchName, sFileName);
+      return;
+    }
+
+    // uPython: list files in a sketch GET /users/{userName}/project-upython/{projectName}/sketches/{sketchName}
+    const upythonSketchFilesMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/sketches\/([^/]+)$/);
+    if (upythonSketchFilesMatch && method === 'GET') {
+      const [, sUserName, sProjectName, sSketchName] = upythonSketchFilesMatch.map(decodeURIComponent);
+      const projectId = await this.resolveProjectId(sUserName, sProjectName);
+      if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+      const dir = path.resolve(this.rootDir!, 'Minis', 'Users', sUserName, 'Projects', projectId, 'sketches', sSketchName);
+      try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        this.sendJsonResponse(res, 200, { items: entries.filter(e => e.isFile()).map(e => e.name).sort() });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
       return;
     }
 
@@ -1317,6 +1410,16 @@ export class MycastleHttpServer extends HttpUploadServer {
       await fs.promises.mkdir(path.join(sketchesDir, sketchName), { recursive: true });
       await fs.promises.writeFile(filePath, body.content, 'utf-8');
       this.sendJsonResponse(res, 200, { success: true });
+      return;
+    }
+
+    if (method === 'DELETE') {
+      try {
+        await fs.promises.unlink(filePath);
+        this.sendJsonResponse(res, 200, { success: true });
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'File not found' });
+      }
       return;
     }
 
@@ -2637,8 +2740,9 @@ const { password, ...safeBody } = body;
       sketches?: Array<{ name: string; files: string[] }>;
       readmePath?: string | null;
       libraries?: Array<{ url?: string; remoteName?: string; name?: string }>;
+      projectScriptPath?: string | null;
     };
-    const { githubRepoUrl, sketches, readmePath, libraries } = body;
+    const { githubRepoUrl, sketches, readmePath, libraries, projectScriptPath } = body;
     if (!githubRepoUrl) {
       this.sendJsonResponse(res, 400, { error: 'githubRepoUrl is required' });
       return;
@@ -2670,6 +2774,16 @@ const { password, ...safeBody } = body;
         await fs.promises.writeFile(dest, content, 'utf-8');
       }
 
+      // Download project.js (optional — ignore if not found)
+      if (projectScriptPath) {
+        try {
+          const content = await this.fetchText(`${rawBase}/${projectScriptPath}`);
+          const dest = path.join(projectDir, 'project.js');
+          await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+          await fs.promises.writeFile(dest, content, 'utf-8');
+        } catch { /* not required */ }
+      }
+
       // Save libraries to Project.json
       if (libraries && libraries.length > 0) {
         const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
@@ -2685,6 +2799,31 @@ const { password, ...safeBody } = body;
     } catch (err) {
       this.sendJsonResponse(res, 502, { error: `Clone failed: ${this.errorMessage(err)}` });
     }
+  }
+
+  private async handleProjectScript(res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+
+    const scriptPath = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'project.js');
+    try {
+      const content = await fs.promises.readFile(scriptPath, 'utf-8');
+      this.sendJsonResponse(res, 200, { content });
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'project.js not found' });
+    }
+  }
+
+  private async handleSaveProjectScript(res: ServerResponse, req: IncomingMessage, userName: string, projectName: string): Promise<void> {
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+
+    const body = await this.parseRequestBody(req) as { content?: string };
+    if (typeof body.content !== 'string') { this.sendJsonResponse(res, 400, { error: 'content is required' }); return; }
+
+    const scriptPath = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId, 'project.js');
+    await fs.promises.writeFile(scriptPath, body.content, 'utf-8');
+    this.sendJsonResponse(res, 200, { ok: true });
   }
 
   private async handleProjectSyncFromGithub(res: ServerResponse, userName: string, projectName: string): Promise<void> {
@@ -2715,6 +2854,7 @@ const { password, ...safeBody } = body;
       const sketches = (entry.sketches ?? []) as Array<{ name: string; files: string[] }>;
       const readmePath = (entry.readmePath ?? null) as string | null;
       const libraries = (entry.libraries ?? []) as Array<{ name?: string; version?: string; url?: string; remoteName?: string }>;
+      const projectScriptPath = (entry.projectScriptPath ?? null) as string | null;
 
       const projectDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId);
 
@@ -2736,6 +2876,16 @@ const { password, ...safeBody } = body;
         await fs.promises.writeFile(dest, content, 'utf-8');
       }
 
+      // Sync project.js (optional — ignore if not found)
+      if (projectScriptPath) {
+        try {
+          const content = await this.fetchText(`${rawBase}/${projectScriptPath}`);
+          const dest = path.join(projectDir, 'project.js');
+          await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+          await fs.promises.writeFile(dest, content, 'utf-8');
+        } catch { /* not required */ }
+      }
+
       // Update libraries in Project.json from index
       if (libraries.length > 0) {
         project.libraries = libraries;
@@ -2748,6 +2898,127 @@ const { password, ...safeBody } = body;
     }
   }
 
+  private async handleProjectPushToGithub(req: IncomingMessage, res: ServerResponse, userName: string, projectId: string): Promise<void> {
+    if (!this.rootDir) { this.sendJsonResponse(res, 503, { error: 'rootDir not configured' }); return; }
+
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const token: string = (body.token as string | undefined) ?? process.env.GITHUB_TOKEN ?? '';
+    if (!token) {
+      this.sendJsonResponse(res, 400, { error: 'GitHub token required — set GITHUB_TOKEN env var or pass token in body' });
+      return;
+    }
+
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
+      const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
+      const project = projects.find(p => p.id === projectId);
+      if (!project) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+
+      const githubRepoUrl = project.githubRepoUrl as string | undefined;
+      const githubProjectId = (project.githubProjectId as string | undefined) ?? projectId;
+      if (!githubRepoUrl) {
+        this.sendJsonResponse(res, 400, { error: 'Project has no githubRepoUrl' });
+        return;
+      }
+
+      const m = githubRepoUrl.match(/github\.com\/([^/]+)\/([^/\s]+?)(?:\.git)?(?:\/|$)/);
+      if (!m) { this.sendJsonResponse(res, 400, { error: 'Invalid GitHub URL' }); return; }
+      const [, owner, repo] = m;
+      const branch = (body.branch as string | undefined) ?? 'main';
+      const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
+      const headers = {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+        'User-Agent': 'MyCastle/1.0',
+      };
+
+      // Collect all local sketch files
+      const sketchesDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', projectId, 'sketches');
+      const treeItems: Array<{ path: string; mode: string; type: string; content: string }> = [];
+
+      let sketchDirs: string[] = [];
+      try { sketchDirs = await fs.promises.readdir(sketchesDir); } catch { /* no sketches */ }
+
+      for (const sketchName of sketchDirs) {
+        const sketchDir = path.join(sketchesDir, sketchName);
+        const stat = await fs.promises.stat(sketchDir).catch(() => null);
+        if (!stat?.isDirectory()) continue;
+        const files = await fs.promises.readdir(sketchDir).catch(() => [] as string[]);
+        for (const fileName of files) {
+          const content = await fs.promises.readFile(path.join(sketchDir, fileName), 'utf-8').catch(() => null);
+          if (content === null) continue;
+          treeItems.push({
+            path: `src/${githubProjectId}/sketches/${sketchName}/${fileName}`,
+            mode: '100644',
+            type: 'blob',
+            content,
+          });
+        }
+      }
+
+      // Also push README if present
+      const readmePath = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', projectId, 'README.md');
+      const readmeContent = await fs.promises.readFile(readmePath, 'utf-8').catch(() => null);
+      const githubReadmePath = (project.githubReadmePath as string | undefined) ?? `src/${githubProjectId}/README.md`;
+      if (readmeContent !== null) {
+        treeItems.push({ path: githubReadmePath, mode: '100644', type: 'blob', content: readmeContent });
+      }
+
+      if (treeItems.length === 0) {
+        this.sendJsonResponse(res, 400, { error: 'No files to push' });
+        return;
+      }
+
+      // Get current HEAD
+      const refRes = await fetch(`${apiBase}/git/refs/heads/${branch}`, { headers });
+      if (!refRes.ok) throw new Error(`Failed to get branch ref: ${refRes.status} ${await refRes.text()}`);
+      const refData = await refRes.json() as { object: { sha: string } };
+      const headSha = refData.object.sha;
+
+      // Get commit's tree SHA
+      const commitRes = await fetch(`${apiBase}/git/commits/${headSha}`, { headers });
+      if (!commitRes.ok) throw new Error(`Failed to get commit: ${commitRes.status}`);
+      const commitData = await commitRes.json() as { tree: { sha: string } };
+      const baseSha = commitData.tree.sha;
+
+      // Create new tree
+      const newTreeRes = await fetch(`${apiBase}/git/trees`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ base_tree: baseSha, tree: treeItems }),
+      });
+      if (!newTreeRes.ok) throw new Error(`Failed to create tree: ${newTreeRes.status} ${await newTreeRes.text()}`);
+      const newTree = await newTreeRes.json() as { sha: string };
+
+      // Create commit
+      const newCommitRes = await fetch(`${apiBase}/git/commits`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: `chore: push ${project.name ?? projectId} from MyCastle`,
+          tree: newTree.sha,
+          parents: [headSha],
+        }),
+      });
+      if (!newCommitRes.ok) throw new Error(`Failed to create commit: ${newCommitRes.status} ${await newCommitRes.text()}`);
+      const newCommit = await newCommitRes.json() as { sha: string; html_url?: string };
+
+      // Update branch ref
+      const updateRes = await fetch(`${apiBase}/git/refs/heads/${branch}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ sha: newCommit.sha }),
+      });
+      if (!updateRes.ok) throw new Error(`Failed to update ref: ${updateRes.status} ${await updateRes.text()}`);
+
+      this.sendJsonResponse(res, 200, { ok: true, commitSha: newCommit.sha, fileCount: treeItems.length });
+    } catch (err) {
+      this.sendJsonResponse(res, 502, { error: `Push failed: ${this.errorMessage(err)}` });
+    }
+  }
+
   private async handleGithubProjectdefs(req: IncomingMessage, res: ServerResponse, method: string, apiPath: string): Promise<void> {
     // GET /admin/github-projectdefs?url=...  → fetch index.json and return projects + modules
     if (method === 'GET' && apiPath === '/admin/github-projectdefs') {
@@ -2757,8 +3028,12 @@ const { password, ...safeBody } = body;
       const rawBase = this.githubRawBase(repoUrl);
       if (!rawBase) { this.sendJsonResponse(res, 400, { error: 'Invalid GitHub URL' }); return; }
       try {
-        const index = await this.fetchJson(`${rawBase}/index.json`) as Record<string, unknown>;
-        this.sendJsonResponse(res, 200, { ...index, rawBase });
+        const [index, modulesData] = await Promise.all([
+          this.fetchJson(`${rawBase}/index.json`) as Promise<Record<string, unknown>>,
+          this.fetchJson(`${rawBase}/modules.json`).catch(() => ({ modules: [] })) as Promise<Record<string, unknown>>,
+        ]);
+        const modules = (modulesData as Record<string, unknown>).modules ?? [];
+        this.sendJsonResponse(res, 200, { ...index, modules, rawBase });
       } catch (err) {
         this.sendJsonResponse(res, 502, { error: `Failed to fetch index: ${this.errorMessage(err)}` });
       }
@@ -2855,5 +3130,74 @@ const { password, ...safeBody } = body;
 </svg>`;
 
     return Buffer.from(svg, 'utf-8');
+  }
+
+  private async handleWebFetch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const url = body.url as string | undefined;
+
+    if (!url || typeof url !== 'string') {
+      this.sendJsonResponse(res, 400, { error: 'url is required' });
+      return;
+    }
+
+    // Only allow http/https
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      this.sendJsonResponse(res, 400, { error: 'Only http and https URLs are allowed' });
+      return;
+    }
+
+    try {
+      const fetchHeaders: Record<string, string> = {
+        'User-Agent': 'Mozilla/5.0 (compatible; MyCastle-Agent/1.0)',
+      };
+      // For GitHub API/raw content, add token if available (avoids rate-limiting / 401 on public repos)
+      const githubToken = process.env.GITHUB_TOKEN;
+      if (githubToken && (url.includes('api.github.com') || url.includes('raw.githubusercontent.com') || url.includes('github.com'))) {
+        fetchHeaders['Authorization'] = `Bearer ${githubToken}`;
+      }
+
+      const response = await fetch(url, {
+        headers: fetchHeaders,
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      const contentType = response.headers.get('content-type') ?? '';
+      const rawText = await response.text();
+
+      let text: string;
+      let title: string | undefined;
+
+      if (contentType.includes('text/html')) {
+        // Extract title
+        const titleMatch = rawText.match(/<title[^>]*>([^<]*)<\/title>/i);
+        title = titleMatch?.[1]?.trim();
+
+        // Strip HTML: remove scripts, styles, tags, collapse whitespace
+        text = rawText
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/\s{2,}/g, ' ')
+          .trim();
+      } else {
+        text = rawText;
+      }
+
+      // Truncate to 50KB
+      const MAX = 50_000;
+      const truncated = text.length > MAX;
+      if (truncated) text = text.slice(0, MAX);
+
+      this.sendJsonResponse(res, 200, { url, text, title, statusCode: response.status, truncated });
+    } catch (err) {
+      this.sendJsonResponse(res, 502, { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 }

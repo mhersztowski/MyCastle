@@ -4,11 +4,12 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Alert, CircularProgress, Chip,
 } from '@mui/material';
-import { Add, Delete, Refresh } from '@mui/icons-material';
+import { Add, Delete, GitHub, Refresh } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { MinisProjectModel } from '@mhersztowski/core';
 import type { GithubProjectEntry, GithubModuleEntry } from '../../services/MinisApiService';
+import { boardProfiles } from '../../modules/upythonblockly/boards/BoardProfile';
 
 const DEFAULT_REPO_URL = 'https://github.com/platform-minis/MinisProjects';
 const REPO_URL_KEY = 'minis_github_repo_url';
@@ -28,6 +29,10 @@ function UserUPythonProjectsPage() {
   const [githubError, setGithubError] = useState<string | null>(null);
   const [selectedGithubProject, setSelectedGithubProject] = useState<GithubProjectEntry | null>(null);
   const [projectName, setProjectName] = useState('');
+
+  const [addEmptyDialogOpen, setAddEmptyDialogOpen] = useState(false);
+  const [emptyProjectName, setEmptyProjectName] = useState('');
+  const [emptyBoardProfileKey, setEmptyBoardProfileKey] = useState('esp32s3_pico');
 
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
@@ -94,6 +99,22 @@ function UserUPythonProjectsPage() {
     }
   };
 
+  const handleAddEmpty = async () => {
+    if (!userName || !emptyProjectName.trim()) return;
+    try {
+      await minisApi.createUserProject(userName, {
+        name: emptyProjectName.trim(),
+        softwarePlatform: 'uPython',
+        boardProfileKey: emptyBoardProfileKey || undefined,
+      });
+      setAddEmptyDialogOpen(false);
+      setEmptyProjectName('');
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project');
+    }
+  };
+
   const handleDelete = async (name: string) => {
     if (!userName) return;
     try {
@@ -109,7 +130,10 @@ function UserUPythonProjectsPage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4">My uPython Projects</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => setAddDialogOpen(true)}>Add</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" startIcon={<Add />} onClick={() => { setAddEmptyDialogOpen(true); setEmptyProjectName(''); }}>Add</Button>
+          <Button variant="contained" startIcon={<GitHub />} onClick={() => setAddDialogOpen(true)}>Add From Repo</Button>
+        </Box>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -127,8 +151,8 @@ function UserUPythonProjectsPage() {
                   <Typography variant="body2">{item.githubProjectId}</Typography>
                 </>
               )}
-              {item.moduleId && (
-                <Chip label={item.moduleId} size="small" sx={{ mt: 0.5 }} />
+              {(item.moduleId || item.boardProfileKey) && (
+                <Chip label={item.moduleId ?? item.boardProfileKey} size="small" sx={{ mt: 0.5 }} />
               )}
             </CardActionArea>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 0.5, pb: 0.5 }}>
@@ -143,9 +167,36 @@ function UserUPythonProjectsPage() {
         )}
       </Box>
 
-      {/* Add Project Dialog */}
+      {/* Add Empty Project Dialog */}
+      <Dialog open={addEmptyDialogOpen} onClose={() => setAddEmptyDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>New uPython Project</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
+          <TextField
+            autoFocus fullWidth label="Project Name"
+            value={emptyProjectName} onChange={(e) => setEmptyProjectName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddEmpty(); }}
+          />
+          <TextField
+            fullWidth select label="Board" value={emptyBoardProfileKey}
+            onChange={(e) => setEmptyBoardProfileKey(e.target.value)}
+            SelectProps={{ native: true }}
+            InputLabelProps={{ shrink: true }}
+          >
+            <option value=""></option>
+            {Object.entries(boardProfiles).map(([key, profile]) => (
+              <option key={key} value={key}>{profile.name}</option>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddEmptyDialogOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={handleAddEmpty} disabled={!emptyProjectName.trim()}>Create</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add From Repo Dialog */}
       <Dialog open={addDialogOpen} onClose={() => { setAddDialogOpen(false); setGithubProjects([]); setSelectedGithubProject(null); }} maxWidth="sm" fullWidth>
-        <DialogTitle>Create uPython Project</DialogTitle>
+        <DialogTitle>Create uPython Project from Repo</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', gap: 1, mt: 1, mb: 2 }}>
             <TextField

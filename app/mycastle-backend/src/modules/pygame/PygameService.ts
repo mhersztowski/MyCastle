@@ -98,12 +98,15 @@ export class PygameService {
     const rel = path.relative(this.rootDir, sketchDir).split(path.sep).join('/');
     const containerWorkDir = `${this.dockerDataDir}/${rel}`;
 
+    const uid = process.getuid?.() ?? 1000;
+    const gid = process.getgid?.() ?? 1000;
+
     if (this.dockerImage) {
       cmd = 'docker';
-      args = ['run', '--rm', '-w', containerWorkDir, '-v', `${this.rootDir}:${this.dockerDataDir}`, this.dockerImage, 'pygbag', '--build', sketchFile];
+      args = ['run', '--rm', '--user', `${uid}:${gid}`, '-w', containerWorkDir, '-v', `${this.rootDir}:${this.dockerDataDir}`, this.dockerImage, 'pygbag', '--build', sketchFile];
     } else if (this.dockerContainer) {
       cmd = 'docker';
-      args = ['exec', '-w', containerWorkDir, this.dockerContainer, 'pygbag', '--build', sketchFile];
+      args = ['exec', '--user', `${uid}:${gid}`, '-w', containerWorkDir, this.dockerContainer, 'pygbag', '--build', sketchFile];
     } else {
       cmd = this.pygbagPath;
       args = ['--build', sketchFile];

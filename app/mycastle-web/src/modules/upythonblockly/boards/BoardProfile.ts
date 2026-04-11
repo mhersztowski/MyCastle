@@ -113,6 +113,29 @@ boardProfiles.esp32s3_generic = {
   supportsWifi: true,
 };
 
+/** ESP32-S3 Pico (Waveshare) — same GPIO set as ESP32-S3 Generic */
+boardProfiles.esp32s3_pico = {
+  name: 'ESP32-S3 Pico',
+  description: 'Waveshare ESP32-S3 Pico — compact Pico form factor, 8MB Flash, 2MB OPI PSRAM, HWCDC',
+  chipName: 'ESP32-S3',
+  digitalPins: [
+    ...numRange(0, 21),
+    ...numRange(26, 48),
+  ],
+  analogPins: [
+    ...numRange(1, 10),
+    ...numRange(11, 20),
+  ],
+  pwmPins: [
+    ...numRange(1, 21),
+    ...numRange(26, 45),
+  ],
+  uartIds: pins([[0, 0], [1, 1], [2, 2]]),
+  i2cIds: pins([[0, 0], [1, 1]]),
+  builtinLed: pins([['LED (GPIO2)', '2']]),
+  supportsWifi: true,
+};
+
 /** ESP8266 / Wemos D1 Mini */
 boardProfiles.esp8266_wemos_d1 = {
   name: 'Wemos D1 Mini',
