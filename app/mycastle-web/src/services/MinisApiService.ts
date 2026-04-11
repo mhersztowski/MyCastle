@@ -438,6 +438,10 @@ class MinisApiService {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
   }
 
+  async deleteSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+  }
+
   // uPython sketch files
   async listUpythonSketches(userName: string, projectName: string): Promise<string[]> {
     const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches`);

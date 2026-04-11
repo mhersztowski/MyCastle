@@ -5,6 +5,7 @@ import {
   Button,
   ButtonGroup,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -28,20 +29,27 @@ import {
   ArrowBack,
   Build,
   Close,
+  CloseFullscreen,
   Code,
+  Delete as DeleteIcon,
   Description,
   Edit as EditIcon,
+  ExpandLess,
+  ExpandMore,
   Extension,
   FlashOn,
   FolderOpen,
+  InsertDriveFile,
+  OpenInFull,
   Refresh,
   Save,
   Settings,
-  VerticalSplit,
   Terminal as TerminalIcon,
+  VerticalSplit,
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
+import remarkGfm from 'remark-gfm';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
 import { EditorInstance } from '@mhersztowski/web-client';
@@ -62,22 +70,31 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const serviceRef = useRef<ArduBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const generatedCodeRef = useRef('');
   const codeEditedRef = useRef(false);
   const currentSketchRef = useRef<string | null>(null);
   const suppressEditorChangeRef = useRef(false);
   const suppressBlocklyChangeRef = useRef(false);
   const savedBlocklyXmlRef = useRef<string | null>(null);
 
+  const lastSourceStorageKey = projectId ? `arduino_last_source_${projectId}` : null;
+  const [sketchLastSource, setSketchLastSource] = useState<Map<string, 'blockly' | 'code'>>(() => {
+    if (!projectId) return new Map();
+    try {
+      const raw = localStorage.getItem(`arduino_last_source_${projectId}`);
+      if (raw) return new Map(JSON.parse(raw) as [string, 'blockly' | 'code'][]);
+    } catch { /* ignore */ }
+    return new Map();
+  });
+
   const [board, setBoard] = useState<string | null>(null);
   const [newSketchName, setNewSketchName] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>(mode === 'code' ? 'code' : 'blockly');
-
-  useEffect(() => {
-    setViewMode(mode === 'code' ? 'code' : 'blockly');
-  }, [mode]);
   const [codeEdited, setCodeEdited] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [backConfirmOpen, setBackConfirmOpen] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
@@ -85,7 +102,12 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const [flashOpen, setFlashOpen] = useState(false);
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
-  const [sketchesOpen, setSketchesOpen] = useState(true);
+  const [sketchesOpen, setSketchesOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 900 : true,
+  );
+  const [expandedSketches, setExpandedSketches] = useState<Set<string>>(new Set());
+  const [sketchFiles, setSketchFiles] = useState<Map<string, string[]>>(new Map());
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [compileOutput, setCompileOutput] = useState('');
   const [compileSuccess, setCompileSuccess] = useState<boolean | null>(null);
@@ -97,9 +119,14 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const initialSketch = searchParams.get('sketch');
   const compileOutputRef = useRef<HTMLDivElement>(null);
   const [readmeOpen, setReadmeOpen] = useState(false);
+  const [readmeExpanded, setReadmeExpanded] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
   const [readmeEditMode, setReadmeEditMode] = useState(false);
   const [readmeEditValue, setReadmeEditValue] = useState('');
+
+  useEffect(() => {
+    setViewMode(mode === 'code' ? 'code' : 'blockly');
+  }, [mode]);
 
   // Keep refs in sync with state for use inside async callbacks / stale closures
   useEffect(() => {
@@ -110,8 +137,17 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     currentSketchRef.current = currentSketch;
   }, [currentSketch]);
 
+  // Persist sketchLastSource to localStorage
+  useEffect(() => {
+    if (!lastSourceStorageKey) return;
+    try {
+      localStorage.setItem(lastSourceStorageKey, JSON.stringify([...sketchLastSource]));
+    } catch { /* ignore */ }
+  }, [sketchLastSource, lastSourceStorageKey]);
+
   // Sync generated code to Monaco editor
   const syncCodeToEditor = useCallback((code: string) => {
+    generatedCodeRef.current = code;
     setGeneratedCode(code);
     if (editorRef.current) {
       suppressEditorChangeRef.current = true;
@@ -131,6 +167,14 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       }
       const code = service.generateArduinoCode();
       syncCodeToEditor(code);
+      setIsDirty(true);
+      setSketchLastSource((prev) => {
+        const s = currentSketchRef.current;
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(s, 'blockly');
+        return next;
+      });
     });
 
     // Restore workspace XML if returning from code-only view
@@ -145,14 +189,15 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     syncCodeToEditor(code);
   }, [syncCodeToEditor]);
 
-  // Initialize/dispose Monaco editor when code panel is visible
   const showCode = mode === 'code' || viewMode === 'split';
+  const showBlockly = mode !== 'code' && (viewMode === 'blockly' || viewMode === 'split');
 
+  // Initialize/dispose Monaco editor when code panel is visible
   useEffect(() => {
     if (!showCode || !editorContainerRef.current) return;
 
     const editor = EditorInstance.create(editorContainerRef.current, {
-      value: generatedCode,
+      value: generatedCodeRef.current,
       language: 'cpp',
       theme: 'vs-dark',
       automaticLayout: true,
@@ -165,6 +210,14 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     editor.on('contentChanged', () => {
       if (suppressEditorChangeRef.current) return;
       setCodeEdited(true);
+      setIsDirty(true);
+      setSketchLastSource((prev) => {
+        const s = currentSketchRef.current;
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(s, 'code');
+        return next;
+      });
     });
 
     editorRef.current = editor;
@@ -238,6 +291,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     setCurrentSketch(sketchName);
     currentSketchRef.current = sketchName;
     setCodeEdited(false);
+    setIsDirty(false);
     codeEditedRef.current = false;
     setCompileOutput('');
     setCompileSuccess(null);
@@ -267,7 +321,6 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     try {
       const inoContent = await minisApi.readSketchFile(userName, projectId, sketchName, `${sketchName}.ino`);
       syncCodeToEditor(inoContent);
-      // If cpp was last modified, mark as edited so blockly won't silently overwrite
       if (lastModified === 'cpp') {
         setCodeEdited(true);
         codeEditedRef.current = true;
@@ -278,15 +331,91 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         syncCodeToEditor(code);
       }
     } finally {
-      // Release suppress only after .ino is loaded — prevents async blockly events from overwriting
       suppressBlocklyChangeRef.current = false;
     }
+
+    setIsDirty(false);
+  };
+
+  const handleToggleSketchExpand = async (sketchName: string) => {
+    if (!userName || !projectId) return;
+    setExpandedSketches((prev) => {
+      const next = new Set(prev);
+      if (next.has(sketchName)) { next.delete(sketchName); return next; }
+      next.add(sketchName);
+      return next;
+    });
+    if (!sketchFiles.has(sketchName)) {
+      const files = await minisApi.listSketchFiles(userName, projectId, sketchName).catch(() => [] as string[]);
+      setSketchFiles((prev) => new Map(prev).set(sketchName, files));
+    }
+  };
+
+  const handleLoadSketchFile = async (sketchName: string, fileName: string) => {
+    if (!userName || !projectId) return;
+    setCurrentSketch(sketchName);
+    currentSketchRef.current = sketchName;
+    setCodeEdited(false);
+    setIsDirty(false);
+
+    if (fileName.endsWith('.blockly')) {
+      suppressBlocklyChangeRef.current = true;
+      serviceRef.current?.clearWorkspace();
+      try {
+        const xml = await minisApi.readSketchFile(userName, projectId, sketchName, fileName);
+        if (xml && serviceRef.current) {
+          serviceRef.current.loadFromXml(xml);
+          syncCodeToEditor(serviceRef.current.generateArduinoCode());
+        }
+      } catch { /* ignore */ }
+      suppressBlocklyChangeRef.current = false;
+      // Navigate to blockly view
+      if (mode === 'code') {
+        window.location.href = `/user/${userName}/project/${projectId}?sketch=${sketchName}`;
+      }
+    } else if (fileName.endsWith('.ino')) {
+      try {
+        const content = await minisApi.readSketchFile(userName, projectId, sketchName, fileName);
+        syncCodeToEditor(content);
+      } catch { /* ignore */ }
+      if (mode === 'blockly') {
+        window.location.href = `/user/${userName}/project/${projectId}/code?sketch=${sketchName}`;
+      }
+    }
+  };
+
+  const handleDeleteSketchFile = async (sketchName: string, fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!userName || !projectId) return;
+    if (!window.confirm(`Delete ${fileName} from sketch "${sketchName}"?`)) return;
+    try {
+      await minisApi.deleteSketchFile(userName, projectId, sketchName, fileName);
+      setSketchFiles((prev) => {
+        const next = new Map(prev);
+        next.set(sketchName, (next.get(sketchName) ?? []).filter((f) => f !== fileName));
+        return next;
+      });
+    } catch { /* ignore */ }
+  };
+
+  const handleDropOnSketch = async (sketchName: string, dt: DataTransfer) => {
+    if (!userName || !projectId) return;
+    const files = Array.from(dt.files);
+    for (const file of files) {
+      const text = await file.text().catch(() => null);
+      if (text === null) continue;
+      await minisApi.writeSketchFile(userName, projectId, sketchName, file.name, text).catch(() => {});
+    }
+    const updated = await minisApi.listSketchFiles(userName, projectId, sketchName).catch(() => [] as string[]);
+    setSketchFiles((prev) => new Map(prev).set(sketchName, updated));
+    setExpandedSketches((prev) => new Set(prev).add(sketchName));
   };
 
   const handleNewSketch = () => {
     const name = newSketchName.trim();
     if (!name) return;
     setCurrentSketch(name);
+    currentSketchRef.current = name;
     if (!sketches.includes(name)) setSketches((prev) => [...prev, name]);
     setNewSketchName('');
   };
@@ -304,27 +433,25 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.ino`, inoCode),
       minisApi.writeSketchFile(userName, projectId, currentSketch, `${currentSketch}.meta.json`, meta),
     ]);
+    if (!sketches.includes(currentSketch)) setSketches((prev) => [...prev, currentSketch]);
     setCodeEdited(false);
+    setIsDirty(false);
   };
 
   const switchToView = (target: ViewMode) => {
     if (target === viewMode) return;
-    // Navigate to separate page to avoid Blockly+Monaco in memory simultaneously
     if (target === 'code' && mode === 'blockly') {
-      // Full page reload — clears Blockly bundle from memory before loading Monaco
       handleSaveSketch().then(() => {
         window.location.href = `/user/${userName}/project/${projectId}/code?sketch=${currentSketch ?? ''}`;
       });
       return;
     }
     if (target === 'blockly' && mode === 'code') {
-      // Full page reload — clears Monaco bundle from memory before loading Blockly
       handleSaveSketch().then(() => {
         window.location.href = `/user/${userName}/project/${projectId}?sketch=${currentSketch ?? ''}`;
       });
       return;
     }
-    // Split view (desktop only, both components on same page)
     if (showBlockly && target === 'code' && serviceRef.current) {
       savedBlocklyXmlRef.current = serviceRef.current.serializeToXml();
     }
@@ -334,19 +461,16 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const handleConfirmOverwrite = () => {
     setConfirmOpen(false);
     setCodeEdited(false);
+    setIsDirty(false);
     if (serviceRef.current) {
       const code = serviceRef.current.generateArduinoCode();
       syncCodeToEditor(code);
     }
   };
 
-  const handleCancelOverwrite = () => {
-    setConfirmOpen(false);
-  };
-
   const doCompile = async () => {
-    const currentSketch = currentSketchRef.current;
-    if (!currentSketch || !userName || !projectId) return;
+    const sk = currentSketchRef.current;
+    if (!sk || !userName || !projectId) return;
     setCompiling(true);
     setCompileOutput('');
     setCompileSuccess(null);
@@ -365,7 +489,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         setCompileSuccess(false);
         return;
       }
-      const result = await minisApi.compileProject(userName, projectId, currentSketch, fqbn, selectedDeviceName || undefined);
+      const result = await minisApi.compileProject(userName, projectId, sk, fqbn, selectedDeviceName || undefined);
       setCompileOutput(result.output);
       setCompileSuccess(result.success);
     } catch (err) {
@@ -430,37 +554,34 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     '& .MuiButton-startIcon': { mr: { xs: 0, sm: 1 } },
   });
 
-  const showBlockly = mode !== 'code' && (viewMode === 'blockly' || viewMode === 'split');
-
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
       {/* Top AppBar */}
       <AppBar position="static" elevation={1} sx={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <Toolbar variant="dense">
-          <IconButton color="inherit" edge="start" onClick={() => navigate(`/user/${userName}/electronics/devices`)} sx={{ mr: 1 }}>
+          <IconButton
+            color="inherit"
+            edge="start"
+            onClick={() => isDirty ? setBackConfirmOpen(true) : navigate(`/user/${userName}/electronics/arduino`)}
+            sx={{ mr: 1 }}
+          >
             <ArrowBack />
           </IconButton>
           <Typography variant="h6" sx={{ mr: 2, display: { xs: 'none', md: 'block' } }} noWrap>
             Project
           </Typography>
 
-          {/* Configuration toggle */}
           <Button
-            size="small"
-            variant={configOpen ? 'contained' : 'outlined'}
-            color="inherit"
+            size="small" variant={configOpen ? 'contained' : 'outlined'} color="inherit"
             startIcon={<Settings />}
             onClick={() => setConfigOpen((v) => !v)}
             sx={btnSx(configOpen)}
           >
-            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Configuration</Box>
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Config</Box>
           </Button>
 
-          {/* README toggle */}
           <Button
-            size="small"
-            variant={readmeOpen ? 'contained' : 'outlined'}
-            color="inherit"
+            size="small" variant={readmeOpen ? 'contained' : 'outlined'} color="inherit"
             startIcon={<Description />}
             onClick={() => setReadmeOpen((v) => !v)}
             sx={{ ml: 1, ...btnSx(readmeOpen) }}
@@ -468,11 +589,8 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>README</Box>
           </Button>
 
-          {/* Sketches toggle */}
           <Button
-            size="small"
-            variant={sketchesOpen ? 'contained' : 'outlined'}
-            color="inherit"
+            size="small" variant={sketchesOpen ? 'contained' : 'outlined'} color="inherit"
             startIcon={<FolderOpen />}
             onClick={() => setSketchesOpen((v) => !v)}
             sx={{ ml: 1, ...btnSx(sketchesOpen) }}
@@ -484,9 +602,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           <Tooltip title="Sync sketches from GitHub">
             <span>
               <Button
-                size="small"
-                variant="outlined"
-                color="inherit"
+                size="small" variant="outlined" color="inherit"
                 startIcon={syncing ? <CircularProgress size={14} color="inherit" /> : <Refresh />}
                 onClick={async () => {
                   if (!userName || !projectId) return;
@@ -509,26 +625,27 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
             </span>
           </Tooltip>
 
-          {/* Save */}
-          <Button
-            size="small"
-            variant="outlined"
-            color="inherit"
-            startIcon={<Save />}
-            onClick={handleSaveSketch}
-            disabled={!currentSketch}
-            sx={{ ml: 1, ...btnSx(false) }}
-          >
-            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save</Box>
-          </Button>
+          <Tooltip title={isDirty && currentSketch ? 'Unsaved changes' : ''}>
+            <span>
+              <Button
+                size="small"
+                variant={isDirty && currentSketch ? 'contained' : 'outlined'}
+                color={isDirty && currentSketch ? 'warning' : 'inherit'}
+                startIcon={<Save />}
+                onClick={handleSaveSketch}
+                disabled={!currentSketch}
+                sx={{ ml: 1, ...(isDirty && currentSketch ? {} : btnSx(false)) }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save</Box>
+              </Button>
+            </span>
+          </Tooltip>
 
           <Box sx={{ flexGrow: 1 }} />
 
-          {/* Blockly / Split / Code toggle — centered */}
           <ButtonGroup size="small">
             <Button
-              variant={viewMode === 'blockly' ? 'contained' : 'outlined'}
-              color="inherit"
+              variant={viewMode === 'blockly' ? 'contained' : 'outlined'} color="inherit"
               startIcon={<Extension />}
               onClick={() => switchToView('blockly')}
               sx={btnSx(viewMode === 'blockly')}
@@ -536,8 +653,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Blockly</Box>
             </Button>
             <Button
-              variant={viewMode === 'split' ? 'contained' : 'outlined'}
-              color="inherit"
+              variant={viewMode === 'split' ? 'contained' : 'outlined'} color="inherit"
               startIcon={<VerticalSplit />}
               onClick={() => switchToView('split')}
               sx={{ ...btnSx(viewMode === 'split'), display: { xs: 'none', md: 'inline-flex' } }}
@@ -545,8 +661,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Split</Box>
             </Button>
             <Button
-              variant={viewMode === 'code' ? 'contained' : 'outlined'}
-              color="inherit"
+              variant={viewMode === 'code' ? 'contained' : 'outlined'} color="inherit"
               startIcon={<Code />}
               onClick={() => switchToView('code')}
               sx={btnSx(viewMode === 'code')}
@@ -568,37 +683,34 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       </AppBar>
 
       {/* Content area */}
-      <Box
-        sx={{
-          flexGrow: 1,
-          display: 'flex',
-          overflow: 'hidden',
-        }}
-      >
+      <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
+
         {/* Configuration panel */}
         {configOpen && (
           <Box
             sx={{
-              width: 280,
+              width: { xs: '100%', sm: 280 }, maxWidth: { xs: 320, sm: 'none' },
               flexShrink: 0,
-              borderRight: 1,
-              borderColor: 'divider',
-              overflow: 'auto',
-              bgcolor: 'background.paper',
-              p: 2,
+              position: { xs: 'absolute', sm: 'relative' },
+              zIndex: { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0,
+              borderRight: 1, borderColor: 'divider',
+              overflow: 'auto', bgcolor: 'background.paper', p: 2,
             }}
           >
-            <Typography variant="subtitle2" gutterBottom>
-              Configuration
+            <Typography variant="subtitle2" gutterBottom>Configuration</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+              ID: {projectId}
             </Typography>
-
             <Typography variant="body2" sx={{ mb: 1 }}>
               Board: {board ? (boardProfiles[board]?.name ?? board) : 'Loading...'}
             </Typography>
-            <Typography variant="caption" color="text.secondary">
-              FQBN: {board ? (boardProfiles[board]?.compilerFlag ?? 'unknown') : '—'}
+            <Typography variant="caption" color="text.secondary" display="block">
+              FQBN: {board ? (boardProfiles[board]?.compilerFlag ?? '—') : '—'}
             </Typography>
-
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+              Platform: Arduino
+            </Typography>
             <FormControl fullWidth size="small" sx={{ mt: 2 }}>
               <InputLabel>Device</InputLabel>
               <Select
@@ -623,12 +735,14 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         {readmeOpen && (
           <Box
             sx={{
-              width: 360,
-              flexShrink: 0,
-              borderRight: 1,
-              borderColor: 'divider',
-              display: 'flex',
-              flexDirection: 'column',
+              width: readmeExpanded ? '100%' : { xs: '100%', sm: 360 },
+              maxWidth: readmeExpanded ? '100%' : { xs: 400, sm: 'none' },
+              flexShrink: readmeExpanded ? 1 : 0,
+              position: { xs: 'absolute', sm: readmeExpanded ? 'absolute' : 'relative' },
+              zIndex: readmeExpanded ? 1200 : { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0, right: readmeExpanded ? 0 : 'auto',
+              borderRight: readmeExpanded ? 0 : 1, borderColor: 'divider',
+              display: 'flex', flexDirection: 'column',
               bgcolor: 'background.paper',
             }}
           >
@@ -644,28 +758,32 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
                   </Tooltip>
                 </>
               ) : (
-                <Tooltip title="Edit">
-                  <IconButton size="small" onClick={() => { setReadmeEditValue(readmeContent ?? ''); setReadmeEditMode(true); }}>
-                    <EditIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                <>
+                  <Tooltip title={readmeExpanded ? 'Collapse' : 'Expand'}>
+                    <IconButton size="small" onClick={() => setReadmeExpanded((v) => !v)}>
+                      {readmeExpanded ? <CloseFullscreen fontSize="small" /> : <OpenInFull fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Edit">
+                    <IconButton size="small" onClick={() => { setReadmeEditValue(readmeContent ?? ''); setReadmeEditMode(true); }}>
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </>
               )}
             </Box>
             <Box sx={{ flexGrow: 1, overflow: 'auto', p: 2 }}>
               {readmeEditMode ? (
                 <TextField
-                  multiline
-                  fullWidth
-                  minRows={10}
+                  multiline fullWidth minRows={10}
                   value={readmeEditValue}
                   onChange={(e) => setReadmeEditValue(e.target.value)}
-                  variant="outlined"
-                  size="small"
+                  variant="outlined" size="small"
                   inputProps={{ style: { fontFamily: 'monospace', fontSize: 13 } }}
                 />
               ) : readmeContent ? (
-                <Box sx={{ '& h1,h2,h3': { mt: 1, mb: 0.5 }, '& p': { mt: 0, mb: 1 }, '& pre': { bgcolor: 'action.hover', p: 1, borderRadius: 1, overflow: 'auto', fontSize: 12 }, '& code': { bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5, fontSize: 12 } }}>
-                  <ReactMarkdown remarkPlugins={[remarkBreaks]}>{readmeContent}</ReactMarkdown>
+                <Box sx={{ '& h1,h2,h3': { mt: 1, mb: 0.5 }, '& p': { mt: 0, mb: 1 }, '& pre': { bgcolor: 'action.hover', p: 1, borderRadius: 1, overflow: 'auto', fontSize: 12 }, '& code': { bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5, fontSize: 12 }, '& table': { borderCollapse: 'collapse', width: '100%', fontSize: 12, mb: 1 }, '& th,td': { border: 1, borderColor: 'divider', px: 1, py: 0.5 }, '& th': { bgcolor: 'action.hover', fontWeight: 'bold' } }}>
+                  <ReactMarkdown remarkPlugins={[remarkBreaks, remarkGfm]}>{readmeContent}</ReactMarkdown>
                 </Box>
               ) : (
                 <Typography variant="body2" color="text.secondary">
@@ -680,12 +798,13 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         {sketchesOpen && (
           <Box
             sx={{
-              width: 220,
+              width: { xs: '100%', sm: 220 }, maxWidth: { xs: 280, sm: 'none' },
               flexShrink: 0,
-              borderRight: 1,
-              borderColor: 'divider',
-              display: 'flex',
-              flexDirection: 'column',
+              position: { xs: 'absolute', sm: 'relative' },
+              zIndex: { xs: 10, sm: 'auto' },
+              top: 0, bottom: 0, left: 0,
+              borderRight: 1, borderColor: 'divider',
+              display: 'flex', flexDirection: 'column',
               bgcolor: 'background.paper',
             }}
           >
@@ -709,15 +828,77 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               </Tooltip>
             </Box>
             <List dense sx={{ flexGrow: 1, overflow: 'auto' }}>
-              {sketches.map((name) => (
-                <ListItemButton
-                  key={name}
-                  selected={currentSketch === name}
-                  onClick={() => handleLoadSketch(name)}
-                >
-                  <ListItemText primary={name} />
-                </ListItemButton>
-              ))}
+              {sketches.map((name) => {
+                const expanded = expandedSketches.has(name);
+                const files = sketchFiles.get(name) ?? [];
+                const lastSrc = sketchLastSource.get(name) ?? 'blockly';
+                return (
+                  <Box key={name}>
+                    <ListItemButton
+                      selected={currentSketch === name}
+                      onClick={() => handleLoadSketch(name)}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropTarget(name); }}
+                      onDragLeave={() => setDropTarget(null)}
+                      onDrop={(e) => { e.preventDefault(); setDropTarget(null); void handleDropOnSketch(name, e.dataTransfer); }}
+                      sx={{
+                        pr: 0.5,
+                        outline: dropTarget === name ? '2px dashed' : 'none',
+                        outlineColor: 'primary.main',
+                      }}
+                    >
+                      <ListItemText
+                        primary={name}
+                        primaryTypographyProps={{ fontSize: 13, noWrap: true }}
+                        sx={{ flexGrow: 1, minWidth: 0 }}
+                      />
+                      <IconButton
+                        size="small"
+                        onClick={(e) => { e.stopPropagation(); void handleToggleSketchExpand(name); }}
+                        sx={{ ml: 0.5, p: 0.25 }}
+                      >
+                        {expanded ? <ExpandLess fontSize="inherit" /> : <ExpandMore fontSize="inherit" />}
+                      </IconButton>
+                    </ListItemButton>
+                    <Collapse in={expanded} unmountOnExit>
+                      <List dense disablePadding>
+                        {files.map((file) => {
+                          const isLastEdited =
+                            (lastSrc === 'code' && file === `${name}.ino`) ||
+                            (lastSrc === 'blockly' && file === `${name}.blockly`);
+                          const isOpen = isLastEdited && name === currentSketch;
+                          const fileColor = isOpen ? 'error.main' : isLastEdited ? 'primary.main' : 'text.primary';
+                          return (
+                            <ListItemButton
+                              key={file}
+                              onClick={() => void handleLoadSketchFile(name, file)}
+                              sx={{ pl: 3.5, py: 0.25, pr: 0.5 }}
+                            >
+                              <InsertDriveFile sx={{ fontSize: 14, mr: 0.75, color: fileColor, flexShrink: 0 }} />
+                              <ListItemText
+                                primary={file}
+                                primaryTypographyProps={{ fontSize: 11, noWrap: true, color: fileColor, fontWeight: isLastEdited ? 600 : 400 }}
+                                sx={{ flexGrow: 1, minWidth: 0 }}
+                              />
+                              <IconButton
+                                size="small"
+                                onClick={(e) => void handleDeleteSketchFile(name, file, e)}
+                                sx={{ p: 0.25, opacity: 0.5, '&:hover': { opacity: 1, color: 'error.main' } }}
+                              >
+                                <DeleteIcon sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </ListItemButton>
+                          );
+                        })}
+                        {files.length === 0 && (
+                          <Typography sx={{ pl: 4, py: 0.5, fontSize: 11, color: 'text.disabled' }}>
+                            empty
+                          </Typography>
+                        )}
+                      </List>
+                    </Collapse>
+                  </Box>
+                );
+              })}
               {sketches.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1 }}>
                   No sketches yet
@@ -730,58 +911,46 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         {/* Editor area */}
         <Box
           ref={splitterContainerRef}
-          sx={{
-            flexGrow: 1,
-            display: 'flex',
-            overflow: 'hidden',
-            position: 'relative',
-          }}
+          sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}
         >
-        {/* Blockly panel — unmounted in code-only view to free memory */}
-        {showBlockly && (
-          <Box
-            sx={{
-              position: 'relative',
-              overflow: 'hidden',
-              width: viewMode === 'split' ? `${splitRatio * 100}%` : '100%',
-              flexShrink: 0,
-            }}
-          >
-            {board && (
-              <ArduBlocklyComponent
-                onServiceReady={handleServiceReady}
-                initialBoard={board}
-              />
-            )}
-          </Box>
-        )}
+          {/* Blockly panel — unmounted in code-only view to free memory */}
+          {showBlockly && (
+            <Box
+              sx={{
+                position: 'relative', overflow: 'hidden',
+                width: viewMode === 'split' ? `${splitRatio * 100}%` : '100%',
+                height: '100%',
+                flexShrink: 0,
+              }}
+            >
+              {board && (
+                <ArduBlocklyComponent
+                  onServiceReady={handleServiceReady}
+                  initialBoard={board}
+                />
+              )}
+            </Box>
+          )}
 
-        {/* Splitter handle */}
-        {viewMode === 'split' && (
-          <Box
-            onMouseDown={handleSplitterMouseDown}
-            sx={{
-              width: 6,
-              cursor: 'col-resize',
-              bgcolor: 'divider',
-              flexShrink: 0,
-              '&:hover': { bgcolor: 'primary.main' },
-              transition: 'background-color 0.15s',
-            }}
-          />
-        )}
+          {/* Splitter handle */}
+          {viewMode === 'split' && (
+            <Box
+              onMouseDown={handleSplitterMouseDown}
+              sx={{
+                width: 6, cursor: 'col-resize', bgcolor: 'divider', flexShrink: 0,
+                '&:hover': { bgcolor: 'primary.main' },
+                transition: 'background-color 0.15s',
+              }}
+            />
+          )}
 
-        {/* Code panel */}
-        {showCode && (
-          <Box
-            ref={editorContainerRef}
-            sx={{
-              flexGrow: 1,
-              overflow: 'hidden',
-              minWidth: MIN_PANEL_PX,
-            }}
-          />
-        )}
+          {/* Code panel */}
+          {showCode && (
+            <Box
+              ref={editorContainerRef}
+              sx={{ flexGrow: 1, overflow: 'hidden', minWidth: MIN_PANEL_PX, height: '100%' }}
+            />
+          )}
         </Box>
       </Box>
 
@@ -792,9 +961,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
             height: 200,
             borderTop: 2,
             borderColor: compileSuccess === true ? 'success.main' : compileSuccess === false ? 'error.main' : 'divider',
-            display: 'flex',
-            flexDirection: 'column',
-            flexShrink: 0,
+            display: 'flex', flexDirection: 'column', flexShrink: 0,
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, bgcolor: 'action.hover' }}>
@@ -809,14 +976,9 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
             ref={compileOutputRef}
             sx={{
               flexGrow: 1,
-              bgcolor: '#1e1e1e',
-              color: '#d4d4d4',
-              fontFamily: 'monospace',
-              fontSize: 12,
-              p: 1,
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
+              bgcolor: '#1e1e1e', color: '#d4d4d4',
+              fontFamily: 'monospace', fontSize: 12,
+              p: 1, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
             }}
           >
             {compiling && !compileOutput ? 'Compiling...\n' : compileOutput || 'Ready.\n'}
@@ -825,12 +987,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       )}
 
       {/* Bottom status bar */}
-      <AppBar
-        position="static"
-        elevation={0}
-        color="default"
-        sx={{ borderTop: 1, borderColor: 'divider' }}
-      >
+      <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider' }}>
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
           <Tooltip title="Compile">
             <span>
@@ -876,16 +1033,13 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           </Tooltip>
           <Box sx={{ flexGrow: 1 }} />
           <Typography variant="caption" color="text.secondary">
-            {board}
+            {board ? (boardProfiles[board]?.name ?? board) : '—'}
           </Typography>
         </Toolbar>
       </AppBar>
 
       {/* Serial Terminal panel */}
-      <WebSerialTerminal
-        open={terminalOpen}
-        onClose={() => setTerminalOpen(false)}
-      />
+      <WebSerialTerminal open={terminalOpen} onClose={() => setTerminalOpen(false)} />
 
       {/* Flash Firmware dialog */}
       <FlashDialog
@@ -898,27 +1052,34 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         projectId={projectId}
       />
 
+      {/* Back confirmation dialog */}
+      <Dialog open={backConfirmOpen} onClose={() => setBackConfirmOpen(false)}>
+        <DialogTitle>Unsaved changes</DialogTitle>
+        <DialogContent>
+          <DialogContentText>You have unsaved changes. Leave without saving?</DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBackConfirmOpen(false)}>Stay</Button>
+          <Button color="warning" variant="contained" onClick={() => navigate(`/user/${userName}/electronics/arduino`)}>Leave</Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Save before compile dialog */}
       <Dialog open={saveBeforeCompileOpen} onClose={() => setSaveBeforeCompileOpen(false)}>
         <DialogTitle>Unsaved changes</DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            You have unsaved code changes. Save and compile?
-          </DialogContentText>
+          <DialogContentText>You have unsaved code changes. Save and compile?</DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSaveBeforeCompileOpen(false)}>Cancel</Button>
-          <Button
-            onClick={() => { setSaveBeforeCompileOpen(false); doCompile(); }}
-            variant="contained"
-          >
+          <Button onClick={() => { setSaveBeforeCompileOpen(false); doCompile(); }} variant="contained">
             Save & Compile
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Confirm overwrite dialog */}
-      <Dialog open={confirmOpen} onClose={handleCancelOverwrite}>
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
         <DialogTitle>Overwrite manual changes?</DialogTitle>
         <DialogContent>
           <DialogContentText>
@@ -926,10 +1087,8 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCancelOverwrite}>Cancel</Button>
-          <Button onClick={handleConfirmOverwrite} color="warning" variant="contained">
-            Overwrite
-          </Button>
+          <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
+          <Button onClick={handleConfirmOverwrite} color="warning" variant="contained">Overwrite</Button>
         </DialogActions>
       </Dialog>
     </Box>
