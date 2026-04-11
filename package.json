@@ -17,7 +17,7 @@
     "build:cad": "pnpm --filter cad-app run build",
     "build:cad-backend": "pnpm --filter cad-backend run build",
     "build:ui-core": "pnpm --filter @mhersztowski/ui-core run build",
-    "build:cad-all": "pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:ui-scene3d && pnpm build:cad-backend && pnpm build:cad",
+    "build:cad-all": "pnpm build:core && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:ui-scene3d && pnpm build:cad-backend && pnpm build:cad",
     "build:cadall": "pnpm build:cad-all",
     "dev:backend": "pnpm --filter mycastle-backend run dev",
     "dev:web": "pnpm --filter mycastle-web run dev",
