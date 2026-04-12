@@ -71,7 +71,7 @@ function UploadDialog({ open, onClose, code, userName, board, projectId, deviceN
     }
     minisApi.getDeviceMinisConfig(userName, effectiveDevice)
       .then((cfg) => {
-        if (cfg.wifiSsid || cfg.serialNumber) setMinisConfig(cfg);
+        if (cfg.deviceName) setMinisConfig(cfg);
       })
       .catch(() => setMinisConfig(undefined));
   }, [open, userName, effectiveDevice]);

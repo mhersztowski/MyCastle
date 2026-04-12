@@ -2132,11 +2132,6 @@ const { password, ...safeBody } = body;
         this.sendJsonResponse(res, 404, { error: 'Device not found' });
         return;
       }
-      const sn = device['sn'] as string | undefined;
-      if (!sn) {
-        this.sendJsonResponse(res, 200, { serialNumber: '', wifiSsid: '', wifiPassword: '' });
-        return;
-      }
       const config = await this.resolveMinisConfig(userName, deviceName);
       this.sendJsonResponse(res, 200, { deviceName: config.deviceName, serialNumber: config.serialNumber, wifiSsid: config.wifiSsid, wifiPassword: config.wifiPassword });
     } catch (err) {
