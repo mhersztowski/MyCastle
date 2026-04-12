@@ -8,6 +8,9 @@ services:
       - ROOT_DIR=/data
       - STATIC_DIR=/app/app/mycastle-web/build
       - HOST_DATA_DIR=/opt/mycastle-data
+      - ARDUINO_CLI_DOCKER_IMAGE=mycastle-arduino:local
+      - PYGAME_DOCKER_IMAGE=mycastle-pygame:local
+      - UPYTHON_DOCKER_IMAGE=mycastle-pico:local
     ports:
       - "1894:1894"
     volumes:
