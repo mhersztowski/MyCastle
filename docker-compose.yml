@@ -7,6 +7,7 @@ services:
       - PORT=1894
       - ROOT_DIR=/data
       - STATIC_DIR=/app/app/mycastle-web/build
+      - HOST_DATA_DIR=/opt/mycastle-data
     ports:
       - "1894:1894"
     volumes:

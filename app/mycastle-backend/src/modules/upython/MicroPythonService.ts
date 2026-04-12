@@ -12,6 +12,7 @@ export interface MicroPythonServiceConfig {
   dockerContainer?: string;
   dockerImage?: string;
   rootDir: string;
+  hostDataDir?: string;
 }
 
 export class MicroPythonService {
@@ -22,7 +23,8 @@ export class MicroPythonService {
     this.rootDir = path.resolve(config.rootDir);
 
     if (config.dockerImage) {
-      this.cli = new MicroPythonCliDockerRun(config.dockerImage, this.rootDir);
+      const hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : this.rootDir;
+      this.cli = new MicroPythonCliDockerRun(config.dockerImage, hostDataDir);
       console.log(`MicroPython CLI: docker run mode (${config.dockerImage})`);
     } else if (config.dockerContainer) {
       this.cli = new MicroPythonCliDocker(config.dockerContainer);

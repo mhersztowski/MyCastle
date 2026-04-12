@@ -10,6 +10,9 @@ export interface ArduinoServiceConfig {
   dockerContainer?: string;
   dockerImage?: string;
   rootDir: string;
+  /** Host path to data dir — used when backend runs in Docker and spawns `docker run` via socket.
+   *  Defaults to rootDir (correct when running directly on the host). */
+  hostDataDir?: string;
 }
 
 export class ArduinoService {
@@ -20,7 +23,8 @@ export class ArduinoService {
     this.rootDir = path.resolve(config.rootDir);
 
     if (config.dockerImage) {
-      this.cli = new ArduinoCliDockerRun(config.dockerImage, this.rootDir);
+      const hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : this.rootDir;
+      this.cli = new ArduinoCliDockerRun(config.dockerImage, hostDataDir);
       console.log(`Arduino CLI: docker run mode (${config.dockerImage})`);
     } else if (config.dockerContainer) {
       this.cli = new ArduinoCliDocker(config.dockerContainer);

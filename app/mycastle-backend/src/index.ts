@@ -23,8 +23,9 @@ const pygbagPath = process.env.PYGBAG_PATH;
 const pygameDockerName = process.env.PYGAME_DOCKER_NAME;
 const pygameDockerImage = process.env.PYGAME_DOCKER_IMAGE;
 const userDataPath = process.env.USER_DATA_PATH || 'Minis/Users/marcin';
+const hostDataDir = process.env.HOST_DATA_DIR;
 
-App.create({ httpPort, mqttPort, rootDir, staticDir, jwtSecret, arduinoCliLocalPath, arduinoCliDockerName, arduinoCliDockerImage, upythonCliLocalPath, upythonDockerName, upythonDockerImage, pygbagPath, pygameDockerName, pygameDockerImage, userDataPath });
+App.create({ httpPort, mqttPort, rootDir, staticDir, jwtSecret, arduinoCliLocalPath, arduinoCliDockerName, arduinoCliDockerImage, upythonCliLocalPath, upythonDockerName, upythonDockerImage, pygbagPath, pygameDockerName, pygameDockerImage, userDataPath, hostDataDir });
 
 async function main() {
   try {

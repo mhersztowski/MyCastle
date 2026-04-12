@@ -27,6 +27,9 @@ export interface AppConfig {
   pygameDockerImage?: string;
   /** Base path for user PIM data, e.g. 'Minis/Users/marcin'. Defaults to env USER_DATA_PATH. */
   userDataPath?: string;
+  /** Host-side path to the data directory, used when backend runs inside Docker and spawns
+   *  `docker run` via the Docker socket. If unset, rootDir is used (correct for non-Docker deployments). */
+  hostDataDir?: string;
 }
 
 export class App {
@@ -75,18 +78,21 @@ export class App {
       dockerContainer: config.arduinoCliDockerName,
       dockerImage: config.arduinoCliDockerImage,
       rootDir: config.rootDir,
+      hostDataDir: config.hostDataDir,
     });
     this.upythonService = new MicroPythonService({
       localPath: config.upythonCliLocalPath,
       dockerContainer: config.upythonDockerName,
       dockerImage: config.upythonDockerImage,
       rootDir: config.rootDir,
+      hostDataDir: config.hostDataDir,
     });
     this.pygameService = new PygameService({
       pygbagPath: config.pygbagPath,
       dockerContainer: config.pygameDockerName,
       dockerImage: config.pygameDockerImage,
       rootDir: config.rootDir,
+      hostDataDir: config.hostDataDir,
     });
 
     this.httpServer = new MycastleHttpServer(

@@ -15,6 +15,7 @@ export interface PygameServiceConfig {
   /** Path to pygbag executable. Defaults to 'pygbag'. */
   pygbagPath?: string;
   rootDir: string;
+  hostDataDir?: string;
   /** Docker container name — uses `docker exec`. */
   dockerContainer?: string;
   /** Docker image name — uses `docker run --rm` (preferred, no persistent container needed). */
@@ -31,7 +32,7 @@ export class PygameService {
   private readonly dockerDataDir: string;
 
   constructor(config: PygameServiceConfig) {
-    this.rootDir = path.resolve(config.rootDir);
+    this.rootDir = config.hostDataDir ? path.resolve(config.hostDataDir) : path.resolve(config.rootDir);
     this.pygbagPath = config.pygbagPath ?? 'pygbag';
     this.dockerContainer = config.dockerContainer;
     this.dockerImage = config.dockerImage;
