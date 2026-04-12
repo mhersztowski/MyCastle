@@ -1303,7 +1303,7 @@ export class MycastleHttpServer extends HttpUploadServer {
         await fs.promises.rm(path.join(sketchDir, 'build'), { recursive: true, force: true });
       }
       const result = await this.pygameService.build(userName, projectId, sketchName);
-      this.sendJsonResponse(res, result.success ? 200 : 422, result);
+      this.sendJsonResponse(res, 200, result);
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
     }
