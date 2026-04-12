@@ -37,3 +37,11 @@ async function main() {
 }
 
 main();
+
+// Prevent unhandled worker errors (e.g. Tesseract.js fetch failures) from crashing the process
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (server will continue):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection (server will continue):', reason);
+});

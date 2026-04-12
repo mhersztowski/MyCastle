@@ -54,12 +54,14 @@ export class PygameService {
     return path.join(this.sketchDir(userName, projectId, sketchName), 'build', 'web');
   }
 
-  private async injectBackButton(webBuildDir: string): Promise<void> {
+  private async patchIndexHtml(webBuildDir: string): Promise<void> {
     const indexPath = path.join(webBuildDir, 'index.html');
     try {
       let html = await fs.promises.readFile(indexPath, 'utf-8');
-      if (html.includes('data-pygbag-back-btn')) return; // already injected
-      const btn = `
+
+      // Inject back button (idempotent)
+      if (!html.includes('data-pygbag-back-btn')) {
+        const btn = `
 <style data-pygbag-back-btn>
   #pygbag-back {
     position: fixed; top: 8px; left: 8px; z-index: 99999;
@@ -71,7 +73,16 @@ export class PygameService {
   #pygbag-back:hover { background: rgba(0,0,0,0.8); }
 </style>
 <button id="pygbag-back" onclick="window.history.length>1?window.history.back():window.close()">&#8592; Back</button>`;
-      html = html.replace('<body>', '<body>' + btn);
+        html = html.replace('<body>', '<body>' + btn);
+      }
+
+      // ume_block: 0 — skip media engagement wait (MM.UME = true immediately)
+      // Without this, browsers that block autoplay audio get stuck in an infinite retry loop.
+      html = html.replace(/ume_block\s*:\s*\d+/, 'ume_block : 0');
+
+      // gui_divider: 1 — game takes full canvas area (default 2 splits screen with Python terminal)
+      html = html.replace(/gui_divider\s*:\s*\d+/, 'gui_divider : 1');
+
       await fs.promises.writeFile(indexPath, html, 'utf-8');
     } catch {
       // Non-critical — skip if index.html not found
@@ -126,7 +137,7 @@ export class PygameService {
         timeout: 120_000,
       });
       const output = [stdout, stderr].filter(Boolean).join('');
-      await this.injectBackButton(this.webBuildDir(userName, projectId, sketchName));
+      await this.patchIndexHtml(this.webBuildDir(userName, projectId, sketchName));
       return { success: true, output: cmdLine + output };
     } catch (err: unknown) {
       const e = err as { stdout?: string; stderr?: string; code?: number; message?: string };

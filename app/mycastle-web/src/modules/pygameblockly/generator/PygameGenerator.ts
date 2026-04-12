@@ -99,7 +99,6 @@ export class PygameGenerator extends Blockly.CodeGenerator {
     const I2 = I + I;
     const I3 = I + I + I;
     const importLines = Object.values(this.imports_);
-    const initLines = Object.values(this.inits_);
     const funcDefs = Object.values(this.userFunctions_);
     const setupBody = Object.values(this.setup_stmts_).join('');
     const loopBodyStmts = Object.values(this.loop_stmts_).join('');
@@ -114,7 +113,8 @@ export class PygameGenerator extends Blockly.CodeGenerator {
     if (importLines.length > 0) stdImports.push(...importLines);
     const importSection = stdImports.join('\n') + '\n';
 
-    // ---- pygame init + screen ----
+    // ---- pygame init + screen (native mode only — in web mode all init goes inside async def main()) ----
+    const initLines = Object.values(this.inits_);
     const pygameInitSection = [
       '\npygame.init()',
       ...initLines,
@@ -186,9 +186,18 @@ export class PygameGenerator extends Blockly.CodeGenerator {
       return importSection + pygameInitSection + varNoneSection + funcSection + setupFn + loopFn + entryPoint;
     } else {
       // async def main() with await asyncio.sleep(0)
-      // Inline setup code at the top of main() so all game vars are local — no global needed.
+      // In pygbag/WASM, ALL pygame initialization (init, set_mode, Clock, SysFont, etc.)
+      // must happen inside the asyncio event loop — not at module level. The SDL canvas
+      // and WASM filesystem aren't ready until the loop starts.
+      const pygameInitInMain =
+        I + 'pygame.init()\n' +
+        initLines.map((l) => I + l).join('\n') + (initLines.length ? '\n' : '') +
+        I + '_screen = pygame.display.set_mode((_screen_width, _screen_height))\n' +
+        I + 'pygame.display.set_caption(_window_title)\n' +
+        I + '_clock = pygame.time.Clock()\n';
       const inlineSetup = setupBody; // already has 1-level indent from statementToCode
       const mainBody =
+        pygameInitInMain +
         inlineSetup +
         I + 'while True:\n' +
         quitCheck.split('\n').map((l) => (l ? I + l : l)).join('\n') + '\n' +
@@ -199,7 +208,7 @@ export class PygameGenerator extends Blockly.CodeGenerator {
       const mainFn = `\nasync def main():\n${mainBody || I + 'pass\n'}`;
       entryPoint = '\nasyncio.run(main())\n';
       this.nameDB_?.reset();
-      return importSection + pygameInitSection + funcSection + mainFn + entryPoint;
+      return importSection + funcSection + mainFn + entryPoint;
     }
   }
 
