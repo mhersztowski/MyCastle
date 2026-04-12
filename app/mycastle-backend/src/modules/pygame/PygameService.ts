@@ -26,13 +26,18 @@ export interface PygameServiceConfig {
 
 export class PygameService {
   private readonly pygbagPath: string;
+  /** Path to data dir as seen by this backend process (used for FS access and path computation). */
   private readonly rootDir: string;
+  /** Host-side path to data dir — used only for the Docker volume mount flag.
+   *  Equals rootDir when backend runs directly on the host. */
+  private readonly hostDataDir: string;
   private readonly dockerContainer: string | undefined;
   private readonly dockerImage: string | undefined;
   private readonly dockerDataDir: string;
 
   constructor(config: PygameServiceConfig) {
-    this.rootDir = config.hostDataDir ? path.resolve(config.hostDataDir) : path.resolve(config.rootDir);
+    this.rootDir = path.resolve(config.rootDir);
+    this.hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : this.rootDir;
     this.pygbagPath = config.pygbagPath ?? 'pygbag';
     this.dockerContainer = config.dockerContainer;
     this.dockerImage = config.dockerImage;
@@ -104,7 +109,7 @@ export class PygameService {
 
     if (this.dockerImage) {
       cmd = 'docker';
-      args = ['run', '--rm', '--user', `${uid}:${gid}`, '-w', containerWorkDir, '-v', `${this.rootDir}:${this.dockerDataDir}`, this.dockerImage, 'pygbag', '--build', sketchFile];
+      args = ['run', '--rm', '--user', `${uid}:${gid}`, '-w', containerWorkDir, '-v', `${this.hostDataDir}:${this.dockerDataDir}`, this.dockerImage, 'pygbag', '--build', sketchFile];
     } else if (this.dockerContainer) {
       cmd = 'docker';
       args = ['exec', '--user', `${uid}:${gid}`, '-w', containerWorkDir, this.dockerContainer, 'pygbag', '--build', sketchFile];

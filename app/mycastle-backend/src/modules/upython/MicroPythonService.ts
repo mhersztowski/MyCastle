@@ -24,7 +24,7 @@ export class MicroPythonService {
 
     if (config.dockerImage) {
       const hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : this.rootDir;
-      this.cli = new MicroPythonCliDockerRun(config.dockerImage, hostDataDir);
+      this.cli = new MicroPythonCliDockerRun(config.dockerImage, hostDataDir, this.rootDir);
       console.log(`MicroPython CLI: docker run mode (${config.dockerImage})`);
     } else if (config.dockerContainer) {
       this.cli = new MicroPythonCliDocker(config.dockerContainer);

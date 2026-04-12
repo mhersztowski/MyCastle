@@ -14,11 +14,14 @@ export class ArduinoCliDockerRun implements ArduinoCli {
   constructor(
     private readonly imageName: string,
     private readonly hostDataDir: string,
+    /** Path to data dir as seen by the backend process (may differ from hostDataDir when
+     *  the backend itself runs inside Docker). Defaults to hostDataDir. */
+    private readonly backendDataDir: string = hostDataDir,
     private readonly containerDataDir: string = '/workspace/data',
   ) {}
 
-  private toContainer(hostPath: string): string {
-    const rel = path.relative(this.hostDataDir, hostPath).split(path.sep).join('/');
+  private toContainer(backendPath: string): string {
+    const rel = path.relative(this.backendDataDir, backendPath).split(path.sep).join('/');
     return `${this.containerDataDir}/${rel}`;
   }
 

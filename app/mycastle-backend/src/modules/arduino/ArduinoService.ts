@@ -24,7 +24,7 @@ export class ArduinoService {
 
     if (config.dockerImage) {
       const hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : this.rootDir;
-      this.cli = new ArduinoCliDockerRun(config.dockerImage, hostDataDir);
+      this.cli = new ArduinoCliDockerRun(config.dockerImage, hostDataDir, this.rootDir);
       console.log(`Arduino CLI: docker run mode (${config.dockerImage})`);
     } else if (config.dockerContainer) {
       this.cli = new ArduinoCliDocker(config.dockerContainer);
