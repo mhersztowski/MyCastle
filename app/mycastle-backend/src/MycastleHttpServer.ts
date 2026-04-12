@@ -1351,6 +1351,8 @@ export class MycastleHttpServer extends HttpUploadServer {
         // Required for SharedArrayBuffer / WebAssembly threads (pygbag)
         'Cross-Origin-Opener-Policy': 'same-origin',
         'Cross-Origin-Embedder-Policy': 'credentialless',
+        // Prevent Cloudflare and browsers from caching build artifacts
+        'Cache-Control': 'no-store',
       });
       res.end(content);
     } catch {
