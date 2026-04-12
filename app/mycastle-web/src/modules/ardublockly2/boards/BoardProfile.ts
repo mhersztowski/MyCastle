@@ -390,11 +390,55 @@ boardProfiles.esp32s3_pico = {
   interrupt: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
 };
 
+/**
+ * Waveshare ESP32-S3-Zero (4MB Flash + 2MB OPI PSRAM, native USB only)
+ * Chip: ESP32-S3FH4R2 — no USB-UART bridge, CDCOnBoot=cdc required for Serial over USB.
+ * PSRAM=opi required — without it the chip crashes on boot.
+ * Also compatible with LOLIN S3 Mini and similar "Zero" boards with OPI PSRAM.
+ */
+boardProfiles.esp32s3_zero = {
+  name: 'ESP32-S3 Zero',
+  description: 'Waveshare/LOLIN ESP32-S3 Zero (4MB Flash, 2MB OPI PSRAM, native USB)',
+  compilerFlag: 'esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=4M,PSRAM=opi',
+  flashConfig: { filePattern: '{sketch}.ino.merged.bin', offset: 0x0000 },
+  analogPins: [
+    ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],
+    ['6', '6'], ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'],
+  ],
+  digitalPins: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
+  pwmPins: [
+    ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],
+    ['6', '6'], ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'],
+    ['11', '11'], ['12', '12'], ['13', '13'], ['14', '14'], ['15', '15'],
+    ['16', '16'], ['17', '17'], ['18', '18'], ['21', '21'],
+    ['33', '33'], ['34', '34'], ['35', '35'], ['36', '36'], ['37', '37'],
+    ['38', '38'], ['39', '39'], ['40', '40'], ['41', '41'], ['42', '42'],
+    ['45', '45'], ['47', '47'], ['48', '48'],
+  ],
+  serial: [['serial', 'Serial'], ['serial1', 'Serial1'], ['serial2', 'Serial2']],
+  serialPins: {
+    // Serial routes to native USB CDC — no physical UART adapter needed
+    Serial: [['TX', '43'], ['RX', '44']],
+    Serial1: [['TX', '17'], ['RX', '18']],
+    Serial2: [['TX', '15'], ['RX', '16']],
+  },
+  serialSpeed: SERIAL_SPEEDS,
+  spi: [['SPI', 'SPI']],
+  spiPins: { SPI: [['MOSI', '11'], ['MISO', '13'], ['SCK', '12']] },
+  spiClockDivide: SPI_CLOCK_DIVIDES,
+  i2c: [['I2C', 'Wire']],
+  i2cPins: { Wire: [['SDA', '8'], ['SCL', '9']] },
+  i2cSpeed: I2C_SPEEDS,
+  builtinLed: [['BUILTIN_1', '21']],
+  interrupt: generateDigitalIo(0, 21).concat(generateDigitalIo(33, 48)),
+};
+
 /** Map SoC name (from ModuleDef) to board profile key */
 export const socToBoardKey: Record<string, string> = {
   Esp32: 'esp32_devkitc',
   Esp32S3: 'esp32s3_devkitc',
   Esp32S3Pico: 'esp32s3_pico',
+  Esp32S3Zero: 'esp32s3_zero',
   Esp8266: 'esp8266_wemos_d1',
   ATmega328: 'uno',
   ATmega2560: 'mega',

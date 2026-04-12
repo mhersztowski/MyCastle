@@ -115,7 +115,11 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const [flashFiles, setFlashFiles] = useState<FlashFileEntry[] | undefined>(undefined);
   const [saveBeforeCompileOpen, setSaveBeforeCompileOpen] = useState(false);
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
-  const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
+  const [selectedDeviceName, setSelectedDeviceName] = useState<string>(() => {
+    const fromUrl = searchParams.get('device');
+    if (fromUrl) return fromUrl;
+    return (projectId ? localStorage.getItem(`arduino_device_${projectId}`) : null) ?? '';
+  });
   const initialSketch = searchParams.get('sketch');
   const compileOutputRef = useRef<HTMLDivElement>(null);
   const [readmeOpen, setReadmeOpen] = useState(false);
@@ -279,6 +283,27 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     minisApi.getUserDevices(userName).then(setDevices).catch(() => setDevices([]));
   }, [userName]);
 
+  // Persist selected device to localStorage so it survives view-mode remounts
+  useEffect(() => {
+    if (!projectId) return;
+    if (selectedDeviceName) {
+      localStorage.setItem(`arduino_device_${projectId}`, selectedDeviceName);
+    } else {
+      localStorage.removeItem(`arduino_device_${projectId}`);
+    }
+  }, [projectId, selectedDeviceName]);
+
+  // Restore compileSuccess from device's lastBuild when sketch is loaded
+  useEffect(() => {
+    if (!selectedDeviceName || !projectId || !currentSketch) return;
+    if (compileSuccess !== null) return; // Don't override a fresh in-session result
+    const device = devices.find(d => d.name === selectedDeviceName);
+    const lb = device?.lastBuild;
+    if (lb?.success && lb.projectId === projectId && lb.sketchName === currentSketch) {
+      setCompileSuccess(true);
+    }
+  }, [devices, selectedDeviceName, projectId, currentSketch]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSaveReadme = async () => {
     if (!userName || !projectId) return;
     await minisApi.writeProjectReadme(userName, projectId, readmeEditValue);
@@ -304,6 +329,13 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       const parsed = JSON.parse(meta) as { lastModified?: string };
       if (parsed.lastModified === 'cpp') lastModified = 'cpp';
     } catch { /* no meta = default blockly */ }
+
+    // Sync sketchLastSource from persisted meta so file highlighting is correct across machines
+    setSketchLastSource(prev => {
+      const next = new Map(prev);
+      next.set(sketchName, lastModified === 'cpp' ? 'code' : 'blockly');
+      return next;
+    });
 
     // Suppress workspace change events during the entire load sequence
     suppressBlocklyChangeRef.current = true;
@@ -371,7 +403,9 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       suppressBlocklyChangeRef.current = false;
       // Navigate to blockly view
       if (mode === 'code') {
-        window.location.href = `/user/${userName}/project/${projectId}?sketch=${sketchName}`;
+        const p = new URLSearchParams({ sketch: sketchName });
+        if (selectedDeviceName) p.set('device', selectedDeviceName);
+        window.location.href = `/user/${userName}/project/${projectId}?${p.toString()}`;
       }
     } else if (fileName.endsWith('.ino')) {
       try {
@@ -379,7 +413,9 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         syncCodeToEditor(content);
       } catch { /* ignore */ }
       if (mode === 'blockly') {
-        window.location.href = `/user/${userName}/project/${projectId}/code?sketch=${sketchName}`;
+        const p = new URLSearchParams({ sketch: sketchName });
+        if (selectedDeviceName) p.set('device', selectedDeviceName);
+        window.location.href = `/user/${userName}/project/${projectId}/code?${p.toString()}`;
       }
     }
   };
@@ -442,13 +478,17 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     if (target === viewMode) return;
     if (target === 'code' && mode === 'blockly') {
       handleSaveSketch().then(() => {
-        window.location.href = `/user/${userName}/project/${projectId}/code?sketch=${currentSketch ?? ''}`;
+        const p = new URLSearchParams({ sketch: currentSketch ?? '' });
+        if (selectedDeviceName) p.set('device', selectedDeviceName);
+        window.location.href = `/user/${userName}/project/${projectId}/code?${p.toString()}`;
       });
       return;
     }
     if (target === 'blockly' && mode === 'code') {
       handleSaveSketch().then(() => {
-        window.location.href = `/user/${userName}/project/${projectId}?sketch=${currentSketch ?? ''}`;
+        const p = new URLSearchParams({ sketch: currentSketch ?? '' });
+        if (selectedDeviceName) p.set('device', selectedDeviceName);
+        window.location.href = `/user/${userName}/project/${projectId}?${p.toString()}`;
       });
       return;
     }
@@ -492,6 +532,11 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       const result = await minisApi.compileProject(userName, projectId, sk, fqbn, selectedDeviceName || undefined);
       setCompileOutput(result.output);
       setCompileSuccess(result.success);
+      // Keep devices state in sync so lastBuild-based restore works on next sketch switch
+      if (selectedDeviceName) {
+        const buildEntry = { platform: 'arduino', fqbn, at: Date.now(), success: result.success, projectId, sketchName: sk };
+        setDevices(prev => prev.map(d => d.name === selectedDeviceName ? { ...d, lastBuild: buildEntry } : d));
+      }
     } catch (err) {
       setCompileOutput(`Error: ${err instanceof Error ? err.message : String(err)}`);
       setCompileSuccess(false);
@@ -1006,7 +1051,12 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : board && boardProfiles[board]?.flashConfig ? 'Flash' : 'Flash not supported for this board'}>
+          <Tooltip title={
+            !selectedDeviceName ? 'Select a device first (Config panel)' :
+            !board || !boardProfiles[board]?.flashConfig ? 'Flash not supported for this board' :
+            !compileSuccess ? 'Compile the project first' :
+            'Flash'
+          }>
             <span>
               <IconButton
                 size="small"
