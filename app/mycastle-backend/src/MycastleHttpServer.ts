@@ -1350,7 +1350,7 @@ export class MycastleHttpServer extends HttpUploadServer {
         'Content-Type': mimeType,
         // Required for SharedArrayBuffer / WebAssembly threads (pygbag)
         'Cross-Origin-Opener-Policy': 'same-origin',
-        'Cross-Origin-Embedder-Policy': 'require-corp',
+        'Cross-Origin-Embedder-Policy': 'credentialless',
       });
       res.end(content);
     } catch {
