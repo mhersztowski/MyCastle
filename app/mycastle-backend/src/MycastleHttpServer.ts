@@ -1346,8 +1346,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       const content = await fs.promises.readFile(fullPath);
       const ext = path.extname(fullPath).toLowerCase();
       const mimeType = MycastleHttpServer.PYGAME_MIME_TYPES[ext] ?? 'application/octet-stream';
-      // COOP/COEP headers required for SharedArrayBuffer (WebAssembly threads)
-      res.writeHead(200, { 'Content-Type': mimeType });
+      res.writeHead(200, {
+        'Content-Type': mimeType,
+        // Required for SharedArrayBuffer / WebAssembly threads (pygbag)
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+      });
       res.end(content);
     } catch {
       this.sendJsonResponse(res, 404, { error: 'File not found' });
