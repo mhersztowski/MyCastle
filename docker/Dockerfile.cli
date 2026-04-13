@@ -27,6 +27,7 @@ FROM base AS arduino
 # build-essential needed by some Arduino cores at compile time
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    python3-serial \
     && rm -rf /var/lib/apt/lists/*
 
 # Override at build time: --build-arg ARDUINO_ARCH=Linux_ARM64
