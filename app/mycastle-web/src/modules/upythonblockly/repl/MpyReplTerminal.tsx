@@ -4,14 +4,17 @@ import {
   Button,
   ButtonGroup,
   Chip,
+  IconButton,
   MenuItem,
+  Paper,
   Select,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
-import { PlayArrow, Stop } from '@mui/icons-material';
+import { Close, DeleteOutline, DragIndicator, PlayArrow, Stop } from '@mui/icons-material';
 import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { MpySerialReplService } from './MpySerialReplService';
 import { MpyWebReplService } from './MpyWebReplService';
@@ -19,21 +22,24 @@ import { MpyWebReplService } from './MpyWebReplService';
 type Backend = 'serial' | 'webrepl';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400];
+const PANEL_HEIGHT = 320;
 
 interface MpyReplTerminalProps {
+  open: boolean;
+  onClose: () => void;
+  /** Optional code to run on device */
+  code?: string;
   /** Which backend to show first */
   defaultBackend?: Backend;
-  height?: number | string;
-  /** Optional code to upload when clicking "Run" */
-  code?: string;
   onConnect?: () => void;
   onDisconnect?: () => void;
 }
 
 function MpyReplTerminal({
-  defaultBackend = 'serial',
-  height = 300,
+  open,
+  onClose,
   code,
+  defaultBackend = 'serial',
   onConnect,
   onDisconnect,
 }: MpyReplTerminalProps) {
@@ -45,29 +51,48 @@ function MpyReplTerminal({
   const [webReplPort, setWebReplPort] = useState(8266);
   const [webReplPassword, setWebReplPassword] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [positioned, setPositioned] = useState(false);
 
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
   const serialRef = useRef<MpySerialReplService | null>(null);
   const webReplRef = useRef<MpyWebReplService | null>(null);
-  // Keep a ref so the xterm key handler (created once) can read current backend
   const backendRef = useRef<Backend>(defaultBackend);
   useEffect(() => { backendRef.current = backend; }, [backend]);
 
+  // Set initial position when opening
+  useEffect(() => {
+    if (open && !positioned) {
+      setPosition({
+        x: 116,
+        y: window.innerHeight - PANEL_HEIGHT - 16 - 36,
+      });
+      setPositioned(true);
+    }
+    if (!open) {
+      setPositioned(false);
+    }
+  }, [open, positioned]);
+
   // Initialize xterm.js
   useEffect(() => {
-    if (!terminalRef.current) return;
-    const term = new Terminal({
-      theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-      fontSize: 13,
-      fontFamily: 'monospace',
-      rows: 12,
-      cursorBlink: true,
-    });
-    term.open(terminalRef.current);
-    xtermRef.current = term;
+    if (!open || !terminalRef.current) return;
 
-    // Ctrl+Shift+C → copy selection
+    const term = new Terminal({
+      theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+      fontSize: 12,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      cursorBlink: true,
+      convertEol: true,
+    });
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(terminalRef.current);
+    requestAnimationFrame(() => fitAddon.fit());
+
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') {
@@ -78,21 +103,27 @@ function MpyReplTerminal({
       return true;
     });
 
-    // Keyboard input + paste → send to device
-    // Use refs (not state) to avoid stale closure — this handler is created once
     term.onData((data) => {
       if (backendRef.current === 'serial' && serialRef.current?.isConnected) {
-        serialRef.current.write(data).catch(() => { /* ignore */ });
+        serialRef.current.write(data).catch(() => {});
       } else if (backendRef.current === 'webrepl' && webReplRef.current?.isConnected) {
-        webReplRef.current.send(data).catch(() => { /* ignore */ });
+        webReplRef.current.send(data).catch(() => {});
       }
     });
 
+    xtermRef.current = term;
+    fitAddonRef.current = fitAddon;
+
+    const observer = new ResizeObserver(() => fitAddon.fit());
+    observer.observe(terminalRef.current);
+
     return () => {
+      observer.disconnect();
       term.dispose();
       xtermRef.current = null;
+      fitAddonRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const writeToTerminal = (text: string) => {
     xtermRef.current?.write(text.replace(/\n/g, '\r\n'));
@@ -107,14 +138,12 @@ function MpyReplTerminal({
         svc.onData(writeToTerminal);
         await svc.connect(baudRate);
         serialRef.current = svc;
-        // Interrupt any running program, exit raw REPL if stuck there, get fresh prompt
         await svc.write('\x03\x03\x02\r\n');
       } else {
         const svc = new MpyWebReplService();
         svc.onData(writeToTerminal);
         await svc.connect({ ip: webReplIp, port: webReplPort, password: webReplPassword });
         webReplRef.current = svc;
-        // Device is authenticated but prompt was consumed during auth — request a fresh one
         await svc.send('\r\n');
       }
       setConnected(true);
@@ -157,18 +186,105 @@ function MpyReplTerminal({
     }
   };
 
+  const handleClear = () => {
+    xtermRef.current?.clear();
+  };
+
+  // --- Drag handling ---
+  const handleDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startPos = { ...position };
+
+    const onMouseMove = (ev: MouseEvent) => {
+      setPosition({
+        x: startPos.x + (ev.clientX - startX),
+        y: startPos.y + (ev.clientY - startY),
+      });
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  if (!open) return null;
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height }}>
-      {/* Toolbar */}
+    <Paper
+      elevation={8}
+      sx={{
+        position: 'fixed',
+        left: position.x,
+        top: position.y,
+        width: 'calc(100vw - 232px)',
+        height: PANEL_HEIGHT,
+        zIndex: 1300,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        border: 1,
+        borderColor: connected ? 'success.dark' : 'divider',
+      }}
+    >
+      {/* Draggable title bar */}
+      <Box
+        onMouseDown={handleDragStart}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          px: 1,
+          py: 0.25,
+          bgcolor: '#2d2d2d',
+          cursor: 'move',
+          userSelect: 'none',
+          flexShrink: 0,
+          gap: 0.5,
+        }}
+      >
+        <DragIndicator sx={{ fontSize: 16, color: '#888' }} />
+        <Typography variant="caption" sx={{ color: '#ccc', mr: 1 }} noWrap>
+          MicroPython REPL
+        </Typography>
+        <Chip
+          size="small"
+          label={connected ? 'Connected' : 'Disconnected'}
+          color={connected ? 'success' : 'default'}
+          sx={{ height: 16, fontSize: 10, '.MuiChip-label': { px: 0.75 } }}
+        />
+        {statusMsg && (
+          <Typography variant="caption" color="error" sx={{ ml: 1 }} noWrap>
+            {statusMsg}
+          </Typography>
+        )}
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title="Clear">
+          <IconButton size="small" onClick={handleClear} sx={{ color: '#888', p: 0.25 }}>
+            <DeleteOutline sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Close">
+          <IconButton size="small" onClick={onClose} sx={{ color: '#888', p: 0.25 }}>
+            <Close sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* Connection toolbar */}
       <Box
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: 1,
+          gap: 0.75,
           px: 1,
           py: 0.5,
+          bgcolor: '#252526',
           borderBottom: 1,
           borderColor: 'divider',
+          flexShrink: 0,
           flexWrap: 'wrap',
         }}
       >
@@ -177,6 +293,7 @@ function MpyReplTerminal({
             variant={backend === 'serial' ? 'contained' : 'outlined'}
             onClick={() => setBackend('serial')}
             disabled={connected}
+            sx={{ height: 24, fontSize: 11, textTransform: 'none', px: 1 }}
           >
             Serial
           </Button>
@@ -184,22 +301,28 @@ function MpyReplTerminal({
             variant={backend === 'webrepl' ? 'contained' : 'outlined'}
             onClick={() => setBackend('webrepl')}
             disabled={connected}
+            sx={{ height: 24, fontSize: 11, textTransform: 'none', px: 1 }}
           >
             WebREPL
           </Button>
         </ButtonGroup>
 
-        {/* Connection params */}
         {backend === 'serial' ? (
           <Select
             size="small"
             value={baudRate}
             onChange={(e) => setBaudRate(Number(e.target.value))}
             disabled={connected}
-            sx={{ minWidth: 100 }}
+            sx={{
+              height: 24,
+              fontSize: 12,
+              color: '#ccc',
+              '.MuiOutlinedInput-notchedOutline': { borderColor: '#555' },
+              '.MuiSvgIcon-root': { color: '#888', fontSize: 16 },
+            }}
           >
             {BAUD_RATES.map((b) => (
-              <MenuItem key={b} value={b}>{b}</MenuItem>
+              <MenuItem key={b} value={b} sx={{ fontSize: 12 }}>{b}</MenuItem>
             ))}
           </Select>
         ) : (
@@ -210,7 +333,7 @@ function MpyReplTerminal({
               value={webReplIp}
               onChange={(e) => setWebReplIp(e.target.value)}
               disabled={connected}
-              sx={{ width: 130 }}
+              sx={{ width: 120, '& .MuiInputBase-root': { height: 24, fontSize: 12 }, '& .MuiInputLabel-root': { fontSize: 11 } }}
             />
             <TextField
               size="small"
@@ -218,7 +341,7 @@ function MpyReplTerminal({
               value={webReplPort}
               onChange={(e) => setWebReplPort(Number(e.target.value))}
               disabled={connected}
-              sx={{ width: 80 }}
+              sx={{ width: 70, '& .MuiInputBase-root': { height: 24, fontSize: 12 }, '& .MuiInputLabel-root': { fontSize: 11 } }}
             />
             <TextField
               size="small"
@@ -227,50 +350,50 @@ function MpyReplTerminal({
               value={webReplPassword}
               onChange={(e) => setWebReplPassword(e.target.value)}
               disabled={connected}
-              sx={{ width: 120 }}
+              sx={{ width: 110, '& .MuiInputBase-root': { height: 24, fontSize: 12 }, '& .MuiInputLabel-root': { fontSize: 11 } }}
             />
           </>
         )}
 
-        {/* Connect / Disconnect */}
         {connected ? (
-          <Button size="small" color="error" startIcon={<Stop />} onClick={handleDisconnect}>
+          <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            startIcon={<Stop sx={{ fontSize: '14px !important' }} />}
+            onClick={handleDisconnect}
+            sx={{ height: 24, fontSize: 11, textTransform: 'none', px: 1, minWidth: 0 }}
+          >
             Disconnect
           </Button>
         ) : (
-          <Button size="small" color="success" onClick={handleConnect} disabled={connecting}>
+          <Button
+            size="small"
+            variant="contained"
+            color="success"
+            onClick={handleConnect}
+            disabled={connecting}
+            sx={{ height: 24, fontSize: 11, textTransform: 'none', px: 1, minWidth: 0 }}
+          >
             {connecting ? 'Connecting...' : 'Connect'}
           </Button>
         )}
 
-        {/* Run code button */}
         {code && (
           <Tooltip title="Run current code on device">
             <span>
               <Button
                 size="small"
-                startIcon={<PlayArrow />}
+                variant="contained"
+                startIcon={<PlayArrow sx={{ fontSize: '14px !important' }} />}
                 onClick={handleRunCode}
                 disabled={!connected}
-                variant="contained"
-                color="primary"
+                sx={{ height: 24, fontSize: 11, textTransform: 'none', px: 1, minWidth: 0 }}
               >
                 Run
               </Button>
             </span>
           </Tooltip>
-        )}
-
-        {/* Status */}
-        <Chip
-          size="small"
-          label={connected ? 'Connected' : 'Disconnected'}
-          color={connected ? 'success' : 'default'}
-        />
-        {statusMsg && (
-          <Typography variant="caption" color="error" sx={{ ml: 1 }}>
-            {statusMsg}
-          </Typography>
         )}
       </Box>
 
@@ -285,7 +408,7 @@ function MpyReplTerminal({
           '& .xterm-viewport': { overflowY: 'auto' },
         }}
       />
-    </Box>
+    </Paper>
   );
 }
 

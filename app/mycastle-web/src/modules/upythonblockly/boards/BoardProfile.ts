@@ -113,6 +113,36 @@ boardProfiles.esp32s3_generic = {
   supportsWifi: true,
 };
 
+/**
+ * ESP32-S3 Zero (Waveshare) — ultra-compact Zero form factor.
+ * 4MB Flash, 2MB OPI PSRAM, native USB CDC (HWCDC), built-in LED on GPIO21.
+ * moduleId in MinisProjects: "esp32-s3-zero"
+ */
+boardProfiles['esp32-s3-zero'] = {
+  name: 'ESP32-S3 Zero',
+  description: 'Waveshare ESP32-S3 Zero — compact Zero form factor, 4MB Flash, 2MB OPI PSRAM, native USB CDC',
+  chipName: 'ESP32-S3',
+  digitalPins: [
+    ...numRange(0, 21),
+    ...numRange(26, 48),
+  ],
+  analogPins: [
+    ...numRange(1, 10),
+    ...numRange(11, 20),
+  ],
+  pwmPins: [
+    ...numRange(1, 21),
+    ...numRange(26, 45),
+  ],
+  uartIds: pins([[0, 0], [1, 1], [2, 2]]),
+  i2cIds: pins([[0, 0], [1, 1]]),
+  builtinLed: pins([['LED (GPIO21)', '21']]),
+  supportsWifi: true,
+};
+
+// Alias used by modules.json boardProfileKey
+boardProfiles.esp32s3_zero = boardProfiles['esp32-s3-zero'];
+
 /** ESP32-S3 Pico (Waveshare) — same GPIO set as ESP32-S3 Generic */
 boardProfiles.esp32s3_pico = {
   name: 'ESP32-S3 Pico',
@@ -222,7 +252,8 @@ boardProfiles.m5stack_atom = {
 export const socToUPythonBoardKey: Record<string, string> = {
   Esp32: 'esp32_generic',
   Esp32S3: 'esp32s3_generic',
-  Esp32S3Pico: 'esp32s3_generic',
+  Esp32S3Pico: 'esp32s3_pico',
+  Esp32S3Zero: 'esp32-s3-zero',
   Esp8266: 'esp8266_wemos_d1',
   RP2040: 'rp2040_pico',
   M5Stack: 'm5stack_core',

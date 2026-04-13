@@ -138,7 +138,9 @@ function UPythonProjectPage() {
   const [readmeEditMode, setReadmeEditMode] = useState(false);
   const [readmeEditValue, setReadmeEditValue] = useState('');
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
-  const [selectedDeviceName, setSelectedDeviceName] = useState<string>(searchParams.get('device') ?? '');
+  const [selectedDeviceName, setSelectedDeviceName] = useState<string>(() =>
+    searchParams.get('device') ?? (projectId ? localStorage.getItem(`upython_device_${projectId}`) : null) ?? ''
+  );
   const initialSketch = searchParams.get('sketch');
   const [uploadCode, setUploadCode] = useState('');
   const [uploadExtraFiles, setUploadExtraFiles] = useState<Array<{ name: string; content: string }>>([]);
@@ -919,7 +921,14 @@ function UPythonProjectPage() {
               <Select
                 value={selectedDeviceName}
                 label="Device"
-                onChange={(e) => setSelectedDeviceName(e.target.value)}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  setSelectedDeviceName(name);
+                  if (projectId) {
+                    if (name) localStorage.setItem(`upython_device_${projectId}`, name);
+                    else localStorage.removeItem(`upython_device_${projectId}`);
+                  }
+                }}
                 renderValue={(v) => {
                   const d = devices.find((x) => x.name === v);
                   return d ? `${d.name}${d.sn ? ` (${d.sn})` : ''}` : v;
@@ -1300,25 +1309,12 @@ function UPythonProjectPage() {
         </Box>
       </Box>
 
-      {/* REPL Terminal panel */}
-      {replOpen && (
-        <Box sx={{ height: 300, borderTop: 1, borderColor: 'divider', flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, bgcolor: 'action.hover' }}>
-            <Typography variant="caption" sx={{ fontWeight: 'bold', flexGrow: 1 }}>
-              MicroPython REPL
-            </Typography>
-            <IconButton size="small" onClick={() => setReplOpen(false)}>
-              <Close sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Box>
-          <Box sx={{ flexGrow: 1, overflow: 'hidden' }}>
-            <MpyReplTerminal
-              height="100%"
-              code={codeForUpload}
-            />
-          </Box>
-        </Box>
-      )}
+      {/* REPL Terminal — floating panel (consistent with WebSerialTerminal / BuildOutputPanel) */}
+      <MpyReplTerminal
+        open={replOpen}
+        onClose={() => setReplOpen(false)}
+        code={codeForUpload}
+      />
 
       {/* Bottom status bar */}
       <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider', display: { xs: 'none', sm: 'block' } }}>

@@ -358,7 +358,13 @@ export function FlashDialog({ open, onClose, initialFiles, userName, deviceName,
                 <Select
                   value={selectedFirmware}
                   label="Firmware file"
-                  onChange={(e) => setSelectedFirmware(e.target.value)}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    setSelectedFirmware(name);
+                    // Auto-set flash offset: ESP32-S3/C3/C6 → 0x0, classic ESP32 → 0x1000
+                    const isS3orCx = /GENERIC_S3|GENERIC_C3|GENERIC_C6/i.test(name);
+                    setPredefinedAddress(isS3orCx ? '0x0' : '0x1000');
+                  }}
                   disabled={isFlashing}
                 >
                   {firmwareFiles.map((f) => (

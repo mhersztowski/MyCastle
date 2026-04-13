@@ -57,6 +57,7 @@ import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@m
 import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/serial';
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
+import { BuildOutputPanel } from '../../components/BuildOutputPanel';
 import type { MinisDeviceModel } from '@mhersztowski/core';
 
 type ViewMode = 'blockly' | 'split' | 'code';
@@ -121,7 +122,6 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     return (projectId ? localStorage.getItem(`arduino_device_${projectId}`) : null) ?? '';
   });
   const initialSketch = searchParams.get('sketch');
-  const compileOutputRef = useRef<HTMLDivElement>(null);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [readmeExpanded, setReadmeExpanded] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
@@ -552,13 +552,6 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       doCompile();
     }
   };
-
-  // Auto-scroll compile output
-  useEffect(() => {
-    if (compileOutputRef.current) {
-      compileOutputRef.current.scrollTop = compileOutputRef.current.scrollHeight;
-    }
-  }, [compileOutput]);
 
   // --- Splitter drag handling ---
   const splitterContainerRef = useRef<HTMLDivElement>(null);
@@ -1000,36 +993,14 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       </Box>
 
       {/* Compile output panel */}
-      {compileOutputOpen && (
-        <Box
-          sx={{
-            height: 200,
-            borderTop: 2,
-            borderColor: compileSuccess === true ? 'success.main' : compileSuccess === false ? 'error.main' : 'divider',
-            display: 'flex', flexDirection: 'column', flexShrink: 0,
-          }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, bgcolor: 'action.hover' }}>
-            <Typography variant="caption" sx={{ fontWeight: 'bold', flexGrow: 1 }}>
-              {compiling ? 'Compiling...' : compileSuccess === true ? 'Compilation succeeded' : compileSuccess === false ? 'Compilation failed' : 'Build Output'}
-            </Typography>
-            <IconButton size="small" onClick={() => setCompileOutputOpen(false)}>
-              <Close sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Box>
-          <Box
-            ref={compileOutputRef}
-            sx={{
-              flexGrow: 1,
-              bgcolor: '#1e1e1e', color: '#d4d4d4',
-              fontFamily: 'monospace', fontSize: 12,
-              p: 1, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-            }}
-          >
-            {compiling && !compileOutput ? 'Compiling...\n' : compileOutput || 'Ready.\n'}
-          </Box>
-        </Box>
-      )}
+      {/* Build Output — floating panel (consistent with WebSerialTerminal / MpyReplTerminal) */}
+      <BuildOutputPanel
+        open={compileOutputOpen}
+        onClose={() => setCompileOutputOpen(false)}
+        output={compileOutput}
+        compiling={compiling}
+        success={compileSuccess}
+      />
 
       {/* Bottom status bar */}
       <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider' }}>

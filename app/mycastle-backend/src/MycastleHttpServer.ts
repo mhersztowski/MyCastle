@@ -2792,7 +2792,7 @@ const { password, ...safeBody } = body;
       // Download sketch files: src/{id}/src/{sketchName}/{file} → sketches/{sketchName}/{file}
       for (const sketch of sketches ?? []) {
         for (const filePath of sketch.files) {
-          const rel = filePath.replace(/^src\/[^/]+\/(?:src|sketches)\//, ''); // strip "src/{id}/src/" or "src/{id}/sketches/"
+          const rel = filePath.replace(/^src\/(?:[^/]+\/)+(?:src|sketches)\//, ''); // strip "src/{id[/sub]}/src/" or "src/{id[/sub]}/sketches/" (handles multi-level paths)
           if (!rel || rel.includes('..')) continue;
           const content = await this.fetchText(`${rawBase}/${filePath}`);
           const dest = path.join(projectDir, 'sketches', rel);
@@ -2895,7 +2895,7 @@ const { password, ...safeBody } = body;
 
       for (const sketch of sketches) {
         for (const filePath of sketch.files) {
-          const rel = filePath.replace(/^src\/[^/]+\/(?:src|sketches)\//, '');
+          const rel = filePath.replace(/^src\/(?:[^/]+\/)+(?:src|sketches)\//, '');
           if (!rel || rel.includes('..')) continue;
           const content = await this.fetchText(`${rawBase}/${filePath}`);
           const dest = path.join(projectDir, 'sketches', rel);

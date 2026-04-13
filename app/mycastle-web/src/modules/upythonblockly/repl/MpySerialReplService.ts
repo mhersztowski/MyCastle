@@ -38,6 +38,11 @@ export class MpySerialReplService {
     this.reader = this.port.readable!.getReader();
     this.readLoopActive = true;
     this.startReadLoop();
+
+    // Send Ctrl+C to interrupt any running program and request a fresh prompt.
+    // We do NOT verify the prompt here — the device may need a moment to respond.
+    await this.write(new Uint8Array([0x03, 0x03]));
+    await this.delay(300);
   }
 
   /** Disconnect cleanly. */
@@ -90,7 +95,7 @@ export class MpySerialReplService {
     await this.write(new Uint8Array([0x04]));
 
     // Collect output until we see the raw REPL "OK" and end markers
-    const output = await this.readUntilCtrlD(3000);
+    const output = await this.readUntilCtrlD(5000);
 
     // Exit raw REPL (Ctrl+B)
     await this.write(new Uint8Array([0x02]));
@@ -142,6 +147,7 @@ export class MpySerialReplService {
     };
     loop().catch(() => { /* connection closed */ });
   }
+
 
   private async readUntilCtrlD(timeoutMs: number): Promise<string> {
     return new Promise((resolve) => {
