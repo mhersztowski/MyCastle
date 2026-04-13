@@ -15,7 +15,18 @@ import type {
   ApiKeyPublic,
   ApiKeyCreateResponse,
   SmartDisplayConfig,
+  AppSession,
+  AppSessionDayStat,
+  AppSessionPlatform,
+  ProjectTimeStat,
 } from '@mhersztowski/core';
+
+export type { AppSession, AppSessionDayStat, AppSessionPlatform, ProjectTimeStat };
+
+export interface AppSessionWeekEntry {
+  session: AppSession;
+  days: AppSessionDayStat[];
+}
 
 export type UserPublic = Omit<UserModel, 'password'>;
 
@@ -272,6 +283,25 @@ class MinisApiService {
 
   async saveSmartDisplayConfig(userName: string, deviceName: string, config: SmartDisplayConfig): Promise<SmartDisplayConfig> {
     return this.request<SmartDisplayConfig>('PUT', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/smart-display`, config);
+  }
+
+  // App sessions (admin only)
+  async getAppSessions(userId?: string): Promise<AppSession[]> {
+    const qs = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const data = await this.request<{ sessions: AppSession[] }>('GET', `/admin/app-sessions${qs}`);
+    return data.sessions;
+  }
+
+  async getAppSessionsWeekly(userId?: string): Promise<AppSessionWeekEntry[]> {
+    const qs = `?weekly=true${userId ? `&userId=${encodeURIComponent(userId)}` : ''}`;
+    const data = await this.request<{ stats: AppSessionWeekEntry[] }>('GET', `/admin/app-sessions${qs}`);
+    return data.stats;
+  }
+
+  async getProjectTimeStats(userId?: string): Promise<ProjectTimeStat[]> {
+    const qs = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const data = await this.request<{ stats: ProjectTimeStat[] }>('GET', `/admin/app-sessions/project-time${qs}`);
+    return data.stats;
   }
 
   async saveIotConfig(userName: string, deviceName: string, config: Partial<IotDeviceConfig>): Promise<IotDeviceConfig> {

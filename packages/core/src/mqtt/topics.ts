@@ -45,13 +45,18 @@ export const telemetry = defineMqttTopic({
 
 export const heartbeat = defineMqttTopic({
   pattern: 'minis/{userName}/{deviceName}/heartbeat',
-  description: 'Device heartbeat (keep-alive)',
+  description: 'Device heartbeat (keep-alive). App instances include sessionId, intervalSec, isInteractive, context.',
   direction: 'device→server',
   tags: ['IoT', 'Presence'],
   payloadSchema: z.object({
     uptime: z.number().optional(),
     rssi: z.number().optional(),
     battery: z.number().optional(),
+    // App-instance fields (web / mobile / desktop presence)
+    sessionId: z.string().optional(),
+    intervalSec: z.number().optional(),
+    isInteractive: z.boolean().optional(),
+    context: z.object({ type: z.string(), id: z.string().optional() }).optional(),
   }),
 });
 
@@ -85,6 +90,11 @@ export const hello = defineMqttTopic({
       // select
       options: z.array(z.string()).optional(),
     })).optional(),
+    // App-instance fields (web / mobile / desktop presence)
+    platform: z.enum(['web', 'mobile', 'desktop']).optional(),
+    sessionId: z.string().optional(),
+    label: z.string().optional(),
+    userAgent: z.string().optional(),
   }),
 });
 

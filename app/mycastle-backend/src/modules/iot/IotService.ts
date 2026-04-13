@@ -8,6 +8,7 @@ import { CommandDispatcher } from './CommandDispatcher.js';
 import { AlertEngine } from './AlertEngine.js';
 import { DeviceShareStore } from './DeviceShareStore.js';
 import { IotExtensionRegistry } from './IotExtensionRegistry.js';
+import { AppSessionStore } from './AppSessionStore.js';
 
 export interface MqttPublishFn {
   (topic: string, payload: string): void;
@@ -21,6 +22,7 @@ export class IotService {
   readonly alerts: AlertEngine;
   readonly shares: DeviceShareStore;
   readonly extensions: IotExtensionRegistry;
+  readonly appSessions: AppSessionStore;
 
   private publishFn: MqttPublishFn | null = null;
 
@@ -32,6 +34,7 @@ export class IotService {
     this.alerts = new AlertEngine(this.db);
     this.shares = new DeviceShareStore(this.db);
     this.extensions = new IotExtensionRegistry((topic, payload) => this.publishFn?.(topic, payload));
+    this.appSessions = new AppSessionStore(this.db);
   }
 
   start(publishFn: MqttPublishFn): void {
@@ -108,8 +111,32 @@ export class IotService {
 
   // Called when MQTT message arrives on minis/+/+/hello
   // Device announces itself on connect — mark online, persist entities, sync extensions in-memory.
-  handleHello(userId: string, deviceId: string, payload: { uptime?: number; extensions?: Array<{ type: string; enabled: boolean; options?: Record<string, unknown> }>; entities?: unknown[] }): void {
+  // App instances (web/mobile/desktop) include platform + sessionId fields.
+  handleHello(userId: string, deviceId: string, payload: {
+    uptime?: number;
+    extensions?: Array<{ type: string; enabled: boolean; options?: Record<string, unknown> }>;
+    entities?: unknown[];
+    // App-instance fields (present only when sent by PresenceService / desktop agent)
+    platform?: 'web' | 'mobile' | 'desktop';
+    sessionId?: string;
+    label?: string;
+    userAgent?: string;
+  }): void {
     console.log(`[IoT] hello: userId=${userId} deviceId=${deviceId}`);
+
+    // App-instance hello: register/update in app_sessions, skip IoT device handling
+    if (payload.platform && payload.sessionId) {
+      this.appSessions.upsert({
+        id: payload.sessionId,
+        userId,
+        label: payload.label ?? payload.platform,
+        platform: payload.platform,
+        userAgent: payload.userAgent ?? '',
+      });
+      console.log(`[IoT] app session upserted: ${payload.sessionId} (${payload.platform}) for ${userId}`);
+      return;
+    }
+
     const existing = this.telemetry.getConfig(deviceId);
     const heartbeatSec = existing?.heartbeatIntervalSec ?? 60;
     const topicPrefix = existing?.topicPrefix ?? `minis/${userId}/${deviceId}`;
@@ -138,8 +165,30 @@ export class IotService {
   }
 
   // Called when MQTT message arrives on minis/+/+/heartbeat
-  handleHeartbeat(userId: string, deviceId: string, _payload: { uptime?: number; rssi?: number; battery?: number }): void {
+  handleHeartbeat(userId: string, deviceId: string, payload: {
+    uptime?: number;
+    rssi?: number;
+    battery?: number;
+    // App-instance fields
+    sessionId?: string;
+    intervalSec?: number;
+    isInteractive?: boolean;
+    context?: { type: string; id?: string };
+  }): void {
     console.log(`[IoT] heartbeat: userId=${userId} deviceId=${deviceId}`);
+
+    // App-instance heartbeat
+    if (payload.sessionId) {
+      const intervalSec = payload.intervalSec ?? 30;
+      this.appSessions.recordHeartbeat(
+        payload.sessionId,
+        intervalSec,
+        payload.isInteractive ?? false,
+        payload.context,
+      );
+      return;
+    }
+
     const config = this.telemetry.getConfig(deviceId);
     const heartbeatSec = config?.heartbeatIntervalSec ?? 60;
     this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);

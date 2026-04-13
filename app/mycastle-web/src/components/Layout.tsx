@@ -97,7 +97,8 @@ function Layout({ children, fullBleed }: LayoutProps) {
       return [
         { text: 'Main', icon: <HomeIcon />, path: `/admin/${userName}/main` },
         { text: 'Users', icon: <PeopleIcon />, path: `/admin/${userName}/users` },
-{ text: 'Scripts', icon: <TerminalIcon />, path: `/admin/${userName}/scripts` },
+        { text: 'Scripts', icon: <TerminalIcon />, path: `/admin/${userName}/scripts` },
+        { text: 'App Sessions', icon: <AppsIcon />, path: `/admin/${userName}/app-sessions` },
         { text: 'GitHub Import', icon: <CloudDownloadIcon />, path: `/admin/${userName}/github-projectdefs` },
       ];
     }

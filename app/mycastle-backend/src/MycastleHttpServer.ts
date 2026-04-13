@@ -526,6 +526,40 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // App sessions (admin only) — GET /api/admin/app-sessions[?userId=][&weekly=true]
+    if (apiPath === '/admin/app-sessions' && method === 'GET') {
+      const urlObj = new URL(req.url ?? '', 'http://localhost');
+      const filterUserId = urlObj.searchParams.get('userId') ?? undefined;
+      const weekly = urlObj.searchParams.get('weekly') === 'true';
+      if (!this.iotService) {
+        this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+        return;
+      }
+      if (weekly) {
+        const stats = this.iotService.appSessions.getWeeklyStats(filterUserId);
+        this.sendJsonResponse(res, 200, { stats });
+      } else {
+        const sessions = filterUserId
+          ? this.iotService.appSessions.getByUser(filterUserId)
+          : this.iotService.appSessions.getAll();
+        this.sendJsonResponse(res, 200, { sessions });
+      }
+      return;
+    }
+
+    // Project time (admin only) — GET /api/admin/app-sessions/project-time[?userId=]
+    if (apiPath === '/admin/app-sessions/project-time' && method === 'GET') {
+      const urlObj = new URL(req.url ?? '', 'http://localhost');
+      const filterUserId = urlObj.searchParams.get('userId') ?? undefined;
+      if (!this.iotService) {
+        this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+        return;
+      }
+      const stats = this.iotService.appSessions.getProjectStats(filterUserId);
+      this.sendJsonResponse(res, 200, { stats });
+      return;
+    }
+
     // API Keys: /users/{userName}/api-keys[/{keyId}]
     const apiKeysMatch = apiPath.match(/^\/users\/([^/]+)\/api-keys(?:\/(.+))?$/);
     if (apiKeysMatch) {

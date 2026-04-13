@@ -16,3 +16,4 @@ export * from './UserModel';
 export * from './IotModels';
 export * from './SmartDisplayModel';
 export * from './AuthTypes';
+export * from './AppSessionModel';

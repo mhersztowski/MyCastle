@@ -18,6 +18,9 @@ import { GlobalTerminal } from './components/GlobalTerminal';
 import { GlobalVfs } from './components/GlobalVfs';
 import { MinimizedTaskbar } from './components/MinimizedTaskbar';
 import { DisplayProvider } from './components/DisplayContext';
+import { useEffect } from 'react';
+import { useMqtt } from './modules/mqttclient';
+import { presenceService } from './services/PresenceService';
 import './global.css';
 
 App.create();
@@ -33,6 +36,21 @@ function MqttProviderWithAuth({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Starts/stops PresenceService whenever auth+mqtt become available
+function PresenceRunner() {
+  const { currentUser } = useAuth();
+  const { rawPublish, isConnected } = useMqtt();
+
+  useEffect(() => {
+    if (currentUser && isConnected) {
+      presenceService.start(rawPublish, currentUser.name);
+      return () => presenceService.stop();
+    }
+  }, [currentUser, isConnected, rawPublish]);
+
+  return null;
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <DisplayProvider>
@@ -40,6 +58,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <NotificationProvider>
           <AuthProvider>
             <MqttProviderWithAuth>
+              <PresenceRunner />
               <FilesystemProvider>
                 <MinisDataSourceProvider>
                   <GlobalWindowsProvider>

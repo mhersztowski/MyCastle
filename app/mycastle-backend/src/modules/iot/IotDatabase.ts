@@ -96,6 +96,46 @@ export class IotDatabase {
       CREATE INDEX IF NOT EXISTS idx_device_share_target ON device_share(target_user_id);
     `);
 
+    // App sessions — web/mobile/desktop presence & time tracking (admin only)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS app_sessions (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL,
+        label          TEXT NOT NULL,
+        platform       TEXT NOT NULL,
+        user_agent     TEXT NOT NULL DEFAULT '',
+        started_at     INTEGER NOT NULL,
+        last_seen_at   INTEGER NOT NULL,
+        total_seconds  INTEGER NOT NULL DEFAULT 0,
+        active_seconds INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_sessions_user ON app_sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_app_sessions_seen ON app_sessions(last_seen_at);
+
+      CREATE TABLE IF NOT EXISTS app_session_time_buckets (
+        session_id     TEXT NOT NULL,
+        date           TEXT NOT NULL,
+        total_seconds  INTEGER NOT NULL DEFAULT 0,
+        active_seconds INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (session_id, date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_bucket_session ON app_session_time_buckets(session_id);
+
+      -- Per-project time: accumulates seconds per (user, contextType, contextId, date)
+      CREATE TABLE IF NOT EXISTS app_session_project_time (
+        user_id        TEXT NOT NULL,
+        context_type   TEXT NOT NULL,
+        context_id     TEXT NOT NULL DEFAULT '',
+        date           TEXT NOT NULL,
+        total_seconds  INTEGER NOT NULL DEFAULT 0,
+        active_seconds INTEGER NOT NULL DEFAULT 0,
+        last_seen_at   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, context_type, context_id, date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_proj_user ON app_session_project_time(user_id);
+      CREATE INDEX IF NOT EXISTS idx_app_proj_date ON app_session_project_time(date);
+    `);
+
     // Migration: add entities column to iot_device_config
     try {
       this.db.exec(`ALTER TABLE iot_device_config ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'`);

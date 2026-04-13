@@ -3,10 +3,13 @@
 import asyncio
 import json
 import logging
+import os
+import platform
 import signal
 import sys
 import threading
 import time
+import uuid
 
 import paho.mqtt.client as mqtt
 import psutil
@@ -15,6 +18,7 @@ import config
 import operations
 from entities import IotEntity
 from extensions.vfs import VfsExtension
+from presence import ActivityTracker, PresenceReporter
 from extensions.virtual_keyboard import VirtualKeyboardExtension
 from extensions.virtual_mouse import VirtualMouseExtension
 
@@ -44,6 +48,12 @@ class ClientAgent:
         self._heartbeat_timer: threading.Timer | None = None
         self._telemetry_timer: threading.Timer | None = None
         self._entities: dict[str, IotEntity] = {}
+
+        # App-session presence (separate from IoT device identity)
+        self._presence = PresenceReporter(
+            user=config.MQTT_USER,
+            publish_fn=lambda topic, payload: self.client.publish(topic, payload, qos=1),
+        )
 
         self.vfs = VfsExtension(
             root_dir=config.DATA_DIR,
@@ -119,6 +129,7 @@ class ClientAgent:
                 client.subscribe(config.TOPICS["EXT_SMART_DISPLAY_REQ"], qos=1)
             log.info(f"Subscribed | prefix={config.TOPIC_PREFIX} | vfs root={config.DATA_DIR}")
             self._send_hello()
+            self._presence.send_hello(client)
             self._send_heartbeat()
             if self._entities:
                 self._publish_system_telemetry()
@@ -215,6 +226,7 @@ class ClientAgent:
         uptime = int(time.time() - self._start_time)
         packet = {"uptime": uptime}
         self.client.publish(config.TOPICS["HEARTBEAT"], json.dumps(packet), qos=1)
+        self._presence.send_heartbeat(self.client)
         log.debug(f"Heartbeat sent (uptime={uptime}s)")
         self._heartbeat_timer = threading.Timer(
             config.HEARTBEAT_INTERVAL, self._send_heartbeat
@@ -289,6 +301,7 @@ class ClientAgent:
         if self._telemetry_timer:
             self._telemetry_timer.cancel()
             self._telemetry_timer = None
+        self._presence.stop()
         self.client.loop_stop()
         self.client.disconnect()
         try:

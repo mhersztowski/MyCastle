@@ -47,7 +47,7 @@ import ShoppingPage from './pages/shopping/ShoppingPage';
 
 // Layout pages — minis
 import HomePage from './pages/HomePage';
-import { AdminDashboardPage, UsersPage, ScriptsPage, GithubProjectDefsPage } from './pages/admin';
+import { AdminDashboardPage, UsersPage, ScriptsPage, GithubProjectDefsPage, AppSessionsPage } from './pages/admin';
 import {
   UserDashboardPage,
   UserDevicesPage,
@@ -155,8 +155,9 @@ function AppRoot() {
                   {/* Minis admin */}
                   <Route path="/admin/:userName/main" element={<AdminDashboardPage />} />
                   <Route path="/admin/:userName/users" element={<UsersPage />} />
-<Route path="/admin/:userName/scripts" element={<ScriptsPage />} />
+                  <Route path="/admin/:userName/scripts" element={<ScriptsPage />} />
                   <Route path="/admin/:userName/github-projectdefs" element={<GithubProjectDefsPage />} />
+                  <Route path="/admin/:userName/app-sessions" element={<AppSessionsPage />} />
 
 
                   {/* Minis user */}
