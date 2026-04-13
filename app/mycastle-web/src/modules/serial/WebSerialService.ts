@@ -43,6 +43,16 @@ export class WebSerialService {
     this.port = await navigator.serial.requestPort();
     await this.port.open(options);
 
+    // Toggle DTR low→high so ESP32 native USB CDC detects a new host connection and starts sending data.
+    // Setting DTR=true alone is not enough when the device was already running — the edge matters.
+    try {
+      await this.port.setSignals({ dataTerminalReady: false });
+      await new Promise((r) => setTimeout(r, 50));
+      await this.port.setSignals({ dataTerminalReady: true });
+    } catch {
+      // not all ports support setSignals — ignore
+    }
+
     this.reading = true;
     this.readLoop();
   }

@@ -25,10 +25,12 @@ CMD ["tail", "-f", "/dev/null"]
 FROM base AS arduino
 
 # build-essential needed by some Arduino cores at compile time
+# python3-serial + pip pyserial both needed: apt for system tools, pip for esptool.py
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-serial \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --break-system-packages --no-cache-dir pyserial
 
 # Override at build time: --build-arg ARDUINO_ARCH=Linux_ARM64
 ARG ARDUINO_ARCH=Linux_64bit
