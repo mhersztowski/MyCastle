@@ -18,7 +18,7 @@ services:
       dockerfile: docker/Dockerfile.cli
       target: arduino
       args:
-        ARDUINO_ARCH: Linux_64bit
+        ARDUINO_ARCH: Linux_ARM64
 
   pico:
     image: mycastle-pico:local

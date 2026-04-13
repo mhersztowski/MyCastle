@@ -26,7 +26,7 @@ COPY app/mycastle-web/package.json app/mycastle-web/
 COPY app/mycastle-mobile/package.json app/mycastle-mobile/
 COPY app/mycastle-watch/package.json app/mycastle-watch/
 COPY app/demo-scene-3d/package.json app/demo-scene-3d/
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --network-timeout 120000
 
 # Now copy source files and build
 COPY packages/core/ packages/core/
