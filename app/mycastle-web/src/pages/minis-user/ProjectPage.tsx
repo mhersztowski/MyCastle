@@ -1047,7 +1047,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
             </span>
           </Tooltip>
           <Tooltip title="Serial Terminal">
-            <IconButton size="small" onClick={() => setTerminalOpen(true)}>
+            <IconButton size="small" onClick={() => { setFlashOpen(false); setTerminalOpen(true); }}>
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
@@ -1069,6 +1069,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
                   try {
                     const data = await minisApi.fetchOutputBinary(userName, projectId, fileName);
                     setFlashFiles([{ data, address: fc.offset, name: fileName }]);
+                    setTerminalOpen(false);
                     setFlashOpen(true);
                   } catch (err) {
                     setCompileOutput(`Flash error: ${err instanceof Error ? err.message : String(err)}`);

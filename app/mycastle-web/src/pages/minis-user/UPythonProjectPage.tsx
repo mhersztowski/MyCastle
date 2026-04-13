@@ -584,6 +584,7 @@ function UPythonProjectPage() {
       } catch { /* non-critical */ }
     }
     setUploadExtraFiles(extras);
+    setReplOpen(false);
     setUploadOpen(true);
   };
 
@@ -876,7 +877,7 @@ function UPythonProjectPage() {
               </span>
             </Tooltip>
             <Tooltip title="MicroPython REPL Terminal">
-              <IconButton color="inherit" size="small" onClick={() => setReplOpen((v) => !v)}>
+              <IconButton color="inherit" size="small" onClick={() => setReplOpen((v) => { if (!v) setUploadOpen(false); return !v; })}>
                 <TerminalIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -1334,7 +1335,7 @@ function UPythonProjectPage() {
             </span>
           </Tooltip>
           <Tooltip title="MicroPython REPL Terminal">
-            <IconButton size="small" onClick={() => setReplOpen((v) => !v)}>
+            <IconButton size="small" onClick={() => setReplOpen((v) => { if (!v) setUploadOpen(false); return !v; })}>
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>

@@ -1,16 +1,23 @@
+# syntax=docker/dockerfile:1
 FROM node:20-slim
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 ENV PNPM_STORE_DIR="/pnpm/store"
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
-RUN apt-get update && apt-get install -y python3 python3-pip make g++ ca-certificates curl --no-install-recommends \
+
+# System deps + Docker CLI
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends python3 python3-pip make g++ ca-certificates curl \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
-    && apt-get update && apt-get install -y docker-ce-cli --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --break-system-packages pygbag==0.9.3
+    && apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+RUN pip3 install --break-system-packages --quiet --no-cache-dir pygbag==0.9.3
 
 WORKDIR /app
 
@@ -28,7 +35,7 @@ COPY app/mycastle-mobile/package.json app/mycastle-mobile/
 COPY app/mycastle-watch/package.json app/mycastle-watch/
 COPY app/demo-scene-3d/package.json app/demo-scene-3d/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --fetch-timeout 120000
+    pnpm install --frozen-lockfile --fetch-timeout 120000 --reporter silent
 
 # Now copy source files and build
 COPY packages/core/ packages/core/
@@ -36,10 +43,10 @@ COPY packages/core-backend/ packages/core-backend/
 COPY packages/web-client/ packages/web-client/
 COPY app/mycastle-backend/ app/mycastle-backend/
 COPY app/mycastle-web/ app/mycastle-web/
-RUN pnpm --filter @mhersztowski/core build
-RUN pnpm --filter @mhersztowski/core-backend build
-RUN pnpm --filter @mhersztowski/web-client build
-RUN pnpm --filter mycastle-backend build
+RUN pnpm --filter @mhersztowski/core build --silent
+RUN pnpm --filter @mhersztowski/core-backend build --silent
+RUN pnpm --filter @mhersztowski/web-client build --silent
+RUN pnpm --filter mycastle-backend build --silent
 RUN NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter mycastle-web build
 
 WORKDIR /app/app/mycastle-backend
