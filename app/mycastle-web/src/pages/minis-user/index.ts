@@ -24,3 +24,5 @@ export { default as DocsPage } from './tools/DocsPage';
 export { default as LocalizationPage } from './tools/LocalizationPage';
 export { default as UserPygameProjectsPage } from './UserPygameProjectsPage';
 export { default as PygameProjectPage } from './PygameProjectPage';
+export { default as UserPicoSdkProjectsPage } from './UserPicoSdkProjectsPage';
+export { default as PicoSdkProjectPage } from './PicoSdkProjectPage';

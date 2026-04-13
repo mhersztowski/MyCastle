@@ -501,6 +501,13 @@ class MinisApiService {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
   }
 
+  // Pico SDK build
+  async buildPicoSdkProject(userName: string, projectName: string, sketchName: string, boardKey = 'pico2'): Promise<{
+    success: boolean; output: string; exitCode: number; uf2Url?: string;
+  }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/build-pico`, { sketchName, boardKey });
+  }
+
   // Pygame sketch files
   async listPygameSketches(userName: string, projectName: string): Promise<string[]> {
     const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-pygame/${encodeURIComponent(projectName)}/sketches`);

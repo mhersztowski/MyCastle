@@ -29,6 +29,7 @@ import MinisMonacoEditorPage from './pages/editor/MinisMonacoEditorPage';
 import MinisProjectPage from './pages/minis-user/ProjectPage';
 import MinisUPythonProjectPage from './pages/minis-user/UPythonProjectPage';
 import MinisPygameProjectPage from './pages/minis-user/PygameProjectPage';
+import MinisPicoSdkProjectPage from './pages/minis-user/PicoSdkProjectPage';
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -54,6 +55,7 @@ import {
   UserProjectsPage,
   UserUPythonProjectsPage,
   UserPygameProjectsPage,
+  UserPicoSdkProjectsPage,
   IotDashboardPage,
   IotDashboard2Page,
   IotDashboard2ConfigPage,
@@ -123,6 +125,7 @@ function AppRoot() {
         <Route path="/user/:userName/project/:projectId/code" element={<RequireAuth><MinisProjectPage key="code" mode="code" /></RequireAuth>} />
         <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><MinisUPythonProjectPage /></RequireAuth>} />
         <Route path="/user/:userName/pygame-project/:projectId" element={<RequireAuth><MinisPygameProjectPage /></RequireAuth>} />
+        <Route path="/user/:userName/picosdk-project/:projectId" element={<RequireAuth><MinisPicoSdkProjectPage /></RequireAuth>} />
 
         {/* Full-bleed layout routes */}
         <Route
@@ -170,6 +173,7 @@ function AppRoot() {
                   <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />
                   <Route path="/user/:userName/electronics/upython" element={<UserUPythonProjectsPage />} />
                   <Route path="/user/:userName/electronics/pygame" element={<UserPygameProjectsPage />} />
+                  <Route path="/user/:userName/electronics/picosdk" element={<UserPicoSdkProjectsPage />} />
                   <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />
                   <Route path="/user/:userName/iot/dashboard2" element={<IotDashboard2Page />} />
                   <Route path="/user/:userName/iot/dashboard2/config" element={<IotDashboard2ConfigPage />} />

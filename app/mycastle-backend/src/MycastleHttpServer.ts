@@ -15,6 +15,7 @@ import type { ArduinoService } from './modules/arduino/index.js';
 import type { MinisConfig } from './modules/arduino/ArduinoCli.js';
 import type { MicroPythonService } from './modules/upython/index.js';
 import type { PygameService } from './modules/pygame/index.js';
+import type { PicoSdkService } from './modules/picosdk/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
 
 interface CrudConfig {
@@ -58,6 +59,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private arduinoService: ArduinoService | null;
   private upythonService: MicroPythonService | null;
   private pygameService: PygameService | null;
+  private picoSdkService: PicoSdkService | null = null;
   private rootDir: string | null;
   private scriptsService: ScriptsService | null = null;
   // shareUrl → { assets (id+description), baseUrl, key, cachedAt }
@@ -74,7 +76,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -82,6 +84,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.arduinoService = arduinoService ?? null;
     this.upythonService = upythonService ?? null;
     this.pygameService = pygameService ?? null;
+    this.picoSdkService = picoSdkService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
@@ -970,8 +973,8 @@ export class MycastleHttpServer extends HttpUploadServer {
       if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
       const dir = path.resolve(this.rootDir!, 'Minis', 'Users', sUserName, 'Projects', projectId, 'sketches', sSketchName);
       try {
-        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-        this.sendJsonResponse(res, 200, { items: entries.filter(e => e.isFile()).map(e => e.name).sort() });
+        const items = await this.listFilesRecursive(dir, '');
+        this.sendJsonResponse(res, 200, { items: items.sort() });
       } catch {
         this.sendJsonResponse(res, 200, { items: [] });
       }
@@ -993,6 +996,25 @@ export class MycastleHttpServer extends HttpUploadServer {
       const userName = decodeURIComponent(upythonDeployMatch[1]);
       const projectName = decodeURIComponent(upythonDeployMatch[2]);
       await this.handleUpythonDeploy(req, res, userName, projectName);
+      return;
+    }
+
+    // PicoSDK: build (POST or GET/SSE /api/users/{userName}/project-upython/{projectName}/build-pico)
+    const picoSdkBuildMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/build-pico$/);
+    if (picoSdkBuildMatch && (method === 'POST' || method === 'GET')) {
+      const userName = decodeURIComponent(picoSdkBuildMatch[1]);
+      const projectName = decodeURIComponent(picoSdkBuildMatch[2]);
+      await this.handlePicoSdkBuild(req, res, userName, projectName);
+      return;
+    }
+
+    // PicoSDK: download UF2 (GET /api/users/{userName}/project-upython/{projectName}/uf2/{sketchName})
+    const picoSdkUf2Match = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/uf2\/([^/]+)$/);
+    if (picoSdkUf2Match && method === 'GET') {
+      const userName = decodeURIComponent(picoSdkUf2Match[1]);
+      const projectName = decodeURIComponent(picoSdkUf2Match[2]);
+      const sketchName = decodeURIComponent(picoSdkUf2Match[3]);
+      await this.handlePicoSdkDownload(req, res, userName, projectName, sketchName);
       return;
     }
 
@@ -1447,7 +1469,7 @@ export class MycastleHttpServer extends HttpUploadServer {
         this.sendJsonResponse(res, 400, { error: 'Missing content' });
         return;
       }
-      await fs.promises.mkdir(path.join(sketchesDir, sketchName), { recursive: true });
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
       await fs.promises.writeFile(filePath, body.content, 'utf-8');
       this.sendJsonResponse(res, 200, { success: true });
       return;
@@ -2063,6 +2085,102 @@ const { password, ...safeBody } = body;
         await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: false });
       }
       this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
+    }
+  }
+
+  // --- PicoSDK ---
+
+  private async handlePicoSdkBuild(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.picoSdkService) {
+      this.sendJsonResponse(res, 503, { error: 'PicoSDK service not configured (set PICOSDK_DOCKER_IMAGE)' });
+      return;
+    }
+
+    // Support both GET (SSE streaming) and POST (JSON, legacy)
+    const isSSE = req.headers.accept?.includes('text/event-stream');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+
+    let sketchName: string | undefined;
+    let boardKey = 'pico2';
+
+    if (req.method === 'GET') {
+      sketchName = url.searchParams.get('sketchName') ?? undefined;
+      boardKey = url.searchParams.get('boardKey') ?? 'pico2';
+    } else {
+      const body = await this.readJsonBody(req) as { sketchName?: string; boardKey?: string };
+      sketchName = body.sketchName;
+      boardKey = body.boardKey ?? 'pico2';
+    }
+
+    if (!sketchName) {
+      this.sendJsonResponse(res, 400, { error: 'sketchName is required' });
+      return;
+    }
+
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+
+    if (isSSE) {
+      // SSE streaming mode
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+
+      const sendEvent = (type: string, data: unknown) => {
+        res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      try {
+        const result = await this.picoSdkService.buildProject(
+          userName, projectId, sketchName, boardKey,
+          (chunk) => sendEvent('output', { chunk }),
+        );
+        const uf2Url = result.success
+          ? `/api/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/uf2/${encodeURIComponent(sketchName)}?board=${encodeURIComponent(boardKey)}`
+          : undefined;
+        sendEvent('done', { success: result.success, exitCode: result.exitCode, uf2Url });
+      } catch (err) {
+        sendEvent('done', { success: false, exitCode: 1, error: err instanceof Error ? err.message : 'Build failed' });
+      }
+      res.end();
+    } else {
+      // Legacy JSON mode
+      try {
+        const result = await this.picoSdkService.buildProject(userName, projectId, sketchName, boardKey);
+        const uf2Url = result.success
+          ? `/api/users/${encodeURIComponent(userName)}/project-upython/${encodeURIComponent(projectName)}/uf2/${encodeURIComponent(sketchName)}?board=${encodeURIComponent(boardKey)}`
+          : undefined;
+        this.sendJsonResponse(res, 200, { ...result, uf2Url });
+      } catch (err) {
+        this.sendJsonResponse(res, 200, { success: false, output: err instanceof Error ? err.message : 'Build failed', exitCode: 1 });
+      }
+    }
+  }
+
+  private async handlePicoSdkDownload(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string, sketchName: string): Promise<void> {
+    if (!this.picoSdkService) {
+      this.sendJsonResponse(res, 503, { error: 'PicoSDK service not configured' });
+      return;
+    }
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const boardKey = url.searchParams.get('board') ?? 'pico2';
+    const uf2Path = this.picoSdkService.uf2Path(userName, projectId, sketchName, boardKey);
+    try {
+      const data = await fs.promises.readFile(uf2Path);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${projectName}.uf2"`);
+      res.setHeader('Content-Length', data.length);
+      res.writeHead(200);
+      res.end(data);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'UF2 file not found — build first' });
     }
   }
 
@@ -2746,6 +2864,42 @@ const { password, ...safeBody } = body;
 
   // --- GitHub Import ---
 
+  /**
+   * Resolves the relative path within a sketch directory for a file from a repo.
+   * Finds the longest common directory prefix across all sketch files, strips it,
+   * then prepends sketchName — works for both uPython (src/{id}/src/{name}/{file})
+   * and PicoSdk (src/{id}/CMakeLists.txt, src/{id}/src/main.c) layouts.
+   */
+  private resolveSketchRel(sketchName: string, files: string[], filePath: string): string {
+    if (files.length === 0) return `${sketchName}/${filePath}`;
+    const split = (p: string) => p.split('/');
+    const allParts = files.map(split);
+    const minDepth = Math.min(...allParts.map(p => p.length - 1)); // directory depth (exclude filename)
+    let common = 0;
+    for (let i = 0; i < minDepth; i++) {
+      const seg = allParts[0][i];
+      if (allParts.every(p => p[i] === seg)) common++;
+      else break;
+    }
+    const rel = split(filePath).slice(common).join('/');
+    return `${sketchName}/${rel}`;
+  }
+
+  /** Recursively lists all files in a directory, returning paths relative to rootDir. */
+  private async listFilesRecursive(dir: string, prefix: string): Promise<string[]> {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const results: string[] = [];
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        results.push(...await this.listFilesRecursive(path.join(dir, entry.name), rel));
+      } else {
+        results.push(rel);
+      }
+    }
+    return results;
+  }
+
   private githubRawBase(repoUrl: string): string | null {
     const m = repoUrl.match(/github\.com\/([^/]+)\/([^/\s]+?)(?:\.git)?(?:\/|$)/);
     if (!m) return null;
@@ -2789,10 +2943,10 @@ const { password, ...safeBody } = body;
     const projectDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId);
 
     try {
-      // Download sketch files: src/{id}/src/{sketchName}/{file} → sketches/{sketchName}/{file}
+      // Download sketch files → sketches/{sketchName}/{relativeFile}
       for (const sketch of sketches ?? []) {
         for (const filePath of sketch.files) {
-          const rel = filePath.replace(/^src\/(?:[^/]+\/)+(?:src|sketches)\//, ''); // strip "src/{id[/sub]}/src/" or "src/{id[/sub]}/sketches/" (handles multi-level paths)
+          const rel = this.resolveSketchRel(sketch.name, sketch.files, filePath);
           if (!rel || rel.includes('..')) continue;
           const content = await this.fetchText(`${rawBase}/${filePath}`);
           const dest = path.join(projectDir, 'sketches', rel);
@@ -2895,7 +3049,7 @@ const { password, ...safeBody } = body;
 
       for (const sketch of sketches) {
         for (const filePath of sketch.files) {
-          const rel = filePath.replace(/^src\/(?:[^/]+\/)+(?:src|sketches)\//, '');
+          const rel = this.resolveSketchRel(sketch.name, sketch.files, filePath);
           if (!rel || rel.includes('..')) continue;
           const content = await this.fetchText(`${rawBase}/${filePath}`);
           const dest = path.join(projectDir, 'sketches', rel);

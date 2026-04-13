@@ -54,21 +54,48 @@ RUN arduino-cli core update-index \
 # ─── Raspberry Pi Pico / MicroPython ────────────────────────────────────────
 FROM base AS pico
 
-# ARM toolchain for compiling Pico SDK projects
+# build tools (cmake, make, xz for toolchain extraction)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    gcc-arm-none-eabi \
-    libnewlib-arm-none-eabi \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Official ARM GNU Toolchain — includes gcc, g++, newlib, C++ stdlib headers
+# Works on both x86_64 and aarch64 hosts (Ubuntu packages are incomplete on ARM64)
+ARG ARM_TOOLCHAIN_VER=13.3.rel1
+ARG ARM_TOOLCHAIN_ARCH=aarch64
+RUN curl -L "https://developer.arm.com/-/media/Files/downloads/gnu/${ARM_TOOLCHAIN_VER}/binrel/arm-gnu-toolchain-${ARM_TOOLCHAIN_VER}-${ARM_TOOLCHAIN_ARCH}-arm-none-eabi.tar.xz" \
+        -o /tmp/arm-toolchain.tar.xz \
+    && tar -xf /tmp/arm-toolchain.tar.xz -C /opt \
+    && rm /tmp/arm-toolchain.tar.xz \
+    && mv /opt/arm-gnu-toolchain-${ARM_TOOLCHAIN_VER}-${ARM_TOOLCHAIN_ARCH}-arm-none-eabi /opt/arm-toolchain
+
+ENV PATH="/opt/arm-toolchain/bin:${PATH}"
 
 # mpremote for deploying MicroPython scripts over serial
 # (USB serial passthrough: add `devices: [/dev/ttyUSB0:/dev/ttyUSB0]` in compose)
 RUN pip3 install --break-system-packages --no-cache-dir mpremote
 
+# Pico SDK baked into image — server won't have it locally
+# Symlink fixes pico-sdk 2.x bug: cmake looks for rp2350.cmake, file is rp2350-arm-s.cmake
+ARG PICO_SDK_TAG=2.1.1
+RUN git clone --depth=1 --branch ${PICO_SDK_TAG} \
+        https://github.com/raspberrypi/pico-sdk.git /opt/pico-sdk \
+    && cd /opt/pico-sdk && git submodule update --init \
+    && ln -s /opt/pico-sdk/src/rp2350-arm-s.cmake /opt/pico-sdk/src/rp2350.cmake
+
+ENV PICO_SDK_PATH=/opt/pico-sdk
+
 
 # ─── Pygame / pygbag web builder ─────────────────────────────────────────────
 FROM base AS pygame
 
+# ffmpeg: audio/video asset processing by pygbag
+# black: Python formatter used by pygbag optimizer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # pygbag converts pygame projects to WebAssembly — headless, no display needed
-RUN pip3 install --break-system-packages --no-cache-dir pygbag pygame
+RUN pip3 install --break-system-packages --no-cache-dir pygbag pygame black

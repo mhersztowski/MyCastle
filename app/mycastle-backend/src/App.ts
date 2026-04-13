@@ -9,6 +9,7 @@ import { TerminalService } from './modules/terminal/TerminalService.js';
 import { ArduinoService } from './modules/arduino/index.js';
 import { MicroPythonService } from './modules/upython/index.js';
 import { PygameService } from './modules/pygame/index.js';
+import { PicoSdkService } from './modules/picosdk/index.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -45,6 +46,7 @@ export class App {
   readonly arduinoService: ArduinoService;
   readonly upythonService: MicroPythonService;
   readonly pygameService: PygameService;
+  readonly picoSdkService: PicoSdkService | null;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
   private jwtService: JwtService;
@@ -95,6 +97,12 @@ export class App {
       hostDataDir: config.hostDataDir,
     });
 
+    const picoSdkDockerImage = process.env.PICOSDK_DOCKER_IMAGE;
+    this.picoSdkService = picoSdkDockerImage
+      ? new PicoSdkService({ dockerImage: picoSdkDockerImage, rootDir: config.rootDir, hostDataDir: config.hostDataDir })
+      : null;
+    if (!picoSdkDockerImage) console.log('PicoSdk service: not configured (set PICOSDK_DOCKER_IMAGE)');
+
     this.httpServer = new MycastleHttpServer(
       config.httpPort,
       this.fileSystem,
@@ -106,6 +114,7 @@ export class App {
       this.arduinoService,
       this.upythonService,
       this.pygameService,
+      this.picoSdkService,
     );
   }
 
