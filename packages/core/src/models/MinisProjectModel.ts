@@ -1,3 +1,9 @@
+export interface MinisProjectLibrary {
+  name?: string;
+  version?: string;
+  url?: string;
+}
+
 export interface MinisProjectModel {
   type: 'minis_project';
   id: string;
@@ -7,6 +13,7 @@ export interface MinisProjectModel {
   softwarePlatform: string;
   moduleId?: string;
   boardProfileKey?: string;
+  libraries?: MinisProjectLibrary[];
 }
 
 export interface MinisProjectsModel {

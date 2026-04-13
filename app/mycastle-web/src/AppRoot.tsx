@@ -64,6 +64,7 @@ import {
   IotAlertsPage,
   IotEmulatorPage,
   ElectronicsConfigurationPage,
+  ElectronicsWelcomePage,
   RpcExplorerPage,
   MqttExplorerPage,
   ApiKeysPage,
@@ -163,6 +164,7 @@ function AppRoot() {
                   {/* Minis user */}
                   <Route path="/user/:userName/main" element={<UserDashboardPage />} />
                   <Route path="/user/:userName/localization" element={<LocalizationPage />} />
+                  <Route path="/user/:userName/electronics/welcome" element={<ElectronicsWelcomePage />} />
                   <Route path="/user/:userName/electronics/devices" element={<UserDevicesPage />} />
                   <Route path="/user/:userName/electronics/devicesdefs" element={<DevicesDefPage />} />
                   <Route path="/user/:userName/electronics/arduino" element={<UserProjectsPage />} />

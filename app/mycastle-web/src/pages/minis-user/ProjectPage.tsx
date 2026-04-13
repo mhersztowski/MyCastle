@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   ButtonGroup,
+  Chip,
   CircularProgress,
   Collapse,
   Dialog,
@@ -11,8 +12,10 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Divider,
   FormControl,
   IconButton,
+  InputAdornment,
   InputLabel,
   List,
   ListItemButton,
@@ -58,7 +61,7 @@ import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/se
 import { minisApi } from '../../services/MinisApiService';
 import { AccountMenu } from '../../components/AccountMenu';
 import { BuildOutputPanel } from '../../components/BuildOutputPanel';
-import type { MinisDeviceModel } from '@mhersztowski/core';
+import type { MinisDeviceModel, MinisProjectLibrary } from '@mhersztowski/core';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 
@@ -122,6 +125,9 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     return (projectId ? localStorage.getItem(`arduino_device_${projectId}`) : null) ?? '';
   });
   const initialSketch = searchParams.get('sketch');
+  const [libraries, setLibraries] = useState<MinisProjectLibrary[]>([]);
+  const [libInput, setLibInput] = useState('');
+  const [libSaving, setLibSaving] = useState(false);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [readmeExpanded, setReadmeExpanded] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
@@ -253,6 +259,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           setBoard(boardKey);
           serviceRef.current?.changeBoard(boardKey);
         }
+        if (project.libraries) setLibraries(project.libraries);
       } catch { /* ignore */ }
     })();
   }, [userName, projectId]);
@@ -303,6 +310,38 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       setCompileSuccess(true);
     }
   }, [devices, selectedDeviceName, projectId, currentSketch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAddLibrary = () => {
+    const val = libInput.trim();
+    if (!val) return;
+    let entry: MinisProjectLibrary;
+    if (val.startsWith('http://') || val.startsWith('https://') || val.startsWith('git@')) {
+      entry = { url: val };
+    } else {
+      // support "Name@version" or "Name version" or just "Name"
+      const atMatch = val.match(/^([^@]+)@(.+)$/);
+      const spaceMatch = val.match(/^(\S+)\s+(\S+)$/);
+      if (atMatch) entry = { name: atMatch[1].trim(), version: atMatch[2].trim() };
+      else if (spaceMatch) entry = { name: spaceMatch[1], version: spaceMatch[2] };
+      else entry = { name: val };
+    }
+    setLibraries((prev) => [...prev, entry]);
+    setLibInput('');
+  };
+
+  const handleRemoveLibrary = (index: number) => {
+    setLibraries((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveLibraries = async () => {
+    if (!userName || !projectId) return;
+    setLibSaving(true);
+    try {
+      await minisApi.updateProjectLibraries(userName, projectId, libraries);
+    } finally {
+      setLibSaving(false);
+    }
+  };
 
   const handleSaveReadme = async () => {
     if (!userName || !projectId) return;
@@ -766,6 +805,64 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
                 ))}
               </Select>
             </FormControl>
+
+            <Divider sx={{ my: 2 }} />
+
+            <Typography variant="subtitle2" gutterBottom>Libraries</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+              Enter a GitHub URL or library name (optionally add @version).
+            </Typography>
+
+            <Box sx={{ display: 'flex', gap: 0.5, mb: 1 }}>
+              <TextField
+                size="small"
+                placeholder="Name@version or URL"
+                value={libInput}
+                onChange={(e) => setLibInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddLibrary(); }}
+                sx={{ flexGrow: 1, '& .MuiInputBase-input': { fontSize: 12 } }}
+                InputProps={{
+                  endAdornment: libInput ? (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setLibInput('')}>
+                        <Close sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </InputAdornment>
+                  ) : undefined,
+                }}
+              />
+              <Tooltip title="Add library">
+                <IconButton size="small" onClick={handleAddLibrary}><Add fontSize="small" /></IconButton>
+              </Tooltip>
+            </Box>
+
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5, minHeight: 24 }}>
+              {libraries.map((lib, i) => {
+                const label = lib.url
+                  ? lib.url.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+                  : `${lib.name ?? ''}${lib.version ? `@${lib.version}` : ''}`;
+                return (
+                  <Chip
+                    key={i}
+                    label={label}
+                    size="small"
+                    onDelete={() => handleRemoveLibrary(i)}
+                    sx={{ maxWidth: 220, fontSize: 11 }}
+                  />
+                );
+              })}
+            </Box>
+
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={libSaving ? <CircularProgress size={12} /> : <Save fontSize="small" />}
+              onClick={handleSaveLibraries}
+              disabled={libSaving}
+              fullWidth
+            >
+              Save libraries
+            </Button>
           </Box>
         )}
 

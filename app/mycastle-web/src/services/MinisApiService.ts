@@ -6,6 +6,7 @@ import type {
   MinisDeviceModel,
   MinisLocalizationModel,
   MinisProjectModel,
+  MinisProjectLibrary,
   IotDeviceConfig,
   TelemetryRecord,
   DeviceCommand,
@@ -226,6 +227,10 @@ class MinisApiService {
 
   async deleteUserProject(userName: string, projectName: string): Promise<void> {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}`);
+  }
+
+  async updateProjectLibraries(userName: string, projectName: string, libraries: MinisProjectLibrary[]): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}`, { libraries });
   }
 
   async syncProjectFromGithub(userName: string, projectName: string): Promise<void> {

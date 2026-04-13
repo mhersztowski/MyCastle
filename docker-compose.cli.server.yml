@@ -1,0 +1,9 @@
+# CLI tool images for Minis — server (x86_64) build
+# Usage on server:
+#   docker compose -f docker-compose.cli.yml -f docker-compose.cli.server.yml build arduino pico pygame
+
+services:
+  arduino:
+    build:
+      args:
+        ARDUINO_ARCH: Linux_64bit

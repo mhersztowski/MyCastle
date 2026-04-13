@@ -1,8 +1,10 @@
 import React, { useRef, useCallback, useEffect } from 'react';
 import { BackHandler, Platform, SafeAreaView, StatusBar, StyleSheet } from 'react-native';
 import WebView, { WebViewNavigation } from 'react-native-webview';
+import Constants from 'expo-constants';
 
-const SERVER_URL = 'http://192.168.0.207:1894';
+const SERVER_URL: string =
+  (Constants.expoConfig?.extra?.serverUrl as string | undefined) ?? 'http://192.168.0.207:1894';
 
 export default function App() {
   const webViewRef = useRef<WebView>(null);

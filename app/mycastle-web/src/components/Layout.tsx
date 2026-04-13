@@ -52,6 +52,7 @@ import {
   ExpandMore,
   Terminal as TerminalIcon,
   CloudDownload as CloudDownloadIcon,
+  Storefront as StorefrontIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -107,6 +108,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
         { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
+            { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },
             { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
             { text: 'DevicesDef', icon: <DevicesIcon />, path: `/user/${userName}/electronics/devicesdefs` },
             { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },

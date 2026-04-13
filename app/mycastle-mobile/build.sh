@@ -29,7 +29,7 @@ echo "==> Installing npm dependencies..."
 npm install --yes
 
 echo "==> Installing Expo-compatible native packages..."
-npx expo install react-native-webview expo-asset expo-font
+npx expo install react-native-webview expo-constants expo-asset expo-font
 
 echo "==> Generating placeholder assets..."
 mkdir -p assets
@@ -64,6 +64,10 @@ for path, (w, h, r, g, b) in assets.items():
         f.write(make_png(w, h, r, g, b))
     print(f'  created {path}')
 PYEOF
+
+echo "==> Config:"
+echo "    MYCASTLE_SERVER_URL = ${MYCASTLE_SERVER_URL:-http://192.168.0.207:1894 (default)}"
+echo "    MYCASTLE_APP_NAME   = ${MYCASTLE_APP_NAME:-MyCastle (default)}"
 
 echo "==> Running expo prebuild (generates native Android project)..."
 npx expo prebuild --platform android --clean
