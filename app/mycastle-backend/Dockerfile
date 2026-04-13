@@ -1,6 +1,7 @@
 FROM node:20-slim
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
+ENV PNPM_STORE_DIR="/pnpm/store"
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 RUN apt-get update && apt-get install -y python3 python3-pip make g++ ca-certificates curl --no-install-recommends \
     && install -m 0755 -d /etc/apt/keyrings \
@@ -26,7 +27,8 @@ COPY app/mycastle-web/package.json app/mycastle-web/
 COPY app/mycastle-mobile/package.json app/mycastle-mobile/
 COPY app/mycastle-watch/package.json app/mycastle-watch/
 COPY app/demo-scene-3d/package.json app/demo-scene-3d/
-RUN pnpm install --frozen-lockfile --fetch-timeout 120000
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --fetch-timeout 120000
 
 # Now copy source files and build
 COPY packages/core/ packages/core/
@@ -38,7 +40,7 @@ RUN pnpm --filter @mhersztowski/core build
 RUN pnpm --filter @mhersztowski/core-backend build
 RUN pnpm --filter @mhersztowski/web-client build
 RUN pnpm --filter mycastle-backend build
-RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter mycastle-web build
+RUN NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter mycastle-web build
 
 WORKDIR /app/app/mycastle-backend
 ENV NODE_ENV=production
