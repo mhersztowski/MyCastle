@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CompositeFS, RemoteFS } from '@mhersztowski/core';
 import type { FileSystemProvider, FileSystemCapabilities, FileStat, DirectoryEntry, WriteFileOptions, DeleteOptions, RenameOptions } from '@mhersztowski/core';
 import type { VfsEvent, FileChangeEvent } from '@mhersztowski/core';
-import { MonacoMultiEditor, remoteFsProvider, defaultProviderRegistry, DEFAULT_AGENT_CONFIG } from '@mhersztowski/web-client';
+import { MonacoMultiEditor, remoteFsProvider, defaultProviderRegistry, DEFAULT_AGENT_CONFIG, WordCountPluginV2 } from '@mhersztowski/web-client';
+import { MarkdownPreviewPlugin } from '../../plugins/MarkdownPreviewPlugin';
+import { MarkdownEditorPlugin } from '../../plugins/MarkdownEditorPlugin';
 import type { AgentConfig } from '@mhersztowski/web-client';
 import { useAuth } from '../../modules/auth';
 import { minisApi } from '../../services/MinisApiService';
@@ -153,6 +155,7 @@ export default function UserDataEditorPage() {
       provider={cfs as FileSystemProvider}
       height="100%"
       providerRegistry={registry}
+      plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin]}
       enableAgent={isAdmin}
       defaultAgentConfig={agentDefaultConfig}
       agentClaudeMd={claudeMd}

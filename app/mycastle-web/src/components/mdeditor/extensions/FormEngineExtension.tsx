@@ -152,6 +152,8 @@ const FormEngineNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, s
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const getFormJson = useCallback(() => formJson ?? '', [formJson]);
+
   const loadForm = useCallback(async () => {
     if (!formPath) return;
     setLoading(true);
@@ -236,7 +238,7 @@ const FormEngineNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, s
           </Typography>
         </Box>
 
-        <Box sx={{ p: 1, pointerEvents: 'none' }}>
+        <Box sx={{ p: 1 }}>
           {loading && (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
               <CircularProgress size={20} />
@@ -248,7 +250,7 @@ const FormEngineNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, s
           {formJson && !loading && (
             <FormViewer
               view={view}
-              getForm={() => formJson}
+              getForm={getFormJson}
             />
           )}
         </Box>

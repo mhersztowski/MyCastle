@@ -157,6 +157,28 @@ function restoreUIFormsFromHtml(html: string, uiForms: { id: string; inline?: st
   return result;
 }
 
+// Helper to escape form-engine embeds (@[form:path]) to protect them from showdown
+function escapeFormEngineEmbedsForHtml(content: string): string {
+  const formEmbeds: string[] = [];
+  const result = content.replace(/@\[form:([^\]]+)\]/g, (_, path) => {
+    formEmbeds.push(path.trim());
+    return `%%FORMEMBED_${formEmbeds.length - 1}%%`;
+  });
+  return JSON.stringify({ result, formEmbeds });
+}
+
+// Helper to restore form-engine embeds after showdown conversion
+function restoreFormEngineEmbedsFromHtml(html: string, formEmbeds: string[]): string {
+  let result = html;
+  formEmbeds.forEach((path, index) => {
+    const htmlTag = `<div data-type="form-engine-embed" data-form-path="${path}"></div>`;
+    const placeholder = `%%FORMEMBED_${index}%%`;
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    result = result.split(placeholder).join(htmlTag);
+  });
+  return result;
+}
+
 // Helper to restore component embeds after showdown conversion
 function restoreComponentEmbedsFromHtml(html: string, componentEmbeds: { type: string; id: string }[]): string {
   let result = html;
@@ -891,8 +913,12 @@ export function markdownToHtml(markdown: string): string {
   const uiFormDataStr = escapeUIFormsForHtml(markdownWithoutFlows);
   const { result: markdownWithoutUIForms, uiForms } = JSON.parse(uiFormDataStr);
 
+  // Protect form-engine embeds from showdown processing
+  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutUIForms);
+  const { result: markdownWithoutFormEngine, formEmbeds } = JSON.parse(formEngineDataStr);
+
   // Then, protect component embeds from showdown processing
-  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutUIForms);
+  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutFormEngine);
   const { result: markdownWithoutComponents, componentEmbeds } = JSON.parse(componentDataStr);
 
   // Then, protect math content from showdown processing
@@ -912,6 +938,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore UI form embeds
   html = restoreUIFormsFromHtml(html, uiForms);
+
+  // Restore form-engine embeds
+  html = restoreFormEngineEmbedsFromHtml(html, formEmbeds);
 
   // Restore automate flow embeds
   html = restoreAutomateFlowsFromHtml(html, automateFlows);
@@ -987,6 +1016,26 @@ export function htmlToMarkdown(html: string): string {
       uiForms.push({ id: '', inline: decodeURIComponent(encodedInline) });
       return `##UIFORMEMBED${uiForms.length - 1}##`;
     }
+  );
+
+  // Pre-process: Replace form-engine embeds with placeholders before Turndown
+  const formEngineEmbeds: string[] = [];
+
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="form-engine-embed"[^>]*data-form-path="([^"]*)"[^>]*>[\s\S]*?<\/div>/gi,
+    (_, path) => {
+      formEngineEmbeds.push(path);
+      return `##FORMEMBED${formEngineEmbeds.length - 1}##`;
+    },
+  );
+
+  // Also handle self-closing variant
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="form-engine-embed"[^>]*data-form-path="([^"]*)"[^>]*\/>/gi,
+    (_, path) => {
+      formEngineEmbeds.push(path);
+      return `##FORMEMBED${formEngineEmbeds.length - 1}##`;
+    },
   );
 
   // Pre-process: Replace automate flow embeds with placeholders before Turndown
@@ -1068,6 +1117,13 @@ export function htmlToMarkdown(html: string): string {
   componentEmbeds.forEach((embed, index) => {
     const placeholder = `##COMPEMBED${index}##`;
     const replacement = embed.type ? `@[${embed.type}:${embed.id || ''}]` : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore form-engine embeds as @[form:path] syntax
+  formEngineEmbeds.forEach((path, index) => {
+    const placeholder = `##FORMEMBED${index}##`;
+    const replacement = path ? `@[form:${path}]` : '';
     markdown = markdown.split(placeholder).join(replacement);
   });
 

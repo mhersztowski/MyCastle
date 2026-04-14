@@ -4,7 +4,17 @@
  * Stores form JSON in VFS under the path provided in the URL.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+const EMPTY_FORM_JSON = JSON.stringify({
+  version: '1',
+  tooltipType: 'MuiTooltip',
+  modalType: 'MuiDialog',
+  form: { key: 'Screen', type: 'Screen', props: {} },
+  localization: {},
+  languages: [{ code: 'en', dialect: 'US', name: 'English', description: 'American English', bidi: 'ltr' }],
+  defaultLanguage: 'en-US',
+});
 import { useParams, useNavigate } from 'react-router-dom';
 import { Box, CircularProgress, Snackbar, Alert, Typography, IconButton, Tooltip } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -79,6 +89,16 @@ export default function FormEngineDesignerPage() {
     [filePath, handleSave, navigate],
   );
 
+  // Stable reference — only changes when the loaded content changes.
+  const getForm = useCallback(async () => initialJson ?? EMPTY_FORM_JSON, [initialJson]);
+
+  const handleFormSchemaChange = useCallback((json: string) => {
+    pendingJson.current = json;
+  }, []);
+
+  // Remount FormBuilder when the file path changes so stale form state is discarded.
+  const builderKey = useMemo(() => filePath, [filePath]);
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
@@ -87,16 +107,14 @@ export default function FormEngineDesignerPage() {
     );
   }
 
-  // getForm is called by FormBuilder to load the initial JSON
-  const getForm = async () => initialJson ?? '{}';
-
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <Box sx={{ flex: 1, overflow: 'hidden' }}>
         <FormBuilder
+          key={builderKey}
           view={builderView}
           getForm={getForm}
-          onFormSchemaChange={(json: string) => { pendingJson.current = json; }}
+          onFormSchemaChange={handleFormSchemaChange}
         />
       </Box>
 
