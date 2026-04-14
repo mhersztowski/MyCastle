@@ -15,10 +15,12 @@ import { MinimalTopBar } from './components/MinimalTopBar';
 
 // Mycastle full-page routes (no layout)
 import WorkspaceMdPage from './pages/workspace/WorkspaceMdPage';
+import UserDataEditorPage from './pages/workspace/UserDataEditorPage';
 import SimpleEditorPage from './pages/editor/SimpleEditorPage';
 import MdEditorPage from './pages/editor/MdEditorPage';
 import MdViewerPage from './pages/viewer/MdViewerPage';
 import UIDesignerPage from './pages/designer/UIDesignerPage';
+import FormEngineDesignerPage from './pages/designer/FormEngineDesignerPage';
 import AutomateDesignerPage from './pages/automate/AutomateDesignerPage';
 import UIViewerPage from './pages/viewer/UIViewerPage';
 
@@ -72,6 +74,7 @@ import {
   ApiKeysPage,
   TestVfsPage,
   DocsPage,
+  UiDocsPage,
   LocalizationPage,
   DevicesDefPage,
 } from './pages/minis-user';
@@ -114,6 +117,7 @@ function AppRoot() {
         <Route path="/viewer/md/*" element={<RequireAuth><MinimalTopBar><MdViewerPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/ui/:id?" element={<RequireAuth><MinimalTopBar><UIDesignerPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/automate/:id?" element={<RequireAuth><MinimalTopBar><AutomateDesignerPage /></MinimalTopBar></RequireAuth>} />
+        <Route path="/designer/form/*" element={<RequireAuth><MinimalTopBar><FormEngineDesignerPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/viewer/ui/:id" element={<RequireAuth><MinimalTopBar><UIViewerPage /></MinimalTopBar></RequireAuth>} />
 
         {/* Public full-page routes */}
@@ -145,6 +149,18 @@ function AppRoot() {
               <Layout fullBleed>
                 <AdminOnly><TestVfsPage /></AdminOnly>
               </Layout>
+            </Box>
+          }
+        />
+        <Route
+          path="/user/:userName/pim/editor"
+          element={
+            <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+              <RequireAuth>
+                <Layout fullBleed>
+                  <UserDataEditorPage />
+                </Layout>
+              </RequireAuth>
             </Box>
           }
         />
@@ -187,6 +203,7 @@ function AppRoot() {
                   <Route path="/user/:userName/tools/mqtt-explorer" element={<AdminOnly><MqttExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/api-keys" element={<AdminOnly><ApiKeysPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/docs" element={<AdminOnly><DocsPage /></AdminOnly>} />
+                  <Route path="/user/:userName/tools/ui-docs" element={<UiDocsPage />} />
 
                   {/* Pim pages under /user/:userName */}
                   <Route path="/user/:userName/pim/calendar" element={<CalendarPage />} />

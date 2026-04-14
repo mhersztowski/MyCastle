@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as os from 'os';
 import * as path from 'path';
@@ -40,13 +40,42 @@ export class ArduinoCliLocal implements ArduinoCli {
       '--output-dir', options.outputDir,
       '--build-path', options.buildDir,
     ];
-    const cmdLine = `$ ${this.resolvedPath} ${args.join(' ')}\n\n`;
+    const cmdLine = `$ ${this.resolvedPath} ${args.join(' ')}\n`;
+
+    if (options.onChunk) {
+      // Streaming mode via spawn
+      const { onChunk } = options;
+      onChunk(cmdLine);
+      return new Promise<CompileResult>((resolve) => {
+        const child = spawn(this.resolvedPath, args);
+        let out = cmdLine;
+        const handle = (data: Buffer) => {
+          const s = data.toString();
+          out += s;
+          onChunk(s);
+        };
+        child.stdout.on('data', handle);
+        child.stderr.on('data', handle);
+        child.on('close', (code) => {
+          resolve({ success: code === 0, output: out, exitCode: code ?? 1 });
+        });
+        child.on('error', (err) => {
+          const msg = err.message;
+          out += msg;
+          onChunk(msg);
+          resolve({ success: false, output: out, exitCode: 1 });
+        });
+      });
+    }
+
+    // Buffered mode (legacy)
+    const cmdLineLegacy = cmdLine + '\n';
     try {
       const { stdout, stderr } = await execFileAsync(this.resolvedPath, args, { maxBuffer: MAX_BUFFER });
-      return { success: true, output: cmdLine + this.formatOutput(stdout, stderr), exitCode: 0 };
+      return { success: true, output: cmdLineLegacy + this.formatOutput(stdout, stderr), exitCode: 0 };
     } catch (err: unknown) {
       const e = err as { stdout?: string; stderr?: string; code?: number };
-      return { success: false, output: cmdLine + this.formatOutput(e.stdout, e.stderr), exitCode: e.code ?? 1 };
+      return { success: false, output: cmdLineLegacy + this.formatOutput(e.stdout, e.stderr), exitCode: e.code ?? 1 };
     }
   }
 
@@ -69,13 +98,29 @@ export class ArduinoCliLocal implements ArduinoCli {
       ...(options.verbose ? ['-v'] : []),
       '--config-file', options.configFilePath,
     ];
-    const cmdLine = `$ ${this.resolvedPath} ${args.join(' ')}\n\n`;
+    const cmdLine = `$ ${this.resolvedPath} ${args.join(' ')}\n`;
+
+    if (options.onChunk) {
+      const { onChunk } = options;
+      onChunk(cmdLine);
+      return new Promise<UploadResult>((resolve) => {
+        const child = spawn(this.resolvedPath, args);
+        let out = cmdLine;
+        const handle = (data: Buffer) => { const s = data.toString(); out += s; onChunk(s); };
+        child.stdout.on('data', handle);
+        child.stderr.on('data', handle);
+        child.on('close', (code) => resolve({ success: code === 0, output: out, exitCode: code ?? 1 }));
+        child.on('error', (err) => { const msg = err.message; out += msg; onChunk(msg); resolve({ success: false, output: out, exitCode: 1 }); });
+      });
+    }
+
+    const cmdLineLegacy = cmdLine + '\n';
     try {
       const { stdout, stderr } = await execFileAsync(this.resolvedPath, args, { maxBuffer: MAX_BUFFER });
-      return { success: true, output: cmdLine + this.formatOutput(stdout, stderr), exitCode: 0 };
+      return { success: true, output: cmdLineLegacy + this.formatOutput(stdout, stderr), exitCode: 0 };
     } catch (err: unknown) {
       const e = err as { stdout?: string; stderr?: string; code?: number };
-      return { success: false, output: cmdLine + this.formatOutput(e.stdout, e.stderr), exitCode: e.code ?? 1 };
+      return { success: false, output: cmdLineLegacy + this.formatOutput(e.stdout, e.stderr), exitCode: e.code ?? 1 };
     }
   }
 

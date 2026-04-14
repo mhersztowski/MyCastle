@@ -7,7 +7,7 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemText from '@mui/material/ListItemText';
 import Divider from '@mui/material/Divider';
 import LinearProgress from '@mui/material/LinearProgress';
-import { normalize, dirname, encodeText, WritableGitHubFS } from '@mhersztowski/core';
+import { normalize, dirname, encodeText, decodeText, WritableGitHubFS } from '@mhersztowski/core';
 import type { CompositeFS } from '@mhersztowski/core';
 
 import { useVfsTree } from './useVfsTree';
@@ -16,8 +16,48 @@ import { VfsBreadcrumbs } from './VfsBreadcrumbs';
 import { VfsMountManager } from './VfsMountManager';
 import { VfsCommitDialog } from './VfsCommitDialog';
 import { getFileIcon } from './icons';
-import type { VfsExplorerProps, VfsTreeNode } from './types';
+import type { VfsExplorerProps, VfsProjectContext, VfsTreeNode } from './types';
+import { platformToLanguage } from './types';
+import { ProjectPanel, Spinner } from './ProjectPanel';
+import type { ProjectPanelHandle } from './ProjectPanel';
+import type { OutputLine } from './project/types';
+import { classifyLine } from './project/types';
+import { createProject } from './project/createProject';
+import type { Project } from './project/Project';
 import './vfs-explorer.css';
+
+/* ── Toolbar action icons ── */
+
+function IconCompile() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 4l5 4-5 4" /><path d="M9 12h5" />
+    </svg>
+  );
+}
+
+function IconFlash() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M9 1L3 9h5l-1 6 7-8H9L9 1z" />
+    </svg>
+  );
+}
+
+function IconRun() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M4 2l10 6-10 6V2z" />
+    </svg>
+  );
+}
+
+/** Pick toolbar icon by action id */
+function ActionIcon({ actionId }: { actionId: string }) {
+  if (actionId === 'compile' || actionId === 'build' || actionId === 'build-web') return <IconCompile />;
+  if (actionId === 'flash' || actionId === 'compile-flash') return <IconFlash />;
+  return <IconRun />;
+}
 
 /* ── Expand / Collapse chevrons ── */
 
@@ -43,6 +83,7 @@ const treeViewSx = {
   flexGrow: 1,
   overflowY: 'auto',
   py: 0.25,
+  color: '#cccccc',
   /* MUI X v8 uses data-* attributes for state, not .Mui-* classes */
   '& .MuiTreeItem-content': {
     borderRadius: 0,
@@ -148,6 +189,59 @@ function isDescendantOf(childPath: string, parentPath: string): boolean {
   return childPath === parentPath || childPath.startsWith(parentPath + '/');
 }
 
+/* ── Project context traversal ── */
+
+/**
+ * Walks up the path segment-by-segment and returns the parsed project.json
+ * from the nearest ancestor directory that contains one. Returns null if none found.
+ */
+async function findProjectContext(
+  path: string,
+  provider: { readFile: (path: string) => Promise<Uint8Array> },
+  cache: Map<string, VfsProjectContext | null>,
+): Promise<VfsProjectContext | null> {
+  // Build ancestor list starting from path itself down to root.
+  // Starting at i=segments.length means we try "{path}/project.json" first —
+  // that's a no-op for files (will throw, caught below) but correctly finds
+  // project.json when path IS the project directory.
+  const segments = path.split('/').filter(Boolean);
+  const ancestors: string[] = [];
+  for (let i = segments.length; i >= 0; i--) {
+    ancestors.push(i === 0 ? '/' : '/' + segments.slice(0, i).join('/'));
+  }
+  // Deduplicate (handles trailing slash edge cases)
+  const unique = [...new Set(ancestors)];
+
+  for (const dir of unique) {
+    const key = dir + '/project.json';
+    if (cache.has(key)) {
+      const cached = cache.get(key)!;
+      if (cached !== null) return cached;
+      continue; // null means "not found here", skip
+    }
+    try {
+      const data = await provider.readFile(normalize(dir + '/project.json'));
+      const json = JSON.parse(decodeText(data)) as Partial<VfsProjectContext>;
+      if (json.id && json.name && json.platform) {
+        const ctx: VfsProjectContext = {
+          id: json.id,
+          name: json.name,
+          platform: json.platform,
+          language: platformToLanguage(json.platform),
+          boardProfileKey: json.boardProfileKey,
+          projectJsonPath: normalize(dir + '/project.json'),
+        };
+        cache.set(key, ctx);
+        return ctx;
+      }
+      cache.set(key, null);
+    } catch {
+      cache.set(key, null);
+    }
+  }
+  return null;
+}
+
 /* ── Component ── */
 
 export function VfsExplorer({
@@ -158,11 +252,18 @@ export function VfsExplorer({
   onFileSelect,
   onFileOpen,
   onDirectoryChange,
+  onProjectContext,
+  projectDeps,
+  onExecuteAction,
+  onOutputLine,
+  onActionRunningChange,
+  hideOutput = false,
   readOnly: readOnlyProp,
   showBreadcrumbs = true,
   className,
   providerRegistry,
   onMountsChanged: onMountsChangedProp,
+  selectedPath: externalSelectedPath,
 }: VfsExplorerProps) {
   const clipboard = useVfsClipboard();
   const readOnly = readOnlyProp ?? provider.capabilities.readonly;
@@ -176,6 +277,147 @@ export function VfsExplorer({
     onDirectoryChange?.(currentPath);
   }, [currentPath, onDirectoryChange]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  /* ── Project context cache (keyed by "dir/project.json") ── */
+
+  const projectCacheRef = useRef<Map<string, VfsProjectContext | null>>(new Map());
+  const [activeProject, setActiveProject] = useState<VfsProjectContext | null>(null);
+
+  // Invalidate cache when provider changes (e.g. new mount)
+  useEffect(() => {
+    projectCacheRef.current.clear();
+    setActiveProject(null);
+  }, [provider]);
+
+  // Propagate to external consumer whenever activeProject changes
+  useEffect(() => {
+    onProjectContext?.(activeProject);
+  }, [activeProject, onProjectContext]);
+
+  // Sync tree selection when externalSelectedPath changes (e.g. active editor tab)
+  useEffect(() => {
+    if (!externalSelectedPath) return;
+    setSelectedItems([externalSelectedPath]);
+
+    // Expand all ancestor directories so the item is visible
+    const segments = externalSelectedPath.split('/').filter(Boolean);
+    const toExpand: string[] = [];
+    for (let i = 1; i <= segments.length - 1; i++) {
+      toExpand.push('/' + segments.slice(0, i).join('/'));
+    }
+    if (toExpand.length > 0) {
+      tree.setExpandedItems(prev => {
+        const set = new Set([...prev, ...toExpand]);
+        return [...set];
+      });
+    }
+
+    // Update breadcrumb path
+    const node = findNode(tree.items, externalSelectedPath);
+    const dir = node ? (node.isDirectory ? node.id : dirname(externalSelectedPath)) : dirname(externalSelectedPath);
+    setCurrentPath(dir);
+
+    // Detect project context
+    findProjectContext(externalSelectedPath, provider, projectCacheRef.current)
+      .then(ctx => setActiveProject(ctx))
+      .catch(() => setActiveProject(null));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalSelectedPath, provider]);
+
+  /* ── Project instance (with execute() wired to deps) ── */
+
+  const activeProjectInstance = useMemo<Project | null>(
+    () => activeProject ? createProject(activeProject, projectDeps) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeProject, projectDeps],
+  );
+
+  /* ── Action execution state ── */
+
+  const [outputLines, setOutputLines] = useState<OutputLine[]>([]);
+  const [actionRunning, setActionRunning] = useState(false);
+  const [lastStatus, setLastStatus] = useState<'success' | 'error' | null>(null);
+  const [outputOpen, setOutputOpen] = useState(false);
+  const actionAbortRef = useRef<AbortController | null>(null);
+  const outputEndRef = useRef<HTMLDivElement | null>(null);
+  const projectPanelRef = useRef<ProjectPanelHandle | null>(null);
+
+  // Auto-scroll output
+  useEffect(() => {
+    if (outputOpen) outputEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [outputLines, outputOpen]);
+
+  // Reset when project changes
+  useEffect(() => {
+    setOutputLines([]);
+    setLastStatus(null);
+    setOutputOpen(false);
+    actionAbortRef.current?.abort();
+    setActionRunning(false);
+  }, [activeProject?.id]);
+
+  const appendLine = useCallback((text: string) => {
+    const line = { text, timestamp: Date.now(), type: classifyLine(text) };
+    setOutputLines(prev => [...prev, line]);
+    onOutputLine?.(line);
+  }, [onOutputLine]);
+
+  const handleRunAction = useCallback(async (actionId: string, hasOutput: boolean) => {
+    const ctx = activeProject;
+    if (!ctx) return;
+
+    actionAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    actionAbortRef.current = ctrl;
+
+    if (hasOutput) {
+      setOutputLines([]);
+      setLastStatus(null);
+      setOutputOpen(true);
+    }
+    const actionLabel = activeProjectInstance?.getActions().find(a => a.id === actionId)?.label;
+    setActionRunning(true);
+    onActionRunningChange?.(true, actionLabel);
+
+    try {
+      let result: { success: boolean; error?: string };
+
+      if (onExecuteAction) {
+        // External override takes priority
+        result = await onExecuteAction(actionId, ctx, selectedItems[0] ?? null, appendLine, ctrl.signal);
+      } else if (activeProjectInstance) {
+        // Built-in execute() from Project class
+        result = await activeProjectInstance.execute(actionId, selectedItems[0] ?? null, appendLine, ctrl.signal);
+      } else {
+        appendLine('Error: no executor configured (provide projectDeps or onExecuteAction)');
+        result = { success: false };
+      }
+
+      if (!ctrl.signal.aborted) {
+        setLastStatus(result.success ? 'success' : 'error');
+        if (result.error) appendLine(`Error: ${result.error}`);
+        if (hasOutput) appendLine(result.success ? '✓ Done' : '✗ Failed');
+      }
+    } catch (err) {
+      if (!ctrl.signal.aborted) {
+        setLastStatus('error');
+        appendLine(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } finally {
+      if (!actionAbortRef.current?.signal.aborted) {
+        setActionRunning(false);
+        onActionRunningChange?.(false);
+      }
+    }
+  }, [activeProject, activeProjectInstance, onExecuteAction, onActionRunningChange, selectedItems, appendLine]);
+
+  const handleStopAction = useCallback(() => {
+    actionAbortRef.current?.abort();
+    setActionRunning(false);
+    appendLine('— Aborted —');
+  }, [appendLine]);
 
   /* ── Drag & drop ── */
 
@@ -244,9 +486,14 @@ export function VfsExplorer({
         if (node) {
           setCurrentPath(node.isDirectory ? node.id : dirname(node.id));
         }
+        findProjectContext(itemIds[0], provider, projectCacheRef.current)
+          .then(ctx => setActiveProject(ctx))
+          .catch(() => setActiveProject(null));
+      } else {
+        setActiveProject(null);
       }
     },
-    [onFileSelect, tree.items],
+    [onFileSelect, provider, tree.items],
   );
 
   const handleExpandedItemsChange = useCallback(
@@ -379,6 +626,11 @@ export function VfsExplorer({
     }
   }, [contextMenu, provider, tree, closeContextMenu]);
 
+  const handleCopyPath = useCallback(() => {
+    if (contextMenu?.nodeId) navigator.clipboard.writeText(contextMenu.nodeId).catch(() => {});
+    closeContextMenu();
+  }, [contextMenu, closeContextMenu]);
+
   const handleCopy = useCallback(() => {
     if (contextMenu?.nodeId) clipboard.copy([contextMenu.nodeId]);
     closeContextMenu();
@@ -395,13 +647,24 @@ export function VfsExplorer({
     tree.refresh();
   }, [getParentDir, clipboard, provider, tree, closeContextMenu]);
 
-  const handleDelete = useCallback(async () => {
+  const handleDeleteRequest = useCallback(() => {
     const nodeId = contextMenu?.nodeId;
     closeContextMenu();
+    if (!nodeId) return;
+    setDeleteTarget(nodeId);
+  }, [contextMenu, closeContextMenu]);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    const nodeId = deleteTarget;
+    setDeleteTarget(null);
     if (!provider.delete || !nodeId) return;
-    await provider.delete(nodeId, { recursive: true });
-    tree.refresh();
-  }, [contextMenu, provider, tree, closeContextMenu]);
+    try {
+      await provider.delete(nodeId, { recursive: true });
+      await tree.refresh();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    }
+  }, [deleteTarget, provider, tree]);
 
   /* ── Breadcrumb navigation ── */
 
@@ -568,6 +831,43 @@ export function VfsExplorer({
           onCommit={handleCommit}
         />
       )}
+      {/* ── Project action toolbar ── */}
+      {activeProjectInstance && activeProjectInstance.getActions().length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 2,
+          padding: '3px 6px',
+          background: '#252526', borderBottom: '1px solid #3c3c3c',
+          flexShrink: 0,
+        }}>
+          {activeProjectInstance.getActions().map(action => (
+            <button
+              key={action.id}
+              title={action.description ?? action.label}
+              disabled={actionRunning}
+              onClick={() => handleRunAction(action.id, action.hasOutput)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '2px 6px', fontSize: 11, cursor: actionRunning ? 'not-allowed' : 'pointer',
+                background: 'none', border: '1px solid transparent', borderRadius: 3,
+                color: actionRunning ? '#555' : '#ccc',
+                opacity: actionRunning ? 0.5 : 1,
+              }}
+              onMouseEnter={e => { if (!actionRunning) (e.currentTarget as HTMLButtonElement).style.borderColor = '#555'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent'; }}
+            >
+              <ActionIcon actionId={action.id} />
+              {action.label}
+            </button>
+          ))}
+          {actionRunning && (
+            <span style={{ marginLeft: 'auto', color: '#888', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+              <Spinner />
+              Running…
+            </span>
+          )}
+        </div>
+      )}
+
       <div
         className="vfs-tree-container"
         onContextMenu={handleContainerContextMenu}
@@ -599,6 +899,20 @@ export function VfsExplorer({
         </SimpleTreeView>
       </div>
 
+      {/* ── Project panel ── */}
+      <ProjectPanel
+        ref={projectPanelRef}
+        context={activeProject}
+        outputLines={outputLines}
+        running={actionRunning}
+        lastStatus={lastStatus}
+        outputOpen={!hideOutput && outputOpen}
+        onToggleOutput={() => setOutputOpen(o => !o)}
+        onClearOutput={() => { setOutputLines([]); setOutputOpen(false); }}
+        onStop={handleStopAction}
+        outputEndRef={outputEndRef}
+      />
+
       {/* ── Context Menu ── */}
       <Menu
         open={contextMenu !== null}
@@ -612,6 +926,11 @@ export function VfsExplorer({
         {contextMenu?.nodeId && !contextMenu.isDirectory && (
           <MenuItem onClick={handleOpen}>
             <ListItemText>Open</ListItemText>
+          </MenuItem>
+        )}
+        {contextMenu?.nodeId && (
+          <MenuItem onClick={handleCopyPath}>
+            <ListItemText>Copy Path</ListItemText>
           </MenuItem>
         )}
         {!readOnly && (
@@ -647,11 +966,66 @@ export function VfsExplorer({
         )}
         {!readOnly && contextMenu?.nodeId && <Divider />}
         {!readOnly && contextMenu?.nodeId && (
-          <MenuItem onClick={handleDelete}>
+          <MenuItem onClick={handleDeleteRequest}>
             <ListItemText>Delete</ListItemText>
           </MenuItem>
         )}
       </Menu>
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.6)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#252526', border: '1px solid #3c3c3c', borderRadius: 4,
+            padding: '20px 24px', minWidth: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          }}>
+            <div style={{ color: '#cccccc', marginBottom: 8, fontWeight: 600 }}>Delete</div>
+            <div style={{ color: '#999', fontSize: 13, marginBottom: 20, wordBreak: 'break-all' }}>
+              Are you sure you want to delete<br />
+              <span style={{ color: '#cccccc' }}>{deleteTarget}</span>?
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setDeleteTarget(null)}
+                style={{
+                  background: 'transparent', border: '1px solid #555', color: '#ccc',
+                  borderRadius: 3, padding: '5px 14px', cursor: 'pointer', fontSize: 13,
+                }}
+              >Cancel</button>
+              <button
+                onClick={handleDeleteConfirm}
+                style={{
+                  background: '#c5231c', border: 'none', color: '#fff',
+                  borderRadius: 3, padding: '5px 14px', cursor: 'pointer', fontSize: 13,
+                }}
+              >Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error toast */}
+      {deleteError && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, background: '#c5231c', color: '#fff',
+          borderRadius: 4, padding: '10px 20px', fontSize: 13,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)', maxWidth: 480,
+        }}>
+          Delete failed: {deleteError}
+          <button
+            onClick={() => setDeleteError(null)}
+            style={{
+              marginLeft: 12, background: 'transparent', border: 'none',
+              color: '#fff', cursor: 'pointer', fontSize: 16, lineHeight: 1,
+            }}
+          >×</button>
+        </div>
+      )}
     </div>
   );
 }

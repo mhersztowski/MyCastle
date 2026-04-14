@@ -50,15 +50,15 @@ export class ArduinoService {
     return this.cli.listPorts();
   }
 
-  async compile(userName: string, projectId: string, sketchName: string, fqbn: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>): Promise<CompileResult> {
+  async compile(userName: string, projectId: string, sketchName: string, fqbn: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>, onChunk?: (chunk: string) => void): Promise<CompileResult> {
     if (!this.cli) throw new Error('Arduino CLI not configured');
     const project = new ArduinoProject(this.cli, this.rootDir, userName, projectId, fqbn);
-    return project.compile(sketchName, minisConfig, libraries);
+    return project.compile(sketchName, minisConfig, libraries, onChunk);
   }
 
-  async upload(userName: string, projectId: string, sketchName: string, fqbn: string, port: string): Promise<UploadResult> {
+  async upload(userName: string, projectId: string, sketchName: string, fqbn: string, port: string, onChunk?: (chunk: string) => void): Promise<UploadResult> {
     if (!this.cli) throw new Error('Arduino CLI not configured');
     const project = new ArduinoProject(this.cli, this.rootDir, userName, projectId, fqbn);
-    return project.upload(sketchName, port);
+    return project.upload(sketchName, port, onChunk);
   }
 }

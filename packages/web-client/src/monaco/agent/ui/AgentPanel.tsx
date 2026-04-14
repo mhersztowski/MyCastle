@@ -37,9 +37,13 @@ interface AgentPanelProps {
   providerVersion?: number;
   webFetchUrl?: string;
   authToken?: string;
+  /** Extra context injected into the system prompt (e.g. workspace structure, user info). */
+  injectedClaudeMd?: string;
+  /** Called whenever the agent writes/deletes/renames files. Useful for syncing open tabs. */
+  onFileWritten?: (paths: string[]) => void;
 }
 
-export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersion, webFetchUrl, authToken }: AgentPanelProps) {
+export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersion, webFetchUrl, authToken, injectedClaudeMd, onFileWritten }: AgentPanelProps) {
   const [config, setConfig] = useState<AgentConfig>(() => loadAgentConfig(defaultConfig));
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -60,6 +64,7 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         config.maxTokens,
         webFetchUrl,
         authToken,
+        injectedClaudeMd,
       );
     } else {
       const engine = new AgentEngine(
@@ -67,6 +72,7 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         {
           onMessage: (msg) => setMessages(prev => [...prev, msg]),
           onProcessingChange: setProcessing,
+          onFileWritten,
         },
         aiProvider,
         providerConfig,
@@ -75,6 +81,7 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         config.maxTokens,
         webFetchUrl,
         authToken,
+        injectedClaudeMd,
       );
       engineRef.current = engine;
       // Eagerly load CLAUDE.md + skills so autocomplete works immediately
@@ -82,7 +89,7 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
         setSkills(new Map(engine.getSkills()));
       }).catch(() => {/* ignore */});
     }
-  }, [config, provider, webFetchUrl, authToken]);
+  }, [config, provider, webFetchUrl, authToken, injectedClaudeMd, onFileWritten]);
 
   const handleSend = useCallback(async (text: string, files: File[]) => {
     if (!engineRef.current) return;

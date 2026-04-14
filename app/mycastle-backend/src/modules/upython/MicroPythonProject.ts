@@ -22,7 +22,7 @@ export class MicroPythonProject {
   get srcDir(): string { return path.join(this.projectDir, 'src'); }
   get librariesDir(): string { return path.join(this.projectDir, 'libraries'); }
 
-  async deploy(port: string, libraries?: UpythonLibrary[], inlineFiles?: Array<{ content: string; remoteName: string }>): Promise<DeployResult> {
+  async deploy(port: string, libraries?: UpythonLibrary[], inlineFiles?: Array<{ content: string; remoteName: string }>, onChunk?: (chunk: string) => void): Promise<DeployResult> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.srcDir);
@@ -68,7 +68,9 @@ export class MicroPythonProject {
       }
     }
 
-    const result = await this.cli.deploy({ port, files });
+    if (libLogs.length && onChunk) onChunk(libLogs.join('\n') + '\n');
+
+    const result = await this.cli.deploy({ port, files, onChunk });
     if (libLogs.length > 0) {
       result.output = libLogs.join('\n') + '\n\n' + result.output;
     }

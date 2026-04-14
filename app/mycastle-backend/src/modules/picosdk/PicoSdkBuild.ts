@@ -68,9 +68,12 @@ export class PicoSdkBuild {
     const header = `$ docker run --rm -v ${this.hostDataDir}:${this.containerDataDir} ${this.imageName} [cmake build]\n`;
     onData?.(header);
 
+    const uid = process.getuid?.() ?? 1000;
+    const gid = process.getgid?.() ?? 1000;
     return new Promise((resolve) => {
       const proc = spawn('docker', [
         'run', '--rm',
+        '--user', `${uid}:${gid}`,
         '-v', `${this.hostDataDir}:${this.containerDataDir}`,
         this.imageName,
         'bash', '-c', script,

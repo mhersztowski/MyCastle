@@ -2,9 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   Box, Typography, Button, IconButton, Card, CardActionArea,
   Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, Alert, CircularProgress, Chip,
+  TextField, Alert, CircularProgress, Chip, Snackbar,
 } from '@mui/material';
-import { Add, Delete, GitHub, Refresh } from '@mui/icons-material';
+import { Add, Delete, GitHub, Refresh, CleaningServices } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { MinisProjectModel } from '@mhersztowski/core';
@@ -35,6 +35,8 @@ function UserProjectsPage() {
   const [emptyBoardProfileKey, setEmptyBoardProfileKey] = useState('uno');
 
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!userName) return;
@@ -129,11 +131,36 @@ function UserProjectsPage() {
     }
   };
 
+  const handleCleanup = async () => {
+    if (!userName) return;
+    setCleanupLoading(true);
+    try {
+      const result = await minisApi.cleanupOrphanProjects(userName);
+      if (result.removed.length === 0) {
+        setCleanupResult('No orphaned directories found.');
+      } else {
+        setCleanupResult(`Removed ${result.removed.length} orphaned director${result.removed.length === 1 ? 'y' : 'ies'}: ${result.removed.join(', ')}`);
+      }
+    } catch (err) {
+      setCleanupResult(`Error: ${err instanceof Error ? err.message : 'Cleanup failed'}`);
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4">My Projects</Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          <IconButton
+            title="Clean up orphaned project directories"
+            onClick={handleCleanup}
+            disabled={cleanupLoading}
+            size="small"
+          >
+            {cleanupLoading ? <CircularProgress size={18} /> : <CleaningServices fontSize="small" />}
+          </IconButton>
           <Button variant="outlined" startIcon={<Add />} onClick={() => { setAddEmptyDialogOpen(true); setEmptyProjectName(''); }}>Add</Button>
           <Button variant="contained" startIcon={<GitHub />} onClick={() => setAddDialogOpen(true)}>Add From Repo</Button>
         </Box>
@@ -256,6 +283,13 @@ function UserProjectsPage() {
           <Button color="error" variant="contained" onClick={() => deleteConfirm && handleDelete(deleteConfirm)}>Delete</Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={!!cleanupResult}
+        autoHideDuration={6000}
+        onClose={() => setCleanupResult(null)}
+        message={cleanupResult}
+      />
     </Box>
   );
 }

@@ -7,6 +7,7 @@ import { buildSwaggerSpec } from './swagger.js';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawn } from 'child_process';
 import AdmZip from 'adm-zip';
 import type { IotService } from './modules/iot/IotService.js';
 import type { TerminalService } from './modules/terminal/TerminalService.js';
@@ -61,6 +62,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private pygameService: PygameService | null;
   private picoSdkService: PicoSdkService | null = null;
   private rootDir: string | null;
+  private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
   // shareUrl → { assets (id+description), baseUrl, key, cachedAt }
   private immichAlbumCache = new Map<string, { assets: { id: string; description: string }[]; baseUrl: string; key: string; cachedAt: number }>();
@@ -86,6 +88,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.pygameService = pygameService ?? null;
     this.picoSdkService = picoSdkService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
+    this.ownStaticDir = staticDir ?? null;
     this.resolveSwaggerUiDir();
     this.rpcRouter = new RpcRouter();
     registerHandlers(this.rpcRouter, { iotService: this.iotService ?? undefined, fileSystem });
@@ -849,18 +852,18 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Arduino: compile (POST /api/users/{userName}/project-arduino/{projectName}/compile)
+    // Arduino: compile (POST or GET/SSE /api/users/{userName}/project-arduino/{projectName}/compile)
     const compileMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/compile$/);
-    if (compileMatch && method === 'POST') {
+    if (compileMatch && (method === 'POST' || method === 'GET')) {
       const userName = decodeURIComponent(compileMatch[1]);
       const projectName = decodeURIComponent(compileMatch[2]);
       await this.handleArduinoCompile(req, res, userName, projectName);
       return;
     }
 
-    // Arduino: upload (POST /api/users/{userName}/project-arduino/{projectName}/upload)
+    // Arduino: upload (POST or GET/SSE /api/users/{userName}/project-arduino/{projectName}/upload)
     const uploadMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/upload$/);
-    if (uploadMatch && method === 'POST') {
+    if (uploadMatch && (method === 'POST' || method === 'GET')) {
       const userName = decodeURIComponent(uploadMatch[1]);
       const projectName = decodeURIComponent(uploadMatch[2]);
       await this.handleArduinoUpload(req, res, userName, projectName);
@@ -990,9 +993,9 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // uPython: deploy (POST /api/users/{userName}/project-upython/{projectName}/deploy)
+    // uPython: deploy (POST or GET/SSE /api/users/{userName}/project-upython/{projectName}/deploy)
     const upythonDeployMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/deploy$/);
-    if (upythonDeployMatch && method === 'POST') {
+    if (upythonDeployMatch && (method === 'POST' || method === 'GET')) {
       const userName = decodeURIComponent(upythonDeployMatch[1]);
       const projectName = decodeURIComponent(upythonDeployMatch[2]);
       await this.handleUpythonDeploy(req, res, userName, projectName);
@@ -1027,6 +1030,37 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
 
     // Scripts endpoints: /admin/scripts/* (admin-only, covered by /admin/ prefix check above)
+    // Docs generation: POST /api/admin/docs/generate
+    if (apiPath === '/admin/docs/generate' && method === 'POST') {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      try {
+        const result = await this.runDocsGenerate();
+        this.sendJsonResponse(res, result.exitCode === 0 ? 200 : 500, result);
+      } catch (err) {
+        this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+      }
+      return;
+    }
+
+    // Screenshots generation: POST /api/admin/screenshots/generate
+    if (apiPath === '/admin/screenshots/generate' && method === 'POST') {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      try {
+        const body = await this.parseRequestBody(req) as { user?: string; pass?: string; base?: string };
+        const result = await this.runScreenshotsGenerate(body.user, body.pass, body.base);
+        this.sendJsonResponse(res, result.exitCode === 0 ? 200 : 500, result);
+      } catch (err) {
+        this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+      }
+      return;
+    }
+
     const scriptRunMatch = apiPath.match(/^\/admin\/scripts\/([^/]+)\/run$/);
     if (scriptRunMatch && method === 'POST') {
       if (!this.scriptsService) {
@@ -1088,6 +1122,18 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Cleanup orphaned project dirs: POST /api/users/{userName}/cleanup-projects
+    const cleanupMatch = apiPath.match(/^\/users\/([^/]+)\/cleanup-projects$/);
+    if (cleanupMatch && method === 'POST') {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      const userName = decodeURIComponent(cleanupMatch[1]);
+      await this.handleCleanupOrphanProjects(res, userName);
+      return;
+    }
+
     this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
   }
 
@@ -1103,6 +1149,62 @@ export class MycastleHttpServer extends HttpUploadServer {
       return project?.id ?? null;
     } catch {
       return null;
+    }
+  }
+
+  /** Core cleanup logic — usable both from HTTP handler and scheduled job. */
+  async cleanupOrphanProjectsForUser(userName: string): Promise<{ removed: string[]; kept: string[] }> {
+    if (!this.rootDir) return { removed: [], kept: [] };
+    const projectsDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects');
+
+    // Read the registry
+    let registeredIds: Set<string>;
+    try {
+      const data = await this.fileSystem.readFile(`Minis/Users/${userName}/Project.json`);
+      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string }> };
+      registeredIds = new Set((parsed.projects ?? []).map(p => p.id));
+    } catch {
+      return { removed: [], kept: [] };
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
+    } catch {
+      return { removed: [], kept: [] };
+    }
+
+    const removed: string[] = [];
+    const kept: string[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const name = entry.name;
+      if (registeredIds.has(name)) {
+        kept.push(name);
+      } else {
+        try {
+          await this.fileSystem.deleteDirectory(path.join(projectsDir, name));
+          removed.push(name);
+        } catch (err) {
+          console.warn(`cleanup-projects: failed to delete "${name}" for ${userName}:`, err);
+        }
+      }
+    }
+
+    return { removed, kept };
+  }
+
+  private async handleCleanupOrphanProjects(res: ServerResponse, userName: string): Promise<void> {
+    if (!this.rootDir) {
+      this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
+      return;
+    }
+    try {
+      const result = await this.cleanupOrphanProjectsForUser(userName);
+      this.sendJsonResponse(res, 200, result);
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
     }
   }
 
@@ -1137,8 +1239,26 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; deviceName?: string };
-    if (!body.sketchName || !body.fqbn) {
+
+    const isSSE = req.headers.accept?.includes('text/event-stream');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+
+    let sketchName: string | undefined;
+    let fqbn: string | undefined;
+    let deviceName: string | undefined;
+
+    if (req.method === 'GET') {
+      sketchName = url.searchParams.get('sketchName') ?? undefined;
+      fqbn       = url.searchParams.get('fqbn') ?? undefined;
+      deviceName = url.searchParams.get('deviceName') ?? undefined;
+    } else {
+      const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; deviceName?: string };
+      sketchName = body.sketchName;
+      fqbn       = body.fqbn;
+      deviceName = body.deviceName;
+    }
+
+    if (!sketchName || !fqbn) {
       this.sendJsonResponse(res, 400, { error: 'sketchName and fqbn are required' });
       return;
     }
@@ -1149,11 +1269,10 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
 
     let minisConfig: MinisConfig | undefined;
-    if (body.deviceName) {
-      minisConfig = await this.resolveMinisConfig(userName, body.deviceName);
+    if (deviceName) {
+      minisConfig = await this.resolveMinisConfig(userName, deviceName);
     }
 
-    // Read libraries from project record
     let libraries: Array<{ name: string; version?: string; url?: string }> | undefined;
     try {
       const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; libraries?: Array<{ name: string; version?: string; url?: string }> }> };
@@ -1161,18 +1280,40 @@ export class MycastleHttpServer extends HttpUploadServer {
       if (projectEntry?.libraries?.length) libraries = projectEntry.libraries;
     } catch { /* ignore */ }
 
-    try {
-      const result = await this.arduinoService.compile(userName, projectId, body.sketchName, body.fqbn, minisConfig, libraries);
-      if (body.deviceName && minisConfig?.serialNumber) {
-        await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success, projectId, sketchName: body.sketchName });
+    if (isSSE) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+
+      const sendEvent = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      const onChunk = (chunk: string) => sendEvent('output', { chunk });
+
+      try {
+        const result = await this.arduinoService.compile(userName, projectId, sketchName, fqbn, minisConfig, libraries, onChunk);
+        if (deviceName && minisConfig?.serialNumber) {
+          await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn, success: result.success, projectId, sketchName });
+        }
+        sendEvent('done', { success: result.success, exitCode: result.exitCode });
+      } catch (err) {
+        sendEvent('done', { success: false, exitCode: 1, error: err instanceof Error ? err.message : 'Compilation failed' });
       }
-      this.sendJsonResponse(res, 200, result);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Compilation failed';
-      if (body.deviceName && minisConfig?.serialNumber) {
-        await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false, projectId, sketchName: body.sketchName });
+      res.end();
+    } else {
+      try {
+        const result = await this.arduinoService.compile(userName, projectId, sketchName, fqbn, minisConfig, libraries);
+        if (deviceName && minisConfig?.serialNumber) {
+          await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn, success: result.success, projectId, sketchName });
+        }
+        this.sendJsonResponse(res, 200, result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Compilation failed';
+        if (deviceName && minisConfig?.serialNumber) {
+          await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn, success: false, projectId, sketchName });
+        }
+        this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
       }
-      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
   }
 
@@ -1226,8 +1367,29 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; port?: string; serialNumber?: string };
-    if (!body.sketchName || !body.fqbn || !body.port) {
+
+    const isSSE = req.headers.accept?.includes('text/event-stream');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+
+    let sketchName: string | undefined;
+    let fqbn: string | undefined;
+    let port: string | undefined;
+    let serialNumber: string | undefined;
+
+    if (req.method === 'GET') {
+      sketchName    = url.searchParams.get('sketchName') ?? undefined;
+      fqbn          = url.searchParams.get('fqbn') ?? undefined;
+      port          = url.searchParams.get('port') ?? undefined;
+      serialNumber  = url.searchParams.get('serialNumber') ?? undefined;
+    } else {
+      const body = await this.parseRequestBody(req) as { sketchName?: string; fqbn?: string; port?: string; serialNumber?: string };
+      sketchName   = body.sketchName;
+      fqbn         = body.fqbn;
+      port         = body.port;
+      serialNumber = body.serialNumber;
+    }
+
+    if (!sketchName || !fqbn || !port) {
       this.sendJsonResponse(res, 400, { error: 'sketchName, fqbn and port are required' });
       return;
     }
@@ -1236,18 +1398,41 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 404, { error: 'Project not found' });
       return;
     }
-    try {
-      const result = await this.arduinoService.upload(userName, projectId, body.sketchName, body.fqbn, body.port);
-      if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: result.success, sketchName: body.sketchName });
+
+    if (isSSE) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+
+      const sendEvent = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      const onChunk = (chunk: string) => sendEvent('output', { chunk });
+
+      try {
+        const result = await this.arduinoService.upload(userName, projectId, sketchName, fqbn, port, onChunk);
+        if (serialNumber) {
+          await this.saveDeviceLastBuild(userName, serialNumber, { platform: 'arduino', fqbn, success: result.success, sketchName });
+        }
+        sendEvent('done', { success: result.success, exitCode: result.exitCode });
+      } catch (err) {
+        sendEvent('done', { success: false, exitCode: 1, error: err instanceof Error ? err.message : 'Upload failed' });
       }
-      this.sendJsonResponse(res, 200, result);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Upload failed';
-      if (body.serialNumber) {
-        await this.saveDeviceLastBuild(userName, body.serialNumber, { platform: 'arduino', fqbn: body.fqbn, success: false, sketchName: body.sketchName });
+      res.end();
+    } else {
+      try {
+        const result = await this.arduinoService.upload(userName, projectId, sketchName, fqbn, port);
+        if (serialNumber) {
+          await this.saveDeviceLastBuild(userName, serialNumber, { platform: 'arduino', fqbn, success: result.success, sketchName });
+        }
+        this.sendJsonResponse(res, 200, result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Upload failed';
+        if (serialNumber) {
+          await this.saveDeviceLastBuild(userName, serialNumber, { platform: 'arduino', fqbn, success: false, sketchName });
+        }
+        this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
       }
-      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
   }
 
@@ -2027,8 +2212,26 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 503, { error: 'MicroPython CLI not configured' });
       return;
     }
-    const body = await this.parseRequestBody(req) as { port?: string; deviceName?: string; serialNumber?: string };
-    if (!body.port) {
+
+    const isSSE = req.headers.accept?.includes('text/event-stream');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+
+    let port: string | undefined;
+    let deviceName: string | undefined;
+    let serialNumber: string | undefined;
+
+    if (req.method === 'GET') {
+      port         = url.searchParams.get('port') ?? undefined;
+      deviceName   = url.searchParams.get('deviceName') ?? undefined;
+      serialNumber = url.searchParams.get('serialNumber') ?? undefined;
+    } else {
+      const body = await this.parseRequestBody(req) as { port?: string; deviceName?: string; serialNumber?: string };
+      port         = body.port;
+      deviceName   = body.deviceName;
+      serialNumber = body.serialNumber;
+    }
+
+    if (!port) {
       this.sendJsonResponse(res, 400, { error: 'port is required' });
       return;
     }
@@ -2039,11 +2242,11 @@ const { password, ...safeBody } = body;
     }
 
     // Resolve deviceName — accept either deviceName or serialNumber (legacy)
-    let resolvedDeviceName = body.deviceName;
-    if (!resolvedDeviceName && body.serialNumber) {
+    let resolvedDeviceName = deviceName;
+    if (!resolvedDeviceName && serialNumber) {
       try {
         const deviceData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`) as { devices?: Array<{ name?: string; sn?: string }> };
-        const device = (deviceData?.devices ?? []).find(d => d.sn === body.serialNumber);
+        const device = (deviceData?.devices ?? []).find(d => d.sn === serialNumber);
         resolvedDeviceName = device?.name;
       } catch { /* ignore */ }
     }
@@ -2073,18 +2276,40 @@ const { password, ...safeBody } = body;
       } catch { /* ignore */ }
     }
 
-    try {
-      const result = await this.upythonService.deploy(userName, projectId, body.port, upythonLibraries, minisConfigFile);
-      if (resolvedDeviceName) {
-        await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: result.success });
+    if (isSSE) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+
+      const sendEvent = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      const onChunk = (chunk: string) => sendEvent('output', { chunk });
+
+      try {
+        const result = await this.upythonService.deploy(userName, projectId, port, upythonLibraries, minisConfigFile, onChunk);
+        if (resolvedDeviceName) {
+          await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: result.success });
+        }
+        sendEvent('done', { success: result.success, exitCode: result.exitCode });
+      } catch (err) {
+        sendEvent('done', { success: false, exitCode: 1, error: err instanceof Error ? err.message : 'Deploy failed' });
       }
-      this.sendJsonResponse(res, 200, result);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Deploy failed';
-      if (resolvedDeviceName) {
-        await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: false });
+      res.end();
+    } else {
+      try {
+        const result = await this.upythonService.deploy(userName, projectId, port, upythonLibraries, minisConfigFile);
+        if (resolvedDeviceName) {
+          await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: result.success });
+        }
+        this.sendJsonResponse(res, 200, result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Deploy failed';
+        if (resolvedDeviceName) {
+          await this.saveDeviceLastBuildByName(userName, resolvedDeviceName, { platform: 'micropython', success: false });
+        }
+        this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
       }
-      this.sendJsonResponse(res, 200, { success: false, output: msg, exitCode: 1 });
     }
   }
 
@@ -2860,6 +3085,181 @@ const { password, ...safeBody } = body;
 
   private errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : 'Internal server error';
+  }
+
+  private runDocsGenerate(): Promise<{ stdout: string; stderr: string; exitCode: number; duration: number }> {
+    // Monorepo root: two levels up from cwd (app/mycastle-backend → monorepo root).
+    // Falls back to REPO_ROOT env var for non-standard setups.
+    const repoRoot = process.env.REPO_ROOT ?? path.resolve(process.cwd(), '..', '..');
+    const docsJson = path.join(repoRoot, 'docs-site', 'docs.json');
+    // In dev: Vite serves from public/; in prod: from the built static dir.
+    const publicDocsJson = path.join(repoRoot, 'app', 'mycastle-web', 'public', 'docs.json');
+
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+
+      const proc = spawn('pnpm', ['gendocs'], { cwd: repoRoot, shell: true });
+
+      proc.stdout.on('data', (chunk: Buffer) => stdout.push(chunk.toString()));
+      proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk.toString()));
+
+      proc.on('close', (code) => {
+        const exitCode = code ?? 1;
+        if (exitCode === 0 && fs.existsSync(docsJson)) {
+          try {
+            fs.copyFileSync(docsJson, publicDocsJson);
+          } catch {
+            stderr.push('\nWarning: could not copy docs.json to public/\n');
+          }
+          // Also copy to STATIC_DIR if running in production
+          if (this.ownStaticDir) {
+            try {
+              fs.copyFileSync(docsJson, path.join(this.ownStaticDir, 'docs.json'));
+            } catch { /* non-fatal */ }
+          }
+        }
+        resolve({ stdout: stdout.join(''), stderr: stderr.join(''), exitCode, duration: Date.now() - start });
+      });
+
+      proc.on('error', (err) => {
+        resolve({ stdout: '', stderr: err.message, exitCode: 1, duration: Date.now() - start });
+      });
+    });
+  }
+
+  private async runScreenshotsGenerate(
+    screenshotUser?: string,
+    screenshotPass?: string,
+    screenshotBase?: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number; duration: number }> {
+    const repoRoot = process.env.REPO_ROOT ?? path.resolve(process.cwd(), '..', '..');
+    const screenshotsDir = path.join(repoRoot, 'app', 'mycastle-web', 'public', 'screenshots');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...(screenshotUser ? { SCREENSHOT_USER: screenshotUser } : {}),
+      ...(screenshotPass ? { SCREENSHOT_PASS: screenshotPass } : {}),
+      ...(screenshotBase ? { SCREENSHOT_BASE: screenshotBase } : {}),
+    };
+
+    const start = Date.now();
+    const allStdout: string[] = [];
+    const allStderr: string[] = [];
+
+    // Step 1: run Playwright
+    const playwrightExitCode = await new Promise<number>((resolve) => {
+      const proc = spawn(
+        'npx',
+        ['playwright', 'test', 'tests/screenshots/take-screenshots.ts', '--config', 'tests/screenshots/playwright.config.ts'],
+        { cwd: repoRoot, shell: true, env },
+      );
+      proc.stdout.on('data', (chunk: Buffer) => allStdout.push(chunk.toString()));
+      proc.stderr.on('data', (chunk: Buffer) => allStderr.push(chunk.toString()));
+      proc.on('close', (code) => resolve(code ?? 1));
+      proc.on('error', (err) => { allStderr.push(err.message); resolve(1); });
+    });
+
+    if (playwrightExitCode !== 0) {
+      return { stdout: allStdout.join(''), stderr: allStderr.join(''), exitCode: playwrightExitCode, duration: Date.now() - start };
+    }
+
+    // Step 2: AI analysis — for each PNG generate callout annotations
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      allStderr.push('\nANTHROPIC_API_KEY not set — skipping AI callout generation.\n');
+      return { stdout: allStdout.join(''), stderr: allStderr.join(''), exitCode: 0, duration: Date.now() - start };
+    }
+
+    allStdout.push('\nAnalyzing screenshots with Claude Vision…\n');
+
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const anthropic = new Anthropic({ apiKey });
+
+    const pngFiles = fs.readdirSync(screenshotsDir)
+      .filter((f) => f.endsWith('.png'))
+      .sort();
+
+    const docs: Array<{
+      file: string;
+      title: string;
+      section: string;
+      description: string;
+      callouts: Array<{ n: number; x: number; y: number; label: string; description: string }>;
+    }> = [];
+
+    for (const png of pngFiles) {
+      const file = png.replace(/\.png$/, '');
+      allStdout.push(`  analyzing ${file}…\n`);
+
+      try {
+        const imgBuffer = fs.readFileSync(path.join(screenshotsDir, png));
+        const base64 = imgBuffer.toString('base64');
+
+        // Read the companion .md for context if it exists
+        let mdContext = '';
+        const mdPath = path.join(screenshotsDir, `${file}.md`);
+        if (fs.existsSync(mdPath)) mdContext = fs.readFileSync(mdPath, 'utf8');
+
+        const response = await anthropic.messages.create({
+          model: 'claude-opus-4-5',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: { type: 'base64', media_type: 'image/png', data: base64 },
+              },
+              {
+                type: 'text',
+                text: `You are documenting a web application UI. Analyze this screenshot and identify the most important UI elements (buttons, panels, tables, inputs, navigation, etc.).
+
+${mdContext ? `Context from existing description:\n${mdContext}\n` : ''}
+
+Return ONLY a JSON object (no markdown, no explanation) with this exact structure:
+{
+  "title": "short page title",
+  "section": "one of: Auth | Admin | Electronics | IoT | PIM | Server | Tools | User",
+  "description": "one sentence describing this page",
+  "callouts": [
+    { "n": 1, "x": 50, "y": 10, "label": "Element name", "description": "What this element does" }
+  ]
+}
+
+Rules:
+- x and y are percentages (0-100) from top-left corner of the screenshot
+- identify 3-6 key elements
+- be specific about positions (look at actual pixel positions in the image)
+- labels are short (2-4 words), descriptions are 1-2 sentences`,
+              },
+            ],
+          }],
+        });
+
+        const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]) as { title: string; section: string; description: string; callouts: Array<{ n: number; x: number; y: number; label: string; description: string }> };
+          docs.push({ file, ...parsed });
+          allStdout.push(`    ✓ ${parsed.callouts.length} callouts\n`);
+        } else {
+          allStderr.push(`    ✗ ${file}: no JSON in response\n`);
+        }
+      } catch (err) {
+        allStderr.push(`    ✗ ${file}: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    }
+
+    // Step 3: save docs.json
+    if (docs.length > 0) {
+      const docsJson = { generatedAt: new Date().toISOString(), entries: docs };
+      const docsPath = path.join(screenshotsDir, 'docs.json');
+      fs.writeFileSync(docsPath, JSON.stringify(docsJson, null, 2), 'utf8');
+      allStdout.push(`\nSaved docs.json with ${docs.length} entries.\n`);
+    }
+
+    return { stdout: allStdout.join(''), stderr: allStderr.join(''), exitCode: 0, duration: Date.now() - start };
   }
 
   // --- GitHub Import ---

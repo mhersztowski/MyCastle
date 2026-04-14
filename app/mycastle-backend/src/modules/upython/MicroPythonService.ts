@@ -40,9 +40,9 @@ export class MicroPythonService {
 
   get isAvailable(): boolean { return this.cli !== null; }
 
-  async deploy(userName: string, projectId: string, port: string, libraries?: UpythonLibrary[], inlineFiles?: Array<{ content: string; remoteName: string }>): Promise<DeployResult> {
+  async deploy(userName: string, projectId: string, port: string, libraries?: UpythonLibrary[], inlineFiles?: Array<{ content: string; remoteName: string }>, onChunk?: (chunk: string) => void): Promise<DeployResult> {
     if (!this.cli) throw new Error('MicroPython CLI not configured');
     const project = new MicroPythonProject(this.cli, this.rootDir, userName, projectId);
-    return project.deploy(port, libraries, inlineFiles);
+    return project.deploy(port, libraries, inlineFiles, onChunk);
   }
 }

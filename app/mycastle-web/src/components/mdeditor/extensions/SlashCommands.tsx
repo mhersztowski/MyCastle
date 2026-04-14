@@ -35,6 +35,7 @@ import PersonIcon from '@mui/icons-material/Person';
 import TaskIcon from '@mui/icons-material/Task';
 import FolderIcon from '@mui/icons-material/Folder';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import DynamicFormIcon from '@mui/icons-material/DynamicForm';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -327,6 +328,14 @@ const commands: CommandItem[] = [
         .deleteRange(range)
         .insertUIForm('')
         .run();
+    },
+  },
+  {
+    title: 'Form',
+    description: 'Embed a FormEngine form',
+    icon: <DynamicFormIcon color="primary" />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).insertFormEngine('').run();
     },
   },
   {

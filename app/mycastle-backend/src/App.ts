@@ -1,4 +1,5 @@
 import { MqttServer, FileSystem, JwtService, PasswordService, ApiKeyService, DataSource } from '@mhersztowski/core-backend';
+import * as cron from 'node-cron';
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { OcrService } from './modules/ocr/OcrService';
 import { AutomateService } from './modules/automate';
@@ -236,6 +237,10 @@ export class App {
 
     this._mqttServer.setAutomateService(this.automateService);
 
+    // Nightly cleanup of orphaned project directories (every day at 03:00 UTC)
+    cron.schedule('0 3 * * *', () => { void this.runOrphanProjectsCleanup(); });
+    console.log('Scheduled nightly orphan-projects cleanup at 03:00 UTC');
+
     // Graceful shutdown on signals
     const shutdownHandler = async () => {
       await this.shutdown();
@@ -270,6 +275,25 @@ export class App {
     };
     await this.fileSystem.writeFile(usersPath, JSON.stringify(defaultAdmin, null, 2));
     console.log('Seeded default admin user (admin/admin) — change password after first login!');
+  }
+
+  private async runOrphanProjectsCleanup(): Promise<void> {
+    try {
+      const data = await this.fileSystem.readFile('Minis/Admin/Users.json');
+      const parsed = JSON.parse(data.content) as { items?: Array<{ name: string }> };
+      const users = parsed.items ?? [];
+      let totalRemoved = 0;
+      for (const user of users) {
+        const result = await this.httpServer.cleanupOrphanProjectsForUser(user.name);
+        if (result.removed.length > 0) {
+          console.log(`Cleanup [${user.name}]: removed ${result.removed.length} orphan dir(s): ${result.removed.join(', ')}`);
+          totalRemoved += result.removed.length;
+        }
+      }
+      console.log(`Nightly cleanup done — ${totalRemoved} orphaned director${totalRemoved === 1 ? 'y' : 'ies'} removed across ${users.length} user(s)`);
+    } catch (err) {
+      console.warn('Nightly cleanup failed:', err instanceof Error ? err.message : err);
+    }
   }
 
   async shutdown(): Promise<void> {

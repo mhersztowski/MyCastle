@@ -35,6 +35,7 @@ import { VideoEmbed } from './extensions/VideoExtension';
 import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
 import { ColumnLayout, Column } from './extensions/ColumnExtension';
 import { UIFormEmbed } from './extensions/UIFormExtension';
+import { FormEngineEmbed } from './extensions/FormEngineExtension';
 import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
 import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
@@ -156,6 +157,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       ColumnLayout,
       Column,
       UIFormEmbed,
+      FormEngineEmbed,
       AutomateFlowEmbed,
       AutomateScriptBlock,
       BlockIdExtension,

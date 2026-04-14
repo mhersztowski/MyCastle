@@ -1,5 +1,7 @@
 export * from './types';
+export * from './project';
 export { VfsExplorer } from './VfsExplorer';
+export { ProjectPanel } from './ProjectPanel';
 export { useVfsTree } from './useVfsTree';
 export { VfsBreadcrumbs } from './VfsBreadcrumbs';
 export { VfsMountManager } from './VfsMountManager';

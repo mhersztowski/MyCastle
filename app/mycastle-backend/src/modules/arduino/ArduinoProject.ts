@@ -33,7 +33,7 @@ export class ArduinoProject {
     await fs.mkdir(this.librariesDir, { recursive: true });
   }
 
-  async compile(sketchName: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>): Promise<CompileResult> {
+  async compile(sketchName: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>, onChunk?: (chunk: string) => void): Promise<CompileResult> {
     await this.ensureConfig();
     await this.ensureDirs(sketchName);
     await this.cleanDir(this.outputDir);
@@ -80,6 +80,8 @@ export class ArduinoProject {
     }
 
     const buildDir = this.sketchBuildDir(sketchName);
+    if (libLogs.length && onChunk) onChunk(libLogs.join('\n') + '\n');
+
     const result = await this.cli.compile({
       fqbn: this.fqbn,
       sketchPath,
@@ -87,6 +89,7 @@ export class ArduinoProject {
       outputDir: this.outputDir,
       buildDir,
       verbose: true,
+      onChunk,
     });
 
     if (libLogs.length > 0) {
@@ -104,7 +107,7 @@ export class ArduinoProject {
     return result;
   }
 
-  async upload(sketchName: string, port: string): Promise<UploadResult> {
+  async upload(sketchName: string, port: string, onChunk?: (chunk: string) => void): Promise<UploadResult> {
     const sketchPath = path.join(this.sketchesDir, sketchName, `${sketchName}.ino`);
     return this.cli.upload({
       fqbn: this.fqbn,
@@ -112,6 +115,7 @@ export class ArduinoProject {
       port,
       configFilePath: this.configFile,
       verbose: true,
+      onChunk,
     });
   }
 

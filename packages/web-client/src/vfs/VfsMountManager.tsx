@@ -67,6 +67,14 @@ function MountIcon() {
   );
 }
 
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ display: 'block', transition: 'transform 0.15s', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+      <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /* ── Styling ── */
 
 const dialogPaperSx = {
@@ -128,6 +136,7 @@ export function VfsMountManager({ compositeFs, providerRegistry, onMountsChanged
   const [version, setVersion] = useState(0);
   const mounts = useMemo(() => compositeFs.getMounts(), [compositeFs, version]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [expanded, setExpanded] = useState(false);
   const [presets, setPresets] = useState<VfsMountPreset[]>(() => loadPresets());
 
   const [dialog, setDialog] = useState<MountDialogState>({
@@ -268,95 +277,120 @@ export function VfsMountManager({ compositeFs, providerRegistry, onMountsChanged
     mounts.some(m => m.mountPoint === preset.mountPoint),
   [mounts]);
 
+  const mountCount = mounts.length;
+  const presetCount = presets.length;
+
   return (
     <>
-      {/* ── Active mounts ── */}
-      <Box sx={sectionHeaderSx}>
-        <span>Mounts</span>
-        <IconButton size="small" onClick={() => openDialog()} sx={{ color: '#cccccc', p: 0.25 }}>
+      {/* ── Collapsible header ── */}
+      <Box
+        sx={{
+          ...sectionHeaderSx,
+          cursor: 'pointer',
+          userSelect: 'none',
+          '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
+        }}
+        onClick={() => setExpanded(v => !v)}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <ChevronIcon open={expanded} />
+          <span>Mounts</span>
+          {mountCount > 0 && (
+            <span style={{ fontSize: 10, color: '#4fc3f7', fontWeight: 400, marginLeft: 2 }}>
+              {mountCount}
+            </span>
+          )}
+          {presetCount > 0 && (
+            <span style={{ fontSize: 10, color: '#858585', fontWeight: 400 }}>
+              /{presetCount}p
+            </span>
+          )}
+        </Box>
+        <IconButton
+          size="small"
+          onClick={e => { e.stopPropagation(); openDialog(); }}
+          sx={{ color: '#cccccc', p: 0.25 }}
+          title="Add mount"
+        >
           <AddIcon />
         </IconButton>
       </Box>
 
-      {mounts.map(m => (
-        <Box key={m.mountPoint} sx={rowSx}>
-          <Chip
-            label={m.provider.scheme}
-            size="small"
-            sx={{ height: 16, fontSize: 10, bgcolor: '#3c3c3c', color: '#cccccc', '& .MuiChip-label': { px: 0.75 } }}
-          />
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {m.mountPoint}
-          </span>
-          <IconButton
-            size="small"
-            onClick={() => handleUnmount(m.mountPoint)}
-            sx={{ color: '#858585', p: 0.25, '&:hover': { color: '#f48771' } }}
-          >
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      ))}
-
-      {mounts.length === 0 && (
-        <Box sx={{ px: 1, py: 1, fontSize: 11, color: '#666', flexShrink: 0 }}>
-          No mounts. Click + to add a provider.
-        </Box>
-      )}
-
-      {/* ── Saved presets ── */}
-      <Box sx={{ ...sectionHeaderSx, mt: 0.5 }}>
-        <span>Presets</span>
-      </Box>
-
-      {presets.map(preset => {
-        const mounted = isMounted(preset);
-        return (
-          <Box key={preset.id} sx={rowSx}>
-            <Chip
-              label={preset.providerType}
-              size="small"
-              sx={{ height: 16, fontSize: 10, bgcolor: '#3c3c3c', color: '#cccccc', '& .MuiChip-label': { px: 0.75 } }}
-            />
-            <Box sx={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-              <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {preset.name}
+      {expanded && (
+        <>
+          {/* ── Active mounts ── */}
+          {mounts.map(m => (
+            <Box key={m.mountPoint} sx={rowSx}>
+              <Chip
+                label={m.provider.scheme}
+                size="small"
+                sx={{ height: 16, fontSize: 10, bgcolor: '#3c3c3c', color: '#cccccc', '& .MuiChip-label': { px: 0.75 } }}
+              />
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {m.mountPoint}
               </span>
-              <span style={{ fontSize: 10, color: '#666', display: 'block' }}>{preset.mountPoint}</span>
+              <IconButton
+                size="small"
+                onClick={() => handleUnmount(m.mountPoint)}
+                sx={{ color: '#858585', p: 0.25, '&:hover': { color: '#f48771' } }}
+              >
+                <CloseIcon />
+              </IconButton>
             </Box>
-            <IconButton
-              size="small"
-              title={mounted ? 'Already mounted' : 'Mount'}
-              disabled={mounted}
-              onClick={() => handleMountPreset(preset)}
-              sx={{ color: mounted ? '#444' : '#89d185', p: 0.25, '&:hover': { color: '#a8e6a0' } }}
-            >
-              <MountIcon />
-            </IconButton>
-            <IconButton
-              size="small"
-              title="Edit"
-              onClick={() => openDialog(preset)}
-              sx={{ color: '#858585', p: 0.25, '&:hover': { color: '#cccccc' } }}
-            >
-              <AddIcon />
-            </IconButton>
-            <IconButton
-              size="small"
-              title="Delete preset"
-              onClick={() => handleDeletePreset(preset.id)}
-              sx={{ color: '#858585', p: 0.25, '&:hover': { color: '#f48771' } }}
-            >
-              <CloseIcon />
-            </IconButton>
-          </Box>
-        );
-      })}
+          ))}
 
-      {presets.length === 0 && (
-        <Box sx={{ px: 1, py: 1, fontSize: 11, color: '#666', flexShrink: 0 }}>
-          No presets. Fill "Preset name" when mounting to save one.
-        </Box>
+          {mounts.length === 0 && (
+            <Box sx={{ px: 2, py: 0.5, fontSize: 11, color: '#666', flexShrink: 0 }}>
+              No active mounts.
+            </Box>
+          )}
+
+          {/* ── Saved presets ── */}
+          {presetCount > 0 && (
+            <Box sx={{ ...sectionHeaderSx, fontSize: 10, py: 0.15, color: '#666' }}>
+              <span>Presets</span>
+            </Box>
+          )}
+
+          {presets.map(preset => {
+            const mounted = isMounted(preset);
+            return (
+              <Box key={preset.id} sx={rowSx}>
+                <Box sx={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+                  <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+                    {preset.name}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#666', display: 'block' }}>{preset.mountPoint}</span>
+                </Box>
+                <IconButton
+                  size="small"
+                  title={mounted ? 'Already mounted' : 'Mount'}
+                  disabled={mounted}
+                  onClick={() => handleMountPreset(preset)}
+                  sx={{ color: mounted ? '#444' : '#89d185', p: 0.25, '&:hover': { color: '#a8e6a0' } }}
+                >
+                  <MountIcon />
+                </IconButton>
+                <IconButton
+                  size="small"
+                  title="Edit"
+                  onClick={() => openDialog(preset)}
+                  sx={{ color: '#858585', p: 0.25, '&:hover': { color: '#cccccc' } }}
+                >
+                  <AddIcon />
+                </IconButton>
+                <IconButton
+                  size="small"
+                  title="Delete preset"
+                  onClick={() => handleDeletePreset(preset.id)}
+                  sx={{ color: '#858585', p: 0.25, '&:hover': { color: '#f48771' } }}
+                >
+                  <CloseIcon />
+                </IconButton>
+              </Box>
+            );
+          })}
+        </>
       )}
 
       {/* ── Mount Dialog ── */}

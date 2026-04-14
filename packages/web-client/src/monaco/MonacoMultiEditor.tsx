@@ -15,6 +15,7 @@ import { decodeText, encodeText } from '@mhersztowski/core';
 
 import { VfsExplorer } from '../vfs/VfsExplorer';
 import type { VfsProviderDef } from '../vfs/providerRegistry';
+import type { OutputLine } from '../vfs/project/types';
 import { EditorInstance } from './core/EditorInstance';
 import { ModelManager } from './core/ModelManager';
 import { KeyMod, KeyCode } from './core/CommandRegistry';
@@ -22,7 +23,8 @@ import type { DocumentUri } from './utils/types';
 import { createDocumentUri } from './utils/types';
 import { AgentPanel } from './agent/ui/AgentPanel';
 import type { AgentConfig } from './agent/types';
-import { TerminalPanel } from './terminal/TerminalPanel';
+import { BottomPanel } from './BottomPanel';
+import type { BottomTab } from './BottomPanel';
 
 /* ── Types ── */
 
@@ -34,9 +36,17 @@ export interface MonacoMultiEditorProps {
   onFileSave?: (path: string, content: Uint8Array) => void | Promise<void>;
   enableAgent?: boolean;
   defaultAgentConfig?: Partial<AgentConfig>;
+  /** Extra context injected into agent system prompt (workspace structure, user info, etc.). */
+  agentClaudeMd?: string;
+  /** Auth token forwarded to the agent for authenticated web-fetch calls. */
+  agentAuthToken?: string;
+  /** Base URL for agent web-fetch proxy endpoint (e.g. '/api/web-fetch'). */
+  agentWebFetchUrl?: string;
   enableTerminal?: boolean;
   terminalWsUrl?: string;
   terminalToken?: string;
+  /** Passed through to VfsExplorer so project action buttons can make authenticated API calls. */
+  projectDeps?: import('../vfs/project/types').ProjectDeps;
 }
 
 interface TabInfo {
@@ -175,7 +185,7 @@ const MIN_PANEL_PX = 180;
 const ACTIVITY_BAR_W = 48;
 const MENU_BAR_H = 30;
 const STATUS_BAR_H = 22;
-const MIN_TERMINAL_H = 100;
+
 
 /* ── Kbd shortcut label ── */
 
@@ -455,9 +465,13 @@ export function MonacoMultiEditor({
   onFileSave,
   enableAgent = false,
   defaultAgentConfig,
+  agentClaudeMd,
+  agentAuthToken,
+  agentWebFetchUrl,
   enableTerminal = false,
   terminalWsUrl,
   terminalToken,
+  projectDeps,
 }: MonacoMultiEditorProps) {
   const [groups, setGroups] = useState<EditorGroup[]>(() => [{ id: makeGroupId(), tabs: [], activeTab: null, size: 1 }]);
   const [activeGroupId, setActiveGroupId] = useState<string>(groups[0].id);
@@ -468,9 +482,13 @@ export function MonacoMultiEditor({
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [agentPanelWidth, setAgentPanelWidth] = useState(380);
   const agentPanelWidthRef = useRef(380);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [terminalHeight, setTerminalHeight] = useState(200);
-  const terminalHeightRef = useRef(200);
+  // Unified bottom panel (terminal + output tabs)
+  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(220);
+  const bottomPanelHeightRef = useRef(220);
+  const [bottomTabs, setBottomTabs] = useState<BottomTab[]>([{ id: 'terminal-1', type: 'terminal', label: 'bash' }]);
+  const [activeBottomTabId, setActiveBottomTabId] = useState('terminal-1');
+  const currentOutputTabIdRef = useRef<string | null>(null);
   const mainAreaRef = useRef<HTMLDivElement | null>(null);
 
   // Menu anchors
@@ -731,6 +749,28 @@ export function MonacoMultiEditor({
     })));
   }, []);
 
+  // Agent wrote files → reload any open tabs whose content changed
+  const handleAgentFileWritten = useCallback(async (paths: string[]) => {
+    const mm = modelManagerRef.current;
+    if (!mm) return;
+    for (const path of paths) {
+      const uri = `file://${path}`;
+      const docUri = createDocumentUri(uri);
+      const model = mm.getModel(docUri);
+      if (!model) continue; // not open in any tab, nothing to reload
+      try {
+        const data = await provider.readFile(path);
+        const content = decodeText(data);
+        model.setValue(content);
+        // Mark the tab as clean — agent already persisted it to VFS
+        setGroups(prev => prev.map(g => ({
+          ...g,
+          tabs: g.tabs.map(t => t.path === path ? { ...t, modified: false } : t),
+        })));
+      } catch { /* file deleted or unreadable — leave tab as-is */ }
+    }
+  }, [provider]);
+
   // Splitter drag (sidebar)
   const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -790,36 +830,79 @@ export function MonacoMultiEditor({
     document.addEventListener('mouseup', onMouseUp);
   }, []);
 
-  // Terminal splitter drag (vertical)
-  const handleTerminalSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+  // Bottom panel splitter drag
+  const handleBottomSplitterMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const container = mainAreaRef.current;
     if (!container) return;
-
     const startY = e.clientY;
-    const startHeight = terminalHeightRef.current;
-    const containerHeight = container.getBoundingClientRect().height;
-    const maxHeight = containerHeight * 0.7;
-
+    const startHeight = bottomPanelHeightRef.current;
+    const maxHeight = container.getBoundingClientRect().height * 0.7;
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'row-resize';
-
     const onMouseMove = (ev: MouseEvent) => {
-      const dy = startY - ev.clientY;
-      const newHeight = Math.max(MIN_TERMINAL_H, Math.min(maxHeight, startHeight + dy));
-      terminalHeightRef.current = newHeight;
-      setTerminalHeight(newHeight);
+      const newH = Math.max(80, Math.min(maxHeight, startHeight + (startY - ev.clientY)));
+      bottomPanelHeightRef.current = newH;
+      setBottomPanelHeight(newH);
     };
-
     const onMouseUp = () => {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
     };
-
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
+  }, []);
+
+  // Tab management
+  const handleAddTerminal = useCallback(() => {
+    const id = `terminal-${Date.now()}`;
+    const n = bottomTabs.filter(t => t.type === 'terminal').length + 1;
+    setBottomTabs(prev => [...prev, { id, type: 'terminal', label: `bash ${n}` }]);
+    setActiveBottomTabId(id);
+    setBottomPanelOpen(true);
+  }, [bottomTabs]);
+
+  const handleCloseTab = useCallback((id: string) => {
+    setBottomTabs(prev => {
+      const next = prev.filter(t => t.id !== id);
+      if (next.length === 0) { setBottomPanelOpen(false); return prev; }
+      return next;
+    });
+    setActiveBottomTabId(prev => {
+      if (prev !== id) return prev;
+      const idx = bottomTabs.findIndex(t => t.id === id);
+      const remaining = bottomTabs.filter(t => t.id !== id);
+      if (remaining.length === 0) return '';
+      return remaining[Math.max(0, idx - 1)].id;
+    });
+  }, [bottomTabs]);
+
+  // VfsExplorer → bottom panel output callbacks
+  const handleOutputLine = useCallback((line: OutputLine) => {
+    const tabId = currentOutputTabIdRef.current;
+    if (!tabId) return;
+    setBottomTabs(prev => prev.map(t =>
+      t.id === tabId && t.type === 'output' ? { ...t, lines: [...t.lines, line] } : t,
+    ));
+  }, []);
+
+  const handleActionRunningChange = useCallback((running: boolean, actionLabel?: string) => {
+    if (running) {
+      const tabId = `output-${Date.now()}`;
+      currentOutputTabIdRef.current = tabId;
+      setBottomTabs(prev => [...prev, { id: tabId, type: 'output', label: actionLabel ?? 'Output', lines: [], running: true }]);
+      setActiveBottomTabId(tabId);
+      setBottomPanelOpen(true);
+    } else {
+      const tabId = currentOutputTabIdRef.current;
+      if (tabId) {
+        setBottomTabs(prev => prev.map(t =>
+          t.id === tabId && t.type === 'output' ? { ...t, running: false } : t,
+        ));
+      }
+    }
   }, []);
 
   // Activity bar toggle
@@ -995,7 +1078,7 @@ export function MonacoMultiEditor({
             </Box>
 
             {/* Sidebar content */}
-            <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+            <Box sx={{ flexGrow: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               {sidebarPanel === 'explorer' && (
                 <VfsExplorer
                   provider={provider}
@@ -1005,6 +1088,11 @@ export function MonacoMultiEditor({
                   readOnly={readOnly}
                   showBreadcrumbs={false}
                   providerRegistry={providerRegistry}
+                  selectedPath={activeGroup.activeTab ?? undefined}
+                  projectDeps={projectDeps}
+                  onOutputLine={handleOutputLine}
+                  onActionRunningChange={handleActionRunningChange}
+                  hideOutput
                 />
               )}
 
@@ -1133,6 +1221,10 @@ export function MonacoMultiEditor({
               provider={provider}
               defaultConfig={defaultAgentConfig}
               onFileOpen={handleFileOpen}
+              injectedClaudeMd={agentClaudeMd}
+              authToken={agentAuthToken}
+              webFetchUrl={agentWebFetchUrl}
+              onFileWritten={handleAgentFileWritten}
             />
           </Box>
         )}
@@ -1170,22 +1262,23 @@ export function MonacoMultiEditor({
         )}
       </Box>
 
-      {/* ── Terminal splitter + panel ── */}
-      {enableTerminal && terminalOpen && (
+      {/* ── Bottom panel (terminal + output tabs) ── */}
+      {enableTerminal && bottomPanelOpen && (
         <>
           <Box
-            onMouseDown={handleTerminalSplitterMouseDown}
-            sx={{
-              height: 5,
-              cursor: 'row-resize',
-              bgcolor: '#2d2d2d',
-              flexShrink: 0,
-              '&:hover': { bgcolor: '#007acc' },
-              transition: 'background-color 0.15s',
-            }}
+            onMouseDown={handleBottomSplitterMouseDown}
+            sx={{ height: 5, cursor: 'row-resize', bgcolor: '#2d2d2d', flexShrink: 0, '&:hover': { bgcolor: '#007acc' }, transition: 'background-color 0.15s' }}
           />
-          <Box sx={{ height: terminalHeight, flexShrink: 0, overflow: 'hidden', borderTop: '1px solid #3c3c3c' }}>
-            <TerminalPanel wsUrl={terminalWsUrl} token={terminalToken} />
+          <Box sx={{ height: bottomPanelHeight, flexShrink: 0, overflow: 'hidden', borderTop: '1px solid #3c3c3c' }}>
+            <BottomPanel
+              tabs={bottomTabs}
+              activeTabId={activeBottomTabId}
+              onTabChange={setActiveBottomTabId}
+              onAddTerminal={handleAddTerminal}
+              onCloseTab={handleCloseTab}
+              wsUrl={terminalWsUrl}
+              token={terminalToken}
+            />
           </Box>
         </>
       )}
@@ -1205,16 +1298,12 @@ export function MonacoMultiEditor({
       }}>
         {enableTerminal && (
           <Box
-            onClick={() => setTerminalOpen(p => !p)}
-            title="Toggle Terminal"
+            onClick={() => setBottomPanelOpen(p => !p)}
+            title="Toggle Terminal Panel"
             sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.5,
-              cursor: 'pointer',
-              px: 0.5,
-              borderRadius: 0.5,
-              opacity: terminalOpen ? 1 : 0.7,
+              display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer',
+              px: 0.5, borderRadius: 0.5,
+              opacity: bottomPanelOpen ? 1 : 0.7,
               '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', opacity: 1 },
             }}
           >

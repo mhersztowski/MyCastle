@@ -11,6 +11,8 @@ import { buildWebToolDefinitions, executeWebTool } from '../tools/webTools';
 export interface AgentEngineCallbacks {
   onMessage: (message: AgentMessage) => void;
   onProcessingChange: (processing: boolean) => void;
+  /** Called after the agent writes/deletes/renames files in the VFS. */
+  onFileWritten?: (paths: string[]) => void;
 }
 
 export class AgentEngine {
@@ -30,6 +32,7 @@ export class AgentEngine {
   private skills = new Map<string, string>(); // name → content
   private webFetchUrl: string | null = null;
   private authToken: string | null = null;
+  private injectedClaudeMd = '';
 
   constructor(
     private provider: FileSystemProvider,
@@ -41,6 +44,7 @@ export class AgentEngine {
     maxTokens = 4096,
     webFetchUrl?: string,
     authToken?: string,
+    injectedClaudeMd?: string,
   ) {
     this.aiProvider = aiProvider;
     this.config = config;
@@ -49,6 +53,7 @@ export class AgentEngine {
     this.maxTokens = maxTokens;
     this.webFetchUrl = webFetchUrl ?? null;
     this.authToken = authToken ?? null;
+    this.injectedClaudeMd = injectedClaudeMd ?? '';
   }
 
   updateConfig(
@@ -59,6 +64,7 @@ export class AgentEngine {
     maxTokens?: number,
     webFetchUrl?: string,
     authToken?: string,
+    injectedClaudeMd?: string,
   ): void {
     this.aiProvider = aiProvider;
     this.config = config;
@@ -67,6 +73,7 @@ export class AgentEngine {
     if (maxTokens !== undefined) this.maxTokens = maxTokens;
     if (webFetchUrl !== undefined) this.webFetchUrl = webFetchUrl;
     if (authToken !== undefined) this.authToken = authToken;
+    if (injectedClaudeMd !== undefined) this.injectedClaudeMd = injectedClaudeMd;
   }
 
   /** Scans VFS root dirs for CLAUDE.md + skills (skills-lock.json + .claude/commands/). */
@@ -236,6 +243,7 @@ export class AgentEngine {
           this.history.push(assistantMsg);
           this.callbacks.onMessage(assistantMsg);
 
+          const WRITE_TOOLS = new Set(['vfs_write_file', 'vfs_delete', 'vfs_rename', 'vfs_copy', 'vfs_mkdir']);
           for (const toolCall of response.toolCalls) {
             if (signal.aborted) break;
             let result: string;
@@ -248,6 +256,9 @@ export class AgentEngine {
               ({ result, affectedFiles } = await executeVfsTool(toolCall, this.provider));
             }
             for (const f of affectedFiles) this.allAffectedFiles.add(f);
+            if (affectedFiles.length > 0 && WRITE_TOOLS.has(toolCall.function.name)) {
+              this.callbacks.onFileWritten?.(affectedFiles);
+            }
 
             const toolMsg = this.createMessage('tool', result);
             toolMsg.toolCallId = toolCall.id;
@@ -308,6 +319,10 @@ export class AgentEngine {
       'Always respond in the same language the user uses.',
       'Be concise and precise.',
     ];
+    if (this.injectedClaudeMd) {
+      lines.push('\n## Workspace context\n');
+      lines.push(this.injectedClaudeMd);
+    }
     if (this.claudeMdContent) {
       lines.push('\n## Project instructions (from CLAUDE.md files)\n');
       lines.push(this.claudeMdContent);

@@ -585,6 +585,14 @@ class MinisApiService {
     return this.request('POST', `/admin/scripts/${encodeURIComponent(name)}/run`);
   }
 
+  async generateDocs(): Promise<{ stdout: string; stderr: string; exitCode: number; duration: number }> {
+    return this.request('POST', '/admin/docs/generate');
+  }
+
+  async generateScreenshots(opts: { user?: string; pass?: string; base?: string } = {}): Promise<{ stdout: string; stderr: string; exitCode: number; duration: number }> {
+    return this.request('POST', '/admin/screenshots/generate', opts);
+  }
+
   /** Fetch a compiled output file as binary string (for esptool-js). */
   async fetchOutputBinary(userName: string, projectName: string, fileName: string): Promise<string> {
     const res = await fetch(`${this.getBaseUrl()}/api/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/output/${encodeURIComponent(fileName)}`, {
@@ -623,6 +631,10 @@ class MinisApiService {
   async getAnthropicKey(): Promise<string> {
     const res = await this.request<{ apiKey: string }>('GET', '/config/anthropic-key');
     return res.apiKey ?? '';
+  }
+
+  async cleanupOrphanProjects(userName: string): Promise<{ removed: string[]; kept: string[] }> {
+    return this.request<{ removed: string[]; kept: string[] }>('POST', `/users/${encodeURIComponent(userName)}/cleanup-projects`);
   }
 }
 

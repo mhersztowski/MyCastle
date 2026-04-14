@@ -53,6 +53,7 @@ import {
   Terminal as TerminalIcon,
   CloudDownload as CloudDownloadIcon,
   Storefront as StorefrontIcon,
+  PhotoLibrary as PhotoLibraryIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -130,6 +131,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
         {
           text: 'Pim', icon: <AppsIcon />, children: [
             { text: 'Notes', icon: <NotesIcon />, path: `/workspace/md` },
+            { text: 'Editor', icon: <CodeIcon />, path: `/user/${userName}/pim/editor` },
             { text: 'Calendar', icon: <CalendarMonthIcon />, path: `/user/${userName}/pim/calendar` },
             { text: 'To-Do List', icon: <ChecklistIcon />, path: `/user/${userName}/pim/todolist` },
             { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },
@@ -144,12 +146,17 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'Automate', icon: <AccountTreeIcon />, path: `/user/${userName}/pim/automate` },
           ],
         },
-        ...(isAdmin && !impersonating ? [{
+        {
           text: 'Tools', icon: <BuildIcon />, children: [
-            { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
-            { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },
+            { text: 'UI Docs', icon: <PhotoLibraryIcon />, path: `/user/${userName}/tools/ui-docs` },
+            ...(isAdmin && !impersonating ? [
+              { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
+              { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },
+              { text: 'Docs', icon: <CodeIcon />, path: `/user/${userName}/tools/docs` },
+            ] : []),
           ],
-        }, {
+        },
+        ...(isAdmin && !impersonating ? [{
           text: 'Castle Settings', icon: <SettingsIcon />, children: [
             { text: 'AI', icon: <PsychologyIcon />, path: `/user/${userName}/pim/settings/ai` },
             { text: 'Speech', icon: <RecordVoiceOverIcon />, path: `/user/${userName}/pim/settings/speech` },

@@ -18,6 +18,8 @@ export interface CompileOptions {
   outputDir: string;
   buildDir: string;
   verbose?: boolean;
+  /** If provided, called with each stdout/stderr chunk in real time (SSE streaming). */
+  onChunk?: (chunk: string) => void;
 }
 
 export interface CompileResult {
@@ -39,6 +41,8 @@ export interface UploadOptions {
   port: string;
   configFilePath: string;
   verbose?: boolean;
+  /** If provided, called with each stdout/stderr chunk in real time (SSE streaming). */
+  onChunk?: (chunk: string) => void;
 }
 
 export interface UploadResult {
