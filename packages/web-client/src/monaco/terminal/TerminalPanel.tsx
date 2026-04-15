@@ -14,11 +14,23 @@ function getDefaultWsUrl(): string {
   return `${proto}//${window.location.host}/ws/terminal`;
 }
 
-function resolveToken(propToken?: string): string {
-  if (propToken) return propToken;
-  // Fallback: read from sessionStorage (same key as AuthProvider)
+function isSameOriginWs(wsUrl?: string): boolean {
+  if (!wsUrl || typeof window === 'undefined') return true;
   try {
-    const stored = sessionStorage.getItem('minis_current_user');
+    return new URL(wsUrl).host === window.location.host;
+  } catch {
+    return true; // relative URL = same origin
+  }
+}
+
+function resolveToken(propToken?: string, wsUrl?: string): string {
+  if (propToken) return propToken;
+  // Fallback to localStorage JWT only when connecting to the same origin.
+  // A remote wsUrl (different host) requires an explicitly configured API key —
+  // the local JWT is signed by a different secret and would be rejected (401).
+  if (!isSameOriginWs(wsUrl)) return '';
+  try {
+    const stored = localStorage.getItem('minis_current_user');
     if (stored) {
       const parsed = JSON.parse(stored);
       if (parsed.token) return parsed.token;
@@ -27,8 +39,22 @@ function resolveToken(propToken?: string): string {
   return '';
 }
 
-async function fetchTicket(authToken: string): Promise<string> {
-  const res = await fetch('/api/terminal/ticket', {
+/** Derive the HTTP ticket endpoint from the WebSocket URL.
+ *  wss://mycastle.hersztowski.org/ws/terminal → https://mycastle.hersztowski.org/api/terminal/ticket
+ *  Falls back to the relative path when wsUrl is undefined or relative. */
+function ticketUrl(wsUrl?: string): string {
+  if (wsUrl) {
+    try {
+      const u = new URL(wsUrl);
+      const proto = u.protocol === 'wss:' ? 'https:' : 'http:';
+      return `${proto}//${u.host}/api/terminal/ticket`;
+    } catch { /* relative URL or invalid — fall through */ }
+  }
+  return '/api/terminal/ticket';
+}
+
+async function fetchTicket(authToken: string, wsUrl?: string): Promise<string> {
+  const res = await fetch(ticketUrl(wsUrl), {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -40,7 +66,7 @@ async function fetchTicket(authToken: string): Promise<string> {
   return data.ticket;
 }
 
-export function TerminalPanel({ wsUrl, token }: TerminalPanelProps) {
+export function TerminalPanel({ wsUrl, token, onConfigRequest }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
 
@@ -84,9 +110,9 @@ export function TerminalPanel({ wsUrl, token }: TerminalPanelProps) {
       // Step 1: Get one-time ticket via HTTP (uses Bearer auth which works reliably)
       let ticket: string;
       try {
-        const authToken = resolveToken(token);
+        const authToken = resolveToken(token, wsUrl || getDefaultWsUrl());
         if (!authToken) throw new Error('No auth token available');
-        ticket = await fetchTicket(authToken);
+        ticket = await fetchTicket(authToken, wsUrl || getDefaultWsUrl());
       } catch (err) {
         if (disposed) return;
         const detail = err instanceof Error ? err.message : String(err);
@@ -247,6 +273,20 @@ export function TerminalPanel({ wsUrl, token }: TerminalPanelProps) {
         <Typography sx={{ fontSize: 10, color: '#888' }}>
           {status}
         </Typography>
+        {onConfigRequest && (
+          <Box
+            component="button"
+            onClick={onConfigRequest}
+            title="Configure terminal connection"
+            sx={{
+              all: 'unset', ml: 'auto', cursor: 'pointer', color: '#555',
+              fontSize: 13, lineHeight: 1, px: 0.5, borderRadius: 0.5,
+              '&:hover': { color: '#ccc' },
+            }}
+          >
+            ⚙
+          </Box>
+        )}
       </Box>
 
       {/* Terminal container */}

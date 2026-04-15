@@ -89,7 +89,7 @@ function UserPygameProjectsPage() {
           {items.map((item) => (
             <Card key={item.id} sx={{ width: 220, position: 'relative' }}>
               <CardActionArea
-                onClick={() => navigate(`/user/${userName}/pygame-project/${item.id}`)}
+                onClick={() => navigate(`/user/${userName}/pygame-project/${encodeURIComponent(item.name)}`)}
                 sx={{ p: 2 }}
               >
                 <Typography variant="subtitle1" fontWeight={600} noWrap>{item.name}</Typography>

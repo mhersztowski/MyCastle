@@ -19,6 +19,16 @@ import { defineEditorPlugin } from '@mhersztowski/web-client';
 import { MdEditor } from '../components/mdeditor';
 import { useMqtt } from '../modules/mqttclient/MqttContext';
 
+function rlog(tag: string, msg: unknown) {
+  const text = typeof msg === 'string' ? msg : JSON.stringify(msg);
+  console.log(`[${tag}]`, text);
+  fetch('/api/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag, msg: text }),
+  }).catch(() => {});
+}
+
 /* ── Module-level active-file store ─────────────────────────────────────── */
 // Shared between activate() and the panel component (same pattern as MarkdownPreviewPlugin).
 
@@ -66,23 +76,45 @@ function MarkdownEditorPanel() {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Keep readFile/writeFile in refs so reference changes don't re-trigger the effect.
+  const readFileRef = useRef(readFile);
+  useEffect(() => { readFileRef.current = readFile; }, [readFile]);
+  const writeFileRef = useRef(writeFile);
+  useEffect(() => { writeFileRef.current = writeFile; }, [writeFile]);
+
+  const hasLoadedRef = useRef(false);
+
   useEffect(() => {
+    rlog('MDE', `effect run isConnected=${isConnected} mqttPath=${mqttPath} hasLoaded=${hasLoadedRef.current}`);
     if (!isConnected || !mqttPath) return;
-    setContent(null);
-    setError(null);
-    readFile(mqttPath)
-      .then((f) => setContent(f.content))
-      .catch((e) => setError(String(e)));
-  }, [isConnected, mqttPath, readFile]);
+    let cancelled = false;
+    if (!hasLoadedRef.current) {
+      rlog('MDE', 'first load — resetting state');
+      setContent(null);
+      setError(null);
+    }
+    rlog('MDE', `reading file: ${mqttPath}`);
+    readFileRef.current(mqttPath)
+      .then((f) => {
+        if (cancelled) { rlog('MDE', 'cancelled after read'); return; }
+        rlog('MDE', `file loaded, length=${f.content.length}`);
+        hasLoadedRef.current = true;
+        setContent(f.content);
+      })
+      .catch((e) => { if (!cancelled) { rlog('MDE', `error: ${e}`); setError(String(e)); } });
+    return () => { rlog('MDE', 'load effect cleanup'); cancelled = true; };
+  }, [isConnected, mqttPath]);
 
   const handleSave = useCallback(async (markdown: string) => {
     if (!mqttPath) return;
     try {
-      await writeFile(mqttPath, markdown);
+      await writeFileRef.current(mqttPath, markdown);
     } catch (e) {
       console.error('[MarkdownEditorPlugin] save error:', e);
     }
-  }, [mqttPath, writeFile]);
+  }, [mqttPath]);
+
+  rlog('MDE', `render: content=${content === null ? 'null' : 'loaded('+content.length+')'} error=${error} fileUri=${fileUri}`);
 
   if (!fileUri || !isMarkdownUri(fileUri)) {
     return (
@@ -114,10 +146,11 @@ function MarkdownEditorPanel() {
     );
   }
 
+  // Mount MdEditor only when content is ready — TipTap initialises with real content
+  // from the start, so it is immediately interactive on Android.
   return (
     <Box sx={{ height: '100%', overflow: 'hidden', bgcolor: '#fff' }}>
       <MdEditor
-        key={fileUri}
         initialContent={content}
         onSave={handleSave}
         autoSaveDelay={2000}

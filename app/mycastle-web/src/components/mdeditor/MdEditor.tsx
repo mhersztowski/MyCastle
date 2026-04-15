@@ -73,6 +73,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   const initialContentRef = useRef(initialContent);
   const isInitializedRef = useRef(false);
+  const autoFocusRef = useRef(autoFocus);
   const onCreatePageRef = useRef(onCreatePage);
 
   // Block action menu — one button per block
@@ -202,9 +203,13 @@ const MdEditor: React.FC<MdEditorProps> = ({
     if (editor && !isInitializedRef.current && initialContentRef.current) {
       const html = markdownToHtml(initialContentRef.current);
       editor.commands.setContent(html);
-      // Set cursor to the beginning and scroll to top after DOM update
+      // Set cursor to the beginning and scroll to top after DOM update.
+      // Only focus if autoFocus is set — focusing on mobile triggers the virtual keyboard
+      // and causes iOS Safari to reflow the viewport (looks like a "page reset").
       setTimeout(() => {
-        editor.commands.focus('start');
+        if (autoFocusRef.current) {
+          editor.commands.focus('start');
+        }
         requestAnimationFrame(() => {
           if (contentWrapperRef.current) {
             contentWrapperRef.current.scrollTop = 0;
@@ -222,9 +227,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
       if (editor && initialContent) {
         const html = markdownToHtml(initialContent);
         editor.commands.setContent(html);
-        // Set cursor to the beginning and scroll to top after DOM update
         setTimeout(() => {
-          editor.commands.focus('start');
+          if (autoFocusRef.current) {
+            editor.commands.focus('start');
+          }
           requestAnimationFrame(() => {
             if (contentWrapperRef.current) {
               contentWrapperRef.current.scrollTop = 0;

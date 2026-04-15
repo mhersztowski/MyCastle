@@ -12,7 +12,7 @@ import type {
   Disposable,
   VfsEvent,
 } from './types';
-import { FileType } from './types';
+import { FileType, FileChangeType } from './types';
 import { VfsError } from './errors';
 import { VfsEventEmitter } from './EventEmitter';
 import { normalize } from './paths';
@@ -56,6 +56,9 @@ export class CompositeFS implements FileSystemProvider {
 
     // Sort by mount point length descending for longest prefix match
     this.mounts.sort((a, b) => b.mountPoint.length - a.mountPoint.length);
+
+    // Notify listeners that the mount point directory was created so tree subscribers refresh
+    this.emitter.fire([{ type: FileChangeType.Created, path: mp }]);
 
     return {
       dispose: () => {

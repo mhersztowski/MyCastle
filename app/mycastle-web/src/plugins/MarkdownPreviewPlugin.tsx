@@ -111,7 +111,6 @@ async function renderMarkdown(text: string, uri: string): Promise<void> {
 }
 
 function handleUriChange(uri: string, text: string) {
-  console.debug('[MDPreview] handleUriChange', { uri, textLen: text.length });
   // Ignore virtual tabs (preview itself, editor panels, etc.) — don't clear state
   if (uri.startsWith('virtual://')) return;
 

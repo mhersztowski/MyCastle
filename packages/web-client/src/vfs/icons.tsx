@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 
-const S = 16; // icon size
+const S = 20; // icon size
 
 /** Folder closed — VS Code Seti style (flat golden folder) */
 function FolderClosedIcon() {

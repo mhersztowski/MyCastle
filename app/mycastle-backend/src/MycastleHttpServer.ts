@@ -161,6 +161,15 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     // --- Public endpoints (no auth required) ---
 
+    // Client-side remote logging (mobile debug)
+    if (method === 'POST' && apiPath === '/log') {
+      const body = await this.parseRequestBody(req);
+      const { tag = 'CLIENT', msg } = body as { tag?: string; msg: unknown };
+      console.log(`[${tag}]`, typeof msg === 'string' ? msg : JSON.stringify(msg));
+      this.sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
     // Auth
     if (method === 'POST' && apiPath === '/auth/login') {
       await this.handleLogin(req, res);
@@ -195,10 +204,12 @@ export class MycastleHttpServer extends HttpUploadServer {
     const pygameWebBuildMatchPublic = apiPath.match(/^\/users\/([^/]+)\/project-pygame\/([^/]+)\/sketches\/([^/]+)\/web-build(?:\/(.*))?$/);
     if (pygameWebBuildMatchPublic && method === 'GET') {
       const wUserName = decodeURIComponent(pygameWebBuildMatchPublic[1]);
-      const wProjectId = decodeURIComponent(pygameWebBuildMatchPublic[2]);
+      const wProjectName = decodeURIComponent(pygameWebBuildMatchPublic[2]);
       const wSketchName = decodeURIComponent(pygameWebBuildMatchPublic[3]);
       const wFilePath = pygameWebBuildMatchPublic[4] ? decodeURIComponent(pygameWebBuildMatchPublic[4]) : 'index.html';
-      await this.handlePygameWebBuildFile(res, wUserName, wProjectId, wSketchName, wFilePath);
+      const wProjectDirName = await this.resolveProjectName(wUserName, wProjectName);
+      if (!wProjectDirName) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+      await this.handlePygameWebBuildFile(res, wUserName, wProjectDirName, wSketchName, wFilePath);
       return;
     }
 
@@ -893,11 +904,13 @@ export class MycastleHttpServer extends HttpUploadServer {
     const sketchFilesMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/sketches\/([^/]+)$/);
     if (sketchFilesMatch && method === 'GET') {
       const userName = decodeURIComponent(sketchFilesMatch[1]);
-      const projectId = decodeURIComponent(sketchFilesMatch[2]);
+      const projectName = decodeURIComponent(sketchFilesMatch[2]);
       const sketchName = decodeURIComponent(sketchFilesMatch[3]);
       if (sketchName.includes('..')) { this.sendJsonResponse(res, 400, { error: 'Invalid path' }); return; }
       if (!this.rootDir) { this.sendJsonResponse(res, 503, { error: 'rootDir not configured' }); return; }
-      const dir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', projectId, 'sketches', sketchName);
+      const projectDirName = await this.resolveProjectName(userName, projectName);
+      if (!projectDirName) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
+      const dir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', projectDirName, 'sketches', sketchName);
       try {
         const entries = await fs.promises.readdir(dir, { withFileTypes: true });
         const items = entries.filter(e => e.isFile()).map(e => e.name).sort();
@@ -1122,6 +1135,18 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // User-scoped VFS: /users/{userName}/vfs/{operation} — user can only access their own home dir
+    const userVfsMatch = apiPath.match(/^\/users\/([^/]+)\/vfs\/([a-zA-Z]+)$/);
+    if (userVfsMatch) {
+      const targetUser = decodeURIComponent(userVfsMatch[1]);
+      if (!user.isAdmin && user.userName !== targetUser) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleUserHomeVfs(req, res, method, targetUser, userVfsMatch[2]);
+      return;
+    }
+
     // Cleanup orphaned project dirs: POST /api/users/{userName}/cleanup-projects
     const cleanupMatch = apiPath.match(/^\/users\/([^/]+)\/cleanup-projects$/);
     if (cleanupMatch && method === 'POST') {
@@ -1139,16 +1164,85 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   // --- Arduino ---
 
-  private async resolveProjectId(userName: string, projectIdentifier: string): Promise<string | null> {
+  /** Returns the project directory path segment (= "{softwarePlatform}/{name}") for the given identifier.
+   *  Matches by name first, then by legacy UUID id. */
+  private async resolveProjectName(userName: string, projectIdentifier: string): Promise<string | null> {
     try {
       const data = await this.fileSystem.readFile(`Minis/Users/${userName}/Project.json`);
-      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string; name: string }> };
-      const projects = parsed.projects ?? [];
-      // Try by name first, then by id
+      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string; name: string; softwarePlatform?: string }> };
+      const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
       const project = projects.find(p => p.name === projectIdentifier) ?? projects.find(p => p.id === projectIdentifier);
-      return project?.id ?? null;
+      if (!project) return null;
+      const platform = project.softwarePlatform ?? 'Arduino';
+      return `${platform}/${project.name}`;
     } catch {
       return null;
+    }
+  }
+
+  /** @deprecated Use resolveProjectName — kept for internal call sites that haven't been migrated. */
+  private resolveProjectId(userName: string, projectIdentifier: string): Promise<string | null> {
+    return this.resolveProjectName(userName, projectIdentifier);
+  }
+
+  /** One-time migration: create project.json inside every project directory that is missing one.
+   *  Safe to run on every startup — skips projects that already have the file. */
+  async migrateProjectJsonFiles(): Promise<void> {
+    if (!this.rootDir) return;
+    const usersDir = path.resolve(this.rootDir, 'Minis', 'Users');
+    let userDirs: string[];
+    try {
+      userDirs = (await fs.promises.readdir(usersDir, { withFileTypes: true }))
+        .filter(e => e.isDirectory())
+        .map(e => e.name);
+    } catch {
+      return; // data dir not ready yet
+    }
+
+    let created = 0;
+    for (const userName of userDirs) {
+      // Read the project registry for this user
+      let registry: Array<Record<string, unknown>>;
+      try {
+        const raw = await this.readJsonFile(`Minis/Users/${userName}/Project.json`) as Record<string, unknown>;
+        registry = Array.isArray(raw.projects) ? raw.projects as Array<Record<string, unknown>> : [];
+      } catch {
+        continue;
+      }
+
+      for (const project of registry) {
+        const name = typeof project.name === 'string' ? project.name : null;
+        const platform = (typeof project.softwarePlatform === 'string' ? project.softwarePlatform : null) ?? 'Arduino';
+        if (!name) continue;
+
+        const projectDir = path.resolve(usersDir, userName, 'Projects', platform, name);
+        const projectJsonPath = path.join(projectDir, 'project.json');
+
+        // Skip if already present
+        const exists = await fs.promises.access(projectJsonPath).then(() => true).catch(() => false);
+        if (exists) continue;
+
+        // Skip if the project directory itself doesn't exist (no files cloned yet)
+        const dirExists = await fs.promises.access(projectDir).then(() => true).catch(() => false);
+        if (!dirExists) continue;
+
+        const projectJson = {
+          id: name,
+          name,
+          platform,
+          ...(project.boardProfileKey ? { boardProfileKey: project.boardProfileKey } : {}),
+        };
+        try {
+          await fs.promises.writeFile(projectJsonPath, JSON.stringify(projectJson, null, 2), 'utf-8');
+          created++;
+        } catch (err) {
+          console.warn(`migrateProjectJson: failed to write ${projectJsonPath}:`, err);
+        }
+      }
+    }
+
+    if (created > 0) {
+      console.log(`migrateProjectJson: created ${created} missing project.json file(s)`);
     }
   }
 
@@ -1157,19 +1251,25 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (!this.rootDir) return { removed: [], kept: [] };
     const projectsDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects');
 
-    // Read the registry
-    let registeredIds: Set<string>;
+    // Read the registry — directories are now {platform}/{name}
+    let registeredPaths: Set<string>;
     try {
       const data = await this.fileSystem.readFile(`Minis/Users/${userName}/Project.json`);
-      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string }> };
-      registeredIds = new Set((parsed.projects ?? []).map(p => p.id));
+      const parsed = JSON.parse(data.content) as { projects?: Array<{ id: string; name: string; softwarePlatform?: string }> };
+      const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+      registeredPaths = new Set(projects.flatMap(p => {
+        const platform = p.softwarePlatform ?? 'Arduino';
+        // Accept both new path (platform/name) and legacy (name or id alone)
+        return [`${platform}/${p.name}`, p.name, p.id].filter(Boolean);
+      }));
     } catch {
       return { removed: [], kept: [] };
     }
 
-    let entries: fs.Dirent[];
+    // Scan Projects/ — top-level entries are platform dirs (Arduino, uPython, …) or legacy project dirs
+    let topEntries: fs.Dirent[];
     try {
-      entries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
+      topEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
     } catch {
       return { removed: [], kept: [] };
     }
@@ -1177,17 +1277,42 @@ export class MycastleHttpServer extends HttpUploadServer {
     const removed: string[] = [];
     const kept: string[] = [];
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const name = entry.name;
-      if (registeredIds.has(name)) {
-        kept.push(name);
+    for (const topEntry of topEntries) {
+      if (!topEntry.isDirectory()) continue;
+      // Check if this is a known platform dir (has sub-directories = projects inside it)
+      const topPath = path.join(projectsDir, topEntry.name);
+      let subEntries: fs.Dirent[] = [];
+      try { subEntries = await fs.promises.readdir(topPath, { withFileTypes: true }); } catch { /* ignore */ }
+
+      const hasSubDirs = subEntries.some(e => e.isDirectory());
+      if (hasSubDirs) {
+        // Platform directory — scan its children
+        for (const sub of subEntries) {
+          if (!sub.isDirectory()) continue;
+          const relPath = `${topEntry.name}/${sub.name}`;
+          if (registeredPaths.has(relPath)) {
+            kept.push(relPath);
+          } else {
+            try {
+              await this.fileSystem.deleteDirectory(path.join(topPath, sub.name));
+              removed.push(relPath);
+            } catch (err) {
+              console.warn(`cleanup-projects: failed to delete "${relPath}" for ${userName}:`, err);
+            }
+          }
+        }
       } else {
-        try {
-          await this.fileSystem.deleteDirectory(path.join(projectsDir, name));
-          removed.push(name);
-        } catch (err) {
-          console.warn(`cleanup-projects: failed to delete "${name}" for ${userName}:`, err);
+        // Legacy flat entry (name or UUID directly under Projects/)
+        const name = topEntry.name;
+        if (registeredPaths.has(name)) {
+          kept.push(name);
+        } else {
+          try {
+            await this.fileSystem.deleteDirectory(path.join(projectsDir, name));
+            removed.push(name);
+          } catch (err) {
+            console.warn(`cleanup-projects: failed to delete "${name}" for ${userName}:`, err);
+          }
         }
       }
     }
@@ -1275,8 +1400,8 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     let libraries: Array<{ name: string; version?: string; url?: string }> | undefined;
     try {
-      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; libraries?: Array<{ name: string; version?: string; url?: string }> }> };
-      const projectEntry = (projectData?.projects ?? []).find(p => p.id === projectId);
+      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; name: string; libraries?: Array<{ name: string; version?: string; url?: string }> }> };
+      const projectEntry = (Array.isArray(projectData?.projects) ? projectData.projects : []).find(p => p.name === projectId || p.id === projectId);
       if (projectEntry?.libraries?.length) libraries = projectEntry.libraries;
     } catch { /* ignore */ }
 
@@ -1761,6 +1886,72 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
   }
 
+  /** User-scoped VFS: validates that the requested path is under the user's home directory. */
+  private async handleUserHomeVfs(req: IncomingMessage, res: ServerResponse, _method: string, userName: string, operation: string): Promise<void> {
+    const urlObj = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+    const userHomePrefix = `/data/Minis/Users/${userName}`;
+
+    const assertPath = (p: string) => {
+      const normalized = p === '/' ? userHomePrefix : p;
+      if (normalized !== userHomePrefix && !normalized.startsWith(userHomePrefix + '/')) {
+        throw new VfsError('NoPermissions' as any, `Access denied: path outside user home`, p);
+      }
+      return normalized;
+    };
+
+    try {
+      switch (operation) {
+        case 'capabilities':
+          this.sendJsonResponse(res, 200, this.vfs.capabilities); return;
+        case 'stat': {
+          const stat = await this.vfs.stat(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, stat); return;
+        }
+        case 'readdir': {
+          const entries = await this.vfs.readDirectory(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, { entries }); return;
+        }
+        case 'readFile': {
+          const data = await this.vfs.readFile(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, { data: Buffer.from(data).toString('base64') }); return;
+        }
+        case 'writeFile': {
+          const wb = await this.parseRequestBody(req) as { data: string; options?: WriteFileOptions };
+          await this.vfs.writeFile!(assertPath(urlObj.searchParams.get('path') ?? '/'), new Uint8Array(Buffer.from(wb.data, 'base64')), wb.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'delete': {
+          const db = await this.parseRequestBody(req) as { options?: DeleteOptions };
+          await this.vfs.delete!(assertPath(urlObj.searchParams.get('path') ?? '/'), db.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'rename': {
+          const rb = await this.parseRequestBody(req) as { oldPath: string; newPath: string; options?: RenameOptions };
+          await this.vfs.rename!(assertPath(rb.oldPath), assertPath(rb.newPath), rb.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'mkdir': {
+          await this.vfs.mkdir!(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        case 'copy': {
+          const cpBody = await this.parseRequestBody(req) as { source: string; destination: string; options?: CopyOptions };
+          await this.vfs.copy!(assertPath(cpBody.source), assertPath(cpBody.destination), cpBody.options);
+          this.sendJsonResponse(res, 200, { ok: true }); return;
+        }
+        default:
+          this.sendJsonResponse(res, 404, { error: `Unknown VFS operation: ${operation}` });
+      }
+    } catch (err) {
+      if (err instanceof VfsError) {
+        const statusMap: Record<string, number> = { FileNotFound: 404, FileExists: 409, FileNotADirectory: 400, FileIsADirectory: 400, NoPermissions: 403, Unavailable: 503 };
+        this.sendJsonResponse(res, statusMap[err.code] ?? 500, { error: err.message, code: err.code, path: err.path });
+      } else {
+        this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+      }
+    }
+  }
+
   private async handleVfs(req: IncomingMessage, res: ServerResponse, method: string, operation: string): Promise<void> {
     const url = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
     const vfsPath = url.searchParams.get('path') || '/';
@@ -2087,8 +2278,9 @@ const { password, ...safeBody } = body;
     // Delete user project source files directory
     if (config.itemsKey === 'projects') {
       const userDir = path.dirname(config.filePath);
-      const projectId = (deletedItem as Record<string, unknown>).id as string | undefined;
-      const dirName = projectId ?? id;
+      const projectName = (deletedItem as Record<string, unknown>).name as string | undefined;
+      const platform = (deletedItem as Record<string, unknown>).softwarePlatform as string | undefined ?? 'Arduino';
+      const dirName = projectName ? `${platform}/${projectName}` : id;
       const projectDir = `${userDir}/Projects/${dirName}`;
       try {
         await this.fileSystem.deleteDirectory(projectDir);
@@ -2254,8 +2446,8 @@ const { password, ...safeBody } = body;
     // Read uPython libraries from project record
     let upythonLibraries: Array<{ url: string; remoteName: string }> | undefined;
     try {
-      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; libraries?: Array<{ url: string; remoteName?: string; name?: string }> }> };
-      const projectEntry = (projectData?.projects ?? []).find(p => p.id === projectId);
+      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; name: string; libraries?: Array<{ url: string; remoteName?: string; name?: string }> }> };
+      const projectEntry = (Array.isArray(projectData?.projects) ? projectData.projects : []).find(p => p.name === projectId || p.id === projectId);
       if (projectEntry?.libraries?.length) {
         upythonLibraries = projectEntry.libraries
           .filter(l => l.url)
@@ -2547,6 +2739,42 @@ const { password, ...safeBody } = body;
       typeValue: 'projects',
       lookupKey: 'name',
     };
+
+    // For project creation: run the standard CRUD then also scaffold project directory + project.json
+    if (method === 'POST' && !projectName) {
+      const body = await this.parseRequestBody(req) as Record<string, unknown>;
+      const data = await this.readJsonFile(config.filePath) as Record<string, unknown>;
+      const items = (data[config.itemsKey] || []) as Record<string, unknown>[];
+
+      const name = typeof body.name === 'string' ? body.name : null;
+      if (!name) { this.sendJsonResponse(res, 400, { error: 'name is required' }); return; }
+      const nameErr = MycastleHttpServer.validateName(name);
+      if (nameErr) { this.sendJsonResponse(res, 400, { error: nameErr }); return; }
+      if (items.find(p => p.name === name)) { this.sendJsonResponse(res, 409, { error: `Name '${name}' already exists` }); return; }
+
+      body.id = body.id || randomUUID();
+      body.type = 'minis_project';
+      items.push(body);
+      data[config.itemsKey] = items;
+      data.type = config.typeValue;
+      await this.writeJsonFile(config.filePath, data);
+
+      // Create project directory with project.json so VFS workspace can detect it
+      const platform = (typeof body.softwarePlatform === 'string' ? body.softwarePlatform : null) ?? 'Arduino';
+      const projectDir = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', platform, name);
+      await fs.promises.mkdir(path.join(projectDir, 'sketches'), { recursive: true });
+      const projectJson = {
+        id: name,
+        name,
+        platform,
+        ...(body.boardProfileKey ? { boardProfileKey: body.boardProfileKey } : {}),
+      };
+      await fs.promises.writeFile(path.join(projectDir, 'project.json'), JSON.stringify(projectJson, null, 2), 'utf-8');
+
+      this.sendJsonResponse(res, 201, body);
+      return;
+    }
+
     await this.handleCrud(req, res, method, config, projectName);
   }
 
@@ -3376,11 +3604,32 @@ Rules:
       // Save libraries to Project.json
       if (libraries && libraries.length > 0) {
         const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
-        const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
-        const project = projects.find(p => p.id === projectId);
+        const projects = (Array.isArray(data.projects) ? data.projects : []) as Array<Record<string, unknown>>;
+        const project = projects.find(p => p.name === projectId || p.id === projectId);
         if (project) {
           project.libraries = libraries;
           await this.writeJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`, data);
+        }
+      }
+
+      // Ensure project.json exists in the project directory so VFS workspace can detect it
+      const registryData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
+      const registryProjects = (Array.isArray(registryData.projects) ? registryData.projects : []) as Array<Record<string, unknown>>;
+      const registryProject = registryProjects.find(p => p.name === projectName || p.id === projectName);
+      if (registryProject) {
+        const platform = (typeof registryProject.softwarePlatform === 'string' ? registryProject.softwarePlatform : null) ?? 'Arduino';
+        const pjPath = path.join(projectDir, 'project.json');
+        // Only write if not already present
+        const alreadyExists = await fs.promises.access(pjPath).then(() => true).catch(() => false);
+        if (!alreadyExists) {
+          const projectJson = {
+            id: registryProject.name ?? projectName,
+            name: registryProject.name ?? projectName,
+            platform,
+            ...(registryProject.boardProfileKey ? { boardProfileKey: registryProject.boardProfileKey } : {}),
+          };
+          await fs.promises.mkdir(projectDir, { recursive: true });
+          await fs.promises.writeFile(pjPath, JSON.stringify(projectJson, null, 2), 'utf-8');
         }
       }
 
@@ -3421,8 +3670,8 @@ Rules:
 
     try {
       const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
-      const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
-      const project = projects.find(p => p.id === projectId);
+      const projects = (Array.isArray(data.projects) ? data.projects : []) as Array<Record<string, unknown>>;
+      const project = projects.find(p => p.name === projectId || p.id === projectId);
       if (!project) { this.sendJsonResponse(res, 404, { error: 'Project not found in Project.json' }); return; }
 
       const githubRepoUrl = project.githubRepoUrl as string | undefined;
@@ -3499,8 +3748,8 @@ Rules:
 
     try {
       const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
-      const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
-      const project = projects.find(p => p.id === projectId);
+      const projects = (Array.isArray(data.projects) ? data.projects : []) as Array<Record<string, unknown>>;
+      const project = projects.find(p => p.name === projectId || p.id === projectId);
       if (!project) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
 
       const githubRepoUrl = project.githubRepoUrl as string | undefined;

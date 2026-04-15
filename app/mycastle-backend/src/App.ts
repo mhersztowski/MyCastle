@@ -163,6 +163,10 @@ export class App {
 
     // Start HTTP server, then attach MQTT on same port
     await this.httpServer.start();
+    // Non-blocking one-time migration: backfill project.json files for existing projects
+    this.httpServer.migrateProjectJsonFiles().catch(err =>
+      console.warn('migrateProjectJson failed:', err),
+    );
     this._mqttServer = new MqttServer(this.fileSystem, this.httpServer.getHttpServer());
 
     // MQTT authentication: anonymous allowed, or API key, JWT token, username+password

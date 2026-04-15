@@ -135,7 +135,7 @@ function UserPicoSdkProjectsPage() {
         {items.map((item) => (
           <Card key={item.id} sx={{ width: 220 }}>
             <CardActionArea
-              onClick={() => navigate(`/user/${userName}/picosdk-project/${item.id}`)}
+              onClick={() => navigate(`/user/${userName}/picosdk-project/${encodeURIComponent(item.name)}`)}
               sx={{ p: 1.5, pb: 0.5 }}
             >
               <Typography variant="subtitle2" color="text.secondary">Name:</Typography>

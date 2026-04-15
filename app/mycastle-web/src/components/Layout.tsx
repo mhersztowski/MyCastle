@@ -111,6 +111,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },
             { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
+            { text: 'Editor', icon: <CodeIcon />, path: `/user/${userName}/electronics/editor` },
             { text: 'DevicesDef', icon: <DevicesIcon />, path: `/user/${userName}/electronics/devicesdefs` },
             { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
             { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
@@ -131,7 +132,6 @@ function Layout({ children, fullBleed }: LayoutProps) {
         {
           text: 'Pim', icon: <AppsIcon />, children: [
             { text: 'Notes', icon: <NotesIcon />, path: `/workspace/md` },
-            { text: 'Editor', icon: <CodeIcon />, path: `/user/${userName}/pim/editor` },
             { text: 'Calendar', icon: <CalendarMonthIcon />, path: `/user/${userName}/pim/calendar` },
             { text: 'To-Do List', icon: <ChecklistIcon />, path: `/user/${userName}/pim/todolist` },
             { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },

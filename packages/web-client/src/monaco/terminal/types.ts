@@ -12,4 +12,6 @@ export interface TerminalPanelProps {
   wsUrl?: string;
   /** JWT token for authentication */
   token?: string;
+  /** Called when the user clicks the configure button (e.g. to set a remote API key). */
+  onConfigRequest?: () => void;
 }

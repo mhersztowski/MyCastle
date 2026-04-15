@@ -313,7 +313,14 @@ export class AgentEngine {
       'You can read, search, and browse files using the provided VFS tools.',
       readOnly
         ? 'The file system is READ-ONLY. You cannot create, edit, or delete files.'
-        : 'You can also create, edit, and delete files using the VFS tools.',
+        : [
+            'You can also create, edit, and delete files using the VFS tools.',
+            'IMPORTANT — Writing files: When creating or modifying files, you MUST call vfs_write_file for EVERY file.',
+            'Never just describe file contents in text without calling the tool.',
+            'If you plan to create 5 files, make 5 separate vfs_write_file calls — one per file.',
+            'Always use absolute paths starting with / for all VFS operations.',
+            'After writing a batch of files, list the directory to confirm all files were created.',
+          ].join(' '),
       'When asked about code, use the VFS tools to explore and understand the codebase before answering.',
       'When making changes, explain what you are doing and why.',
       'Always respond in the same language the user uses.',

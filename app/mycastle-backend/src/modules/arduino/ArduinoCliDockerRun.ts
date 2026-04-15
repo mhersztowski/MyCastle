@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import type { ArduinoCli, BoardInfo, CompileOptions, CompileResult, PortInfo, UploadOptions, UploadResult } from './ArduinoCli.js';
 
 const execFileAsync = promisify(execFile);
@@ -25,19 +26,35 @@ export class ArduinoCliDockerRun implements ArduinoCli {
     return `${this.containerDataDir}/${rel}`;
   }
 
-  private get userArgs(): string[] {
-    const uid = process.getuid?.() ?? 1000;
-    const gid = process.getgid?.() ?? 1000;
-    return ['--user', `${uid}:${gid}`];
+  /** Base docker run args shared by exec() and compile() streaming mode. */
+  private get baseRunArgs(): string[] {
+    return [
+      'run', '--rm',
+      '-v', `${this.hostDataDir}:${this.containerDataDir}`,
+      this.imageName,
+      'arduino-cli',
+    ];
+  }
+
+  /**
+   * Rewrites the config file so that `directories.user` (and any other paths)
+   * uses the container path instead of the backend host path.
+   * Safe to call multiple times — the replacement is idempotent once the path
+   * is already using the container prefix.
+   */
+  private async patchConfigFile(hostConfigPath: string): Promise<void> {
+    try {
+      let content = await fs.readFile(hostConfigPath, 'utf-8');
+      // Replace every occurrence of the backend data dir prefix with the container prefix
+      content = content.split(this.backendDataDir).join(this.containerDataDir);
+      await fs.writeFile(hostConfigPath, content, 'utf-8');
+    } catch { /* ignore — compile will surface the real error */ }
   }
 
   private async exec(args: string[]): Promise<{ stdout: string; stderr: string }> {
     return execFileAsync('docker', [
-      'run', '--rm',
-      ...this.userArgs,
-      '-v', `${this.hostDataDir}:${this.containerDataDir}`,
-      this.imageName,
-      'arduino-cli', ...args,
+      ...this.baseRunArgs,
+      ...args,
     ], { maxBuffer: MAX_BUFFER });
   }
 
@@ -51,6 +68,8 @@ export class ArduinoCliDockerRun implements ArduinoCli {
   }
 
   async compile(options: CompileOptions): Promise<CompileResult> {
+    await this.patchConfigFile(options.configFilePath);
+
     const cliArgs = [
       'compile',
       '-b', options.fqbn,
@@ -61,11 +80,8 @@ export class ArduinoCliDockerRun implements ArduinoCli {
       '--build-path', this.toContainer(options.buildDir),
     ];
     const dockerArgs = [
-      'run', '--rm',
-      ...this.userArgs,
-      '-v', `${this.hostDataDir}:${this.containerDataDir}`,
-      this.imageName,
-      'arduino-cli', ...cliArgs,
+      ...this.baseRunArgs,
+      ...cliArgs,
     ];
     const cmdLine = `$ docker run --rm ${this.imageName} arduino-cli ${cliArgs.join(' ')}\n`;
 
@@ -106,6 +122,7 @@ export class ArduinoCliDockerRun implements ArduinoCli {
   }
 
   async libInstall(lib: { name: string; version?: string; url?: string }, configFilePath: string): Promise<void> {
+    await this.patchConfigFile(configFilePath);
     if (lib.url) {
       await this.exec(['lib', 'install', '--git-url', lib.url, '--config-file', this.toContainer(configFilePath)]);
     } else {

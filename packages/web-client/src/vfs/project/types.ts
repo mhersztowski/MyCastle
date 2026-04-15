@@ -6,6 +6,11 @@ export interface ProjectAction {
   description?: string;
   /** If true, clicking opens the output panel in VfsExplorer */
   hasOutput: boolean;
+  /**
+   * If true, clicking calls onDialogAction instead of execute().
+   * The action does not produce output — it opens a dialog managed by the host.
+   */
+  hasDialog?: boolean;
   /** Optional shortcut hint shown in tooltip */
   shortcut?: string;
 }

@@ -812,6 +812,9 @@ importers:
       '@types/react':
         specifier: ^18.2.0
         version: 18.2.79
+      '@types/react-dom':
+        specifier: ^18.2.0
+        version: 18.3.7(@types/react@18.2.79)
       '@types/uuid':
         specifier: ^10.0.0
         version: 10.0.0
@@ -11074,6 +11077,10 @@ snapshots:
   '@types/react-dom@18.2.25':
     dependencies:
       '@types/react': 18.3.28
+
+  '@types/react-dom@18.3.7(@types/react@18.2.79)':
+    dependencies:
+      '@types/react': 18.2.79
 
   '@types/react-dom@18.3.7(@types/react@18.3.28)':
     dependencies:

@@ -7,8 +7,8 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemText from '@mui/material/ListItemText';
 import Divider from '@mui/material/Divider';
 import LinearProgress from '@mui/material/LinearProgress';
-import { normalize, dirname, encodeText, decodeText, WritableGitHubFS } from '@mhersztowski/core';
-import type { CompositeFS } from '@mhersztowski/core';
+import { normalize, dirname, encodeText, decodeText, WritableGitHubFS, FileType } from '@mhersztowski/core';
+import type { CompositeFS, FileSystemProvider } from '@mhersztowski/core';
 
 import { useVfsTree } from './useVfsTree';
 import { useVfsClipboard } from './clipboard';
@@ -87,7 +87,7 @@ const treeViewSx = {
   /* MUI X v8 uses data-* attributes for state, not .Mui-* classes */
   '& .MuiTreeItem-content': {
     borderRadius: 0,
-    minHeight: '22px',
+    minHeight: '30px',
     py: 0,
     pl: '4px',
     pr: '8px',
@@ -116,14 +116,14 @@ const treeViewSx = {
     },
   },
   '& .MuiTreeItem-label': {
-    fontSize: '13px !important',
-    lineHeight: '22px',
+    fontSize: '14px !important',
+    lineHeight: '30px',
     pl: '0 !important',
   },
   '& .MuiTreeItem-iconContainer': {
-    width: '16px',
-    minWidth: '16px !important',
-    mr: '2px',
+    width: '20px',
+    minWidth: '20px !important',
+    mr: '4px',
     color: '#cccccc',
   },
   '& .MuiTreeItem-groupTransition, & .MuiCollapse-root': {
@@ -195,29 +195,47 @@ function isDescendantOf(childPath: string, parentPath: string): boolean {
  * Walks up the path segment-by-segment and returns the parsed project.json
  * from the nearest ancestor directory that contains one. Returns null if none found.
  */
+/** Infer platform from a file path.
+ *  Prefers explicit platform directory names in the path (e.g. /Projects/Arduino/…)
+ *  over file extension, since both Arduino and uPython projects have a sketches/ subdir. */
+function inferPlatform(filePath: string): VfsProjectContext['platform'] | null {
+  // Check for explicit platform segment in path (new directory structure: Projects/{Platform}/{name})
+  const segments = filePath.split('/');
+  const projectsIdx = segments.findIndex(s => s === 'Projects');
+  if (projectsIdx !== -1 && projectsIdx + 1 < segments.length) {
+    const platformSeg = segments[projectsIdx + 1];
+    if (platformSeg === 'Arduino') return 'Arduino';
+    if (platformSeg === 'uPython') return 'uPython';
+    if (platformSeg === 'PicoSdk') return 'PicoSdk';
+    if (platformSeg === 'pygame') return 'pygame';
+  }
+  // Fallback: infer from file extension
+  if (filePath.endsWith('.ino')) return 'Arduino';
+  if (filePath.endsWith('main.c') || filePath.endsWith('CMakeLists.txt') || filePath.endsWith('.cmake')) return 'PicoSdk';
+  if (filePath.endsWith('.py')) return 'uPython';
+  return null;
+}
+
 async function findProjectContext(
   path: string,
-  provider: { readFile: (path: string) => Promise<Uint8Array> },
+  provider: FileSystemProvider,
   cache: Map<string, VfsProjectContext | null>,
 ): Promise<VfsProjectContext | null> {
   // Build ancestor list starting from path itself down to root.
-  // Starting at i=segments.length means we try "{path}/project.json" first —
-  // that's a no-op for files (will throw, caught below) but correctly finds
-  // project.json when path IS the project directory.
   const segments = path.split('/').filter(Boolean);
   const ancestors: string[] = [];
   for (let i = segments.length; i >= 0; i--) {
     ancestors.push(i === 0 ? '/' : '/' + segments.slice(0, i).join('/'));
   }
-  // Deduplicate (handles trailing slash edge cases)
   const unique = [...new Set(ancestors)];
 
+  // Pass 1: look for project.json
   for (const dir of unique) {
     const key = dir + '/project.json';
     if (cache.has(key)) {
       const cached = cache.get(key)!;
       if (cached !== null) return cached;
-      continue; // null means "not found here", skip
+      continue;
     }
     try {
       const data = await provider.readFile(normalize(dir + '/project.json'));
@@ -229,6 +247,7 @@ async function findProjectContext(
           platform: json.platform,
           language: platformToLanguage(json.platform),
           boardProfileKey: json.boardProfileKey,
+          fqbn: json.fqbn,
           projectJsonPath: normalize(dir + '/project.json'),
         };
         cache.set(key, ctx);
@@ -236,9 +255,44 @@ async function findProjectContext(
       }
       cache.set(key, null);
     } catch {
-      cache.set(key, null);
+      // Do not cache — mount may not be ready yet.
+      continue;
     }
   }
+
+  // Pass 2: fallback — detect project root by finding a directory that contains a "sketches/" child.
+  // This handles projects that predate project.json (old directory structure).
+  const platform = inferPlatform(path);
+  if (platform && provider.readDirectory) {
+    for (const dir of unique.slice(1)) { // skip path itself (it's a file)
+      const fbKey = '__fallback__' + dir;
+      if (cache.has(fbKey)) {
+        const cached = cache.get(fbKey)!;
+        if (cached !== null) return cached;
+        continue;
+      }
+      try {
+        const entries = await provider.readDirectory(normalize(dir));
+        const hasSketchesDir = entries.some(e => e.name === 'sketches' && e.type === FileType.Directory);
+        if (hasSketchesDir) {
+          const dirName = dir.split('/').filter(Boolean).pop() ?? dir;
+          const ctx: VfsProjectContext = {
+            id: dirName,
+            name: dirName,
+            platform,
+            language: platformToLanguage(platform),
+            projectJsonPath: normalize(dir + '/project.json'),
+          };
+          cache.set(fbKey, ctx);
+          return ctx;
+        }
+        cache.set(fbKey, null);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   return null;
 }
 
@@ -255,6 +309,7 @@ export function VfsExplorer({
   onProjectContext,
   projectDeps,
   onExecuteAction,
+  onDialogAction,
   onOutputLine,
   onActionRunningChange,
   hideOutput = false,
@@ -262,7 +317,10 @@ export function VfsExplorer({
   showBreadcrumbs = true,
   className,
   providerRegistry,
+  defaultMountPresets,
   onMountsChanged: onMountsChangedProp,
+  refreshRef,
+  revealPathsRef,
   selectedPath: externalSelectedPath,
 }: VfsExplorerProps) {
   const clipboard = useVfsClipboard();
@@ -270,6 +328,38 @@ export function VfsExplorer({
   const rp = normalize(rootPath);
 
   const tree = useVfsTree(provider, rp);
+
+  // Expose tree.refresh to external callers via ref
+  useEffect(() => {
+    if (refreshRef) refreshRef.current = tree.refresh;
+    return () => { if (refreshRef) refreshRef.current = null; };
+  }, [refreshRef, tree.refresh]);
+
+  // Expose a "reveal paths" function: refreshes tree and expands/loads all ancestor dirs of given paths
+  useEffect(() => {
+    if (!revealPathsRef) return;
+    revealPathsRef.current = async (paths: string[]) => {
+      await tree.refresh();
+      // Collect all ancestor directories (shallowest first)
+      const dirsToExpand = new Set<string>();
+      for (const p of paths) {
+        const parts = normalize(p).split('/').filter(Boolean);
+        for (let i = 1; i < parts.length; i++) {
+          dirsToExpand.add('/' + parts.slice(0, i).join('/'));
+        }
+      }
+      const sorted = [...dirsToExpand].sort((a, b) => a.split('/').length - b.split('/').length);
+      for (const dir of sorted) {
+        await tree.handleItemExpansionToggle(null, dir, true);
+      }
+      tree.setExpandedItems(prev => {
+        const set = new Set([...prev, ...sorted]);
+        return [...set];
+      });
+    };
+    return () => { if (revealPathsRef) revealPathsRef.current = null; };
+  }, [revealPathsRef, tree]);
+
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [currentPath, setCurrentPath] = useState(rp);
 
@@ -291,10 +381,36 @@ export function VfsExplorer({
     setActiveProject(null);
   }, [provider]);
 
+  // Re-attempt project detection when tree updates (e.g. after CompositeFS.mount() fires a Created event).
+  // This handles the race where externalSelectedPath fires before /home is mounted.
+  const prevTreeLengthRef = useRef(0);
+  useEffect(() => {
+    const len = tree.items.length;
+    const grew = len > prevTreeLengthRef.current;
+    prevTreeLengthRef.current = len;
+    if (!grew || activeProject !== null) return;
+    const path = externalSelectedPath ?? (currentPath !== rp ? currentPath : null);
+    if (!path) return;
+    findProjectContext(path, provider, projectCacheRef.current)
+      .then(ctx => { if (ctx) setActiveProject(ctx); })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree.items]);
+
   // Propagate to external consumer whenever activeProject changes
   useEffect(() => {
     onProjectContext?.(activeProject);
   }, [activeProject, onProjectContext]);
+
+  // Auto-detect project from current folder (fires on navigation, tree expand, breadcrumb click)
+  // Only activates when no project is already active — does not override explicit file selection.
+  useEffect(() => {
+    if (currentPath === rp || activeProject !== null) return;
+    findProjectContext(currentPath, provider, projectCacheRef.current)
+      .then(ctx => { if (ctx) setActiveProject(ctx); })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPath, provider]);
 
   // Sync tree selection when externalSelectedPath changes (e.g. active editor tab)
   useEffect(() => {
@@ -319,10 +435,10 @@ export function VfsExplorer({
     const dir = node ? (node.isDirectory ? node.id : dirname(externalSelectedPath)) : dirname(externalSelectedPath);
     setCurrentPath(dir);
 
-    // Detect project context
+    // Detect project context (don't clear on errors — mount may not be ready yet)
     findProjectContext(externalSelectedPath, provider, projectCacheRef.current)
       .then(ctx => setActiveProject(ctx))
-      .catch(() => setActiveProject(null));
+      .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalSelectedPath, provider]);
 
@@ -364,9 +480,34 @@ export function VfsExplorer({
     onOutputLine?.(line);
   }, [onOutputLine]);
 
-  const handleRunAction = useCallback(async (actionId: string, hasOutput: boolean) => {
+  /** Builds a saveProjectJson callback for dialog actions: merges updates into project.json and refreshes context. */
+  const buildSaveProjectJson = useCallback((ctx: VfsProjectContext) => {
+    return async (updates: Record<string, unknown>) => {
+      const data = await provider.readFile(ctx.projectJsonPath);
+      const existing = JSON.parse(decodeText(data)) as Record<string, unknown>;
+      const merged = { ...existing, ...updates };
+      const encoded = new TextEncoder().encode(JSON.stringify(merged, null, 2));
+      await provider.writeFile!(ctx.projectJsonPath, encoded, { create: false, overwrite: true });
+      // Invalidate the project context cache so the next resolution picks up new values
+      projectCacheRef.current.delete(ctx.projectJsonPath);
+      // Re-evaluate context for the currently selected path
+      if (selectedItems[0]) {
+        const fresh = await findProjectContext(selectedItems[0], provider, projectCacheRef.current);
+        setActiveProject(fresh);
+        onProjectContext?.(fresh);
+      }
+    };
+  }, [provider, selectedItems, onProjectContext]);
+
+  const handleRunAction = useCallback(async (actionId: string, hasOutput: boolean, hasDialog?: boolean) => {
     const ctx = activeProject;
     if (!ctx) return;
+
+    // Dialog actions are handled by the host — no async output pipeline needed
+    if (hasDialog && onDialogAction) {
+      onDialogAction(actionId, ctx, buildSaveProjectJson(ctx));
+      return;
+    }
 
     actionAbortRef.current?.abort();
     const ctrl = new AbortController();
@@ -411,7 +552,7 @@ export function VfsExplorer({
         onActionRunningChange?.(false);
       }
     }
-  }, [activeProject, activeProjectInstance, onExecuteAction, onActionRunningChange, selectedItems, appendLine]);
+  }, [activeProject, activeProjectInstance, onExecuteAction, onDialogAction, onActionRunningChange, selectedItems, appendLine, buildSaveProjectJson]);
 
   const handleStopAction = useCallback(() => {
     actionAbortRef.current?.abort();
@@ -488,7 +629,7 @@ export function VfsExplorer({
         }
         findProjectContext(itemIds[0], provider, projectCacheRef.current)
           .then(ctx => setActiveProject(ctx))
-          .catch(() => setActiveProject(null));
+          .catch(() => {});
       } else {
         setActiveProject(null);
       }
@@ -793,6 +934,7 @@ export function VfsExplorer({
         <VfsMountManager
           compositeFs={provider as CompositeFS}
           providerRegistry={providerRegistry!}
+          defaultMountPresets={defaultMountPresets}
           onMountsChanged={handleMountsChanged}
         />
       )}
@@ -832,38 +974,50 @@ export function VfsExplorer({
         />
       )}
       {/* ── Project action toolbar ── */}
-      {activeProjectInstance && activeProjectInstance.getActions().length > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 2,
-          padding: '3px 6px',
-          background: '#252526', borderBottom: '1px solid #3c3c3c',
-          flexShrink: 0,
-        }}>
-          {activeProjectInstance.getActions().map(action => (
-            <button
-              key={action.id}
-              title={action.description ?? action.label}
-              disabled={actionRunning}
-              onClick={() => handleRunAction(action.id, action.hasOutput)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                padding: '2px 6px', fontSize: 11, cursor: actionRunning ? 'not-allowed' : 'pointer',
-                background: 'none', border: '1px solid transparent', borderRadius: 3,
-                color: actionRunning ? '#555' : '#ccc',
-                opacity: actionRunning ? 0.5 : 1,
-              }}
-              onMouseEnter={e => { if (!actionRunning) (e.currentTarget as HTMLButtonElement).style.borderColor = '#555'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent'; }}
-            >
-              <ActionIcon actionId={action.id} />
-              {action.label}
-            </button>
-          ))}
-          {actionRunning && (
-            <span style={{ marginLeft: 'auto', color: '#888', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-              <Spinner />
-              Running…
+      {activeProject && (
+        <div style={{ flexShrink: 0, borderBottom: '1px solid #3c3c3c', background: '#1e1e1e' }}>
+          {/* Project name row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px 2px' }}>
+            <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.7px', color: '#666' }}>
+              Project
             </span>
+            <span style={{ fontSize: 11, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeProject.name}
+            </span>
+            <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#0e639c', color: '#c5c5c5', flexShrink: 0 }}>
+              {activeProject.platform}
+            </span>
+          </div>
+          {/* Action buttons row */}
+          {activeProjectInstance && activeProjectInstance.getActions().length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, padding: '2px 6px 4px' }}>
+              {activeProjectInstance.getActions().map(action => (
+                <button
+                  key={action.id}
+                  title={action.description ?? action.label}
+                  disabled={actionRunning && !action.hasDialog}
+                  onClick={() => handleRunAction(action.id, action.hasOutput, action.hasDialog)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    padding: '3px 8px', fontSize: 11, cursor: actionRunning ? 'not-allowed' : 'pointer',
+                    background: '#2d2d2d', border: '1px solid #454545', borderRadius: 3,
+                    color: actionRunning ? '#555' : '#ccc',
+                    opacity: actionRunning ? 0.5 : 1,
+                  }}
+                  onMouseEnter={e => { if (!actionRunning) { (e.currentTarget as HTMLButtonElement).style.background = '#3a3a3a'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#666'; } }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#2d2d2d'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#454545'; }}
+                >
+                  <ActionIcon actionId={action.id} />
+                  {action.label}
+                </button>
+              ))}
+              {actionRunning && (
+                <span style={{ marginLeft: 'auto', color: '#888', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                  <Spinner />
+                  Running…
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}

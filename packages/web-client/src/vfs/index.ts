@@ -19,3 +19,5 @@ export {
   defaultProviderRegistry,
 } from './providerRegistry';
 export type { VfsProviderDef, VfsProviderConfigField } from './providerRegistry';
+export type { VfsMountPreset } from './vfsMountPresets';
+export { loadPresets, savePreset, deletePreset, generatePresetId } from './vfsMountPresets';

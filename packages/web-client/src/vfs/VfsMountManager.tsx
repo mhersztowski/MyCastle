@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
@@ -29,6 +29,8 @@ import type { VfsMountPreset } from './vfsMountPresets';
 export interface VfsMountManagerProps {
   compositeFs: CompositeFS;
   providerRegistry: VfsProviderDef[];
+  /** Built-in presets always shown (cannot be deleted). */
+  defaultMountPresets?: VfsMountPreset[];
   onMountsChanged: () => void;
 }
 
@@ -63,6 +65,14 @@ function MountIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
       <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
+      <path d="M3 8l4 4 6-6" stroke="#89d185" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -132,11 +142,27 @@ const rowSx = {
 
 /* ── Component ── */
 
-export function VfsMountManager({ compositeFs, providerRegistry, onMountsChanged }: VfsMountManagerProps) {
+export function VfsMountManager({ compositeFs, providerRegistry, defaultMountPresets, onMountsChanged }: VfsMountManagerProps) {
   const [version, setVersion] = useState(0);
   const mounts = useMemo(() => compositeFs.getMounts(), [compositeFs, version]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep stable ref to onMountsChanged so the effect below doesn't need it as a dep.
+  const onMountsChangedRef = useRef(onMountsChanged);
+  onMountsChangedRef.current = onMountsChanged;
+
+  // Defer re-read to the next macrotask so parent component effects (e.g. UserDataEditorPage
+  // auto-mounting /home) finish first. React flushes all useEffects synchronously before
+  // yielding, so setTimeout(0) fires after every effect in the tree has run.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setVersion(v => v + 1);
+      onMountsChangedRef.current();   // triggers tree.refresh() in VfsExplorer
+    }, 0);
+    return () => clearTimeout(id);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [expanded, setExpanded] = useState(false);
+  const [presetError, setPresetError] = useState<string | null>(null);
   const [presets, setPresets] = useState<VfsMountPreset[]>(() => loadPresets());
 
   const [dialog, setDialog] = useState<MountDialogState>({
@@ -255,8 +281,9 @@ export function VfsMountManager({ compositeFs, providerRegistry, onMountsChanged
 
   const handleMountPreset = useCallback(async (preset: VfsMountPreset) => {
     const def = providerRegistry.find(d => d.type === preset.providerType);
-    if (!def) return;
+    if (!def) { setPresetError(`Unknown provider type: ${preset.providerType}`); return; }
 
+    setPresetError(null);
     try {
       let provider;
       if (def.needsUserGesture && def.asyncFactory) {
@@ -269,12 +296,17 @@ export function VfsMountManager({ compositeFs, providerRegistry, onMountsChanged
       onMountsChanged();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
-      console.error('Failed to mount preset:', err);
+      // Refresh stale mount list so the UI reflects current state
+      setVersion(v => v + 1);
+      const msg = err instanceof Error ? err.message : String(err);
+      setPresetError(`Mount failed: ${msg}`);
     }
   }, [providerRegistry, compositeFs, onMountsChanged]);
 
+  // isMounted reads directly from compositeFs (not stale mounts cache)
+  // to correctly reflect external mounts (e.g. auto-mount from UserDataEditorPage).
   const isMounted = useCallback((preset: VfsMountPreset) =>
-    mounts.some(m => m.mountPoint === preset.mountPoint),
+    compositeFs.getMounts().some(m => m.mountPoint === preset.mountPoint),
   [mounts]);
 
   const mountCount = mounts.length;
@@ -344,6 +376,52 @@ export function VfsMountManager({ compositeFs, providerRegistry, onMountsChanged
               No active mounts.
             </Box>
           )}
+
+          {/* ── Preset error ── */}
+          {presetError && (
+            <Box
+              sx={{ px: 1, py: 0.5, fontSize: 11, color: '#f48771', bgcolor: 'rgba(244,135,113,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}
+            >
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{presetError}</span>
+              <Box component="span" onClick={() => setPresetError(null)} sx={{ cursor: 'pointer', opacity: 0.7, '&:hover': { opacity: 1 } }}>✕</Box>
+            </Box>
+          )}
+
+          {/* ── Built-in presets ── */}
+          {(defaultMountPresets?.length ?? 0) > 0 && (
+            <Box sx={{ ...sectionHeaderSx, fontSize: 10, py: 0.15, color: '#666' }}>
+              <span>Default presets</span>
+            </Box>
+          )}
+
+          {defaultMountPresets?.map(preset => {
+            const mounted = isMounted(preset);
+            return (
+              <Box key={preset.id} sx={rowSx}>
+                <Box sx={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+                  <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+                    {preset.name}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#666', display: 'block' }}>{preset.mountPoint}</span>
+                </Box>
+                {mounted ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: '#89d185', fontSize: 10, px: 0.5, flexShrink: 0 }}>
+                    <CheckIcon />
+                    <span>active</span>
+                  </Box>
+                ) : (
+                  <IconButton
+                    size="small"
+                    title="Mount"
+                    onClick={() => handleMountPreset(preset)}
+                    sx={{ color: '#4fc3f7', p: 0.25, '&:hover': { color: '#82d9ff' } }}
+                  >
+                    <MountIcon />
+                  </IconButton>
+                )}
+              </Box>
+            );
+          })}
 
           {/* ── Saved presets ── */}
           {presetCount > 0 && (

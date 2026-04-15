@@ -172,7 +172,7 @@ function UserProjectsPage() {
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
         {items.map((item) => (
           <Card key={item.id} sx={{ width: 220 }}>
-            <CardActionArea onClick={() => navigate(`/user/${userName}/project/${item.id}`)} sx={{ p: 1.5, pb: 0.5 }}>
+            <CardActionArea onClick={() => navigate(`/user/${userName}/project/${encodeURIComponent(item.name)}`)} sx={{ p: 1.5, pb: 0.5 }}>
               <Typography variant="body1" fontWeight="medium" sx={{ mb: 0.5 }}>{item.name}</Typography>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
                 {item.moduleId && (

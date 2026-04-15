@@ -152,18 +152,7 @@ function AppRoot() {
             </Box>
           }
         />
-        <Route
-          path="/user/:userName/pim/editor"
-          element={
-            <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-              <RequireAuth>
-                <Layout fullBleed>
-                  <UserDataEditorPage />
-                </Layout>
-              </RequireAuth>
-            </Box>
-          }
-        />
+        <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><UserDataEditorPage /></MinimalTopBar></RequireAuth>} />
 
         {/* All layout routes — single Layout handles nav based on path */}
         <Route

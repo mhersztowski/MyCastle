@@ -1,5 +1,7 @@
+import type React from 'react';
 import type { FileSystemProvider } from '@mhersztowski/core';
 import type { VfsProviderDef } from './providerRegistry';
+import type { VfsMountPreset } from './vfsMountPresets';
 import type { ProjectActionExecutor } from './project/types';
 
 export type VfsProjectLanguage = 'MicroPython' | 'Python' | 'C++' | string;
@@ -21,6 +23,12 @@ export interface VfsProjectContext {
   /** Programming language derived from platform */
   language: VfsProjectLanguage;
   boardProfileKey?: string;
+  /**
+   * Custom FQBN (fully-qualified board name) for Arduino projects.
+   * When set, takes precedence over the FQBN derived from boardProfileKey.
+   * Example: "esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=4M,PSRAM=opi"
+   */
+  fqbn?: string;
   /** Absolute VFS path to the project.json file */
   projectJsonPath: string;
 }
@@ -48,6 +56,19 @@ export interface VfsExplorerProps {
    */
   onExecuteAction?: ProjectActionExecutor;
   /**
+   * Called when a project action with `hasDialog: true` is clicked.
+   * The host is responsible for showing a dialog. When the user confirms,
+   * call `saveProjectJson(updates)` to persist changes and refresh the context.
+   *
+   * `saveProjectJson` merges `updates` into the existing project.json, writes it
+   * back via VFS, invalidates the project context cache, and re-evaluates the context.
+   */
+  onDialogAction?: (
+    actionId: string,
+    context: VfsProjectContext,
+    saveProjectJson: (updates: Record<string, unknown>) => Promise<void>,
+  ) => void;
+  /**
    * Called for every output line produced by a project action.
    * When provided, the in-sidebar output panel is hidden (hideOutput=true implied).
    */
@@ -60,7 +81,16 @@ export interface VfsExplorerProps {
   showBreadcrumbs?: boolean;
   className?: string;
   providerRegistry?: VfsProviderDef[];
+  /** Built-in presets always shown in the mount manager (cannot be deleted by user). */
+  defaultMountPresets?: VfsMountPreset[];
   onMountsChanged?: () => void;
+  /** When provided, assigned to tree.refresh() so external callers can trigger a tree reload. */
+  refreshRef?: React.MutableRefObject<(() => void) | null>;
+  /**
+   * When provided, assigned to a function that refreshes the tree and expands/loads the given paths.
+   * Useful after agent writes — call with the list of written file paths to make them visible.
+   */
+  revealPathsRef?: React.MutableRefObject<((paths: string[]) => Promise<void>) | null>;
 }
 
 export interface VfsTreeNode {

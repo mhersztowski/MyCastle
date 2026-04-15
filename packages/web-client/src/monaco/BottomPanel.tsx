@@ -49,11 +49,13 @@ export interface BottomPanelProps {
   onCloseTab(id: string): void;
   wsUrl?: string;
   token?: string;
+  onConfigRequest?: () => void;
+  enableTerminal?: boolean;
 }
 
 /* ── Component ── */
 
-export function BottomPanel({ tabs, activeTabId, onTabChange, onAddTerminal, onCloseTab, wsUrl, token }: BottomPanelProps) {
+export function BottomPanel({ tabs, activeTabId, onTabChange, onAddTerminal, onCloseTab, wsUrl, token, onConfigRequest, enableTerminal }: BottomPanelProps) {
   const outputScrollRef = useRef<HTMLDivElement | null>(null);
   const activeTab = tabs.find(t => t.id === activeTabId);
 
@@ -118,16 +120,18 @@ export function BottomPanel({ tabs, activeTabId, onTabChange, onAddTerminal, onC
           );
         })}
 
-        {/* Add terminal button */}
-        <Box
-          onClick={onAddTerminal}
-          title="New Terminal"
-          sx={{
-            px: 1, display: 'flex', alignItems: 'center', cursor: 'pointer',
-            color: '#555', fontSize: 16, lineHeight: 1, flexShrink: 0,
-            '&:hover': { color: '#ccc', background: '#252526' },
-          }}
-        >+</Box>
+        {/* Add terminal button — admin only */}
+        {enableTerminal && (
+          <Box
+            onClick={onAddTerminal}
+            title="New Terminal"
+            sx={{
+              px: 1, display: 'flex', alignItems: 'center', cursor: 'pointer',
+              color: '#555', fontSize: 16, lineHeight: 1, flexShrink: 0,
+              '&:hover': { color: '#ccc', background: '#252526' },
+            }}
+          >+</Box>
+        )}
       </Box>
 
       {/* ── Content ── */}
@@ -143,7 +147,7 @@ export function BottomPanel({ tabs, activeTabId, onTabChange, onAddTerminal, onC
               pointerEvents: tab.id === activeTabId ? 'auto' : 'none',
             }}
           >
-            <TerminalPanel wsUrl={wsUrl} token={token} />
+            <TerminalPanel wsUrl={wsUrl} token={token} onConfigRequest={onConfigRequest} />
           </Box>
         ))}
 

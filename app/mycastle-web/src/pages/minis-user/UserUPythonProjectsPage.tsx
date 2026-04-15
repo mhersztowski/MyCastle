@@ -142,7 +142,7 @@ function UserUPythonProjectsPage() {
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
         {items.map((item) => (
           <Card key={item.id} sx={{ width: 220 }}>
-            <CardActionArea onClick={() => navigate(`/user/${userName}/upython-project/${item.id}`)} sx={{ p: 1.5, pb: 0.5 }}>
+            <CardActionArea onClick={() => navigate(`/user/${userName}/upython-project/${encodeURIComponent(item.name)}`)} sx={{ p: 1.5, pb: 0.5 }}>
               <Typography variant="subtitle2" color="text.secondary">Name:</Typography>
               <Typography variant="body1" sx={{ mb: 1 }}>{item.name}</Typography>
               {item.githubProjectId && (

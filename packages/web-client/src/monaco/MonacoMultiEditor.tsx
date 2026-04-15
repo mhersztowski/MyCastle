@@ -63,8 +63,14 @@ export interface MonacoMultiEditorProps {
   enableTerminal?: boolean;
   terminalWsUrl?: string;
   terminalToken?: string;
+  /** Called when the user clicks the configure button in the terminal header. */
+  onTerminalConfigRequest?: () => void;
   /** Passed through to VfsExplorer so project action buttons can make authenticated API calls. */
   projectDeps?: import('../vfs/project/types').ProjectDeps;
+  /** Passed through to VfsExplorer — called when a project action with hasDialog=true is clicked. */
+  onDialogAction?: import('../vfs/types').VfsExplorerProps['onDialogAction'];
+  /** Built-in mount presets always shown in the VFS mount manager (cannot be deleted by user). */
+  defaultMountPresets?: import('../vfs/vfsMountPresets').VfsMountPreset[];
 }
 
 interface TabInfo {
@@ -390,6 +396,19 @@ function Kbd({ children }: { children: string }) {
 
 const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 const mod = isMac ? '\u2318' : 'Ctrl+';
+function useIsMobile() {
+  // Touch device (phone/tablet) OR narrow window — catches landscape phones too
+  const detect = () =>
+    (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+    window.innerWidth < 900;
+  const [mobile, setMobile] = useState(detect);
+  useEffect(() => {
+    const fn = () => setMobile(detect);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return mobile;
+}
 
 /* ── EditorGroupPane ── */
 
@@ -638,6 +657,11 @@ const EditorGroupPane = memo(function EditorGroupPane({
     // Virtual tab — clear Monaco model, nothing else to do
     const activeTabInfo = group.tabs.find(t => t.path === group.activeTab);
     if (activeTabInfo?.virtual) {
+      // Blur Monaco before hiding it. On Android, hiding a focused element without
+      // moving focus explicitly causes the browser to auto-focus the next available
+      // input (TipTap's contenteditable), which triggers the soft keyboard and a
+      // viewport resize that looks like a "flash and reset".
+      (document.activeElement as HTMLElement | null)?.blur();
       editor.setModel(null);
       return;
     }
@@ -665,15 +689,12 @@ const EditorGroupPane = memo(function EditorGroupPane({
     if (!tabInfo) return;
 
     const model = modelManager.getModel(tabInfo.uri);
-    console.debug('[MME] model switch', { uri: group.activeTab, tabUri: tabInfo.uri, found: !!model });
     if (model) {
       editor.setModel(model);
       // Notify plugins about the model change with the actual text
-      const text = model.getValue();
-      console.debug('[MME] emit modelChanged', { uri: group.activeTab, textLen: text.length });
       globalEventBus.emit('system:editor:modelChanged', {
         uri: group.activeTab,
-        text,
+        text: model.getValue(),
       });
 
       // Check pending navigation from Find in Files (takes priority over saved view state)
@@ -871,11 +892,16 @@ export function MonacoMultiEditor({
   enableTerminal = false,
   terminalWsUrl,
   terminalToken,
+  onTerminalConfigRequest,
   projectDeps,
+  onDialogAction,
+  defaultMountPresets,
 }: MonacoMultiEditorProps) {
   const [groups, setGroups] = useState<EditorGroup[]>(() => [{ id: makeGroupId(), tabs: [], activeTab: null, size: 1 }]);
   const [activeGroupId, setActiveGroupId] = useState<string>(groups[0].id);
-  const [splitRatio, setSplitRatio] = useState(0.25);
+  const [splitRatio, setSplitRatio] = useState(() => window.innerWidth < 900 ? 0.65 : 0.25);
+  const explorerRefreshRef = useRef<(() => void) | null>(null);
+  const explorerRevealRef = useRef<((paths: string[]) => Promise<void>) | null>(null);
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>('explorer');
   const [cursorInfo, setCursorInfo] = useState({ ln: 1, col: 1 });
   const [searchQuery, setSearchQuery] = useState('');
@@ -908,6 +934,7 @@ export function MonacoMultiEditor({
   // ── Menu anchors ──
   const [viewMenuAnchor, setViewMenuAnchor] = useState<null | HTMLElement>(null);
 
+  const isMobile = useIsMobile();
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [agentPanelWidth, setAgentPanelWidth] = useState(380);
   const agentPanelWidthRef = useRef(380);
@@ -915,8 +942,10 @@ export function MonacoMultiEditor({
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelHeight, setBottomPanelHeight] = useState(220);
   const bottomPanelHeightRef = useRef(220);
-  const [bottomTabs, setBottomTabs] = useState<BottomTab[]>([{ id: 'terminal-1', type: 'terminal', label: 'bash' }]);
-  const [activeBottomTabId, setActiveBottomTabId] = useState('terminal-1');
+  const [bottomTabs, setBottomTabs] = useState<BottomTab[]>(
+    enableTerminal ? [{ id: 'terminal-1', type: 'terminal', label: 'bash' }] : [],
+  );
+  const [activeBottomTabId, setActiveBottomTabId] = useState(enableTerminal ? 'terminal-1' : '');
   const currentOutputTabIdRef = useRef<string | null>(null);
   const mainAreaRef = useRef<HTMLDivElement | null>(null);
 
@@ -1416,8 +1445,11 @@ export function MonacoMultiEditor({
     }
   }, [searchResults, handleReplaceInFile]);
 
-  // Agent wrote files → reload any open tabs whose content changed
+  // Agent wrote files → reload any open tabs whose content changed + reveal in file explorer
   const handleAgentFileWritten = useCallback(async (paths: string[]) => {
+    // Reveal written paths in the VFS explorer (refresh + expand ancestor dirs)
+    explorerRevealRef.current?.(paths).catch(() => {});
+
     const mm = modelManagerRef.current;
     if (!mm) return;
     for (const path of paths) {
@@ -1438,37 +1470,52 @@ export function MonacoMultiEditor({
     }
   }, [provider]);
 
-  // Splitter drag (sidebar)
-  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
+  // Splitter drag (sidebar) — shared logic for mouse and touch
+  const startSplitterDrag = useCallback((startClientX: number) => {
     const container = splitterContainerRef.current;
     if (!container) return;
 
-    const startX = e.clientX;
     const containerRect = container.getBoundingClientRect();
     const startRatio = splitRatio;
 
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
 
-    const onMouseMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
+    const applyDelta = (clientX: number) => {
+      const dx = clientX - startClientX;
       const newRatio = startRatio + dx / containerRect.width;
       const minRatio = MIN_PANEL_PX / containerRect.width;
       const maxRatio = 1 - minRatio;
       setSplitRatio(Math.min(maxRatio, Math.max(minRatio, newRatio)));
     };
 
-    const onMouseUp = () => {
+    const onMouseMove = (ev: MouseEvent) => applyDelta(ev.clientX);
+    const onTouchMove = (ev: TouchEvent) => { ev.preventDefault(); applyDelta(ev.touches[0].clientX); };
+
+    const cleanup = () => {
       document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('mouseup', cleanup);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', cleanup);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
     };
 
     document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('mouseup', cleanup);
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', cleanup);
   }, [splitRatio]);
+
+  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    startSplitterDrag(e.clientX);
+  }, [startSplitterDrag]);
+
+  const handleSplitterTouchStart = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    startSplitterDrag(e.touches[0].clientX);
+  }, [startSplitterDrag]);
 
   // Agent panel splitter drag
   const handleAgentSplitterMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1624,7 +1671,7 @@ export function MonacoMultiEditor({
     : pluginCommandPaletteItems;
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height, overflow: 'hidden', bgcolor: '#1e1e1e' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height, overflow: 'hidden', bgcolor: '#1e1e1e', position: 'relative' }}>
 
       {/* ── Command Palette Overlay ── */}
       {cmdPaletteOpen && (
@@ -1633,48 +1680,64 @@ export function MonacoMultiEditor({
           sx={{
             position: 'absolute', inset: 0, zIndex: 9999,
             bgcolor: 'rgba(0,0,0,0.4)',
-            display: 'flex', justifyContent: 'center', pt: '10%',
+            display: 'flex',
+            ...(isMobile
+              ? { alignItems: 'flex-end', justifyContent: 'center' }
+              : { justifyContent: 'center', alignItems: 'flex-start' }),
           }}
         >
           <Box
             onClick={(e) => e.stopPropagation()}
             sx={{
-              width: 560, maxWidth: '90vw',
               bgcolor: '#252526',
               border: '1px solid #454545',
-              borderRadius: 1,
               boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
               display: 'flex', flexDirection: 'column',
-              maxHeight: '60vh',
               overflow: 'hidden',
+              ...(isMobile
+                ? { borderRadius: '12px 12px 0 0', maxHeight: '70vh', width: '100%' }
+                : { borderRadius: 1, width: 560, maxWidth: '90vw', maxHeight: '60vh' }),
             }}
           >
-            <TextField
-              autoFocus
-              fullWidth
-              placeholder="Type a command…"
-              value={cmdPaletteQuery}
-              onChange={(e) => setCmdPaletteQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setCmdPaletteOpen(false);
-                if (e.key === 'Enter' && filteredCmdItems.length > 0) {
-                  globalCommandRegistry.execute(filteredCmdItems[0].command).catch(console.error);
-                  setCmdPaletteOpen(false);
-                }
-              }}
-              slotProps={{
-                input: {
-                  sx: {
-                    color: '#ccc', fontSize: 14, px: 1.5, py: 1,
-                    '& input': { p: 0 },
+            {/* On mobile: no text input (prevents keyboard → viewport shrink → scroll reset).
+                On desktop: standard searchable text field. */}
+            {isMobile ? (
+              <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid #454545', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography sx={{ fontSize: 13, color: '#858585' }}>Commands</Typography>
+                <Box
+                  component="button"
+                  onClick={() => setCmdPaletteOpen(false)}
+                  sx={{ background: 'none', border: 'none', color: '#858585', fontSize: 20, cursor: 'pointer', lineHeight: 1, p: 0, touchAction: 'manipulation' }}
+                >×</Box>
+              </Box>
+            ) : (
+              <TextField
+                autoFocus
+                fullWidth
+                placeholder="Type a command…"
+                value={cmdPaletteQuery}
+                onChange={(e) => setCmdPaletteQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setCmdPaletteOpen(false);
+                  if (e.key === 'Enter' && filteredCmdItems.length > 0) {
+                    globalCommandRegistry.execute(filteredCmdItems[0].command).catch(console.error);
+                    setCmdPaletteOpen(false);
+                  }
+                }}
+                slotProps={{
+                  input: {
+                    sx: {
+                      color: '#ccc', fontSize: 14, px: 1.5, py: 1,
+                      '& input': { p: 0 },
+                    },
                   },
-                },
-              }}
-              sx={{
-                '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
-                borderBottom: '1px solid #454545',
-              }}
-            />
+                }}
+                sx={{
+                  '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
+                  borderBottom: '1px solid #454545',
+                }}
+              />
+            )}
             <Box sx={{ overflowY: 'auto' }}>
               {filteredCmdItems.length === 0 ? (
                 <Box sx={{ px: 2, py: 1.5, color: '#858585', fontSize: 13 }}>No commands found</Box>
@@ -1689,13 +1752,13 @@ export function MonacoMultiEditor({
                         setCmdPaletteOpen(false);
                       }}
                       sx={{
-                        px: 2, py: 1, fontSize: 13, color: '#ccc', cursor: 'pointer',
+                        px: 2, py: isMobile ? 1.5 : 1, fontSize: 13, color: '#ccc', cursor: 'pointer',
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
                       }}
                     >
-                      <Typography sx={{ fontSize: 13 }}>{label}</Typography>
-                      {item.keybinding && (
+                      <Typography sx={{ fontSize: isMobile ? 15 : 13 }}>{label}</Typography>
+                      {item.keybinding && !isMobile && (
                         <Typography sx={{ fontSize: 11, color: '#858585', ml: 2, flexShrink: 0 }}>
                           {item.keybinding}
                         </Typography>
@@ -1844,63 +1907,91 @@ export function MonacoMultiEditor({
           </MenuItem>
         </Menu>
 
+        {/* Command Palette — direct menu bar item */}
+        <Box sx={{ width: '1px', height: 14, bgcolor: '#555', mx: 0.5, flexShrink: 0 }} />
+        <Box
+          onClick={() => globalEventBus.emit('system:editor:openCommandPalette', {})}
+          sx={{
+            px: 1, py: 0.25, borderRadius: 0.5, cursor: 'pointer', color: '#ccc', fontSize: 13,
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
+          }}
+        >
+          Command Palette
+        </Box>
+
       </Box>
 
-      {/* ── Toolbar (below menu bar) ── */}
-      <Box sx={{
-        bgcolor: '#2d2d2d',
-        borderBottom: '1px solid #2b2b2b',
-        px: 0.5,
-        display: 'flex',
-        alignItems: 'center',
-        height: 32,
-        flexShrink: 0,
-        gap: 0.25,
-      }}>
-        {pluginToolbarItems.map((item) => (
-          <Tooltip key={item.id} title={item.label}>
-            <Box
-              onClick={() => globalCommandRegistry.execute(item.command).catch(console.error)}
-              sx={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 28, height: 28, borderRadius: 0.5, cursor: 'pointer',
-                color: '#ccc', userSelect: 'none', flexShrink: 0,
-                '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
-              }}
-            >
-              {item.icon.startsWith('<svg') ? (
-                <Box component="span" sx={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                  dangerouslySetInnerHTML={{ __html: item.icon }} />
-              ) : (
-                <Typography sx={{ fontSize: 13 }}>{item.icon}</Typography>
-              )}
-            </Box>
-          </Tooltip>
-        ))}
-        {pluginToolbarItems.length > 0 && <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25 }} />}
-        <Tooltip title="Command Palette (F1)">
-          <Box
-            onClick={() => globalEventBus.emit('system:editor:openCommandPalette', {})}
-            sx={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 28, height: 28, borderRadius: 0.5, cursor: 'pointer',
-              color: '#858585', userSelect: 'none', flexShrink: 0,
-              '&:hover': { bgcolor: 'rgba(255,255,255,0.1)', color: '#ccc' },
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
-              <path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-              <path d="M11 10l2 2-2 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </Box>
-        </Tooltip>
-      </Box>
+      {/* ── Toolbar (below menu bar) — only shown when plugins contribute items ── */}
+      {pluginToolbarItems.length > 0 && (
+        <Box sx={{
+          bgcolor: '#2d2d2d',
+          borderBottom: '1px solid #2b2b2b',
+          px: 0.5,
+          display: 'flex',
+          alignItems: 'center',
+          height: 32,
+          flexShrink: 0,
+          gap: 0.25,
+        }}>
+          {pluginToolbarItems.map((item) => (
+            <Tooltip key={item.id} title={item.label}>
+              <Box
+                onClick={() => globalCommandRegistry.execute(item.command).catch(console.error)}
+                sx={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 28, height: 28, borderRadius: 0.5, cursor: 'pointer',
+                  color: '#ccc', userSelect: 'none', flexShrink: 0,
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
+                }}
+              >
+                {item.icon.startsWith('<svg') ? (
+                  <Box component="span" sx={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    dangerouslySetInnerHTML={{ __html: item.icon }} />
+                ) : (
+                  <Typography sx={{ fontSize: 13 }}>{item.icon}</Typography>
+                )}
+              </Box>
+            </Tooltip>
+          ))}
+        </Box>
+      )}
 
       {/* ── Main area wrapper (editors + terminal) ── */}
       <Box ref={mainAreaRef} sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
 
+      {/* ── Mobile full-screen agent panel (replaces editors on mobile when open) ── */}
+      {enableAgent && isMobile && agentPanelOpen && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden', bgcolor: '#1e1e1e' }}>
+          <button
+            type="button"
+            onClick={() => setAgentPanelOpen(false)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '0 16px', height: 44, flexShrink: 0,
+              background: '#252526', border: 'none', borderBottom: '1px solid #3c3c3c',
+              color: '#ccc', fontSize: 13, cursor: 'pointer', width: '100%',
+              touchAction: 'manipulation', textAlign: 'left',
+            }}
+          >
+            <span style={{ fontSize: 18, lineHeight: 1 }}>←</span>
+            <span>AI Agent</span>
+          </button>
+          <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <AgentPanel
+              provider={provider}
+              defaultConfig={defaultAgentConfig}
+              onFileOpen={handleFileOpen}
+              injectedClaudeMd={agentClaudeMd}
+              authToken={agentAuthToken}
+              webFetchUrl={agentWebFetchUrl}
+              onFileWritten={handleAgentFileWritten}
+            />
+          </Box>
+        </Box>
+      )}
+
       {/* ── Editors area: Activity Bar + Sidebar + Splitter + Editor Groups ── */}
-      <Box ref={splitterContainerRef} sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
+      <Box ref={splitterContainerRef} sx={{ display: isMobile && agentPanelOpen ? 'none' : 'flex', flexGrow: 1, overflow: 'hidden' }}>
 
         {/* Activity Bar */}
         <Box sx={{
@@ -1983,8 +2074,8 @@ export function MonacoMultiEditor({
             bgcolor: '#252526',
           }}>
             {/* Sidebar header */}
-            <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid #3c3c3c' }}>
-              <Typography sx={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8, color: '#bbb' }}>
+            <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid #3c3c3c', display: 'flex', alignItems: 'center' }}>
+              <Typography sx={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8, color: '#bbb', flex: 1 }}>
                 {sidebarPanel === 'explorer' && 'Explorer'}
                 {sidebarPanel === 'search' && 'Search'}
                 {sidebarPanel === 'extensions' && 'Extensions'}
@@ -1992,6 +2083,24 @@ export function MonacoMultiEditor({
                   pluginSidebarPanels.find(p => p.id === sidebarPanel)?.title ?? sidebarPanel
                 )}
               </Typography>
+              {sidebarPanel === 'explorer' && (
+                <Box
+                  component="button"
+                  onClick={() => explorerRefreshRef.current?.()}
+                  title="Refresh Explorer"
+                  sx={{
+                    all: 'unset', cursor: 'pointer', color: '#858585', p: 0.25, borderRadius: 0.5, lineHeight: 0,
+                    '&:hover': { color: '#ccc', bgcolor: 'rgba(255,255,255,0.06)' },
+                    touchAction: 'manipulation',
+                  }}
+                >
+                  {/* Refresh icon */}
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.6 0 3 .67 4 1.74" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                    <path d="M12 1v3.5H8.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </Box>
+              )}
             </Box>
 
             {/* Sidebar content */}
@@ -2005,8 +2114,12 @@ export function MonacoMultiEditor({
                   readOnly={readOnly}
                   showBreadcrumbs={false}
                   providerRegistry={providerRegistry}
+                  defaultMountPresets={defaultMountPresets}
+                  refreshRef={explorerRefreshRef}
+                  revealPathsRef={explorerRevealRef}
                   selectedPath={activeGroup.activeTab ?? undefined}
                   projectDeps={projectDeps}
+                  onDialogAction={onDialogAction}
                   onOutputLine={handleOutputLine}
                   onActionRunningChange={handleActionRunningChange}
                   hideOutput
@@ -2341,12 +2454,15 @@ export function MonacoMultiEditor({
         {sidebarOpen && (
           <Box
             onMouseDown={handleSplitterMouseDown}
+            onTouchStart={handleSplitterTouchStart}
             sx={{
-              width: 5,
+              width: isMobile ? 10 : 5,
               cursor: 'col-resize',
               bgcolor: '#2d2d2d',
               flexShrink: 0,
+              touchAction: 'none',
               '&:hover': { bgcolor: '#007acc' },
+              '&:active': { bgcolor: '#007acc' },
               transition: 'background-color 0.15s',
             }}
           />
@@ -2397,8 +2513,8 @@ export function MonacoMultiEditor({
           ))}
         </Box>
 
-        {/* Agent panel splitter */}
-        {enableAgent && agentPanelOpen && (
+        {/* Agent panel splitter (desktop only) */}
+        {enableAgent && agentPanelOpen && !isMobile && (
           <Box
             onMouseDown={handleAgentSplitterMouseDown}
             sx={{
@@ -2412,8 +2528,8 @@ export function MonacoMultiEditor({
           />
         )}
 
-        {/* Agent panel */}
-        {enableAgent && agentPanelOpen && (
+        {/* Agent panel — inline on desktop */}
+        {enableAgent && agentPanelOpen && !isMobile && (
           <Box sx={{
             width: agentPanelWidth,
             flexShrink: 0,
@@ -2432,6 +2548,7 @@ export function MonacoMultiEditor({
             />
           </Box>
         )}
+
 
         {/* Right Activity Bar (Agent) */}
         {enableAgent && (
@@ -2467,7 +2584,7 @@ export function MonacoMultiEditor({
       </Box>
 
       {/* ── Bottom panel (terminal + output tabs) ── */}
-      {enableTerminal && bottomPanelOpen && (
+      {bottomPanelOpen && (
         <>
           <Box
             onMouseDown={handleBottomSplitterMouseDown}
@@ -2482,6 +2599,8 @@ export function MonacoMultiEditor({
               onCloseTab={handleCloseTab}
               wsUrl={terminalWsUrl}
               token={terminalToken}
+              onConfigRequest={onTerminalConfigRequest}
+              enableTerminal={enableTerminal}
             />
           </Box>
         </>
@@ -2500,21 +2619,19 @@ export function MonacoMultiEditor({
         gap: 2,
         userSelect: 'none',
       }}>
-        {enableTerminal && (
-          <Box
-            onClick={() => setBottomPanelOpen(p => !p)}
-            title="Toggle Terminal Panel"
-            sx={{
-              display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer',
-              px: 0.5, borderRadius: 0.5,
-              opacity: bottomPanelOpen ? 1 : 0.7,
-              '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', opacity: 1 },
-            }}
-          >
-            <TerminalIcon active />
-            <Typography sx={{ fontSize: 11, color: '#fff' }}>Terminal</Typography>
-          </Box>
-        )}
+        <Box
+          onClick={() => setBottomPanelOpen(p => !p)}
+          title="Toggle Output Panel"
+          sx={{
+            display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer',
+            px: 0.5, borderRadius: 0.5,
+            opacity: bottomPanelOpen ? 1 : 0.7,
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', opacity: 1 },
+          }}
+        >
+          <TerminalIcon active />
+          <Typography sx={{ fontSize: 11, color: '#fff' }}>{enableTerminal ? 'Terminal' : 'Output'}</Typography>
+        </Box>
         {activeGroup?.activeTab ? (
           <>
             <Typography sx={{ fontSize: 12, color: '#fff' }}>

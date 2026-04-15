@@ -252,7 +252,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     (async () => {
       try {
         const projects = await minisApi.getUserProjects(userName);
-        const project = projects.find(p => p.id === projectId);
+        const project = projects.find(p => p.name === projectId || p.id === projectId);
         if (!project) return;
         const boardKey = project.boardProfileKey;
         if (boardKey && boardProfiles[boardKey]) {
