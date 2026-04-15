@@ -26,14 +26,9 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/core-backend/package.json packages/core-backend/
 COPY packages/web-client/package.json packages/web-client/
-COPY packages/core-scene3d/package.json packages/core-scene3d/
 COPY packages/ui-core/package.json packages/ui-core/
-COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
 COPY app/mycastle-backend/package.json app/mycastle-backend/
 COPY app/mycastle-web/package.json app/mycastle-web/
-COPY app/mycastle-mobile/package.json app/mycastle-mobile/
-COPY app/mycastle-watch/package.json app/mycastle-watch/
-COPY app/demo-scene-3d/package.json app/demo-scene-3d/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --fetch-timeout 120000 --reporter silent
 

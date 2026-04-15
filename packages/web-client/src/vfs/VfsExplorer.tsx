@@ -293,6 +293,32 @@ async function findProjectContext(
     }
   }
 
+  // Pass 3: detect package.json as a Node.js project marker
+  for (const dir of unique.slice(1)) { // skip path itself
+    const pkgKey = '__nodejs__' + dir;
+    if (cache.has(pkgKey)) {
+      const cached = cache.get(pkgKey)!;
+      if (cached !== null) return cached;
+      continue;
+    }
+    try {
+      const data = await provider.readFile(normalize(dir + '/package.json'));
+      const json = JSON.parse(decodeText(data)) as { name?: string };
+      const dirName = dir.split('/').filter(Boolean).pop() ?? dir;
+      const ctx: VfsProjectContext = {
+        id: dirName,
+        name: json.name ?? dirName,
+        platform: 'NodeJs',
+        language: 'TypeScript',
+        projectJsonPath: normalize(dir + '/package.json'),
+      };
+      cache.set(pkgKey, ctx);
+      return ctx;
+    } catch {
+      cache.set(pkgKey, null);
+    }
+  }
+
   return null;
 }
 

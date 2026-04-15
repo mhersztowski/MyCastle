@@ -7,6 +7,7 @@ import type { VfsProviderDef, VfsMountPreset, VfsProjectContext } from '@mherszt
 import { ArduinoBoardConfigDialog } from '../../components/ArduinoBoardConfigDialog';
 import { MarkdownPreviewPlugin } from '../../plugins/MarkdownPreviewPlugin';
 import { MarkdownEditorPlugin } from '../../plugins/MarkdownEditorPlugin';
+import { createTypeScriptPlugin } from '../../plugins/TypeScriptIntelliSensePlugin';
 import type { AgentConfig } from '@mhersztowski/web-client';
 import { useAuth } from '../../modules/auth';
 import { minisApi } from '../../services/MinisApiService';
@@ -258,6 +259,8 @@ export default function UserDataEditorPage() {
     }];
   }, [currentUser]);
 
+  const tsPlugin = useMemo(() => createTypeScriptPlugin(cfs), [cfs]);
+
   const projectDeps = useMemo(
     () => currentUser ? { baseUrl: '', authToken: token ?? undefined, userName: currentUser.name } : undefined,
     [currentUser, token],
@@ -305,7 +308,7 @@ export default function UserDataEditorPage() {
         height="100%"
         providerRegistry={registry}
         defaultMountPresets={defaultMountPresets}
-        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin]}
+        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin, tsPlugin]}
         enableAgent={isAdmin}
         defaultAgentConfig={agentDefaultConfig}
         agentClaudeMd={claudeMd}

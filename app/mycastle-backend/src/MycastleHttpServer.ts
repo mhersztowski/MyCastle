@@ -1015,6 +1015,14 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Node.js: run npm script (GET/SSE /api/users/{userName}/nodejs/run?subpath=...&script=...)
+    const nodejsRunMatch = apiPath.match(/^\/users\/([^/]+)\/nodejs\/run$/);
+    if (nodejsRunMatch && method === 'GET') {
+      const userName = decodeURIComponent(nodejsRunMatch[1]);
+      await this.handleNodejsRun(req, res, userName);
+      return;
+    }
+
     // PicoSDK: build (POST or GET/SSE /api/users/{userName}/project-upython/{projectName}/build-pico)
     const picoSdkBuildMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/build-pico$/);
     if (picoSdkBuildMatch && (method === 'POST' || method === 'GET')) {
@@ -2599,6 +2607,59 @@ const { password, ...safeBody } = body;
     } catch {
       this.sendJsonResponse(res, 404, { error: 'UF2 file not found — build first' });
     }
+  }
+
+  // --- Node.js ---
+
+  private async handleNodejsRun(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
+    if (!this.rootDir) {
+      this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const subpath = url.searchParams.get('subpath') ?? '';
+    const script = url.searchParams.get('script') ?? '';
+    if (!script) {
+      this.sendJsonResponse(res, 400, { error: 'Missing script parameter' });
+      return;
+    }
+    // Resolve to real filesystem path: rootDir/data/Minis/Users/{user}/{subpath}
+    const projectDir = path.resolve(this.rootDir, 'data', 'Minis', 'Users', userName, subpath);
+    // Ensure the resolved path is within rootDir (prevent directory traversal)
+    if (!projectDir.startsWith(path.resolve(this.rootDir))) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+      return;
+    }
+
+    const args = script === 'install' ? ['install'] : ['run', script];
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    this.setCorsHeaders(res);
+    res.writeHead(200);
+
+    const sendEvent = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const proc = spawn('npm', args, { cwd: projectDir, shell: true });
+
+    proc.stdout.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
+    proc.stderr.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
+
+    proc.on('close', (code) => {
+      sendEvent('done', { success: code === 0, exitCode: code });
+      res.end();
+    });
+
+    proc.on('error', (err) => {
+      sendEvent('output', { chunk: `Error: ${err.message}\n` });
+      sendEvent('done', { success: false, error: err.message });
+      res.end();
+    });
+
+    req.on('close', () => proc.kill());
   }
 
   // --- User Devices ---
