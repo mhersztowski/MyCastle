@@ -134,32 +134,20 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
     },
 
     activate(api) {
-      // ── Compiler options ─────────────────────────────────────────────────────
       const tsDefaults = monaco.languages.typescript.typescriptDefaults;
-
-      tsDefaults.setCompilerOptions({
-        target: monaco.languages.typescript.ScriptTarget.ES2020,
-        moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
-        allowJs: true,
-        checkJs: false,
-        allowSyntheticDefaultImports: true,
-        esModuleInterop: true,
-        strict: false,
-        noEmit: true,
-        jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
-        allowNonTsExtensions: true,
-      });
-
-      tsDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false });
+      const jsDefaults = monaco.languages.typescript.javascriptDefaults;
 
       // ── State ────────────────────────────────────────────────────────────────
-      const registeredLibs = new Map<string, monaco.IDisposable>();
+      const registeredLibsTs = new Map<string, monaco.IDisposable>();
+      const registeredLibsJs = new Map<string, monaco.IDisposable>();
       const resolvedPkgs = new Set<string>();   // packages already resolved (VFS or CDN)
       const processedFiles = new Set<string>(); // VFS files already processed (VFS paths)
 
       function registerLib(libPath: string, content: string) {
-        registeredLibs.get(libPath)?.dispose();
-        registeredLibs.set(libPath, tsDefaults.addExtraLib(content, libPath));
+        registeredLibsTs.get(libPath)?.dispose();
+        registeredLibsTs.set(libPath, tsDefaults.addExtraLib(content, libPath));
+        registeredLibsJs.get(libPath)?.dispose();
+        registeredLibsJs.set(libPath, jsDefaults.addExtraLib(content, libPath));
       }
 
       // ── VFS read (uses VFS paths, e.g. '/home/foo/bar.ts') ──────────────────

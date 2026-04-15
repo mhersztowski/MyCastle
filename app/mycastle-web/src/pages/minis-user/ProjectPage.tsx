@@ -59,6 +59,7 @@ import { EditorInstance } from '@mhersztowski/web-client';
 import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@modules/ardublockly2';
 import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/serial';
 import { minisApi } from '../../services/MinisApiService';
+import { useAuth } from '../../modules/auth';
 import { AccountMenu } from '../../components/AccountMenu';
 import { BuildOutputPanel } from '../../components/BuildOutputPanel';
 import type { MinisDeviceModel, MinisProjectLibrary } from '@mhersztowski/core';
@@ -70,6 +71,7 @@ const MIN_PANEL_PX = 200;
 function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const { userName, projectId } = useParams<{ userName: string; projectId: string }>();
   const navigate = useNavigate();
+  const { token } = useAuth();
   const [searchParams] = useSearchParams();
   const serviceRef = useRef<ArduBlocklyService | null>(null);
   const editorRef = useRef<EditorInstance | null>(null);
@@ -568,13 +570,53 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         setCompileSuccess(false);
         return;
       }
-      const result = await minisApi.compileProject(userName, projectId, sk, fqbn, selectedDeviceName || undefined);
-      setCompileOutput(result.output);
-      setCompileSuccess(result.success);
-      // Keep devices state in sync so lastBuild-based restore works on next sketch switch
-      if (selectedDeviceName) {
-        const buildEntry = { platform: 'arduino', fqbn, at: Date.now(), success: result.success, projectId, sketchName: sk };
-        setDevices(prev => prev.map(d => d.name === selectedDeviceName ? { ...d, lastBuild: buildEntry } : d));
+
+      const params = new URLSearchParams({ sketchName: sk, fqbn });
+      if (selectedDeviceName) params.set('deviceName', selectedDeviceName);
+      const url = `/api/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectId)}/compile?${params}`;
+
+      const resp = await fetch(url, {
+        headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token ?? ''}` },
+      });
+
+      if (!resp.ok || !resp.body) {
+        const text = await resp.text();
+        setCompileOutput(text || `HTTP ${resp.status}`);
+        setCompileSuccess(false);
+        return;
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let success = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+
+        for (const part of parts) {
+          const eventMatch = part.match(/^event: (\w+)\ndata: (.+)$/s);
+          if (!eventMatch) continue;
+          const [, evType, rawData] = eventMatch;
+          try {
+            const data = JSON.parse(rawData) as Record<string, unknown>;
+            if (evType === 'output') {
+              setCompileOutput((prev) => prev + (data.chunk as string));
+            } else if (evType === 'done') {
+              success = data.success as boolean;
+              setCompileSuccess(success);
+              if (selectedDeviceName) {
+                const buildEntry = { platform: 'arduino', fqbn, at: Date.now(), success, projectId, sketchName: sk };
+                setDevices(prev => prev.map(d => d.name === selectedDeviceName ? { ...d, lastBuild: buildEntry } : d));
+              }
+            }
+          } catch { /* ignore malformed events */ }
+        }
       }
     } catch (err) {
       setCompileOutput(`Error: ${err instanceof Error ? err.message : String(err)}`);
