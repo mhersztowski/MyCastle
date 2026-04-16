@@ -2642,6 +2642,19 @@ const { password, ...safeBody } = body;
 
     const args = script === 'install' ? ['install'] : ['run', script];
 
+    // Inject GitHub Packages registry config for @mhersztowski scope so that
+    // workspace projects that depend on @mhersztowski/* packages can resolve them
+    // without requiring a manually placed .npmrc in each project directory.
+    const spawnEnv: NodeJS.ProcessEnv = { ...process.env };
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (githubToken) {
+      // npm reads npm_config_* env vars as config keys.
+      // Scoped registry: npm_config_@mhersztowski:registry → @mhersztowski:registry
+      spawnEnv['npm_config_@mhersztowski:registry'] = 'https://npm.pkg.github.com';
+      // Auth token for npm.pkg.github.com
+      spawnEnv['npm_config_//npm.pkg.github.com/:_authToken'] = githubToken;
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -2652,7 +2665,7 @@ const { password, ...safeBody } = body;
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
-    const proc = spawn('npm', args, { cwd: projectDir, shell: true });
+    const proc = spawn('npm', args, { cwd: projectDir, shell: true, env: spawnEnv });
 
     proc.stdout.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
     proc.stderr.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
