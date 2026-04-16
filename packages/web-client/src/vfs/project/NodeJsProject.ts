@@ -24,11 +24,22 @@ export class NodeJsProject extends Project {
   }
 
   async execute(actionId: string, _selectedPath: string | null, onOutput: (l: string) => void, signal: AbortSignal) {
-    // Derive the path relative to user home (/home/... → strip /home)
+    // Derive path relative to the user's home directory.
+    // The user's RemoteFS may be mounted at /home/{userName}/ or at /home/ depending
+    // on VFS preset configuration. Try both prefixes and strip whichever matches,
+    // so the backend receives only the path under the user's data root.
     const projectDir = this.context.projectJsonPath.replace(/\/package\.json$/, '');
-    const subpath = projectDir.startsWith('/home/')
-      ? projectDir.slice('/home/'.length)
-      : projectDir.replace(/^\//, '');
+    const prefixes = [
+      '/home/' + this.deps.userName + '/',
+      '/home/',
+    ];
+    let subpath = projectDir.replace(/^\//, ''); // fallback: strip leading slash only
+    for (const p of prefixes) {
+      if (projectDir.startsWith(p)) {
+        subpath = projectDir.slice(p.length);
+        break;
+      }
+    }
 
     const scriptMap: Record<string, string> = {
       install: 'install',

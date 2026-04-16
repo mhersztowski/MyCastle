@@ -189,6 +189,21 @@ function isDescendantOf(childPath: string, parentPath: string): boolean {
   return childPath === parentPath || childPath.startsWith(parentPath + '/');
 }
 
+/* ── OS drag-and-drop helpers ── */
+
+/** Reads all entries from a FileSystemDirectoryReader (max 100 per batch). */
+async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  const all: FileSystemEntry[] = [];
+  const readBatch = (): Promise<FileSystemEntry[]> =>
+    new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+  let batch = await readBatch();
+  while (batch.length > 0) {
+    all.push(...batch);
+    batch = await readBatch();
+  }
+  return all;
+}
+
 /* ── Project context traversal ── */
 
 /**
@@ -586,10 +601,59 @@ export function VfsExplorer({
     appendLine('— Aborted —');
   }, [appendLine]);
 
-  /* ── Drag & drop ── */
+  /* ── Drag & drop (internal reorder) ── */
 
   const dragNodeRef = useRef<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  /* ── External OS file/folder drop ── */
+
+  const [isExternalDragOver, setIsExternalDragOver] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+
+  const handleExternalDrop = useCallback(async (
+    items: DataTransferItemList,
+    targetDir: string,
+  ): Promise<void> => {
+    if (readOnly || !provider.writeFile) return;
+
+    // Collect FileSystemEntry objects via the File and Directory Entries API
+    const entries: FileSystemEntry[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind !== 'file') continue;
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) entries.push(entry);
+    }
+    if (entries.length === 0) return;
+
+    async function uploadEntry(entry: FileSystemEntry, dir: string): Promise<void> {
+      if (entry.isFile) {
+        const file = await new Promise<File>((res, rej) =>
+          (entry as FileSystemFileEntry).file(res, rej),
+        );
+        const content = new Uint8Array(await file.arrayBuffer());
+        setUploadProgress(file.name);
+        await provider.writeFile!(normalize(dir + '/' + entry.name), content, { create: true, overwrite: true });
+      } else if (entry.isDirectory) {
+        const subDir = normalize(dir + '/' + entry.name);
+        try { await provider.mkdir?.(subDir); } catch { /* may already exist */ }
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const children = await readAllEntries(reader);
+        for (const child of children) await uploadEntry(child, subDir);
+      }
+    }
+
+    setUploadProgress('Uploading…');
+    try {
+      for (const entry of entries) await uploadEntry(entry, targetDir);
+      await tree.refresh();
+    } catch (err) {
+      console.error('[VfsExplorer] upload error:', err);
+    } finally {
+      setUploadProgress(null);
+    }
+  }, [readOnly, provider, tree]);
 
   /* ── Mount manager ── */
 
@@ -883,14 +947,22 @@ export function VfsExplorer({
                   e.dataTransfer.effectAllowed = 'move';
                 },
                 onDragOver: (e: React.DragEvent) => {
-                  if (!dragNodeRef.current || readOnly) return;
-                  const dragId = dragNodeRef.current;
-                  // Only directories are valid drop targets; can't drop on self or own subtree
-                  if (!node.isDirectory || isDescendantOf(node.id, dragId)) return;
-                  // Can't drop into same parent (no-op move)
-                  if (dirname(dragId) === node.id) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'move';
+                  if (readOnly) return;
+                  const isInternal = !!dragNodeRef.current;
+                  const isExternalFiles = !isInternal && e.dataTransfer.types.includes('Files');
+                  if (!isInternal && !isExternalFiles) return;
+                  if (!node.isDirectory) return;
+                  if (isInternal) {
+                    const dragId = dragNodeRef.current!;
+                    if (isDescendantOf(node.id, dragId) || dirname(dragId) === node.id) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  } else {
+                    e.preventDefault();
+                    e.stopPropagation(); // prevent container from also reacting
+                    e.dataTransfer.dropEffect = 'copy';
+                    setIsExternalDragOver(false);
+                  }
                   setDropTargetId(node.id);
                 },
                 onDragLeave: () => {
@@ -898,15 +970,24 @@ export function VfsExplorer({
                 },
                 onDrop: (e: React.DragEvent) => {
                   e.preventDefault();
+                  e.stopPropagation();
                   setDropTargetId(null);
-                  const dragId = dragNodeRef.current;
-                  dragNodeRef.current = null;
-                  if (!dragId || !provider.rename || readOnly) return;
-                  if (!node.isDirectory || isDescendantOf(node.id, dragId)) return;
-                  const name = dragId.split('/').pop() ?? '';
-                  const newPath = normalize(node.id + '/' + name);
-                  if (dragId !== newPath) {
-                    provider.rename(dragId, newPath, { overwrite: false }).then(() => tree.refresh());
+                  setIsExternalDragOver(false);
+                  const isInternal = !!dragNodeRef.current;
+                  if (isInternal) {
+                    // Internal reorder
+                    const dragId = dragNodeRef.current!;
+                    dragNodeRef.current = null;
+                    if (!provider.rename || readOnly) return;
+                    if (!node.isDirectory || isDescendantOf(node.id, dragId)) return;
+                    const name = dragId.split('/').pop() ?? '';
+                    const newPath = normalize(node.id + '/' + name);
+                    if (dragId !== newPath) {
+                      provider.rename(dragId, newPath, { overwrite: false }).then(() => tree.refresh());
+                    }
+                  } else if (node.isDirectory && e.dataTransfer.items.length > 0) {
+                    // External OS file/folder drop onto a specific directory
+                    handleExternalDrop(e.dataTransfer.items, node.id).catch(() => {});
                   }
                 },
                 onDragEnd: () => {
@@ -940,7 +1021,7 @@ export function VfsExplorer({
           </TreeItem>
         );
       }),
-    [tree.expandedItems, tree, openContextMenu, onFileOpen, readOnly, provider, dropTargetId, startLongPress, cancelLongPress, onTouchMove, blockPostLongPressClick],
+    [tree.expandedItems, tree, openContextMenu, onFileOpen, readOnly, provider, dropTargetId, startLongPress, cancelLongPress, onTouchMove, blockPostLongPressClick, handleExternalDrop],
   );
 
   /* ── Render ── */
@@ -1050,12 +1131,65 @@ export function VfsExplorer({
 
       <div
         className="vfs-tree-container"
+        style={{ position: 'relative' }}
         onContextMenu={handleContainerContextMenu}
         onTouchStart={e => startLongPress(e, null)}
         onTouchEnd={cancelLongPress}
         onTouchMove={onTouchMove}
         onClickCapture={blockPostLongPressClick}
+        onDragOver={(e: React.DragEvent) => {
+          if (dragNodeRef.current || readOnly || !provider.writeFile) return;
+          if (!e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          setIsExternalDragOver(true);
+        }}
+        onDragLeave={(e: React.DragEvent) => {
+          // Only clear when leaving the container itself, not a child element
+          if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+            setIsExternalDragOver(false);
+          }
+        }}
+        onDrop={(e: React.DragEvent) => {
+          setIsExternalDragOver(false);
+          if (dragNodeRef.current || readOnly || !provider.writeFile) return;
+          if (e.dataTransfer.items.length === 0) return;
+          e.preventDefault();
+          // Drop target: if a specific directory is highlighted use it, else currentPath
+          const targetDir = dropTargetId ?? currentPath;
+          setDropTargetId(null);
+          handleExternalDrop(e.dataTransfer.items, targetDir).catch(() => {});
+        }}
       >
+        {/* External drag-over overlay */}
+        {isExternalDragOver && !readOnly && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none',
+            background: 'rgba(0, 120, 212, 0.12)',
+            border: '2px dashed #0078d4',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', gap: 4,
+          }}>
+            <svg width="24" height="24" viewBox="0 0 16 16" fill="#0078d4">
+              <path d="M8 1v9M4 6l4-4 4 4M2 13h12" stroke="#0078d4" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span style={{ color: '#0078d4', fontSize: 12, fontWeight: 500 }}>
+              Drop to upload
+            </span>
+          </div>
+        )}
+        {/* Upload progress */}
+        {uploadProgress && (
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 11,
+            background: '#252526', borderTop: '1px solid #3c3c3c',
+            padding: '4px 8px', fontSize: 11, color: '#888',
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #888', borderTopColor: 'transparent', animation: 'spin 0.6s linear infinite' }} />
+            {uploadProgress}
+          </div>
+        )}
         {tree.loading && (
           <LinearProgress
             sx={{ height: 2, position: 'sticky', top: 0, zIndex: 1, bgcolor: 'transparent' }}

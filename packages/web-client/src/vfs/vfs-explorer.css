@@ -107,6 +107,11 @@
   vertical-align: middle;
 }
 
+/* ── Upload spinner ── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Explorer states ── */
 .vfs-explorer__loading,
 .vfs-explorer__error {

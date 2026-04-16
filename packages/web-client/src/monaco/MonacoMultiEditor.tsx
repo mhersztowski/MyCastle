@@ -495,6 +495,11 @@ const EditorGroupPane = memo(function EditorGroupPane({
       minimap: { enabled: false },
       wordWrap: 'off',
       fontSize: 14,
+      // fixedOverflowWidgets: widget uses position:fixed so it escapes overflow:hidden ancestors.
+      fixedOverflowWidgets: true,
+      quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
+      wordBasedSuggestions: 'currentDocument',
+      suggestOnTriggerCharacters: true,
     });
     editorRef.current = editor;
 

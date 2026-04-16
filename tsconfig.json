@@ -11,6 +11,7 @@
     { "path": "./app/mycastle-web" },
     { "path": "./app/demo-scene-3d" },
     { "path": "./packages/core-cad" },
+    { "path": "./packages/minislib" },
     { "path": "./app/cad-app" }
   ]
 }

@@ -2623,11 +2623,20 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 400, { error: 'Missing script parameter' });
       return;
     }
-    // Resolve to real filesystem path: rootDir/data/Minis/Users/{user}/{subpath}
-    const projectDir = path.resolve(this.rootDir, 'data', 'Minis', 'Users', userName, subpath);
+    // Resolve to real filesystem path: rootDir/Minis/Users/{user}/{subpath}
+    // (rootDir already points to the data directory, e.g. …/data)
+    const projectDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, subpath);
     // Ensure the resolved path is within rootDir (prevent directory traversal)
     if (!projectDir.startsWith(path.resolve(this.rootDir))) {
       this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    // Verify the directory exists — a missing cwd causes a misleading spawn ENOENT error
+    try {
+      const stat = await import('fs/promises').then(m => m.stat(projectDir));
+      if (!stat.isDirectory()) throw new Error('not a directory');
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `Project directory not found: ${projectDir}` });
       return;
     }
 
