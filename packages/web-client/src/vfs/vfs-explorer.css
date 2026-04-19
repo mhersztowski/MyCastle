@@ -14,10 +14,8 @@
 
 /* ── Tree container ── */
 .vfs-tree-container {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
   /* Prevent iOS text-selection popup on long-press */
   -webkit-touch-callout: none;
   -webkit-user-select: none;

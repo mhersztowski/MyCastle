@@ -8,6 +8,7 @@ import { PicoSdkProject } from './PicoSdkProject';
 import { NotesProject } from './NotesProject';
 import { EditorProject } from './EditorProject';
 import { NodeJsProject } from './NodeJsProject';
+import { PythonProject } from './PythonProject';
 
 const FALLBACK_DEPS: ProjectDeps = { baseUrl: '', userName: '' };
 
@@ -20,6 +21,7 @@ export function createProject(context: VfsProjectContext, deps: ProjectDeps = FA
     case 'Notes':    return new NotesProject(context, deps);
     case 'Editor':   return new EditorProject(context, deps);
     case 'NodeJs':   return new NodeJsProject(context, deps);
+    case 'Python':   return new PythonProject(context, deps);
     default:         return null;
   }
 }

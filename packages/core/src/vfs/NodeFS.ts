@@ -61,6 +61,7 @@ export class NodeFS implements FileSystemProvider {
       };
     } catch (err: any) {
       if (err.code === 'ENOENT') throw VfsError.fileNotFound(normalize(path));
+      if (err.code === 'ENOTDIR') throw VfsError.fileNotFound(normalize(path));
       if (err.code === 'EACCES') throw VfsError.noPermissions(normalize(path));
       throw new VfsError(VfsErrorCode.Unknown, err.message, normalize(path));
     }
@@ -92,6 +93,7 @@ export class NodeFS implements FileSystemProvider {
     } catch (err: any) {
       if (err.code === 'ENOENT') throw VfsError.fileNotFound(normalize(path));
       if (err.code === 'EISDIR') throw VfsError.isADirectory(normalize(path));
+      if (err.code === 'ENOTDIR') throw VfsError.fileNotFound(normalize(path));
       if (err.code === 'EACCES') throw VfsError.noPermissions(normalize(path));
       throw new VfsError(VfsErrorCode.Unknown, err.message, normalize(path));
     }

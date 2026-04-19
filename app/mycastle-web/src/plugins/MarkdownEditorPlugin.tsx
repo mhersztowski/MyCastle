@@ -1,60 +1,49 @@
 /**
  * Markdown Editor Plugin
  *
- * Opens the MdEditor component (TipTap-based rich markdown editor) as a
- * virtual editor tab for the currently active .md file in the Monaco editor.
+ * Single persistent virtual tab that tracks the active .md file.
+ * When any .md file is activated (VFS click, tab switch, command palette),
+ * the tab opens/reveals and reloads content for that file.
  *
  * Path mapping: VFS path `/home/md/foo.md` → MQTT path `md/foo.md`
- * (strips the `/home/` mount prefix that UserDataEditorPage uses).
- *
- * Commands:
- *  - Command Palette: "Markdown: Open Editor"
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
-import { defineEditorPlugin } from '@mhersztowski/web-client';
+import { defineEditorPlugin, globalEventBus } from '@mhersztowski/web-client';
 import { MdEditor } from '../components/mdeditor';
 import { useMqtt } from '../modules/mqttclient/MqttContext';
 
-function rlog(tag: string, msg: unknown) {
-  const text = typeof msg === 'string' ? msg : JSON.stringify(msg);
-  console.log(`[${tag}]`, text);
-  fetch('/api/log', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag, msg: text }),
-  }).catch(() => {});
-}
-
 /* ── Module-level active-file store ─────────────────────────────────────── */
-// Shared between activate() and the panel component (same pattern as MarkdownPreviewPlugin).
+// Only .md URIs are stored here. Non-.md file activation is ignored so the
+// tab keeps showing the last markdown file when the user switches to e.g. a .ts file.
 
-let _activeVfsUri = '';
+const EDITOR_TAB_URI = 'virtual://markdown-editor';
 
+let _activeUri = '';
 const _uriListeners = new Set<() => void>();
+let _vfsUnsub: (() => void) | null = null;
 
 function setActiveUri(uri: string) {
-  _activeVfsUri = uri;
+  if (_activeUri === uri) return;
+  _activeUri = uri;
   _uriListeners.forEach((fn) => fn());
 }
 
 function useActiveUri(): string {
-  const [uri, setUri] = useState(_activeVfsUri);
+  const [uri, setUri] = useState(_activeUri);
   useEffect(() => {
-    const fn = () => setUri(_activeVfsUri);
+    const fn = () => setUri(_activeUri);
     _uriListeners.add(fn);
     return () => { _uriListeners.delete(fn); };
   }, []);
   return uri;
 }
 
-/** Convert a VFS uri like `/home/md/foo.md` to an MQTT-relative path `md/foo.md`. */
 function vfsToMqttPath(uri: string): string {
   if (uri.startsWith('/home/')) return uri.slice('/home/'.length);
-  // Fallback: strip leading slash
   return uri.startsWith('/') ? uri.slice(1) : uri;
 }
 
@@ -66,55 +55,37 @@ function isMarkdownUri(uri: string): boolean {
 
 function MarkdownEditorPanel() {
   const { readFile, writeFile, isConnected } = useMqtt();
-  const activeUri = useActiveUri();
-
-  // Snapshot the URI at mount time so the tab stays bound to one file
-  const fileUriRef = useRef(activeUri || _activeVfsUri);
-  const fileUri = fileUriRef.current;
+  const fileUri = useActiveUri();
   const mqttPath = fileUri ? vfsToMqttPath(fileUri) : '';
 
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep readFile/writeFile in refs so reference changes don't re-trigger the effect.
   const readFileRef = useRef(readFile);
   useEffect(() => { readFileRef.current = readFile; }, [readFile]);
   const writeFileRef = useRef(writeFile);
   useEffect(() => { writeFileRef.current = writeFile; }, [writeFile]);
 
-  const hasLoadedRef = useRef(false);
-
+  // Reload whenever the active file or connection changes
   useEffect(() => {
-    rlog('MDE', `effect run isConnected=${isConnected} mqttPath=${mqttPath} hasLoaded=${hasLoadedRef.current}`);
-    if (!isConnected || !mqttPath) return;
-    let cancelled = false;
-    if (!hasLoadedRef.current) {
-      rlog('MDE', 'first load — resetting state');
+    if (!mqttPath || !isConnected) {
       setContent(null);
-      setError(null);
+      return;
     }
-    rlog('MDE', `reading file: ${mqttPath}`);
+    let cancelled = false;
+    setContent(null);
+    setError(null);
     readFileRef.current(mqttPath)
-      .then((f) => {
-        if (cancelled) { rlog('MDE', 'cancelled after read'); return; }
-        rlog('MDE', `file loaded, length=${f.content.length}`);
-        hasLoadedRef.current = true;
-        setContent(f.content);
-      })
-      .catch((e) => { if (!cancelled) { rlog('MDE', `error: ${e}`); setError(String(e)); } });
-    return () => { rlog('MDE', 'load effect cleanup'); cancelled = true; };
+      .then((f) => { if (!cancelled) setContent(f.content); })
+      .catch((e) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
   }, [isConnected, mqttPath]);
 
   const handleSave = useCallback(async (markdown: string) => {
     if (!mqttPath) return;
-    try {
-      await writeFileRef.current(mqttPath, markdown);
-    } catch (e) {
-      console.error('[MarkdownEditorPlugin] save error:', e);
-    }
+    try { await writeFileRef.current(mqttPath, markdown); }
+    catch (e) { console.error('[MarkdownEditorPlugin] save error:', e); }
   }, [mqttPath]);
-
-  rlog('MDE', `render: content=${content === null ? 'null' : 'loaded('+content.length+')'} error=${error} fileUri=${fileUri}`);
 
   if (!fileUri || !isMarkdownUri(fileUri)) {
     return (
@@ -146,11 +117,11 @@ function MarkdownEditorPanel() {
     );
   }
 
-  // Mount MdEditor only when content is ready — TipTap initialises with real content
-  // from the start, so it is immediately interactive on Android.
   return (
     <Box sx={{ height: '100%', overflow: 'hidden', bgcolor: '#fff' }}>
+      {/* key forces TipTap to remount when switching files — clean slate, no stale state */}
       <MdEditor
+        key={fileUri}
         initialContent={content}
         onSave={handleSave}
         autoSaveDelay={2000}
@@ -161,44 +132,50 @@ function MarkdownEditorPanel() {
 
 /* ── Plugin definition ───────────────────────────────────────────────────── */
 
-let _editorCounter = 0;
-
 export const MarkdownEditorPlugin = defineEditorPlugin(
   {
     id: 'builtin.markdown-editor',
     name: 'Markdown Editor',
-    version: '1.0.0',
-    description: 'Opens the TipTap markdown editor for the currently active .md file',
+    version: '1.1.0',
+    description: 'Single persistent tab that follows the active .md file',
     contributes: ['commandpalette'],
   },
 
   (api) => {
-    // Track the active file URI — ignore virtual tabs (preview, editor panels, etc.)
-    api.editor.onDidOpenDocument((uri) => {
-      if (!uri.startsWith('virtual://')) setActiveUri(uri);
-    });
-
-    api.editor.onDidChangeModel((uri) => {
-      if (!uri.startsWith('virtual://')) setActiveUri(uri);
-    });
-
-    api.commands.register('open', () => {
+    function openOrReveal() {
       api.openEditorTab({
-        uri: `virtual://markdown-editor/${++_editorCounter}`,
-        title: _activeVfsUri ? `MD: ${_activeVfsUri.split('/').pop()}` : 'Markdown Editor',
+        uri: EDITOR_TAB_URI,
+        title: 'Markdown Editor',
         component: MarkdownEditorPanel,
         toSide: false,
       });
-    });
+    }
 
+    function handleUri(uri: string) {
+      if (uri.startsWith('virtual://')) return;
+      if (!isMarkdownUri(uri)) return;
+      setActiveUri(uri);
+    }
+
+    api.editor.onDidOpenDocument((uri) => handleUri(uri));
+    api.editor.onDidChangeModel((uri) => handleUri(uri));
+
+    _vfsUnsub = globalEventBus.on<{ path: string }>('system:vfs:fileSelected', ({ path }) => handleUri(path));
+
+    api.commands.register('open', openOrReveal);
     api.ui.commandpalette.register({
       command: `${api.pluginId}:open`,
       title: 'Open Editor',
       category: 'Markdown',
     });
 
-    api.logger.info('Markdown Editor activated');
+    api.logger.info('Markdown Editor v1.1 activated');
   },
 
-  () => { /* nothing to clean up */ },
+  () => {
+    _vfsUnsub?.();
+    _vfsUnsub = null;
+    _activeUri = '';
+    _uriListeners.forEach(fn => fn());
+  },
 );

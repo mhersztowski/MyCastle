@@ -15,13 +15,22 @@ MyCastle publishes shared TypeScript packages to **GitHub Packages** (npm regist
 ### Option A — manual (fastest)
 
 ```bash
-# 1. Build the package
+# 1. Authenticate once — writes token to ~/.npmrc globally
+npm config set //npm.pkg.github.com/:_authToken <your-github-token>
+
+# 2. Build
 pnpm --filter @mhersztowski/minislib build
 
-# 2. Publish (NODE_AUTH_TOKEN is the standard npm variable for registry auth)
+# 3. Publish (publishConfig.registry in package.json sets the target registry)
 cd packages/minislib
-NODE_AUTH_TOKEN=<your-github-token> npm publish
+npm publish
+
+# 4. Optionally remove the global token afterwards
+npm config delete //npm.pkg.github.com/:_authToken
 ```
+
+> **Why `npm config set` instead of env vars?**  
+> `.npmrc` uses `${NODE_AUTH_TOKEN}` variable substitution, but inline env var prefixes (`NODE_AUTH_TOKEN=xxx npm publish`) are not always reliably picked up depending on the shell and npm version. Writing the token to `~/.npmrc` via `npm config set` always works.
 
 ### Option B — via GitHub Actions (tag-triggered)
 

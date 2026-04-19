@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "pnpm -r run build",
+    "build": "pnpm -r --workspace-concurrency=2 run build",
     "build:core": "pnpm --filter @mhersztowski/core run build",
     "build:core-backend": "pnpm --filter @mhersztowski/core-backend run build",
     "build:web-client": "pnpm --filter @mhersztowski/web-client run build",

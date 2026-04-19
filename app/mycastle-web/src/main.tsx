@@ -1,6 +1,15 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
+// Configure @monaco-editor/react to use the bundled Monaco instead of loading from CDN.
+// Without this, @monaco-editor/react fetches Monaco 0.55.x from cdn.jsdelivr.net, which:
+//  - Creates a second Monaco runtime alongside our bundled 0.52.x
+//  - Overwrites window.MonacoEnvironment with CDN worker URLs
+//  - Causes the bundled JSON worker to never receive languageSettings → "Cannot read
+//    properties of undefined (reading 'schemas')" crash in json.worker.js
+import { loader } from '@monaco-editor/react';
+import * as monacoEditor from 'monaco-editor';
+loader.config({ monaco: monacoEditor });
 import { App } from './App';
 import AppRoot from './AppRoot';
 import { MqttProvider } from './modules/mqttclient/MqttContext';
@@ -22,6 +31,7 @@ import { useEffect } from 'react';
 import { useMqtt } from './modules/mqttclient';
 import { presenceService } from './services/PresenceService';
 import './global.css';
+import '@mhersztowski/web-client/dist/index.css';
 
 App.create();
 

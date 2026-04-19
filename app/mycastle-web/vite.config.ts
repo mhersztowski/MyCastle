@@ -13,7 +13,7 @@ export default defineConfig({
       '@components': path.resolve(__dirname, './src/components'),
       '@pages': path.resolve(__dirname, './src/pages'),
     },
-    dedupe: ['react', 'react-dom', '@mui/material', 'dayjs'],
+    dedupe: ['react', 'react-dom', '@mui/material', 'dayjs', 'monaco-editor'],
   },
   server: {
     host: true,
@@ -23,6 +23,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:1894',
         changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
       },
       '/mqtt': {
         target: 'ws://localhost:1894',
@@ -36,6 +38,9 @@ export default defineConfig({
   },
   build: {
     outDir: 'build',
-    target: ['chrome63', 'safari13', 'firefox78'],
+    // Modern target required for Monaco workers — old targets cause esbuild to transform
+    // import.meta.url, which breaks Vite's ?worker URL construction and prevents
+    // Monaco language workers (JSON, TS, CSS) from starting.
+    target: 'esnext',
   },
 });

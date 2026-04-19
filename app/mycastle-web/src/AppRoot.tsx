@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 
 function MdFileRedirect() {
@@ -15,7 +15,9 @@ import { MinimalTopBar } from './components/MinimalTopBar';
 
 // Mycastle full-page routes (no layout)
 import WorkspaceMdPage from './pages/workspace/WorkspaceMdPage';
-import UserDataEditorPage from './pages/workspace/UserDataEditorPage';
+// Lazy: UserDataEditorPage imports Monaco + monacoWorkers (~10 MB). Eager loading
+// puts Monaco in the initial bundle and crashes iOS Safari on all routes.
+const UserDataEditorPage = lazy(() => import('./pages/workspace/UserDataEditorPage'));
 import SimpleEditorPage from './pages/editor/SimpleEditorPage';
 import MdEditorPage from './pages/editor/MdEditorPage';
 import MdViewerPage from './pages/viewer/MdViewerPage';
@@ -27,11 +29,12 @@ import UIViewerPage from './pages/viewer/UIViewerPage';
 // Minis full-page routes (no layout)
 import LoginPage from './pages/LoginPage';
 import WatchPage from './pages/WatchPage';
-import MinisMonacoEditorPage from './pages/editor/MinisMonacoEditorPage';
-import MinisProjectPage from './pages/minis-user/ProjectPage';
-import MinisUPythonProjectPage from './pages/minis-user/UPythonProjectPage';
-import MinisPygameProjectPage from './pages/minis-user/PygameProjectPage';
-import MinisPicoSdkProjectPage from './pages/minis-user/PicoSdkProjectPage';
+const MinisMonacoEditorPage = lazy(() => import('./pages/editor/MinisMonacoEditorPage'));
+// Heavy pages: Blockly + Monaco are large bundles — lazy load to keep initial bundle small (iOS Safari)
+const MinisProjectPage = lazy(() => import('./pages/minis-user/ProjectPage'));
+const MinisUPythonProjectPage = lazy(() => import('./pages/minis-user/UPythonProjectPage'));
+const MinisPygameProjectPage = lazy(() => import('./pages/minis-user/PygameProjectPage'));
+const MinisPicoSdkProjectPage = lazy(() => import('./pages/minis-user/PicoSdkProjectPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -124,12 +127,12 @@ function AppRoot() {
         <Route path="/" element={<HomePage />} />
         <Route path="/watch" element={<WatchPage />} />
         <Route path="/login/:userName" element={<LoginPage />} />
-        <Route path="/user/:userName/editor/monaco/*" element={<RequireAuth><MinisMonacoEditorPage /></RequireAuth>} />
-        <Route path="/user/:userName/project/:projectId" element={<RequireAuth><MinisProjectPage key="blockly" /></RequireAuth>} />
-        <Route path="/user/:userName/project/:projectId/code" element={<RequireAuth><MinisProjectPage key="code" mode="code" /></RequireAuth>} />
-        <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><MinisUPythonProjectPage /></RequireAuth>} />
-        <Route path="/user/:userName/pygame-project/:projectId" element={<RequireAuth><MinisPygameProjectPage /></RequireAuth>} />
-        <Route path="/user/:userName/picosdk-project/:projectId" element={<RequireAuth><MinisPicoSdkProjectPage /></RequireAuth>} />
+        <Route path="/user/:userName/editor/monaco/*" element={<RequireAuth><Suspense fallback={null}><MinisMonacoEditorPage /></Suspense></RequireAuth>} />
+        <Route path="/user/:userName/project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisProjectPage key="blockly" /></Suspense></RequireAuth>} />
+        <Route path="/user/:userName/project/:projectId/code" element={<RequireAuth><Suspense fallback={null}><MinisProjectPage key="code" mode="code" /></Suspense></RequireAuth>} />
+        <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisUPythonProjectPage /></Suspense></RequireAuth>} />
+        <Route path="/user/:userName/pygame-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisPygameProjectPage /></Suspense></RequireAuth>} />
+        <Route path="/user/:userName/picosdk-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisPicoSdkProjectPage /></Suspense></RequireAuth>} />
 
         {/* Full-bleed layout routes */}
         <Route
@@ -152,7 +155,7 @@ function AppRoot() {
             </Box>
           }
         />
-        <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><UserDataEditorPage /></MinimalTopBar></RequireAuth>} />
+        <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><Suspense fallback={null}><UserDataEditorPage /></Suspense></MinimalTopBar></RequireAuth>} />
 
         {/* All layout routes — single Layout handles nav based on path */}
         <Route

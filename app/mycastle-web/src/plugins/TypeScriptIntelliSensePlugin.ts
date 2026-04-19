@@ -745,6 +745,8 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
 
       api.editor.onDidChangeContent((text) => {
         if (!currentUri) return;
+        const ext = currentUri.split('.').pop()?.toLowerCase() ?? '';
+        if (ext !== 'ts' && ext !== 'tsx' && ext !== 'js' && ext !== 'jsx') return;
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(async () => {
           debounceTimer = null;

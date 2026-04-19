@@ -1,5 +1,40 @@
 /* Mobile Safari fixes */
 
+/* ── Scrollbars — all viewports (desktop / tablet / mobile) ── */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #555 transparent;
+}
+
+/* Chrome / Edge / Safari / Android / iOS (WebKit/Blink) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #777;
+  border-color: transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 :root {
   /* Safe area insets for notch/home indicator */
   --safe-area-inset-top: env(safe-area-inset-top, 0px);

@@ -91,6 +91,8 @@ export interface VfsExplorerProps {
    * Useful after agent writes — call with the list of written file paths to make them visible.
    */
   revealPathsRef?: React.MutableRefObject<((paths: string[]) => Promise<void>) | null>;
+  /** Extra inline styles merged onto the root div (overrides width/height props). */
+  style?: React.CSSProperties;
 }
 
 export interface VfsTreeNode {

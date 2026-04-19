@@ -64,60 +64,57 @@ function getLanguage(path: string): string {
 
 function ResizeDivider({ onResize }: { onResize: (delta: number) => void }) {
   const [dragging, setDragging] = useState(false);
+  const onResizeRef = useRef(onResize);
+  onResizeRef.current = onResize;
 
-  const startDrag = (initialX: number) => {
-    let prevX = initialX;
+  // Pointer Events API: unified mouse + touch, works on iOS Safari 13+.
+  // setPointerCapture keeps the element receiving events when pointer moves outside,
+  // replacing both document-level listeners and the overlay approach.
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore if not supported */ }
     setDragging(true);
+    let prevX = e.clientX;
 
-    const onMouseMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
+      ev.preventDefault();
       const delta = ev.clientX - prevX;
       prevX = ev.clientX;
-      onResize(delta);
+      onResizeRef.current(delta);
     };
-    const onMouseUp = () => {
+    const onUp = () => {
       setDragging(false);
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
     };
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  };
-
-  const startTouchDrag = (initialX: number) => {
-    let prevX = initialX;
-
-    const onTouchMove = (ev: TouchEvent) => {
-      ev.preventDefault();
-      const delta = ev.touches[0].clientX - prevX;
-      prevX = ev.touches[0].clientX;
-      onResize(delta);
-    };
-    const onTouchEnd = () => {
-      document.removeEventListener('touchmove', onTouchMove);
-      document.removeEventListener('touchend', onTouchEnd);
-    };
-    document.addEventListener('touchmove', onTouchMove, { passive: false });
-    document.addEventListener('touchend', onTouchEnd);
-  };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+  }, []);
 
   return (
     <>
-      {/* Overlay during drag — stops Monaco/iframes from capturing mouse events */}
+      {/* Overlay during drag — prevents Monaco/iframes from capturing events */}
       {dragging && (
-        <Box sx={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, cursor: 'col-resize' }} />
+        <Box sx={{ position: 'fixed', inset: 0, zIndex: 9999, cursor: 'col-resize' }} />
       )}
       <Box
-        onMouseDown={e => { e.preventDefault(); startDrag(e.clientX); }}
-        onTouchStart={e => startTouchDrag(e.touches[0].clientX)}
+        onPointerDown={handlePointerDown}
         sx={{
-          width: 8,
+          width: 6,
           flexShrink: 0,
           cursor: 'col-resize',
           bgcolor: dragging ? 'primary.main' : 'divider',
           transition: 'background-color 0.15s',
           '&:hover': { bgcolor: 'primary.main' },
           userSelect: 'none',
+          // Prevent browser scroll/zoom gestures on this element
           touchAction: 'none',
+          // Wider invisible hit area for touch (24px total = 6px + 9px each side)
+          mx: '-9px',
+          px: '9px',
         }}
       />
     </>

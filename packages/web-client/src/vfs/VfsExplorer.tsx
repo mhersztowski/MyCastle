@@ -10,6 +10,7 @@ import LinearProgress from '@mui/material/LinearProgress';
 import { normalize, dirname, encodeText, decodeText, WritableGitHubFS, FileType } from '@mhersztowski/core';
 import type { CompositeFS, FileSystemProvider } from '@mhersztowski/core';
 
+import { globalEventBus } from '../monaco/plugins/EventBus';
 import { useVfsTree } from './useVfsTree';
 import { useVfsClipboard } from './clipboard';
 import { VfsBreadcrumbs } from './VfsBreadcrumbs';
@@ -80,8 +81,6 @@ function ChevronDownIcon() {
 /* ── VS Code-like tree styling ── */
 
 const treeViewSx = {
-  flexGrow: 1,
-  overflowY: 'auto',
   py: 0.25,
   color: '#cccccc',
   /* MUI X v8 uses data-* attributes for state, not .Mui-* classes */
@@ -308,29 +307,64 @@ async function findProjectContext(
     }
   }
 
-  // Pass 3: detect package.json as a Node.js project marker
-  for (const dir of unique.slice(1)) { // skip path itself
-    const pkgKey = '__nodejs__' + dir;
+  // Pass 2.5: look for package.json in ancestor directories (Node.js sub-projects).
+  // Runs before the generic app/node path heuristic so that e.g.
+  // /home/app/node/my-lib/src/index.ts correctly resolves to my-lib, not app/node.
+  for (const dir of unique.slice(1)) {
+    if (dir.includes('/node_modules')) continue;
+    const pkgKey = '__pkg__' + dir;
     if (cache.has(pkgKey)) {
-      const cached = cache.get(pkgKey)!;
-      if (cached !== null) return cached;
+      const c = cache.get(pkgKey);
+      if (c !== null) return c!;
       continue;
     }
     try {
       const data = await provider.readFile(normalize(dir + '/package.json'));
-      const json = JSON.parse(decodeText(data)) as { name?: string };
-      const dirName = dir.split('/').filter(Boolean).pop() ?? dir;
-      const ctx: VfsProjectContext = {
-        id: dirName,
-        name: json.name ?? dirName,
-        platform: 'NodeJs',
-        language: 'TypeScript',
-        projectJsonPath: normalize(dir + '/package.json'),
-      };
-      cache.set(pkgKey, ctx);
-      return ctx;
-    } catch {
+      const json = JSON.parse(decodeText(data)) as Record<string, unknown>;
+      if (json.name && json.scripts) {
+        const dirName = dir.split('/').filter(Boolean).pop() ?? dir;
+        const ctx: VfsProjectContext = {
+          id: String(json.name),
+          name: dirName,
+          platform: 'NodeJs',
+          language: 'TypeScript',
+          projectJsonPath: normalize(dir + '/package.json'),
+        };
+        cache.set(pkgKey, ctx);
+        return ctx;
+      }
       cache.set(pkgKey, null);
+    } catch {
+      // Don't cache — provider may not be ready yet
+    }
+  }
+
+  // Pass 3: path-based app detection for /app/node and /app/python conventions.
+  // The app root is exactly /…/app/{type} — files live directly inside, no extra subdirectory layer.
+  // Identified purely by path position; no config file is required.
+  {
+    const segs = path.split('/').filter(Boolean);
+    const appIdx = segs.indexOf('app');
+    if (appIdx !== -1 && appIdx + 1 < segs.length) {
+      const appType = segs[appIdx + 1]; // 'node' or 'python'
+      if (appType === 'node' || appType === 'python') {
+        const appRoot = '/' + segs.slice(0, appIdx + 2).join('/'); // e.g. /home/app/python
+        const pkgKey = '__pathapp__' + appRoot;
+        if (!cache.has(pkgKey)) {
+          const isNode = appType === 'node';
+          const ctx: VfsProjectContext = {
+            id: appType,
+            name: appType,
+            platform: isNode ? 'NodeJs' : 'Python',
+            language: isNode ? 'TypeScript' : 'Python',
+            // projectJsonPath points into the app root — execute() strips the filename to get cwd.
+            projectJsonPath: normalize(appRoot + (isNode ? '/package.json' : '/pyproject.toml')),
+          };
+          cache.set(pkgKey, ctx);
+        }
+        const cached = cache.get(pkgKey);
+        if (cached) return cached;
+      }
     }
   }
 
@@ -363,6 +397,7 @@ export function VfsExplorer({
   refreshRef,
   revealPathsRef,
   selectedPath: externalSelectedPath,
+  style: styleProp,
 }: VfsExplorerProps) {
   const clipboard = useVfsClipboard();
   const readOnly = readOnlyProp ?? provider.capabilities.readonly;
@@ -415,10 +450,13 @@ export function VfsExplorer({
 
   const projectCacheRef = useRef<Map<string, VfsProjectContext | null>>(new Map());
   const [activeProject, setActiveProject] = useState<VfsProjectContext | null>(null);
+  // Monotonic counter — only the latest findProjectContext result may update activeProject.
+  const projectDetectSeqRef = useRef(0);
 
   // Invalidate cache when provider changes (e.g. new mount)
   useEffect(() => {
     projectCacheRef.current.clear();
+    ++projectDetectSeqRef.current; // cancel any in-flight detection
     setActiveProject(null);
   }, [provider]);
 
@@ -477,8 +515,9 @@ export function VfsExplorer({
     setCurrentPath(dir);
 
     // Detect project context (don't clear on errors — mount may not be ready yet)
+    const seq = ++projectDetectSeqRef.current;
     findProjectContext(externalSelectedPath, provider, projectCacheRef.current)
-      .then(ctx => setActiveProject(ctx))
+      .then(ctx => { if (projectDetectSeqRef.current === seq) setActiveProject(ctx); })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalSelectedPath, provider]);
@@ -500,6 +539,19 @@ export function VfsExplorer({
   const actionAbortRef = useRef<AbortController | null>(null);
   const outputEndRef = useRef<HTMLDivElement | null>(null);
   const projectPanelRef = useRef<ProjectPanelHandle | null>(null);
+
+  // Overlay toolbar height (measured via ResizeObserver — avoids layout shift)
+  const projectToolbarRef = useRef<HTMLDivElement | null>(null);
+  const [projectToolbarHeight, setProjectToolbarHeight] = useState(0);
+
+  // Measure project toolbar height via ResizeObserver so tree paddingTop stays in sync
+  useEffect(() => {
+    const el = projectToolbarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setProjectToolbarHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Auto-scroll output
   useEffect(() => {
@@ -716,13 +768,20 @@ export function VfsExplorer({
         const node = findNode(tree.items, itemIds[0]);
         if (node) {
           setCurrentPath(node.isDirectory ? node.id : dirname(node.id));
+          if (!node.isDirectory) {
+            const selectedPath = itemIds[0];
+            globalEventBus.emit('system:vfs:fileSelected', { path: selectedPath });
+            provider.readFile(selectedPath)
+              .then(data => globalEventBus.emit('system:vfs:fileContent', { path: selectedPath, content: decodeText(data) }))
+              .catch(() => {});
+          }
         }
+        const seq = ++projectDetectSeqRef.current;
         findProjectContext(itemIds[0], provider, projectCacheRef.current)
-          .then(ctx => setActiveProject(ctx))
+          .then(ctx => { if (projectDetectSeqRef.current === seq) setActiveProject(ctx); })
           .catch(() => {});
-      } else {
-        setActiveProject(null);
       }
+      // Empty selection (deselect / double-click toggle) — don't clear the project panel.
     },
     [onFileSelect, provider, tree.items],
   );
@@ -1032,6 +1091,7 @@ export function VfsExplorer({
       style={{
         width: width ?? '100%',
         height: height ?? '100%',
+        ...styleProp,
       }}
     >
       {showBreadcrumbs && (
@@ -1080,19 +1140,28 @@ export function VfsExplorer({
           onCommit={handleCommit}
         />
       )}
-      {/* ── Project action toolbar ── */}
-      {activeProject && (
-        <div style={{ flexShrink: 0, borderBottom: '1px solid #3c3c3c', background: '#1e1e1e' }}>
+      {/* ── Tree area: relative wrapper so toolbar can overlay without shifting layout ── */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        {/* ── Project action toolbar: absolute overlay, measured by ResizeObserver ── */}
+        <div
+          ref={projectToolbarRef}
+          style={{
+            position: 'absolute', top: 0, left: 0, right: 0, zIndex: 3,
+            background: '#1e1e1e',
+            borderBottom: activeProject ? '1px solid #3c3c3c' : 'none',
+            display: activeProject ? 'block' : 'none',
+          }}
+        >
           {/* Project name row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px 2px' }}>
             <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.7px', color: '#666' }}>
               Project
             </span>
             <span style={{ fontSize: 11, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {activeProject.name}
+              {activeProject?.name ?? ''}
             </span>
             <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#0e639c', color: '#c5c5c5', flexShrink: 0 }}>
-              {activeProject.platform}
+              {activeProject?.platform ?? ''}
             </span>
           </div>
           {/* Action buttons row */}
@@ -1127,90 +1196,87 @@ export function VfsExplorer({
             </div>
           )}
         </div>
-      )}
 
-      <div
-        className="vfs-tree-container"
-        style={{ position: 'relative' }}
-        onContextMenu={handleContainerContextMenu}
-        onTouchStart={e => startLongPress(e, null)}
-        onTouchEnd={cancelLongPress}
-        onTouchMove={onTouchMove}
-        onClickCapture={blockPostLongPressClick}
-        onDragOver={(e: React.DragEvent) => {
-          if (dragNodeRef.current || readOnly || !provider.writeFile) return;
-          if (!e.dataTransfer.types.includes('Files')) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-          setIsExternalDragOver(true);
-        }}
-        onDragLeave={(e: React.DragEvent) => {
-          // Only clear when leaving the container itself, not a child element
-          if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
-            setIsExternalDragOver(false);
-          }
-        }}
-        onDrop={(e: React.DragEvent) => {
-          setIsExternalDragOver(false);
-          if (dragNodeRef.current || readOnly || !provider.writeFile) return;
-          if (e.dataTransfer.items.length === 0) return;
-          e.preventDefault();
-          // Drop target: if a specific directory is highlighted use it, else currentPath
-          const targetDir = dropTargetId ?? currentPath;
-          setDropTargetId(null);
-          handleExternalDrop(e.dataTransfer.items, targetDir).catch(() => {});
-        }}
-      >
-        {/* External drag-over overlay */}
-        {isExternalDragOver && !readOnly && (
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none',
-            background: 'rgba(0, 120, 212, 0.12)',
-            border: '2px dashed #0078d4',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexDirection: 'column', gap: 4,
-          }}>
-            <svg width="24" height="24" viewBox="0 0 16 16" fill="#0078d4">
-              <path d="M8 1v9M4 6l4-4 4 4M2 13h12" stroke="#0078d4" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span style={{ color: '#0078d4', fontSize: 12, fontWeight: 500 }}>
-              Drop to upload
-            </span>
-          </div>
-        )}
-        {/* Upload progress */}
-        {uploadProgress && (
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 11,
-            background: '#252526', borderTop: '1px solid #3c3c3c',
-            padding: '4px 8px', fontSize: 11, color: '#888',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #888', borderTopColor: 'transparent', animation: 'spin 0.6s linear infinite' }} />
-            {uploadProgress}
-          </div>
-        )}
-        {tree.loading && (
-          <LinearProgress
-            sx={{ height: 2, position: 'sticky', top: 0, zIndex: 1, bgcolor: 'transparent' }}
-          />
-        )}
-        <SimpleTreeView
-          expandedItems={tree.expandedItems}
-          onExpandedItemsChange={handleExpandedItemsChange}
-          onItemExpansionToggle={tree.handleItemExpansionToggle}
-          selectedItems={selectedItems}
-          onSelectedItemsChange={handleSelectedItemsChange}
-          multiSelect
-          slots={{
-            expandIcon: ChevronRightIcon,
-            collapseIcon: ChevronDownIcon,
+        {/* ── Tree: fills wrapper, paddingTop pushes content below overlay toolbar ── */}
+        <div
+          className="vfs-tree-container"
+          style={{ position: 'absolute', inset: 0, paddingTop: projectToolbarHeight }}
+          onContextMenu={handleContainerContextMenu}
+          onTouchStart={e => startLongPress(e, null)}
+          onTouchEnd={cancelLongPress}
+          onTouchMove={onTouchMove}
+          onClickCapture={blockPostLongPressClick}
+          onDragOver={(e: React.DragEvent) => {
+            if (dragNodeRef.current || readOnly || !provider.writeFile) return;
+            if (!e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setIsExternalDragOver(true);
           }}
-          itemChildrenIndentation={0}
-          sx={treeViewSx}
+          onDragLeave={(e: React.DragEvent) => {
+            if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+              setIsExternalDragOver(false);
+            }
+          }}
+          onDrop={(e: React.DragEvent) => {
+            setIsExternalDragOver(false);
+            if (dragNodeRef.current || readOnly || !provider.writeFile) return;
+            if (e.dataTransfer.items.length === 0) return;
+            e.preventDefault();
+            const targetDir = dropTargetId ?? currentPath;
+            setDropTargetId(null);
+            handleExternalDrop(e.dataTransfer.items, targetDir).catch(() => {});
+          }}
         >
-          {renderTree(tree.items)}
-        </SimpleTreeView>
+          {/* External drag-over overlay */}
+          {isExternalDragOver && !readOnly && (
+            <div style={{
+              position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none',
+              background: 'rgba(0, 120, 212, 0.12)',
+              border: '2px dashed #0078d4',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 4,
+            }}>
+              <svg width="24" height="24" viewBox="0 0 16 16" fill="#0078d4">
+                <path d="M8 1v9M4 6l4-4 4 4M2 13h12" stroke="#0078d4" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span style={{ color: '#0078d4', fontSize: 12, fontWeight: 500 }}>Drop to upload</span>
+            </div>
+          )}
+          {/* Upload progress */}
+          {uploadProgress && (
+            <div style={{
+              position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 11,
+              background: '#252526', borderTop: '1px solid #3c3c3c',
+              padding: '4px 8px', fontSize: 11, color: '#888',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #888', borderTopColor: 'transparent', animation: 'spin 0.6s linear infinite' }} />
+              {uploadProgress}
+            </div>
+          )}
+          {tree.loading && (
+            <LinearProgress
+              sx={{ height: 2, position: 'sticky', top: 0, zIndex: 1, bgcolor: 'transparent' }}
+            />
+          )}
+          <SimpleTreeView
+            expandedItems={tree.expandedItems}
+            onExpandedItemsChange={handleExpandedItemsChange}
+            onItemExpansionToggle={tree.handleItemExpansionToggle}
+            selectedItems={selectedItems}
+            onSelectedItemsChange={handleSelectedItemsChange}
+            multiSelect
+            slots={{
+              expandIcon: ChevronRightIcon,
+              collapseIcon: ChevronDownIcon,
+            }}
+            itemChildrenIndentation={0}
+            sx={treeViewSx}
+          >
+            {renderTree(tree.items)}
+          </SimpleTreeView>
+        </div>
       </div>
 
       {/* ── Project panel ── */}

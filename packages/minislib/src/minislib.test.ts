@@ -47,6 +47,59 @@ describe('Signal', () => {
     sig.emit(1);
     expect(received).toEqual([1]);
   });
+
+  it('re-entrant emit is queued and executed after outer emit finishes', () => {
+    const sig = new Signal<[n: number]>();
+    const order: number[] = [];
+    sig.connect((n) => {
+      order.push(n);
+      if (n === 1) sig.emit(2); // re-entrant call
+      order.push(n * 10); // must run before the queued emit(2)
+    });
+    sig.emit(1);
+    // Expected: outer slot runs to completion (push 1, push 10) then queued emit(2) fires (push 2, push 20)
+    expect(order).toEqual([1, 10, 2, 20]);
+  });
+
+  it('circuit breaker disconnects slot after threshold consecutive errors', () => {
+    const sig = new Signal();
+    const spy = vi.fn(() => { throw new Error('boom'); });
+    sig.connect(spy);
+    // First 2 calls: error logged but slot stays connected
+    sig.emit();
+    sig.emit();
+    expect(sig.connectionCount).toBe(1);
+    // Third call: threshold reached, slot disconnected
+    sig.emit();
+    expect(sig.connectionCount).toBe(0);
+    // Fourth call: slot is gone
+    sig.emit();
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it('circuit breaker resets error count on success', () => {
+    const sig = new Signal();
+    let shouldThrow = true;
+    const spy = vi.fn(() => { if (shouldThrow) throw new Error('boom'); });
+    sig.connect(spy);
+    sig.emit(); // errorCount = 1
+    sig.emit(); // errorCount = 2
+    shouldThrow = false;
+    sig.emit(); // success → errorCount resets to 0
+    shouldThrow = true;
+    sig.emit(); // errorCount = 1 (not 3, so no disconnect)
+    expect(sig.connectionCount).toBe(1);
+  });
+
+  it('emitQueued defers to next microtask', async () => {
+    const sig = new Signal<[n: number]>();
+    const received: number[] = [];
+    sig.connect((n) => received.push(n));
+    sig.emitQueued(42);
+    expect(received).toEqual([]); // not yet
+    await Promise.resolve();
+    expect(received).toEqual([42]);
+  });
 });
 
 describe('MObject', () => {

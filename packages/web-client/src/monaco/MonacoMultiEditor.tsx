@@ -13,6 +13,18 @@ import InputAdornment from '@mui/material/InputAdornment';
 import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip from '@mui/material/Tooltip';
 import Collapse from '@mui/material/Collapse';
+// Inline SVG icons for toolbar (avoids @mui/icons-material peer dependency)
+const SvgSave = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10z"/></svg>;
+const SvgUndo = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8"/></svg>;
+const SvgRedo = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7z"/></svg>;
+const SvgSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"/></svg>;
+const SvgFindReplace = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 6c1.38 0 2.63.56 3.54 1.46L12 10h6V4l-2.05 2.05C14.68 4.78 12.93 4 11 4c-3.53 0-6.43 2.61-6.92 6H6.1c.46-2.28 2.48-4 4.9-4m5.64 9.14c.66-.9 1.12-1.97 1.28-3.14H15.9c-.46 2.28-2.48 4-4.9 4-1.38 0-2.63-.56-3.54-1.46L10 12H4v6l2.05-2.05C7.32 17.22 9.07 18 11 18c1.55 0 2.98-.51 4.14-1.36L20 21.49 21.49 20z"/></svg>;
+const SvgFolderSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 13.5v2c0 .28.22.5.5.5h.5v.68l1.76 1.76c-.28.05-.51.07-.76.07-2.48 0-4.5-2.02-4.5-4.5S10.02 9 12.5 9c2.16 0 3.96 1.5 4.39 3.5H15v-.5c0-.28-.22-.5-.5-.5h-3c-.28 0-.5.22-.5.5M22 17.17l-2.64-2.62C19.74 14.06 20 13.31 20 12.5 20 10.01 17.99 8 15.5 8S11 10.01 11 12.5s2.01 4.5 4.5 4.5c.81 0 1.56-.26 2.17-.73L20.29 19H22v-1.83zM15.5 15c-1.38 0-2.5-1.12-2.5-2.5S14.12 10 15.5 10s2.5 1.12 2.5 2.5S16.88 15 15.5 15zM6 8l-4 4v8h16v-2H4v-5.17L7.17 12H8v-4H6z"/></svg>;
+const SvgFormat = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 21h18v-2H3zm0-4h18v-2H3zm0-4h18v-2H3zm0-4h18V7H3zm0-6v2h18V3z"/></svg>;
+const SvgCut = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.64 7.64c.23-.5.36-1.05.36-1.64 0-2.21-1.79-4-4-4S2 3.79 2 6s1.79 4 4 4c.59 0 1.14-.13 1.64-.36L10 12l-2.36 2.36C7.14 14.13 6.59 14 6 14c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4c0-.59-.13-1.14-.36-1.64L12 14l7 7h3v-1L9.64 7.64zM6 8c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm0 12c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm6-7.5c-.28 0-.5-.22-.5-.5s.22-.5.5-.5.5.22.5.5-.22.5-.5.5zM19 3l-6 6 2 2 7-7V3z"/></svg>;
+const SvgCopy = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>;
+const SvgPaste = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>;
+const SvgDelete = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>;
 import type { FileSystemProvider } from '@mhersztowski/core';
 import { decodeText, encodeText, FileType } from '@mhersztowski/core';
 
@@ -145,6 +157,7 @@ function fileLabel(path: string): string {
 
 let nextGroupId = 1;
 function makeGroupId() { return `g${nextGroupId++}`; }
+
 
 /* ── SVG Icons ── */
 
@@ -433,6 +446,7 @@ interface EditorGroupPaneProps {
   onGoToFile: () => void;
   onToggleMinimap: () => void;
   onToggleWordWrap: () => void;
+  onEditorReady: (groupId: string, editor: monaco.editor.IStandaloneCodeEditor) => void;
   /* ── Plugin contribution points ── */
   pluginContextMenuItems: ContextMenuContribution[];
   pluginCommandPaletteItems: CommandPaletteContribution[];
@@ -458,6 +472,7 @@ const EditorGroupPane = memo(function EditorGroupPane({
   onGoToFile,
   onToggleMinimap,
   onToggleWordWrap,
+  onEditorReady,
   pluginContextMenuItems,
   pluginCommandPaletteItems,
 }: EditorGroupPaneProps) {
@@ -468,6 +483,8 @@ const EditorGroupPane = memo(function EditorGroupPane({
   saveRef.current = onSave;
   const groupIdRef = useRef(group.id);
   groupIdRef.current = group.id;
+  const tabsRef = useRef(group.tabs);
+  tabsRef.current = group.tabs;
 
   // Stable refs for callbacks used inside once-only useEffect
   const isActiveRef = useRef(isActive);
@@ -497,11 +514,21 @@ const EditorGroupPane = memo(function EditorGroupPane({
       fontSize: 14,
       // fixedOverflowWidgets: widget uses position:fixed so it escapes overflow:hidden ancestors.
       fixedOverflowWidgets: true,
-      quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
+      // strings: 'on' is required for JSON — all keys/values are strings,
+      // so 'off' would suppress autocomplete entirely in JSON files.
+      quickSuggestions: { other: 'on', comments: 'off', strings: 'on' },
       wordBasedSuggestions: 'currentDocument',
       suggestOnTriggerCharacters: true,
+      // Suppress word-based (abc) completions — schema/type-aware items take over.
+      // This prevents "wordBasedSuggestions: currentDocument" from polluting the list.
+      suggest: { showWords: false },
+      scrollbar: {
+        verticalScrollbarSize: 10,
+        horizontalScrollbarSize: 10,
+      },
     });
     editorRef.current = editor;
+    onEditorReady(group.id, editor.getMonacoEditor());
 
     const saveAction = editor.getMonacoEditor().addAction({
       id: 'file.save',
@@ -659,8 +686,12 @@ const EditorGroupPane = memo(function EditorGroupPane({
     const editor = editorRef.current;
     if (!editor) return;
 
+    // Read tabs from ref to avoid re-running this effect when only tab metadata
+    // (e.g. isDirty/modified flag) changes — those changes must not reset the cursor.
+    const tabs = tabsRef.current;
+
     // Virtual tab — clear Monaco model, nothing else to do
-    const activeTabInfo = group.tabs.find(t => t.path === group.activeTab);
+    const activeTabInfo = tabs.find(t => t.path === group.activeTab);
     if (activeTabInfo?.virtual) {
       // Blur Monaco before hiding it. On Android, hiding a focused element without
       // moving focus explicitly causes the browser to auto-focus the next available
@@ -690,7 +721,7 @@ const EditorGroupPane = memo(function EditorGroupPane({
       return;
     }
 
-    const tabInfo = group.tabs.find(t => t.path === group.activeTab);
+    const tabInfo = tabs.find(t => t.path === group.activeTab);
     if (!tabInfo) return;
 
     const model = modelManager.getModel(tabInfo.uri);
@@ -722,7 +753,8 @@ const EditorGroupPane = memo(function EditorGroupPane({
         editor.focus();
       }
     }
-  }, [group.activeTab, group.tabs, modelManager, navPendingRef]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.activeTab, modelManager, navPendingRef]);
 
   // Layout on resize
   useEffect(() => {
@@ -960,6 +992,7 @@ export function MonacoMultiEditor({
 
   const modelManagerRef = useRef<ModelManager | null>(null);
   const splitterContainerRef = useRef<HTMLDivElement | null>(null);
+  const groupEditorsRef = useRef<Map<string, monaco.editor.IStandaloneCodeEditor>>(new Map());
   const pendingNavRef = useRef<{ path: string; line: number; col: number } | null>(null);
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -1019,6 +1052,17 @@ export function MonacoMultiEditor({
   useEffect(() => {
     const unsub = globalEventBus.on<{ panelId: string }>('system:ui:openSidebar', ({ panelId }) => {
       setSidebarPanel(panelId);
+    });
+    return unsub;
+  }, []);
+
+  // Allow plugins to mark a file as modified (e.g. after programmatic model edits)
+  useEffect(() => {
+    const unsub = globalEventBus.on<{ path: string }>('system:editor:markDirty', ({ path }) => {
+      setGroups(prev => prev.map(g => ({
+        ...g,
+        tabs: g.tabs.map(t => t.path === path ? { ...t, modified: true } : t),
+      })));
     });
     return unsub;
   }, []);
@@ -1122,6 +1166,7 @@ export function MonacoMultiEditor({
     const content = decodeText(data);
     const language = detectLanguage(path);
     const uri = `file://${path}`;
+
     mm.createModel(content, language, uri);
     const docUri = createDocumentUri(uri);
 
@@ -1239,6 +1284,11 @@ export function MonacoMultiEditor({
     setActiveGroupId(groupId);
   }, []);
 
+  const handleEditorReady = useCallback((groupId: string, editor: monaco.editor.IStandaloneCodeEditor) => {
+    groupEditorsRef.current.set(groupId, editor);
+    editor.onDidDispose(() => { groupEditorsRef.current.delete(groupId); });
+  }, []);
+
   // Save in a group
   const handleGroupSave = useCallback(async (groupId: string) => {
     const group = groups.find(g => g.id === groupId);
@@ -1298,12 +1348,15 @@ export function MonacoMultiEditor({
     setCursorInfo({ ln, col });
   }, []);
 
-  // Group splitter drag — resize adjacent editor groups
+  // Group splitter drag — resize adjacent editor groups (Pointer Events: unified mouse + touch)
   const editorGroupsContainerRef = useRef<HTMLDivElement | null>(null);
-  const handleGroupSplitterMouseDown = useCallback((e: React.MouseEvent, leftGroupId: string, rightGroupId: string) => {
+  const handleGroupSplitterPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>, leftGroupId: string, rightGroupId: string) => {
     e.preventDefault();
     const container = editorGroupsContainerRef.current;
     if (!container) return;
+
+    const el = e.currentTarget;
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
 
     // Snapshot current values from ref (always fresh)
     const snap = groupsRef.current;
@@ -1322,10 +1375,8 @@ export function MonacoMultiEditor({
     const leftStart = leftGroup.size;
     const combined = leftGroup.size + rightGroup.size;
 
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
-
-    const onMouseMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
+      ev.preventDefault();
       const dx = ev.clientX - startX;
       const delta = dx / pxPerUnit;
       let newLeft = leftStart + delta;
@@ -1341,15 +1392,15 @@ export function MonacoMultiEditor({
       }));
     };
 
-    const onMouseUp = () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
+    const onUp = () => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
     };
 
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
   }, []);
 
   // Content change → mark tab modified in all groups that have this path open
@@ -1475,16 +1526,18 @@ export function MonacoMultiEditor({
     }
   }, [provider]);
 
-  // Splitter drag (sidebar) — shared logic for mouse and touch
-  const startSplitterDrag = useCallback((startClientX: number) => {
+  // Splitter drag (sidebar) — Pointer Events API: unified mouse + touch, works on iOS Safari 13+
+  const handleSplitterPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
     const container = splitterContainerRef.current;
     if (!container) return;
 
+    const el = e.currentTarget;
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore if not supported */ }
+
     const containerRect = container.getBoundingClientRect();
     const startRatio = splitRatio;
-
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
+    const startClientX = e.clientX;
 
     const applyDelta = (clientX: number) => {
       const dx = clientX - startClientX;
@@ -1494,59 +1547,44 @@ export function MonacoMultiEditor({
       setSplitRatio(Math.min(maxRatio, Math.max(minRatio, newRatio)));
     };
 
-    const onMouseMove = (ev: MouseEvent) => applyDelta(ev.clientX);
-    const onTouchMove = (ev: TouchEvent) => { ev.preventDefault(); applyDelta(ev.touches[0].clientX); };
-
-    const cleanup = () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', cleanup);
-      document.removeEventListener('touchmove', onTouchMove);
-      document.removeEventListener('touchend', cleanup);
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
+    const onMove = (ev: PointerEvent) => { ev.preventDefault(); applyDelta(ev.clientX); };
+    const onUp = () => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
     };
 
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', cleanup);
-    document.addEventListener('touchmove', onTouchMove, { passive: false });
-    document.addEventListener('touchend', cleanup);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
   }, [splitRatio]);
 
-  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+  // Agent panel splitter drag (Pointer Events: unified mouse + touch)
+  const handleAgentSplitterPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    startSplitterDrag(e.clientX);
-  }, [startSplitterDrag]);
+    const el = e.currentTarget;
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
 
-  const handleSplitterTouchStart = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
-    startSplitterDrag(e.touches[0].clientX);
-  }, [startSplitterDrag]);
-
-  // Agent panel splitter drag
-  const handleAgentSplitterMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
     const startX = e.clientX;
     const startWidth = agentPanelWidthRef.current;
 
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
-
-    const onMouseMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
+      ev.preventDefault();
       const dx = ev.clientX - startX;
       const newWidth = Math.max(280, startWidth - dx);
       agentPanelWidthRef.current = newWidth;
       setAgentPanelWidth(newWidth);
     };
 
-    const onMouseUp = () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
+    const onUp = () => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
     };
 
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
   }, []);
 
   // Bottom panel splitter drag
@@ -1629,33 +1667,74 @@ export function MonacoMultiEditor({
     setSidebarPanel(prev => prev === panel ? null : panel);
   }, []);
 
-  // Editor commands for Edit menu — trigger on the active group's editor
-  // Focus the active group's editor so keyboard shortcuts work from menu
-  const focusActiveEditor = useCallback(() => {
-    const containers = splitterContainerRef.current?.querySelectorAll<HTMLElement>('.monaco-editor');
-    if (containers) {
-      for (const el of containers) {
-        const textarea = el.querySelector('textarea');
-        if (textarea) { textarea.focus(); break; }
-      }
-    }
+  // Get the active group's Monaco editor instance and call trigger()
+  const triggerActiveEditor = useCallback((actionId: string) => {
+    const editor = groupEditorsRef.current.get(activeGroupIdRef.current);
+    if (editor) editor.trigger('toolbar', actionId, null);
   }, []);
 
-  // Trigger format document on the focused Monaco editor
-  const triggerFormatDocument = useCallback(() => {
-    const containers = splitterContainerRef.current?.querySelectorAll<HTMLElement>('.monaco-editor');
-    if (containers) {
-      for (const el of containers) {
-        const textarea = el.querySelector('textarea');
-        if (textarea) {
-          textarea.focus();
-          // Dispatch keyboard event for Shift+Alt+F which our registered action listens to
-          textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', altKey: true, shiftKey: true, bubbles: true }));
-          break;
-        }
-      }
-    }
+  const triggerUndo = useCallback(() => triggerActiveEditor('undo'), [triggerActiveEditor]);
+  const triggerRedo = useCallback(() => triggerActiveEditor('redo'), [triggerActiveEditor]);
+
+  // Clipboard helpers — do NOT use Monaco's clipboard actions because focus leaves the editor
+  // when the toolbar button is clicked, breaking the clipboard user-gesture requirement.
+  // Instead we read/write the editor model directly and use navigator.clipboard ourselves.
+  const getActiveEditorRef = useCallback(() => {
+    return groupEditorsRef.current.get(activeGroupIdRef.current) ?? null;
   }, []);
+
+  const triggerCopy = useCallback(async () => {
+    const editor = getActiveEditorRef();
+    if (!editor) return;
+    const sel = editor.getSelection();
+    if (!sel) return;
+    const text = sel.isEmpty()
+      ? (editor.getModel()?.getLineContent(sel.startLineNumber) ?? '') + '\n'
+      : (editor.getModel()?.getValueInRange(sel) ?? '');
+    if (text) await navigator.clipboard.writeText(text).catch(() => {});
+  }, [getActiveEditorRef]);
+
+  const triggerCut = useCallback(async () => {
+    const editor = getActiveEditorRef();
+    if (!editor) return;
+    const sel = editor.getSelection();
+    if (!sel) return;
+    const isEmpty = sel.isEmpty();
+    const lineNumber = sel.startLineNumber;
+    const text = isEmpty
+      ? (editor.getModel()?.getLineContent(lineNumber) ?? '') + '\n'
+      : (editor.getModel()?.getValueInRange(sel) ?? '');
+    if (text) await navigator.clipboard.writeText(text).catch(() => {});
+    if (isEmpty) {
+      // Delete whole line (keep cursor on same line number)
+      triggerActiveEditor('editor.action.deleteLines');
+    } else {
+      editor.executeEdits('toolbar-cut', [{ range: sel, text: '', forceMoveMarkers: true }]);
+    }
+    editor.focus();
+  }, [getActiveEditorRef, triggerActiveEditor]);
+
+  const triggerPaste = useCallback(async () => {
+    const editor = getActiveEditorRef();
+    if (!editor) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      const sel = editor.getSelection();
+      if (sel) {
+        editor.executeEdits('toolbar-paste', [{ range: sel, text, forceMoveMarkers: true }]);
+        editor.focus();
+      }
+    } catch {
+      // Fallback: focus then let Monaco handle it
+      editor.focus();
+      editor.trigger('toolbar', 'editor.action.clipboardPasteAction', null);
+    }
+  }, [getActiveEditorRef]);
+
+  const triggerDeleteLine = useCallback(() => triggerActiveEditor('editor.action.deleteLines'), [triggerActiveEditor]);
+  const triggerFind = useCallback(() => triggerActiveEditor('actions.find'), [triggerActiveEditor]);
+  const triggerReplace = useCallback(() => triggerActiveEditor('editor.action.startFindReplaceAction'), [triggerActiveEditor]);
+  const triggerFormatDocument = useCallback(() => triggerActiveEditor('editor.action.formatDocument'), [triggerActiveEditor]);
 
   /* ── Menu item style ── */
   const menuItemSx = {
@@ -1844,17 +1923,30 @@ export function MonacoMultiEditor({
             paper: { sx: { bgcolor: '#252526', color: '#ccc', border: '1px solid #454545', minWidth: 220 } },
           }}
         >
-          <MenuItem sx={menuItemSx} onClick={() => { focusActiveEditor(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerUndo(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
             <ListItemText>Undo</ListItemText><Kbd>{`${mod}Z`}</Kbd>
           </MenuItem>
-          <MenuItem sx={menuItemSx} onClick={() => { focusActiveEditor(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerRedo(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
             <ListItemText>Redo</ListItemText><Kbd>{`${mod}${isMac ? '\u21E7Z' : 'Y'}`}</Kbd>
           </MenuItem>
           <Divider sx={{ borderColor: '#454545', my: 0.5 }} />
-          <MenuItem sx={menuItemSx} onClick={() => { focusActiveEditor(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerCut(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
+            <ListItemText>Cut</ListItemText><Kbd>{`${mod}X`}</Kbd>
+          </MenuItem>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerCopy(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
+            <ListItemText>Copy</ListItemText><Kbd>{`${mod}C`}</Kbd>
+          </MenuItem>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerPaste(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
+            <ListItemText>Paste</ListItemText><Kbd>{`${mod}V`}</Kbd>
+          </MenuItem>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerDeleteLine(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
+            <ListItemText>Delete Line</ListItemText><Kbd>{`${mod}Shift+K`}</Kbd>
+          </MenuItem>
+          <Divider sx={{ borderColor: '#454545', my: 0.5 }} />
+          <MenuItem sx={menuItemSx} onClick={() => { triggerFind(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
             <ListItemText>Find</ListItemText><Kbd>{`${mod}F`}</Kbd>
           </MenuItem>
-          <MenuItem sx={menuItemSx} onClick={() => { focusActiveEditor(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerReplace(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
             <ListItemText>Replace</ListItemText><Kbd>{`${mod}H`}</Kbd>
           </MenuItem>
           <Divider sx={{ borderColor: '#454545', my: 0.5 }} />
@@ -1926,40 +2018,167 @@ export function MonacoMultiEditor({
 
       </Box>
 
-      {/* ── Toolbar (below menu bar) — only shown when plugins contribute items ── */}
-      {pluginToolbarItems.length > 0 && (
-        <Box sx={{
-          bgcolor: '#2d2d2d',
-          borderBottom: '1px solid #2b2b2b',
-          px: 0.5,
-          display: 'flex',
-          alignItems: 'center',
-          height: 32,
-          flexShrink: 0,
-          gap: 0.25,
-        }}>
-          {pluginToolbarItems.map((item) => (
-            <Tooltip key={item.id} title={item.label}>
-              <Box
-                onClick={() => globalCommandRegistry.execute(item.command).catch(console.error)}
-                sx={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 28, height: 28, borderRadius: 0.5, cursor: 'pointer',
-                  color: '#ccc', userSelect: 'none', flexShrink: 0,
-                  '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
-                }}
-              >
-                {item.icon.startsWith('<svg') ? (
-                  <Box component="span" sx={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    dangerouslySetInnerHTML={{ __html: item.icon }} />
-                ) : (
-                  <Typography sx={{ fontSize: 13 }}>{item.icon}</Typography>
-                )}
-              </Box>
-            </Tooltip>
-          ))}
-        </Box>
-      )}
+      {/* ── Toolbar (below menu bar) ── */}
+      <Box sx={{
+        bgcolor: '#2d2d2d',
+        borderBottom: '1px solid #2b2b2b',
+        px: 0.5,
+        display: 'flex',
+        alignItems: 'center',
+        height: 32,
+        flexShrink: 0,
+        gap: 0.25,
+      }}>
+        {/* Save */}
+        <Tooltip title={`Save (${mod}S)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab || readOnly}
+              onClick={() => handleGroupSave(activeGroupId)}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgSave />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
+
+        {/* Undo */}
+        <Tooltip title={`Undo (${mod}Z)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab}
+              onClick={triggerUndo}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgUndo />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Redo */}
+        <Tooltip title={`Redo (${mod}${isMac ? '⇧Z' : 'Y'})`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab}
+              onClick={triggerRedo}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgRedo />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
+
+        {/* Cut */}
+        <Tooltip title={`Cut (${mod}X)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab || readOnly}
+              onClick={triggerCut}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgCut />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Copy */}
+        <Tooltip title={`Copy (${mod}C)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab}
+              onClick={triggerCopy}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgCopy />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Paste */}
+        <Tooltip title={`Paste (${mod}V)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab || readOnly}
+              onClick={triggerPaste}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgPaste />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Delete line */}
+        <Tooltip title="Delete Line (Ctrl+Shift+K)">
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab || readOnly}
+              onClick={triggerDeleteLine}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgDelete />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
+
+        {/* Find */}
+        <Tooltip title={`Find (${mod}F)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab}
+              onClick={triggerFind}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgSearch />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Replace */}
+        <Tooltip title={`Replace (${mod}H)`}>
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab}
+              onClick={triggerReplace}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgFindReplace />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Find in Files */}
+        <Tooltip title={`Find in Files (${mod}Shift+F)`}>
+          <span>
+            <IconButton size="small"
+              onClick={() => { togglePanel('search'); setShowReplace(false); }}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
+              <SvgFolderSearch />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
+
+        {/* Format Document */}
+        <Tooltip title="Format Document (Shift+Alt+F)">
+          <span>
+            <IconButton size="small" disabled={!activeGroup?.activeTab || readOnly}
+              onClick={triggerFormatDocument}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgFormat />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        {/* Plugin toolbar items */}
+        {pluginToolbarItems.length > 0 && (
+          <>
+            <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
+            {pluginToolbarItems.map((item) => (
+              <Tooltip key={item.id} title={item.label}>
+                <Box
+                  onClick={() => globalCommandRegistry.execute(item.command).catch(console.error)}
+                  sx={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 28, height: 28, borderRadius: 0.5, cursor: 'pointer',
+                    color: '#ccc', userSelect: 'none', flexShrink: 0,
+                    '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
+                  }}
+                >
+                  {item.icon.startsWith('<svg') ? (
+                    <Box component="span" sx={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      dangerouslySetInnerHTML={{ __html: item.icon }} />
+                  ) : (
+                    <Typography sx={{ fontSize: 13 }}>{item.icon}</Typography>
+                  )}
+                </Box>
+              </Tooltip>
+            ))}
+          </>
+        )}
+      </Box>
 
       {/* ── Main area wrapper (editors + terminal) ── */}
       <Box ref={mainAreaRef} sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
@@ -2110,11 +2329,11 @@ export function MonacoMultiEditor({
 
             {/* Sidebar content */}
             <Box sx={{ flexGrow: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              <Box sx={{ display: sidebarPanel === 'explorer' ? 'flex' : 'none', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+              <Box sx={{ display: sidebarPanel === 'explorer' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 <VfsExplorer
                   provider={provider}
                   rootPath="/"
-                  height="100%"
+                  style={{ flex: 1, minHeight: 0, height: 'auto' }}
                   onFileOpen={handleFileOpen}
                   readOnly={readOnly}
                   showBreadcrumbs={false}
@@ -2132,7 +2351,7 @@ export function MonacoMultiEditor({
               </Box>
 
               {sidebarPanel === 'search' && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                   {/* Search inputs */}
                   <Box sx={{ p: 1, flexShrink: 0 }}>
                     {/* Search row */}
@@ -2383,7 +2602,7 @@ export function MonacoMultiEditor({
               )}
 
               {sidebarPanel === 'extensions' && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+                <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                   {pluginInfos.length === 0 ? (
                     <Box sx={{ p: 2 }}>
                       <Typography sx={{ color: '#858585', fontSize: 13 }}>No plugins installed.</Typography>
@@ -2446,7 +2665,7 @@ export function MonacoMultiEditor({
               {/* Plugin sidebar panels */}
               {pluginSidebarPanels.map((panel) => (
                 sidebarPanel === panel.id && (
-                  <Box key={panel.id} sx={{ flexGrow: 1, overflow: 'auto' }}>
+                  <Box key={panel.id} sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                     <panel.component />
                   </Box>
                 )
@@ -2458,8 +2677,7 @@ export function MonacoMultiEditor({
         {/* Sidebar splitter */}
         {sidebarOpen && (
           <Box
-            onMouseDown={handleSplitterMouseDown}
-            onTouchStart={handleSplitterTouchStart}
+            onPointerDown={handleSplitterPointerDown}
             sx={{
               width: isMobile ? 10 : 5,
               cursor: 'col-resize',
@@ -2480,12 +2698,13 @@ export function MonacoMultiEditor({
               {/* Group splitter (between groups) */}
               {idx > 0 && (
                 <Box
-                  onMouseDown={(e) => handleGroupSplitterMouseDown(e, groups[idx - 1].id, group.id)}
+                  onPointerDown={(e) => handleGroupSplitterPointerDown(e, groups[idx - 1].id, group.id)}
                   sx={{
                     width: 5,
                     cursor: 'col-resize',
                     bgcolor: '#2d2d2d',
                     flexShrink: 0,
+                    touchAction: 'none',
                     '&:hover': { bgcolor: '#007acc' },
                     transition: 'background-color 0.15s',
                   }}
@@ -2511,6 +2730,7 @@ export function MonacoMultiEditor({
                 onGoToFile={handleGoToFileOpen}
                 onToggleMinimap={handleToggleMinimap}
                 onToggleWordWrap={handleToggleWordWrap}
+                onEditorReady={handleEditorReady}
                 pluginContextMenuItems={pluginContextMenuItems}
                 pluginCommandPaletteItems={pluginCommandPaletteItems}
               />
@@ -2521,12 +2741,13 @@ export function MonacoMultiEditor({
         {/* Agent panel splitter (desktop only) */}
         {enableAgent && agentPanelOpen && !isMobile && (
           <Box
-            onMouseDown={handleAgentSplitterMouseDown}
+            onPointerDown={handleAgentSplitterPointerDown}
             sx={{
               width: 5,
               cursor: 'col-resize',
               bgcolor: '#2d2d2d',
               flexShrink: 0,
+              touchAction: 'none',
               '&:hover': { bgcolor: '#007acc' },
               transition: 'background-color 0.15s',
             }}

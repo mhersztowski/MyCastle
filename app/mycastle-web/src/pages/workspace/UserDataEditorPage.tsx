@@ -8,6 +8,9 @@ import { ArduinoBoardConfigDialog } from '../../components/ArduinoBoardConfigDia
 import { MarkdownPreviewPlugin } from '../../plugins/MarkdownPreviewPlugin';
 import { MarkdownEditorPlugin } from '../../plugins/MarkdownEditorPlugin';
 import { createTypeScriptPlugin } from '../../plugins/TypeScriptIntelliSensePlugin';
+import { createPythonPlugin } from '../../plugins/PythonIntelliSensePlugin';
+import { VisualMinisLibPlugin } from '../../plugins/VisualMinisLibPlugin';
+import { createSnippetsPlugin } from '../../plugins/SnippetsPlugin';
 import type { AgentConfig } from '@mhersztowski/web-client';
 import { useAuth } from '../../modules/auth';
 import { minisApi } from '../../services/MinisApiService';
@@ -260,6 +263,8 @@ export default function UserDataEditorPage() {
   }, [currentUser]);
 
   const tsPlugin = useMemo(() => createTypeScriptPlugin(cfs), [cfs]);
+  const pyPlugin = useMemo(() => createPythonPlugin(cfs), [cfs]);
+  const snippetsPlugin = useMemo(() => createSnippetsPlugin(cfs), [cfs]);
 
   const projectDeps = useMemo(
     () => currentUser ? { baseUrl: '', authToken: token ?? undefined, userName: currentUser.name } : undefined,
@@ -308,7 +313,7 @@ export default function UserDataEditorPage() {
         height="100%"
         providerRegistry={registry}
         defaultMountPresets={defaultMountPresets}
-        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin, tsPlugin]}
+        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin, tsPlugin, pyPlugin, VisualMinisLibPlugin, snippetsPlugin]}
         enableAgent={isAdmin}
         defaultAgentConfig={agentDefaultConfig}
         agentClaudeMd={claudeMd}

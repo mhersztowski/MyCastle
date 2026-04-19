@@ -1023,6 +1023,14 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Python: run python script (GET/SSE /api/users/{userName}/python/run?subpath=...&script=...)
+    const pythonRunMatch = apiPath.match(/^\/users\/([^/]+)\/python\/run$/);
+    if (pythonRunMatch && method === 'GET') {
+      const userName = decodeURIComponent(pythonRunMatch[1]);
+      await this.handlePythonRun(req, res, userName);
+      return;
+    }
+
     // PicoSDK: build (POST or GET/SSE /api/users/{userName}/project-upython/{projectName}/build-pico)
     const picoSdkBuildMatch = apiPath.match(/^\/users\/([^/]+)\/project-upython\/([^/]+)\/build-pico$/);
     if (picoSdkBuildMatch && (method === 'POST' || method === 'GET')) {
@@ -2639,20 +2647,110 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 404, { error: `Project directory not found: ${projectDir}` });
       return;
     }
+    // Ensure package.json exists here — without it npm walks up the filesystem and may
+    // accidentally run scripts from the monorepo root.
+    try {
+      await import('fs/promises').then(m => m.stat(path.join(projectDir, 'package.json')));
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `No package.json in ${projectDir}` });
+      return;
+    }
 
     const args = script === 'install' ? ['install'] : ['run', script];
 
-    // Inject GitHub Packages registry config for @mhersztowski scope so that
-    // workspace projects that depend on @mhersztowski/* packages can resolve them
-    // without requiring a manually placed .npmrc in each project directory.
-    const spawnEnv: NodeJS.ProcessEnv = { ...process.env };
+    // Write a temporary .npmrc so npm resolves @mhersztowski/* from GitHub Packages.
+    // Environment variable names cannot contain '@' or ':', so npm_config_* injection
+    // does not work for scoped registry keys — a config file is the only reliable way.
+    const { readFile, writeFile, unlink } = await import('fs/promises');
+    const { tmpdir } = await import('os');
     const githubToken = process.env.GITHUB_TOKEN;
+    let tmpNpmrc: string | null = null;
     if (githubToken) {
-      // npm reads npm_config_* env vars as config keys.
-      // Scoped registry: npm_config_@mhersztowski:registry → @mhersztowski:registry
-      spawnEnv['npm_config_@mhersztowski:registry'] = 'https://npm.pkg.github.com';
-      // Auth token for npm.pkg.github.com
-      spawnEnv['npm_config_//npm.pkg.github.com/:_authToken'] = githubToken;
+      tmpNpmrc = path.join(tmpdir(), `mycastle-npm-${Date.now()}.npmrc`);
+      await writeFile(tmpNpmrc, [
+        '@mhersztowski:registry=https://npm.pkg.github.com',
+        `//npm.pkg.github.com/:_authToken=${githubToken}`,
+      ].join('\n') + '\n');
+    }
+
+    const npmArgs = tmpNpmrc ? [...args, `--userconfig=${tmpNpmrc}`] : args;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    this.setCorsHeaders(res);
+    res.writeHead(200);
+
+    const sendEvent = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const proc = spawn('npm', npmArgs, { cwd: projectDir, shell: true });
+
+    proc.stdout.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
+    proc.stderr.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
+
+    const cleanup = () => { if (tmpNpmrc) unlink(tmpNpmrc).catch(() => {}); };
+
+    proc.on('close', (code) => {
+      cleanup();
+      sendEvent('done', { success: code === 0, exitCode: code });
+      res.end();
+    });
+
+    proc.on('error', (err) => {
+      cleanup();
+      sendEvent('output', { chunk: `Error: ${err.message}\n` });
+      sendEvent('done', { success: false, error: err.message });
+      res.end();
+    });
+
+    req.on('close', () => { proc.kill(); cleanup(); });
+  }
+
+  // --- Python ---
+
+  private async handlePythonRun(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
+    if (!this.rootDir) {
+      this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const subpath = url.searchParams.get('subpath') ?? '';
+    const script  = url.searchParams.get('script')  ?? '';
+    const file    = url.searchParams.get('file')     ?? '';
+
+    if (!script) {
+      this.sendJsonResponse(res, 400, { error: 'Missing script parameter' });
+      return;
+    }
+
+    const projectDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, subpath);
+    if (!projectDir.startsWith(path.resolve(this.rootDir))) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    try {
+      const stat = await import('fs/promises').then(m => m.stat(projectDir));
+      if (!stat.isDirectory()) throw new Error('not a directory');
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `Project directory not found: ${projectDir}` });
+      return;
+    }
+
+    // Map action id → python3 arguments
+    let args: string[];
+    if (script === 'run') {
+      // Run a specific file (if provided) or fall back to main.py
+      const target = file || 'main.py';
+      args = [target];
+    } else if (script === 'install') {
+      args = ['-m', 'pip', 'install', '-r', 'requirements.txt'];
+    } else if (script === 'test') {
+      args = ['-m', 'pytest'];
+    } else {
+      this.sendJsonResponse(res, 400, { error: `Unknown script: ${script}` });
+      return;
     }
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -2665,7 +2763,7 @@ const { password, ...safeBody } = body;
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
-    const proc = spawn('npm', args, { cwd: projectDir, shell: true, env: spawnEnv });
+    const proc = spawn('python3', args, { cwd: projectDir, shell: false });
 
     proc.stdout.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
     proc.stderr.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
@@ -2681,7 +2779,7 @@ const { password, ...safeBody } = body;
       res.end();
     });
 
-    req.on('close', () => proc.kill());
+    req.on('close', () => { proc.kill(); });
   }
 
   // --- User Devices ---
