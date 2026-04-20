@@ -9,8 +9,11 @@ import { MarkdownPreviewPlugin } from '../../plugins/MarkdownPreviewPlugin';
 import { MarkdownEditorPlugin } from '../../plugins/MarkdownEditorPlugin';
 import { createTypeScriptPlugin } from '../../plugins/TypeScriptIntelliSensePlugin';
 import { createPythonPlugin } from '../../plugins/PythonIntelliSensePlugin';
+import { createCppPlugin } from '../../plugins/CppIntelliSensePlugin';
 import { VisualMinisLibPlugin } from '../../plugins/VisualMinisLibPlugin';
 import { createSnippetsPlugin } from '../../plugins/SnippetsPlugin';
+import { createMarkdownLspPlugin } from '../../plugins/MarkdownLspPlugin';
+import { createMarkdownLspServerPlugin } from '../../plugins/MarkdownLspServerPlugin';
 import type { AgentConfig } from '@mhersztowski/web-client';
 import { useAuth } from '../../modules/auth';
 import { minisApi } from '../../services/MinisApiService';
@@ -264,7 +267,14 @@ export default function UserDataEditorPage() {
 
   const tsPlugin = useMemo(() => createTypeScriptPlugin(cfs), [cfs]);
   const pyPlugin = useMemo(() => createPythonPlugin(cfs), [cfs]);
+  const cppPlugin = useMemo(() => createCppPlugin(cfs), [cfs]);
   const snippetsPlugin = useMemo(() => createSnippetsPlugin(cfs), [cfs]);
+  const mdLspPlugin = useMemo(() => createMarkdownLspPlugin(cfs), [cfs]);
+  const mdLspServerPlugin = useMemo(
+    () => token ? createMarkdownLspServerPlugin(token) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [!!token], // recreate only when token transitions null↔value, not on every refresh
+  );
 
   const projectDeps = useMemo(
     () => currentUser ? { baseUrl: '', authToken: token ?? undefined, userName: currentUser.name } : undefined,
@@ -313,7 +323,7 @@ export default function UserDataEditorPage() {
         height="100%"
         providerRegistry={registry}
         defaultMountPresets={defaultMountPresets}
-        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin, tsPlugin, pyPlugin, VisualMinisLibPlugin, snippetsPlugin]}
+        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin, tsPlugin, pyPlugin, cppPlugin, VisualMinisLibPlugin, snippetsPlugin, mdLspPlugin, ...(mdLspServerPlugin ? [mdLspServerPlugin] : [])]}
         enableAgent={isAdmin}
         defaultAgentConfig={agentDefaultConfig}
         agentClaudeMd={claudeMd}

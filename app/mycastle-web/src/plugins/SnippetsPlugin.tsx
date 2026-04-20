@@ -30,7 +30,7 @@
  * verbatim (preserving relative paths) when the user creates from template.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as monaco from 'monaco-editor';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -143,17 +143,56 @@ const CATEGORY_COLOR: Record<string, string> = {
   'Node.js':     '#68a063',
 };
 
+/* ── Placeholder parsing ──────────────────────────────────────────────────────*/
+
+interface SnippetField {
+  index: number;
+  /** Display label derived from the first occurrence of this index */
+  label: string;
+}
+
+/** Extract unique ordered placeholder fields from a VS Code snippet body. */
+function parsePlaceholders(body: string): SnippetField[] {
+  const re = /\$\{(\d+):([^}]+)\}/g;
+  const seen = new Map<number, string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const idx = Number(m[1]);
+    if (!seen.has(idx)) seen.set(idx, m[2]);
+  }
+  return [...seen.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, label]) => ({ index, label }));
+}
+
+/** Fill a snippet body by replacing all `${N:...}` with the provided values map. */
+function fillSnippet(body: string, values: Map<number, string>): string {
+  return body.replace(/\$\{(\d+):([^}]+)\}/g, (_, idxStr) => {
+    return values.get(Number(idxStr)) ?? '';
+  });
+}
+
 /* ── Monaco insert ────────────────────────────────────────────────────────────*/
 
-function insertSnippetAtCursor(body: string): boolean {
-  const editors = monaco.editor.getEditors();
-  // Prefer the editor that currently has focus
-  const active = editors.find((e) => e.hasTextFocus()) ?? editors[0];
-  if (!active) return false;
-  // Use Monaco's built-in snippet engine — supports ${1:placeholder} tabstops
-  active.trigger('snippets-plugin', 'editor.action.insertSnippet', { snippet: body });
-  active.focus();
-  return true;
+function insertIntoEditor(editor: monaco.editor.ICodeEditor | null, text: string): void {
+  if (!editor) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return;
+  }
+  const selection = editor.getSelection();
+  const range = selection ?? new monaco.Range(1, 1, 1, 1);
+  editor.executeEdits('snippets-plugin', [{ range, text, forceMoveMarkers: true }]);
+  // Move cursor to end of inserted text
+  const model = editor.getModel();
+  if (model) {
+    const lines = text.split('\n');
+    const endLine = range.startLineNumber + lines.length - 1;
+    const endCol = lines.length === 1
+      ? range.startColumn + text.length
+      : lines[lines.length - 1].length + 1;
+    editor.setPosition({ lineNumber: endLine, column: endCol });
+  }
+  editor.focus();
 }
 
 /* ── VFS helpers ──────────────────────────────────────────────────────────────*/
@@ -675,6 +714,71 @@ async function loadTemplatesFromVfs(vfs: FileSystemProvider): Promise<Template[]
   return templates;
 }
 
+/* ── Snippet form dialog ──────────────────────────────────────────────────────*/
+
+function SnippetFormDialog({
+  snippet,
+  fields,
+  onInsert,
+  onClose,
+}: {
+  snippet: EditorSnippet;
+  fields: SnippetField[];
+  onInsert: (body: string) => void;
+  onClose: () => void;
+}) {
+  const [values, setValues] = useState<Map<number, string>>(
+    () => new Map(fields.map((f) => [f.index, f.label])),
+  );
+  const firstRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setTimeout(() => firstRef.current?.focus(), 50); }, []);
+
+  const handleSubmit = () => {
+    onInsert(fillSnippet(snippet.body, values));
+    onClose();
+  };
+
+  return (
+    <Dialog open onClose={onClose}
+      PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', minWidth: 360 } }}>
+      <DialogTitle sx={{ fontSize: 13, fontWeight: 600, color: '#cba6f7', pb: 0.5 }}>
+        {snippet.name}
+      </DialogTitle>
+      <DialogContent sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        {snippet.description && (
+          <Typography sx={{ fontSize: 11, color: '#6c7086' }}>{snippet.description}</Typography>
+        )}
+        {fields.map((f, i) => (
+          <Box key={f.index}>
+            <Typography sx={{ fontSize: 10, color: '#a6adc8', mb: 0.5 }}>{f.label}</Typography>
+            <TextField
+              inputRef={i === 0 ? firstRef : undefined}
+              size="small"
+              fullWidth
+              value={values.get(f.index) ?? ''}
+              onChange={(e) => setValues((prev) => new Map(prev).set(f.index, e.target.value))}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); if (e.key === 'Escape') onClose(); }}
+              sx={{
+                '& .MuiInputBase-root': { fontSize: 12, background: '#13131e', color: '#cdd6f4' },
+                '& .MuiOutlinedInput-notchedOutline': { borderColor: '#313244' },
+                '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#cba6f7' },
+              }}
+            />
+          </Box>
+        ))}
+      </DialogContent>
+      <DialogActions sx={{ px: 2, pb: 1.5 }}>
+        <Button size="small" onClick={onClose}
+          sx={{ fontSize: 11, color: '#6c7086', textTransform: 'none' }}>Cancel</Button>
+        <Button size="small" variant="contained" onClick={handleSubmit}
+          sx={{ fontSize: 11, textTransform: 'none', bgcolor: '#cba6f7', color: '#1e1e2e', '&:hover': { bgcolor: '#b894f5' } }}>
+          Insert
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 /* ── Panel ────────────────────────────────────────────────────────────────────*/
 
 const PANEL_ID = 'builtin.snippets.panel';
@@ -698,6 +802,8 @@ function SnippetsPanel({ vfsProvider }: { vfsProvider: FileSystemProvider }) {
   const [seeded, setSeeded] = useState(false);
   const [createDlg, setCreateDlg] = useState<CreateDialogState | null>(null);
   const [copyLabel, setCopyLabel] = useState<string>('');
+  const [formSnippet, setFormSnippet] = useState<{ snippet: EditorSnippet; fields: SnippetField[] } | null>(null);
+  const targetEditorRef = useRef<monaco.editor.ICodeEditor | null>(null);
 
   // Subscribe to model changes so language filter stays in sync
   useEffect(() => {
@@ -735,13 +841,25 @@ function SnippetsPanel({ vfsProvider }: { vfsProvider: FileSystemProvider }) {
   }, [vfsProvider, load]);
 
   const handleInsert = useCallback((snippet: EditorSnippet) => {
-    const ok = insertSnippetAtCursor(snippet.body);
-    if (!ok) {
-      // Fallback: copy to clipboard
-      navigator.clipboard.writeText(snippet.body).catch(() => {});
-      setCopyLabel(snippet.name);
-      setTimeout(() => setCopyLabel(''), 2000);
+    const editors = monaco.editor.getEditors();
+    const active = editors.find((e) => e.hasTextFocus()) ?? editors[0] ?? null;
+    const fields = parsePlaceholders(snippet.body);
+    if (fields.length > 0) {
+      targetEditorRef.current = active;
+      setFormSnippet({ snippet, fields });
+    } else {
+      insertIntoEditor(active, snippet.body);
+      if (!active) {
+        setCopyLabel(snippet.name);
+        setTimeout(() => setCopyLabel(''), 2000);
+      }
     }
+  }, []);
+
+  const handleFormInsert = useCallback((body: string) => {
+    const editor = targetEditorRef.current;
+    targetEditorRef.current = null;
+    insertIntoEditor(editor, body);
   }, []);
 
   const handleCopy = useCallback((snippet: EditorSnippet) => {
@@ -985,6 +1103,16 @@ function SnippetsPanel({ vfsProvider }: { vfsProvider: FileSystemProvider }) {
             Files in <code>/home/editorsnippets/</code> — click snippet to insert at cursor
           </Typography>
         </Box>
+      )}
+
+      {/* Snippet form dialog */}
+      {formSnippet && (
+        <SnippetFormDialog
+          snippet={formSnippet.snippet}
+          fields={formSnippet.fields}
+          onInsert={handleFormInsert}
+          onClose={() => setFormSnippet(null)}
+        />
       )}
 
       {/* Create-from-template dialog */}

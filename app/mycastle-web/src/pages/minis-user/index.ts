@@ -27,3 +27,5 @@ export { default as UserPygameProjectsPage } from './UserPygameProjectsPage';
 export { default as PygameProjectPage } from './PygameProjectPage';
 export { default as UserPicoSdkProjectsPage } from './UserPicoSdkProjectsPage';
 export { default as PicoSdkProjectPage } from './PicoSdkProjectPage';
+export { default as UserCppProjectsPage } from './UserCppProjectsPage';
+export { default as CppProjectPage } from './CppProjectPage';

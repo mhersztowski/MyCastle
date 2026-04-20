@@ -8,7 +8,7 @@
  *   Changing a value patches the source code in the Monaco editor.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import * as monaco from 'monaco-editor';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -583,6 +583,8 @@ function insertAtEnd(code: string, targetUri: string): boolean {
 
 /* ── Module-level shared state ───────────────────────────────────────────────*/
 
+interface ImportedClass { packageName: string; className: string; }
+
 interface PluginState {
   entities: MinisEntity[];
   connections: ParsedConnection[];
@@ -591,9 +593,10 @@ interface PluginState {
   currentCode: string;
   savedPositions: SavedPositions;
   externalClassDefs: ExternalClassEntry[];
+  importedClasses: ImportedClass[];
 }
 
-let _state: PluginState = { entities: [], connections: [], uri: '', isMinisFile: false, currentCode: '', savedPositions: {}, externalClassDefs: [] };
+let _state: PluginState = { entities: [], connections: [], uri: '', isMinisFile: false, currentCode: '', savedPositions: {}, externalClassDefs: [], importedClasses: [] };
 
 const _stateListeners = new Set<() => void>();
 function notifyState() { _stateListeners.forEach((fn) => fn()); }
@@ -891,55 +894,6 @@ function SnippetRow({ snippet }: { snippet: Snippet }) {
 
 /* ── Add-node templates ──────────────────────────────────────────────────────*/
 
-interface NodeTemplate {
-  kind: EntityKind;
-  label: string;
-  description: string;
-  defaultPrefix: string;
-  needsName: boolean;
-  generateSnippet: (varName: string) => string;
-}
-
-const NODE_TEMPLATES: NodeTemplate[] = [
-  {
-    kind: 'timer', label: 'Timer', description: 'MTimer — periodic / one-shot', defaultPrefix: 'timer', needsName: false,
-    generateSnippet: (v) => `const ${v} = MTimer.create(1000);`,
-  },
-  {
-    kind: 'property', label: 'Property', description: 'MProperty<T> — observable value', defaultPrefix: 'prop', needsName: false,
-    generateSnippet: (v) => `const ${v} = new MProperty<number>(0);`,
-  },
-  {
-    kind: 'signal', label: 'Signal', description: 'Signal<T> — standalone emitter', defaultPrefix: 'signal', needsName: false,
-    generateSnippet: (v) => `const ${v} = new Signal<[]>();`,
-  },
-  {
-    kind: 'fsm', label: 'State Machine', description: 'MStateMachine — FSM', defaultPrefix: 'fsm', needsName: false,
-    generateSnippet: (v) => `const ${v} = new MStateMachine();\n${v}.addState('idle');\n${v}.start('idle');`,
-  },
-  {
-    kind: 'bus', label: 'Event Bus', description: 'MEventBus — global pub/sub', defaultPrefix: 'bus', needsName: false,
-    generateSnippet: (v) => `const ${v} = MEventBus.global();`,
-  },
-  {
-    kind: 'commandstack', label: 'Command Stack', description: 'MCommandStack — undo/redo', defaultPrefix: 'stack', needsName: false,
-    generateSnippet: (v) => `const ${v} = new MCommandStack();`,
-  },
-  {
-    kind: 'listmodel', label: 'List Model', description: 'MListModel<T> — observable list', defaultPrefix: 'list', needsName: false,
-    generateSnippet: (v) => `const ${v} = new MListModel<unknown>();`,
-  },
-  {
-    kind: 'logger', label: 'Logger', description: 'MLogger — categorized logger', defaultPrefix: 'log', needsName: false,
-    generateSnippet: (v) => `const ${v} = new MLogger('${v}');`,
-  },
-  {
-    kind: 'class', label: 'Custom class', description: 'New class extending MObject', defaultPrefix: 'MyObject', needsName: true,
-    generateSnippet: (v) =>
-      `class ${v} extends MObject {\n  constructor(parent?: MObject) {\n    super(parent, '${v}');\n  }\n}`,
-  },
-];
-
 function generateExternalSnippet(className: string, paramDefs: ParamDef[]): string {
   const maxIdx = paramDefs.reduce((m, p) => Math.max(m, p.argIndex), -1);
   const args: string[] = new Array(maxIdx + 1).fill('undefined');
@@ -1009,47 +963,56 @@ function ExportManifestButton({ uri, entities }: { uri: string; entities: MinisE
 
 /* ── Add-node toolbar ────────────────────────────────────────────────────────*/
 
-function AddNodeMenu({ uri: _uri, externalClassDefs, entities }: { uri: string; externalClassDefs: ExternalClassEntry[]; entities: MinisEntity[] }) {
+interface FlatEntry { packageName: string; className: string; paramDefs?: ParamDef[]; }
+
+function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }: { uri: string; externalClassDefs: ExternalClassEntry[]; importedClasses: ImportedClass[]; entities: MinisEntity[] }) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
-  const [pendingTemplate, setPendingTemplate] = useState<NodeTemplate | null>(null);
-  const [customName, setCustomName] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [filter, setFilter] = useState('');
+  const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (pendingTemplate?.needsName) setTimeout(() => inputRef.current?.focus(), 50);
-  }, [pendingTemplate]);
+    if (anchorEl) setTimeout(() => filterRef.current?.focus(), 50);
+    else setFilter('');
+  }, [anchorEl]);
 
-  const doInsert = useCallback((template: NodeTemplate, name?: string) => {
+  // Build flat list: manifest entries first, then plain imports (deduplicated)
+  const allEntries: FlatEntry[] = useMemo(() => {
+    const manifestNames = new Set(externalClassDefs.map((e) => e.className));
+    const fromManifest: FlatEntry[] = externalClassDefs.map((e) => ({
+      packageName: e.packageName, className: e.className, paramDefs: e.def.paramDefs,
+    }));
+    const fromImports: FlatEntry[] = importedClasses
+      .filter(({ className }) => !manifestNames.has(className))
+      .map(({ packageName, className }) => ({ packageName, className }));
+    return [...fromManifest, ...fromImports];
+  }, [externalClassDefs, importedClasses]);
+
+  const q = filter.toLowerCase();
+  const visible = q
+    ? allEntries.filter((e) => e.className.toLowerCase().includes(q) || e.packageName.toLowerCase().includes(q))
+    : allEntries;
+
+  if (allEntries.length === 0) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', background: '#13131e' }}>
+        <ExportManifestButton uri={_uri} entities={entities} />
+      </Box>
+    );
+  }
+
+  const handleInsert = (entry: FlatEntry) => {
+    setAnchorEl(null);
     const targetUri = _state.uri;
     if (!targetUri || targetUri.startsWith('virtual://')) return;
     const taken = new Set(_state.entities.map((e) => e.varName));
-    const varName = name?.trim() || generateVarName(template.defaultPrefix, taken);
-    const snippet = template.generateSnippet(varName);
+    const base = entry.className.charAt(0).toLowerCase() + entry.className.slice(1);
+    const varName = generateVarName(base, taken);
+    const snippet = entry.paramDefs
+      ? generateExternalSnippet(entry.className, entry.paramDefs).replace(/^const \w+/, `const ${varName}`)
+      : `const ${varName} = new ${entry.className}();\n`;
     const inserted = insertAtEnd(snippet, targetUri);
-    if (inserted) {
-      // pushEditOperations doesn't trigger onDidChangeContent — re-parse immediately
-      const model = findModel(targetUri);
-      if (model) {
-        const newCode = model.getValue();
-        const { entities, connections } = parseMinisEntities(newCode);
-        const savedPositions = parseGraphMetadata(newCode);
-        _state = { ..._state, currentCode: newCode, entities, connections, savedPositions };
-        notifyState();
-      }
-    }
     addSnippet(snippet, inserted);
-    setPendingTemplate(null);
-    setCustomName('');
-  }, []);
-
-  const handleMenuClick = useCallback((template: NodeTemplate) => {
-    setAnchorEl(null);
-    if (template.needsName) {
-      setPendingTemplate(template);
-    } else {
-      doInsert(template);
-    }
-  }, [doInsert]);
+  };
 
   return (
     <>
@@ -1063,100 +1026,52 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, entities }: { uri: string; 
           onClick={(e) => setAnchorEl(e.currentTarget)}
           sx={{ fontSize: 11, color: '#cba6f7', textTransform: 'none', py: 0.25, px: 1, minWidth: 0, '&:hover': { background: '#2d2040' } }}
         >
-          Add object
+          Add instance
         </Button>
         <ExportManifestButton uri={_uri} entities={entities} />
-        {pendingTemplate && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1, minWidth: 160 }}>
-            <Typography sx={{ fontSize: 10, color: '#6c7086', whiteSpace: 'nowrap' }}>Class name:</Typography>
-            <TextField
-              inputRef={inputRef}
-              size="small"
-              placeholder="MyClassName"
-              value={customName}
-              onChange={(e) => setCustomName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && customName.trim()) doInsert(pendingTemplate, customName);
-                if (e.key === 'Escape') { setPendingTemplate(null); setCustomName(''); }
-              }}
-              sx={{
-                flex: 1,
-                '& .MuiInputBase-root': { fontSize: 11, background: '#1e1e2e', color: '#cdd6f4', height: 24 },
-                '& .MuiOutlinedInput-notchedOutline': { borderColor: '#cba6f766' },
-                '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#cba6f7' },
-                '& input': { py: 0, px: 1 },
-              }}
-            />
-            <IconButton size="small" onClick={() => doInsert(pendingTemplate, customName)} disabled={!customName.trim()} sx={{ p: 0.25, color: '#a6e3a1' }}>
-              <CheckIcon sx={{ fontSize: 12 }} />
-            </IconButton>
-            <IconButton size="small" onClick={() => { setPendingTemplate(null); setCustomName(''); }} sx={{ p: 0.25, color: '#6c7086' }}>
-              <CloseIcon sx={{ fontSize: 12 }} />
-            </IconButton>
-          </Box>
-        )}
       </Box>
 
       <Menu
         anchorEl={anchorEl}
         open={Boolean(anchorEl)}
         onClose={() => setAnchorEl(null)}
-        PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', minWidth: 230, py: 0.5 } }}
+        PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', minWidth: 260, py: 0 } }}
       >
-        {NODE_TEMPLATES.map((t) => (
+        {/* Filter input */}
+        <Box sx={{ px: 1, pt: 1, pb: 0.5 }} onKeyDown={(e) => e.stopPropagation()}>
+          <TextField
+            inputRef={filterRef}
+            size="small"
+            placeholder="Filter classes…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            fullWidth
+            sx={{
+              '& .MuiInputBase-root': { fontSize: 12, background: '#13131e', color: '#cdd6f4', height: 28 },
+              '& .MuiOutlinedInput-notchedOutline': { borderColor: '#313244' },
+              '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#cba6f7' },
+              '& input': { py: 0, px: 1 },
+            }}
+          />
+        </Box>
+        <Divider sx={{ borderColor: '#313244' }} />
+
+        {visible.length === 0 && (
+          <Typography sx={{ fontSize: 11, color: '#45475a', px: 2, py: 1 }}>No matches</Typography>
+        )}
+        {visible.map((entry) => (
           <MenuItem
-            key={t.kind}
-            onClick={() => handleMenuClick(t)}
+            key={`${entry.packageName}:${entry.className}`}
+            onClick={() => handleInsert(entry)}
             sx={{ fontSize: 12, color: '#cdd6f4', py: 0.75, gap: 1.25, '&:hover': { background: '#313244' } }}
           >
-            <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>{KIND_ICON[t.kind]}</span>
+            <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>🧩</span>
             <Box>
-              <Typography sx={{ fontSize: 12, color: KIND_COLOR[t.kind], fontWeight: 600, lineHeight: 1.4 }}>{t.label}</Typography>
-              <Typography sx={{ fontSize: 10, color: '#6c7086' }}>{t.description}</Typography>
+              <Typography sx={{ fontSize: 12, color: '#81c784', fontWeight: 600, lineHeight: 1.4 }}>{entry.className}</Typography>
+              <Typography sx={{ fontSize: 10, color: '#6c7086' }}>{entry.packageName}</Typography>
             </Box>
           </MenuItem>
         ))}
-
-        {/* External library classes from minislib-plugin.json manifests */}
-        {externalClassDefs.length > 0 && (() => {
-          const byPkg = new Map<string, ExternalClassEntry[]>();
-          for (const e of externalClassDefs) {
-            if (!byPkg.has(e.packageName)) byPkg.set(e.packageName, []);
-            byPkg.get(e.packageName)!.push(e);
-          }
-          return [...byPkg.entries()].map(([pkg, entries]) => [
-            <Divider key={`div-${pkg}`} sx={{ borderColor: '#313244', my: 0.5 }} />,
-            <Typography key={`hdr-${pkg}`} sx={{ fontSize: 9, color: '#45475a', px: 2, py: 0.25, letterSpacing: 1, textTransform: 'uppercase' }}>
-              {pkg}
-            </Typography>,
-            ...entries.map((entry) => (
-              <MenuItem
-                key={`${pkg}:${entry.className}`}
-                onClick={() => {
-                  setAnchorEl(null);
-                  const targetUri = _state.uri;
-                  if (!targetUri || targetUri.startsWith('virtual://')) return;
-                  const taken = new Set(_state.entities.map((e) => e.varName));
-                  const base = entry.className.charAt(0).toLowerCase() + entry.className.slice(1);
-                  const varName = generateVarName(base, taken);
-                  const snippet = generateExternalSnippet(entry.className, entry.def.paramDefs)
-                    .replace(new RegExp(`^const \\w+`), `const ${varName}`);
-                  const inserted = insertAtEnd(snippet, targetUri);
-                  addSnippet(snippet, inserted);
-                }}
-                sx={{ fontSize: 12, color: '#cdd6f4', py: 0.75, gap: 1.25, '&:hover': { background: '#313244' } }}
-              >
-                <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>🧩</span>
-                <Box>
-                  <Typography sx={{ fontSize: 12, color: '#81c784', fontWeight: 600, lineHeight: 1.4 }}>{entry.className}</Typography>
-                  <Typography sx={{ fontSize: 10, color: '#6c7086' }}>
-                    {entry.def.signals.length}⚡ {entry.def.slots.length} slots
-                  </Typography>
-                </Box>
-              </MenuItem>
-            )),
-          ]);
-        })()}
       </Menu>
     </>
   );
@@ -1165,7 +1080,7 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, entities }: { uri: string; 
 /* ── Main panel ──────────────────────────────────────────────────────────────*/
 
 function VisualMinisLibPanel() {
-  const { entities, connections, uri, isMinisFile, savedPositions, externalClassDefs } = usePluginState();
+  const { entities, connections, uri, isMinisFile, savedPositions, externalClassDefs, importedClasses } = usePluginState();
   const snippets = useSnippets();
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
 
@@ -1247,7 +1162,7 @@ function VisualMinisLibPanel() {
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
       {/* Add-node toolbar — always visible when a valid file is open */}
-      <AddNodeMenu uri={uri} externalClassDefs={externalClassDefs} entities={entities} />
+      <AddNodeMenu uri={uri} externalClassDefs={externalClassDefs} importedClasses={importedClasses} entities={entities} />
 
       {entities.length === 0 ? (
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, p: 2, textAlign: 'center' }}>
@@ -1336,13 +1251,21 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
       const isMinisFile = hasMinislibImport(code);
       const { entities, connections } = parseMinisEntities(code);
       const savedPositions = parseGraphMetadata(code);
-      _state = { entities, connections, uri, isMinisFile, currentCode: code, savedPositions, externalClassDefs: [] };
+
+      const importedClasses: ImportedClass[] = parseNpmImports(code)
+        .filter(({ packageName }) => packageName !== '@mhersztowski/minislib')
+        .flatMap(({ packageName, names }) =>
+          names
+            .filter((n) => /^[A-Z]/.test(n)) // keep only PascalCase (likely classes)
+            .map((className) => ({ packageName, className })),
+        );
+
+      _state = { entities, connections, uri, isMinisFile, currentCode: code, savedPositions, externalClassDefs: [], importedClasses };
       notifyState();
 
       // Async: load external package manifests and re-parse with discovered classes
       if (isMinisFile) {
         loadExternalClassDefs(code, uri).then(({ byClass, entries }) => {
-          if (entries.length === 0) return;
           if (_state.uri !== uri) return;
           const { entities: ext, connections: extConn } = parseMinisEntities(code, byClass);
           _state = { ..._state, entities: ext, connections: extConn, externalClassDefs: entries };
@@ -1404,7 +1327,7 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
     _vfsContentUnsub?.();
     _vfsContentUnsub = null;
     _onInsertCode = null;
-    _state = { entities: [], connections: [], uri: '', isMinisFile: false, currentCode: '', savedPositions: {}, externalClassDefs: [] };
+    _state = { entities: [], connections: [], uri: '', isMinisFile: false, currentCode: '', savedPositions: {}, externalClassDefs: [], importedClasses: [] };
     notifyState();
   },
 );

@@ -11,6 +11,7 @@ import { ArduinoService } from './modules/arduino/index.js';
 import { MicroPythonService } from './modules/upython/index.js';
 import { PygameService } from './modules/pygame/index.js';
 import { PicoSdkService } from './modules/picosdk/index.js';
+import { LspProxyService } from './modules/lsp/LspProxyService.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -50,6 +51,7 @@ export class App {
   readonly picoSdkService: PicoSdkService | null;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
+  private lspProxyService!: LspProxyService;
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
   readonly config: AppConfig;
@@ -193,6 +195,10 @@ export class App {
     this.terminalService.attach(this.httpServer.getHttpServer());
     this.httpServer.setTerminalService(this.terminalService);
 
+    // Attach LSP proxy (marksman) WebSocket service
+    this.lspProxyService = new LspProxyService(this.jwtService, this.config.rootDir);
+    this.lspProxyService.attach(this.httpServer.getHttpServer());
+
     if (this.sharedPort) {
       await this._mqttServer.start();
       console.log(`Server started on port ${this.config.httpPort} (HTTP + MQTT WebSocket at /mqtt + Terminal at /ws/terminal)`);
@@ -309,6 +315,12 @@ export class App {
       this.terminalService?.shutdown();
     } catch (err) {
       console.warn('Error stopping terminal service:', err);
+    }
+
+    try {
+      this.lspProxyService?.shutdown();
+    } catch (err) {
+      console.warn('Error stopping LSP proxy service:', err);
     }
 
     try {

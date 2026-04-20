@@ -121,6 +121,101 @@ interface FileSearchResult {
   collapsed: boolean;
 }
 
+/* ── JSON schema auto-loader ── */
+
+// Cache of schema URIs already registered to avoid redundant setDiagnosticsOptions calls.
+const _registeredJsonSchemas = new Set<string>();
+
+/**
+ * When a JSON file declares `"$schema": "./relative/path"`, resolve the schema
+ * file from the VFS, load it, and register it with Monaco's JSON language
+ * service so property-name completions work.
+ *
+ * Monaco JSON normally tries to fetch $schema URLs via XHR/fetch — but that
+ * fails for `file://` URIs in the browser. This function intercepts that flow
+ * by reading the schema from the VFS provider directly and passing it inline.
+ */
+async function loadJsonSchemaFromVfs(
+  provider: FileSystemProvider,
+  filePath: string,
+  content: string,
+  fileUri: string,
+): Promise<void> {
+  // Parse $schema field — fast path before full JSON.parse
+  const schemaMatch = content.match(/"?\$schema"?\s*:\s*"([^"]+)"/);
+  if (!schemaMatch) return;
+
+  const rawSchemaRef = schemaMatch[1];
+
+  // Resolve the schema path relative to the JSON file's directory
+  let schemaVfsPath: string;
+  if (rawSchemaRef.startsWith('/')) {
+    schemaVfsPath = rawSchemaRef;
+  } else if (rawSchemaRef.startsWith('http://') || rawSchemaRef.startsWith('https://')) {
+    return; // absolute HTTP — skip (Monaco handles these natively)
+  } else {
+    const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+    // Normalize: resolve ".." and "." segments
+    const parts = `${dir}/${rawSchemaRef}`.split('/');
+    const resolved: string[] = [];
+    for (const p of parts) {
+      if (p === '..') resolved.pop();
+      else if (p !== '.') resolved.push(p);
+    }
+    schemaVfsPath = resolved.join('/');
+  }
+
+  const schemaUri = `file://${schemaVfsPath}`;
+  if (_registeredJsonSchemas.has(schemaUri)) return; // already loaded
+
+  let schemaContent: string;
+  try {
+    const bytes = await provider.readFile(schemaVfsPath);
+    schemaContent = decodeText(bytes);
+  } catch {
+    return; // schema file not found — non-fatal
+  }
+
+  let schemaObj: unknown;
+  try {
+    schemaObj = JSON.parse(schemaContent);
+  } catch {
+    return; // invalid JSON in schema file — non-fatal
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const jsonDefaults = (monaco.languages as any).json?.jsonDefaults;
+  if (!jsonDefaults) return;
+
+  const currentOpts = jsonDefaults.diagnosticsOptions ?? {};
+  const existingSchemas: unknown[] = Array.isArray(currentOpts.schemas) ? currentOpts.schemas : [];
+
+  // Avoid duplicates by schema URI
+  if (existingSchemas.some((s: unknown) => (s as { uri?: string }).uri === schemaUri)) {
+    _registeredJsonSchemas.add(schemaUri);
+    return;
+  }
+
+  // Register by URI — Monaco JSON automatically uses this for any document
+  // whose $schema field resolves to this URI. No fileMatch needed.
+  // Also add fileMatch on the VFS path so files without $schema also benefit.
+  const filePathForMatch = filePath; // e.g. "/home/marcin/.../product.json"
+  jsonDefaults.setDiagnosticsOptions({
+    ...currentOpts,
+    schemas: [
+      ...existingSchemas,
+      {
+        uri: schemaUri,
+        fileMatch: [filePathForMatch],
+        schema: schemaObj,
+      },
+    ],
+  });
+
+  _registeredJsonSchemas.add(schemaUri);
+  console.log(`[Monaco] JSON schema loaded from VFS: ${schemaVfsPath} → applied to ${fileUri}`);
+}
+
 /* ── Language map ── */
 
 const extensionToLanguage: Record<string, string> = {
@@ -1166,6 +1261,11 @@ export function MonacoMultiEditor({
     const content = decodeText(data);
     const language = detectLanguage(path);
     const uri = `file://${path}`;
+
+    // For JSON files: auto-load $schema from VFS and register with Monaco
+    if (language === 'json') {
+      loadJsonSchemaFromVfs(provider, path, content, uri).catch(() => {/* non-fatal */});
+    }
 
     mm.createModel(content, language, uri);
     const docUri = createDocumentUri(uri);

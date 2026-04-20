@@ -35,6 +35,7 @@ const MinisProjectPage = lazy(() => import('./pages/minis-user/ProjectPage'));
 const MinisUPythonProjectPage = lazy(() => import('./pages/minis-user/UPythonProjectPage'));
 const MinisPygameProjectPage = lazy(() => import('./pages/minis-user/PygameProjectPage'));
 const MinisPicoSdkProjectPage = lazy(() => import('./pages/minis-user/PicoSdkProjectPage'));
+const MinisCppProjectPage = lazy(() => import('./pages/minis-user/CppProjectPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -61,6 +62,7 @@ import {
   UserUPythonProjectsPage,
   UserPygameProjectsPage,
   UserPicoSdkProjectsPage,
+  UserCppProjectsPage,
   IotDashboardPage,
   IotDashboard2Page,
   IotDashboard2ConfigPage,
@@ -133,6 +135,7 @@ function AppRoot() {
         <Route path="/user/:userName/upython-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisUPythonProjectPage /></Suspense></RequireAuth>} />
         <Route path="/user/:userName/pygame-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisPygameProjectPage /></Suspense></RequireAuth>} />
         <Route path="/user/:userName/picosdk-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisPicoSdkProjectPage /></Suspense></RequireAuth>} />
+        <Route path="/user/:userName/cpp-project/:projectId" element={<RequireAuth><Suspense fallback={null}><MinisCppProjectPage /></Suspense></RequireAuth>} />
 
         {/* Full-bleed layout routes */}
         <Route
@@ -182,6 +185,7 @@ function AppRoot() {
                   <Route path="/user/:userName/electronics/upython" element={<UserUPythonProjectsPage />} />
                   <Route path="/user/:userName/electronics/pygame" element={<UserPygameProjectsPage />} />
                   <Route path="/user/:userName/electronics/picosdk" element={<UserPicoSdkProjectsPage />} />
+                  <Route path="/user/:userName/electronics/cpp" element={<UserCppProjectsPage />} />
                   <Route path="/user/:userName/iot/dashboard" element={<IotDashboardPage />} />
                   <Route path="/user/:userName/iot/dashboard2" element={<IotDashboard2Page />} />
                   <Route path="/user/:userName/iot/dashboard2/config" element={<IotDashboard2ConfigPage />} />

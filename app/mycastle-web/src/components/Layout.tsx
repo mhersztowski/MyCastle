@@ -117,6 +117,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
             { text: 'Pygame', icon: <CodeIcon />, path: `/user/${userName}/electronics/pygame` },
             { text: 'PicoSDK', icon: <CodeIcon />, path: `/user/${userName}/electronics/picosdk` },
+            { text: 'C++', icon: <CodeIcon />, path: `/user/${userName}/electronics/cpp` },
             { text: 'Configuration', icon: <HubIcon />, path: `/user/${userName}/electronics/configuration` },
           ],
         },
