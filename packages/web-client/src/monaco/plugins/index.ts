@@ -57,3 +57,4 @@ export { WordCountPlugin, HighlightLinePlugin } from './examples';
 
 // ── Built-in example plugins (v2) ────────────────────────────────────────────
 export { WordCountPluginV2 } from './examples/WordCountPluginV2';
+export { GenerateUuidPlugin } from './examples/GenerateUuidPlugin';

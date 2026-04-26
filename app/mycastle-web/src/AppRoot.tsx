@@ -1,5 +1,49 @@
-import React, { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, type ErrorInfo } from 'react';
 import { Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
+
+class EditorErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[EditorErrorBoundary] Render error:', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          padding: '32px 24px', fontFamily: 'monospace', background: '#1e1e1e',
+          color: '#f48771', height: '100%', overflow: 'auto',
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Editor failed to load</div>
+          <pre style={{ fontSize: 12, color: '#ce9178', whiteSpace: 'pre-wrap', wordBreak: 'break-all', marginBottom: 24 }}>
+            {this.state.error.message}
+          </pre>
+          <button
+            onClick={() => this.setState({ error: null })}
+            style={{
+              padding: '8px 16px', background: '#007acc', color: '#fff',
+              border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13,
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function MdFileRedirect() {
   const location = useLocation();
@@ -158,7 +202,7 @@ function AppRoot() {
             </Box>
           }
         />
-        <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><Suspense fallback={null}><UserDataEditorPage /></Suspense></MinimalTopBar></RequireAuth>} />
+        <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><UserDataEditorPage /></Suspense></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
 
         {/* All layout routes — single Layout handles nav based on path */}
         <Route

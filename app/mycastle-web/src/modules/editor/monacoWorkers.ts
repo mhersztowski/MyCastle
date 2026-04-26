@@ -165,15 +165,63 @@ const _safeJsonLanguageSettings = {
   document.head.appendChild(style);
 }
 
-self.MonacoEnvironment = {
-  getWorker(_: unknown, label: string) {
-    if (label === 'json') return new jsonWorker();
-    if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker();
-    if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker();
-    if (label === 'typescript' || label === 'javascript') return new tsWorker();
-    return new editorWorker();
-  },
-};
+// ---------------------------------------------------------------------------
+// Patch C: Set _VSCODE_FILE_ROOT to prevent WorkerDescriptor constructor crash
+//
+// WorkerDescriptor constructor calls:
+//   this.esmModuleLocation = FileAccess.asBrowserUri('vs/language/json/jsonWorker.esm.js')
+//
+// FileAccess.asBrowserUri → toUri(path) (ESM path — no moduleIdToUrl arg):
+//   if (!_VSCODE_FILE_ROOT) return URI.parse(moduleIdToUrl.toUrl(...))
+//   → TypeError: Cannot read properties of undefined (reading 'toUrl')
+//
+// Without _VSCODE_FILE_ROOT this constructor throws and createWebWorker fails immediately.
+// The resulting esmModuleLocation URI is never actually used when MonacoEnvironment.getWorker
+// is a function (getWorker() returns early from the first if-branch). We just need the
+// constructor to not throw.
+// ---------------------------------------------------------------------------
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+if (!(globalThis as any)._VSCODE_FILE_ROOT) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any)._VSCODE_FILE_ROOT = `${window.location.origin}/`;
+  console.log(`[Monaco] _VSCODE_FILE_ROOT set to: ${window.location.origin}/`);
+}
+
+// Define the getWorker implementation using our Vite-bundled workers.
+function _getWorker(_: unknown, label: string) {
+  console.log(`[Monaco] getWorker called for label: ${label}`);
+  if (label === 'json') return new jsonWorker();
+  if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker();
+  if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker();
+  if (label === 'typescript' || label === 'javascript') return new tsWorker();
+  return new editorWorker();
+}
+
+// Lock MonacoEnvironment so CDN Monaco (if it somehow loads despite loader.config) cannot
+// overwrite our getWorker with CDN-based worker URLs.
+// A plain assignment `self.MonacoEnvironment = {...}` would be silently overwritten by
+// CDN Monaco 0.55.x which does `window.MonacoEnvironment = { getWorkerUrl: ... }`.
+// Object.defineProperty with a setter that ignores writes prevents that.
+const _monacoEnv = { getWorker: _getWorker };
+try {
+  Object.defineProperty(globalThis, 'MonacoEnvironment', {
+    get() { return _monacoEnv; },
+    // Silently block any overwrite (CDN Monaco, AMD loader, etc.)
+    set(v: unknown) {
+      console.warn('[Monaco] Blocked attempt to overwrite MonacoEnvironment:', v);
+    },
+    configurable: true, // Allow redefinition if monacoWorkers.ts is re-evaluated
+  });
+  console.log('[Monaco] MonacoEnvironment locked with bundled workers');
+} catch {
+  // defineProperty failed (already non-configurable from a previous definition) — fall back
+  console.warn('[Monaco] Could not lock MonacoEnvironment, falling back to direct assignment');
+  try {
+    (self as unknown as Record<string, unknown>).MonacoEnvironment = _monacoEnv;
+  } catch {
+    console.warn('[Monaco] Could not set MonacoEnvironment at all');
+  }
+}
 
 // Full mode configuration — completionItems enabled from the start.
 // Type definitions are loaded via createModel() which does NOT restart the TS worker,

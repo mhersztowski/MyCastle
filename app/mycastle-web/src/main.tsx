@@ -10,6 +10,11 @@ import { BrowserRouter } from 'react-router-dom';
 import { loader } from '@monaco-editor/react';
 import * as monacoEditor from 'monaco-editor';
 loader.config({ monaco: monacoEditor });
+// Force early initialization so isInitialized=true is set with OUR Monaco before any
+// component's useEffect can race and trigger CDN loading (loader.init() marks the loader
+// as initialized on first call; subsequent calls from Editor components just resolve the
+// already-resolved wrapperPromise instead of falling through to CDN script injection).
+void loader.init();
 import { App } from './App';
 import AppRoot from './AppRoot';
 import { MqttProvider } from './modules/mqttclient/MqttContext';

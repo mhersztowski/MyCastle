@@ -592,6 +592,30 @@ const MdEditor: React.FC<MdEditorProps> = ({
     setToolbarVisible(!isMobile);
   }, [isMobile]);
 
+  // Handle formatting commands emitted from the MonacoMultiEditor plugin toolbar
+  useEffect(() => {
+    if (!editor) return;
+    // Dynamic import to avoid circular deps — globalEventBus lives in web-client
+    let unsub: (() => void) | null = null;
+    import('@mhersztowski/web-client').then(({ globalEventBus }) => {
+      unsub = globalEventBus.on<{ type: string }>('mde:command', ({ type }) => {
+        switch (type) {
+          case 'bold': editor.chain().focus().toggleBold().run(); break;
+          case 'italic': editor.chain().focus().toggleItalic().run(); break;
+          case 'strike': editor.chain().focus().toggleStrike().run(); break;
+          case 'code': editor.chain().focus().toggleCode().run(); break;
+          case 'h1': editor.chain().focus().toggleHeading({ level: 1 }).run(); break;
+          case 'h2': editor.chain().focus().toggleHeading({ level: 2 }).run(); break;
+          case 'h3': editor.chain().focus().toggleHeading({ level: 3 }).run(); break;
+          case 'bulletList': editor.chain().focus().toggleBulletList().run(); break;
+          case 'orderedList': editor.chain().focus().toggleOrderedList().run(); break;
+          case 'blockquote': editor.chain().focus().toggleBlockquote().run(); break;
+        }
+      });
+    });
+    return () => { unsub?.(); };
+  }, [editor]);
+
   if (!editor) {
     return null;
   }

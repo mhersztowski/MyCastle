@@ -3,6 +3,15 @@ import type { Disposable, DocumentUri } from '../utils/types';
 import { createDocumentUri } from '../utils/types';
 import { DisposableStore } from '../utils/disposable';
 
+function safeRandomUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b, i) => ([4, 6, 8, 10].includes(i) ? '-' : '') + (i === 6 ? ((b & 0x0f) | 0x40).toString(16) : i === 8 ? ((b & 0x3f) | 0x80).toString(16) : b.toString(16).padStart(2, '0')))
+    .join('');
+}
+
 export interface ModelInfo {
   readonly uri: DocumentUri;
   readonly languageId: string;
@@ -27,7 +36,7 @@ export class ModelManager implements Disposable {
   ): monaco.editor.ITextModel {
     const modelUri = uri
       ? monaco.Uri.parse(uri)
-      : monaco.Uri.parse(`inmemory://model/${crypto.randomUUID()}`);
+      : monaco.Uri.parse(`inmemory://model/${safeRandomUUID()}`);
 
     const documentUri = createDocumentUri(modelUri.toString());
 

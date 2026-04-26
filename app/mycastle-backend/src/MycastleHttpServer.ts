@@ -236,6 +236,16 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // User public files — public, no auth required
+    // GET /api/users/{userName}/public/{filePath} → serves data/Minis/Users/{userName}/public/{filePath}
+    const userPublicMatch = apiPath.match(/^\/users\/([^/]+)\/public\/(.+)$/);
+    if (userPublicMatch && method === 'GET') {
+      const pubUserName = decodeURIComponent(userPublicMatch[1]);
+      const pubFilePath = decodeURIComponent(userPublicMatch[2]);
+      await this.handleUserPublicFile(res, pubUserName, pubFilePath);
+      return;
+    }
+
     // Smart display config GET — public so devices can fetch without a token
     const smartDisplayPublicMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/smart-display$/);
     if (smartDisplayPublicMatch && method === 'GET') {
@@ -4217,6 +4227,50 @@ Rules:
       this.sendJsonResponse(res, 200, { url, text, title, statusCode: response.status, truncated });
     } catch (err) {
       this.sendJsonResponse(res, 502, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async handleUserPublicFile(res: ServerResponse, userName: string, filePath: string): Promise<void> {
+    const MIME_TYPES: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+      '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.bmp': 'image/bmp',
+      '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.webm': 'audio/webm', '.ogg': 'audio/ogg',
+      '.mp4': 'video/mp4', '.pdf': 'application/pdf', '.zip': 'application/zip',
+      '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+      '.json': 'application/json', '.txt': 'text/plain', '.md': 'text/markdown',
+    };
+
+    // Validate userName
+    if (!MycastleHttpServer.NAME_PATTERN.test(userName)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid user name' }));
+      return;
+    }
+
+    // Security: normalize and block path traversal
+    const normalized = path.normalize(filePath).replace(/\\/g, '/');
+    if (normalized.startsWith('..') || normalized.includes('/../')) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Access denied' }));
+      return;
+    }
+
+    const fsPath = `${MINIS_ROOT}/Users/${userName}/public/${normalized}`;
+
+    try {
+      const fileData = await this.fileSystem.readBinaryFile(fsPath);
+      const ext = path.extname(normalized).toLowerCase();
+      const mimeType = MIME_TYPES[ext] || fileData.mimeType || 'application/octet-stream';
+      const buffer = Buffer.from(fileData.data, 'base64');
+
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Length', buffer.length);
+      res.writeHead(200);
+      res.end(buffer);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'File not found' }));
     }
   }
 }

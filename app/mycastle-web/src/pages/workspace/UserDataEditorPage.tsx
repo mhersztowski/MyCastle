@@ -2,15 +2,17 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { CompositeFS, RemoteFS } from '@mhersztowski/core';
 import type { FileSystemProvider, FileSystemCapabilities, FileStat, DirectoryEntry, WriteFileOptions, DeleteOptions, RenameOptions } from '@mhersztowski/core';
 import type { VfsEvent, FileChangeEvent } from '@mhersztowski/core';
-import { MonacoMultiEditor, remoteFsProvider, defaultProviderRegistry, DEFAULT_AGENT_CONFIG, WordCountPluginV2 } from '@mhersztowski/web-client';
+import { MonacoMultiEditor, remoteFsProvider, defaultProviderRegistry, DEFAULT_AGENT_CONFIG, WordCountPluginV2, GenerateUuidPlugin } from '@mhersztowski/web-client';
 import type { VfsProviderDef, VfsMountPreset, VfsProjectContext } from '@mhersztowski/web-client';
 import { ArduinoBoardConfigDialog } from '../../components/ArduinoBoardConfigDialog';
 import { MarkdownPreviewPlugin } from '../../plugins/MarkdownPreviewPlugin';
 import { MarkdownEditorPlugin } from '../../plugins/MarkdownEditorPlugin';
+import { FoldingPlugin } from '../../plugins/FoldingPlugin';
 import { createTypeScriptPlugin } from '../../plugins/TypeScriptIntelliSensePlugin';
 import { createPythonPlugin } from '../../plugins/PythonIntelliSensePlugin';
 import { createCppPlugin } from '../../plugins/CppIntelliSensePlugin';
 import { VisualMinisLibPlugin } from '../../plugins/VisualMinisLibPlugin';
+import { createMjdEditorPlugin } from '../../plugins/MjdEditorPlugin';
 import { createSnippetsPlugin } from '../../plugins/SnippetsPlugin';
 import { createMarkdownLspPlugin } from '../../plugins/MarkdownLspPlugin';
 import { createMarkdownLspServerPlugin } from '../../plugins/MarkdownLspServerPlugin';
@@ -268,6 +270,7 @@ export default function UserDataEditorPage() {
   const tsPlugin = useMemo(() => createTypeScriptPlugin(cfs), [cfs]);
   const pyPlugin = useMemo(() => createPythonPlugin(cfs), [cfs]);
   const cppPlugin = useMemo(() => createCppPlugin(cfs), [cfs]);
+  const mjdPlugin = useMemo(() => createMjdEditorPlugin(cfs), [cfs]);
   const snippetsPlugin = useMemo(() => createSnippetsPlugin(cfs), [cfs]);
   const mdLspPlugin = useMemo(() => createMarkdownLspPlugin(cfs), [cfs]);
   const mdLspServerPlugin = useMemo(
@@ -323,7 +326,7 @@ export default function UserDataEditorPage() {
         height="100%"
         providerRegistry={registry}
         defaultMountPresets={defaultMountPresets}
-        plugins={[WordCountPluginV2, MarkdownPreviewPlugin, MarkdownEditorPlugin, tsPlugin, pyPlugin, cppPlugin, VisualMinisLibPlugin, snippetsPlugin, mdLspPlugin, ...(mdLspServerPlugin ? [mdLspServerPlugin] : [])]}
+        plugins={[WordCountPluginV2, GenerateUuidPlugin, FoldingPlugin, MarkdownPreviewPlugin, MarkdownEditorPlugin, mjdPlugin, tsPlugin, pyPlugin, cppPlugin, VisualMinisLibPlugin, snippetsPlugin, mdLspPlugin, ...(mdLspServerPlugin ? [mdLspServerPlugin] : [])]}
         enableAgent={isAdmin}
         defaultAgentConfig={agentDefaultConfig}
         agentClaudeMd={claudeMd}

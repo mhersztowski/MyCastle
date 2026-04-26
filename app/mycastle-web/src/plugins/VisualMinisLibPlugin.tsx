@@ -965,6 +965,18 @@ function ExportManifestButton({ uri, entities }: { uri: string; entities: MinisE
 
 interface FlatEntry { packageName: string; className: string; paramDefs?: ParamDef[]; }
 
+const BUILTIN_MINISLIB_ENTRIES: FlatEntry[] = [
+  { packageName: '@mhersztowski/minislib', className: 'MObject' },
+  { packageName: '@mhersztowski/minislib', className: 'MTimer', paramDefs: BUILTIN_PARAM_DEFS['timer'] },
+  { packageName: '@mhersztowski/minislib', className: 'MProperty', paramDefs: BUILTIN_PARAM_DEFS['property'] },
+  { packageName: '@mhersztowski/minislib', className: 'MStateMachine' },
+  { packageName: '@mhersztowski/minislib', className: 'MEventBus' },
+  { packageName: '@mhersztowski/minislib', className: 'MCommandStack', paramDefs: BUILTIN_PARAM_DEFS['commandstack'] },
+  { packageName: '@mhersztowski/minislib', className: 'MListModel' },
+  { packageName: '@mhersztowski/minislib', className: 'MLogger', paramDefs: BUILTIN_PARAM_DEFS['logger'] },
+  { packageName: '@mhersztowski/minislib', className: 'Signal' },
+];
+
 function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }: { uri: string; externalClassDefs: ExternalClassEntry[]; importedClasses: ImportedClass[]; entities: MinisEntity[] }) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [filter, setFilter] = useState('');
@@ -975,7 +987,7 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
     else setFilter('');
   }, [anchorEl]);
 
-  // Build flat list: manifest entries first, then plain imports (deduplicated)
+  // Build flat list: builtins first, then manifest entries, then plain imports (deduplicated)
   const allEntries: FlatEntry[] = useMemo(() => {
     const manifestNames = new Set(externalClassDefs.map((e) => e.className));
     const fromManifest: FlatEntry[] = externalClassDefs.map((e) => ({
@@ -984,21 +996,13 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
     const fromImports: FlatEntry[] = importedClasses
       .filter(({ className }) => !manifestNames.has(className))
       .map(({ packageName, className }) => ({ packageName, className }));
-    return [...fromManifest, ...fromImports];
+    return [...BUILTIN_MINISLIB_ENTRIES, ...fromManifest, ...fromImports];
   }, [externalClassDefs, importedClasses]);
 
   const q = filter.toLowerCase();
   const visible = q
     ? allEntries.filter((e) => e.className.toLowerCase().includes(q) || e.packageName.toLowerCase().includes(q))
     : allEntries;
-
-  if (allEntries.length === 0) {
-    return (
-      <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', background: '#13131e' }}>
-        <ExportManifestButton uri={_uri} entities={entities} />
-      </Box>
-    );
-  }
 
   const handleInsert = (entry: FlatEntry) => {
     setAnchorEl(null);
@@ -1065,7 +1069,9 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
             onClick={() => handleInsert(entry)}
             sx={{ fontSize: 12, color: '#cdd6f4', py: 0.75, gap: 1.25, '&:hover': { background: '#313244' } }}
           >
-            <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>🧩</span>
+            <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>
+              {entry.packageName === '@mhersztowski/minislib' ? '⚡' : '🧩'}
+            </span>
             <Box>
               <Typography sx={{ fontSize: 12, color: '#81c784', fontWeight: 600, lineHeight: 1.4 }}>{entry.className}</Typography>
               <Typography sx={{ fontSize: 10, color: '#6c7086' }}>{entry.packageName}</Typography>
@@ -1222,6 +1228,20 @@ function VisualMinisLibPanelWrapped() {
   return <ReactFlowProvider><VisualMinisLibPanel /></ReactFlowProvider>;
 }
 
+/* ── Toolbar icons ───────────────────────────────────────────────────────────*/
+
+const ICON_GRAPH = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <circle cx="3" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/>
+  <circle cx="13" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.3"/>
+  <circle cx="13" cy="12.5" r="1.5" stroke="currentColor" stroke-width="1.3"/>
+  <path d="M5 7.2l6.5-3M5 8.8l6.5 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+</svg>`;
+
+const ICON_EXPORT_MANIFEST = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <path d="M8 2v8M5.5 7.5L8 10l2.5-2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M3 11v1.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+</svg>`;
+
 /* ── Plugin definition ───────────────────────────────────────────────────────*/
 
 const PLUGIN_ID = 'builtin.visual-minislib';
@@ -1230,9 +1250,9 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
   {
     id: PLUGIN_ID,
     name: 'Visual MinisLib',
-    version: '1.1.0',
+    version: '1.2.0',
     description: 'Signal-Slot visual graph + properties panel for @mhersztowski/minislib',
-    contributes: ['commandpalette'],
+    contributes: ['toolbar', 'commandpalette'],
   },
 
   (api) => {
@@ -1241,10 +1261,49 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
 
     _onInsertCode = (code) => insertAtEnd(code, currentUri);
 
+    // ── Toolbar ──────────────────────────────────────────────────────────────
+
+    type ToolbarDisposable = ReturnType<typeof api.ui.toolbar.register> | null;
+    let toolbarDisposables: ToolbarDisposable[] = [];
+
+    function clearToolbar() {
+      toolbarDisposables.forEach((d) => d?.dispose());
+      toolbarDisposables = [];
+    }
+
+    function updateToolbar() {
+      clearToolbar();
+      if (!_state.isMinisFile) return;
+      toolbarDisposables = [
+        api.ui.toolbar.register({ id: 'vml.open',   label: 'Open MinisLib Graph',      icon: ICON_GRAPH,            command: `${PLUGIN_ID}:open`,           group: 'right', order: 160 }),
+        api.ui.toolbar.register({ id: 'vml.export', label: 'Export Plugin Manifest',   icon: ICON_EXPORT_MANIFEST,  command: `${PLUGIN_ID}:exportManifest`, group: 'right', order: 161 }),
+      ];
+    }
+
+    // Re-evaluate toolbar whenever plugin state changes (isMinisFile may flip)
+    _stateListeners.add(updateToolbar);
+
+    // ── Commands ─────────────────────────────────────────────────────────────
+
     api.commands.register('open', () => {
       api.openEditorTab({ uri: 'virtual://visual-minislib', title: 'MinisLib Graph', component: VisualMinisLibPanelWrapped });
     });
-    api.ui.commandpalette.register({ command: `${PLUGIN_ID}:open`, title: 'Open Signal-Slot Graph', category: 'MinisLib' });
+
+    api.commands.register('exportManifest', async () => {
+      const { uri, entities } = _state;
+      if (!uri || uri.startsWith('virtual://')) return;
+      const classCount = entities.filter((e) => e.kind === 'class').length;
+      if (classCount === 0) { api.logger.warn('No class definitions to export'); return; }
+      try {
+        await saveManifestToVfs(uri, generateManifest(entities));
+        api.logger.info('minislib-plugin.json exported');
+      } catch (err) {
+        api.logger.error(`Export failed: ${err}`);
+      }
+    });
+
+    api.ui.commandpalette.register({ command: `${PLUGIN_ID}:open`,           title: 'Open Signal-Slot Graph',    category: 'MinisLib' });
+    api.ui.commandpalette.register({ command: `${PLUGIN_ID}:exportManifest`, title: 'Export Plugin Manifest',    category: 'MinisLib' });
 
     function updateState(uri: string, code: string) {
       currentUri = uri;
