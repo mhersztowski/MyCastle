@@ -113,8 +113,8 @@ function ImportDialog({ open, project, repoUrl, modules, userName, onClose, onIm
       const sketches = project.sketches ?? [];
       const readmePath = project.readmePath ?? null;
       const libraries = project.libraries?.length ? project.libraries : undefined;
-      if (sketches.length > 0 || readmePath || libraries) {
-        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath, libraries);
+      if (sketches.length > 0 || readmePath || libraries || project.projectScriptPath) {
+        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath, libraries, project.projectScriptPath ?? undefined);
       }
       onImported(created.id, platform);
     } catch (err) {

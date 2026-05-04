@@ -42,7 +42,7 @@ export interface ToolbarContribution {
    */
   icon: string;
   /** Alignment group in the toolbar */
-  group?: 'left' | 'center' | 'right';
+  group?: string;
   /** Sort order within the group (ascending) */
   order?: number;
   when?: ContextExpression;

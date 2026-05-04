@@ -14,6 +14,11 @@ import InputAdornment from '@mui/material/InputAdornment';
 import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip from '@mui/material/Tooltip';
 import Collapse from '@mui/material/Collapse';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import Button from '@mui/material/Button';
 // Inline SVG icons for toolbar (avoids @mui/icons-material peer dependency)
 const SvgSave = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10z"/></svg>;
 const SvgUndo = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8"/></svg>;
@@ -27,7 +32,8 @@ const SvgSuggest = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" heig
 const SvgCut = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.64 7.64c.23-.5.36-1.05.36-1.64 0-2.21-1.79-4-4-4S2 3.79 2 6s1.79 4 4 4c.59 0 1.14-.13 1.64-.36L10 12l-2.36 2.36C7.14 14.13 6.59 14 6 14c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4c0-.59-.13-1.14-.36-1.64L12 14l7 7h3v-1L9.64 7.64zM6 8c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm0 12c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm6-7.5c-.28 0-.5-.22-.5-.5s.22-.5.5-.5.5.22.5.5-.22.5-.5.5zM19 3l-6 6 2 2 7-7V3z"/></svg>;
 const SvgCopy = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>;
 const SvgPaste = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>;
-const SvgDelete = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>;
+// Backspace / delete-selection icon (≈ keyboard backspace key shape)
+const SvgDeleteSel = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z"/></svg>;
 // Selection-anchor icons for mobile FROM/TO touch selection
 const SvgSelFrom = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -65,7 +71,7 @@ import type { AgentConfig } from './agent/types';
 import { BottomPanel } from './BottomPanel';
 import type { BottomTab } from './BottomPanel';
 import * as monaco from 'monaco-editor';
-import type { IPlugin, ContextMenuContribution, CommandPaletteContribution } from './plugins/types';
+import type { IPlugin, ContextMenuContribution, CommandPaletteContribution, ToolbarContribution } from './plugins/types';
 import {
   globalPluginRegistry,
   globalCommandRegistry,
@@ -678,18 +684,41 @@ const EditorGroupPane = memo(function EditorGroupPane({
     }
 
     const pointerId = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    // Distinguish tap (minimal movement) from drag — threshold in CSS px.
+    // Fingers naturally jitter ±4px; 8px avoids accidental drag on a stationary tap.
+    const DRAG_THRESHOLD = 8;
+    let hasMoved = false;
 
     const onMove = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       ev.preventDefault();
-      applyHandleDrag(which, ev.clientX, ev.clientY);
+      if (!hasMoved) {
+        const dx = Math.abs(ev.clientX - startX);
+        const dy = Math.abs(ev.clientY - startY);
+        if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) hasMoved = true;
+      }
+      if (hasMoved) applyHandleDrag(which, ev.clientX, ev.clientY);
     };
 
     const onUp = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('pointerup', onUp, true);
-      editorRef.current?.getMonacoEditor().focus();
+      const me = editorRef.current?.getMonacoEditor();
+      if (me) {
+        if (!hasMoved && which === 'cursor') {
+          // Pure tap on the cursor handle — move cursor to the tapped position.
+          // Without this the tap is swallowed (e.preventDefault above) and the
+          // cursor stays put, making repositioning impossible by tapping near it.
+          const target = me.getTargetAtClientPoint(ev.clientX, ev.clientY);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const newPos = (target as any)?.position as monaco.Position | null | undefined;
+          if (newPos) me.setPosition(newPos);
+        }
+        me.focus();
+      }
     };
 
     document.addEventListener('pointermove', onMove, { capture: true, passive: false });
@@ -743,6 +772,12 @@ const EditorGroupPane = memo(function EditorGroupPane({
         verticalScrollbarSize: 10,
         horizontalScrollbarSize: 10,
       },
+      // On Android, enable accessibility mode so Monaco populates the textarea with
+      // surrounding text (PagedScreenReaderStrategy).  Gboard then sees real characters
+      // and its InputConnection.setSelection() actually changes selectionStart, which
+      // lets the Gboard spacebar cursor-control bridge detect deltas.
+      // 'auto' on all other platforms to avoid unnecessary overhead.
+      accessibilitySupport: 'auto',
     });
     editorRef.current = editor;
     onEditorReady(group.id, editor.getMonacoEditor());
@@ -870,7 +905,20 @@ const EditorGroupPane = memo(function EditorGroupPane({
     let lastTapX = 0;
     let lastTapY = 0;
 
+    // Gboard spacebar cursor-control: tracks the last time a Gboard delta was applied
+    // so we can suppress Monaco's own pointer handler during the gesture.
+    const gboardState = { lastActive: 0 };
+
     const onDocPointerDown = (e: PointerEvent) => {
+      // When Gboard's spacebar-swipe gesture is active the sliding finger may enter
+      // the editor viewport and fire a touch pointerdown.  Monaco would then move the
+      // cursor to the touch position, overwriting the Gboard delta we just applied.
+      // Suppress those touch events for 800 ms after the last Gboard delta.
+      if (e.pointerType === 'touch' && Date.now() - gboardState.lastActive < 800) {
+        e.stopPropagation();
+        return;
+      }
+
       // Use bounding-rect check instead of DOM containment — the second tap of a
       // Double-tap tracking happens BEFORE the inEditor check — the second tap can
       // land on our handle div (portaled to body, outside Monaco's rect). We still
@@ -918,7 +966,178 @@ const EditorGroupPane = memo(function EditorGroupPane({
 
     document.addEventListener('pointerdown', onDocPointerDown, true);
 
+    // ── Gboard spacebar cursor-control (Android only) ─────────────────────────
+    // Gboard's hold-spacebar+swipe gesture calls InputConnection.setSelection()
+    // on the hidden textarea. Chrome maps this to a 'selectionchange' DOM event.
+    //
+    // Problem: Monaco uses an EMPTY textarea on Android (TextAreaState.EMPTY,
+    // value=""). Gboard establishes InputConnection at focus time and reads the
+    // textarea value then. With empty value, Gboard thinks there is no content to
+    // navigate, so selectionStart never changes.
+    //
+    // Solution — Shadow Cursor:
+    //   1. Write a 21-char SHADOW string into Chrome's C++ textarea storage via
+    //      the native HTMLTextAreaElement value setter (bypasses any JS overrides).
+    //   2. Override the JS .value getter on this instance to return '' — Monaco
+    //      reads JS getter and still sees empty string, so it leaves textarea alone.
+    //   3. Override .setSelectionRange on this instance — Monaco's calls are
+    //      blocked; Gboard's C++-level setSelection bypasses JS entirely.
+    //   4. Blur/focus cycle — forces Chrome to re-establish InputConnection by
+    //      reading the C++ storage, which now has SHADOW. Gboard now knows the
+    //      field has 21 chars and will change selectionStart on gesture.
+    //   5. selectionchange listener reads the native selectionStart, computes
+    //      delta from SHADOW_MID (10), and moves Monaco cursor accordingly.
+    let gboardCleanup: (() => void) | null = null;
+    if (/Android/i.test(navigator.userAgent)) {
+      const monacoTextarea = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
+      if (monacoTextarea) {
+        // Debug overlay — remove once confirmed working
+        let dbgEl: HTMLDivElement | null = null;
+        const dbg = (msg: string) => {
+          if (!dbgEl) {
+            dbgEl = document.createElement('div');
+            dbgEl.style.cssText = 'position:fixed;bottom:72px;right:6px;background:rgba(0,0,0,.82);color:#7fff00;font:10px/1.4 monospace;padding:4px 8px;z-index:99999;pointer-events:none;max-width:240px;border-radius:4px;white-space:pre-wrap;';
+            document.body.appendChild(dbgEl);
+          }
+          const ls = (dbgEl.textContent ?? '').split('\n').filter(Boolean);
+          ls.unshift(new Date().toISOString().slice(14, 22) + ' ' + msg);
+          if (ls.length > 10) ls.length = 10;
+          dbgEl.textContent = ls.join('\n');
+        };
+
+        // SHADOW: 21 spaces — invisible, neutral, gives Gboard room to move left/right
+        const SHADOW = '                     '; // 21 spaces
+        const SHADOW_MID = 10; // cursor sits in the middle
+
+        // Grab the native property descriptor from the prototype chain
+        // so we can write directly into Chrome's C++ value storage.
+        const nativeValDesc = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype, 'value'
+        )!;
+        const nativeSsr = HTMLTextAreaElement.prototype.setSelectionRange;
+
+        // Write SHADOW into C++ storage (Chrome reads this to init InputConnection)
+        nativeValDesc.set!.call(monacoTextarea, SHADOW);
+
+        // Override JS .value getter on this instance so Monaco always sees ''
+        Object.defineProperty(monacoTextarea, 'value', {
+          get() { return ''; },
+          set(v: string) {
+            // Monaco sets value=''; ignore — keep SHADOW in C++ storage
+            // But if Monaco sets a non-empty value (shouldn't happen), allow it
+            if (v !== '') nativeValDesc.set!.call(monacoTextarea, v);
+          },
+          configurable: true,
+        });
+
+        // Override .setSelectionRange on this instance — blocks Monaco's calls;
+        // Gboard's InputConnection.setSelection() is C++ and bypasses JS.
+        const origSsr = monacoTextarea.setSelectionRange.bind(monacoTextarea);
+        void origSsr; // suppress lint
+        Object.defineProperty(monacoTextarea, 'setSelectionRange', {
+          value(..._args: unknown[]) {
+            // Silently block — keep shadow cursor at SHADOW_MID
+          },
+          configurable: true,
+          writable: true,
+        });
+
+        // Reset shadow cursor to middle via native setter (bypasses our override)
+        const resetShadow = () => {
+          nativeValDesc.set!.call(monacoTextarea, SHADOW);
+          nativeSsr.call(monacoTextarea, SHADOW_MID, SHADOW_MID);
+        };
+
+        // Blur/focus cycle: forces Chrome to re-init InputConnection from C++ storage.
+        // Create a tiny off-screen textarea to take focus temporarily.
+        const tmp = document.createElement('textarea');
+        tmp.style.cssText = 'position:fixed;opacity:0;top:-9999px;left:-9999px;width:1px;height:1px;';
+        document.body.appendChild(tmp);
+
+        const doBlurFocusCycle = () => {
+          resetShadow();
+          tmp.focus(); // moves focus away → Chrome will re-init InputConnection on next focus
+          requestAnimationFrame(() => {
+            monacoTextarea.focus(); // Chrome re-establishes InputConnection, reads C++ storage (SHADOW)
+            requestAnimationFrame(() => {
+              resetShadow(); // ensure cursor is at SHADOW_MID after IC init
+              dbg(`shadow ready mid=${SHADOW_MID}`);
+            });
+          });
+        };
+
+        // Run initial blur/focus cycle after Monaco has finished its own setup
+        const initTimer = setTimeout(doBlurFocusCycle, 300);
+
+        // When Monaco refocuses textarea (e.g. after tap), redo the cycle.
+        // Guard prevents recursive triggering when doBlurFocusCycle itself
+        // calls monacoTextarea.focus().
+        let cycleInProgress = false;
+        const onFocus = () => {
+          if (cycleInProgress) return;
+          dbg('focus — resetting shadow');
+          cycleInProgress = true;
+          setTimeout(() => {
+            doBlurFocusCycle();
+            setTimeout(() => { cycleInProgress = false; }, 400);
+          }, 50);
+        };
+        monacoTextarea.addEventListener('focus', onFocus);
+
+        // Track whether we are mid-gesture to suppress Monaco pointer handler
+        let applyingDelta = false;
+
+        const onGboardSel = () => {
+          // Read native selectionStart directly from C++ storage
+          const nativeSS = Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype, 'selectionStart'
+          )!.get!.call(monacoTextarea) as number;
+
+          const delta = nativeSS - SHADOW_MID;
+          const active = document.activeElement === monacoTextarea;
+          dbg(`SC nSS=${nativeSS} d=${delta} act=${active} apply=${applyingDelta}`);
+
+          if (!active) return;
+          if (applyingDelta) return;
+          if (delta === 0) return;
+
+          // Reset shadow immediately so next Gboard step is relative to mid
+          resetShadow();
+
+          const model = me.getModel();
+          const pos = me.getPosition();
+          if (!model || !pos) return;
+
+          const newOffset = Math.max(0, Math.min(model.getValueLength(), model.getOffsetAt(pos) + delta));
+
+          applyingDelta = true;
+          gboardState.lastActive = Date.now();
+          me.setPosition(model.getPositionAt(newOffset));
+          me.revealPositionInCenter(model.getPositionAt(newOffset));
+          dbg(`MOVE d=${delta}`);
+
+          // Release flag after Monaco echo SC fires
+          requestAnimationFrame(() => { applyingDelta = false; });
+        };
+
+        document.addEventListener('selectionchange', onGboardSel);
+
+        gboardCleanup = () => {
+          clearTimeout(initTimer);
+          document.removeEventListener('selectionchange', onGboardSel);
+          monacoTextarea.removeEventListener('focus', onFocus);
+          // Restore .value and .setSelectionRange on this instance
+          delete (monacoTextarea as unknown as Record<string, unknown>).value;
+          delete (monacoTextarea as unknown as Record<string, unknown>).setSelectionRange;
+          tmp.remove();
+          dbgEl?.remove();
+        };
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     return () => {
+      gboardCleanup?.();
       document.removeEventListener('pointerdown', onDocPointerDown, true);
       if (pendingWordRangeTtl) clearTimeout(pendingWordRangeTtl);
       pendingWordRangeRef.current = null;
@@ -1351,6 +1570,137 @@ const EditorGroupPane = memo(function EditorGroupPane({
   );
 });
 
+/* ── CursorControlStrip (mobile cursor joystick) ── */
+
+interface CursorControlStripProps {
+  onMoveCursor: (dChars: number, dLines: number) => void;
+  onSingleChar: (dir: -1 | 1) => void;
+}
+
+function CursorControlStrip({ onMoveCursor, onSingleChar }: CursorControlStripProps) {
+  const [active, setActive] = useState(false);
+  // Keep latest callbacks in refs so drag closures never go stale.
+  const onMoveCursorRef = useRef(onMoveCursor);
+  onMoveCursorRef.current = onMoveCursor;
+  const onSingleCharRef = useRef(onSingleChar);
+  onSingleCharRef.current = onSingleChar;
+  // Accumulate sub-step movement so small drags sum up correctly.
+  const accumRef = useRef({ x: 0, y: 0 });
+
+  const CHAR_PX = 9;  // horizontal pixels per one character step
+  const LINE_PX = 22; // vertical pixels per one line step
+
+  const startDrag = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    setActive(true);
+    accumRef.current = { x: 0, y: 0 };
+
+    const pointerId = e.pointerId;
+    let lastX = e.clientX;
+    let lastY = e.clientY;
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      accumRef.current.x += ev.clientX - lastX;
+      accumRef.current.y += ev.clientY - lastY;
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+
+      const dChars = Math.trunc(accumRef.current.x / CHAR_PX);
+      const dLines = Math.trunc(accumRef.current.y / LINE_PX);
+      if (dChars !== 0 || dLines !== 0) {
+        accumRef.current.x -= dChars * CHAR_PX;
+        accumRef.current.y -= dLines * LINE_PX;
+        onMoveCursorRef.current(dChars, dLines);
+      }
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+      setActive(false);
+    };
+
+    document.addEventListener('pointermove', onMove, { capture: true, passive: false });
+    document.addEventListener('pointerup', onUp, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const btnStyle: React.CSSProperties = {
+    all: 'unset' as const,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 44,
+    height: 36,
+    flexShrink: 0,
+    cursor: 'pointer',
+    touchAction: 'manipulation',
+    color: '#bbb',
+    fontSize: 18,
+    userSelect: 'none',
+  };
+
+  return (
+    <Box sx={{
+      height: 36,
+      bgcolor: active ? '#2a2d2e' : '#252526',
+      borderTop: '1px solid #3c3c3c',
+      display: 'flex',
+      alignItems: 'stretch',
+      flexShrink: 0,
+      userSelect: 'none',
+      transition: 'background-color 0.1s',
+    }}>
+      {/* Single-step left */}
+      <button style={btnStyle} onPointerDown={e => { e.stopPropagation(); onSingleCharRef.current(-1); }}>
+        ‹
+      </button>
+
+      {/* Drag zone */}
+      <Box
+        onPointerDown={startDrag}
+        sx={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
+          touchAction: 'none',
+          cursor: active ? 'grabbing' : 'grab',
+          borderLeft: '1px solid #3c3c3c',
+          borderRight: '1px solid #3c3c3c',
+        }}
+      >
+        <Box sx={{
+          width: 28,
+          height: 4,
+          borderRadius: 2,
+          bgcolor: active ? '#4fc3f7' : '#555',
+          transition: 'background-color 0.1s',
+        }} />
+        <Box component="span" sx={{ fontSize: 11, color: active ? '#4fc3f7' : '#666', letterSpacing: 0.5, userSelect: 'none', transition: 'color 0.1s' }}>
+          {active ? 'moving' : 'cursor'}
+        </Box>
+        <Box sx={{
+          width: 28,
+          height: 4,
+          borderRadius: 2,
+          bgcolor: active ? '#4fc3f7' : '#555',
+          transition: 'background-color 0.1s',
+        }} />
+      </Box>
+
+      {/* Single-step right */}
+      <button style={btnStyle} onPointerDown={e => { e.stopPropagation(); onSingleCharRef.current(1); }}>
+        ›
+      </button>
+    </Box>
+  );
+}
+
 /* ── Main Component ── */
 
 export function MonacoMultiEditor({
@@ -1432,6 +1782,8 @@ export function MonacoMultiEditor({
   // Menu anchors
   const [fileMenuAnchor, setFileMenuAnchor] = useState<null | HTMLElement>(null);
   const [editMenuAnchor, setEditMenuAnchor] = useState<null | HTMLElement>(null);
+  const [codeMenuAnchor, setCodeMenuAnchor] = useState<null | HTMLElement>(null);
+  const [pluginsMenuAnchor, setPluginsMenuAnchor] = useState<null | HTMLElement>(null);
 
   const modelManagerRef = useRef<ModelManager | null>(null);
   const splitterContainerRef = useRef<HTMLDivElement | null>(null);
@@ -2097,6 +2449,53 @@ export function MonacoMultiEditor({
     setSidebarPanel(prev => prev === panel ? null : panel);
   }, []);
 
+  // Markdown formatting in Monaco text editor
+  const applyMarkdownFormat = useCallback((formatType: string) => {
+    const editor = groupEditorsRef.current.get(activeGroupIdRef.current);
+    if (!editor) return;
+    const model = editor.getModel();
+    const sel = editor.getSelection();
+    if (!model || !sel) return;
+
+    const selectedText = model.getValueInRange(sel);
+
+    // Inline wrapping: **bold**, *italic*, ~~strike~~
+    const inlineMarkers: Record<string, string> = {
+      bold: '**', italic: '*', strike: '~~',
+    };
+    if (formatType in inlineMarkers) {
+      const marker = inlineMarkers[formatType];
+      if (selectedText) {
+        const newText = `${marker}${selectedText}${marker}`;
+        editor.executeEdits('markdown-toolbar', [{ range: sel, text: newText, forceMoveMarkers: true }]);
+      } else {
+        // Insert markers and position cursor between them
+        editor.executeEdits('markdown-toolbar', [{ range: sel, text: `${marker}${marker}`, forceMoveMarkers: true }]);
+        editor.setPosition({ lineNumber: sel.startLineNumber, column: sel.startColumn + marker.length });
+      }
+      editor.focus();
+      return;
+    }
+
+    // Block prefixes: headings, lists, blockquote
+    const blockPrefixes: Record<string, string> = {
+      h1: '# ', h2: '## ', h3: '### ',
+      bulletList: '- ', orderedList: '1. ', blockquote: '> ',
+    };
+    if (formatType in blockPrefixes) {
+      const prefix = blockPrefixes[formatType];
+      const edits: monaco.editor.IIdentifiedSingleEditOperation[] = [];
+      for (let ln = sel.startLineNumber; ln <= sel.endLineNumber; ln++) {
+        const line = model.getLineContent(ln);
+        const lineRange: monaco.IRange = { startLineNumber: ln, startColumn: 1, endLineNumber: ln, endColumn: line.length + 1 };
+        // Toggle: remove prefix if already present, otherwise add it
+        edits.push({ range: lineRange, text: line.startsWith(prefix) ? line.slice(prefix.length) : prefix + line });
+      }
+      editor.executeEdits('markdown-toolbar', edits);
+      editor.focus();
+    }
+  }, []);
+
   // Get the active group's Monaco editor instance and call trigger()
   const triggerActiveEditor = useCallback((actionId: string) => {
     const editor = groupEditorsRef.current.get(activeGroupIdRef.current);
@@ -2151,7 +2550,48 @@ export function MonacoMultiEditor({
     return groupEditorsRef.current.get(activeGroupIdRef.current) ?? null;
   }, []);
 
-  const triggerCopy = useCallback(async () => {
+  // Paste dialog state — used on mobile where navigator.clipboard.readText() is unreliable
+  const [pasteDialogOpen, setPasteDialogOpen] = useState(false);
+  const [pasteDialogText, setPasteDialogText] = useState('');
+  const pendingPasteEditorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  // Tracks text last copied via the toolbar Copy/Cut button so the paste dialog can pre-fill it.
+  // This works even when the OS clipboard API is blocked — no permission needed.
+  const lastToolbarCopiedRef = useRef<string>('');
+
+  const insertPasteText = useCallback((editor: monaco.editor.IStandaloneCodeEditor, text: string) => {
+    const sel = editor.getSelection();
+    if (sel) {
+      editor.executeEdits('toolbar-paste', [{ range: sel, text, forceMoveMarkers: true }]);
+      editor.focus();
+    }
+  }, []);
+
+  /** Copy `text` to clipboard: execCommand (synchronous, no permission needed) + clipboard API. */
+  const copyToClipboard = useCallback((text: string) => {
+    lastToolbarCopiedRef.current = text;
+    // execCommand must run synchronously within the user-gesture context (before any await)
+    // so that iOS/Android honour it without requiring clipboard-write permission.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    Object.assign(ta.style, { position: 'fixed', top: '0', left: '0', opacity: '0', width: '1px', height: '1px', pointerEvents: 'none' });
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); } catch {}
+    document.body.removeChild(ta);
+    // Also write via modern clipboard API (overrides execCommand on supporting browsers)
+    navigator.clipboard.writeText(text).catch(() => {});
+  }, []);
+
+  // Clear the toolbar-copy cache when the user switches away from this page (e.g. to copy
+  // from another app). This prevents stale editor text from being pasted on return.
+  useEffect(() => {
+    const onHide = () => { if (document.hidden) lastToolbarCopiedRef.current = ''; };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, []);
+
+  const triggerCopy = useCallback(() => {
     const editor = getActiveEditorRef();
     if (!editor) return;
     const sel = editor.getSelection();
@@ -2159,10 +2599,10 @@ export function MonacoMultiEditor({
     const text = sel.isEmpty()
       ? (editor.getModel()?.getLineContent(sel.startLineNumber) ?? '') + '\n'
       : (editor.getModel()?.getValueInRange(sel) ?? '');
-    if (text) await navigator.clipboard.writeText(text).catch(() => {});
-  }, [getActiveEditorRef]);
+    if (text) copyToClipboard(text);
+  }, [getActiveEditorRef, copyToClipboard]);
 
-  const triggerCut = useCallback(async () => {
+  const triggerCut = useCallback(() => {
     const editor = getActiveEditorRef();
     if (!editor) return;
     const sel = editor.getSelection();
@@ -2172,7 +2612,7 @@ export function MonacoMultiEditor({
     const text = isEmpty
       ? (editor.getModel()?.getLineContent(lineNumber) ?? '') + '\n'
       : (editor.getModel()?.getValueInRange(sel) ?? '');
-    if (text) await navigator.clipboard.writeText(text).catch(() => {});
+    if (text) copyToClipboard(text);
     if (isEmpty) {
       // Delete whole line (keep cursor on same line number)
       triggerActiveEditor('editor.action.deleteLines');
@@ -2180,26 +2620,65 @@ export function MonacoMultiEditor({
       editor.executeEdits('toolbar-cut', [{ range: sel, text: '', forceMoveMarkers: true }]);
     }
     editor.focus();
-  }, [getActiveEditorRef, triggerActiveEditor]);
+  }, [getActiveEditorRef, triggerActiveEditor, copyToClipboard]);
 
   const triggerPaste = useCallback(async () => {
     const editor = getActiveEditorRef();
     if (!editor) return;
+
+    // Try clipboard API first — works on desktop and Chrome Android over HTTPS/localhost.
     try {
       const text = await navigator.clipboard.readText();
-      const sel = editor.getSelection();
-      if (sel) {
-        editor.executeEdits('toolbar-paste', [{ range: sel, text, forceMoveMarkers: true }]);
-        editor.focus();
+      if (text) {
+        insertPasteText(editor, text);
+        return;
       }
-    } catch {
-      // Fallback: focus then let Monaco handle it
-      editor.focus();
-      editor.trigger('toolbar', 'editor.action.clipboardPasteAction', null);
+    } catch {}
+
+    // Clipboard API unavailable (HTTP on Android, iOS Safari, permission denied).
+    // If the user copied from the toolbar moments ago, paste it directly — no dialog.
+    // The ref is cleared on visibilitychange so it won't contain stale editor text
+    // when the user copied from a different app in the meantime.
+    if (lastToolbarCopiedRef.current) {
+      insertPasteText(editor, lastToolbarCopiedRef.current);
+      return;
     }
-  }, [getActiveEditorRef]);
+
+    // Nothing in the toolbar cache → user wants to paste from an external source.
+    // Show a textarea so they can long-press → Paste from the Android context menu;
+    // onPaste on that textarea inserts the text and closes the dialog automatically.
+    pendingPasteEditorRef.current = editor;
+    setPasteDialogText('');
+    setPasteDialogOpen(true);
+  }, [getActiveEditorRef, insertPasteText]);
+
+  const confirmPasteDialog = useCallback(() => {
+    const editor = pendingPasteEditorRef.current;
+    if (editor && pasteDialogText) {
+      insertPasteText(editor, pasteDialogText);
+    }
+    setPasteDialogOpen(false);
+    setPasteDialogText('');
+    pendingPasteEditorRef.current = null;
+  }, [pasteDialogText, insertPasteText]);
 
   const triggerDeleteLine = useCallback(() => triggerActiveEditor('editor.action.deleteLines'), [triggerActiveEditor]);
+
+  // Delete selection (or single char left if nothing selected) — equivalent to Backspace key
+  const triggerDelete = useCallback(() => {
+    const editor = groupEditorsRef.current.get(activeGroupIdRef.current);
+    if (!editor) return;
+    const sel = editor.getSelection();
+    if (!sel) return;
+    if (!sel.isEmpty()) {
+      editor.executeEdits('toolbar-delete', [{ range: sel, text: '', forceMoveMarkers: true }]);
+    } else {
+      // Nothing selected: delete one character to the left (backspace behaviour)
+      editor.trigger('toolbar', 'deleteLeft', null);
+    }
+    editor.focus();
+  }, []);
+
   const triggerFind = useCallback(() => triggerActiveEditor('actions.find'), [triggerActiveEditor]);
   const triggerReplace = useCallback(() => triggerActiveEditor('editor.action.startFindReplaceAction'), [triggerActiveEditor]);
   const triggerFormatDocument = useCallback(() => triggerActiveEditor('editor.action.formatDocument'), [triggerActiveEditor]);
@@ -2222,6 +2701,28 @@ export function MonacoMultiEditor({
         return label.includes(q);
       })
     : pluginCommandPaletteItems;
+
+  // ── Mobile cursor control (stable callbacks, always use current refs) ────
+  const handleCursorControlMove = useCallback((dChars: number, dLines: number) => {
+    // Try active group first; fall back to any editor that has a model
+    let me = groupEditorsRef.current.get(activeGroupIdRef.current) ?? null;
+    if (!me) {
+      for (const e of groupEditorsRef.current.values()) { me = e; break; }
+    }
+    if (!me) return;
+    const model = me.getModel();
+    const pos   = me.getPosition();
+    if (!model || !pos) return;
+    const lineNumber = Math.max(1, Math.min(model.getLineCount(), pos.lineNumber + dLines));
+    const lineLen    = model.getLineContent(lineNumber).length + 1;
+    const column     = Math.max(1, Math.min(lineLen, pos.column + dChars));
+    me.setPosition({ lineNumber, column });
+    me.revealPositionInCenterIfOutsideViewport({ lineNumber, column });
+  }, []); // refs-only — never stale
+
+  const handleCursorControlSingle = useCallback((dir: -1 | 1) => {
+    handleCursorControlMove(dir, 0);
+  }, [handleCursorControlMove]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height, overflow: 'hidden', bgcolor: '#1e1e1e', position: 'relative' }}>
@@ -2408,6 +2909,9 @@ export function MonacoMultiEditor({
           <MenuItem sx={menuItemSx} onClick={() => { triggerPaste(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
             <ListItemText>Paste</ListItemText><Kbd>{`${mod}V`}</Kbd>
           </MenuItem>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerDelete(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
+            <ListItemText>Delete</ListItemText><Kbd>Backspace</Kbd>
+          </MenuItem>
           <MenuItem sx={menuItemSx} onClick={() => { triggerDeleteLine(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
             <ListItemText>Delete Line</ListItemText><Kbd>{`${mod}Shift+K`}</Kbd>
           </MenuItem>
@@ -2425,11 +2929,96 @@ export function MonacoMultiEditor({
           <MenuItem sx={menuItemSx} onClick={() => { togglePanel('search'); setShowReplace(true); setEditMenuAnchor(null); }}>
             <ListItemText>Replace in Files</ListItemText><Kbd>{`${mod}Shift+H`}</Kbd>
           </MenuItem>
-          <Divider sx={{ borderColor: '#454545', my: 0.5 }} />
-          <MenuItem sx={menuItemSx} onClick={() => { triggerFormatDocument(); setEditMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
-            <ListItemText>Format Document</ListItemText><Kbd>{`Shift+Alt+F`}</Kbd>
+        </Menu>
+
+        {/* Code menu */}
+        <Box
+          onClick={(e) => setCodeMenuAnchor(e.currentTarget)}
+          sx={{
+            px: 1, py: 0.25, borderRadius: 0.5, cursor: 'pointer', color: '#ccc', fontSize: 13,
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
+          }}
+        >
+          Code
+        </Box>
+        <Menu
+          anchorEl={codeMenuAnchor}
+          open={Boolean(codeMenuAnchor)}
+          onClose={() => setCodeMenuAnchor(null)}
+          slotProps={{
+            paper: { sx: { bgcolor: '#252526', color: '#ccc', border: '1px solid #454545', minWidth: 240 } },
+          }}
+        >
+          <MenuItem sx={menuItemSx} onClick={() => { triggerFormatDocument(); setCodeMenuAnchor(null); }} disabled={!activeGroup?.activeTab || readOnly}>
+            <ListItemText>Format Document</ListItemText><Kbd>Shift+Alt+F</Kbd>
+          </MenuItem>
+          <MenuItem sx={menuItemSx} onClick={() => { triggerSuggestions(); setCodeMenuAnchor(null); }} disabled={!activeGroup?.activeTab}>
+            <ListItemText>Trigger Suggestions</ListItemText><Kbd>{`${mod}Space`}</Kbd>
           </MenuItem>
         </Menu>
+
+        {/* Plugins menu — shown only when plugins contribute toolbar items */}
+        {pluginToolbarItems.length > 0 && (() => {
+          // Group items by their `group` field to insert dividers between groups
+          const groups: ToolbarContribution[][] = [];
+          let lastGroup: string | undefined = undefined;
+          const sorted = [...pluginToolbarItems].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+          for (const item of sorted) {
+            if (item.group !== lastGroup) {
+              groups.push([]);
+              lastGroup = item.group;
+            }
+            groups[groups.length - 1].push(item);
+          }
+          return (
+            <>
+              <Box
+                onClick={(e) => setPluginsMenuAnchor(e.currentTarget)}
+                sx={{
+                  px: 1, py: 0.25, borderRadius: 0.5, cursor: 'pointer', color: '#ccc', fontSize: 13,
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
+                }}
+              >
+                Plugins
+              </Box>
+              <Menu
+                anchorEl={pluginsMenuAnchor}
+                open={Boolean(pluginsMenuAnchor)}
+                onClose={() => setPluginsMenuAnchor(null)}
+                slotProps={{
+                  paper: { sx: { bgcolor: '#252526', color: '#ccc', border: '1px solid #454545', minWidth: 240 } },
+                }}
+              >
+                {groups.map((grp, gi) => (
+                  <Box key={gi}>
+                    {gi > 0 && <Divider sx={{ borderColor: '#454545', my: 0.5 }} />}
+                    {grp.map(item => (
+                      <MenuItem
+                        key={item.id}
+                        sx={menuItemSx}
+                        onClick={() => {
+                          globalCommandRegistry.execute(item.command).catch(console.error);
+                          setPluginsMenuAnchor(null);
+                        }}
+                      >
+                        {item.icon.startsWith('<svg') ? (
+                          <Box
+                            component="span"
+                            sx={{ width: 16, height: 16, mr: 1.5, flexShrink: 0, display: 'flex', alignItems: 'center', color: '#ccc' }}
+                            dangerouslySetInnerHTML={{ __html: item.icon }}
+                          />
+                        ) : (
+                          <Typography component="span" sx={{ fontSize: 13, mr: 1.5, flexShrink: 0 }}>{item.icon}</Typography>
+                        )}
+                        <ListItemText>{item.label}</ListItemText>
+                      </MenuItem>
+                    ))}
+                  </Box>
+                ))}
+              </Menu>
+            </>
+          );
+        })()}
 
         {/* View menu */}
         <Box
@@ -2564,17 +3153,16 @@ export function MonacoMultiEditor({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Delete line */}
-        <Tooltip title="Delete Line (Ctrl+Shift+K)">
+        {/* Delete selection / backspace */}
+        <Tooltip title="Delete selection (Backspace)">
           <span>
             <IconButton size="small" disabled={!activeGroup?.activeTab || readOnly}
-              onClick={triggerDeleteLine}
+              onClick={triggerDelete}
               sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
-              <SvgDelete />
+              <SvgDeleteSel />
             </IconButton>
           </span>
         </Tooltip>
-
         <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
 
         {/* FROM / TO — touch-friendly selection anchors (mobile).
@@ -2661,11 +3249,11 @@ export function MonacoMultiEditor({
           </span>
         </Tooltip>
 
-        {/* Plugin toolbar items */}
-        {pluginToolbarItems.length > 0 && (
+        {/* Plugin toolbar items — excluding 'markdown' group (shown in dedicated markdown toolbar) */}
+        {pluginToolbarItems.filter(i => i.group !== 'markdown').length > 0 && (
           <>
             <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
-            {pluginToolbarItems.map((item) => (
+            {pluginToolbarItems.filter(i => i.group !== 'markdown').map((item) => (
               <Tooltip key={item.id} title={item.label}>
                 <Box
                   onClick={() => globalCommandRegistry.execute(item.command).catch(console.error)}
@@ -2706,6 +3294,62 @@ export function MonacoMultiEditor({
         )}
       </Box>
 
+      {/* ── Markdown toolbar — shown when active Monaco tab is a .md file ── */}
+      {(() => {
+        const mdItems = [...pluginToolbarItems.filter(i => i.group === 'markdown')].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        const isMarkdownActive = /\.(md|mdx|markdown)$/i.test(activeGroup?.activeTab ?? '');
+        if (mdItems.length === 0 || !isMarkdownActive) return null;
+
+        // Map item id suffix to applyMarkdownFormat type
+        const FORMAT_MAP: Record<string, string> = {
+          'mde.bold': 'bold', 'mde.italic': 'italic', 'mde.strike': 'strike',
+          'mde.h1': 'h1', 'mde.h2': 'h2', 'mde.h3': 'h3',
+          'mde.bullet': 'bulletList', 'mde.ordered': 'orderedList', 'mde.quote': 'blockquote',
+        };
+
+        return (
+          <Box sx={{
+            display: 'flex', alignItems: 'center', flexShrink: 0,
+            px: 0.75, height: 32,
+            bgcolor: '#1e2a1e', borderBottom: '1px solid #2d3f2d',
+            overflowX: 'auto', gap: 0.25,
+          }}>
+            <Typography sx={{ fontSize: 10, color: '#7ca87c', mr: 0.75, flexShrink: 0, letterSpacing: 0.5, textTransform: 'uppercase', fontWeight: 600 }}>
+              Markdown
+            </Typography>
+            {mdItems.map((item, idx) => {
+              const prevOrder = idx > 0 ? (mdItems[idx - 1].order ?? 0) : 0;
+              const curOrder = item.order ?? 0;
+              const showDivider = idx > 0 && Math.floor(curOrder / 10) !== Math.floor(prevOrder / 10);
+              const formatType = FORMAT_MAP[item.id];
+              return (
+                <>
+                  {showDivider && <Box key={`div-${idx}`} sx={{ width: '1px', height: 14, bgcolor: '#2d3f2d', mx: 0.25, flexShrink: 0 }} />}
+                  <Tooltip key={item.id} title={item.label}>
+                    <Box
+                      onClick={() => formatType ? applyMarkdownFormat(formatType) : globalCommandRegistry.execute(item.command).catch(console.error)}
+                      sx={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: 28, height: 26, borderRadius: 0.5, cursor: 'pointer',
+                        color: '#a8cca8', userSelect: 'none', flexShrink: 0,
+                        '&:hover': { bgcolor: 'rgba(120,200,120,0.12)', color: '#c8e8c8' },
+                      }}
+                    >
+                      {item.icon.startsWith('<svg') ? (
+                        <Box component="span" sx={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          dangerouslySetInnerHTML={{ __html: item.icon }} />
+                      ) : (
+                        <Typography sx={{ fontSize: 13 }}>{item.icon}</Typography>
+                      )}
+                    </Box>
+                  </Tooltip>
+                </>
+              );
+            })}
+          </Box>
+        );
+      })()}
+
       {/* ── Main area wrapper (editors + terminal) ── */}
       <Box ref={mainAreaRef} sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
 
@@ -2715,7 +3359,7 @@ export function MonacoMultiEditor({
         {/* Activity Bar */}
         <Box sx={{
           width: ACTIVITY_BAR_W,
-          bgcolor: '#333333',
+          bgcolor: isMobile ? '#3d3d3d' : '#333333',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -2740,7 +3384,7 @@ export function MonacoMultiEditor({
                 justifyContent: 'center',
                 cursor: 'pointer',
                 borderLeft: sidebarPanel === panel ? '2px solid #fff' : '2px solid transparent',
-                opacity: sidebarPanel === panel ? 1 : 0.6,
+                opacity: sidebarPanel === panel ? 1 : (isMobile ? 0.85 : 0.6),
                 '&:hover': { opacity: 1 },
               }}
             >
@@ -2762,10 +3406,10 @@ export function MonacoMultiEditor({
                 justifyContent: 'center',
                 cursor: 'pointer',
                 borderLeft: sidebarPanel === panel.id ? '2px solid #fff' : '2px solid transparent',
-                opacity: sidebarPanel === panel.id ? 1 : 0.6,
+                opacity: sidebarPanel === panel.id ? 1 : (isMobile ? 0.85 : 0.6),
                 '&:hover': { opacity: 1 },
                 userSelect: 'none',
-                color: sidebarPanel === panel.id ? '#fff' : '#858585',
+                color: sidebarPanel === panel.id ? '#fff' : (isMobile ? '#aaaaaa' : '#858585'),
                 '& svg': { width: 24, height: 24, stroke: 'currentColor' },
               }}
             >
@@ -2807,10 +3451,12 @@ export function MonacoMultiEditor({
           overflow: 'hidden',
           display: sidebarOpen ? 'flex' : 'none',
           flexDirection: 'column',
-          bgcolor: '#252526',
+          // On mobile the sidebar is a floating overlay — non-explorer panels get a lighter
+          // background so Search/Extensions/Plugins text is readable against the overlay.
+          bgcolor: (isMobile && sidebarPanel !== 'explorer') ? '#464646' : '#252526',
         }}>
             {/* Sidebar header */}
-            <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid #3c3c3c', display: 'flex', alignItems: 'center' }}>
+            <Box sx={{ px: 1.5, py: 0.75, borderBottom: `1px solid ${(isMobile && sidebarPanel !== 'explorer') ? '#5a5a5a' : '#3c3c3c'}`, display: 'flex', alignItems: 'center' }}>
               <Typography sx={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8, color: '#bbb', flex: 1 }}>
                 {sidebarPanel === 'explorer' && 'Explorer'}
                 {sidebarPanel === 'search' && 'Search'}
@@ -2950,7 +3596,7 @@ export function MonacoMultiEditor({
                               </InputAdornment>
                             ),
                             sx: {
-                              fontSize: 13, bgcolor: '#3c3c3c', color: '#ccc',
+                              fontSize: 13, bgcolor: isMobile ? '#4a4a4a' : '#3c3c3c', color: '#ccc',
                               '& fieldset': { border: 'none' }, borderRadius: 0.5,
                             },
                           },
@@ -2972,7 +3618,7 @@ export function MonacoMultiEditor({
                           slotProps={{
                             input: {
                               sx: {
-                                fontSize: 13, bgcolor: '#3c3c3c', color: '#ccc',
+                                fontSize: 13, bgcolor: isMobile ? '#4a4a4a' : '#3c3c3c', color: '#ccc',
                                 '& fieldset': { border: 'none' }, borderRadius: 0.5,
                               },
                             },
@@ -2994,7 +3640,7 @@ export function MonacoMultiEditor({
                         slotProps={{
                           input: {
                             sx: {
-                              fontSize: 12, bgcolor: '#3c3c3c', color: '#ccc',
+                              fontSize: 12, bgcolor: isMobile ? '#4a4a4a' : '#3c3c3c', color: '#ccc',
                               '& fieldset': { border: 'none' }, borderRadius: 0.5,
                             },
                           },
@@ -3024,7 +3670,7 @@ export function MonacoMultiEditor({
                           onClick={handleReplaceAll}
                           sx={{
                             px: 1, py: 0.375, borderRadius: 0.5, cursor: 'pointer', fontSize: 12,
-                            bgcolor: '#3c3c3c', color: '#ccc', userSelect: 'none',
+                            bgcolor: isMobile ? '#4a4a4a' : '#3c3c3c', color: '#ccc', userSelect: 'none',
                             border: '1px solid #555',
                             '&:hover': { bgcolor: '#4c4c4c' },
                             opacity: searchResults.length === 0 ? 0.4 : 1,
@@ -3088,7 +3734,7 @@ export function MonacoMultiEditor({
                           )}
                         </Box>
                         <Typography
-                          sx={{ fontSize: 10, color: '#606060', px: 1, pb: 0.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: result.collapsed ? 'none' : 'block' }}
+                          sx={{ fontSize: 10, color: isMobile ? '#888888' : '#606060', px: 1, pb: 0.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: result.collapsed ? 'none' : 'block' }}
                           title={result.path}
                         >
                           {result.path}
@@ -3105,7 +3751,7 @@ export function MonacoMultiEditor({
                                 '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
                               }}
                             >
-                              <Typography sx={{ fontSize: 10, color: '#606060', flexShrink: 0, minWidth: 28, textAlign: 'right' }}>
+                              <Typography sx={{ fontSize: 10, color: isMobile ? '#888888' : '#606060', flexShrink: 0, minWidth: 28, textAlign: 'right' }}>
                                 {match.line}
                               </Typography>
                               <Typography
@@ -3150,7 +3796,7 @@ export function MonacoMultiEditor({
                           <Typography sx={{ fontSize: 13, color: '#ccc', flexGrow: 1 }}>
                             {info.manifest.name}
                           </Typography>
-                          <Typography sx={{ fontSize: 10, color: '#606060' }}>
+                          <Typography sx={{ fontSize: 10, color: isMobile ? '#888888' : '#606060' }}>
                             v{info.manifest.version}
                           </Typography>
                           <Box
@@ -3176,7 +3822,7 @@ export function MonacoMultiEditor({
                           </Box>
                         </Box>
                         {info.manifest.description && (
-                          <Typography sx={{ fontSize: 11, color: '#606060', mt: 0.25 }}>
+                          <Typography sx={{ fontSize: 11, color: isMobile ? '#888888' : '#606060', mt: 0.25 }}>
                             {info.manifest.description}
                           </Typography>
                         )}
@@ -3391,6 +4037,14 @@ export function MonacoMultiEditor({
 
       </Box>
 
+      {/* ── Mobile cursor control strip ── */}
+      {isMobile && (
+        <CursorControlStrip
+          onMoveCursor={handleCursorControlMove}
+          onSingleChar={handleCursorControlSingle}
+        />
+      )}
+
       {/* ── Status Bar ── */}
       <Box sx={{
         height: STATUS_BAR_H,
@@ -3489,6 +4143,71 @@ export function MonacoMultiEditor({
         onClose={() => setGoToFileOpen(false)}
         onSelect={handleGoToFileSelect}
       />
+
+      {/* ── Paste Dialog ── */}
+      {/* When clipboard API is blocked (HTTP on Android, iOS Safari), we show a bottom-sheet
+          with a focused textarea. The onPaste handler captures clipboardData immediately when
+          the user long-presses → Paste from the Android context menu — no "Insert" tap needed.
+          The "Insert" button serves as fallback for the pre-filled toolbar copy→paste case. */}
+      <Dialog
+        open={pasteDialogOpen}
+        onClose={() => { setPasteDialogOpen(false); setPasteDialogText(''); }}
+        maxWidth="xs"
+        fullWidth
+        sx={{
+          '& .MuiDialog-paper': {
+            position: 'fixed',
+            bottom: 0,
+            m: 0,
+            borderRadius: '12px 12px 0 0',
+            width: '100%',
+            maxWidth: '100%',
+          },
+        }}
+      >
+        <DialogTitle sx={{ pb: 0.5, fontSize: 15 }}>Paste</DialogTitle>
+        <DialogContent sx={{ pb: 1 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Long-press the field and tap <strong>Paste</strong> — text inserts automatically.
+          </Typography>
+          <textarea
+            autoFocus
+            value={pasteDialogText}
+            onChange={e => setPasteDialogText(e.target.value)}
+            onPaste={e => {
+              const text = e.clipboardData.getData('text');
+              if (!text) return;
+              e.preventDefault();
+              const editor = pendingPasteEditorRef.current;
+              if (editor) insertPasteText(editor, text);
+              setPasteDialogOpen(false);
+              setPasteDialogText('');
+              pendingPasteEditorRef.current = null;
+            }}
+            rows={pasteDialogText ? 4 : 2}
+            style={{
+              width: '100%',
+              resize: 'none',
+              fontFamily: 'monospace',
+              fontSize: 13,
+              backgroundColor: '#1e1e1e',
+              color: '#d4d4d4',
+              border: '1px solid #007acc',
+              borderRadius: 4,
+              padding: 8,
+              boxSizing: 'border-box',
+              outline: 'none',
+            }}
+            placeholder="Long-press here to paste…"
+          />
+        </DialogContent>
+        {pasteDialogText && (
+          <DialogActions>
+            <Button onClick={() => { setPasteDialogOpen(false); setPasteDialogText(''); }}>Cancel</Button>
+            <Button variant="contained" onClick={confirmPasteDialog}>Insert</Button>
+          </DialogActions>
+        )}
+      </Dialog>
     </Box>
   );
 }

@@ -91,8 +91,8 @@ function UserProjectsPage() {
       });
       const sketches = selectedGithubProject.sketches ?? [];
       const readmePath = selectedGithubProject.readmePath ?? null;
-      if (sketches.length > 0 || readmePath) {
-        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath);
+      if (sketches.length > 0 || readmePath || selectedGithubProject.projectScriptPath) {
+        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath, undefined, selectedGithubProject.projectScriptPath ?? undefined);
       }
       setAddDialogOpen(false);
       setSelectedGithubProject(null);

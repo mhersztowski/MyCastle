@@ -203,16 +203,16 @@ export const MarkdownEditorPlugin = defineEditorPlugin(
     function buildToolbar() {
       clearToolbar();
       disposables = [
-        api.ui.toolbar.register({ id: 'mde.open',    label: 'Open Markdown Editor', icon: ICON_MD,      command: `${api.pluginId}:open`,        group: 'right', order: 110 }),
-        api.ui.toolbar.register({ id: 'mde.bold',    label: 'Bold',                 icon: ICON_BOLD,    command: `${api.pluginId}:bold`,        group: 'right', order: 111 }),
-        api.ui.toolbar.register({ id: 'mde.italic',  label: 'Italic',               icon: ICON_ITALIC,  command: `${api.pluginId}:italic`,      group: 'right', order: 112 }),
-        api.ui.toolbar.register({ id: 'mde.strike',  label: 'Strikethrough',        icon: ICON_STRIKE,  command: `${api.pluginId}:strike`,      group: 'right', order: 113 }),
-        api.ui.toolbar.register({ id: 'mde.h1',      label: 'Heading 1',            icon: ICON_H1,      command: `${api.pluginId}:h1`,          group: 'right', order: 114 }),
-        api.ui.toolbar.register({ id: 'mde.h2',      label: 'Heading 2',            icon: ICON_H2,      command: `${api.pluginId}:h2`,          group: 'right', order: 115 }),
-        api.ui.toolbar.register({ id: 'mde.h3',      label: 'Heading 3',            icon: ICON_H3,      command: `${api.pluginId}:h3`,          group: 'right', order: 116 }),
-        api.ui.toolbar.register({ id: 'mde.bullet',  label: 'Bullet List',          icon: ICON_BULLET,  command: `${api.pluginId}:bulletList`,  group: 'right', order: 117 }),
-        api.ui.toolbar.register({ id: 'mde.ordered', label: 'Ordered List',         icon: ICON_ORDERED, command: `${api.pluginId}:orderedList`, group: 'right', order: 118 }),
-        api.ui.toolbar.register({ id: 'mde.quote',   label: 'Blockquote',           icon: ICON_QUOTE,   command: `${api.pluginId}:blockquote`,  group: 'right', order: 119 }),
+        api.ui.toolbar.register({ id: 'mde.open',    label: 'Open Markdown Editor', icon: ICON_MD,      command: `${api.pluginId}:open`,        group: 'right',    order: 110 }),
+        api.ui.toolbar.register({ id: 'mde.bold',    label: 'Bold',                 icon: ICON_BOLD,    command: `${api.pluginId}:bold`,        group: 'markdown', order: 1 }),
+        api.ui.toolbar.register({ id: 'mde.italic',  label: 'Italic',               icon: ICON_ITALIC,  command: `${api.pluginId}:italic`,      group: 'markdown', order: 2 }),
+        api.ui.toolbar.register({ id: 'mde.strike',  label: 'Strikethrough',        icon: ICON_STRIKE,  command: `${api.pluginId}:strike`,      group: 'markdown', order: 3 }),
+        api.ui.toolbar.register({ id: 'mde.h1',      label: 'Heading 1',            icon: ICON_H1,      command: `${api.pluginId}:h1`,          group: 'markdown', order: 10 }),
+        api.ui.toolbar.register({ id: 'mde.h2',      label: 'Heading 2',            icon: ICON_H2,      command: `${api.pluginId}:h2`,          group: 'markdown', order: 11 }),
+        api.ui.toolbar.register({ id: 'mde.h3',      label: 'Heading 3',            icon: ICON_H3,      command: `${api.pluginId}:h3`,          group: 'markdown', order: 12 }),
+        api.ui.toolbar.register({ id: 'mde.bullet',  label: 'Bullet List',          icon: ICON_BULLET,  command: `${api.pluginId}:bulletList`,  group: 'markdown', order: 20 }),
+        api.ui.toolbar.register({ id: 'mde.ordered', label: 'Ordered List',         icon: ICON_ORDERED, command: `${api.pluginId}:orderedList`, group: 'markdown', order: 21 }),
+        api.ui.toolbar.register({ id: 'mde.quote',   label: 'Blockquote',           icon: ICON_QUOTE,   command: `${api.pluginId}:blockquote`,  group: 'markdown', order: 22 }),
       ];
     }
 

@@ -25,6 +25,7 @@
     "dev:scene3d": "pnpm --filter demo-scene-3d run dev",
     "dev:cad": "pnpm --filter cad-app run dev",
     "dev:cad-backend": "pnpm --filter cad-backend run dev",
+    "dev:trail-map": "pnpm --filter trail-map run dev",
 "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

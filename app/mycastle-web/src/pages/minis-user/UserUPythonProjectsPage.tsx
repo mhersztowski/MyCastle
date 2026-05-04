@@ -86,8 +86,8 @@ function UserUPythonProjectsPage() {
       const sketches = selectedGithubProject.sketches ?? [];
       const readmePath = selectedGithubProject.readmePath ?? null;
       const libraries = selectedGithubProject.libraries?.length ? selectedGithubProject.libraries : undefined;
-      if (sketches.length > 0 || readmePath || libraries) {
-        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath, libraries);
+      if (sketches.length > 0 || readmePath || libraries || selectedGithubProject.projectScriptPath) {
+        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath, libraries, selectedGithubProject.projectScriptPath ?? undefined);
       }
       setAddDialogOpen(false);
       setSelectedGithubProject(null);
