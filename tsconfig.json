@@ -12,6 +12,7 @@
     { "path": "./app/demo-scene-3d" },
     { "path": "./packages/core-cad" },
     { "path": "./packages/minislib" },
+    { "path": "./packages/minisc" },
     { "path": "./app/cad-app" }
   ]
 }
