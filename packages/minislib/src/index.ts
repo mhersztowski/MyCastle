@@ -31,5 +31,13 @@ export { MListModel } from './MListModel';
 export { MLogger } from './MLogger';
 export type { LogLevel, LogRecord } from './MLogger';
 
+// ── Network nodes ─────────────────────────────────────────────────────────────
+export { MqttConn } from './MqttConn';
+export type { MqttConnOptions } from './MqttConn';
+export { MqttSub } from './MqttSub';
+export { MqttPub } from './MqttPub';
+export { HttpReq } from './HttpReq';
+export type { HttpMethod, HttpResponse } from './HttpReq';
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 export { debounce, throttle, promiseToSignals, connectOnce } from './utils';

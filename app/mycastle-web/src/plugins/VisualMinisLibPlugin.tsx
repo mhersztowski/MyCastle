@@ -298,7 +298,10 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
     }
     const builtinKind = MINISLIB_BASE_KIND[className];
     if (builtinKind) {
-      entities.push({ id: nextId(), varName, label: `${varName}:${className}`, kind: builtinKind, signals: [...BUILTIN_SIGNALS[builtinKind]], slots: [], constructorArgs, paramDefs: BUILTIN_PARAM_DEFS[builtinKind] ?? [] });
+      // MTimer constructor only accepts (parent?) — interval is set via .start().
+      // Interval paramDefs apply only to MTimer.create(ms, parent) handled below.
+      const paramDefs = className === 'MTimer' ? [] : (BUILTIN_PARAM_DEFS[builtinKind] ?? []);
+      entities.push({ id: nextId(), varName, label: `${varName}:${className}`, kind: builtinKind, signals: [...BUILTIN_SIGNALS[builtinKind]], slots: [], constructorArgs, paramDefs });
       continue;
     }
     if (knownClasses.has(className)) {

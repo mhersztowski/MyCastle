@@ -86,6 +86,8 @@ export interface VfsExplorerProps {
   onMountsChanged?: () => void;
   /** When provided, assigned to tree.refresh() so external callers can trigger a tree reload. */
   refreshRef?: React.MutableRefObject<(() => void) | null>;
+  /** When provided, assigned to a function that aborts the currently running project action. */
+  stopActionRef?: React.MutableRefObject<(() => void) | null>;
   /**
    * When provided, assigned to a function that refreshes the tree and expands/loads the given paths.
    * Useful after agent writes — call with the list of written file paths to make them visible.

@@ -387,6 +387,7 @@ export function VfsExplorer({
   onDialogAction,
   onOutputLine,
   onActionRunningChange,
+  stopActionRef,
   hideOutput = false,
   readOnly: readOnlyProp,
   showBreadcrumbs = true,
@@ -640,10 +641,8 @@ export function VfsExplorer({
         appendLine(`Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     } finally {
-      if (!actionAbortRef.current?.signal.aborted) {
-        setActionRunning(false);
-        onActionRunningChange?.(false);
-      }
+      setActionRunning(false);
+      onActionRunningChange?.(false);
     }
   }, [activeProject, activeProjectInstance, onExecuteAction, onDialogAction, onActionRunningChange, selectedItems, appendLine, buildSaveProjectJson]);
 
@@ -652,6 +651,11 @@ export function VfsExplorer({
     setActionRunning(false);
     appendLine('— Aborted —');
   }, [appendLine]);
+
+  useEffect(() => {
+    if (stopActionRef) stopActionRef.current = handleStopAction;
+    return () => { if (stopActionRef) stopActionRef.current = null; };
+  }, [stopActionRef, handleStopAction]);
 
   /* ── Drag & drop (internal reorder) ── */
 

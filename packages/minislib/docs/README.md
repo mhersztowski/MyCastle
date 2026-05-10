@@ -14,6 +14,10 @@ Qt-inspired object system for TypeScript/Node.js — signals/slots, observable p
 - [MCommandStack](#mcommandstack) — undo/redo
 - [MListModel](#mlistmodel) — observable list
 - [MLogger](#mlogger) — categorized logger
+- [MqttConn](#mqttconn) — MQTT connection node
+- [MqttSub](#mqttsub) — MQTT subscription node
+- [MqttPub](#mqttpub) — MQTT publisher node
+- [HttpReq](#httpreq) — HTTP request node
 - [Utilities](#utilities) — debounce, throttle, promiseToSignals, connectOnce
 
 ---
@@ -576,6 +580,208 @@ interface LogRecord {
 | `MLogger.root()` | Singleton aggregator receiving all records |
 | `MLogger.silenceConsole()` | Disconnect default console sink |
 | `MLogger.resetRoot()` | Destroy and recreate root (tests) |
+
+---
+
+## MqttConn
+
+MQTT connection node. Wraps the `mqtt` package client, exposing `open`/`close` and signals for connection lifecycle events. `MqttSub` and `MqttPub` nodes that are descendants of this node auto-discover it via `ancestors()`.
+
+```ts
+import { MqttConn, MqttSub, MqttPub } from '@mhersztowski/minislib';
+
+const conn = new MqttConn('ws://localhost:1894/mqtt', {
+  username: 'user',
+  password: 'pass',
+});
+
+conn.connected.connect(() => console.log('online'));
+conn.disconnected.connect((reason) => console.log('offline:', reason));
+conn.error.connect((err) => console.error('mqtt error:', err));
+
+conn.open();
+
+// Publish raw message directly (prefer MqttPub for structured use)
+conn.publish('home/lights', JSON.stringify({ on: true }));
+
+conn.close();
+```
+
+`new MqttConn(url, options?, parent?)` — options: `clientId` (auto-generated), `username`, `password`, `keepalive` (default 60 s).
+
+### MqttConn signals
+
+```ts
+conn.connected.connect(() => { /* session established */ });
+conn.disconnected.connect((reason: string) => { /* connection closed */ });
+conn.error.connect((err: Error) => { /* socket / protocol error */ });
+conn.messageArrived.connect((topic: string, payload: string) => { /* any subscribed message */ });
+```
+
+### MqttConn API
+
+| Member | Description |
+|--------|-------------|
+| `open()` | Connect to the broker (reconnects if already open) |
+| `close()` | Disconnect immediately |
+| `subscribe(topic, qos?)` | Subscribe to a topic; qos 0/1/2, default 0 |
+| `unsubscribe(topic)` | Unsubscribe from a topic |
+| `publish(topic, payload, opts?)` | Publish a raw string payload |
+| `isConnected` | `true` while the broker session is active |
+| `url` | Get/set the broker WebSocket URL |
+
+Connection is closed automatically when the node is destroyed.
+
+---
+
+## MqttSub
+
+MQTT subscription node. Attach as a child (direct or indirect) of an `MqttConn` node. Automatically subscribes when the connection is ready and re-subscribes after reconnects.
+
+Supports MQTT wildcards: `+` (single level) and `#` (multi-level suffix).
+
+```ts
+import { MqttConn, MqttSub } from '@mhersztowski/minislib';
+
+const conn = new MqttConn('ws://localhost:1894/mqtt');
+conn.open();
+
+// Direct child — auto-discovers conn via ancestors()
+const tempSub = new MqttSub('sensors/+/temperature', conn);
+tempSub.messageReceived.connect((topic, payload) => {
+  console.log(topic, JSON.parse(payload));
+});
+
+// Nested — still auto-discovers conn
+const group = new Node(conn, 'group');
+const alertSub = new MqttSub('alerts/#', group);
+alertSub.messageReceived.connect((topic, payload) => handleAlert(topic, payload));
+```
+
+`new MqttSub(topic, parent?, qos?)` — qos defaults to `0`.
+
+### MqttSub signals
+
+```ts
+sub.messageReceived.connect((topic: string, payload: string) => { /* matching message */ });
+```
+
+### MqttSub API
+
+| Member | Description |
+|--------|-------------|
+| `topic` | Get/set the subscription pattern; changing it re-subscribes automatically |
+| `qos` | Get/set QoS level (0/1/2) |
+
+The node unsubscribes from the broker when destroyed.
+
+---
+
+## MqttPub
+
+MQTT publisher node. Attach as a child (direct or indirect) of an `MqttConn` node. Call `publish(payload)` to send — objects are JSON-stringified automatically. Emits `error` (does not throw) when the connection is unavailable.
+
+```ts
+import { MqttConn, MqttPub } from '@mhersztowski/minislib';
+
+const conn = new MqttConn('ws://localhost:1894/mqtt');
+conn.open();
+
+const lightPub = new MqttPub('home/lights/living', conn, { retain: true });
+lightPub.published.connect((topic) => console.log('sent to', topic));
+lightPub.error.connect((err) => console.error('publish failed:', err));
+
+lightPub.publish({ brightness: 80, color: '#ff8000' }); // object → JSON
+lightPub.publish('{"on":false}');                        // raw string
+```
+
+`new MqttPub(topic, parent?, opts?)` — opts: `qos` (default 0), `retain` (default false).
+
+### MqttPub signals
+
+```ts
+pub.published.connect((topic: string) => { /* sent successfully */ });
+pub.error.connect((err: Error) => { /* no connection or publish failure */ });
+```
+
+### MqttPub API
+
+| Member | Description |
+|--------|-------------|
+| `publish(payload)` | Send string or object (auto JSON-serialized) |
+| `topic` | Get/set the target topic |
+| `qos` | Get/set QoS level (0/1/2) |
+| `retain` | Get/set retain flag |
+
+---
+
+## HttpReq
+
+HTTP request node (fetch-based, browser + Node.js 18+). Configure `url`, `method`, `headers`, then call `send()` or one of the shorthand methods. Results arrive both as the returned `Promise` and via signals, integrating naturally with the signal/slot system.
+
+Requests are cancelled automatically when the node is destroyed.
+
+```ts
+import { HttpReq } from '@mhersztowski/minislib';
+
+const req = new HttpReq('https://api.example.com/data', parent);
+req.headers = { Authorization: 'Bearer mytoken' };
+
+// Signal-based (fire-and-forget)
+req.success.connect((res) => console.log(res.json()));
+req.error.connect((err) => console.error(err));
+req.get();
+
+// Promise-based (async/await)
+const res = await req.post({ key: 'value' });
+console.log(res.status, res.json());
+
+// finished fires on both success and error
+req.finished.connect((res, err) => {
+  if (err) handleError(err);
+  else handleResponse(res!);
+});
+```
+
+`new HttpReq(url, parent?)` — `timeoutMs` defaults to 30 000 ms.
+
+### HttpResponse shape
+
+```ts
+interface HttpResponse {
+  status:     number;
+  statusText: string;
+  headers:    Record<string, string>;
+  body:       string;       // raw response text
+  ok:         boolean;      // true when status 200–299
+  json<T>():  T;            // parse body as JSON (throws if invalid)
+}
+```
+
+### HttpReq signals
+
+```ts
+req.success.connect((res: HttpResponse) => { /* 200–299 */ });
+req.error.connect((err: Error) => { /* network error or non-2xx */ });
+req.finished.connect((res: HttpResponse | null, err: Error | null) => { /* always last */ });
+```
+
+### HttpReq API
+
+| Member | Description |
+|--------|-------------|
+| `url` | Target URL (mutable) |
+| `method` | HTTP method — `'GET'`/`'POST'`/`'PUT'`/`'PATCH'`/`'DELETE'` (mutable) |
+| `headers` | Request headers — `Record<string, string>` (mutable) |
+| `timeoutMs` | Abort timeout in ms (default `30_000`) |
+| `send(body?)` | Send request; objects are JSON-serialized |
+| `get()` | Sets method to `GET` and sends |
+| `post(body?)` | Sets method to `POST` and sends |
+| `put(body?)` | Sets method to `PUT` and sends |
+| `patch(body?)` | Sets method to `PATCH` and sends |
+| `delete()` | Sets method to `DELETE` and sends |
+
+`Content-Type` is set automatically: `application/json` for objects, `text/plain` for strings (unless already present in `headers`).
 
 ---
 

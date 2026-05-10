@@ -1139,17 +1139,27 @@ const EditorGroupPane = memo(function EditorGroupPane({
     // ── Scroll-vs-tap: suppress keyboard when user pans/scrolls the editor ──
     // Monaco calls textarea.focus() on every pointerup regardless of movement.
     // We track touch displacement and re-blur if the gesture was a scroll.
+    //
+    // Touches that START on Monaco floating widgets (suggest list, hover cards,
+    // context menus) are exempt — the user may be scrolling the suggestion list
+    // and we must not interfere with focus there.
     let scrollGestureActive = false;
+    let scrollOnWidget = false;
     let scrollOriginX = 0;
     let scrollOriginY = 0;
     const onContainerPDown = (e: PointerEvent) => {
       if (e.pointerType !== 'touch') return;
       scrollGestureActive = false;
+      const target = e.target as Element | null;
+      scrollOnWidget = !!target?.closest(
+        '.suggest-widget, .editor-widget, .monaco-menu, .context-view',
+      );
+      if (scrollOnWidget) return;
       scrollOriginX = e.clientX;
       scrollOriginY = e.clientY;
     };
     const onContainerPMove = (e: PointerEvent) => {
-      if (e.pointerType !== 'touch' || scrollGestureActive) return;
+      if (e.pointerType !== 'touch' || scrollGestureActive || scrollOnWidget) return;
       if (Math.abs(e.clientX - scrollOriginX) > 8 || Math.abs(e.clientY - scrollOriginY) > 8) {
         scrollGestureActive = true;
       }
@@ -1157,11 +1167,15 @@ const EditorGroupPane = memo(function EditorGroupPane({
     const onContainerPUp = (e: PointerEvent) => {
       if (e.pointerType !== 'touch' || !scrollGestureActive) return;
       scrollGestureActive = false;
-      // Monaco may focus the textarea asynchronously — blur on next frame.
-      requestAnimationFrame(() => {
-        const ta = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
-        if (document.activeElement === ta) ta?.blur();
-      });
+      const ta = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
+      if (!ta) return;
+      // readOnly = true prevents the soft keyboard from appearing even when Monaco
+      // calls textarea.focus() asynchronously — no timing race to win.
+      // blur() hides the keyboard immediately; readOnly keeps it hidden during
+      // Monaco's async refocus. Restored after scroll recovery completes.
+      ta.readOnly = true;
+      ta.blur();
+      setTimeout(() => { ta.readOnly = false; }, 300);
     };
     container.addEventListener('pointerdown', onContainerPDown, true);
     container.addEventListener('pointermove', onContainerPMove, { capture: true, passive: true });
@@ -1812,6 +1826,7 @@ export function MonacoMultiEditor({
   );
   const [activeBottomTabId, setActiveBottomTabId] = useState(enableTerminal ? 'terminal-1' : '');
   const currentOutputTabIdRef = useRef<string | null>(null);
+  const stopActionRef = useRef<(() => void) | null>(null);
   const mainAreaRef = useRef<HTMLDivElement | null>(null);
 
   // Menu anchors
@@ -2439,6 +2454,11 @@ export function MonacoMultiEditor({
   }, [bottomTabs]);
 
   const handleCloseTab = useCallback((id: string) => {
+    // If closing a running output tab, abort the underlying process first
+    const closedTab = bottomTabs.find(t => t.id === id);
+    if (closedTab?.type === 'output' && closedTab.running) {
+      stopActionRef.current?.();
+    }
     setBottomTabs(prev => {
       const next = prev.filter(t => t.id !== id);
       if (next.length === 0) { setBottomPanelOpen(false); return prev; }
@@ -3556,6 +3576,7 @@ export function MonacoMultiEditor({
                   onDialogAction={onDialogAction}
                   onOutputLine={handleOutputLine}
                   onActionRunningChange={handleActionRunningChange}
+                  stopActionRef={stopActionRef}
                   hideOutput
                 />
               </Box>
