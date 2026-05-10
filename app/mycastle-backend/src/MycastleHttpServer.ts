@@ -2708,7 +2708,7 @@ const { password, ...safeBody } = body;
       return;
     }
 
-    const args = script === 'install' ? ['install'] : ['run', script];
+    const args = script === 'install' ? ['install', '--include=dev'] : ['run', script];
 
     // Write a temporary .npmrc so npm resolves @mhersztowski/* from GitHub Packages.
     // Environment variable names cannot contain '@' or ':', so npm_config_* injection
