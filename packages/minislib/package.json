@@ -1,6 +1,10 @@
 {
   "name": "@mhersztowski/minislib",
   "version": "0.2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mhersztowski/MyCastle.git"
+  },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
