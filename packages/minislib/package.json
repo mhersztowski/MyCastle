@@ -6,7 +6,8 @@
     "url": "https://github.com/mhersztowski/MyCastle.git"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
   },
   "description": "Qt-inspired object system for TypeScript/Node.js — signals/slots, object tree, state machine, observable properties, undo/redo, event bus",
   "type": "module",
