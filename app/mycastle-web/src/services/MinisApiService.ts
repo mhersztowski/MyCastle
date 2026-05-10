@@ -20,6 +20,12 @@ import type {
   AppSessionDayStat,
   AppSessionPlatform,
   ProjectTimeStat,
+  RetentionPolicy,
+  DeviceTwin,
+  NotificationChannel,
+  IotAutomation,
+  IotAutomationTrigger,
+  IotAutomationAction,
 } from '@mhersztowski/core';
 
 export type { AppSession, AppSessionDayStat, AppSessionPlatform, ProjectTimeStat };
@@ -635,6 +641,75 @@ class MinisApiService {
 
   async cleanupOrphanProjects(userName: string): Promise<{ removed: string[]; kept: string[] }> {
     return this.request<{ removed: string[]; kept: string[] }>('POST', `/users/${encodeURIComponent(userName)}/cleanup-projects`);
+  }
+
+  // --- Retention Policy ---
+
+  async getRetentionPolicies(userName: string, deviceName?: string): Promise<{ policies: RetentionPolicy[]; effective: RetentionPolicy | null }> {
+    const path = deviceName
+      ? `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/iot-retention`
+      : `/users/${encodeURIComponent(userName)}/iot-retention`;
+    return this.request('GET', path);
+  }
+
+  async setRetentionPolicy(userName: string, retentionDays: number, deviceName?: string): Promise<void> {
+    const path = deviceName
+      ? `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/iot-retention`
+      : `/users/${encodeURIComponent(userName)}/iot-retention`;
+    await this.request('PUT', path, { retentionDays });
+  }
+
+  async deleteRetentionPolicy(userName: string, deviceName?: string): Promise<void> {
+    const path = deviceName
+      ? `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/iot-retention`
+      : `/users/${encodeURIComponent(userName)}/iot-retention`;
+    await this.request('DELETE', path);
+  }
+
+  // --- Device Twin ---
+
+  async getDeviceTwin(userName: string, deviceName: string): Promise<DeviceTwin & { delta: Record<string, { desired: unknown; reported: unknown }> }> {
+    return this.request('GET', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/twin`);
+  }
+
+  async patchDeviceTwinDesired(userName: string, deviceName: string, desired: Record<string, unknown>): Promise<DeviceTwin & { delta: Record<string, { desired: unknown; reported: unknown }> }> {
+    return this.request('PUT', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}/twin`, { desired });
+  }
+
+  // --- Notification Channels ---
+
+  async listNotificationChannels(userName: string): Promise<NotificationChannel[]> {
+    return this.request('GET', `/users/${encodeURIComponent(userName)}/notification-channels`);
+  }
+
+  async createNotificationChannel(userName: string, data: { name: string; webhookUrl: string; secret?: string }): Promise<NotificationChannel> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/notification-channels`, data);
+  }
+
+  async updateNotificationChannel(userName: string, channelId: string, patch: Partial<{ name: string; webhookUrl: string; secret: string | null; isActive: boolean }>): Promise<NotificationChannel> {
+    return this.request('PUT', `/users/${encodeURIComponent(userName)}/notification-channels/${encodeURIComponent(channelId)}`, patch);
+  }
+
+  async deleteNotificationChannel(userName: string, channelId: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/notification-channels/${encodeURIComponent(channelId)}`);
+  }
+
+  // --- IoT Automations ---
+
+  async listIotAutomations(userName: string): Promise<IotAutomation[]> {
+    return this.request('GET', `/users/${encodeURIComponent(userName)}/iot-automations`);
+  }
+
+  async createIotAutomation(userName: string, data: { name: string; trigger: IotAutomationTrigger; actions: IotAutomationAction[]; enabled?: boolean }): Promise<IotAutomation> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/iot-automations`, data);
+  }
+
+  async updateIotAutomation(userName: string, automationId: string, patch: Partial<{ name: string; enabled: boolean; trigger: IotAutomationTrigger; actions: IotAutomationAction[] }>): Promise<IotAutomation> {
+    return this.request('PUT', `/users/${encodeURIComponent(userName)}/iot-automations/${encodeURIComponent(automationId)}`, patch);
+  }
+
+  async deleteIotAutomation(userName: string, automationId: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/iot-automations/${encodeURIComponent(automationId)}`);
   }
 }
 

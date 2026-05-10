@@ -142,6 +142,7 @@ export interface AlertRule {
   cooldownMinutes: number;
   isActive: boolean;
   name: string;
+  notificationChannelIds?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -174,3 +175,80 @@ export interface DeviceShare {
 // --- Device Status (runtime) ---
 
 export type IotDeviceStatus = 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
+
+// --- Retention Policy ---
+
+export interface RetentionPolicy {
+  userId: string;
+  deviceId?: string;
+  retentionDays: number;
+  updatedAt: number;
+}
+
+// --- Device Twin ---
+
+export interface DeviceTwin {
+  deviceId: string;
+  userId: string;
+  desired: Record<string, unknown>;
+  reported: Record<string, unknown>;
+  desiredUpdatedAt: number;
+  reportedUpdatedAt: number;
+}
+
+// --- Notification Channels ---
+
+export type NotificationChannelType = 'webhook';
+
+export interface NotificationChannel {
+  id: string;
+  userId: string;
+  name: string;
+  type: NotificationChannelType;
+  webhookUrl: string;
+  secret?: string;
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// --- IoT Automations ---
+
+export type IotAutomationTrigger =
+  | { type: 'cron'; expression: string; timezone?: string }
+  | { type: 'telemetry'; deviceId?: string; metricKey: string; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number };
+
+export type IotAutomationAction =
+  | { type: 'send_command'; deviceId: string; commandName: string; payload?: Record<string, unknown> }
+  | { type: 'notify'; channelId: string; message: string };
+
+export interface IotAutomation {
+  id: string;
+  userId: string;
+  name: string;
+  enabled: boolean;
+  trigger: IotAutomationTrigger;
+  actions: IotAutomationAction[];
+  lastRunAt?: number;
+  lastRunResult?: 'success' | 'error';
+  lastRunError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// --- Downsampled Telemetry ---
+
+export interface DownsampledMetricSummary {
+  min: number;
+  max: number;
+  avg: number;
+  count: number;
+  unit?: string;
+}
+
+export interface DownsampledTelemetryRecord {
+  deviceId: string;
+  userId: string;
+  periodStart: number;
+  metricsSummary: Record<string, DownsampledMetricSummary>;
+}

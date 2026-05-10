@@ -115,6 +115,9 @@ import {
   SmartDisplayPage,
   VirtualDisplayPage,
   IotAlertsPage,
+  IotNotificationsPage,
+  IotAutomationsPage,
+  IotRetentionPage,
   IotEmulatorPage,
   ElectronicsConfigurationPage,
   ElectronicsWelcomePage,
@@ -238,6 +241,9 @@ function AppRoot() {
                   <Route path="/user/:userName/iot/smart-display/:deviceName" element={<SmartDisplayPage />} />
                   <Route path="/user/:userName/iot/virtual-display/:deviceName" element={<VirtualDisplayPage />} />
                   <Route path="/user/:userName/iot/alerts" element={<IotAlertsPage />} />
+                  <Route path="/user/:userName/iot/notifications" element={<IotNotificationsPage />} />
+                  <Route path="/user/:userName/iot/automations" element={<IotAutomationsPage />} />
+                  <Route path="/user/:userName/iot/retention" element={<IotRetentionPage />} />
                   <Route path="/user/:userName/iot/emulator" element={<IotEmulatorPage />} />
                   <Route path="/user/:userName/tools/rpc" element={<AdminOnly><RpcExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/mqtt-explorer" element={<AdminOnly><MqttExplorerPage /></AdminOnly>} />

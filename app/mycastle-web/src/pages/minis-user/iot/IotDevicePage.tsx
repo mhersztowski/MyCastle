@@ -14,7 +14,7 @@ import { useAuth } from '../../../modules/auth';
 import { useGlobalWindows } from '../../../components/GlobalWindowsContext';
 import { EntityWidget, Sparkline } from './EntityWidgets';
 import type { OnCommand } from './EntityWidgets';
-import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel, MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
+import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel, MinisDeviceModel, MinisDeviceDefModel, DeviceTwin } from '@mhersztowski/core';
 
 function IotDevicePage() {
   const { userName, deviceName } = useParams<{ userName: string; deviceName: string }>();
@@ -341,6 +341,9 @@ function IotDevicePage() {
             </TableContainer>
           </Paper>
         </Grid>
+
+        {/* Device Twin */}
+        <DeviceTwinPanel userName={userName!} deviceName={deviceName!} />
 
         {/* Commands */}
         <Grid item xs={12} md={6}>
@@ -711,6 +714,113 @@ function VirtualMouseDialog({ open, onClose, userName, deviceName }: {
         </Box>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── DeviceTwinPanel ──────────────────────────────────────────────────────────
+
+function DeviceTwinPanel({ userName, deviceName }: { userName: string; deviceName: string }) {
+  const [twin, setTwin] = useState<DeviceTwin | null>(null);
+  const [desiredJson, setDesiredJson] = useState('{}');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const loadTwin = useCallback(async () => {
+    try {
+      const t = await minisApi.getDeviceTwin(userName, deviceName);
+      setTwin(t);
+      setDesiredJson(JSON.stringify(t.desired, null, 2));
+    } catch {
+      // Twin may not exist yet
+    }
+  }, [userName, deviceName]);
+
+  useEffect(() => { loadTwin(); }, [loadTwin]);
+
+  const handleSave = async () => {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(desiredJson);
+    } catch {
+      setJsonError('Invalid JSON');
+      return;
+    }
+    setJsonError(null);
+    setSaving(true);
+    try {
+      const updated = await minisApi.patchDeviceTwinDesired(userName, deviceName, parsed);
+      setTwin(updated);
+      setSaveError(null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deltaKeys = twin
+    ? Object.keys(twin.desired).filter(
+        (k) => JSON.stringify(twin.desired[k]) !== JSON.stringify(twin.reported[k]),
+      )
+    : [];
+
+  return (
+    <Grid item xs={12}>
+      <Paper sx={{ p: 2 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+          <Typography variant="h6">Device Twin</Typography>
+          <Button size="small" startIcon={<Refresh />} onClick={loadTwin}>Refresh</Button>
+        </Box>
+
+        {saveError && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setSaveError(null)}>{saveError}</Alert>}
+        {deltaKeys.length > 0 && (
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            Out of sync — desired ≠ reported: {deltaKeys.join(', ')}
+          </Alert>
+        )}
+
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={6}>
+            <Typography variant="subtitle2" gutterBottom>Desired State</Typography>
+            <TextField
+              fullWidth multiline rows={8}
+              value={desiredJson}
+              onChange={(e) => { setDesiredJson(e.target.value); setJsonError(null); }}
+              error={!!jsonError}
+              helperText={jsonError ?? 'Edit JSON and click Save to push new desired state to the device'}
+              inputProps={{ style: { fontFamily: 'monospace', fontSize: 12 } }}
+            />
+            <Button
+              variant="contained" size="small" sx={{ mt: 1 }}
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? <CircularProgress size={16} /> : 'Save Desired'}
+            </Button>
+          </Grid>
+
+          <Grid item xs={12} md={6}>
+            <Typography variant="subtitle2" gutterBottom>Reported State</Typography>
+            <Box
+              component="pre"
+              sx={{
+                fontFamily: 'monospace', fontSize: 12, p: 1.5, m: 0,
+                bgcolor: 'action.hover', borderRadius: 1, overflow: 'auto',
+                minHeight: 192, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+              }}
+            >
+              {twin ? JSON.stringify(twin.reported, null, 2) : '—'}
+            </Box>
+            {twin && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                Last updated: {new Date(twin.reportedUpdatedAt).toLocaleString()}
+              </Typography>
+            )}
+          </Grid>
+        </Grid>
+      </Paper>
+    </Grid>
   );
 }
 

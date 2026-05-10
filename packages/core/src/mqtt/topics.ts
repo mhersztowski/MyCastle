@@ -236,6 +236,22 @@ export const extRes = defineMqttTopic({
   }),
 });
 
+export const twinDesired = defineMqttTopic({
+  pattern: 'minis/{userName}/{deviceName}/twin/desired',
+  description: 'Server → device: push desired state on connect or when desired state changes',
+  direction: 'server→device',
+  tags: ['IoT', 'Twin'],
+  payloadSchema: z.record(z.unknown()),
+});
+
+export const twinReported = defineMqttTopic({
+  pattern: 'minis/{userName}/{deviceName}/twin/reported',
+  description: 'Device → server: device reports its current state',
+  direction: 'device→server',
+  tags: ['IoT', 'Twin'],
+  payloadSchema: z.record(z.unknown()),
+});
+
 // --- Registry ---
 
 export const mqttTopics = {
@@ -251,6 +267,8 @@ export const mqttTopics = {
   sharedStatus,
   extReq,
   extRes,
+  twinDesired,
+  twinReported,
 } as const;
 
 export type MqttTopicRegistry = typeof mqttTopics;

@@ -755,6 +755,48 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Retention policy: /users/{userName}/iot-retention and /users/{userName}/devices/{deviceName}/iot-retention
+    const retentionDeviceMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/iot-retention$/);
+    if (retentionDeviceMatch) {
+      const userName   = decodeURIComponent(retentionDeviceMatch[1]);
+      const deviceName = decodeURIComponent(retentionDeviceMatch[2]);
+      await this.handleIotRetention(req, res, method, userName, deviceName);
+      return;
+    }
+    const retentionMatch = apiPath.match(/^\/users\/([^/]+)\/iot-retention$/);
+    if (retentionMatch) {
+      const userName = decodeURIComponent(retentionMatch[1]);
+      await this.handleIotRetention(req, res, method, userName);
+      return;
+    }
+
+    // Device twin: /users/{userName}/devices/{deviceName}/twin
+    const twinMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/twin$/);
+    if (twinMatch) {
+      const userName   = decodeURIComponent(twinMatch[1]);
+      const deviceName = decodeURIComponent(twinMatch[2]);
+      await this.handleDeviceTwin(req, res, method, userName, deviceName);
+      return;
+    }
+
+    // Notification channels: /users/{userName}/notification-channels[/{id}]
+    const notifChannelMatch = apiPath.match(/^\/users\/([^/]+)\/notification-channels(?:\/([^/]+))?$/);
+    if (notifChannelMatch) {
+      const userName   = decodeURIComponent(notifChannelMatch[1]);
+      const channelId  = notifChannelMatch[2] ? decodeURIComponent(notifChannelMatch[2]) : undefined;
+      await this.handleNotificationChannels(req, res, method, userName, channelId);
+      return;
+    }
+
+    // IoT automations: /users/{userName}/iot-automations[/{id}]
+    const automationMatch = apiPath.match(/^\/users\/([^/]+)\/iot-automations(?:\/([^/]+))?$/);
+    if (automationMatch) {
+      const userName      = decodeURIComponent(automationMatch[1]);
+      const automationId  = automationMatch[2] ? decodeURIComponent(automationMatch[2]) : undefined;
+      await this.handleIotAutomations(req, res, method, userName, automationId);
+      return;
+    }
+
     // User localizations: /users/{userName}/localizations[/{id}]
     const userLocalizationsMatch = apiPath.match(/^\/users\/([^/]+)\/localizations(?:\/([^/]+))?$/);
     if (userLocalizationsMatch) {
@@ -3336,6 +3378,7 @@ const { password, ...safeBody } = body;
           cooldownMinutes: (body.cooldownMinutes as number) ?? 15,
           isActive: body.isActive !== false,
           name: body.name as string,
+          notificationChannelIds: (body.notificationChannelIds as string[]) ?? [],
         });
         this.sendJsonResponse(res, 201, rule);
       } else if (method === 'PUT' && ruleId) {
@@ -4272,5 +4315,180 @@ Rules:
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'File not found' }));
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Retention policy
+  // ---------------------------------------------------------------------------
+
+  private async handleIotRetention(req: IncomingMessage, res: ServerResponse, method: string, userName: string, deviceName?: string): Promise<void> {
+    if (!this.iotService) { this.sendJsonResponse(res, 503, { error: 'IoT service unavailable' }); return; }
+
+    if (method === 'GET') {
+      const policies = this.iotService.retention.listForUser(userName);
+      const effective = deviceName ? this.iotService.retention.getEffective(userName, deviceName) : null;
+      this.sendJsonResponse(res, 200, { policies, effective });
+      return;
+    }
+
+    if (method === 'PUT') {
+      const body = await this.parseRequestBody(req) as { retentionDays: number };
+      if (!body.retentionDays || body.retentionDays < 1) {
+        this.sendJsonResponse(res, 400, { error: 'retentionDays must be >= 1' });
+        return;
+      }
+      this.iotService.retention.set({ userId: userName, deviceId: deviceName, retentionDays: body.retentionDays, updatedAt: Date.now() });
+      this.sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === 'DELETE') {
+      this.iotService.retention.delete(userName, deviceName);
+      this.sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Device twin
+  // ---------------------------------------------------------------------------
+
+  private async handleDeviceTwin(req: IncomingMessage, res: ServerResponse, method: string, _userName: string, deviceName: string): Promise<void> {
+    if (!this.iotService) { this.sendJsonResponse(res, 503, { error: 'IoT service unavailable' }); return; }
+
+    if (method === 'GET') {
+      const twin = this.iotService.twin.get(deviceName);
+      if (!twin) { this.sendJsonResponse(res, 200, { deviceId: deviceName, desired: {}, reported: {}, delta: {}, desiredUpdatedAt: 0, reportedUpdatedAt: 0 }); return; }
+      const delta = this.iotService.twin.getDelta(twin);
+      this.sendJsonResponse(res, 200, { ...twin, delta });
+      return;
+    }
+
+    if (method === 'PUT') {
+      const body = await this.parseRequestBody(req) as { desired?: Record<string, unknown> };
+      if (!body.desired || typeof body.desired !== 'object') {
+        this.sendJsonResponse(res, 400, { error: 'desired object required' });
+        return;
+      }
+      const config = this.iotService.telemetry.getConfig(deviceName);
+      const twin = this.iotService.twin.patchDesired(deviceName, config?.userId ?? _userName, body.desired);
+
+      // Push desired state to device via MQTT
+      if (config) {
+        this.iotService.publish(
+          `${config.topicPrefix}/twin/desired`,
+          JSON.stringify(twin.desired),
+        );
+      }
+
+      const delta = this.iotService.twin.getDelta(twin);
+      this.sendJsonResponse(res, 200, { ...twin, delta });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Notification channels
+  // ---------------------------------------------------------------------------
+
+  private async handleNotificationChannels(req: IncomingMessage, res: ServerResponse, method: string, userName: string, channelId?: string): Promise<void> {
+    if (!this.iotService) { this.sendJsonResponse(res, 503, { error: 'IoT service unavailable' }); return; }
+
+    if (!channelId) {
+      if (method === 'GET') {
+        this.sendJsonResponse(res, 200, this.iotService.notificationChannels.listForUser(userName));
+        return;
+      }
+      if (method === 'POST') {
+        const body = await this.parseRequestBody(req) as { name?: string; webhookUrl?: string; secret?: string };
+        if (!body.name || !body.webhookUrl) {
+          this.sendJsonResponse(res, 400, { error: 'name and webhookUrl required' });
+          return;
+        }
+        const channel = this.iotService.notificationChannels.create(userName, body);
+        this.sendJsonResponse(res, 201, channel);
+        return;
+      }
+    } else {
+      if (method === 'GET') {
+        const channel = this.iotService.notificationChannels.get(channelId);
+        if (!channel) { this.sendJsonResponse(res, 404, { error: 'Not found' }); return; }
+        this.sendJsonResponse(res, 200, channel);
+        return;
+      }
+      if (method === 'PUT') {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const updated = this.iotService.notificationChannels.update(channelId, body as any);
+        if (!updated) { this.sendJsonResponse(res, 404, { error: 'Not found' }); return; }
+        this.sendJsonResponse(res, 200, updated);
+        return;
+      }
+      if (method === 'DELETE') {
+        const ok = this.iotService.notificationChannels.delete(channelId);
+        this.sendJsonResponse(res, ok ? 200 : 404, { ok });
+        return;
+      }
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // IoT automations
+  // ---------------------------------------------------------------------------
+
+  private async handleIotAutomations(req: IncomingMessage, res: ServerResponse, method: string, userName: string, automationId?: string): Promise<void> {
+    if (!this.iotService) { this.sendJsonResponse(res, 503, { error: 'IoT service unavailable' }); return; }
+
+    if (!automationId) {
+      if (method === 'GET') {
+        this.sendJsonResponse(res, 200, this.iotService.automations.listForUser(userName));
+        return;
+      }
+      if (method === 'POST') {
+        const body = await this.parseRequestBody(req) as { name?: string; trigger?: unknown; actions?: unknown[]; enabled?: boolean };
+        if (!body.name || !body.trigger) {
+          this.sendJsonResponse(res, 400, { error: 'name and trigger required' });
+          return;
+        }
+        const auto = this.iotService.automations.create(userName, {
+          name: body.name,
+          trigger: body.trigger as any,
+          actions: (body.actions ?? []) as any,
+          enabled: body.enabled,
+        });
+        // Schedule cron if needed
+        this.iotService.automationRunner.syncCronForUser(userName);
+        this.sendJsonResponse(res, 201, auto);
+        return;
+      }
+    } else {
+      if (method === 'GET') {
+        const auto = this.iotService.automations.get(automationId);
+        if (!auto) { this.sendJsonResponse(res, 404, { error: 'Not found' }); return; }
+        this.sendJsonResponse(res, 200, auto);
+        return;
+      }
+      if (method === 'PUT') {
+        const body = await this.parseRequestBody(req) as Record<string, unknown>;
+        const updated = this.iotService.automations.update(automationId, body as any);
+        if (!updated) { this.sendJsonResponse(res, 404, { error: 'Not found' }); return; }
+        this.iotService.automationRunner.syncCronForUser(userName);
+        this.sendJsonResponse(res, 200, updated);
+        return;
+      }
+      if (method === 'DELETE') {
+        const ok = this.iotService.automations.delete(automationId);
+        this.iotService.automationRunner.syncCronForUser(userName);
+        this.sendJsonResponse(res, ok ? 200 : 404, { ok });
+        return;
+      }
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
   }
 }

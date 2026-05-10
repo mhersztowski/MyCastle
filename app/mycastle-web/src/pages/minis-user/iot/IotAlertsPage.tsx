@@ -4,11 +4,12 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
   Alert as MuiAlert, CircularProgress, Tabs, Tab,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, IconButton,
+  FormControl, InputLabel, Select, MenuItem, OutlinedInput, ListItemText, Checkbox,
 } from '@mui/material';
 import { Delete } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
 import { minisApi } from '../../../services/MinisApiService';
-import type { Alert, AlertRule, MinisDeviceModel, MinisDeviceDefModel } from '@mhersztowski/core';
+import type { Alert, AlertRule, MinisDeviceModel, MinisDeviceDefModel, NotificationChannel } from '@mhersztowski/core';
 
 function IotAlertsPage() {
   const { userName } = useParams<{ userName: string }>();
@@ -17,25 +18,32 @@ function IotAlertsPage() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [deviceDefs, setDeviceDefs] = useState<MinisDeviceDefModel[]>([]);
+  const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
-  const [ruleForm, setRuleForm] = useState({ name: '', metricKey: '', conditionOp: '>', conditionValue: '', severity: 'WARNING', cooldownMinutes: '15', deviceId: '' });
+  const [ruleForm, setRuleForm] = useState({
+    name: '', metricKey: '', conditionOp: '>', conditionValue: '',
+    severity: 'WARNING', cooldownMinutes: '15', deviceId: '',
+    notificationChannelIds: [] as string[],
+  });
 
   const load = useCallback(async () => {
     if (!userName) return;
     setLoading(true);
     try {
-      const [alertsList, rulesList, allDevices, defs] = await Promise.all([
+      const [alertsList, rulesList, allDevices, defs, chans] = await Promise.all([
         minisApi.getAlerts(userName),
         minisApi.getAlertRules(userName),
         minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(userName),
+        minisApi.listNotificationChannels(userName),
       ]);
       setAlerts(alertsList);
       setRules(rulesList);
       setDevices(allDevices);
       setDeviceDefs(defs);
+      setChannels(chans);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
@@ -85,9 +93,14 @@ function IotAlertsPage() {
         cooldownMinutes: parseInt(ruleForm.cooldownMinutes, 10),
         isActive: true,
         deviceId: ruleForm.deviceId || undefined,
+        notificationChannelIds: ruleForm.notificationChannelIds.length > 0 ? ruleForm.notificationChannelIds : undefined,
       });
       setRuleDialogOpen(false);
-      setRuleForm({ name: '', metricKey: '', conditionOp: '>', conditionValue: '', severity: 'WARNING', cooldownMinutes: '15', deviceId: '' });
+      setRuleForm({
+        name: '', metricKey: '', conditionOp: '>', conditionValue: '',
+        severity: 'WARNING', cooldownMinutes: '15', deviceId: '',
+        notificationChannelIds: [],
+      });
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create rule');
@@ -174,6 +187,7 @@ function IotAlertsPage() {
                   <TableCell>Condition</TableCell>
                   <TableCell>Severity</TableCell>
                   <TableCell>Device</TableCell>
+                  <TableCell>Notify</TableCell>
                   <TableCell>Actions</TableCell>
                 </TableRow>
               </TableHead>
@@ -191,12 +205,19 @@ function IotAlertsPage() {
                     </TableCell>
                     <TableCell>{rule.deviceId ? resolveDeviceName(rule.deviceId) : 'All'}</TableCell>
                     <TableCell>
+                      {(rule.notificationChannelIds ?? []).map((cid) => {
+                        const ch = channels.find((c) => c.id === cid);
+                        return <Chip key={cid} label={ch?.name ?? cid.slice(0, 8)} size="small" sx={{ mr: 0.5 }} />;
+                      })}
+                      {!(rule.notificationChannelIds?.length) && <Typography variant="caption" color="text.disabled">—</Typography>}
+                    </TableCell>
+                    <TableCell>
                       <IconButton size="small" onClick={() => handleDeleteRule(rule.id)}><Delete /></IconButton>
                     </TableCell>
                   </TableRow>
                 ))}
                 {rules.length === 0 && (
-                  <TableRow><TableCell colSpan={6} align="center">No rules</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} align="center">No rules</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
@@ -220,7 +241,28 @@ function IotAlertsPage() {
             {['INFO', 'WARNING', 'CRITICAL'].map((s) => <option key={s} value={s}>{s}</option>)}
           </TextField>
           <TextField fullWidth label="Cooldown (minutes)" type="number" value={ruleForm.cooldownMinutes} onChange={(e) => setRuleForm({ ...ruleForm, cooldownMinutes: e.target.value })} sx={{ mb: 2 }} />
-          <TextField fullWidth label="Device ID (optional, empty = all)" value={ruleForm.deviceId} onChange={(e) => setRuleForm({ ...ruleForm, deviceId: e.target.value })} />
+          <TextField fullWidth label="Device ID (optional, empty = all)" value={ruleForm.deviceId} onChange={(e) => setRuleForm({ ...ruleForm, deviceId: e.target.value })} sx={{ mb: 2 }} />
+          {channels.length > 0 && (
+            <FormControl fullWidth>
+              <InputLabel>Notification Channels</InputLabel>
+              <Select
+                multiple
+                value={ruleForm.notificationChannelIds}
+                onChange={(e) => setRuleForm({ ...ruleForm, notificationChannelIds: e.target.value as string[] })}
+                input={<OutlinedInput label="Notification Channels" />}
+                renderValue={(selected) =>
+                  (selected as string[]).map((id) => channels.find((c) => c.id === id)?.name ?? id).join(', ')
+                }
+              >
+                {channels.map((ch) => (
+                  <MenuItem key={ch.id} value={ch.id}>
+                    <Checkbox checked={ruleForm.notificationChannelIds.includes(ch.id)} />
+                    <ListItemText primary={ch.name} secondary={ch.webhookUrl} />
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRuleDialogOpen(false)}>Cancel</Button>

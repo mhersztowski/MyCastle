@@ -7,6 +7,8 @@ import { ExpandMore } from '@mui/icons-material';
 import type { EmulatedDeviceConfig, CommandAckMode } from '@modules/iot-emulator';
 import { DEVICE_PRESETS } from '@modules/iot-emulator';
 import MetricConfigEditor from './MetricConfigEditor';
+import EntityConfigEditor from './EntityConfigEditor';
+import type { IotEntity } from '@mhersztowski/core';
 
 interface EditDeviceDialogProps {
   open: boolean;
@@ -67,6 +69,7 @@ function EditDeviceDialog({ open, config, userId, onSave, onClose }: EditDeviceD
       ...prev,
       name: prev.name || preset.name,
       metrics: structuredClone(preset.metrics),
+      entities: preset.entities ? structuredClone(preset.entities) : prev.entities,
       telemetryIntervalSec: preset.telemetryIntervalSec,
       heartbeatIntervalSec: preset.heartbeatIntervalSec,
     }));
@@ -136,6 +139,14 @@ function EditDeviceDialog({ open, config, userId, onSave, onClose }: EditDeviceD
           metrics={form.metrics}
           onChange={(metrics) => setForm({ ...form, metrics })}
         />
+
+        {/* Entities */}
+        <Box sx={{ mt: 2 }}>
+          <EntityConfigEditor
+            entities={form.entities ?? []}
+            onChange={(entities: IotEntity[]) => setForm({ ...form, entities })}
+          />
+        </Box>
 
         {/* Timing */}
         <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Timing</Typography>

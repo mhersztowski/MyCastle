@@ -997,7 +997,7 @@ const EditorGroupPane = memo(function EditorGroupPane({
           if (!dbgEl) {
             dbgEl = document.createElement('div');
             dbgEl.style.cssText = 'position:fixed;bottom:72px;right:6px;background:rgba(0,0,0,.82);color:#7fff00;font:10px/1.4 monospace;padding:4px 8px;z-index:99999;pointer-events:none;max-width:240px;border-radius:4px;white-space:pre-wrap;';
-            document.body.appendChild(dbgEl);
+            // document.body.appendChild(dbgEl); // temporarily hidden
           }
           const ls = (dbgEl.textContent ?? '').split('\n').filter(Boolean);
           ls.unshift(new Date().toISOString().slice(14, 22) + ' ' + msg);
@@ -1136,9 +1136,44 @@ const EditorGroupPane = memo(function EditorGroupPane({
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── Scroll-vs-tap: suppress keyboard when user pans/scrolls the editor ──
+    // Monaco calls textarea.focus() on every pointerup regardless of movement.
+    // We track touch displacement and re-blur if the gesture was a scroll.
+    let scrollGestureActive = false;
+    let scrollOriginX = 0;
+    let scrollOriginY = 0;
+    const onContainerPDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      scrollGestureActive = false;
+      scrollOriginX = e.clientX;
+      scrollOriginY = e.clientY;
+    };
+    const onContainerPMove = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch' || scrollGestureActive) return;
+      if (Math.abs(e.clientX - scrollOriginX) > 8 || Math.abs(e.clientY - scrollOriginY) > 8) {
+        scrollGestureActive = true;
+      }
+    };
+    const onContainerPUp = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch' || !scrollGestureActive) return;
+      scrollGestureActive = false;
+      // Monaco may focus the textarea asynchronously — blur on next frame.
+      requestAnimationFrame(() => {
+        const ta = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
+        if (document.activeElement === ta) ta?.blur();
+      });
+    };
+    container.addEventListener('pointerdown', onContainerPDown, true);
+    container.addEventListener('pointermove', onContainerPMove, { capture: true, passive: true });
+    container.addEventListener('pointerup', onContainerPUp, true);
+    // ─────────────────────────────────────────────────────────────────────────
+
     return () => {
       gboardCleanup?.();
       document.removeEventListener('pointerdown', onDocPointerDown, true);
+      container.removeEventListener('pointerdown', onContainerPDown, true);
+      container.removeEventListener('pointermove', onContainerPMove, true);
+      container.removeEventListener('pointerup', onContainerPUp, true);
       if (pendingWordRangeTtl) clearTimeout(pendingWordRangeTtl);
       pendingWordRangeRef.current = null;
       updateHandlesRef.current = null;

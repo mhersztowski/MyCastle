@@ -9,10 +9,21 @@ import { AlertEngine } from './AlertEngine.js';
 import { DeviceShareStore } from './DeviceShareStore.js';
 import { IotExtensionRegistry } from './IotExtensionRegistry.js';
 import { AppSessionStore } from './AppSessionStore.js';
+import { RateLimiter } from './RateLimiter.js';
+import { RetentionPolicyStore } from './RetentionPolicyStore.js';
+import { DeviceTwinStore } from './DeviceTwinStore.js';
+import { NotificationChannelStore } from './NotificationChannelStore.js';
+import { NotificationService } from './NotificationService.js';
+import { IotAutomationStore } from './IotAutomationStore.js';
+import { IotAutomationRunner } from './IotAutomationRunner.js';
+import { DownsamplingService } from './DownsamplingService.js';
 
 export interface MqttPublishFn {
   (topic: string, payload: string): void;
 }
+
+/** How long before a SENT command is marked TIMEOUT (default: 10 minutes). */
+const COMMAND_TIMEOUT_MS = 10 * 60_000;
 
 export class IotService {
   readonly db: IotDatabase;
@@ -23,8 +34,18 @@ export class IotService {
   readonly shares: DeviceShareStore;
   readonly extensions: IotExtensionRegistry;
   readonly appSessions: AppSessionStore;
+  readonly rateLimiter: RateLimiter;
+  readonly retention: RetentionPolicyStore;
+  readonly twin: DeviceTwinStore;
+  readonly notificationChannels: NotificationChannelStore;
+  readonly notifications: NotificationService;
+  readonly automations: IotAutomationStore;
+  readonly automationRunner: IotAutomationRunner;
+  readonly downsampling: DownsamplingService;
 
   private publishFn: MqttPublishFn | null = null;
+  private commandTimeoutTimer: NodeJS.Timeout | null = null;
+  private retentionTimer: NodeJS.Timeout | null = null;
 
   constructor(dataDir: string) {
     this.db = new IotDatabase(dataDir);
@@ -35,11 +56,25 @@ export class IotService {
     this.shares = new DeviceShareStore(this.db);
     this.extensions = new IotExtensionRegistry((topic, payload) => this.publishFn?.(topic, payload));
     this.appSessions = new AppSessionStore(this.db);
+    this.rateLimiter = new RateLimiter({ maxMessages: 120, windowMs: 60_000 });
+    this.retention = new RetentionPolicyStore(this.db);
+    this.twin = new DeviceTwinStore(this.db);
+    this.notificationChannels = new NotificationChannelStore(this.db);
+    this.notifications = new NotificationService(this.notificationChannels);
+    this.automations = new IotAutomationStore(this.db);
+    this.automationRunner = new IotAutomationRunner(
+      this.automations,
+      this.notifications,
+      this.telemetry,
+      () => this.publishFn,
+    );
+    this.downsampling = new DownsamplingService(this.db);
   }
 
   start(publishFn: MqttPublishFn): void {
     this.publishFn = publishFn;
     this.presence.start();
+    this.downsampling.start();
 
     this.presence.on('statusChange', (change: DeviceStatusChange) => {
       const statusPayload = JSON.stringify({ status: change.status, lastSeenAt: change.lastSeenAt });
@@ -48,7 +83,6 @@ export class IotService {
         statusPayload,
       );
 
-      // Forward status to shared users
       const shareList = this.shares.getSharesForDevice(change.deviceId);
       for (const share of shareList) {
         this.publishFn?.(
@@ -57,15 +91,32 @@ export class IotService {
         );
       }
     });
+
+    // Mark SENT commands as TIMEOUT every minute
+    this.commandTimeoutTimer = setInterval(() => this.checkCommandTimeouts(), 60_000);
+    this.commandTimeoutTimer.unref();
+
+    // Run retention cleanup once at start, then daily
+    this.runRetentionCleanup();
+    this.retentionTimer = setInterval(() => this.runRetentionCleanup(), 24 * 60 * 60_000);
+    this.retentionTimer.unref();
   }
 
   stop(): void {
     this.presence.stop();
     this.extensions.dispose();
+    this.automationRunner.dispose();
+    this.downsampling.stop();
+    this.rateLimiter.dispose();
+    if (this.commandTimeoutTimer) { clearInterval(this.commandTimeoutTimer); this.commandTimeoutTimer = null; }
+    if (this.retentionTimer) { clearInterval(this.retentionTimer); this.retentionTimer = null; }
     this.db.close();
   }
 
-  // Called when MQTT message arrives on minis/+/+/telemetry
+  // ---------------------------------------------------------------------------
+  // Telemetry
+  // ---------------------------------------------------------------------------
+
   handleTelemetry(userId: string, deviceId: string, payload: { metrics: TelemetryMetric[]; timestamp?: number; rssi?: number; battery?: number }): void {
     const record = {
       deviceId,
@@ -78,28 +129,30 @@ export class IotService {
 
     this.telemetry.insertTelemetry(record);
 
-    // Update presence
     const config = this.telemetry.getConfig(deviceId);
     const heartbeatSec = config?.heartbeatIntervalSec ?? 60;
     this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
 
-    // Evaluate alert rules
+    // Alert evaluation + notifications
     const triggered = this.alerts.evaluate(deviceId, userId, payload.metrics);
     for (const alert of triggered) {
-      this.publishFn?.(
-        `minis/${userId}/${deviceId}/alert`,
-        JSON.stringify(alert),
-      );
+      this.publishFn?.(`minis/${userId}/${deviceId}/alert`, JSON.stringify(alert));
+
+      // Send webhook notifications for this rule
+      const rule = this.alerts.getRule(alert.ruleId);
+      if (rule?.notificationChannelIds?.length) {
+        this.notifications.notifyAlert(alert, rule.notificationChannelIds);
+      }
     }
 
-    // Republish telemetry for frontend subscribers
-    const recordJson = JSON.stringify(record);
-    this.publishFn?.(
-      `minis/${userId}/${deviceId}/telemetry/live`,
-      recordJson,
+    // Telemetry-triggered automations (fire-and-forget)
+    this.automationRunner.evaluateTelemetry(userId, deviceId, payload.metrics).catch((err) =>
+      console.error('[IotService] automation runner error:', err),
     );
 
-    // Forward telemetry to shared users
+    const recordJson = JSON.stringify(record);
+    this.publishFn?.(`minis/${userId}/${deviceId}/telemetry/live`, recordJson);
+
     const shareList = this.shares.getSharesForDevice(deviceId);
     for (const share of shareList) {
       this.publishFn?.(
@@ -109,14 +162,14 @@ export class IotService {
     }
   }
 
-  // Called when MQTT message arrives on minis/+/+/hello
-  // Device announces itself on connect — mark online, persist entities, sync extensions in-memory.
-  // App instances (web/mobile/desktop) include platform + sessionId fields.
+  // ---------------------------------------------------------------------------
+  // Hello
+  // ---------------------------------------------------------------------------
+
   handleHello(userId: string, deviceId: string, payload: {
     uptime?: number;
     extensions?: Array<{ type: string; enabled: boolean; options?: Record<string, unknown> }>;
     entities?: unknown[];
-    // App-instance fields (present only when sent by PresenceService / desktop agent)
     platform?: 'web' | 'mobile' | 'desktop';
     sessionId?: string;
     label?: string;
@@ -124,7 +177,6 @@ export class IotService {
   }): void {
     console.log(`[IoT] hello: userId=${userId} deviceId=${deviceId}`);
 
-    // App-instance hello: register/update in app_sessions, skip IoT device handling
     if (payload.platform && payload.sessionId) {
       this.appSessions.upsert({
         id: payload.sessionId,
@@ -133,7 +185,6 @@ export class IotService {
         platform: payload.platform,
         userAgent: payload.userAgent ?? '',
       });
-      console.log(`[IoT] app session upserted: ${payload.sessionId} (${payload.platform}) for ${userId}`);
       return;
     }
 
@@ -142,7 +193,6 @@ export class IotService {
     const topicPrefix = existing?.topicPrefix ?? `minis/${userId}/${deviceId}`;
     const now = Date.now();
 
-    // Persist entities if the device sent any — entities are re-declared on every reconnect
     if (payload.entities?.length || payload.extensions?.length) {
       const merged = {
         deviceId,
@@ -162,27 +212,37 @@ export class IotService {
     }
 
     this.presence.recordHeartbeat(deviceId, userId, heartbeatSec);
+
+    // Push current desired twin state to device on (re)connect
+    const twinRecord = this.twin.get(deviceId);
+    if (twinRecord && Object.keys(twinRecord.desired).length > 0) {
+      this.publishFn?.(
+        `minis/${userId}/${deviceId}/twin/desired`,
+        JSON.stringify(twinRecord.desired),
+      );
+    }
+
+    // Load cron automations for this user
+    this.automationRunner.syncCronForUser(userId);
   }
 
-  // Called when MQTT message arrives on minis/+/+/heartbeat
+  // ---------------------------------------------------------------------------
+  // Heartbeat
+  // ---------------------------------------------------------------------------
+
   handleHeartbeat(userId: string, deviceId: string, payload: {
     uptime?: number;
     rssi?: number;
     battery?: number;
-    // App-instance fields
     sessionId?: string;
     intervalSec?: number;
     isInteractive?: boolean;
     context?: { type: string; id?: string };
   }): void {
-    console.log(`[IoT] heartbeat: userId=${userId} deviceId=${deviceId}`);
-
-    // App-instance heartbeat
     if (payload.sessionId) {
-      const intervalSec = payload.intervalSec ?? 30;
       this.appSessions.recordHeartbeat(
         payload.sessionId,
-        intervalSec,
+        payload.intervalSec ?? 30,
         payload.isInteractive ?? false,
         payload.context,
       );
@@ -195,12 +255,14 @@ export class IotService {
     if (config) this.extensions.syncFromConfig(config);
   }
 
-  // Called when MQTT message arrives on minis/+/+/command/ack
+  // ---------------------------------------------------------------------------
+  // Commands
+  // ---------------------------------------------------------------------------
+
   handleCommandAck(_deviceId: string, payload: { id: string; status: 'ACKNOWLEDGED' | 'FAILED'; reason?: string }): void {
     this.commands.updateStatus(payload.id, payload.status, payload.reason);
   }
 
-  // Send command to device via MQTT
   sendCommand(deviceId: string, name: string, cmdPayload: Record<string, unknown>): DeviceCommand {
     const command = this.commands.createCommand(deviceId, name, cmdPayload);
 
@@ -217,9 +279,25 @@ export class IotService {
     return command;
   }
 
-  // Process incoming MQTT message — route to appropriate handler (Zod-validated)
+  /** Publish a raw MQTT message through the service's broker connection. */
+  publish(topic: string, payload: string): void {
+    this.publishFn?.(topic, payload);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Twin: device reports its state
+  // ---------------------------------------------------------------------------
+
+  handleTwinReported(userId: string, deviceId: string, reported: Record<string, unknown>): void {
+    this.twin.updateReported(deviceId, userId, reported);
+    console.log(`[IoT] twin reported updated: ${deviceId}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // MQTT routing
+  // ---------------------------------------------------------------------------
+
   handleMqttMessage(topic: string, payload: string): void {
-    // Topic format: minis/{userName}/{deviceName}/{type}
     const parts = topic.split('/');
     if (parts.length < 4 || parts[0] !== 'minis') return;
 
@@ -227,7 +305,9 @@ export class IotService {
     const deviceName = parts[2];
     const msgType = parts.slice(3).join('/');
 
-    console.log(`[IoT] MQTT msg: topic=${topic} type=${msgType}`);
+    // Rate limit device → server traffic (not server → client)
+    const isDeviceMsg = ['telemetry', 'heartbeat', 'hello', 'command/ack'].includes(msgType) || msgType.startsWith('ext/') || msgType === 'twin/reported';
+    if (isDeviceMsg && !this.rateLimiter.allow(deviceName)) return;
 
     let raw: unknown;
     try {
@@ -240,28 +320,19 @@ export class IotService {
     switch (msgType) {
       case 'telemetry': {
         const result = mqttTopics.telemetry.payloadSchema.safeParse(raw);
-        if (!result.success) {
-          console.warn(`[IoT] telemetry schema mismatch:`, result.error.issues);
-          return;
-        }
+        if (!result.success) { console.warn(`[IoT] telemetry schema mismatch:`, result.error.issues); return; }
         this.handleTelemetry(userName, deviceName, result.data);
         break;
       }
       case 'heartbeat': {
         const result = mqttTopics.heartbeat.payloadSchema.safeParse(raw);
-        if (!result.success) {
-          console.warn(`[IoT] heartbeat schema mismatch:`, result.error.issues);
-          return;
-        }
+        if (!result.success) { console.warn(`[IoT] heartbeat schema mismatch:`, result.error.issues); return; }
         this.handleHeartbeat(userName, deviceName, result.data);
         break;
       }
       case 'hello': {
         const result = mqttTopics.hello.payloadSchema.safeParse(raw);
-        if (!result.success) {
-          console.warn(`[IoT] hello schema mismatch:`, result.error.issues);
-          return;
-        }
+        if (!result.success) { console.warn(`[IoT] hello schema mismatch:`, result.error.issues); return; }
         this.handleHello(userName, deviceName, result.data);
         break;
       }
@@ -271,11 +342,15 @@ export class IotService {
         this.handleCommandAck(deviceName, result.data);
         break;
       }
+      case 'twin/reported': {
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          this.handleTwinReported(userName, deviceName, raw as Record<string, unknown>);
+        }
+        break;
+      }
       default: {
-        // Extension messages: ext/{extType}/{subTopic}
-        // e.g. msgType = 'ext/vfs/res'
         if (msgType.startsWith('ext/')) {
-          const extParts = msgType.split('/'); // ['ext', extType, subTopic]
+          const extParts = msgType.split('/');
           if (extParts.length >= 3) {
             const extType = extParts[1];
             const subTopic = extParts.slice(2).join('/');
@@ -284,6 +359,55 @@ export class IotService {
         }
         break;
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Background jobs
+  // ---------------------------------------------------------------------------
+
+  private checkCommandTimeouts(): void {
+    const db = this.db.raw;
+    const cutoff = Date.now() - COMMAND_TIMEOUT_MS;
+    const stmt = db.prepare(
+      `UPDATE device_command SET status = 'TIMEOUT', resolved_at = ? WHERE status = 'SENT' AND created_at < ?`,
+    );
+    const result = stmt.run(Date.now(), cutoff);
+    if (result.changes > 0) {
+      console.log(`[IoT] Marked ${result.changes} command(s) as TIMEOUT`);
+    }
+  }
+
+  private runRetentionCleanup(): void {
+    const db = this.db.raw;
+
+    // Per-user / per-device policies
+    const policies = db.prepare(`SELECT * FROM retention_policy`).all() as Array<{
+      user_id: string; device_id: string; retention_days: number;
+    }>;
+
+    let totalDeleted = 0;
+    for (const p of policies) {
+      const cutoff = Date.now() - p.retention_days * 24 * 60 * 60_000;
+      const stmt = p.device_id
+        ? db.prepare(`DELETE FROM telemetry WHERE user_id = ? AND device_id = ? AND timestamp < ?`)
+        : db.prepare(`DELETE FROM telemetry WHERE user_id = ? AND timestamp < ?`);
+
+      const result = p.device_id
+        ? (stmt as any).run(p.user_id, p.device_id, cutoff)
+        : (stmt as any).run(p.user_id, cutoff);
+
+      totalDeleted += result.changes;
+    }
+
+    // Also cleanup old downsampled data
+    const ds1mCutoff = Date.now() - 7 * 24 * 60 * 60_000; // 7 days
+    const ds1hCutoff = Date.now() - 90 * 24 * 60 * 60_000; // 90 days
+    const del1m = db.prepare(`DELETE FROM telemetry_1m WHERE period_start < ?`).run(ds1mCutoff);
+    const del1h = db.prepare(`DELETE FROM telemetry_1h WHERE period_start < ?`).run(ds1hCutoff);
+
+    if (totalDeleted > 0 || del1m.changes > 0 || del1h.changes > 0) {
+      console.log(`[IoT] Retention cleanup: raw=${totalDeleted}, 1m=${del1m.changes}, 1h=${del1h.changes} rows deleted`);
     }
   }
 }

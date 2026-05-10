@@ -136,19 +136,100 @@ export class IotDatabase {
       CREATE INDEX IF NOT EXISTS idx_app_proj_date ON app_session_project_time(date);
     `);
 
-    // Migration: add entities column to iot_device_config
+    // Retention policies
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS retention_policy (
+        user_id    TEXT NOT NULL,
+        device_id  TEXT NOT NULL DEFAULT '',
+        retention_days INTEGER NOT NULL DEFAULT 30,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, device_id)
+      );
+    `);
+
+    // Device Twin
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_twin (
+        device_id           TEXT PRIMARY KEY,
+        user_id             TEXT NOT NULL,
+        desired             TEXT NOT NULL DEFAULT '{}',
+        reported            TEXT NOT NULL DEFAULT '{}',
+        desired_updated_at  INTEGER NOT NULL DEFAULT 0,
+        reported_updated_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_twin_user ON device_twin(user_id);
+    `);
+
+    // Notification channels
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS notification_channel (
+        id          TEXT PRIMARY KEY,
+        user_id     TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        type        TEXT NOT NULL DEFAULT 'webhook',
+        webhook_url TEXT NOT NULL DEFAULT '',
+        secret      TEXT,
+        is_active   INTEGER NOT NULL DEFAULT 1,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_notif_channel_user ON notification_channel(user_id);
+    `);
+
+    // IoT Automations
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS iot_automation (
+        id              TEXT PRIMARY KEY,
+        user_id         TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        trigger_json    TEXT NOT NULL,
+        actions_json    TEXT NOT NULL DEFAULT '[]',
+        last_run_at     INTEGER,
+        last_run_result TEXT,
+        last_run_error  TEXT,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_iot_automation_user ON iot_automation(user_id);
+    `);
+
+    // Downsampled telemetry — 1-minute buckets
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS telemetry_1m (
+        device_id       TEXT NOT NULL,
+        user_id         TEXT NOT NULL,
+        period_start    INTEGER NOT NULL,
+        metrics_summary TEXT NOT NULL,
+        PRIMARY KEY (device_id, period_start)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tel1m_device_ts ON telemetry_1m(device_id, period_start);
+    `);
+
+    // Downsampled telemetry — 1-hour buckets
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS telemetry_1h (
+        device_id       TEXT NOT NULL,
+        user_id         TEXT NOT NULL,
+        period_start    INTEGER NOT NULL,
+        metrics_summary TEXT NOT NULL,
+        PRIMARY KEY (device_id, period_start)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tel1h_device_ts ON telemetry_1h(device_id, period_start);
+    `);
+
+    // Migrations
     try {
       this.db.exec(`ALTER TABLE iot_device_config ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'`);
-    } catch {
-      // Column already exists
-    }
+    } catch { /* already exists */ }
 
-    // Migration: add extensions column to iot_device_config
     try {
       this.db.exec(`ALTER TABLE iot_device_config ADD COLUMN extensions TEXT NOT NULL DEFAULT '[]'`);
-    } catch {
-      // Column already exists
-    }
+    } catch { /* already exists */ }
+
+    try {
+      this.db.exec(`ALTER TABLE alert_rule ADD COLUMN notification_channel_ids TEXT NOT NULL DEFAULT '[]'`);
+    } catch { /* already exists */ }
   }
 
   get raw(): Database.Database {

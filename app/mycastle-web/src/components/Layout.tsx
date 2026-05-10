@@ -54,6 +54,8 @@ import {
   CloudDownload as CloudDownloadIcon,
   Storefront as StorefrontIcon,
   PhotoLibrary as PhotoLibraryIcon,
+  AutoMode as AutoModeIcon,
+  Notifications as NotificationsIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -127,6 +129,9 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'Dashboard 2', icon: <DashboardIcon />, path: `/user/${userName}/iot/dashboard2` },
             { text: 'Devices', icon: <SensorsIcon />, path: `/user/${userName}/iot/devices` },
             { text: 'Alerts', icon: <NotificationsActiveIcon />, path: `/user/${userName}/iot/alerts` },
+            { text: 'Notifications', icon: <NotificationsIcon />, path: `/user/${userName}/iot/notifications` },
+            { text: 'Automations', icon: <AutoModeIcon />, path: `/user/${userName}/iot/automations` },
+            { text: 'Retention', icon: <StorageIcon />, path: `/user/${userName}/iot/retention` },
             { text: 'Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
           ],
         },

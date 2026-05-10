@@ -1,6 +1,9 @@
-import type { TelemetryRecord, TelemetryAggregate, IotDeviceConfig } from '@mhersztowski/core';
+import type { TelemetryRecord, TelemetryAggregate, IotDeviceConfig, DownsampledTelemetryRecord } from '@mhersztowski/core';
 import type { IotDatabase } from './IotDatabase.js';
 import type Database from 'better-sqlite3';
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 export class TelemetryStore {
   private stmtInsert: Database.Statement;
@@ -123,6 +126,37 @@ export class TelemetryStore {
   cleanup(olderThanMs: number): number {
     const result = this.stmtCleanup.run(olderThanMs);
     return result.changes;
+  }
+
+  /**
+   * Auto-resolution history query:
+   *  - range < 2h  → raw telemetry
+   *  - range < 7d  → 1-minute buckets
+   *  - range >= 7d → 1-hour buckets
+   */
+  getHistoryAutoRes(deviceId: string, from: number, to: number): TelemetryRecord[] | DownsampledTelemetryRecord[] {
+    const range = to - from;
+    if (range < 2 * HOUR_MS) {
+      return this.getHistory(deviceId, from, to, 2000);
+    }
+    const table = range < 7 * DAY_MS ? 'telemetry_1m' : 'telemetry_1h';
+    return this.getDownsampled(deviceId, from, to, table);
+  }
+
+  getDownsampled(deviceId: string, from: number, to: number, table: 'telemetry_1m' | 'telemetry_1h'): DownsampledTelemetryRecord[] {
+    const db = this.iotDb.raw;
+    const stmt = db.prepare(
+      `SELECT device_id, user_id, period_start, metrics_summary FROM ${table}
+       WHERE device_id = ? AND period_start >= ? AND period_start < ?
+       ORDER BY period_start ASC`,
+    );
+    const rows = stmt.all(deviceId, from, to) as any[];
+    return rows.map((r) => ({
+      deviceId: r.device_id,
+      userId: r.user_id,
+      periodStart: r.period_start,
+      metricsSummary: JSON.parse(r.metrics_summary),
+    }));
   }
 
   // --- IoT Device Config ---

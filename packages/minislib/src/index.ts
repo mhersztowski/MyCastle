@@ -4,6 +4,9 @@ export { Signal } from './core/Signal';
 export type { Slot, IConnectionOwner } from './core/Signal';
 export { MObject } from './core/MObject';
 
+// ── Node (typed scene/tree node) ──────────────────────────────────────────────
+export { Node } from './Node';
+
 // ── Properties ────────────────────────────────────────────────────────────────
 export { MProperty } from './MProperty';
 

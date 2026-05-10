@@ -20,12 +20,12 @@ export class AlertEngine {
     const db = _iotDb.raw;
 
     this.stmtInsertRule = db.prepare(
-      `INSERT INTO alert_rule (id, user_id, device_id, metric_key, condition_op, condition_value, severity, cooldown_minutes, is_active, name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO alert_rule (id, user_id, device_id, metric_key, condition_op, condition_value, severity, cooldown_minutes, is_active, name, notification_channel_ids, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     this.stmtUpdateRule = db.prepare(
-      `UPDATE alert_rule SET device_id=?, metric_key=?, condition_op=?, condition_value=?, severity=?, cooldown_minutes=?, is_active=?, name=?, updated_at=? WHERE id=?`,
+      `UPDATE alert_rule SET device_id=?, metric_key=?, condition_op=?, condition_value=?, severity=?, cooldown_minutes=?, is_active=?, name=?, notification_channel_ids=?, updated_at=? WHERE id=?`,
     );
 
     this.stmtDeleteRule = db.prepare(`DELETE FROM alert_rule WHERE id = ?`);
@@ -64,7 +64,8 @@ export class AlertEngine {
     this.stmtInsertRule.run(
       id, rule.userId, rule.deviceId ?? null, rule.metricKey,
       rule.conditionOp, rule.conditionValue, rule.severity,
-      rule.cooldownMinutes, rule.isActive ? 1 : 0, rule.name, now, now,
+      rule.cooldownMinutes, rule.isActive ? 1 : 0, rule.name,
+      JSON.stringify(rule.notificationChannelIds ?? []), now, now,
     );
     return { ...rule, id, createdAt: now, updatedAt: now };
   }
@@ -76,7 +77,8 @@ export class AlertEngine {
     this.stmtUpdateRule.run(
       merged.deviceId ?? null, merged.metricKey, merged.conditionOp,
       merged.conditionValue, merged.severity, merged.cooldownMinutes,
-      merged.isActive ? 1 : 0, merged.name, merged.updatedAt, id,
+      merged.isActive ? 1 : 0, merged.name,
+      JSON.stringify(merged.notificationChannelIds ?? []), merged.updatedAt, id,
     );
     return merged;
   }
@@ -178,6 +180,7 @@ export class AlertEngine {
   }
 
   private rowToRule(row: any): AlertRule {
+    const channelIds = row.notification_channel_ids ? JSON.parse(row.notification_channel_ids) : [];
     return {
       id: row.id,
       userId: row.user_id,
@@ -189,6 +192,7 @@ export class AlertEngine {
       cooldownMinutes: row.cooldown_minutes,
       isActive: row.is_active === 1,
       name: row.name,
+      notificationChannelIds: channelIds.length > 0 ? channelIds : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
