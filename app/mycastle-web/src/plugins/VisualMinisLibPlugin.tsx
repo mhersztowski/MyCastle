@@ -561,9 +561,9 @@ function markDirty(path: string) {
   globalEventBus.emit('system:editor:markDirty', { path });
 }
 
-/** Re-parse entities from `newCode` and notify React so the canvas updates immediately.
- *  Called after programmatic edits — pushEditOperations doesn't fire onDidChangeContent
- *  when the graph virtual tab is active, so we must refresh manually. */
+/** Re-parse entities from `newCode` and notify React components so the canvas updates.
+ *  Uses notifyComponents() — NOT notifyState() — to avoid triggering updateToolbar()
+ *  (which disposes/re-registers toolbar items and can cause them to disappear). */
 function refreshStateFromEdit(newCode: string) {
   const byClass = new Map<string, ExternalClassDef>(
     _state.externalClassDefs.map((e) => [e.className, e.def]),
@@ -571,7 +571,7 @@ function refreshStateFromEdit(newCode: string) {
   const { entities, connections } = parseMinisEntities(newCode, byClass);
   const savedPositions = parseGraphMetadata(newCode);
   _state = { ..._state, entities, connections, currentCode: newCode, savedPositions };
-  notifyState();
+  notifyComponents();
 }
 
 function replaceModelContent(model: monaco.editor.ITextModel, newCode: string) {
@@ -641,21 +641,24 @@ function ensureNamedImport(name: string, pkg: string, targetUri: string): void {
   const model = findModel(targetUri);
   if (!model) return;
   const code = model.getValue();
-  // Already imported?
+  // Already imported — nothing to do
   if (new RegExp(`\\b${name}\\b`).test(code)) return;
-  // Extend existing import from the same package
-  const existingRe = new RegExp(`(import\\s*\\{[^}]*)\\}\\s*from\\s*['"]${pkg.replace(/\//g, '\\/')}['"]`);
+  // Extend an existing import from the same package:
+  // matches e.g. `import { MObject, Signal } from '@mhersztowski/minislib'`
+  const escapedPkg = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const existingRe = new RegExp(`(import\\s*\\{[^}]*)\\}(\\s*from\\s*['"]${escapedPkg}['"])`);
   const m = existingRe.exec(code);
   if (m) {
-    replaceModelContent(model, code.slice(0, m.index) + `${m[1]}, ${name} }` + code.slice(m.index + m[0].length - (code.length - code.indexOf('}', m.index + m[1].length))));
+    // m[1] = "import { MObject, Signal "  m[2] = " from '@mhersztowski/minislib'"
+    const newImport = `${m[1]}, ${name} }${m[2]}`;
+    replaceModelContent(model, code.slice(0, m.index) + newImport + code.slice(m.index + m[0].length));
     return;
   }
-  // Insert new import at top (after last existing import line, or at position 0)
+  // No existing import from this package — insert a new line after the last import
   const lines = code.split('\n');
   let lastImportIdx = -1;
   lines.forEach((l, i) => { if (/^\s*import\s/.test(l)) lastImportIdx = i; });
-  const insertIdx = lastImportIdx + 1;
-  lines.splice(insertIdx, 0, `import { ${name} } from '${pkg}';`);
+  lines.splice(lastImportIdx + 1, 0, `import { ${name} } from '${pkg}';`);
   replaceModelContent(model, lines.join('\n'));
 }
 
@@ -689,19 +692,27 @@ let _state: PluginState = { entities: [], connections: [], uri: '', isMinisFile:
 let _savedViewport: { x: number; y: number; zoom: number } | null = null;
 
 const _stateListeners = new Set<() => void>();
+/** Notify ALL listeners — React components + toolbar updater. */
 function notifyState() { _stateListeners.forEach((fn) => fn()); }
+
+/** Only notify React component listeners (not toolbar).
+ *  Used after programmatic edits so the canvas refreshes without disturbing toolbar state. */
+const _componentListeners = new Set<() => void>();
+function notifyComponents() { _componentListeners.forEach((fn) => fn()); }
 
 function usePluginState(): PluginState {
   const [s, setS] = useState<PluginState>(_state);
   useEffect(() => {
     const fn = () => setS({ ..._state });
     _stateListeners.add(fn);
-    return () => { _stateListeners.delete(fn); };
+    _componentListeners.add(fn);
+    return () => { _stateListeners.delete(fn); _componentListeners.delete(fn); };
   }, []);
   return s;
 }
 
 let _onInsertCode: ((code: string) => void) | null = null;
+let _currentUpdateToolbar: (() => void) | null = null;
 let _vfsContentUnsub: (() => void) | null = null;
 
 /* ── Snippets ────────────────────────────────────────────────────────────────*/
@@ -2040,25 +2051,9 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
 
     // ── Toolbar ──────────────────────────────────────────────────────────────
 
-    type ToolbarDisposable = ReturnType<typeof api.ui.toolbar.register> | null;
-    let toolbarDisposables: ToolbarDisposable[] = [];
-
-    function clearToolbar() {
-      toolbarDisposables.forEach((d) => d?.dispose());
-      toolbarDisposables = [];
-    }
-
-    function updateToolbar() {
-      clearToolbar();
-      if (!_state.isMinisFile) return;
-      toolbarDisposables = [
-        api.ui.toolbar.register({ id: 'vml.open',   label: 'Open MinisLib Graph',      icon: ICON_GRAPH,            command: `${PLUGIN_ID}:open`,           group: 'right', order: 160 }),
-        api.ui.toolbar.register({ id: 'vml.export', label: 'Export Plugin Manifest',   icon: ICON_EXPORT_MANIFEST,  command: `${PLUGIN_ID}:exportManifest`, group: 'right', order: 161 }),
-      ];
-    }
-
-    // Re-evaluate toolbar whenever plugin state changes (isMinisFile may flip)
-    _stateListeners.add(updateToolbar);
+    // Register toolbar items once — always visible regardless of active file.
+    api.ui.toolbar.register({ id: 'vml.open',   label: 'Open MinisLib Graph',    icon: ICON_GRAPH,           command: `${PLUGIN_ID}:open`,           group: 'right', order: 160 });
+    api.ui.toolbar.register({ id: 'vml.export', label: 'Export Plugin Manifest', icon: ICON_EXPORT_MANIFEST, command: `${PLUGIN_ID}:exportManifest`, group: 'right', order: 161 });
 
     // ── Commands ─────────────────────────────────────────────────────────────
 
@@ -2160,6 +2155,14 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
   },
 
   () => {
+    // Remove toolbar updater — prevents stale api closure from throwing in notifyState()
+    // on next activation (each activate() adds a new updateToolbar; without cleanup
+    // the old one stays in _stateListeners and its api.ui.toolbar.register() throws,
+    // aborting the forEach before the new updateToolbar can run).
+    if (_currentUpdateToolbar) {
+      _stateListeners.delete(_currentUpdateToolbar);
+      _currentUpdateToolbar = null;
+    }
     _vfsContentUnsub?.();
     _vfsContentUnsub = null;
     _onInsertCode = null;
