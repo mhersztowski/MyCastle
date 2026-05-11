@@ -20,12 +20,15 @@ import TextField from '@mui/material/TextField';
 import Divider from '@mui/material/Divider';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
+import Autocomplete from '@mui/material/Autocomplete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import DownloadIcon from '@mui/icons-material/Download';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import {
   ReactFlow,
   Background,
@@ -124,6 +127,7 @@ const BUILTIN_PARAM_DEFS: Partial<Record<EntityKind | string, ParamDef[]>> = {
 
 const MINISLIB_BASE_KIND: Record<string, EntityKind> = {
   MObject: 'class',
+  Node: 'class',
   MTimer: 'timer',
   MStateMachine: 'fsm',
   MEventBus: 'bus',
@@ -131,6 +135,12 @@ const MINISLIB_BASE_KIND: Record<string, EntityKind> = {
   MListModel: 'listmodel',
   MLogger: 'logger',
 };
+
+const NODE_BUILTIN_SIGNALS: SignalPort[] = [
+  { name: 'childAdded',    type: 'Node' },
+  { name: 'childRemoved',  type: 'Node' },
+  { name: 'parentChanged', type: 'Node | null' },
+];
 
 const BUILTIN_SIGNALS: Record<EntityKind, SignalPort[]> = {
   class: [],
@@ -253,7 +263,8 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
     knownClasses.set(className, 'class');
 
     const body = extractClassBody(code, m.index + m[0].length);
-    const signals = [...BUILTIN_SIGNALS[baseKind], ...parseSignalPorts(body)];
+    const builtinSigs = parent === 'Node' ? NODE_BUILTIN_SIGNALS : BUILTIN_SIGNALS[baseKind];
+    const signals = [...builtinSigs, ...parseSignalPorts(body)];
     const signalNameSet = new Set(signals.map((s) => s.name.split('.')[0]));
     const slots = parseSlotPorts(body, signalNameSet);
 
@@ -550,13 +561,24 @@ function markDirty(path: string) {
   globalEventBus.emit('system:editor:markDirty', { path });
 }
 
+/** Re-parse entities from `newCode` and notify React so the canvas updates immediately.
+ *  Called after programmatic edits — pushEditOperations doesn't fire onDidChangeContent
+ *  when the graph virtual tab is active, so we must refresh manually. */
+function refreshStateFromEdit(newCode: string) {
+  const byClass = new Map<string, ExternalClassDef>(
+    _state.externalClassDefs.map((e) => [e.className, e.def]),
+  );
+  const { entities, connections } = parseMinisEntities(newCode, byClass);
+  const savedPositions = parseGraphMetadata(newCode);
+  _state = { ..._state, entities, connections, currentCode: newCode, savedPositions };
+  notifyState();
+}
+
 function replaceModelContent(model: monaco.editor.ITextModel, newCode: string) {
   const full = model.getFullModelRange();
   model.pushEditOperations([], [{ range: full, text: newCode }], () => null);
   markDirty(model.uri.path);
-  // pushEditOperations doesn't fire onDidChangeContent when graph tab is active —
-  // keep _state.currentCode in sync so next patch has the correct base
-  _state = { ..._state, currentCode: newCode };
+  refreshStateFromEdit(newCode);
 }
 
 function findModel(targetUri: string): monaco.editor.ITextModel | null {
@@ -581,7 +603,70 @@ function insertAtEnd(code: string, targetUri: string): boolean {
     () => null,
   );
   markDirty(model.uri.path);
+  refreshStateFromEdit(model.getValue());
   return true;
+}
+
+function removeConnectLine(conn: ParsedConnection, targetUri: string): boolean {
+  const model = findModel(targetUri);
+  if (!model) return false;
+  const lines = model.getValue().split('\n');
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const srcPart = conn.signalName ? `${esc(conn.sourceVar)}\\.${esc(conn.signalName)}` : esc(conn.sourceVar);
+  const tgtPart = conn.slotName ? `${esc(conn.targetVar)}(?:\\.${esc(conn.slotName)})?` : esc(conn.targetVar);
+  const re = new RegExp(`${srcPart}\\.connect\\s*\\(\\s*${tgtPart}(?:\\.bind\\s*\\([^)]*\\))?\\s*\\)`);
+  const lineIdx = lines.findIndex((l) => re.test(l));
+  if (lineIdx < 0) return false;
+  lines.splice(lineIdx, 1);
+  replaceModelContent(model, lines.join('\n'));
+  return true;
+}
+
+function insertMemberIntoClass(memberCode: string, className: string, targetUri: string): boolean {
+  const model = findModel(targetUri);
+  if (!model) return false;
+  const code = model.getValue();
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Find "class ClassName ... {" and insert right after the opening brace
+  const re = new RegExp(`class\\s+${esc(className)}\\b[^{]*\\{`);
+  const match = re.exec(code);
+  if (!match) return false;
+  const insertPos = match.index + match[0].length;
+  replaceModelContent(model, code.slice(0, insertPos) + '\n  ' + memberCode + code.slice(insertPos));
+  return true;
+}
+
+/** Adds `name` to an existing named import from `pkg`, or inserts a new import line. */
+function ensureNamedImport(name: string, pkg: string, targetUri: string): void {
+  const model = findModel(targetUri);
+  if (!model) return;
+  const code = model.getValue();
+  // Already imported?
+  if (new RegExp(`\\b${name}\\b`).test(code)) return;
+  // Extend existing import from the same package
+  const existingRe = new RegExp(`(import\\s*\\{[^}]*)\\}\\s*from\\s*['"]${pkg.replace(/\//g, '\\/')}['"]`);
+  const m = existingRe.exec(code);
+  if (m) {
+    replaceModelContent(model, code.slice(0, m.index) + `${m[1]}, ${name} }` + code.slice(m.index + m[0].length - (code.length - code.indexOf('}', m.index + m[1].length))));
+    return;
+  }
+  // Insert new import at top (after last existing import line, or at position 0)
+  const lines = code.split('\n');
+  let lastImportIdx = -1;
+  lines.forEach((l, i) => { if (/^\s*import\s/.test(l)) lastImportIdx = i; });
+  const insertIdx = lastImportIdx + 1;
+  lines.splice(insertIdx, 0, `import { ${name} } from '${pkg}';`);
+  replaceModelContent(model, lines.join('\n'));
+}
+
+const BASE_CLASS_OPTIONS = [
+  { label: 'Node', value: 'Node', pkg: '@mhersztowski/minislib' },
+  { label: 'MObject', value: 'MObject', pkg: '@mhersztowski/minislib' },
+] as const;
+
+function insertNewClass(className: string, baseClass: string, pkg: string, targetUri: string): boolean {
+  ensureNamedImport(baseClass, pkg, targetUri);
+  return insertAtEnd(`\nclass ${className} extends ${baseClass} {\n}`, targetUri);
 }
 
 /* ── Module-level shared state ───────────────────────────────────────────────*/
@@ -600,6 +685,8 @@ interface PluginState {
 }
 
 let _state: PluginState = { entities: [], connections: [], uri: '', isMinisFile: false, currentCode: '', savedPositions: {}, externalClassDefs: [], importedClasses: [] };
+// Persists ReactFlow viewport across tab switches (component unmount/remount)
+let _savedViewport: { x: number; y: number; zoom: number } | null = null;
 
 const _stateListeners = new Set<() => void>();
 function notifyState() { _stateListeners.forEach((fn) => fn()); }
@@ -964,6 +1051,641 @@ function ExportManifestButton({ uri, entities }: { uri: string; entities: MinisE
   );
 }
 
+/* ── Type selector helpers ───────────────────────────────────────────────────*/
+
+interface TypeOpt { label: string; group: string }
+
+const BUILTIN_TYPE_OPTS: TypeOpt[] = [
+  // Primitives
+  { label: 'number',    group: 'Primitive' },
+  { label: 'string',    group: 'Primitive' },
+  { label: 'boolean',   group: 'Primitive' },
+  { label: 'unknown',   group: 'Primitive' },
+  { label: 'void',      group: 'Primitive' },
+  { label: 'null',      group: 'Primitive' },
+  { label: 'undefined', group: 'Primitive' },
+  // Arrays
+  { label: 'number[]',  group: 'Array' },
+  { label: 'string[]',  group: 'Array' },
+  { label: 'boolean[]', group: 'Array' },
+  { label: 'unknown[]', group: 'Array' },
+  // Collections
+  { label: 'Record<string, unknown>', group: 'Collection' },
+  { label: 'Record<string, number>',  group: 'Collection' },
+  { label: 'Map<string, unknown>',    group: 'Collection' },
+  { label: 'Set<string>',             group: 'Collection' },
+  // Object shapes
+  { label: '{ id: string; value: number }',          group: 'Object' },
+  { label: '{ device: string; value: number }',      group: 'Object' },
+  { label: '{ topic: string; payload: unknown }',    group: 'Object' },
+  // Unions
+  { label: 'number | null',   group: 'Union' },
+  { label: 'string | null',   group: 'Union' },
+  { label: 'string | number', group: 'Union' },
+  { label: 'boolean | null',  group: 'Union' },
+];
+
+function defaultsForType(t: string): string[] {
+  const s = t.trim();
+  if (s === 'number') return ['0', '1', '-1'];
+  if (s === 'string') return ["''", "'default'"];
+  if (s === 'boolean') return ['false', 'true'];
+  if (s === 'null') return ['null'];
+  if (s === 'undefined' || s === 'unknown') return ['undefined'];
+  if (s === 'void') return [];
+  if (s.endsWith('[]') || s.startsWith('Array<')) return ['[]'];
+  if (s.startsWith('Record') || s.startsWith('{') || s.startsWith('Map') || s.startsWith('Set')) return ['{}'];
+  if (s.includes('| null') || s.includes('null |')) return ['null'];
+  return ['undefined'];
+}
+
+const COMBO_PAPER_SX = { background: '#1e1e2e', border: '1px solid #313244', color: '#cdd6f4', '& .MuiAutocomplete-listbox': { p: 0 } };
+const COMBO_INPUT_SX = {
+  '& .MuiOutlinedInput-root': {
+    background: '#1e1e2e',
+    color: '#cdd6f4',
+    pr: '4px !important',
+    '& fieldset': { borderColor: '#313244' },
+    '&:hover fieldset': { borderColor: '#585b70' },
+    '& input::placeholder': { color: '#585b70', opacity: 1 },
+  },
+};
+
+function TypeComboBox({ value, onChange, placeholder, onCommit, onCancel }: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  onCommit?: () => void;
+  onCancel?: () => void;
+}) {
+  const classOpts: TypeOpt[] = _state.entities
+    .filter((e) => e.kind === 'class')
+    .map((e) => ({ label: e.varName, group: 'File classes' }));
+  const opts = [...BUILTIN_TYPE_OPTS, ...classOpts];
+
+  return (
+    <Autocomplete
+      freeSolo
+      disableClearable
+      options={opts}
+      groupBy={(o) => (typeof o === 'string' ? '' : o.group)}
+      getOptionLabel={(o) => (typeof o === 'string' ? o : o.label)}
+      inputValue={value}
+      onInputChange={(_, v) => onChange(v)}
+      onChange={(_, v) => onChange(typeof v === 'string' ? v : v.label)}
+      size="small"
+      sx={COMBO_INPUT_SX}
+      slotProps={{ paper: { sx: COMBO_PAPER_SX }, popper: { placement: 'top-start' } }}
+      renderInput={(params) => (
+        <TextField {...params} placeholder={placeholder ?? 'type'}
+          onKeyDown={(e) => { if (e.key === 'Enter') onCommit?.(); if (e.key === 'Escape') onCancel?.(); }}
+          inputProps={{ ...params.inputProps, style: { fontSize: 11, padding: '3px 6px', fontFamily: 'monospace' } }}
+        />
+      )}
+      renderOption={(props, o) => (
+        <Box component="li" {...props} sx={{ fontSize: 11, fontFamily: 'monospace', py: '2px !important', px: 1.5 }}>
+          {typeof o === 'string' ? o : o.label}
+        </Box>
+      )}
+      renderGroup={(params) => (
+        <div key={params.key}>
+          <Typography sx={{ fontSize: 9, color: '#45475a', px: 1.5, pt: 0.5, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+            {params.group}
+          </Typography>
+          {params.children}
+        </div>
+      )}
+    />
+  );
+}
+
+function DefaultComboBox({ typeVal, value, onChange, onCommit, onCancel }: {
+  typeVal: string;
+  value: string;
+  onChange: (v: string) => void;
+  onCommit?: () => void;
+  onCancel?: () => void;
+}) {
+  const opts = defaultsForType(typeVal);
+  return (
+    <Autocomplete
+      freeSolo
+      disableClearable
+      options={opts}
+      inputValue={value}
+      onInputChange={(_, v) => onChange(v)}
+      onChange={(_, v) => onChange(v ?? '')}
+      size="small"
+      sx={COMBO_INPUT_SX}
+      slotProps={{ paper: { sx: COMBO_PAPER_SX } }}
+      renderInput={(params) => (
+        <TextField {...params} placeholder="default value"
+          onKeyDown={(e) => { if (e.key === 'Enter') onCommit?.(); if (e.key === 'Escape') onCancel?.(); }}
+          inputProps={{ ...params.inputProps, style: { fontSize: 11, padding: '3px 6px', fontFamily: 'monospace' } }}
+        />
+      )}
+      renderOption={(props, o) => (
+        <Box component="li" {...props} sx={{ fontSize: 11, fontFamily: 'monospace', py: '2px !important', px: 1.5 }}>
+          {o}
+        </Box>
+      )}
+    />
+  );
+}
+
+/* ── Slot builder — visual block editor for slot bodies ─────────────────────*/
+
+type StmtKind = 'set-prop'|'emit'|'if'|'if-else'|'log'|'declare'|'assign'|'return'|'call'|'append'|'comment';
+
+type SlotStmt =
+  | { id: string; k: 'set-prop';  prop: string;   expr: string }
+  | { id: string; k: 'emit';      signal: string; expr: string }
+  | { id: string; k: 'if';        cond: string;   body: SlotStmt[] }
+  | { id: string; k: 'if-else';   cond: string;   then: SlotStmt[]; els: SlotStmt[] }
+  | { id: string; k: 'log';       level: string;  args: string }
+  | { id: string; k: 'declare';   name: string;   expr: string }
+  | { id: string; k: 'assign';    target: string; expr: string }
+  | { id: string; k: 'return';    expr: string }
+  | { id: string; k: 'call';      obj: string;    method: string; arg: string }
+  | { id: string; k: 'append';    prop: string;   item: string;   maxLen: string }
+  | { id: string; k: 'comment';   text: string };
+
+let _sbId = 0;
+const mkSid = () => `sb${_sbId++}`;
+
+function mkStmt(k: StmtKind): SlotStmt {
+  switch (k) {
+    case 'set-prop':  return { id: mkSid(), k, prop: '',       expr: 'v' };
+    case 'emit':      return { id: mkSid(), k, signal: '',     expr: 'v' };
+    case 'if':        return { id: mkSid(), k, cond: 'v > 0',  body: [] };
+    case 'if-else':   return { id: mkSid(), k, cond: 'v > 0',  then: [], els: [] };
+    case 'log':       return { id: mkSid(), k, level: 'log',   args: 'v' };
+    case 'declare':   return { id: mkSid(), k, name: 'result', expr: 'v' };
+    case 'assign':    return { id: mkSid(), k, target: '',     expr: 'v' };
+    case 'return':    return { id: mkSid(), k, expr: 'v' };
+    case 'call':      return { id: mkSid(), k, obj: 'this',    method: '', arg: 'v' };
+    case 'append':    return { id: mkSid(), k, prop: '',       item: 'v', maxLen: '20' };
+    case 'comment':   return { id: mkSid(), k, text: '' };
+  }
+}
+
+function genStmt(s: SlotStmt, d = 2): string {
+  const p = '  '.repeat(d);
+  const e = (x: string) => x || '_';
+  switch (s.k) {
+    case 'set-prop':  return `${p}this.${e(s.prop)}.value = ${e(s.expr)};`;
+    case 'emit':      return `${p}this.${e(s.signal)}.emit(${e(s.expr)});`;
+    case 'if':        return `${p}if (${e(s.cond)}) {\n${genStmts(s.body, d+1)}\n${p}}`;
+    case 'if-else':   return `${p}if (${e(s.cond)}) {\n${genStmts(s.then, d+1)}\n${p}} else {\n${genStmts(s.els, d+1)}\n${p}}`;
+    case 'log':       return `${p}console.${s.level}(${e(s.args)});`;
+    case 'declare':   return `${p}const ${e(s.name)} = ${e(s.expr)};`;
+    case 'assign':    return `${p}${e(s.target)} = ${e(s.expr)};`;
+    case 'return':    return `${p}return ${e(s.expr)};`;
+    case 'call':      return `${p}${s.obj ? s.obj + '.' : 'this.'}${e(s.method)}(${s.arg});`;
+    case 'append':    return `${p}this.${e(s.prop)}.value = [...this.${e(s.prop)}.value${s.maxLen ? `.slice(-(${s.maxLen}-1))` : ''}, ${e(s.item)}];`;
+    case 'comment':   return `${p}// ${s.text}`;
+  }
+}
+function genStmts(ss: SlotStmt[], d = 2): string { return ss.map(s => genStmt(s, d)).join('\n') || `${'  '.repeat(d)}// empty`; }
+
+interface SlotCtx { props: string[]; signals: string[]; slots: string[]; exprOpts: string[]; condOpts: string[] }
+
+function buildSlotCtx(entity: MinisEntity): SlotCtx {
+  const code = _state.currentCode;
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const clsMatch = new RegExp(`class\\s+${esc(entity.varName)}\\b[^{]*\\{`).exec(code);
+  const body = clsMatch ? extractClassBody(code, clsMatch.index + clsMatch[0].length) : '';
+  const props: string[] = [];
+  let m: RegExpExecArray | null;
+  const propRe = /readonly\s+(\w+)\s*=\s*new\s+MProperty/g;
+  while ((m = propRe.exec(body)) !== null) props.push(m[1]);
+  const signals = entity.signals.map(s => s.name).filter(n => !['changed', 'emit', 'timeout'].includes(n));
+  const slots   = entity.slots.map(s => s.name);
+  const exprOpts = [
+    'v',
+    ...props.map(p => `this.${p}.value`),
+    'Number(v)', 'String(v)', 'Boolean(v)',
+    'Math.round(v)', 'Math.abs(v)', 'Math.floor(v)', 'Math.ceil(v)',
+    'Math.min(v, 0)', 'Math.max(v, 0)',
+    'v + 1', 'v - 1', 'v * 2', 'v / 2', 'v % 2',
+    'v.toFixed(2)', 'v.toString()',
+    '`${v}`', '`${v} °C`', '`${v} %`', '`${v} ms`',
+    'Date.now()', 'new Date().toLocaleTimeString()',
+    'true', 'false', 'null', 'undefined', '[]', '{}', "''",
+    ...props.map(p => `[...this.${p}.value.slice(-19), v]`),
+  ];
+  const condOpts = [
+    'v > 0', 'v < 0', 'v >= 0', 'v <= 0',
+    'v !== undefined', 'v !== null', 'v === true', 'v === false',
+    ...props.map(p => `v > this.${p}.value`),
+    ...props.map(p => `v < this.${p}.value`),
+    ...props.map(p => `v === this.${p}.value`),
+    ...props.map(p => `v !== this.${p}.value`),
+    'true', 'false',
+  ];
+  return { props, signals, slots, exprOpts, condOpts };
+}
+
+const STMT_COLOR: Record<StmtKind, string> = {
+  'set-prop': '#1565c0', 'emit':    '#6a1b9a', 'if':      '#e65100',
+  'if-else':  '#bf360c', 'log':     '#2e7d32', 'declare': '#00838f',
+  'assign':   '#c62828', 'return':  '#ad1457', 'call':    '#4527a0',
+  'append':   '#006064', 'comment': '#37474f',
+};
+const STMT_LABEL: Record<StmtKind, string> = {
+  'set-prop': 'set',   'emit':    'emit',   'if':      'if',
+  'if-else':  'if/else','log':    'log',    'declare': 'const',
+  'assign':   '=',     'return':  'return', 'call':    'call',
+  'append':   'push',  'comment': '//',
+};
+const PALETTE_GROUPS: Array<{ label: string; items: StmtKind[] }> = [
+  { label: 'State',  items: ['set-prop', 'emit', 'append'] },
+  { label: 'Flow',   items: ['if', 'if-else', 'return'] },
+  { label: 'Vars',   items: ['declare', 'assign'] },
+  { label: 'Other',  items: ['log', 'call', 'comment'] },
+];
+
+const INLINE_INPUT_SX = {
+  '& .MuiOutlinedInput-root': {
+    background: '#252535', color: '#cdd6f4', pr: '2px !important',
+    '& fieldset': { borderColor: '#45475a' },
+    '&:hover fieldset': { borderColor: '#585b70' },
+    '& input': { padding: '1px 4px !important', fontSize: 10, fontFamily: 'monospace' },
+  },
+};
+
+function ExprField({ value, onChange, opts, width }: { value: string; onChange: (v: string) => void; opts: string[]; width?: number | string }) {
+  return (
+    <Autocomplete freeSolo disableClearable options={opts} inputValue={value}
+      onInputChange={(_, v) => onChange(v)} onChange={(_, v) => onChange(typeof v === 'string' ? v : '')}
+      size="small" sx={{ width: width ?? 100, minWidth: 60 }}
+      slotProps={{ paper: { sx: COMBO_PAPER_SX }, popper: { placement: 'top-start' } }}
+      renderInput={(params) => (
+        <TextField {...params} inputProps={{ ...params.inputProps, style: { fontSize: 10, padding: '1px 4px', fontFamily: 'monospace', color: '#cdd6f4' } }} sx={INLINE_INPUT_SX} />
+      )}
+      renderOption={(props, o) => <Box component="li" {...props} sx={{ fontSize: 10, fontFamily: 'monospace', py: '1px !important', px: 1 }}>{o}</Box>}
+    />
+  );
+}
+
+function TinyField({ value, onChange, placeholder, width = 60 }: { value: string; onChange: (v: string) => void; placeholder?: string; width?: number }) {
+  return (
+    <TextField size="small" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+      inputProps={{ style: { fontSize: 10, padding: '1px 4px', fontFamily: 'monospace', color: '#cdd6f4', width } }}
+      sx={INLINE_INPUT_SX} />
+  );
+}
+
+const IL = ({ children }: { children: React.ReactNode }) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', minWidth: 0 }}>{children}</Box>
+);
+const Lbl = ({ children }: { children: React.ReactNode }) => (
+  <Typography sx={{ fontSize: 10, color: '#585b70', whiteSpace: 'nowrap', userSelect: 'none' }}>{children}</Typography>
+);
+
+function StmtBlockFields({ stmt, ctx, onChange }: { stmt: SlotStmt; ctx: SlotCtx; onChange: (s: SlotStmt) => void }) {
+  switch (stmt.k) {
+    case 'set-prop':  return <IL><Lbl>this.</Lbl><ExprField value={stmt.prop} onChange={(v) => onChange({ ...stmt, prop: v })} opts={ctx.props} width={80}/><Lbl>.value =</Lbl><ExprField value={stmt.expr} onChange={(v) => onChange({ ...stmt, expr: v })} opts={ctx.exprOpts} width={100}/></IL>;
+    case 'emit':      return <IL><Lbl>this.</Lbl><ExprField value={stmt.signal} onChange={(v) => onChange({ ...stmt, signal: v })} opts={ctx.signals} width={90}/><Lbl>.emit(</Lbl><ExprField value={stmt.expr} onChange={(v) => onChange({ ...stmt, expr: v })} opts={ctx.exprOpts} width={90}/><Lbl>)</Lbl></IL>;
+    case 'return':    return <IL><ExprField value={stmt.expr} onChange={(v) => onChange({ ...stmt, expr: v })} opts={ctx.exprOpts} width={140}/></IL>;
+    case 'declare':   return <IL><TinyField value={stmt.name} onChange={(v) => onChange({ ...stmt, name: v })} placeholder="name"/><Lbl>=</Lbl><ExprField value={stmt.expr} onChange={(v) => onChange({ ...stmt, expr: v })} opts={ctx.exprOpts} width={100}/></IL>;
+    case 'assign':    return <IL><TinyField value={stmt.target} onChange={(v) => onChange({ ...stmt, target: v })} placeholder="target"/><Lbl>=</Lbl><ExprField value={stmt.expr} onChange={(v) => onChange({ ...stmt, expr: v })} opts={ctx.exprOpts} width={100}/></IL>;
+    case 'log':       return (
+      <IL>
+        <Autocomplete freeSolo disableClearable options={['log','warn','error']} inputValue={stmt.level} onInputChange={(_, v) => onChange({ ...stmt, level: v })} size="small" sx={{ width: 68 }} slotProps={{ paper: { sx: COMBO_PAPER_SX }, popper: { placement: 'top-start' } }} renderInput={(p) => <TextField {...p} inputProps={{ ...p.inputProps, style: { fontSize: 10, padding: '1px 4px', color: '#cdd6f4', fontFamily: 'monospace' } }} sx={INLINE_INPUT_SX}/>} renderOption={(p, o) => <Box component="li" {...p} sx={{ fontSize: 10, py: '1px !important', px: 1 }}>{o}</Box>}/>
+        <Lbl>(</Lbl><ExprField value={stmt.args} onChange={(v) => onChange({ ...stmt, args: v })} opts={ctx.exprOpts} width={120}/><Lbl>)</Lbl>
+      </IL>
+    );
+    case 'call':      return <IL><TinyField value={stmt.obj} onChange={(v) => onChange({ ...stmt, obj: v })} placeholder="this" width={45}/><Lbl>.</Lbl><ExprField value={stmt.method} onChange={(v) => onChange({ ...stmt, method: v })} opts={ctx.slots} width={90}/><Lbl>(</Lbl><ExprField value={stmt.arg} onChange={(v) => onChange({ ...stmt, arg: v })} opts={ctx.exprOpts} width={80}/><Lbl>)</Lbl></IL>;
+    case 'append':    return <IL><Lbl>this.</Lbl><ExprField value={stmt.prop} onChange={(v) => onChange({ ...stmt, prop: v })} opts={ctx.props} width={80}/><Lbl>push</Lbl><ExprField value={stmt.item} onChange={(v) => onChange({ ...stmt, item: v })} opts={ctx.exprOpts} width={80}/><Lbl>max</Lbl><TinyField value={stmt.maxLen} onChange={(v) => onChange({ ...stmt, maxLen: v })} placeholder="20" width={30}/></IL>;
+    case 'comment':   return <TinyField value={stmt.text} onChange={(v) => onChange({ ...stmt, text: v })} placeholder="comment…" width={160}/>;
+    case 'if': case 'if-else': return <IL><ExprField value={stmt.cond} onChange={(v) => onChange({ ...stmt, cond: v } as SlotStmt)} opts={ctx.condOpts} width={160}/></IL>;
+  }
+}
+
+function StmtBlock({ stmt, ctx, onChange, onDelete, onUp, onDown, canUp, canDown, depth }: {
+  stmt: SlotStmt; ctx: SlotCtx; onChange: (s: SlotStmt) => void; onDelete: () => void;
+  onUp: () => void; onDown: () => void; canUp: boolean; canDown: boolean; depth: number;
+}) {
+  const color = STMT_COLOR[stmt.k];
+  const label = STMT_LABEL[stmt.k];
+  const isNested = stmt.k === 'if' || stmt.k === 'if-else';
+  return (
+    <Box sx={{ mb: 0.5, border: `1px solid ${color}44`, borderRadius: 0.75, background: `${color}0d`, overflow: 'hidden' }}>
+      {/* Row: badge + fields + controls */}
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, p: 0.5 }}>
+        <Box sx={{ minWidth: 34, mt: '1px', height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: color, borderRadius: 0.5, flexShrink: 0 }}>
+          <Typography sx={{ fontSize: 8, color: '#fff', fontWeight: 700, letterSpacing: 0.3 }}>{label}</Typography>
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}><StmtBlockFields stmt={stmt} ctx={ctx} onChange={onChange} /></Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          {['▲','▼','×'].map((ch, i) => (
+            <Box key={ch} onClick={i===0?onUp:i===1?onDown:onDelete} sx={{
+              width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 0.25, fontSize: 9,
+              color: i===2?'#f38ba866':'#45475a', '&:hover':{ color: i===2?'#f38ba8':'#cdd6f4', background:'#31324422' },
+              opacity: (i===0&&!canUp)||(i===1&&!canDown)?0.25:1, pointerEvents:(i===0&&!canUp)||(i===1&&!canDown)?'none':'auto',
+            }}>{ch}</Box>
+          ))}
+        </Box>
+      </Box>
+      {/* Nested blocks for if / if-else */}
+      {stmt.k === 'if' && (
+        <Box sx={{ px: 0.75, pb: 0.5 }}>
+          <StmtList stmts={stmt.body} ctx={ctx} onChange={(body) => onChange({ ...stmt, body })} depth={depth+1} />
+        </Box>
+      )}
+      {stmt.k === 'if-else' && (
+        <Box sx={{ px: 0.75, pb: 0.5 }}>
+          <Typography sx={{ fontSize: 8, color: '#a6adc8', px: 0.25, pb: 0.25 }}>then:</Typography>
+          <StmtList stmts={stmt.then} ctx={ctx} onChange={(then) => onChange({ ...stmt, then })} depth={depth+1} />
+          <Typography sx={{ fontSize: 8, color: '#a6adc8', px: 0.25, py: 0.25 }}>else:</Typography>
+          <StmtList stmts={stmt.els}  ctx={ctx} onChange={(els)  => onChange({ ...stmt, els  })} depth={depth+1} />
+        </Box>
+      )}
+      {isNested && <Box sx={{ height: 2 }} />}
+    </Box>
+  );
+}
+
+function StmtList({ stmts, ctx, onChange, depth = 0 }: { stmts: SlotStmt[]; ctx: SlotCtx; onChange: (ss: SlotStmt[]) => void; depth?: number }) {
+  const upd = (i: number, s: SlotStmt) => onChange(stmts.map((x, j) => j === i ? s : x));
+  const del = (i: number) => onChange(stmts.filter((_, j) => j !== i));
+  const mv  = (i: number, dir: -1|1) => { const j = i+dir; if (j<0||j>=stmts.length) return; const a=[...stmts];[a[i],a[j]]=[a[j],a[i]]; onChange(a); };
+  const add = (k: StmtKind) => onChange([...stmts, mkStmt(k)]);
+  return (
+    <Box sx={{ pl: depth > 0 ? 1 : 0, borderLeft: depth > 0 ? '2px solid #31324466' : 'none', ml: depth > 0 ? 0.5 : 0 }}>
+      {stmts.map((s, i) => (
+        <StmtBlock key={s.id} stmt={s} ctx={ctx} depth={depth} onChange={(ns) => upd(i, ns)} onDelete={() => del(i)} onUp={() => mv(i, -1)} onDown={() => mv(i, 1)} canUp={i>0} canDown={i<stmts.length-1} />
+      ))}
+      {depth > 0 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.25, mt: 0.25 }}>
+          {PALETTE_GROUPS.flatMap(g => g.items).filter(k => k !== 'if' && k !== 'if-else').map(k => (
+            <Box key={k} onClick={() => add(k)} sx={{ px: 0.5, py: 0.1, fontSize: 9, fontWeight: 700, borderRadius: 0.25, cursor: 'pointer', color: STMT_COLOR[k], background: STMT_COLOR[k]+'22', border: `1px solid ${STMT_COLOR[k]}44`, '&:hover': { background: STMT_COLOR[k]+'44' } }}>{STMT_LABEL[k]}</Box>
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function SlotBuilder({ entity, onCancel, onCommit }: { entity: MinisEntity; onCancel: () => void; onCommit: (name: string, type: string, stmts: SlotStmt[]) => void }) {
+  const [slotName, setSlotName] = useState('');
+  const [paramType, setParamType] = useState('unknown');
+  const [stmts, setStmts] = useState<SlotStmt[]>([]);
+  const ctx = useMemo(() => buildSlotCtx(entity), [entity.varName]); // eslint-disable-line react-hooks/exhaustive-deps
+  const preview = `${slotName||'_'}(v: ${paramType}): void {\n${genStmts(stmts)}\n  }`;
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid #313244', background: '#13131e', maxHeight: 420, minHeight: 280 }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5, gap: 1, borderBottom: '1px solid #313244', flexShrink: 0 }}>
+        <Typography sx={{ fontSize: 11, color: '#89dceb', fontWeight: 600, flex: 1 }}>New Slot</Typography>
+        <Button size="small" onClick={onCancel} sx={{ fontSize: 10, color: '#6c7086', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0 }}>Cancel</Button>
+        <Button size="small" onClick={() => onCommit(slotName, paramType, stmts)} disabled={!slotName.trim()}
+          sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144' }}>Add</Button>
+      </Box>
+      {/* Signature */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.5, borderBottom: '1px solid #313244', flexShrink: 0 }}>
+        <TextField autoFocus size="small" placeholder="name" value={slotName}
+          onChange={(e) => { const v = e.target.value; setSlotName(v ? v[0].toLowerCase()+v.slice(1) : v); }}
+          inputProps={{ style: { fontSize: 11, padding: '2px 6px', fontFamily: 'monospace', color: '#cdd6f4' } }}
+          sx={{ width: 110, '& .MuiOutlinedInput-root': { background: '#1e1e2e', '& fieldset': { borderColor: '#313244' } } }} />
+        <Typography sx={{ fontSize: 11, color: '#45475a' }}>(v:</Typography>
+        <TypeComboBox value={paramType} onChange={setParamType} placeholder="type" />
+        <Typography sx={{ fontSize: 11, color: '#45475a' }}>)</Typography>
+      </Box>
+      {/* Body: palette | statements */}
+      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+        {/* Palette */}
+        <Box sx={{ width: 76, borderRight: '1px solid #313244', overflowY: 'auto', p: 0.5, flexShrink: 0 }}>
+          {PALETTE_GROUPS.map(g => (
+            <Box key={g.label} sx={{ mb: 0.75 }}>
+              <Typography sx={{ fontSize: 8, color: '#45475a', textTransform: 'uppercase', letterSpacing: 0.8, px: 0.25, mb: 0.25 }}>{g.label}</Typography>
+              {g.items.map(k => (
+                <Box key={k} onClick={() => setStmts(prev => [...prev, mkStmt(k)])}
+                  sx={{ px: 0.75, py: 0.2, mb: 0.2, fontSize: 10, fontWeight: 700, borderRadius: 0.5, cursor: 'pointer', color: STMT_COLOR[k], background: STMT_COLOR[k]+'22', border: `1px solid ${STMT_COLOR[k]}44`, '&:hover': { background: STMT_COLOR[k]+'44' } }}>
+                  {STMT_LABEL[k]}
+                </Box>
+              ))}
+            </Box>
+          ))}
+        </Box>
+        {/* Statement list + preview */}
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, overflowY: 'auto', p: 0.75 }}>
+            <StmtList stmts={stmts} ctx={ctx} onChange={setStmts} />
+            {stmts.length === 0 && <Typography sx={{ fontSize: 10, color: '#45475a', textAlign: 'center', pt: 2 }}>← click to add blocks</Typography>}
+          </Box>
+          {/* Code preview */}
+          <Box sx={{ borderTop: '1px solid #313244', px: 1, py: 0.5, background: '#0d0d1a', flexShrink: 0, maxHeight: 72, overflowY: 'auto' }}>
+            <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{preview}</Typography>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* ── Class builder panel (shown when a class entity is selected) ─────────────*/
+
+type ClassMemberMode = 'signal' | 'property' | 'slot';
+
+function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: () => void }) {
+  const color = KIND_COLOR['class'];
+  const [mode, setMode] = useState<ClassMemberMode | null>(null);
+  const [name, setName] = useState('');
+  const [type, setType] = useState('');
+  const [defaultVal, setDefaultVal] = useState('');
+
+  const reset = () => { setMode(null); setName(''); setType(''); setDefaultVal(''); };
+
+  // When type changes, auto-populate defaultVal with first suggestion (if still empty / was auto-set)
+  const handleTypeChange = useCallback((newType: string) => {
+    setType(newType);
+    if (mode === 'property') {
+      const suggestions = defaultsForType(newType);
+      if (suggestions.length > 0) setDefaultVal(suggestions[0]);
+    }
+  }, [mode]);
+
+  const commit = useCallback(() => {
+    const { uri } = _state;
+    if (!uri || !name.trim()) return;
+    const n = name.trim();
+    const t = type.trim() || 'unknown';
+    let memberCode = '';
+    if (mode === 'signal')        memberCode = `readonly ${n} = new Signal<${t}>(this);`;
+    else if (mode === 'property') memberCode = `readonly ${n} = new MProperty<${t}>(this, ${defaultVal.trim() || 'undefined'});`;
+    else if (mode === 'slot')     memberCode = `${n}(v: ${t}): void {}`;
+    if (memberCode) insertMemberIntoClass(memberCode, entity.varName, uri);
+    reset();
+  }, [mode, name, type, defaultVal, entity.varName]);
+
+  return (
+    <Box sx={{ borderTop: '1px solid #313244', background: '#13131e' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.75, gap: 1 }}>
+        <span style={{ fontSize: 14 }}>🏛</span>
+        <Typography sx={{ fontSize: 11, fontWeight: 600, color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {entity.varName}
+        </Typography>
+        <Tooltip title="Close">
+          <IconButton size="small" onClick={onClose} sx={{ color: '#45475a', p: 0.25 }}>
+            <CloseIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      <Divider sx={{ borderColor: '#313244' }} />
+
+      {(entity.signals.length > 0 || entity.slots.length > 0) && (
+        <Box sx={{ px: 1.5, py: 0.5 }}>
+          {entity.signals.length > 0 && (
+            <Typography sx={{ fontSize: 10, color: '#cba6f7', lineHeight: 1.8 }}>
+              ⚡ {entity.signals.map((s) => s.name).join('  ·  ')}
+            </Typography>
+          )}
+          {entity.slots.length > 0 && (
+            <Typography sx={{ fontSize: 10, color: '#89dceb', lineHeight: 1.8 }}>
+              ↩ {entity.slots.map((s) => s.name).join('  ·  ')}
+            </Typography>
+          )}
+        </Box>
+      )}
+
+      <Divider sx={{ borderColor: '#313244' }} />
+
+      {!mode ? (
+        <Box sx={{ px: 1.5, py: 0.75, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+          {(['signal', 'property', 'slot'] as ClassMemberMode[]).map((m) => {
+            const c = m === 'signal' ? '#cba6f7' : m === 'property' ? '#ce93d8' : '#89dceb';
+            return (
+              <Button key={m} size="small" onClick={() => setMode(m)}
+                sx={{ fontSize: 10, textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0, color: c, border: `1px solid ${c}44` }}>
+                + {m.charAt(0).toUpperCase() + m.slice(1)}
+              </Button>
+            );
+          })}
+        </Box>
+      ) : mode === 'slot' ? (
+        <SlotBuilder
+          entity={entity}
+          onCancel={reset}
+          onCommit={(slotName, paramType, stmts) => {
+            const { uri } = _state;
+            if (!uri || !slotName.trim()) return;
+            const body = genStmts(stmts, 2);
+            const memberCode = `${slotName}(v: ${paramType || 'unknown'}): void {\n${body}\n  }`;
+            insertMemberIntoClass(memberCode, entity.varName, uri);
+            reset();
+          }}
+        />
+      ) : (
+        <Box sx={{ px: 1.5, py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+          <Typography sx={{ fontSize: 10, color: '#a6adc8' }}>New {mode}</Typography>
+          {/* name — plain text, no suggestions; first char forced lowercase */}
+          <TextField size="small" autoFocus placeholder="name" value={name}
+            onChange={(e) => { const v = e.target.value; setName(v ? v[0].toLowerCase() + v.slice(1) : v); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') reset(); }}
+            inputProps={{ style: { fontSize: 11, padding: '3px 6px', fontFamily: 'monospace' } }}
+            sx={COMBO_INPUT_SX} />
+          {/* type — combobox with grouped presets + file classes */}
+          <TypeComboBox
+            value={type}
+            onChange={handleTypeChange}
+            placeholder="type"
+            onCommit={commit}
+            onCancel={reset}
+          />
+          {/* default value — combobox with type-aware suggestions (property only) */}
+          {mode === 'property' && (
+            <DefaultComboBox
+              typeVal={type}
+              value={defaultVal}
+              onChange={setDefaultVal}
+              onCommit={commit}
+              onCancel={reset}
+            />
+          )}
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Button size="small" onClick={commit} disabled={!name.trim()}
+              sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144' }}>
+              Add
+            </Button>
+            <Button size="small" onClick={reset}
+              sx={{ fontSize: 10, color: '#6c7086', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0 }}>
+              Cancel
+            </Button>
+          </Box>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+/* ── New-class button ────────────────────────────────────────────────────────*/
+
+function NewClassButton({ uri, onCreated }: { uri: string; onCreated: (varName: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [baseIdx, setBaseIdx] = useState(0); // 0 = Node (default), 1 = MObject
+  const anchorRef = useRef<HTMLButtonElement>(null);
+
+  const handleCreate = useCallback(() => {
+    if (!name.trim() || !uri) return;
+    const varName = name.trim();
+    const { value, pkg } = BASE_CLASS_OPTIONS[baseIdx];
+    insertNewClass(varName, value, pkg, uri);
+    onCreated(varName);
+    setName('');
+    setOpen(false);
+  }, [name, uri, baseIdx, onCreated]);
+
+  return (
+    <>
+      <Tooltip title="Define a new MObject subclass">
+        <Button ref={anchorRef} size="small" onClick={() => setOpen((v) => !v)}
+          sx={{ fontSize: 10, color: '#cba6f7', textTransform: 'none', py: 0, px: 1, minWidth: 0, borderLeft: '1px solid #313244', borderRadius: 0, '&:hover': { background: '#1e1e3e' } }}>
+          + Class
+        </Button>
+      </Tooltip>
+      <Menu
+        anchorEl={anchorRef.current}
+        open={open}
+        onClose={() => { setOpen(false); setName(''); }}
+        PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', p: 1, minWidth: 220, boxShadow: '0 4px 16px rgba(0,0,0,0.5)' } }}
+        transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+        anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+      >
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }} onKeyDown={(e) => e.stopPropagation()}>
+          {/* Base class toggle */}
+          <Box sx={{ display: 'flex', gap: 0.25 }}>
+            {BASE_CLASS_OPTIONS.map((opt, i) => (
+              <Button key={opt.value} size="small" onClick={() => setBaseIdx(i)}
+                sx={{ fontSize: 10, textTransform: 'none', py: 0.2, px: 0.75, minWidth: 0, flex: 1,
+                  color: baseIdx === i ? '#cba6f7' : '#45475a',
+                  background: baseIdx === i ? '#2d2040' : 'transparent',
+                  border: `1px solid ${baseIdx === i ? '#cba6f7' : '#313244'}`,
+                }}>
+                {opt.label}
+              </Button>
+            ))}
+          </Box>
+          {/* Name + Create */}
+          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+            <TextField autoFocus size="small" placeholder="ClassName" value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') { setOpen(false); setName(''); } }}
+              inputProps={{ style: { fontSize: 11, padding: '3px 8px', fontFamily: 'monospace', color: '#cdd6f4' } }}
+              sx={{ flex: 1, '& .MuiOutlinedInput-root': { background: '#181825', color: '#cdd6f4', '& fieldset': { borderColor: '#313244' } } }} />
+            <Button size="small" onClick={handleCreate} disabled={!name.trim()}
+              sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144' }}>
+              Create
+            </Button>
+          </Box>
+        </Box>
+      </Menu>
+    </>
+  );
+}
+
 /* ── Add-node toolbar ────────────────────────────────────────────────────────*/
 
 interface FlatEntry { packageName: string; className: string; paramDefs?: ParamDef[]; }
@@ -1092,6 +1814,7 @@ function VisualMinisLibPanel() {
   const { entities, connections, uri, isMinisFile, savedPositions, externalClassDefs, importedClasses } = usePluginState();
   const snippets = useSnippets();
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const pendingSelectName = useRef<string | null>(null);
 
   const [nodes, setNodes] = useNodesState<Node>([]);
   const [edges, setEdges] = useEdgesState<Edge>([]);
@@ -1111,6 +1834,11 @@ function VisualMinisLibPanel() {
       }));
     });
     setEdges(connectionsToEdges(connections, entities));
+    // Auto-select newly created class (from "+Class" button)
+    if (pendingSelectName.current) {
+      const match = entities.find((e) => e.varName === pendingSelectName.current && e.kind === 'class');
+      if (match) { setSelectedEntityId(match.id); pendingSelectName.current = null; }
+    }
   }, [entities, connections, savedPositions, setNodes, setEdges]);
 
   // When parser refreshes, keep selected entity only if still present
@@ -1154,7 +1882,29 @@ function VisualMinisLibPanel() {
     setEdges((eds) => addEdge({ ...connection, markerEnd: { type: MarkerType.ArrowClosed, color: '#cba6f7' }, style: { stroke: '#cba6f7', strokeWidth: 1.5 } }, eds));
   }, [nodes, setEdges]);
 
+  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+    for (const change of changes) {
+      if (change.type === 'remove') {
+        const conn = connections.find((c) => c.id === change.id);
+        if (conn) removeConnectLine(conn, uri);
+      }
+    }
+    setEdges((es) => applyEdgeChanges(changes, es));
+  }, [connections, uri, setEdges]);
+
   const selectedEntity = selectedEntityId ? entities.find((e) => e.id === selectedEntityId) ?? null : null;
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) containerRef.current?.requestFullscreen();
+    else document.exitFullscreen();
+  }, []);
 
   if (!uri || !isMinisFile) {
     return (
@@ -1169,9 +1919,19 @@ function VisualMinisLibPanel() {
   }
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
-      {/* Add-node toolbar — always visible when a valid file is open */}
-      <AddNodeMenu uri={uri} externalClassDefs={externalClassDefs} importedClasses={importedClasses} entities={entities} />
+    <Box ref={containerRef} sx={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
+      {/* Toolbar: Add instance + Define new class + Fullscreen */}
+      <Box sx={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #313244' }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <AddNodeMenu uri={uri} externalClassDefs={externalClassDefs} importedClasses={importedClasses} entities={entities} />
+        </Box>
+        <NewClassButton uri={uri} onCreated={(varName) => { pendingSelectName.current = varName; }} />
+        <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+          <IconButton size="small" onClick={toggleFullscreen} sx={{ px: 1, borderLeft: '1px solid #313244', borderRadius: 0, color: '#585b70', '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}>
+            {isFullscreen ? <FullscreenExitIcon sx={{ fontSize: 16 }} /> : <FullscreenIcon sx={{ fontSize: 16 }} />}
+          </IconButton>
+        </Tooltip>
+      </Box>
 
       {entities.length === 0 ? (
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, p: 2, textAlign: 'center' }}>
@@ -1185,18 +1945,20 @@ function VisualMinisLibPanel() {
       ) : (
         <>
       {/* ReactFlow canvas */}
-      <Box sx={{ flex: 1, minHeight: 0 }}>
+      <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }} onContextMenu={(e) => e.preventDefault()}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
           onNodesChange={(changes: NodeChange[]) => setNodes((ns) => applyNodeChanges(changes, ns))}
-          onEdgesChange={(changes: EdgeChange[]) => setEdges((es) => applyEdgeChanges(changes, es))}
+          onEdgesChange={handleEdgesChange}
           onConnect={handleConnect}
           onNodeClick={handleNodeClick}
           onNodeDragStop={handleNodeDragStop}
-          fitView
+          defaultViewport={_savedViewport ?? { x: 0, y: 0, zoom: 1 }}
+          fitView={_savedViewport === null}
           fitViewOptions={{ padding: 0.2 }}
+          onMoveEnd={(_, vp) => { _savedViewport = vp; }}
           minZoom={0.3}
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
@@ -1205,11 +1967,23 @@ function VisualMinisLibPanel() {
           <Background color="#313244" variant={BackgroundVariant.Dots} gap={16} size={1} />
           <Controls style={{ background: '#1e1e2e', border: '1px solid #313244' }} showInteractive={false} />
         </ReactFlow>
+        {edges.some((e) => e.selected) && (
+          <Box sx={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 10, display: 'flex', alignItems: 'center', gap: 0.5, background: '#313244', border: '1px solid #45475a', borderRadius: 1, px: 1, py: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: '#cdd6f4' }}>Connection selected</Typography>
+            <Tooltip title="Delete connection">
+              <IconButton size="small" onClick={() => handleEdgesChange(edges.filter((e) => e.selected).map((e) => ({ type: 'remove' as const, id: e.id })))} sx={{ color: '#f38ba8', p: 0.25 }}>
+                <CloseIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
 
-      {/* Properties panel — shown when a node is selected */}
+      {/* Properties / class builder — shown when a node is selected */}
       {selectedEntity && (
-        <PropertiesPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
+        selectedEntity.kind === 'class'
+          ? <ClassBuilderPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
+          : <PropertiesPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
       )}
 
       {/* Generated snippets */}

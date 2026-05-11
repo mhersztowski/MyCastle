@@ -31,6 +31,7 @@ import { GlobalMjdDataEditor } from './components/GlobalMjdDataEditor';
 import { GlobalTerminal } from './components/GlobalTerminal';
 import { GlobalVfs } from './components/GlobalVfs';
 import { MinimizedTaskbar } from './components/MinimizedTaskbar';
+import { PluginProvider } from './modules/web-plugins';
 import { DisplayProvider } from './components/DisplayContext';
 import { useEffect } from 'react';
 import { useMqtt } from './modules/mqttclient';
@@ -72,6 +73,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <NotificationProvider>
           <AuthProvider>
+            <PluginProvider>
             <MqttProviderWithAuth>
               <PresenceRunner />
               <FilesystemProvider>
@@ -90,6 +92,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 </MinisDataSourceProvider>
               </FilesystemProvider>
             </MqttProviderWithAuth>
+            </PluginProvider>
           </AuthProvider>
         </NotificationProvider>
       </BrowserRouter>

@@ -12,6 +12,7 @@ import { MicroPythonService } from './modules/upython/index.js';
 import { PygameService } from './modules/pygame/index.js';
 import { PicoSdkService } from './modules/picosdk/index.js';
 import { LspProxyService } from './modules/lsp/LspProxyService.js';
+import { PluginService } from './modules/plugins/PluginService.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -49,6 +50,7 @@ export class App {
   readonly upythonService: MicroPythonService;
   readonly pygameService: PygameService;
   readonly picoSdkService: PicoSdkService | null;
+  readonly pluginService: PluginService;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
   private lspProxyService!: LspProxyService;
@@ -106,6 +108,8 @@ export class App {
       : null;
     if (!picoSdkDockerImage) console.log('PicoSdk service: not configured (set PICOSDK_DOCKER_IMAGE)');
 
+    this.pluginService = new PluginService(config.rootDir);
+
     this.httpServer = new MycastleHttpServer(
       config.httpPort,
       this.fileSystem,
@@ -118,6 +122,7 @@ export class App {
       this.upythonService,
       this.pygameService,
       this.picoSdkService,
+      this.pluginService,
     );
   }
 

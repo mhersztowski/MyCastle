@@ -39,6 +39,7 @@ import { FormEngineEmbed } from './extensions/FormEngineExtension';
 import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
 import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
+import { PluginScriptBlock } from './extensions/PluginScriptExtension';
 import { BlockActionMenu } from './BlockActionMenu';
 import { BlockIdExtension } from './extensions/BlockIdExtension';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
@@ -161,6 +162,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       FormEngineEmbed,
       AutomateFlowEmbed,
       AutomateScriptBlock,
+      PluginScriptBlock,
       BlockIdExtension,
     ],
     content: '',

@@ -40,6 +40,7 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import LinkIcon from '@mui/icons-material/Link';
+import ExtensionIcon from '@mui/icons-material/Extension';
 
 interface CommandItem {
   title: string;
@@ -361,6 +362,22 @@ const commands: CommandItem[] = [
         .focus()
         .deleteRange(range)
         .insertAutomateScript('// Wpisz kod tutaj\napi.log.info("Witaj!");\ndisplay.text("Wynik: OK");')
+        .run();
+    },
+  },
+  {
+    title: 'Plugin Script',
+    description: 'Script with access to auth, http, reactive output',
+    icon: <ExtensionIcon sx={{ color: '#7c4dff' }} />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertPluginScript(
+          '// Available: auth, http, md, table, reactive, display\n// Return a value to show it, or use display.text() for imperative output\n\nreturn `Hello, ${auth.currentUser}!`;',
+          { mode: 'manual', label: 'Script' },
+        )
         .run();
     },
   },

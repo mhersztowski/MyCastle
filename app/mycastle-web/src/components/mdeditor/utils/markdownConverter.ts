@@ -849,6 +849,60 @@ turndownService.addRule('automateScriptBlock', {
   },
 });
 
+// Plugin script block helpers — format: ```pscript:blockId:mode:encodedLabel
+type PluginScriptEntry = { code: string; blockId: string; mode: string; label: string };
+
+function escapePluginScriptsForHtml(content: string): string {
+  const scripts: PluginScriptEntry[] = [];
+  const result = content.replace(/```pscript(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
+    const parts = (params?.trim() || '').split(':');
+    const blockId = parts[0] || '';
+    const mode = parts[1] || 'manual';
+    const label = parts[2] ? decodeURIComponent(parts[2]) : 'Script';
+    scripts.push({ code: code.trimEnd(), blockId, mode, label });
+    return `%%PLUGINSCRIPT_${scripts.length - 1}%%`;
+  });
+  return JSON.stringify({ result, scripts });
+}
+
+function restorePluginScriptsFromHtml(html: string, scripts: PluginScriptEntry[]): string {
+  let result = html;
+  scripts.forEach((s, index) => {
+    const blockIdAttr = s.blockId ? ` data-block-id="${s.blockId}"` : '';
+    const tag = `<div data-type="plugin-script-block"${blockIdAttr} data-mode="${s.mode}" data-label="${s.label}" data-collapsed="false" data-code="${encodeURIComponent(s.code)}"></div>`;
+    const ph = `%%PLUGINSCRIPT_${index}%%`;
+    result = result.replace(`<p>${ph}</p>`, tag);
+    result = result.split(ph).join(tag);
+  });
+  return result;
+}
+
+// Plugin script block rule — converts back to ```pscript code fence
+turndownService.addRule('pluginScriptBlock', {
+  filter: (node) => {
+    const el = node as HTMLElement;
+    if (el.getAttribute('data-type') === 'plugin-script-block') return true;
+    if (el.getAttribute('data-node-view-wrapper') !== null) {
+      return !!el.querySelector('[data-type="plugin-script-block"]');
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const el = node as HTMLElement;
+    let target: HTMLElement = el;
+    if (!target.getAttribute('data-type')) {
+      const inner = target.querySelector('[data-type="plugin-script-block"]') as HTMLElement | null;
+      if (inner) target = inner;
+    }
+    const code = target.getAttribute('data-code') ? decodeURIComponent(target.getAttribute('data-code')!) : '';
+    const blockId = target.getAttribute('data-block-id') || '';
+    const mode = target.getAttribute('data-mode') || 'manual';
+    const label = encodeURIComponent(target.getAttribute('data-label') || 'Script');
+    const params = [blockId, mode, label].join(':');
+    return `\n\`\`\`pscript:${params}\n${code}\n\`\`\`\n`;
+  },
+});
+
 // Helper to process markdown inside column divs
 function processColumnLayouts(html: string): string {
   // Use DOM parser to properly handle nested elements
@@ -901,8 +955,12 @@ export function markdownToHtml(markdown: string): string {
     },
   );
 
-  // First, protect automate script blocks (code fences) from showdown processing
-  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithBlockIds);
+  // First, protect plugin script blocks from showdown processing
+  const pluginScriptDataStr = escapePluginScriptsForHtml(markdownWithBlockIds);
+  const { result: markdownWithoutPluginScripts, scripts: pluginScripts } = JSON.parse(pluginScriptDataStr);
+
+  // Protect automate script blocks (code fences) from showdown processing
+  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithoutPluginScripts);
   const { result: markdownWithoutScripts, automateScripts } = JSON.parse(automateScriptDataStr);
 
   // Protect automate flow embeds from showdown processing
@@ -947,6 +1005,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore automate script blocks
   html = restoreAutomateScriptsFromHtml(html, automateScripts);
+
+  // Restore plugin script blocks
+  html = restorePluginScriptsFromHtml(html, pluginScripts);
 
   html = html.replace(
     /<li>\s*\[([ xX])\]\s*/g,
@@ -1051,6 +1112,25 @@ export function htmlToMarkdown(html: string): string {
     }
   );
 
+  // Pre-process: Replace plugin script blocks with placeholders before Turndown
+  const pluginScriptsHtml: PluginScriptEntry[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="plugin-script-block"[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const codeM = match.match(/data-code="([^"]*)"/);
+      const blockIdM = match.match(/data-block-id="([^"]*)"/);
+      const modeM = match.match(/data-mode="([^"]*)"/);
+      const labelM = match.match(/data-label="([^"]*)"/);
+      pluginScriptsHtml.push({
+        code: codeM ? decodeURIComponent(codeM[1]) : '',
+        blockId: blockIdM ? blockIdM[1] : '',
+        mode: modeM ? modeM[1] : 'manual',
+        label: labelM ? labelM[1] : 'Script',
+      });
+      return `##PLUGINSCRIPT${pluginScriptsHtml.length - 1}##`;
+    },
+  );
+
   // Pre-process: Replace automate script blocks with placeholders before Turndown
   const automateScripts: { code: string; blockId: string; autorun: boolean }[] = [];
 
@@ -1131,6 +1211,14 @@ export function htmlToMarkdown(html: string): string {
   automateFlows.forEach((flow, index) => {
     const placeholder = `##AUTOMATEFLOW${index}##`;
     const replacement = flow.id ? `@[automate:${flow.id}${flow.autorun ? ':autorun' : ''}]` : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore plugin script blocks as ```pscript code fences
+  pluginScriptsHtml.forEach((s, index) => {
+    const placeholder = `##PLUGINSCRIPT${index}##`;
+    const label = encodeURIComponent(s.label);
+    const replacement = `\n\`\`\`pscript:${s.blockId}:${s.mode}:${label}\n${s.code}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 

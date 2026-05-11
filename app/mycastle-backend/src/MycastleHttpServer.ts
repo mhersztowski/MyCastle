@@ -18,6 +18,7 @@ import type { MicroPythonService } from './modules/upython/index.js';
 import type { PygameService } from './modules/pygame/index.js';
 import type { PicoSdkService } from './modules/picosdk/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
+import type { PluginService } from './modules/plugins/PluginService.js';
 
 interface CrudConfig {
   filePath: string;
@@ -61,6 +62,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private upythonService: MicroPythonService | null;
   private pygameService: PygameService | null;
   private picoSdkService: PicoSdkService | null = null;
+  private pluginService: PluginService | null = null;
   private rootDir: string | null;
   private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
@@ -78,7 +80,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -87,6 +89,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.upythonService = upythonService ?? null;
     this.pygameService = pygameService ?? null;
     this.picoSdkService = picoSdkService ?? null;
+    this.pluginService = pluginService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.ownStaticDir = staticDir ?? null;
     this.resolveSwaggerUiDir();
@@ -584,6 +587,46 @@ export class MycastleHttpServer extends HttpUploadServer {
       }
       const stats = this.iotService.appSessions.getProjectStats(filterUserId);
       this.sendJsonResponse(res, 200, { stats });
+      return;
+    }
+
+    // Plugins: GET /users/{userName}/plugins — list manifests
+    const pluginsListMatch = apiPath.match(/^\/users\/([^/]+)\/plugins$/);
+    if (pluginsListMatch && method === 'GET') {
+      const targetUser = decodeURIComponent(pluginsListMatch[1]);
+      if (user.userName !== targetUser && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.pluginService) {
+        this.sendJsonResponse(res, 200, []);
+        return;
+      }
+      const manifests = await this.pluginService.listPlugins(targetUser);
+      this.sendJsonResponse(res, 200, manifests);
+      return;
+    }
+
+    // Plugins: GET /users/{userName}/plugins/{pluginId}/bundle.js — built CJS bundle
+    const pluginBundleMatch = apiPath.match(/^\/users\/([^/]+)\/plugins\/([^/]+)\/bundle\.js$/);
+    if (pluginBundleMatch && method === 'GET') {
+      const targetUser = decodeURIComponent(pluginBundleMatch[1]);
+      const pluginId = decodeURIComponent(pluginBundleMatch[2]);
+      if (user.userName !== targetUser && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.pluginService) {
+        this.sendJsonResponse(res, 404, { error: 'Plugin service not available' });
+        return;
+      }
+      const js = await this.pluginService.buildPlugin(targetUser, pluginId);
+      if (!js) {
+        this.sendJsonResponse(res, 404, { error: `Plugin ${pluginId} not found or failed to build` });
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(js);
       return;
     }
 
