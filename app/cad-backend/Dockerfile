@@ -32,8 +32,8 @@ COPY app/cad-backend/           app/cad-backend/
 
 RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-cad build --silent
-RUN pnpm --filter @mhersztowski/core-scene3d build --silent
 RUN pnpm --filter @mhersztowski/ui-core build --silent
+RUN pnpm --filter @mhersztowski/core-scene3d build --silent
 RUN pnpm --filter @mhersztowski/ui-components-scene3d build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 # Build frontend → outputs to app/cad-backend/public/
