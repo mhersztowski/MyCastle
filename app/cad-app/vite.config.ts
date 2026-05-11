@@ -31,11 +31,11 @@ export default defineConfig({
     ],
   },
   server: {
-    port: 1897,
+    port: 1892,
     proxy: {
       // Forward /api/vfs/* to cad-backend (port 1898)
       '/api/vfs': {
-        target: 'http://localhost:1898',
+        target: 'http://localhost:1892',
         changeOrigin: true,
       },
     },

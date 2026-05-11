@@ -20,7 +20,8 @@ import { DimensionTool } from '../tools/DimensionTool';
 import { Box3dTool } from '../tools/Box3dTool';
 import { Cylinder3dTool } from '../tools/Cylinder3dTool';
 import { Sphere3dTool } from '../tools/Sphere3dTool';
-import type { DimensionLabel, Tool, ToolName } from '../tools/types';
+import type { DimensionLabel, PenInput, Tool, ToolName } from '../tools/types';
+import { DEFAULT_PEN_INPUT } from '../tools/types';
 
 interface Props {
   project: Project;
@@ -61,6 +62,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
   const mouseRef = useRef({ isPanning: false, lastX: 0, lastY: 0, isDown: false });
   const [dimLabels, setDimLabels] = useState<DimensionLabel[]>([]);
+  const [penInput, setPenInput] = useState<PenInput | null>(null);
 
 
   // Init renderer
@@ -114,7 +116,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     const renderer = rendererRef.current;
     if (!renderer) return;
     const snap: SnapResult = { point: injectedPoint, mode: 'nearest' };
-    const ctx = { project, snapResult: snap };
+    const ctx = { project, snapResult: snap, pen: DEFAULT_PEN_INPUT };
     const tool = tools[activeTool];
     tool.onPointerDown(injectedPoint, ctx);
     renderer.setPreview(tool.getPreview());
@@ -130,7 +132,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     if (activeTool === 'rotate') {
       const rotateTool = tools['rotate'] as RotateTool;
       const snap: SnapResult = { point: cursorWorld, mode: 'nearest' };
-      const ctx = { project, snapResult: snap };
+      const ctx = { project, snapResult: snap, pen: DEFAULT_PEN_INPUT };
       rotateTool.rotateByDegrees(injectedAngle, ctx);
       renderer.setPreview(rotateTool.getPreview());
       renderer.syncAll();
@@ -150,7 +152,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     return renderer.screenToWorld(sx, sy);
   }, []);
 
-  const getSnapPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+  const getSnapPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>): { snapResult: SnapResult; pen: PenInput } | null => {
     const renderer = rendererRef.current;
     if (!renderer) return null;
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -159,21 +161,35 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     const worldPt = resolveWorldPoint(sx, sy);
     if (!worldPt) return null;
 
+    const pen: PenInput = {
+      pointerType: (e.pointerType || 'mouse') as PenInput['pointerType'],
+      pressure: e.pressure,
+      tiltX: e.tiltX,
+      tiltY: e.tiltY,
+      twist: e.twist,
+      tangentialPressure: e.tangentialPressure,
+    };
+
     if (renderer.getViewMode() === '3d') {
-      // In 3D mode: only grid snap (no entity snap on XY plane for now)
       const gridSize = project.settings.gridSize;
       const snapped: Point2D = {
         x: Math.round(worldPt.x / gridSize) * gridSize,
         y: Math.round(worldPt.y / gridSize) * gridSize,
       };
-      return { point: snapped, mode: 'grid' as const };
+      return { snapResult: { point: snapped, mode: 'grid' as const }, pen };
     }
 
+    // Pen pressure modulates snap search radius:
+    // light touch (low pressure) → wider area (forgiving), firm press → tighter (precise).
+    const snapRadius = pen.pointerType === 'pen'
+      ? Math.max(20, Math.round(70 * (1 - pen.pressure * 0.65)))
+      : 50;
+
     const nearby = project.entityRegistry.getInBoundingBox({
-      minX: worldPt.x - 50, minY: worldPt.y - 50,
-      maxX: worldPt.x + 50, maxY: worldPt.y + 50,
+      minX: worldPt.x - snapRadius, minY: worldPt.y - snapRadius,
+      maxX: worldPt.x + snapRadius, maxY: worldPt.y + snapRadius,
     });
-    return project.snapEngine.snap(worldPt, nearby, renderer.getPixelToWorld());
+    return { snapResult: project.snapEngine.snap(worldPt, nearby, renderer.getPixelToWorld()), pen };
   }, [project, resolveWorldPoint]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -190,15 +206,17 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       return;
     }
 
-    const snap = getSnapPoint(e);
-    if (!snap) return;
+    const result = getSnapPoint(e);
+    if (!result) return;
+    const { snapResult: snap, pen } = result;
     setCursorWorld(snap.point);
+    setPenInput(pen);
     if (renderer.getViewMode() !== '3d') {
       renderer.showSnapMarker(snap.mode !== 'nearest' ? snap.point : null);
     }
 
     const tool = tools[activeTool];
-    tool.onPointerMove(snap.point, { project, snapResult: snap });
+    tool.onPointerMove(snap.point, { project, snapResult: snap, pen });
     renderer.setPreview(tool.getPreview());
     setDimLabels(tool.getDimensionLabels?.() ?? []);
   }, [activeTool, project, getSnapPoint]);
@@ -222,8 +240,10 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     if (is3d && e.button !== 0) return;
 
     mouseRef.current.isDown = true;
-    const snap = getSnapPoint(e);
-    if (!snap) return;
+    const result = getSnapPoint(e);
+    if (!result) return;
+    const { snapResult: snap, pen } = result;
+    setPenInput(pen);
 
     if (activeTool === 'select') {
       const rect = canvasRef.current!.getBoundingClientRect();
@@ -241,7 +261,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     }
 
     const tool = tools[activeTool];
-    tool.onPointerDown(snap.point, { project, snapResult: snap });
+    tool.onPointerDown(snap.point, { project, snapResult: snap, pen });
     renderer.setPreview(tool.getPreview());
     renderer.syncAll();
     setDimLabels(tool.getDimensionLabels?.() ?? []);
@@ -257,11 +277,12 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       return;
     }
 
-    const snap = getSnapPoint(e);
-    if (!snap) return;
+    const result = getSnapPoint(e);
+    if (!result) return;
+    const { snapResult: snap, pen } = result;
 
     const tool = tools[activeTool];
-    tool.onPointerUp(snap.point, { project, snapResult: snap });
+    tool.onPointerUp(snap.point, { project, snapResult: snap, pen });
     renderer?.setPreview(tool.getPreview());
     renderer?.syncAll();
     mouseRef.current.isDown = false;
@@ -290,7 +311,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     const tool = tools[activeTool];
     const snap: SnapResult = { point: cursorWorld, mode: 'nearest' };
-    tool.onKeyDown(e.key, { project, snapResult: snap });
+    tool.onKeyDown(e.key, { project, snapResult: snap, pen: DEFAULT_PEN_INPUT });
     rendererRef.current?.setPreview(tool.getPreview());
     rendererRef.current?.syncAll();
 
@@ -315,10 +336,48 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
+        onPointerLeave={() => setPenInput(null)}
         onContextMenu={e => e.preventDefault()}
       />
       {!is3d && rendererRef.current && dimLabels.length > 0 && (
         <DimensionOverlay labels={dimLabels} renderer={rendererRef.current} />
+      )}
+      {/* Pen / stylus indicator — visible only for pen/touch input */}
+      {penInput && penInput.pointerType !== 'mouse' && (
+        <Box sx={{
+          position: 'absolute', top: 8, right: 8,
+          bgcolor: 'rgba(0,0,0,0.72)', color: '#ccc',
+          px: 1, py: 0.5, borderRadius: 1, fontSize: 11,
+          fontFamily: 'monospace', pointerEvents: 'none',
+          display: 'flex', flexDirection: 'column', gap: '3px',
+          minWidth: 110,
+        }}>
+          {/* Device type + pressure bar */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <span style={{ color: '#4fc3f7' }}>{penInput.pointerType === 'pen' ? '✒' : '☞'}</span>
+            <Box sx={{
+              flex: 1, height: 5,
+              bgcolor: 'rgba(255,255,255,0.15)', borderRadius: 2, overflow: 'hidden',
+            }}>
+              <Box sx={{
+                width: `${penInput.pressure * 100}%`, height: '100%',
+                bgcolor: penInput.pressure > 0.7 ? '#4fc3f7' : penInput.pressure > 0.35 ? '#81d4fa' : '#b3e5fc',
+                transition: 'width 0.04s linear',
+              }} />
+            </Box>
+            <span style={{ color: '#aaa', minWidth: 28, textAlign: 'right' }}>
+              {(penInput.pressure * 100).toFixed(0)}%
+            </span>
+          </Box>
+          {/* Tilt + twist */}
+          {penInput.pointerType === 'pen' && (
+            <Box sx={{ color: '#888', fontSize: 10, letterSpacing: '0.02em' }}>
+              {`X:${penInput.tiltX >= 0 ? '+' : ''}${penInput.tiltX.toFixed(0)}°`}
+              {`  Y:${penInput.tiltY >= 0 ? '+' : ''}${penInput.tiltY.toFixed(0)}°`}
+              {penInput.twist !== 0 && `  ⟳${penInput.twist.toFixed(0)}°`}
+            </Box>
+          )}
+        </Box>
       )}
       {/* Cursor coordinates overlay */}
       <Box sx={{

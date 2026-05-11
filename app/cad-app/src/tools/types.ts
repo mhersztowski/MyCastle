@@ -1,6 +1,49 @@
 import type { Point2D, SnapResult } from '@mhersztowski/core-cad';
 import type { Project } from '@mhersztowski/core-cad';
 
+/**
+ * Raw input data from a stylus, touch, or mouse pointer.
+ * Always present in ToolContext — uses mouse defaults for non-pen devices.
+ */
+export interface PenInput {
+  /** Physical input device type. */
+  pointerType: 'mouse' | 'pen' | 'touch';
+  /** Normalized pressure [0, 1]. Mouse/touch default: 0.5. */
+  pressure: number;
+  /**
+   * Plane angle in degrees between the Y–Z plane and the plane containing
+   * the stylus and the Y axis. Range: −90 to +90.
+   * Negative: tilted left; positive: tilted right.
+   */
+  tiltX: number;
+  /**
+   * Plane angle in degrees between the X–Z plane and the plane containing
+   * the stylus and the X axis. Range: −90 to +90.
+   * Negative: tilted toward the user; positive: tilted away.
+   */
+  tiltY: number;
+  /**
+   * Clockwise rotation of the transducer (barrel) around its major axis, in degrees.
+   * Range: 0–359.
+   */
+  twist: number;
+  /**
+   * Normalized tangential pressure (barrel/eraser button). Range: −1 to +1.
+   * 0 for devices that don't support it.
+   */
+  tangentialPressure: number;
+}
+
+/** Mouse/keyboard default — use when there is no real pointer event (injected commands). */
+export const DEFAULT_PEN_INPUT: PenInput = {
+  pointerType: 'mouse',
+  pressure: 0.5,
+  tiltX: 0,
+  tiltY: 0,
+  twist: 0,
+  tangentialPressure: 0,
+};
+
 export type ToolName =
   | 'select'
   | 'line'
@@ -22,6 +65,8 @@ export type ToolName =
 export interface ToolContext {
   project: Project;
   snapResult: SnapResult;
+  /** Input device data. Always present; uses mouse defaults for keyboard-injected actions. */
+  pen: PenInput;
 }
 
 export interface PreviewGeometry {

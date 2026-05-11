@@ -1001,7 +1001,7 @@ function generateExternalSnippet(className: string, paramDefs: ParamDef[]): stri
   for (const p of paramDefs) {
     args[p.argIndex] = p.type === 'number' ? '0'
       : p.type === 'boolean' ? 'false'
-      : p.options?.[0] ?? `'${p.key}'`;
+      : p.options?.[0] ?? `''`;
   }
   const varName = className.charAt(0).toLowerCase() + className.slice(1);
   return `const ${varName} = new ${className}(${args.join(', ')});`;
@@ -1524,8 +1524,8 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
     const n = name.trim();
     const t = type.trim() || 'unknown';
     let memberCode = '';
-    if (mode === 'signal')        memberCode = `readonly ${n} = new Signal<${t}>(this);`;
-    else if (mode === 'property') memberCode = `readonly ${n} = new MProperty<${t}>(this, ${defaultVal.trim() || 'undefined'});`;
+    if (mode === 'signal')        memberCode = `readonly ${n} = new Signal<[${t}]>();`;
+    else if (mode === 'property') memberCode = `readonly ${n} = new MProperty<${t}>(${defaultVal.trim() || 'undefined'});`;
     else if (mode === 'slot')     memberCode = `${n}(v: ${t}): void {}`;
     if (memberCode) insertMemberIntoClass(memberCode, entity.varName, uri);
     reset();
@@ -1747,9 +1747,15 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
     const taken = new Set(_state.entities.map((e) => e.varName));
     const base = entry.className.charAt(0).toLowerCase() + entry.className.slice(1);
     const varName = generateVarName(base, taken);
-    const snippet = entry.paramDefs
-      ? generateExternalSnippet(entry.className, entry.paramDefs).replace(/^const \w+/, `const ${varName}`)
-      : `const ${varName} = new ${entry.className}();\n`;
+    // MTimer.create(ms) is the correct API — new MTimer() sets no interval.
+    let snippet: string;
+    if (entry.className === 'MTimer') {
+      snippet = `const ${varName} = MTimer.create(1000);\n`;
+    } else if (entry.paramDefs) {
+      snippet = generateExternalSnippet(entry.className, entry.paramDefs).replace(/^const \w+/, `const ${varName}`);
+    } else {
+      snippet = `const ${varName} = new ${entry.className}();\n`;
+    }
     const inserted = insertAtEnd(snippet, targetUri);
     addSnippet(snippet, inserted);
   };
@@ -1907,15 +1913,7 @@ function VisualMinisLibPanel() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', handler);
-    return () => document.removeEventListener('fullscreenchange', handler);
-  }, []);
-  const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) containerRef.current?.requestFullscreen();
-    else document.exitFullscreen();
-  }, []);
+  const toggleFullscreen = useCallback(() => setIsFullscreen((v) => !v), []);
 
   if (!uri || !isMinisFile) {
     return (
@@ -1930,7 +1928,10 @@ function VisualMinisLibPanel() {
   }
 
   return (
-    <Box ref={containerRef} sx={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
+    <Box ref={containerRef} sx={isFullscreen ? {
+      position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+      zIndex: 1400, display: 'flex', flexDirection: 'column', background: '#181825',
+    } : { height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
       {/* Toolbar: Add instance + Define new class + Fullscreen */}
       <Box sx={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #313244' }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
