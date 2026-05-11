@@ -1,6 +1,13 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
+import { config } from 'dotenv';
+
+// Load shared CAD env — single source of truth for ports
+config({ path: resolve(__dirname, '../cad-backend/.env') });
+
+const BACKEND_PORT = parseInt(process.env.CAD_BACKEND_PORT ?? '1897', 10);
+const APP_PORT = parseInt(process.env.CAD_APP_PORT ?? '1898', 10);
 
 export default defineConfig({
   plugins: [react()],
@@ -30,12 +37,16 @@ export default defineConfig({
       '@mhersztowski/core-cad',
     ],
   },
+  build: {
+    outDir: '../cad-backend/public',
+    emptyOutDir: true,
+  },
   server: {
-    port: 1892,
+    port: APP_PORT,
+    host: true,
     proxy: {
-      // Forward /api/vfs/* to cad-backend (port 1898)
-      '/api/vfs': {
-        target: 'http://localhost:1892',
+      '/api': {
+        target: `http://localhost:${BACKEND_PORT}`,
         changeOrigin: true,
       },
     },

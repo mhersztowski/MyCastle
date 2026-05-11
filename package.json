@@ -23,7 +23,8 @@
     "dev:backend": "pnpm --filter mycastle-backend run dev",
     "dev:web": "pnpm --filter mycastle-web run dev",
     "dev:scene3d": "pnpm --filter demo-scene-3d run dev",
-    "dev:cad": "pnpm --filter cad-app run dev",
+    "dev:cad": "concurrently -n cad-backend,cad-app -c cyan,green --kill-others \"pnpm dev:cad-backend\" \"pnpm dev:cad-app\"",
+    "dev:cad-app": "pnpm --filter cad-app run dev",
     "dev:cad-backend": "pnpm --filter cad-backend run dev",
     "dev:trail-map": "pnpm --filter trail-map run dev",
 "test": "vitest run",
@@ -44,6 +45,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "concurrently": "^9.1.2",
     "@vitest/coverage-v8": "^4.0.18",
     "typedoc": "^0.28.4",
     "typedoc-plugin-markdown": "^4.4.2",

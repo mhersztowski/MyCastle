@@ -8,7 +8,8 @@
  *   Changing a value patches the source code in the Monaco editor.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
+import { createPortal } from 'react-dom';
 import * as monaco from 'monaco-editor';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -29,6 +30,7 @@ import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import DownloadIcon from '@mui/icons-material/Download';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+import SaveIcon from '@mui/icons-material/Save';
 import {
   ReactFlow,
   Background,
@@ -52,6 +54,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { defineEditorPlugin, globalEventBus, globalPluginRegistry } from '@mhersztowski/web-client';
+import * as Blockly from 'blockly';
+import { javascriptGenerator, Order } from 'blockly/javascript';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
 /* ── Types ────────────────────────────────────────────────────────────────────*/
 
@@ -1439,19 +1445,651 @@ function StmtList({ stmts, ctx, onChange, depth = 0 }: { stmts: SlotStmt[]; ctx:
   );
 }
 
-function SlotBuilder({ entity, onCancel, onCommit }: { entity: MinisEntity; onCancel: () => void; onCommit: (name: string, type: string, stmts: SlotStmt[]) => void }) {
+/* ── Blockly-based slot editor ────────────────────────────────────────────────*/
+
+let _blkRegistered = false;
+let _blkSlotCtx: SlotCtx = { props: [], signals: [], slots: [], exprOpts: [], condOpts: [] };
+
+// Dynamic dropdown generators — read _blkSlotCtx at call time so they
+// reflect the current entity without re-registering blocks.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BMenuOpt = [string, string];
+const propOpts   = (): BMenuOpt[] => { const o = _blkSlotCtx.props.map(p => [p, p] as BMenuOpt);    return o.length ? o : [['(no props)', '']]; };
+const signalOpts = (): BMenuOpt[] => { const o = _blkSlotCtx.signals.map(s => [s, s] as BMenuOpt); return o.length ? o : [['(no signals)', '']]; };
+const slotOpts   = (): BMenuOpt[] => { const o = _blkSlotCtx.slots.map(s => [s, s] as BMenuOpt);    return o.length ? o : [['(no slots)', '']]; };
+
+function ensureMinisBlocksRegistered(): void {
+  if (_blkRegistered) return;
+  _blkRegistered = true;
+
+  /* ── minis_get_param ─ returns v ─────────────────────────────────────────── */
+  Blockly.Blocks['minis_get_param'] = {
+    init() {
+      (this as Blockly.Block).appendDummyInput().appendField('param v');
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour(200);
+      (this as Blockly.Block).setTooltip('The slot parameter value (v)');
+    },
+  };
+  javascriptGenerator.forBlock['minis_get_param'] = () => ['v', Order.ATOMIC];
+
+  /* ── minis_get_prop ─ this.{prop}.value ──────────────────────────────────── */
+  Blockly.Blocks['minis_get_prop'] = {
+    init() {
+      (this as Blockly.Block).appendDummyInput()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .appendField('this.').appendField(new Blockly.FieldDropdown(propOpts as any), 'NAME').appendField('.value');
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour(260);
+      (this as Blockly.Block).setTooltip('Read an MProperty value');
+    },
+  };
+  javascriptGenerator.forBlock['minis_get_prop'] = (block) => {
+    const name = block.getFieldValue('NAME') || '';
+    return name ? [`this.${name}.value`, Order.MEMBER] : ['undefined', Order.ATOMIC];
+  };
+
+  /* ── minis_set_prop ─ this.{prop}.value = expr ───────────────────────────── */
+  Blockly.Blocks['minis_set_prop'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('VALUE')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .appendField('this.').appendField(new Blockly.FieldDropdown(propOpts as any), 'NAME').appendField('.value =');
+      (this as Blockly.Block).setPreviousStatement(true, null);
+      (this as Blockly.Block).setNextStatement(true, null);
+      (this as Blockly.Block).setColour(220);
+      (this as Blockly.Block).setTooltip('Set an MProperty value');
+    },
+  };
+  javascriptGenerator.forBlock['minis_set_prop'] = (block, gen) => {
+    const name = block.getFieldValue('NAME') || '';
+    const val  = gen.valueToCode(block, 'VALUE', Order.ASSIGNMENT) || 'undefined';
+    return name ? `this.${name}.value = ${val};\n` : '';
+  };
+
+  /* ── minis_emit ─ this.{signal}.emit(expr) ───────────────────────────────── */
+  Blockly.Blocks['minis_emit'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('VALUE')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .appendField('this.').appendField(new Blockly.FieldDropdown(signalOpts as any), 'NAME').appendField('.emit(');
+      (this as Blockly.Block).setPreviousStatement(true, null);
+      (this as Blockly.Block).setNextStatement(true, null);
+      (this as Blockly.Block).setColour(280);
+      (this as Blockly.Block).setTooltip('Emit a Signal');
+    },
+  };
+  javascriptGenerator.forBlock['minis_emit'] = (block, gen) => {
+    const name = block.getFieldValue('NAME') || '';
+    const val  = gen.valueToCode(block, 'VALUE', Order.NONE) || 'undefined';
+    return name ? `this.${name}.emit(${val});\n` : '';
+  };
+
+  /* ── minis_call ─ this.{slot}(arg) ──────────────────────────────────────── */
+  Blockly.Blocks['minis_call'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('ARG')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .appendField('call this.').appendField(new Blockly.FieldDropdown(slotOpts as any), 'NAME').appendField('(');
+      (this as Blockly.Block).setPreviousStatement(true, null);
+      (this as Blockly.Block).setNextStatement(true, null);
+      (this as Blockly.Block).setColour(60);
+      (this as Blockly.Block).setTooltip('Call a slot/method with one argument');
+    },
+  };
+  javascriptGenerator.forBlock['minis_call'] = (block, gen) => {
+    const name = block.getFieldValue('NAME') || '';
+    const arg  = gen.valueToCode(block, 'ARG', Order.NONE) || 'undefined';
+    return name ? `this.${name}(${arg});\n` : '';
+  };
+
+  /* ── minis_log ─ console.log(expr) ──────────────────────────────────────── */
+  Blockly.Blocks['minis_log'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('VALUE').appendField('console.log(');
+      (this as Blockly.Block).setPreviousStatement(true, null);
+      (this as Blockly.Block).setNextStatement(true, null);
+      (this as Blockly.Block).setColour(120);
+      (this as Blockly.Block).setTooltip('console.log(value)');
+    },
+  };
+  javascriptGenerator.forBlock['minis_log'] = (block, gen) => {
+    const val = gen.valueToCode(block, 'VALUE', Order.NONE) || "''";
+    return `console.log(${val});\n`;
+  };
+
+  // ── Tuple blocks (JS arrays with fixed semantics) ────────────────────────
+  Blockly.Blocks['minis_tuple_create'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('A').appendField('[');
+      (this as Blockly.Block).appendValueInput('B').appendField(',');
+      (this as Blockly.Block).appendValueInput('C').appendField(',');
+      (this as Blockly.Block).appendDummyInput().appendField(']');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour('#9b5ba5');
+      (this as Blockly.Block).setTooltip('Create a tuple (array) of 3 values');
+    },
+  };
+  javascriptGenerator.forBlock['minis_tuple_create'] = (block, gen) => {
+    const a = gen.valueToCode(block, 'A', Order.NONE) || 'undefined';
+    const b = gen.valueToCode(block, 'B', Order.NONE) || 'undefined';
+    const c = gen.valueToCode(block, 'C', Order.NONE) || 'undefined';
+    return [`[${a}, ${b}, ${c}]`, Order.ATOMIC];
+  };
+
+  Blockly.Blocks['minis_tuple_get'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('TUPLE').appendField('tuple');
+      (this as Blockly.Block).appendValueInput('IDX').appendField('[');
+      (this as Blockly.Block).appendDummyInput().appendField(']');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour('#9b5ba5');
+      (this as Blockly.Block).setTooltip('Get element at index');
+    },
+  };
+  javascriptGenerator.forBlock['minis_tuple_get'] = (block, gen) => {
+    const arr = gen.valueToCode(block, 'TUPLE', Order.MEMBER) || '[]';
+    const idx = gen.valueToCode(block, 'IDX', Order.NONE) || '0';
+    return [`${arr}[${idx}]`, Order.MEMBER];
+  };
+
+  Blockly.Blocks['minis_tuple_length'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('TUPLE').appendField('length of');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, 'Number');
+      (this as Blockly.Block).setColour('#9b5ba5');
+    },
+  };
+  javascriptGenerator.forBlock['minis_tuple_length'] = (block, gen) => {
+    const arr = gen.valueToCode(block, 'TUPLE', Order.MEMBER) || '[]';
+    return [`${arr}.length`, Order.MEMBER];
+  };
+
+  Blockly.Blocks['minis_tuple_find'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('TUPLE').appendField('tuple');
+      (this as Blockly.Block).appendValueInput('ITEM').appendField('.indexOf(');
+      (this as Blockly.Block).appendDummyInput().appendField(')');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, 'Number');
+      (this as Blockly.Block).setColour('#9b5ba5');
+      (this as Blockly.Block).setTooltip('Index of item in tuple (−1 if not found)');
+    },
+  };
+  javascriptGenerator.forBlock['minis_tuple_find'] = (block, gen) => {
+    const arr = gen.valueToCode(block, 'TUPLE', Order.MEMBER) || '[]';
+    const item = gen.valueToCode(block, 'ITEM', Order.NONE) || 'undefined';
+    return [`${arr}.indexOf(${item})`, Order.FUNCTION_CALL];
+  };
+
+  // ── Map blocks (JS object literals / Record) ─────────────────────────────
+  Blockly.Blocks['minis_map_create'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('KEY').appendField('{ key:');
+      (this as Blockly.Block).appendValueInput('VAL').appendField('value:');
+      (this as Blockly.Block).appendDummyInput().appendField('}');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour('#c4527a');
+      (this as Blockly.Block).setTooltip('Create an object { key: value }');
+    },
+  };
+  javascriptGenerator.forBlock['minis_map_create'] = (block, gen) => {
+    const key = gen.valueToCode(block, 'KEY', Order.NONE) || "''";
+    const val = gen.valueToCode(block, 'VAL', Order.NONE) || 'undefined';
+    return [`{ [${key}]: ${val} }`, Order.ATOMIC];
+  };
+
+  Blockly.Blocks['minis_map_get'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('MAP').appendField('map');
+      (this as Blockly.Block).appendValueInput('KEY').appendField('[');
+      (this as Blockly.Block).appendDummyInput().appendField(']');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour('#c4527a');
+      (this as Blockly.Block).setTooltip('Get value for key');
+    },
+  };
+  javascriptGenerator.forBlock['minis_map_get'] = (block, gen) => {
+    const map = gen.valueToCode(block, 'MAP', Order.MEMBER) || '{}';
+    const key = gen.valueToCode(block, 'KEY', Order.NONE) || "''";
+    return [`${map}[${key}]`, Order.MEMBER];
+  };
+
+  Blockly.Blocks['minis_map_set'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('MAP').appendField('map');
+      (this as Blockly.Block).appendValueInput('KEY').appendField('[');
+      (this as Blockly.Block).appendValueInput('VAL').appendField('] =');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setPreviousStatement(true, null);
+      (this as Blockly.Block).setNextStatement(true, null);
+      (this as Blockly.Block).setColour('#c4527a');
+      (this as Blockly.Block).setTooltip('Set value for key');
+    },
+  };
+  javascriptGenerator.forBlock['minis_map_set'] = (block, gen) => {
+    const map = gen.valueToCode(block, 'MAP', Order.MEMBER) || '{}';
+    const key = gen.valueToCode(block, 'KEY', Order.NONE) || "''";
+    const val = gen.valueToCode(block, 'VAL', Order.NONE) || 'undefined';
+    return `${map}[${key}] = ${val};\n`;
+  };
+
+  Blockly.Blocks['minis_map_has'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('KEY').appendField('map has key');
+      (this as Blockly.Block).appendValueInput('MAP').appendField('in');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, 'Boolean');
+      (this as Blockly.Block).setColour('#c4527a');
+      (this as Blockly.Block).setTooltip("'key' in map");
+    },
+  };
+  javascriptGenerator.forBlock['minis_map_has'] = (block, gen) => {
+    const key = gen.valueToCode(block, 'KEY', Order.RELATIONAL) || "''";
+    const map = gen.valueToCode(block, 'MAP', Order.RELATIONAL) || '{}';
+    return [`${key} in ${map}`, Order.RELATIONAL];
+  };
+
+  Blockly.Blocks['minis_map_delete'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('MAP').appendField('delete from map');
+      (this as Blockly.Block).appendValueInput('KEY').appendField('key');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setPreviousStatement(true, null);
+      (this as Blockly.Block).setNextStatement(true, null);
+      (this as Blockly.Block).setColour('#c4527a');
+    },
+  };
+  javascriptGenerator.forBlock['minis_map_delete'] = (block, gen) => {
+    const map = gen.valueToCode(block, 'MAP', Order.MEMBER) || '{}';
+    const key = gen.valueToCode(block, 'KEY', Order.NONE) || "''";
+    return `delete ${map}[${key}];\n`;
+  };
+
+  Blockly.Blocks['minis_map_keys'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('MAP').appendField('Object.keys(');
+      (this as Blockly.Block).appendDummyInput().appendField(')');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour('#c4527a');
+      (this as Blockly.Block).setTooltip('Get all keys of a map as an array');
+    },
+  };
+  javascriptGenerator.forBlock['minis_map_keys'] = (block, gen) => {
+    const map = gen.valueToCode(block, 'MAP', Order.NONE) || '{}';
+    return [`Object.keys(${map})`, Order.FUNCTION_CALL];
+  };
+
+  // ── JSON blocks ───────────────────────────────────────────────────────────
+  Blockly.Blocks['minis_json_stringify'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('VALUE').appendField('JSON.stringify(');
+      (this as Blockly.Block).appendDummyInput().appendField(')');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, 'String');
+      (this as Blockly.Block).setColour('#4a7c59');
+      (this as Blockly.Block).setTooltip('Serialize value to JSON string');
+    },
+  };
+  javascriptGenerator.forBlock['minis_json_stringify'] = (block, gen) => {
+    const val = gen.valueToCode(block, 'VALUE', Order.NONE) || 'undefined';
+    return [`JSON.stringify(${val})`, Order.FUNCTION_CALL];
+  };
+
+  Blockly.Blocks['minis_json_parse'] = {
+    init() {
+      (this as Blockly.Block).appendValueInput('TEXT').appendField('JSON.parse(');
+      (this as Blockly.Block).appendDummyInput().appendField(')');
+      (this as Blockly.Block).setInputsInline(true);
+      (this as Blockly.Block).setOutput(true, null);
+      (this as Blockly.Block).setColour('#4a7c59');
+      (this as Blockly.Block).setTooltip('Parse JSON string to object');
+    },
+  };
+  javascriptGenerator.forBlock['minis_json_parse'] = (block, gen) => {
+    const text = gen.valueToCode(block, 'TEXT', Order.NONE) || "'{}'";
+    return [`JSON.parse(${text})`, Order.FUNCTION_CALL];
+  };
+}
+
+const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
+  kind: 'categoryToolbox',
+  contents: [
+    // ── MinisLib ────────────────────────────────────────────────────────────
+    {
+      kind: 'category', name: 'MinisLib', colour: '#89dceb',
+      contents: [
+        { kind: 'block', type: 'minis_get_param' },
+        { kind: 'block', type: 'minis_get_prop' },
+        { kind: 'block', type: 'minis_set_prop' },
+        { kind: 'block', type: 'minis_emit' },
+        { kind: 'block', type: 'minis_call' },
+        { kind: 'block', type: 'minis_log' },
+      ],
+    },
+    { kind: 'sep' },
+    // ── Language ────────────────────────────────────────────────────────────
+    {
+      kind: 'category', name: 'Language', colour: '210', expanded: true,
+      contents: [
+        {
+          kind: 'category', name: 'Logic', categorystyle: 'logic_category',
+          contents: [
+            { kind: 'block', type: 'controls_if' },
+            { kind: 'block', type: 'logic_compare' },
+            { kind: 'block', type: 'logic_operation' },
+            { kind: 'block', type: 'logic_negate' },
+            { kind: 'block', type: 'logic_boolean' },
+            { kind: 'block', type: 'logic_null' },
+            { kind: 'block', type: 'logic_ternary' },
+          ],
+        },
+        {
+          kind: 'category', name: 'Loops', categorystyle: 'loop_category',
+          contents: [
+            {
+              kind: 'block', type: 'controls_repeat_ext',
+              inputs: { TIMES: { shadow: { type: 'math_number', fields: { NUM: 10 } } } },
+            },
+            { kind: 'block', type: 'controls_whileUntil' },
+            {
+              kind: 'block', type: 'controls_for',
+              inputs: {
+                FROM: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+                TO: { shadow: { type: 'math_number', fields: { NUM: 9 } } },
+                BY: { shadow: { type: 'math_number', fields: { NUM: 1 } } },
+              },
+            },
+            { kind: 'block', type: 'controls_forEach' },
+            { kind: 'block', type: 'controls_flow_statements' },
+          ],
+        },
+        {
+          kind: 'category', name: 'Math', categorystyle: 'math_category',
+          contents: [
+            { kind: 'block', type: 'math_number' },
+            { kind: 'block', type: 'math_arithmetic' },
+            { kind: 'block', type: 'math_single' },
+            { kind: 'block', type: 'math_trig' },
+            { kind: 'block', type: 'math_constant' },
+            { kind: 'block', type: 'math_number_property' },
+            {
+              kind: 'block', type: 'math_change',
+              inputs: { DELTA: { shadow: { type: 'math_number', fields: { NUM: 1 } } } },
+            },
+            { kind: 'block', type: 'math_round' },
+            { kind: 'block', type: 'math_modulo' },
+            {
+              kind: 'block', type: 'math_constrain',
+              inputs: {
+                LOW: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+                HIGH: { shadow: { type: 'math_number', fields: { NUM: 100 } } },
+              },
+            },
+            {
+              kind: 'block', type: 'math_random_int',
+              inputs: {
+                FROM: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+                TO: { shadow: { type: 'math_number', fields: { NUM: 100 } } },
+              },
+            },
+            { kind: 'block', type: 'math_random_float' },
+          ],
+        },
+        {
+          kind: 'category', name: 'Text', categorystyle: 'text_category',
+          contents: [
+            { kind: 'block', type: 'text' },
+            { kind: 'block', type: 'text_join' },
+            { kind: 'block', type: 'text_append', inputs: { TEXT: { shadow: { type: 'text' } } } },
+            { kind: 'block', type: 'text_length' },
+            { kind: 'block', type: 'text_isEmpty' },
+            {
+              kind: 'block', type: 'text_indexOf',
+              inputs: { VALUE: { shadow: { type: 'text', fields: { TEXT: 'abc' } } } },
+            },
+            {
+              kind: 'block', type: 'text_charAt',
+              inputs: { VALUE: { shadow: { type: 'math_number', fields: { NUM: 1 } } } },
+            },
+            { kind: 'block', type: 'text_getSubstring' },
+            { kind: 'block', type: 'text_changeCase' },
+            {
+              kind: 'block', type: 'text_trim',
+              inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: '  hello  ' } } } },
+            },
+            { kind: 'block', type: 'text_print' },
+          ],
+        },
+        {
+          kind: 'category', name: 'Lists', colour: '#5ba5a5',
+          contents: [
+            { kind: 'block', type: 'lists_create_with' },
+            {
+              kind: 'block', type: 'lists_repeat',
+              inputs: {
+                ITEM: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+                NUM: { shadow: { type: 'math_number', fields: { NUM: 5 } } },
+              },
+            },
+            { kind: 'sep' },
+            { kind: 'block', type: 'lists_length' },
+            { kind: 'block', type: 'lists_isEmpty' },
+            {
+              kind: 'block', type: 'lists_indexOf',
+              inputs: { VALUE: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+            },
+            { kind: 'sep' },
+            { kind: 'block', type: 'lists_getIndex' },
+            { kind: 'block', type: 'lists_setIndex' },
+            { kind: 'block', type: 'lists_getSublist' },
+            { kind: 'sep' },
+            {
+              kind: 'block', type: 'lists_split',
+              inputs: { DELIM: { shadow: { type: 'text', fields: { TEXT: ',' } } } },
+            },
+            { kind: 'block', type: 'lists_sort' },
+          ],
+        },
+        {
+          kind: 'category', name: 'Tuples', colour: '#9b5ba5',
+          contents: [
+            { kind: 'block', type: 'minis_tuple_create' },
+            { kind: 'sep' },
+            {
+              kind: 'block', type: 'minis_tuple_get',
+              inputs: { IDX: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+            },
+            { kind: 'block', type: 'minis_tuple_length' },
+            {
+              kind: 'block', type: 'minis_tuple_find',
+              inputs: { ITEM: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
+            },
+          ],
+        },
+        {
+          kind: 'category', name: 'Map', colour: '#c4527a',
+          contents: [
+            {
+              kind: 'block', type: 'minis_map_create',
+              inputs: {
+                KEY: { shadow: { type: 'text', fields: { TEXT: 'key' } } },
+                VAL: { shadow: { type: 'text', fields: { TEXT: 'value' } } },
+              },
+            },
+            { kind: 'sep' },
+            {
+              kind: 'block', type: 'minis_map_get',
+              inputs: { KEY: { shadow: { type: 'text', fields: { TEXT: 'key' } } } },
+            },
+            {
+              kind: 'block', type: 'minis_map_set',
+              inputs: { KEY: { shadow: { type: 'text', fields: { TEXT: 'key' } } } },
+            },
+            {
+              kind: 'block', type: 'minis_map_has',
+              inputs: { KEY: { shadow: { type: 'text', fields: { TEXT: 'key' } } } },
+            },
+            {
+              kind: 'block', type: 'minis_map_delete',
+              inputs: { KEY: { shadow: { type: 'text', fields: { TEXT: 'key' } } } },
+            },
+            { kind: 'block', type: 'minis_map_keys' },
+          ],
+        },
+        {
+          kind: 'category', name: 'JSON', colour: '#4a7c59',
+          contents: [
+            { kind: 'block', type: 'minis_json_stringify' },
+            {
+              kind: 'block', type: 'minis_json_parse',
+              inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: '{"key":"value"}' } } } },
+            },
+          ],
+        },
+        {
+          kind: 'category', name: 'Variables', colour: '#ff8c00',
+          contents: [
+            { kind: 'block', type: 'variables_get' },
+            { kind: 'block', type: 'variables_set' },
+          ],
+        },
+        {
+          kind: 'category', name: 'Functions', categorystyle: 'procedure_category',
+          custom: 'PROCEDURE',
+        },
+      ],
+    },
+  ],
+};
+
+function SlotBlocklyEditor({ ctx, onCodeChange }: { ctx: SlotCtx; onCodeChange: (code: string) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cbRef = useRef(onCodeChange);
+  cbRef.current = onCodeChange;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    ensureMinisBlocksRegistered();
+    _blkSlotCtx = ctx; // set before inject so dropdown options are ready
+    const workspace = Blockly.inject(container, {
+      toolbox: MINIS_BLK_TOOLBOX,
+      scrollbars: true,
+      trashcan: true,
+      zoom: { controls: true, startScale: 0.85, maxScale: 2, minScale: 0.4 },
+    });
+    // Resize after first paint so Blockly measures the real container dimensions
+    requestAnimationFrame(() => Blockly.svgResize(workspace));
+    setTimeout(() => Blockly.svgResize(workspace), 200);
+    const listener = () => {
+      cbRef.current(javascriptGenerator.workspaceToCode(workspace));
+    };
+    workspace.addChangeListener(listener);
+    const ro = new ResizeObserver(() => Blockly.svgResize(workspace));
+    ro.observe(container);
+    return () => {
+      ro.disconnect();
+      workspace.dispose();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Box sx={{ position: 'relative', flex: 1, minHeight: 240 }}>
+      <div ref={containerRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
+    </Box>
+  );
+}
+
+function indentBody(raw: string): string {
+  const lines = raw.split('\n').filter(l => l.trim() !== '');
+  return lines.length > 0 ? lines.map(l => '    ' + l).join('\n') : '    // empty';
+}
+
+/** Context carrying the plugin root element so portals can anchor to it. */
+const MinisContainerCtx = createContext<React.RefObject<HTMLDivElement | null> | null>(null);
+
+/** Renders SlotBlocklyEditor as an absolute overlay inside the plugin container. */
+function SlotBlkOverlay({ slotName, paramType, blkCode, ctx, onCodeChange, onBack, onCommit }: {
+  slotName: string; paramType: string; blkCode: string; ctx: SlotCtx;
+  onCodeChange: (code: string) => void;
+  onBack: () => void;
+  onCommit: () => void;
+}) {
+  const ctxRef = useContext(MinisContainerCtx);
+  // Capture the DOM element once — never let it change so the portal is stable
+  const elRef = useRef<HTMLDivElement | null>(null);
+  if (!elRef.current && ctxRef?.current) elRef.current = ctxRef.current;
+  const el = elRef.current;
+  if (!el) return null;
+  const body = indentBody(blkCode);
+  const preview = `${slotName || '_'}(v: ${paramType}): void {\n${body}\n  }`;
+  return createPortal(
+    <Box
+      sx={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', flexDirection: 'column', background: '#13131e' }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Header: back + signature + add */}
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', flexShrink: 0 }}>
+        <Tooltip title="Back to Visual editor">
+          <IconButton size="small" onClick={onBack} sx={{ color: '#6c7086', p: 0.25, '&:hover': { color: '#cdd6f4' } }}>
+            <CloseIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Tooltip>
+        <Typography sx={{ fontSize: 11, color: '#89dceb', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {slotName || '_'}(v: {paramType}): void
+        </Typography>
+        <Button size="small" onClick={onCommit} disabled={!slotName.trim()}
+          sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144', flexShrink: 0 }}>
+          Add Slot
+        </Button>
+      </Box>
+      {/* Code preview */}
+      <Box sx={{ px: 1, py: 0.4, background: '#0d0d1a', borderBottom: '1px solid #313244', flexShrink: 0 }}>
+        <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.4 }}>{preview}</Typography>
+      </Box>
+      {/* Blockly workspace */}
+      <SlotBlocklyEditor ctx={ctx} onCodeChange={onCodeChange} />
+    </Box>,
+    el,
+  );
+}
+
+function SlotBuilder({ entity, onCancel, onCommit }: { entity: MinisEntity; onCancel: () => void; onCommit: (name: string, type: string, body: string) => void }) {
   const [slotName, setSlotName] = useState('');
   const [paramType, setParamType] = useState('unknown');
   const [stmts, setStmts] = useState<SlotStmt[]>([]);
+  const [editorMode, setEditorMode] = useState<'visual' | 'blockly'>('visual');
+  const [blkCode, setBlkCode] = useState('');
   const ctx = useMemo(() => buildSlotCtx(entity), [entity.varName]); // eslint-disable-line react-hooks/exhaustive-deps
-  const preview = `${slotName||'_'}(v: ${paramType}): void {\n${genStmts(stmts)}\n  }`;
+  const currentBody = editorMode === 'blockly' ? indentBody(blkCode) : genStmts(stmts, 2);
+  const preview = `${slotName||'_'}(v: ${paramType}): void {\n${currentBody}\n  }`;
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid #313244', background: '#13131e', maxHeight: 420, minHeight: 280 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid #313244', background: '#13131e', maxHeight: editorMode === 'visual' ? 420 : undefined, minHeight: editorMode === 'visual' ? 280 : undefined }}>
       {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5, gap: 1, borderBottom: '1px solid #313244', flexShrink: 0 }}>
-        <Typography sx={{ fontSize: 11, color: '#89dceb', fontWeight: 600, flex: 1 }}>New Slot</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', flexShrink: 0 }}>
+        <Typography sx={{ fontSize: 11, color: '#89dceb', fontWeight: 600 }}>New Slot</Typography>
+        <ToggleButtonGroup
+          size="small" exclusive
+          value={editorMode}
+          onChange={(_, v) => { if (v) setEditorMode(v as 'visual' | 'blockly'); }}
+          sx={{ ml: 0.5, '& .MuiToggleButton-root': { fontSize: 9, py: 0.1, px: 0.75, color: '#6c7086', border: '1px solid #31324466', '&.Mui-selected': { color: '#89dceb', background: '#1e1e3e', borderColor: '#89dceb44' } } }}
+        >
+          <ToggleButton value="visual">Visual</ToggleButton>
+          <ToggleButton value="blockly">Blockly</ToggleButton>
+        </ToggleButtonGroup>
+        <Box sx={{ flex: 1 }} />
         <Button size="small" onClick={onCancel} sx={{ fontSize: 10, color: '#6c7086', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0 }}>Cancel</Button>
-        <Button size="small" onClick={() => onCommit(slotName, paramType, stmts)} disabled={!slotName.trim()}
+        <Button size="small" onClick={() => onCommit(slotName, paramType, currentBody)} disabled={!slotName.trim()}
           sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144' }}>Add</Button>
       </Box>
       {/* Signature */}
@@ -1464,34 +2102,56 @@ function SlotBuilder({ entity, onCancel, onCommit }: { entity: MinisEntity; onCa
         <TypeComboBox value={paramType} onChange={setParamType} placeholder="type" />
         <Typography sx={{ fontSize: 11, color: '#45475a' }}>)</Typography>
       </Box>
-      {/* Body: palette | statements */}
-      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
-        {/* Palette */}
-        <Box sx={{ width: 76, borderRight: '1px solid #313244', overflowY: 'auto', p: 0.5, flexShrink: 0 }}>
-          {PALETTE_GROUPS.map(g => (
-            <Box key={g.label} sx={{ mb: 0.75 }}>
-              <Typography sx={{ fontSize: 8, color: '#45475a', textTransform: 'uppercase', letterSpacing: 0.8, px: 0.25, mb: 0.25 }}>{g.label}</Typography>
-              {g.items.map(k => (
-                <Box key={k} onClick={() => setStmts(prev => [...prev, mkStmt(k)])}
-                  sx={{ px: 0.75, py: 0.2, mb: 0.2, fontSize: 10, fontWeight: 700, borderRadius: 0.5, cursor: 'pointer', color: STMT_COLOR[k], background: STMT_COLOR[k]+'22', border: `1px solid ${STMT_COLOR[k]}44`, '&:hover': { background: STMT_COLOR[k]+'44' } }}>
-                  {STMT_LABEL[k]}
-                </Box>
-              ))}
+      {/* Body: visual or Blockly */}
+      {editorMode === 'visual' ? (
+        <Box sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+          {/* Palette */}
+          <Box sx={{ width: 76, borderRight: '1px solid #313244', overflowY: 'auto', p: 0.5, flexShrink: 0 }}>
+            {PALETTE_GROUPS.map(g => (
+              <Box key={g.label} sx={{ mb: 0.75 }}>
+                <Typography sx={{ fontSize: 8, color: '#45475a', textTransform: 'uppercase', letterSpacing: 0.8, px: 0.25, mb: 0.25 }}>{g.label}</Typography>
+                {g.items.map(k => (
+                  <Box key={k} onClick={() => setStmts(prev => [...prev, mkStmt(k)])}
+                    sx={{ px: 0.75, py: 0.2, mb: 0.2, fontSize: 10, fontWeight: 700, borderRadius: 0.5, cursor: 'pointer', color: STMT_COLOR[k], background: STMT_COLOR[k]+'22', border: `1px solid ${STMT_COLOR[k]}44`, '&:hover': { background: STMT_COLOR[k]+'44' } }}>
+                    {STMT_LABEL[k]}
+                  </Box>
+                ))}
+              </Box>
+            ))}
+          </Box>
+          {/* Statement list + preview */}
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+            <Box sx={{ flex: 1, overflowY: 'auto', p: 0.75 }}>
+              <StmtList stmts={stmts} ctx={ctx} onChange={setStmts} />
+              {stmts.length === 0 && <Typography sx={{ fontSize: 10, color: '#45475a', textAlign: 'center', pt: 2 }}>← click to add blocks</Typography>}
             </Box>
-          ))}
-        </Box>
-        {/* Statement list + preview */}
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-          <Box sx={{ flex: 1, overflowY: 'auto', p: 0.75 }}>
-            <StmtList stmts={stmts} ctx={ctx} onChange={setStmts} />
-            {stmts.length === 0 && <Typography sx={{ fontSize: 10, color: '#45475a', textAlign: 'center', pt: 2 }}>← click to add blocks</Typography>}
-          </Box>
-          {/* Code preview */}
-          <Box sx={{ borderTop: '1px solid #313244', px: 1, py: 0.5, background: '#0d0d1a', flexShrink: 0, maxHeight: 72, overflowY: 'auto' }}>
-            <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{preview}</Typography>
+            {/* Code preview */}
+            <Box sx={{ borderTop: '1px solid #313244', px: 1, py: 0.5, background: '#0d0d1a', flexShrink: 0, maxHeight: 72, overflowY: 'auto' }}>
+              <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{preview}</Typography>
+            </Box>
           </Box>
         </Box>
-      </Box>
+      ) : (
+        <>
+          <Box sx={{ px: 1.5, py: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Typography sx={{ fontSize: 10, color: '#45475a' }}>
+              Blockly editor is shown in the canvas area above.
+            </Typography>
+            <Box sx={{ borderTop: '1px solid #313244', px: 0, py: 0.5, background: '#0d0d1a', mt: 0.5, borderRadius: 0.5, overflowY: 'auto', maxHeight: 52 }}>
+              <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', px: 1 }}>{preview}</Typography>
+            </Box>
+          </Box>
+          <SlotBlkOverlay
+            slotName={slotName}
+            paramType={paramType}
+            blkCode={blkCode}
+            ctx={ctx}
+            onCodeChange={setBlkCode}
+            onBack={() => setEditorMode('visual')}
+            onCommit={() => onCommit(slotName, paramType, indentBody(blkCode))}
+          />
+        </>
+      )}
     </Box>
   );
 }
@@ -1579,10 +2239,9 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
         <SlotBuilder
           entity={entity}
           onCancel={reset}
-          onCommit={(slotName, paramType, stmts) => {
+          onCommit={(slotName, paramType, body) => {
             const { uri } = _state;
             if (!uri || !slotName.trim()) return;
-            const body = genStmts(stmts, 2);
             const memberCode = `${slotName}(v: ${paramType || 'unknown'}): void {\n${body}\n  }`;
             insertMemberIntoClass(memberCode, entity.varName, uri);
             reset();
@@ -1825,6 +2484,53 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
   );
 }
 
+/* ── Save source button ──────────────────────────────────────────────────────*/
+
+function SaveSourceButton({ uri }: { uri: string }) {
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const u1 = globalEventBus.on('system:editor:markDirty', (payload: unknown) => {
+      const p = payload as { path?: string };
+      if (p?.path && (p.path === uri || p.path.endsWith(uri) || uri.endsWith(p.path))) {
+        setDirty(true);
+      }
+    });
+    const u2 = globalEventBus.on('system:editor:didSave', (payload: unknown) => {
+      const p = payload as { uri?: string };
+      if (p?.uri && (p.uri === uri || p.uri.endsWith(uri) || uri.endsWith(p.uri))) {
+        setDirty(false);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1500);
+      }
+    });
+    return () => { u1(); u2(); };
+  }, [uri]);
+
+  const handleSave = useCallback(async () => {
+    for (const editor of monaco.editor.getEditors()) {
+      const m = editor.getModel();
+      if (m && (m.uri.toString() === uri || m.uri.path === uri || m.uri.toString().endsWith(uri))) {
+        await editor.getAction('file.save')?.run();
+        return;
+      }
+    }
+  }, [uri]);
+
+  const color = saved ? '#a6e3a1' : dirty ? '#f9e2af' : '#585b70';
+  const tip = saved ? 'Saved!' : dirty ? 'Unsaved changes — click to save (Ctrl+S)' : 'Save source file (Ctrl+S)';
+
+  return (
+    <Tooltip title={tip}>
+      <IconButton size="small" onClick={handleSave}
+        sx={{ px: 1, color, borderLeft: '1px solid #313244', borderRadius: 0, '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}>
+        {saved ? <CheckIcon sx={{ fontSize: 16 }} /> : <SaveIcon sx={{ fontSize: 16 }} />}
+      </IconButton>
+    </Tooltip>
+  );
+}
+
 /* ── Main panel ──────────────────────────────────────────────────────────────*/
 
 function VisualMinisLibPanel() {
@@ -1928,16 +2634,18 @@ function VisualMinisLibPanel() {
   }
 
   return (
+    <MinisContainerCtx.Provider value={containerRef}>
     <Box ref={containerRef} sx={isFullscreen ? {
       position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
       zIndex: 1400, display: 'flex', flexDirection: 'column', background: '#181825',
-    } : { height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
+    } : { position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
       {/* Toolbar: Add instance + Define new class + Fullscreen */}
       <Box sx={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #313244' }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <AddNodeMenu uri={uri} externalClassDefs={externalClassDefs} importedClasses={importedClasses} entities={entities} />
         </Box>
         <NewClassButton uri={uri} onCreated={(varName) => { pendingSelectName.current = varName; }} />
+        <SaveSourceButton uri={uri} />
         <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
           <IconButton size="small" onClick={toggleFullscreen} sx={{ px: 1, borderLeft: '1px solid #313244', borderRadius: 0, color: '#585b70', '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}>
             {isFullscreen ? <FullscreenExitIcon sx={{ fontSize: 16 }} /> : <FullscreenIcon sx={{ fontSize: 16 }} />}
@@ -2010,6 +2718,7 @@ function VisualMinisLibPanel() {
         </>
       )}
     </Box>
+    </MinisContainerCtx.Provider>
   );
 }
 

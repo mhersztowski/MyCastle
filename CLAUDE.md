@@ -187,7 +187,7 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
 
 ### Aplikacja cad-backend (`app/cad-backend/`)
 
-- Node.js HTTP server, ESM, port **1898**. Dev: `pnpm dev:cad-backend`. Używa `NodeFS` z `@mhersztowski/core` jako backend magazynu plików.
+- Node.js HTTP server, ESM, port **1897** (wewnętrzny — użytkownicy wchodzą przez Vite/1898 w dev, lub bezpośrednio w prod po `vite build`). Serwuje VFS API (`/api/*`) + pliki statyczne z `public/` (SPA fallback na `index.html`). Buduj frontend przez `pnpm build:cad` → trafia do `app/cad-backend/public/`.
 - **VFS REST API** — implementuje dokładnie te endpointy których oczekuje `RemoteFS` z `@mhersztowski/core`:
   - `GET /api/vfs/capabilities` → `{readonly, watch}`
   - `GET /api/vfs/stat?path=` → `FileStat`
@@ -199,17 +199,17 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `userId` domyślnie `'default'` — gotowe na przyszłą autentykację (wywołaj `setCurrentUserId()` z auth contextu)
   - Każdy użytkownik ma izolowaną przestrzeń projektów
 - **CORS:** domyślnie `*` dla deweloperki; produkcja — `CAD_CORS_ORIGIN` env var
-- **Env vars:** `CAD_DATA_DIR` (domyślnie `app/cad-backend/data/`), `CAD_BACKEND_PORT` (1898), `CAD_CORS_ORIGIN`
+- **Env vars:** `CAD_DATA_DIR` (domyślnie `app/cad-backend/data/`), `CAD_BACKEND_PORT` (domyślnie 1897 — wewnętrzny), `CAD_CORS_ORIGIN`
 - **Frontend integracja** (`app/cad-app/`):
   - `src/vfs/cadProjectApi.ts` — cienki fetch client (`listProjects`, `readProject`, `writeProject`, `deleteProject`, `renameProject`, `setCurrentUserId`)
   - `src/components/ProjectBrowser.tsx` — dialog wyboru/zapisu projektów: lista z datą i rozmiarem, inline rename, delete, double-click open; name field w trybie save
   - `src/io/CadExporter.ts:loadProjectFromText()` — mutuje istniejący singleton projekt z JSON stringa (używane przez ProjectBrowser i importJSON)
-  - `vite.config.ts` proxy: `/api/vfs` → `http://localhost:1898`
+  - `vite.config.ts` proxy: `/api/*` → `http://localhost:1897` (cad-backend internal)
   - `FileMenu.tsx` — "Open from Server…" / "Save to Server…" otwierają ProjectBrowser
 
 ### Aplikacja cad-app (`app/cad-app/`)
 
-- React 18 + TypeScript, Vite 7, MUI 7, Three.js — edytor CAD 2D/3D. Dev port: 1897. Wymaga `pnpm dev:cad-backend` (port 1898) dla funkcji serwera.
+- React 18 + TypeScript, Vite 7, MUI 7, Three.js — edytor CAD 2D/3D. Dev port: **1898** (user-facing). Proxy `/api/*` → `http://localhost:1897` (cad-backend). `vite build` wyprowadza do `../cad-backend/public/`.
 - Dwa tryby pracy przełączane zakładkami na górze:
   - **CAD 2D/3D** — tryb kreślarski z przełącznikiem widoku 2D (ortho) / 3D (perspektywa + OrbitControls)
   - **Scene 3D** — pełny edytor Three.js (`RichEditor` z `@mhersztowski/ui-components-scene3d`)
@@ -311,7 +311,7 @@ URL-based routing (bez react-router) — regex na `window.location.pathname`:
 
 - React aliases (`react`, `react-dom`, `@emotion/*`) — zapobiegają wielokrotnym instancjom React z workspace paczek
 - `optimizeDeps.exclude` dla wszystkich lokalnych workspace paczek (`@mhersztowski/ui-core`, `@mhersztowski/ui-components-scene3d`, `@mhersztowski/core-scene3d`, `@mhersztowski/core-cad`) — Vite nie cachuje pre-bundled versions, zawsze ładuje świeże `dist/`
-- `/api/vfs` proxy → `http://localhost:1898` (cad-backend)
+- `/api/*` proxy → `http://localhost:1897` (cad-backend internal); dev port 1898 (user-facing); `build.outDir` → `../cad-backend/public`
 
 #### Skróty globalne
 
@@ -420,8 +420,8 @@ mycastle/                           # Root monorepo
 │   │   ├── Dockerfile              # Multi-stage: build → nginx:alpine
 │   │   ├── nginx.conf
 │   │   └── package.json
-│   ├── cad-backend/                # CAD VFS server (port 1898)
-│   │   ├── src/index.ts            # HTTP server: VFS REST API (/api/vfs/*), NodeFS storage, CORS
+│   ├── cad-backend/                # CAD VFS server + static frontend (port 1897 internal)
+│   │   ├── src/index.ts            # HTTP server: VFS REST API (/api/*) + static files from public/, CORS
 │   │   ├── data/                   # VFS root: users/{userId}/projects/{name}.cad.json (gitignored)
 │   │   ├── tsup.config.ts          # ESM, target node20
 │   │   └── package.json
@@ -436,7 +436,7 @@ mycastle/                           # Root monorepo
 │   │   │   ├── io/CadExporter.ts   # exportJSON/SVG/DXF/OBJ/GLTF, importJSON, loadProjectFromText
 │   │   │   ├── vfs/cadProjectApi.ts # fetch client dla cad-backend (listProjects/read/write/delete/rename)
 │   │   │   └── hooks/useProject.ts # version counter from EventBus
-│   │   ├── vite.config.ts          # Port 1897, proxy /api/vfs→localhost:1898, alias @→src/
+│   │   ├── vite.config.ts          # Port 1898 (user-facing), proxy /api/*→localhost:1897, outDir ../cad-backend/public, alias @→src/
 │   │   └── package.json
 │   └── client/                     # Python MQTT agent (Windows) + VFS extension
 │       ├── agent.py                # ClientAgent: heartbeat, command routing, VFS
@@ -475,8 +475,9 @@ mycastle/                           # Root monorepo
 - **Run MyCastle backend:** `pnpm dev:backend` (port 1894, HTTP + MQTT WebSocket at /mqtt)
 - **Run MyCastle frontend:** `pnpm dev:web` (port 1895, Vite HMR)
 - **Run scene3d:** `pnpm dev:scene3d` (requires packages built first)
-- **Run CAD editor:** `pnpm dev:cad` (port 1897, requires `pnpm build:core-cad` first)
-- **Run CAD backend:** `pnpm dev:cad-backend` (port 1898, VFS server for project storage)
+- **Run CAD (both):** `pnpm dev:cad` — `http://localhost:1898` (Vite dev server, proxy /api/* → cad-backend wewnętrzny 1897)
+- **Run CAD editor only:** `pnpm dev:cad-app` (port 1898 Vite, requires `pnpm build:core-cad` first)
+- **Run CAD backend only:** `pnpm dev:cad-backend` (port 1897 internal)
 - **Run client agent:** `app/client/run.sh` (auto-creates `.venv` i instaluje zależności przy pierwszym uruchomieniu)
 - **Test (unit):** `pnpm test` (all packages), `pnpm test:watch`, `pnpm test:coverage`
 - **Test (e2e):** `pnpm test:e2e` (Playwright — auto-starts mycastle-backend + mycastle-web)

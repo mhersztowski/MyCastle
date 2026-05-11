@@ -1,14 +1,16 @@
 import 'dotenv/config';
 import http from 'node:http';
 import { URL } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import { NodeFS, VfsError } from '@mhersztowski/core';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const DATA_DIR = process.env.CAD_DATA_DIR ?? resolve(__dirname, '../data');
-const PORT = parseInt(process.env.CAD_BACKEND_PORT ?? '1898', 10);
+const PORT = parseInt(process.env.CAD_BACKEND_PORT ?? '1897', 10);
+const PUBLIC_DIR = resolve(__dirname, '../public');
 // Allow any origin in dev; in production set CAD_CORS_ORIGIN explicitly
 const CORS_ORIGIN = process.env.CAD_CORS_ORIGIN ?? '*';
 
@@ -68,6 +70,33 @@ function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 
 // ── request handler ───────────────────────────────────────────────────────────
 
+const MIME: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+};
+
+function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  if (!fs.existsSync(PUBLIC_DIR)) return false;
+  const url = new URL(req.url!, `http://localhost`);
+  let filePath = resolve(PUBLIC_DIR, '.' + url.pathname);
+  if (!filePath.startsWith(PUBLIC_DIR)) return false;
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    filePath = resolve(PUBLIC_DIR, 'index.html');
+  }
+  if (!fs.existsSync(filePath)) return false;
+  const mime = MIME[extname(filePath)] ?? 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': mime });
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
   setCors(req, res);
 
@@ -78,6 +107,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = new URL(req.url!, `http://localhost:${PORT}`);
+  // Serve built frontend for non-API requests
+  if (!url.pathname.startsWith('/api/')) {
+    if (serveStatic(req, res)) return;
+  }
+
   // Strip /api/vfs prefix so the route is just /stat, /readdir, etc.
   const route = url.pathname.replace(/^\/api\/vfs/, '');
   const path = url.searchParams.get('path') ?? '/';
@@ -162,7 +196,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`CAD Backend  →  http://localhost:${PORT}`);
-  console.log(`Data dir     →  ${DATA_DIR}`);
-  console.log(`VFS root     →  /users/{userId}/projects/{name}.cad.json`);
+  console.log(`CAD Backend (internal)  →  http://localhost:${PORT}`);
+  console.log(`Data dir                →  ${DATA_DIR}`);
+  console.log(`Public dir              →  ${PUBLIC_DIR}`);
 });
