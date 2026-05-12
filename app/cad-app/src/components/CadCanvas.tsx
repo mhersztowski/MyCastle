@@ -332,7 +332,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     >
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: '100%', height: '100%', cursor }}
+        style={{ display: 'block', width: '100%', height: '100%', cursor, touchAction: 'none' }}
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
