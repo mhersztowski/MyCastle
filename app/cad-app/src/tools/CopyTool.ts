@@ -21,7 +21,7 @@ export class CopyTool implements Tool {
       this.basePoint = point;
       this.state = 'picking-dest';
       this.ghostSegments = buildGhostSegmentsTranslated(ctx.project, 0, 0);
-    } else {
+    } else if (ctx.pen.pointerType === 'mouse') {
       this.commitCopy(point, ctx);
     }
   }
@@ -33,7 +33,13 @@ export class CopyTool implements Tool {
     this.ghostSegments = buildGhostSegmentsTranslated(ctx.project, dx, dy);
   }
 
-  onPointerUp(_point: Point2D, _ctx: ToolContext): void {}
+  onPointerUp(point: Point2D, ctx: ToolContext): void {
+    if (this.state !== 'picking-dest' || !this.basePoint || ctx.pen.pointerType === 'mouse') return;
+    const dx = point.x - this.basePoint.x;
+    const dy = point.y - this.basePoint.y;
+    if (Math.sqrt(dx * dx + dy * dy) > 0.5) this.commitCopy(point, ctx);
+    else this.reset();
+  }
 
   onKeyDown(key: string, _ctx: ToolContext): void {
     if (key === 'Escape') this.reset();

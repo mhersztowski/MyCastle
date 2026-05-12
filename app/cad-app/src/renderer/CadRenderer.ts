@@ -31,6 +31,8 @@ export class CadRenderer {
   private project: Project;
   private canvas: HTMLCanvasElement;
 
+  onViewChange?: () => void;
+
   constructor(canvas: HTMLCanvasElement, project: Project) {
     this.project = project;
     this.canvas = canvas;
@@ -319,6 +321,7 @@ export class CadRenderer {
     this.panX -= dx * this.zoom;
     this.panY += dy * this.zoom;
     this.updateCamera();
+    this.onViewChange?.();
   }
 
   zoomAt(screenX: number, screenY: number, factor: number): void {
@@ -328,15 +331,19 @@ export class CadRenderer {
     this.panX += (before.x - after.x);
     this.panY += (before.y - after.y);
     this.updateCamera();
+    this.onViewChange?.();
   }
 
   getPixelToWorld(): number { return this.zoom; }
+
+  getCanvasRect(): DOMRect { return this.canvas.getBoundingClientRect(); }
 
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
     this.renderer.setSize(width, height, false);
     this.perspCamera.aspect = width / height;
+    this.onViewChange?.();
     this.perspCamera.updateProjectionMatrix();
     this.updateCamera();
   }

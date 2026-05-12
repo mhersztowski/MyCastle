@@ -1,3 +1,4 @@
+import { useState, useRef } from 'react';
 import { Box, Chip, Typography } from '@mui/material';
 import type { Project, ViewMode } from '@mhersztowski/core-cad';
 import type { ToolName } from '../tools/types';
@@ -27,6 +28,56 @@ const TOOL_HINTS: Record<ToolName, string> = {
   sphere3d: 'Click center · Click edge for radius · Esc to cancel',
 };
 
+function GridInput({ project }: { project: Project }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commit = (raw: string) => {
+    const v = parseFloat(raw);
+    if (!isNaN(v) && v > 0) {
+      project.settings.gridSize = v;
+      project.eventBus.emit('project:loaded', undefined as never);
+    }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(draft); }
+          if (e.key === 'Escape') setEditing(false);
+          e.stopPropagation();
+        }}
+        style={{
+          width: 40, fontSize: 11, fontFamily: 'monospace',
+          background: 'rgba(79,195,247,0.12)', border: '1px solid #4fc3f7',
+          color: '#4fc3f7', outline: 'none', padding: '0 3px', borderRadius: 2,
+        }}
+        autoFocus
+      />
+    );
+  }
+
+  return (
+    <Typography
+      variant="caption"
+      onClick={() => { setDraft(String(project.settings.gridSize)); setEditing(true); }}
+      sx={{
+        color: 'text.secondary', cursor: 'pointer',
+        '&:hover span': { color: 'primary.main', textDecoration: 'underline' },
+      }}
+    >
+      Grid: <span style={{ color: '#4fc3f7' }}>{project.settings.gridSize}</span>
+    </Typography>
+  );
+}
+
 export function StatusBar({ project, activeTool, viewMode }: Props) {
   const entityCount = project.entityRegistry.getAll().length;
   const selectedCount = project.selectionManager.count();
@@ -46,6 +97,7 @@ export function StatusBar({ project, activeTool, viewMode }: Props) {
       <Typography variant="caption" sx={{ color: 'text.secondary', flex: 1 }}>
         {TOOL_HINTS[activeTool]}
       </Typography>
+      <GridInput project={project} />
       <Typography variant="caption" sx={{ color: 'text.secondary' }}>
         Layer: <span style={{ color: activeLayer.color }}>{activeLayer.name}</span>
       </Typography>

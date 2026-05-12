@@ -4,6 +4,8 @@ import type { Point2D, Project, SnapResult } from '@mhersztowski/core-cad';
 import type { ViewMode } from '@mhersztowski/core-cad';
 import { CadRenderer } from '../renderer/CadRenderer';
 import { DimensionOverlay } from './DimensionOverlay';
+import { GripOverlay } from './GripOverlay';
+import { ScaleBar } from './ScaleBar';
 import { SelectTool } from '../tools/SelectTool';
 import { LineTool } from '../tools/LineTool';
 import { CircleTool } from '../tools/CircleTool';
@@ -339,6 +341,15 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         onPointerLeave={() => setPenInput(null)}
         onContextMenu={e => e.preventDefault()}
       />
+      {!is3d && (
+        <GripOverlay
+          project={project}
+          renderer={rendererRef.current}
+          version={version}
+          visible={activeTool === 'select'}
+        />
+      )}
+      {!is3d && rendererRef.current && <ScaleBar renderer={rendererRef.current} />}
       {!is3d && rendererRef.current && dimLabels.length > 0 && (
         <DimensionOverlay labels={dimLabels} renderer={rendererRef.current} />
       )}

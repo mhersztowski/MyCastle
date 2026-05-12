@@ -48,7 +48,7 @@ export function LayerPanel({ project }: Props) {
           Layers
         </Typography>
         <Tooltip title="New layer">
-          <IconButton size="small" onClick={addLayer}><AddIcon sx={{ fontSize: 16 }} /></IconButton>
+          <IconButton size="small" onClick={addLayer} onMouseDown={e => e.preventDefault()}><AddIcon sx={{ fontSize: 16 }} /></IconButton>
         </Tooltip>
       </Box>
 
@@ -89,8 +89,8 @@ export function LayerPanel({ project }: Props) {
           placeholder="New layer name"
           value={newName}
           onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && addLayer()}
-          inputProps={{ style: { fontSize: 12, padding: '2px 6px' } }}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addLayer(); } }}
+          inputProps={{ style: { fontSize: 12, padding: '2px 6px' }, autoFocus: false }}
           sx={{ flex: 1 }}
         />
       </Box>

@@ -38,7 +38,7 @@ export class RotateTool implements Tool {
       this.currentAngle = 0;
       this.state = 'picking-angle';
       this.ghostSegments = buildGhostSegmentsRotated(ctx.project, point.x, point.y, 0);
-    } else {
+    } else if (ctx.pen.pointerType === 'mouse') {
       this.commitRotate(ctx);
     }
   }
@@ -49,7 +49,11 @@ export class RotateTool implements Tool {
     this.ghostSegments = buildGhostSegmentsRotated(ctx.project, this.center.x, this.center.y, this.currentAngle);
   }
 
-  onPointerUp(_point: Point2D, _ctx: ToolContext): void {}
+  onPointerUp(_point: Point2D, ctx: ToolContext): void {
+    if (this.state !== 'picking-angle' || ctx.pen.pointerType === 'mouse') return;
+    if (Math.abs(this.currentAngle) > 0.01) this.commitRotate(ctx);
+    else this.reset();
+  }
 
   onKeyDown(key: string, ctx: ToolContext): void {
     if (key === 'Escape') this.reset();
