@@ -44,6 +44,20 @@ function getHandles(project: Project): GripHandle[] {
           handles.push({ entityId: id, key: `p${i}`, wx: p.x, wy: p.y });
         });
         break;
+      case 'freehand':
+        e.points.forEach((p: { x: number; y: number }, i: number) => {
+          handles.push({ entityId: id, key: `p${i}`, wx: p.x, wy: p.y });
+        });
+        break;
+      case 'text':
+        handles.push({ entityId: id, key: 'pos', wx: e.x, wy: e.y });
+        break;
+      case 'image':
+        handles.push({ entityId: id, key: 'tl', wx: e.x,             wy: e.y });
+        handles.push({ entityId: id, key: 'tr', wx: e.x + e.width,   wy: e.y });
+        handles.push({ entityId: id, key: 'br', wx: e.x + e.width,   wy: e.y + e.height });
+        handles.push({ entityId: id, key: 'bl', wx: e.x,             wy: e.y + e.height });
+        break;
     }
   }
   return handles;
@@ -90,6 +104,24 @@ function applyDrag(project: Project, entityId: string, key: string, wx: number, 
       const pts = [...e.points];
       pts[idx] = { x: wx, y: wy };
       changes = { points: pts };
+      break;
+    }
+    case 'freehand': {
+      const idx = parseInt(key.slice(1));
+      const pts = [...e.points];
+      pts[idx] = { x: wx, y: wy };
+      changes = { points: pts };
+      break;
+    }
+    case 'text':
+      changes = { x: wx, y: wy };
+      break;
+    case 'image': {
+      const r = e.x + e.width, b = e.y + e.height;
+      if (key === 'tl') changes = { x: wx, y: wy, width: r - wx,    height: b - wy };
+      if (key === 'tr') changes = { y: wy,         width: wx - e.x,  height: b - wy };
+      if (key === 'br') changes = {                width: wx - e.x,  height: wy - e.y };
+      if (key === 'bl') changes = { x: wx,         width: r - wx,    height: wy - e.y };
       break;
     }
   }

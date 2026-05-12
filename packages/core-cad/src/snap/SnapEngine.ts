@@ -100,6 +100,7 @@ function getEndpoints(e: Entity): Point2D[] {
   switch (e.type) {
     case 'line': return [{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }];
     case 'polyline': return e.points.length > 0 ? [e.points[0], e.points[e.points.length - 1]] : [];
+    case 'freehand': return e.points.length > 0 ? [e.points[0], e.points[e.points.length - 1]] : [];
     case 'rect': return [{ x: e.x, y: e.y }, { x: e.x + e.width, y: e.y }, { x: e.x + e.width, y: e.y + e.height }, { x: e.x, y: e.y + e.height }];
     case 'arc': return [
       { x: e.cx + e.radius * Math.cos(e.startAngle), y: e.cy + e.radius * Math.sin(e.startAngle) },

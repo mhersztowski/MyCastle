@@ -41,6 +41,9 @@ const TOOL_SHORTCUTS: Record<string, ToolName> = {
   bx: 'box3d',
   cy: 'cylinder3d',
   sp: 'sphere3d',
+  tx: 'text',
+  im: 'image',
+  fh: 'freehand',
 };
 
 function parseInput(raw: string): ParseResult {
@@ -91,6 +94,9 @@ const TOOL_PROMPTS: Record<ToolName, string> = {
   arc: 'Arc (A) · 1=center · 2=start point · 3=end point (CCW).',
   rect: 'Pick corner A · then corner B.',
   polyline: 'Pick points · Enter=open · C=close. Type coords.',
+  freehand: 'Press and drag to draw · release to finish stroke.',
+  text: 'Text (TX) · click to place text at position.',
+  image: 'Image (IM) · click to open file picker and place image.',
   move: 'Select first · click base point · click destination.',
   copy: 'Select first · click base point · click destination.',
   rotate: 'Select first · click center · drag or type angle in degrees.',

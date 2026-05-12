@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Box3dEntity, Cylinder3dEntity, DimensionEntity, Entity, Layer, Sphere3dEntity } from '@mhersztowski/core-cad';
+import type { Box3dEntity, Cylinder3dEntity, DimensionEntity, Entity, FreehandEntity, ImageEntity, Layer, Point2D, Sphere3dEntity, TextEntity } from '@mhersztowski/core-cad';
 
 const SELECTION_COLOR = new THREE.Color('#4fc3f7');
 const PREVIEW_COLOR = new THREE.Color('#ffcc00');
@@ -43,6 +43,119 @@ function makeTextSprite(text: string, colorHex: string): THREE.Sprite {
   const texture = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
   return new THREE.Sprite(mat);
+}
+
+const textureCache = new Map<string, THREE.Texture>();
+
+function buildTextObject(entity: TextEntity, layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
+  const colorHex = isSelected ? '#4fc3f7'
+    : entity.color !== 'bylayer' ? entity.color as string
+    : (layer?.color ?? '#ffffff');
+
+  const PX_PER_UNIT = 12;
+  const canvas = document.createElement('canvas');
+  const ctx2d = canvas.getContext('2d')!;
+  const fontPx = Math.max(8, Math.ceil(entity.fontSize * PX_PER_UNIT));
+  ctx2d.font = `${fontPx}px ${entity.fontFamily}`;
+  const metrics = ctx2d.measureText(entity.content || ' ');
+  const cw = Math.ceil(metrics.width) + 8;
+  const ch = Math.ceil(fontPx * 1.5);
+  canvas.width = cw;
+  canvas.height = ch;
+  ctx2d.font = `${fontPx}px ${entity.fontFamily}`;
+  ctx2d.fillStyle = colorHex;
+  ctx2d.textBaseline = 'alphabetic';
+  ctx2d.fillText(entity.content || '', 4, ch * 0.78);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const worldW = cw / PX_PER_UNIT;
+  const worldH = ch / PX_PER_UNIT;
+  const geo = new THREE.PlaneGeometry(worldW, worldH);
+  const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthTest: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(entity.x + worldW / 2, entity.y + worldH / 2, 0.2);
+  if (entity.angle) mesh.rotation.z = entity.angle;
+
+  const group = new THREE.Group();
+  group.userData['entityId'] = entity.id;
+  group.add(mesh);
+
+  if (isSelected) {
+    const bPts = [0, 0, 0.3, worldW, 0, 0.3, worldW, worldH, 0.3, 0, worldH, 0.3, 0, 0, 0.3];
+    const bGeo = new THREE.BufferGeometry();
+    bGeo.setAttribute('position', new THREE.Float32BufferAttribute(bPts, 3));
+    const bLine = new THREE.Line(bGeo, new THREE.LineBasicMaterial({ color: SELECTION_COLOR }));
+    bLine.position.set(entity.x, entity.y, 0);
+    if (entity.angle) bLine.rotation.z = entity.angle;
+    group.add(bLine);
+  }
+
+  return group;
+}
+
+function buildImageObject(entity: ImageEntity, _layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
+  const cached = textureCache.get(entity.src);
+  let texture: THREE.Texture;
+  if (cached) {
+    texture = cached;
+  } else {
+    texture = new THREE.TextureLoader().load(entity.src, (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      textureCache.set(entity.src, t);
+    });
+  }
+
+  const geo = new THREE.PlaneGeometry(entity.width, entity.height);
+  const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(entity.x + entity.width / 2, entity.y + entity.height / 2, 0.1);
+
+  const group = new THREE.Group();
+  group.userData['entityId'] = entity.id;
+  group.add(mesh);
+
+  if (isSelected) {
+    const { x, y, width: w, height: h } = entity;
+    const bPts = [x, y, 0.3, x + w, y, 0.3, x + w, y + h, 0.3, x, y + h, 0.3, x, y, 0.3];
+    const bGeo = new THREE.BufferGeometry();
+    bGeo.setAttribute('position', new THREE.Float32BufferAttribute(bPts, 3));
+    group.add(new THREE.Line(bGeo, new THREE.LineBasicMaterial({ color: SELECTION_COLOR })));
+  }
+
+  return group;
+}
+
+function catmullRomPoints(points: Point2D[], subdivisions = 8): number[] {
+  if (points.length < 2) return [];
+  const p = [points[0], ...points, points[points.length - 1]];
+  const pts: number[] = [];
+  for (let i = 1; i < p.length - 2; i++) {
+    const p0 = p[i - 1], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2];
+    for (let j = 0; j <= subdivisions; j++) {
+      const t = j / subdivisions;
+      const t2 = t * t, t3 = t2 * t;
+      const x = 0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
+      const y = 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
+      pts.push(x, y, 0);
+    }
+  }
+  return pts;
+}
+
+function buildFreehandObject(entity: FreehandEntity, layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
+  const color = getEntityColor(entity, layer);
+  const mat = new THREE.LineBasicMaterial({ color: isSelected ? SELECTION_COLOR : color, linewidth: entity.strokeWidth });
+  const rawPts = entity.smooth ? catmullRomPoints(entity.points) : entity.points.flatMap(p => [p.x, p.y, 0]);
+  if (rawPts.length < 6) {
+    const g = new THREE.Group();
+    g.userData['entityId'] = entity.id;
+    return g;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(rawPts, 3));
+  const line = new THREE.Line(geo, mat);
+  line.userData['entityId'] = entity.id;
+  return line;
 }
 
 function addLineSegment(group: THREE.Group, mat: THREE.Material, pts: number[]): void {
@@ -146,6 +259,15 @@ function buildDimensionObject(entity: DimensionEntity, layer: Layer | undefined,
 export function buildEntityObject(entity: Entity, layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
   if (entity.type === 'dimension') {
     return buildDimensionObject(entity, layer, isSelected);
+  }
+  if (entity.type === 'freehand') {
+    return buildFreehandObject(entity, layer, isSelected);
+  }
+  if (entity.type === 'text') {
+    return buildTextObject(entity, layer, isSelected);
+  }
+  if (entity.type === 'image') {
+    return buildImageObject(entity, layer, isSelected);
   }
 
   const color = getEntityColor(entity, layer);

@@ -51,6 +51,32 @@ export interface ArcEntity extends EntityBase {
   endAngle: number;   // radians
 }
 
+export interface TextEntity extends EntityBase {
+  type: 'text';
+  x: number;
+  y: number;
+  content: string;
+  fontSize: number;   // world units
+  fontFamily: string;
+  angle: number;      // radians
+}
+
+export interface ImageEntity extends EntityBase {
+  type: 'image';
+  x: number;          // bottom-left
+  y: number;
+  width: number;
+  height: number;
+  src: string;        // data URL or external URL
+}
+
+export interface FreehandEntity extends EntityBase {
+  type: 'freehand';
+  points: Point2D[];
+  strokeWidth: number;
+  smooth: boolean;
+}
+
 export interface DimensionEntity extends EntityBase {
   type: 'dimension';
   x1: number;
@@ -91,6 +117,9 @@ export type Entity =
   | PolylineEntity
   | RectEntity
   | ArcEntity
+  | TextEntity
+  | ImageEntity
+  | FreehandEntity
   | DimensionEntity
   | Box3dEntity
   | Cylinder3dEntity
@@ -103,6 +132,9 @@ export type EntityInput =
   | Omit<PolylineEntity, 'id' | 'boundingBox'>
   | Omit<RectEntity, 'id' | 'boundingBox'>
   | Omit<ArcEntity, 'id' | 'boundingBox'>
+  | Omit<TextEntity, 'id' | 'boundingBox'>
+  | Omit<ImageEntity, 'id' | 'boundingBox'>
+  | Omit<FreehandEntity, 'id' | 'boundingBox'>
   | Omit<DimensionEntity, 'id' | 'boundingBox'>
   | Omit<Box3dEntity, 'id' | 'boundingBox'>
   | Omit<Cylinder3dEntity, 'id' | 'boundingBox'>

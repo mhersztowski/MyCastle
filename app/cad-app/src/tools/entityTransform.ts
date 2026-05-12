@@ -12,6 +12,12 @@ export function translateEntity(entity: Entity, dx: number, dy: number): Partial
       return { x: entity.x + dx, y: entity.y + dy };
     case 'polyline':
       return { points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+    case 'freehand':
+      return { points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+    case 'text':
+      return { x: entity.x + dx, y: entity.y + dy };
+    case 'image':
+      return { x: entity.x + dx, y: entity.y + dy };
     case 'arc':
       return { cx: entity.cx + dx, cy: entity.cy + dy };
     case 'dimension':
@@ -48,6 +54,17 @@ export function rotateEntity(entity: Entity, cx: number, cy: number, angle: numb
     case 'polyline': {
       return { points: entity.points.map(p => rotatePoint(p, cx, cy, angle)) };
     }
+    case 'freehand': {
+      return { points: entity.points.map(p => rotatePoint(p, cx, cy, angle)) };
+    }
+    case 'text': {
+      const np = rotatePoint({ x: entity.x, y: entity.y }, cx, cy, angle);
+      return { x: np.x, y: np.y, angle: entity.angle + angle };
+    }
+    case 'image': {
+      const np = rotatePoint({ x: entity.x + entity.width / 2, y: entity.y + entity.height / 2 }, cx, cy, angle);
+      return { x: np.x - entity.width / 2, y: np.y - entity.height / 2 };
+    }
     case 'arc': {
       const c = rotatePoint({ x: entity.cx, y: entity.cy }, cx, cy, angle);
       return { cx: c.x, cy: c.y, startAngle: entity.startAngle + angle, endAngle: entity.endAngle + angle };
@@ -83,6 +100,12 @@ export function cloneEntityAsInput(entity: Entity, dx: number, dy: number): Enti
       return { ...base, type: 'rect', x: entity.x + dx, y: entity.y + dy, width: entity.width, height: entity.height };
     case 'polyline':
       return { ...base, type: 'polyline', points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })), closed: entity.closed };
+    case 'freehand':
+      return { ...base, type: 'freehand', points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })), strokeWidth: entity.strokeWidth, smooth: entity.smooth };
+    case 'text':
+      return { ...base, type: 'text', x: entity.x + dx, y: entity.y + dy, content: entity.content, fontSize: entity.fontSize, fontFamily: entity.fontFamily, angle: entity.angle };
+    case 'image':
+      return { ...base, type: 'image', x: entity.x + dx, y: entity.y + dy, width: entity.width, height: entity.height, src: entity.src };
     case 'arc':
       return { ...base, type: 'arc', cx: entity.cx + dx, cy: entity.cy + dy, radius: entity.radius, startAngle: entity.startAngle, endAngle: entity.endAngle };
     case 'dimension':
@@ -128,6 +151,28 @@ export function entityToSegments(entity: Entity): Array<{ a: Point2D; b: Point2D
         segs.push({ a: entity.points[entity.points.length - 1], b: entity.points[0] });
       }
       return segs;
+    }
+
+    case 'freehand': {
+      const segs: Array<{ a: Point2D; b: Point2D }> = [];
+      for (let i = 0; i < entity.points.length - 1; i++) {
+        segs.push({ a: entity.points[i], b: entity.points[i + 1] });
+      }
+      return segs;
+    }
+
+    case 'text': {
+      const s = entity.fontSize * 0.5;
+      return [
+        { a: { x: entity.x - s, y: entity.y }, b: { x: entity.x + s, y: entity.y } },
+        { a: { x: entity.x, y: entity.y - s }, b: { x: entity.x, y: entity.y + s } },
+      ];
+    }
+
+    case 'image': {
+      const { x, y, width: w, height: h } = entity;
+      const corners: Point2D[] = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+      return corners.map((c, i) => ({ a: c, b: corners[(i + 1) % 4] }));
     }
 
     case 'arc': {

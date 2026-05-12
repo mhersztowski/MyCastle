@@ -1,5 +1,5 @@
 import type { BoundingBox2D, Point2D } from '../types';
-import type { ArcEntity, Box3dEntity, CircleEntity, Cylinder3dEntity, DimensionEntity, Entity, LineEntity, PolylineEntity, RectEntity, Sphere3dEntity } from './types';
+import type { ArcEntity, Box3dEntity, CircleEntity, Cylinder3dEntity, DimensionEntity, Entity, FreehandEntity, ImageEntity, LineEntity, PolylineEntity, RectEntity, Sphere3dEntity, TextEntity } from './types';
 
 function boundsFromPoints(points: Point2D[]): BoundingBox2D {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -58,6 +58,21 @@ function sphere3dBox(e: Sphere3dEntity): BoundingBox2D {
   return { minX: e.cx - e.radius, minY: e.cy - e.radius, maxX: e.cx + e.radius, maxY: e.cy + e.radius };
 }
 
+function textBox(e: TextEntity): BoundingBox2D {
+  const w = e.content.length * e.fontSize * 0.6;
+  const h = e.fontSize * 1.4;
+  return { minX: e.x, minY: e.y, maxX: e.x + w, maxY: e.y + h };
+}
+
+function imageBox(e: ImageEntity): BoundingBox2D {
+  return { minX: e.x, minY: e.y, maxX: e.x + e.width, maxY: e.y + e.height };
+}
+
+function freehandBox(e: FreehandEntity): BoundingBox2D {
+  if (e.points.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  return boundsFromPoints(e.points);
+}
+
 export function computeBoundingBox(entity: Entity): BoundingBox2D {
   switch (entity.type) {
     case 'line': return lineBox(entity);
@@ -65,6 +80,9 @@ export function computeBoundingBox(entity: Entity): BoundingBox2D {
     case 'polyline': return polylineBox(entity);
     case 'rect': return rectBox(entity);
     case 'arc': return arcBox(entity);
+    case 'text': return textBox(entity);
+    case 'image': return imageBox(entity);
+    case 'freehand': return freehandBox(entity);
     case 'dimension': return dimensionBox(entity);
     case 'box3d': return box3dBox(entity);
     case 'cylinder3d': return cylinder3dBox(entity);

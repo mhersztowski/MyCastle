@@ -1,9 +1,16 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import {
+  Autocomplete,
   Box, Typography, TextField, Divider, FormControlLabel,
   Checkbox, Select, MenuItem, InputLabel, FormControl,
 } from '@mui/material';
-import type { Entity, Project } from '@mhersztowski/core-cad';
+import type { Entity, FreehandEntity, Project } from '@mhersztowski/core-cad';
+import { freehandTool } from '../tools/FreehandTool';
+import { textTool } from '../tools/TextTool';
+
+// Inline shapes for text/image until core-cad dist is rebuilt
+type TextEntity = { type: 'text'; x: number; y: number; content: string; fontSize: number; fontFamily: string; angle: number };
+type ImageEntity = { type: 'image'; x: number; y: number; width: number; height: number; src: string };
 
 interface Props {
   project: Project;
@@ -34,11 +41,37 @@ function NumField({
   );
 }
 
+const FONT_FAMILIES = [
+  'Arial', 'Arial Black', 'Verdana', 'Tahoma', 'Trebuchet MS',
+  'Georgia', 'Times New Roman', 'Palatino', 'Garamond',
+  'Courier New', 'Lucida Console', 'monospace',
+  'Comic Sans MS', 'Impact',
+  'sans-serif', 'serif', 'cursive', 'fantasy',
+];
+
 function EntityFields({ entity, project }: { entity: Entity; project: Project }) {
   const update = useCallback(
     (changes: Partial<Entity>) => project.updateEntity(entity.id, changes),
     [entity.id, project],
   );
+
+  // Sync selected entity's settings into the tool singleton so next stroke/text
+  // inherits the same parameters as the one currently being inspected.
+  useEffect(() => {
+    if (entity.type === 'freehand') {
+      const fe = entity as FreehandEntity;
+      freehandTool.strokeWidth = fe.strokeWidth;
+      freehandTool.smooth = fe.smooth;
+    } else {
+      const eType = (entity as { type: string }).type;
+      if (eType === 'text') {
+        const te = entity as unknown as TextEntity;
+        textTool.fontSize = te.fontSize;
+        textTool.fontFamily = te.fontFamily;
+        textTool.content = te.content;
+      }
+    }
+  }, [entity.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fields: React.ReactNode[] = [];
 
@@ -108,6 +141,114 @@ function EntityFields({ entity, project }: { entity: Entity; project: Project })
       );
       break;
 
+    case 'freehand': {
+      const fe = entity as FreehandEntity;
+      fields.push(
+        <Typography key="pts" variant="caption" sx={{ color: 'text.secondary' }}>
+          Points: {fe.points.length}
+        </Typography>,
+        <NumField
+          key="sw"
+          label="Stroke width"
+          value={fe.strokeWidth}
+          onChange={v => {
+            update({ strokeWidth: Math.max(0.1, v) } as Partial<Entity>);
+            freehandTool.strokeWidth = Math.max(0.1, v);
+          }}
+        />,
+        <FormControlLabel
+          key="smooth"
+          control={
+            <Checkbox
+              size="small"
+              checked={fe.smooth}
+              onChange={e => update({ smooth: e.target.checked } as Partial<Entity>)}
+            />
+          }
+          label={<Typography variant="caption">Smooth (Catmull-Rom)</Typography>}
+          sx={{ mx: 0 }}
+        />,
+      );
+      break;
+    }
+
+    case 'text': {
+      const te = entity as TextEntity;
+      fields.push(
+        <TextField
+          key="content"
+          label="Content"
+          size="small"
+          value={te.content}
+          onChange={e => {
+            update({ content: e.target.value } as Partial<Entity>);
+            textTool.content = e.target.value;
+          }}
+          sx={{ width: '100%', '& .MuiInputBase-input': { fontSize: 11, py: 0.5 } }}
+          InputLabelProps={{ sx: { fontSize: 11 } }}
+        />,
+        <NumField key="x" label="X" value={te.x} onChange={v => update({ x: v } as Partial<Entity>)} />,
+        <NumField key="y" label="Y" value={te.y} onChange={v => update({ y: v } as Partial<Entity>)} />,
+        <NumField
+          key="fs"
+          label="Font size"
+          value={te.fontSize}
+          onChange={v => {
+            update({ fontSize: Math.max(1, v) } as Partial<Entity>);
+            textTool.fontSize = Math.max(1, v);
+          }}
+        />,
+        <Autocomplete
+          key="ff"
+          freeSolo
+          size="small"
+          options={FONT_FAMILIES}
+          value={te.fontFamily}
+          onChange={(_, v) => {
+            const val = v ?? te.fontFamily;
+            update({ fontFamily: val } as Partial<Entity>);
+            textTool.fontFamily = val;
+          }}
+          onInputChange={(_, v, reason) => {
+            if (reason === 'input') {
+              update({ fontFamily: v } as Partial<Entity>);
+              textTool.fontFamily = v;
+            }
+          }}
+          renderInput={params => (
+            <TextField
+              {...params}
+              label="Font family"
+              sx={{ '& .MuiInputBase-input': { fontSize: 11, py: 0.5 } }}
+              InputLabelProps={{ sx: { fontSize: 11 } }}
+            />
+          )}
+          sx={{ width: '100%' }}
+        />,
+        <NumField
+          key="angle"
+          label="Angle°"
+          value={(te.angle * 180) / Math.PI}
+          onChange={v => update({ angle: (v * Math.PI) / 180 } as Partial<Entity>)}
+        />,
+      );
+      break;
+    }
+
+    case 'image': {
+      const ie = entity as ImageEntity;
+      fields.push(
+        <NumField key="x" label="X" value={ie.x} onChange={v => update({ x: v } as Partial<Entity>)} />,
+        <NumField key="y" label="Y" value={ie.y} onChange={v => update({ y: v } as Partial<Entity>)} />,
+        <NumField key="w" label="Width" value={ie.width} onChange={v => update({ width: v } as Partial<Entity>)} />,
+        <NumField key="h" label="Height" value={ie.height} onChange={v => update({ height: v } as Partial<Entity>)} />,
+        <Typography key="src" variant="caption" sx={{ color: 'text.disabled', wordBreak: 'break-all', fontSize: 9 }}>
+          {ie.src.startsWith('data:') ? `data:[${ie.src.slice(5, 25)}…]` : ie.src}
+        </Typography>,
+      );
+      break;
+    }
+
     case 'arc':
       fields.push(
         <NumField key="cx" label="Center X" value={entity.cx} onChange={v => update({ cx: v } as Partial<Entity>)} />,
@@ -164,7 +305,8 @@ function EntityFields({ entity, project }: { entity: Entity; project: Project })
   }
 
   // Extrude height — only for 2D entities
-  const is3dPrimitive = entity.type === 'box3d' || entity.type === 'cylinder3d' || entity.type === 'sphere3d';
+  const is3dPrimitive = entity.type === 'box3d' || entity.type === 'cylinder3d' || entity.type === 'sphere3d'
+    || entity.type === 'freehand' || entity.type === 'text' || entity.type === 'image';
   if (!is3dPrimitive) {
     fields.push(
       <NumField

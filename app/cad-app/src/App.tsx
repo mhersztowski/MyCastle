@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { Box, IconButton, Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip } from '@mui/material';
 import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined';
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
@@ -17,10 +17,11 @@ import { LayerPanel } from './components/LayerPanel';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Scene3DView } from './components/Scene3DView';
 import { StatusBar } from './components/StatusBar';
+import { ActionBar } from './components/ActionBar';
 import { Toolbar } from './components/Toolbar';
 import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
-import { AiPanel } from './components/AiPanel';
+const AiPanel = lazy(() => import('./components/AiPanel').then(m => ({ default: m.AiPanel })));
 import { useProject } from './hooks/useProject';
 import type { ToolName } from './tools/types';
 
@@ -64,6 +65,16 @@ export default function App() {
     setInjectedPoint(null);
     setInjectedAngle(null);
   }, []);
+
+  // Auto-select newly placed entity and switch to Properties tab
+  useEffect(() => {
+    return project.eventBus.on('entity:added', entity => {
+      project.selectionManager.clear();
+      project.selectionManager.select(entity.id);
+      project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
+      setRightTab('properties');
+    });
+  }, [project]);
 
   const handleViewModeChange = useCallback((_: React.MouseEvent, v: ViewMode | null) => {
     if (v) setCadViewMode(v);
@@ -150,8 +161,9 @@ export default function App() {
 
       {/* CAD panel */}
       <Box sx={{ flex: 1, display: mode === 'cad' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <ActionBar activeTool={activeTool} onToolChange={handleToolChange} project={project} />
         <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <Toolbar activeTool={activeTool} onToolChange={handleToolChange} project={project} viewMode={cadViewMode} />
+          <Toolbar activeTool={activeTool} onToolChange={handleToolChange} viewMode={cadViewMode} />
 
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             <CadCanvas
@@ -189,14 +201,16 @@ export default function App() {
             </Box>
           </Box>
 
-          {/* AI panel — slides in from the right */}
+          {/* AI panel — slides in from the right, lazy-loaded */}
           {aiOpen && (
             <Box sx={{
               width: 380, display: 'flex', flexDirection: 'column',
               borderLeft: '1px solid rgba(255,255,255,0.08)',
               bgcolor: 'background.paper', overflow: 'hidden',
             }}>
-              <AiPanel project={project} version={version} />
+              <Suspense fallback={null}>
+                <AiPanel project={project} version={version} />
+              </Suspense>
             </Box>
           )}
         </Box>
@@ -228,7 +242,9 @@ export default function App() {
             borderLeft: '1px solid rgba(255,255,255,0.08)',
             bgcolor: 'background.paper', overflow: 'hidden',
           }}>
-            <AiPanel project={project} version={version} onSceneData={setAiSceneData} />
+            <Suspense fallback={null}>
+              <AiPanel project={project} version={version} onSceneData={setAiSceneData} />
+            </Suspense>
           </Box>
         )}
       </Box>
@@ -249,7 +265,9 @@ export default function App() {
             borderLeft: '1px solid rgba(255,255,255,0.08)',
             bgcolor: 'background.paper', overflow: 'hidden',
           }}>
-            <AiPanel project={project} version={version} />
+            <Suspense fallback={null}>
+              <AiPanel project={project} version={version} />
+            </Suspense>
           </Box>
         )}
       </Box>

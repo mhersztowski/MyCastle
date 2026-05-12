@@ -22,6 +22,9 @@ import { DimensionTool } from '../tools/DimensionTool';
 import { Box3dTool } from '../tools/Box3dTool';
 import { Cylinder3dTool } from '../tools/Cylinder3dTool';
 import { Sphere3dTool } from '../tools/Sphere3dTool';
+import { freehandTool } from '../tools/FreehandTool';
+import { textTool } from '../tools/TextTool';
+import { imageTool } from '../tools/ImageTool';
 import type { DimensionLabel, PenInput, Tool, ToolName } from '../tools/types';
 import { DEFAULT_PEN_INPUT } from '../tools/types';
 
@@ -44,6 +47,9 @@ const tools: Record<ToolName, Tool> = {
   arc: new ArcTool(),
   rect: new RectTool(),
   polyline: new PolylineTool(),
+  freehand: freehandTool,
+  text: textTool,
+  image: imageTool,
   move: new MoveTool(),
   copy: new CopyTool(),
   rotate: new RotateTool(),
@@ -172,6 +178,11 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       tangentialPressure: e.tangentialPressure,
     };
 
+    // Freehand/text/image never snap — use raw cursor
+    if (activeTool === 'freehand' || activeTool === 'text' || activeTool === 'image') {
+      return { snapResult: { point: worldPt, mode: 'nearest' }, pen };
+    }
+
     if (renderer.getViewMode() === '3d') {
       const gridSize = project.settings.gridSize;
       const snapped: Point2D = {
@@ -192,7 +203,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       maxX: worldPt.x + snapRadius, maxY: worldPt.y + snapRadius,
     });
     return { snapResult: project.snapEngine.snap(worldPt, nearby, renderer.getPixelToWorld()), pen };
-  }, [project, resolveWorldPoint]);
+  }, [project, resolveWorldPoint, activeTool]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const renderer = rendererRef.current;
