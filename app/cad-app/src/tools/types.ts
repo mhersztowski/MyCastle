@@ -97,6 +97,10 @@ export interface DimensionLabel {
   offsetY?: number;
   /** Visual variant */
   variant?: 'primary' | 'secondary';
+  /** If true, clicking this label opens an inline input for direct numeric entry */
+  editable?: boolean;
+  /** Called with the new numeric value after the user commits an inline edit */
+  onEdit?: (value: number) => void;
 }
 
 export interface Tool {

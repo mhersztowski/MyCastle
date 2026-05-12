@@ -9,6 +9,7 @@ export class CircleTool implements Tool {
   name = 'circle' as const;
   private center: Point2D | null = null;
   private current: Point2D | null = null;
+  private lastCtx: ToolContext | null = null;
 
   getPreview(): PreviewGeometry | null {
     if (!this.center || !this.current) return null;
@@ -19,12 +20,28 @@ export class CircleTool implements Tool {
     if (!this.center || !this.current) return [];
     const r = dist(this.center, this.current);
     if (r < 0.01) return [];
-    // Label near cursor, slightly offset
     const angle = Math.atan2(this.current.y - this.center.y, this.current.x - this.center.x);
     const midX = this.center.x + Math.cos(angle) * r * 0.6;
     const midY = this.center.y + Math.sin(angle) * r * 0.6;
     return [
-      { worldX: midX, worldY: midY, text: `R: ${r.toFixed(2)}`, offsetY: -14, variant: 'primary' },
+      {
+        worldX: midX, worldY: midY,
+        text: `R: ${r.toFixed(2)}`,
+        offsetY: -14,
+        variant: 'primary',
+        editable: true,
+        onEdit: (newR: number) => {
+          if (!this.center || !this.lastCtx) return;
+          this.lastCtx.project.addEntity({
+            type: 'circle',
+            layerId: this.lastCtx.project.layerSystem.getActiveId(),
+            cx: this.center.x, cy: this.center.y, radius: newR,
+            color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
+            visible: true, locked: false, extrudeHeight: 0,
+          });
+          this.reset();
+        },
+      },
     ];
   }
 
@@ -47,8 +64,9 @@ export class CircleTool implements Tool {
     }
   }
 
-  onPointerMove(point: Point2D): void {
+  onPointerMove(point: Point2D, ctx: ToolContext): void {
     this.current = point;
+    this.lastCtx = ctx;
   }
 
   onPointerUp(): void {}
@@ -60,5 +78,6 @@ export class CircleTool implements Tool {
   reset(): void {
     this.center = null;
     this.current = null;
+    this.lastCtx = null;
   }
 }

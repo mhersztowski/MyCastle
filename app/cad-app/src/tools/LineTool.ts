@@ -12,6 +12,7 @@ export class LineTool implements Tool {
   name = 'line' as const;
   private start: Point2D | null = null;
   private current: Point2D | null = null;
+  private lastCtx: ToolContext | null = null;
 
   getPreview(): PreviewGeometry | null {
     if (!this.start || !this.current) return null;
@@ -29,7 +30,6 @@ export class LineTool implements Tool {
     const midY = (this.start.y + this.current.y) / 2;
     const angle = Math.atan2(dy, dx);
 
-    // Length label at midpoint, offset perpendicular to line
     const nx = -Math.sin(angle), ny = Math.cos(angle);
     const perpOffsetPx = 18;
 
@@ -39,8 +39,18 @@ export class LineTool implements Tool {
         worldY: midY,
         text: `L: ${fmt(len)}`,
         offsetX: nx * perpOffsetPx,
-        offsetY: -ny * perpOffsetPx, // screen Y is flipped
+        offsetY: -ny * perpOffsetPx,
         variant: 'primary',
+        editable: true,
+        onEdit: (newLen: number) => {
+          if (!this.start || !this.current || !this.lastCtx) return;
+          const a = Math.atan2(this.current.y - this.start.y, this.current.x - this.start.x);
+          const newEnd: Point2D = {
+            x: this.start.x + Math.cos(a) * newLen,
+            y: this.start.y + Math.sin(a) * newLen,
+          };
+          this.commitLine(newEnd, this.lastCtx);
+        },
       },
       {
         worldX: this.current.x,
@@ -62,8 +72,9 @@ export class LineTool implements Tool {
     }
   }
 
-  onPointerMove(point: Point2D): void {
+  onPointerMove(point: Point2D, ctx: ToolContext): void {
     this.current = point;
+    this.lastCtx = ctx;
   }
 
   onPointerUp(): void {}
@@ -90,7 +101,6 @@ export class LineTool implements Tool {
       locked: false,
       extrudeHeight: 0,
     });
-    // Chain: next line starts from end point
     this.start = end;
     this.current = end;
   }
@@ -98,5 +108,6 @@ export class LineTool implements Tool {
   reset(): void {
     this.start = null;
     this.current = null;
+    this.lastCtx = null;
   }
 }

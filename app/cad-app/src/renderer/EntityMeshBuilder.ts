@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Box3dEntity, Cylinder3dEntity, DimensionEntity, Entity, FreehandEntity, ImageEntity, Layer, Point2D, Sphere3dEntity, TextEntity } from '@mhersztowski/core-cad';
+import type { Box3dEntity, Cylinder3dEntity, DimensionEntity, Entity, FreehandEntity, ImageEntity, Layer, Sphere3dEntity, TextEntity } from '@mhersztowski/core-cad';
 
 const SELECTION_COLOR = new THREE.Color('#4fc3f7');
 const PREVIEW_COLOR = new THREE.Color('#ffcc00');
@@ -125,37 +125,43 @@ function buildImageObject(entity: ImageEntity, _layer: Layer | undefined, isSele
   return group;
 }
 
-function catmullRomPoints(points: Point2D[], subdivisions = 8): number[] {
-  if (points.length < 2) return [];
-  const p = [points[0], ...points, points[points.length - 1]];
-  const pts: number[] = [];
-  for (let i = 1; i < p.length - 2; i++) {
-    const p0 = p[i - 1], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2];
-    for (let j = 0; j <= subdivisions; j++) {
-      const t = j / subdivisions;
-      const t2 = t * t, t3 = t2 * t;
-      const x = 0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
-      const y = 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
-      pts.push(x, y, 0);
-    }
-  }
-  return pts;
-}
-
 function buildFreehandObject(entity: FreehandEntity, layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
+  const group = new THREE.Group();
+  group.userData['entityId'] = entity.id;
+
+  if (entity.points.length < 2) return group;
+
   const color = getEntityColor(entity, layer);
-  const mat = new THREE.LineBasicMaterial({ color: isSelected ? SELECTION_COLOR : color, linewidth: entity.strokeWidth });
-  const rawPts = entity.smooth ? catmullRomPoints(entity.points) : entity.points.flatMap(p => [p.x, p.y, 0]);
-  if (rawPts.length < 6) {
-    const g = new THREE.Group();
-    g.userData['entityId'] = entity.id;
-    return g;
+  const vectors = entity.points.map(p => new THREE.Vector3(p.x, p.y, 0));
+
+  let curve: THREE.Curve<THREE.Vector3>;
+  if (entity.smooth && vectors.length >= 3) {
+    curve = new THREE.CatmullRomCurve3(vectors, false, 'centripetal');
+  } else {
+    const path = new THREE.CurvePath<THREE.Vector3>();
+    for (let i = 0; i < vectors.length - 1; i++) {
+      path.add(new THREE.LineCurve3(vectors[i], vectors[i + 1]));
+    }
+    curve = path as unknown as THREE.Curve<THREE.Vector3>;
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(rawPts, 3));
-  const line = new THREE.Line(geo, mat);
-  line.userData['entityId'] = entity.id;
-  return line;
+
+  const radius = Math.max(0.5, entity.strokeWidth * 0.5);
+  const tubularSegs = Math.min(500, Math.max(20, entity.points.length * (entity.smooth ? 5 : 2)));
+
+  try {
+    const geo = new THREE.TubeGeometry(curve, tubularSegs, radius, 6, false);
+    const mat = new THREE.MeshBasicMaterial({
+      color: isSelected ? SELECTION_COLOR : color,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData['entityId'] = entity.id;
+    group.add(mesh);
+  } catch {
+    // degenerate path (coincident points) — render nothing
+  }
+
+  return group;
 }
 
 function addLineSegment(group: THREE.Group, mat: THREE.Material, pts: number[]): void {

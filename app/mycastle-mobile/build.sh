@@ -9,8 +9,8 @@ set -e
 
 # CI=1 disables all interactive prompts in Expo, npm, and Gradle
 export CI=1
-# Suppress Gradle JVM memory warnings
-export GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx2g -XX:+HeapDumpOnOutOfMemoryError"
+# GRADLE_OPTS sets JVM args for the Gradle client process itself
+export GRADLE_OPTS="-Xmx4g -XX:MaxMetaspaceSize=512m"
 
 APP_DIR="/workspace/app/mycastle-mobile"
 cd "$APP_DIR"
@@ -106,6 +106,11 @@ if [ -n "$AAPT2_PATH" ]; then
   echo "android.aapt2FromMavenOverride=$AAPT2_PATH" >> gradle.properties
   echo "  Using local aapt2: $AAPT2_PATH"
 fi
+
+# Increase JVM heap for the build process (controls --no-daemon JVM, overrides any default)
+sed -i '/^org\.gradle\.jvmargs/d' gradle.properties
+echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError" >> gradle.properties
+echo "  Set org.gradle.jvmargs=-Xmx4g"
 
 chmod +x gradlew
 ./gradlew assembleRelease --no-daemon --quiet

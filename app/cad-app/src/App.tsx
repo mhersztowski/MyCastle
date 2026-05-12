@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { Box, IconButton, Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip } from '@mui/material';
 import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined';
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
+import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
 import LayersIcon from '@mui/icons-material/Layers';
 import TuneIcon from '@mui/icons-material/Tune';
 import Looks3OutlinedIcon from '@mui/icons-material/Looks3Outlined';
@@ -19,6 +20,7 @@ import { Scene3DView } from './components/Scene3DView';
 import { StatusBar } from './components/StatusBar';
 import { ActionBar } from './components/ActionBar';
 import { Toolbar } from './components/Toolbar';
+import { Cad3dView } from './components/Cad3dView';
 import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
 const AiPanel = lazy(() => import('./components/AiPanel').then(m => ({ default: m.AiPanel })));
@@ -27,7 +29,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'scene3d' | 'electronics';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -101,6 +103,12 @@ export default function App() {
             iconPosition="start"
           />
           <Tab
+            value="cad3d"
+            label="CAD 3D"
+            icon={<ViewInArOutlinedIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+          />
+          <Tab
             value="scene3d"
             label="Scene 3D"
             icon={<ViewInArIcon sx={{ fontSize: 16 }} />}
@@ -129,7 +137,7 @@ export default function App() {
           </IconButton>
         </Tooltip>
 
-        {/* 2D / 3D view mode toggle — only in CAD tab */}
+        {/* 2D / 3D view mode toggle — only in CAD 2D tab */}
         {mode === 'cad' && (
           <Box sx={{ ml: 'auto', mr: 1 }}>
             <ToggleButtonGroup
@@ -226,6 +234,26 @@ export default function App() {
           />
         )}
       </Box>
+
+      {/* CAD 3D panel */}
+      {mode === 'cad3d' && (
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, overflow: 'hidden' }}>
+            <Cad3dView project={project} version={version} />
+          </Box>
+          {aiOpen && (
+            <Box sx={{
+              width: 380, display: 'flex', flexDirection: 'column',
+              borderLeft: '1px solid rgba(255,255,255,0.08)',
+              bgcolor: 'background.paper', overflow: 'hidden',
+            }}>
+              <Suspense fallback={null}>
+                <AiPanel project={project} version={version} />
+              </Suspense>
+            </Box>
+          )}
+        </Box>
+      )}
 
       {/* Scene 3D panel */}
       <Box sx={{ flex: 1, display: mode === 'scene3d' ? 'flex' : 'none', flexDirection: 'row', overflow: 'hidden' }}>

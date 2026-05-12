@@ -10,22 +10,23 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@mhersztowski/core": "workspace:*",
     "@mhersztowski/core-cad": "workspace:*",
     "@mhersztowski/core-scene3d": "workspace:*",
     "@mhersztowski/ui-components-scene3d": "workspace:*",
     "@mhersztowski/ui-core": "workspace:*",
     "@mhersztowski/web-client": "workspace:*",
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.7",
     "@mui/material": "^7.3.7",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
     "allotment": "^1.20.5",
-    "three": "^0.182.0",
     "react": "18.2.0",
-    "react-dom": "18.2.0"
+    "react-dom": "18.2.0",
+    "three": "^0.182.0",
+    "three-bvh-csg": "^0.0.18"
   },
   "devDependencies": {
     "@types/react": "18.2.79",

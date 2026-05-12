@@ -362,7 +362,18 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       )}
       {!is3d && rendererRef.current && <ScaleBar renderer={rendererRef.current} />}
       {!is3d && rendererRef.current && dimLabels.length > 0 && (
-        <DimensionOverlay labels={dimLabels} renderer={rendererRef.current} />
+        <DimensionOverlay
+          labels={dimLabels}
+          renderer={rendererRef.current}
+          onCommit={() => {
+            const renderer = rendererRef.current;
+            const tool = tools[activeTool];
+            if (!renderer) return;
+            renderer.setPreview(tool.getPreview());
+            renderer.syncAll();
+            setDimLabels(tool.getDimensionLabels?.() ?? []);
+          }}
+        />
       )}
       {/* Pen / stylus indicator — visible only for pen/touch input */}
       {penInput && penInput.pointerType !== 'mouse' && (
