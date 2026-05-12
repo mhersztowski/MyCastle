@@ -14,6 +14,8 @@ function getHandles(project: Project): GripHandle[] {
   for (const id of project.selectionManager.getSelected()) {
     const e = project.entityRegistry.get(id);
     if (!e) continue;
+    const layer = project.layerSystem.get(e.layerId);
+    if (!layer?.visible) continue;
     switch (e.type) {
       case 'line':
         handles.push({ entityId: id, key: 'p1', wx: e.x1, wy: e.y1 });

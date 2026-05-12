@@ -192,6 +192,7 @@ export class CadRenderer {
   // ── Entity sync ─────────────────────────────────────────────────────────────
 
   syncAll(): void {
+    this.buildGrid();
     while (this.entitiesGroup.children.length) {
       this.entitiesGroup.remove(this.entitiesGroup.children[0]);
     }
