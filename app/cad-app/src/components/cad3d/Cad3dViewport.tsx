@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import * as THREE from 'three';
 
 // ── Axes gizmo ────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ function drawAxesGizmo(canvas: HTMLCanvasElement | null, camera: THREE.Camera): 
 }
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { FeatureTree } from '../../cad3d/types';
-import { evaluateFeatureTree } from '../../cad3d/evaluate';
+import { evaluateFeatureTreeAsync } from '../../cad3d/evaluate';
 import type { Project } from '@mhersztowski/core-cad';
 import {
   type SubSelectMode, type SubHit,
@@ -120,11 +120,23 @@ function fitCamera(camera: THREE.PerspectiveCamera, controls: OrbitControls, roo
   camera.updateProjectionMatrix();
 }
 
+function OccSpinner() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 14 14" style={{ animation: 'occ-spin 0.9s linear infinite' }}>
+      <style>{`@keyframes occ-spin { to { transform: rotate(360deg); } }`}</style>
+      <circle cx={7} cy={7} r={5} fill="none" stroke="#4fc3f7" strokeWidth={2} strokeDasharray="20 10" />
+    </svg>
+  );
+}
+
 export function Cad3dViewport({ tree, project, version, subSelectMode, style, onSceneChange, onSubSelect }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const gizmoCanvasRef = useRef<HTMLCanvasElement>(null);
   const prevTreeRef = useRef<FeatureTree>(tree);
   const stateRef = useRef<ViewportState | null>(null);
+  const [occLoading, setOccLoading] = useState(false);
+  // Abort token for in-flight evaluations — avoids stale updates
+  const evalAbortRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
   // Track sub-select mode in a ref so event handlers always see the latest value
   const subModeRef = useRef(subSelectMode);
@@ -203,7 +215,7 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
     };
   }, []);
 
-  // Re-evaluate feature tree
+  // Re-evaluate feature tree (async — uses OpenCascade.js WASM)
   useEffect(() => {
     const s = stateRef.current;
     if (!s) return;
@@ -211,18 +223,34 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
     const treeChanged = prevTreeRef.current !== tree;
     prevTreeRef.current = tree;
 
-    if (s.cadRoot) { s.scene.remove(s.cadRoot); s.cadRoot = null; }
+    // Cancel any previous in-flight evaluation
+    evalAbortRef.current.cancelled = true;
+    const token = { cancelled: false };
+    evalAbortRef.current = token;
 
-    // Clear sub-selection overlays when tree changes
+    if (s.cadRoot) { s.scene.remove(s.cadRoot); s.cadRoot = null; }
     s.hoverGroup.clear();
     s.selectGroup.clear();
 
-    const root = evaluateFeatureTree(tree, project);
-    s.scene.add(root);
-    s.cadRoot = root;
+    const hasSolids = tree.features.some(f => f.enabled && f.type !== 'sketch');
 
-    if (treeChanged) fitCamera(s.camera, s.controls, root);
-    onSceneChange?.(root);
+    setOccLoading(hasSolids);
+
+    void evaluateFeatureTreeAsync(tree, project).then(root => {
+      if (token.cancelled) return; // superseded by newer evaluation
+      setOccLoading(false);
+      const s2 = stateRef.current;
+      if (!s2) return;
+      if (s2.cadRoot) s2.scene.remove(s2.cadRoot);
+      s2.scene.add(root);
+      s2.cadRoot = root;
+      if (treeChanged) fitCamera(s2.camera, s2.controls, root);
+      onSceneChange?.(root);
+    }).catch(err => {
+      if (token.cancelled) return;
+      setOccLoading(false);
+      console.error('OCC evaluation error:', err);
+    });
   }, [tree, project, version, onSceneChange]);
 
   // ── Sub-selection event handlers ──────────────────────────────────────────
@@ -306,6 +334,23 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
           borderRadius: '50%',
         }}
       />
+      {occLoading && (
+        <div style={{
+          position: 'absolute',
+          top: 10,
+          right: 14,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: 'rgba(0,0,0,0.55)',
+          borderRadius: 6,
+          padding: '4px 10px',
+          pointerEvents: 'none',
+        }}>
+          <OccSpinner />
+          <span style={{ color: '#aaa', fontSize: 11, fontFamily: 'monospace' }}>Computing…</span>
+        </div>
+      )}
     </div>
   );
 }

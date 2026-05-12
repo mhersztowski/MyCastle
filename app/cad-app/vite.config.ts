@@ -24,10 +24,10 @@ export default defineConfig({
     },
     dedupe: ['react', 'react-dom', 'three', '@emotion/react', '@emotion/styled', '@mhersztowski/core'],
   },
+  assetsInclude: ['**/*.wasm'],
   optimizeDeps: {
     include: ['react', 'react-dom', 'three', '@emotion/react', '@emotion/styled'],
-    // Exclude local workspace packages so Vite always loads the fresh built dist
-    // instead of a stale pre-bundled cache
+    // Exclude local workspace packages + opencascade.js (Emscripten module, incompatible with pre-bundling)
     exclude: [
       '@mhersztowski/web-client',
       '@mhersztowski/core',
@@ -35,6 +35,7 @@ export default defineConfig({
       '@mhersztowski/ui-components-scene3d',
       '@mhersztowski/core-scene3d',
       '@mhersztowski/core-cad',
+      'opencascade.js',
     ],
   },
   build: {

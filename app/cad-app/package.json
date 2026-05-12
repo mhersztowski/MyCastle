@@ -26,7 +26,8 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "three": "^0.182.0",
-    "three-bvh-csg": "^0.0.18"
+    "three-bvh-csg": "^0.0.18",
+    "opencascade.js": "2.0.0-beta.b5ff984"
   },
   "devDependencies": {
     "@types/react": "18.2.79",

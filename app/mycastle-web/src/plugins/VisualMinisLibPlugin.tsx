@@ -22,6 +22,12 @@ import Divider from '@mui/material/Divider';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Autocomplete from '@mui/material/Autocomplete';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import Checkbox from '@mui/material/Checkbox';
+import CircularProgress from '@mui/material/CircularProgress';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
@@ -435,8 +441,25 @@ interface MinislibPluginManifest {
   }>;
 }
 
-/** VFS REST API base — same origin as the app */
-const VFS_API = '/api/vfs/readFile';
+/**
+ * Translate a client-side VFS path to the correct backend API URL.
+ *
+ * Client VFS paths under /home/ map to the user-scoped endpoint:
+ *   /home/{relPath} → /api/users/{user}/vfs/{op}?path=/data/Minis/Users/{user}/{relPath}
+ *
+ * All other paths fall back to the admin endpoint (for /server/, /devices/, etc.).
+ */
+function vfsApiUrl(clientPath: string, op: string): string {
+  if (clientPath.startsWith('/home/') || clientPath === '/home') {
+    const userName = window.location.pathname.match(/\/user\/([^/]+)\//)?.[1];
+    if (userName) {
+      const relPath = clientPath.slice('/home'.length) || '/';
+      const backendPath = `/data/Minis/Users/${userName}${relPath === '/' ? '' : relPath}` || `/data/Minis/Users/${userName}`;
+      return `/api/users/${encodeURIComponent(userName)}/vfs/${op}?path=${encodeURIComponent(backendPath)}`;
+    }
+  }
+  return `/api/vfs/${op}?path=${encodeURIComponent(clientPath)}`;
+}
 
 /** Parse bare npm package imports from TypeScript source. */
 function parseNpmImports(code: string): { packageName: string; names: string[] }[] {
@@ -474,7 +497,7 @@ async function fetchManifest(projectRoot: string, packageName: string): Promise<
   }
 
   try {
-    const res = await fetch(`${VFS_API}?path=${encodeURIComponent(manifestPath)}`);
+    const res = await fetch(vfsApiUrl(manifestPath, 'readFile'));
     if (!res.ok) { _manifestCache.set(cacheKey, null); return {}; }
     const { data } = await res.json() as { data: string };
     const manifest = JSON.parse(atob(data)) as MinislibPluginManifest;
@@ -547,7 +570,7 @@ async function saveManifestToVfs(fileUri: string, json: string): Promise<void> {
   const manifestPath = `${projectRoot}/minislib-plugin.json`;
   const bytes = new TextEncoder().encode(json);
   const data = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(''));
-  const res = await fetch(`/api/vfs/writeFile?path=${encodeURIComponent(manifestPath)}`, {
+  const res = await fetch(vfsApiUrl(manifestPath, 'writeFile'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data, options: { create: true, overwrite: true } }),
@@ -576,7 +599,7 @@ function refreshStateFromEdit(newCode: string) {
   );
   const { entities, connections } = parseMinisEntities(newCode, byClass);
   const savedPositions = parseGraphMetadata(newCode);
-  _state = { ..._state, entities, connections, currentCode: newCode, savedPositions };
+  _state = { ..._state, entities, connections, currentCode: newCode, savedPositions, isMinisFile: hasMinislibImport(newCode) };
   notifyComponents();
 }
 
@@ -594,6 +617,7 @@ function findModel(targetUri: string): monaco.editor.ITextModel | null {
   return (
     models.find((m) => m.uri.toString() === targetUri) ??
     models.find((m) => m.uri.toString() === withScheme) ??
+    models.find((m) => m.uri.path === targetUri) ??
     null
   );
 }
@@ -787,6 +811,22 @@ function MinisObjectNode({ data, selected }: NodeProps) {
         </span>
         {hasParams && (
           <span title="Has properties" style={{ fontSize: 9, color: '#585b70', marginLeft: 2 }}>⚙</span>
+        )}
+        {selected && (
+          <span
+            title="Delete (Del)"
+            onClick={(e) => {
+              e.stopPropagation();
+              globalEventBus.emit('minislib:deleteEntity', { varName: entity.varName });
+            }}
+            style={{
+              fontSize: 13, lineHeight: 1, color: '#f38ba8', cursor: 'pointer',
+              padding: '0 2px', borderRadius: 3,
+              transition: 'background 0.1s',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#3e1e1e'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+          >×</span>
         )}
       </div>
 
@@ -2509,12 +2549,25 @@ function SaveSourceButton({ uri }: { uri: string }) {
   }, [uri]);
 
   const handleSave = useCallback(async () => {
-    for (const editor of monaco.editor.getEditors()) {
-      const m = editor.getModel();
-      if (m && (m.uri.toString() === uri || m.uri.path === uri || m.uri.toString().endsWith(uri))) {
-        await editor.getAction('file.save')?.run();
-        return;
-      }
+    // The virtual tab may be active while no Monaco editor has this file as its current model.
+    // Find the model directly by URI and write its content straight to VFS.
+    const model = findModel(uri);
+    if (!model) return;
+    const vfsPath = model.uri.path; // e.g. /home/marcin/Minis/Users/.../scene.ts
+    const content = model.getValue();
+    // UTF-8 → base64 without spread (avoids stack overflow for large files)
+    const bytes = new TextEncoder().encode(content);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    try {
+      const resp = await fetch(vfsApiUrl(vfsPath, 'writeFile'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: btoa(binary) }),
+      });
+      if (resp.ok) globalEventBus.emit('system:editor:didSave', { uri });
+    } catch (e) {
+      console.error('[MinisLib] save error', e);
     }
   }, [uri]);
 
@@ -2531,10 +2584,1315 @@ function SaveSourceButton({ uri }: { uri: string }) {
   );
 }
 
+/* ── Scene tree helpers ─────────────────────────────────────────────────────*/
+
+interface NodeTreeItem {
+  id: string;
+  varName: string;
+  label: string;
+  kind: EntityKind;
+  children: NodeTreeItem[];
+}
+
+/** Build parent-child tree from entities + constructor first-arg heuristic + addChild() calls. */
+function buildNodeTree(entities: MinisEntity[], code: string): NodeTreeItem[] {
+  // Scene tree shows only object instances — skip class definitions
+  const objects = entities.filter((e) => e.kind !== 'class');
+  const byVar = new Map(entities.map((e) => [e.varName, e]));
+  const parentOf = new Map<string, string | null>();
+
+  for (const e of objects) {
+    let parent: string | null = null;
+    if (e.constructorArgs.length > 0) {
+      const arg = e.constructorArgs[0].trim();
+      if (arg && arg !== 'null' && arg !== 'undefined' && arg !== 'this' && byVar.has(arg)) parent = arg;
+    }
+    parentOf.set(e.varName, parent);
+  }
+
+  // Also capture explicit addChild() calls
+  const addChildRe = /(\w+)\.addChild\s*\(\s*(\w+)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = addChildRe.exec(code)) !== null) {
+    if (byVar.has(m[1]) && byVar.has(m[2])) parentOf.set(m[2], m[1]);
+  }
+
+  const items = new Map<string, NodeTreeItem>();
+  for (const e of objects)
+    items.set(e.varName, { id: e.id, varName: e.varName, label: e.label, kind: e.kind, children: [] });
+
+  const roots: NodeTreeItem[] = [];
+  for (const item of items.values()) {
+    const par = parentOf.get(item.varName);
+    if (par && items.has(par)) items.get(par)!.children.push(item);
+    else roots.push(item);
+  }
+  return roots;
+}
+
+/** Compute the relative import path from `fromFile` to `toFile` (strips .ts extension). */
+function toRelativeImportPath(fromFile: string, toFile: string): string {
+  const fromDir = fromFile.split('/').slice(0, -1);
+  const toParts = toFile.split('/');
+  let i = 0;
+  while (i < fromDir.length && i < toParts.length && fromDir[i] === toParts[i]) i++;
+  const up = fromDir.length - i;
+  const rel = [...Array(up).fill('..'), ...toParts.slice(i)].join('/');
+  const withoutExt = rel.replace(/\.(ts|tsx)$/, '');
+  return withoutExt.startsWith('.') ? withoutExt : './' + withoutExt;
+}
+
+/** Read VFS directory contents. Returns [] on error. */
+async function vfsReadDir(path: string): Promise<{ name: string; isDir: boolean }[]> {
+  try {
+    const res = await fetch(vfsApiUrl(path, 'readdir'));
+    if (!res.ok) return [];
+    const { entries } = await res.json() as { entries: { name: string; type: number }[] };
+    return entries.map(({ name, type }) => ({ name, isDir: type === 2 }));
+  } catch { return []; }
+}
+
+/** Read a VFS file and return its text content. Returns null on error. */
+async function vfsReadFileText(path: string): Promise<string | null> {
+  try {
+    const res = await fetch(vfsApiUrl(path, 'readFile'));
+    if (!res.ok) return null;
+    const { data } = await res.json() as { data: string };
+    return atob(data);
+  } catch { return null; }
+}
+
+/** Extract the class name from a MinisEntity (label = "varName:ClassName" for instances). */
+function getEntityClassName(entity: MinisEntity): string {
+  if (entity.kind === 'class') return entity.varName;
+  const idx = entity.label.indexOf(':');
+  return idx >= 0 ? entity.label.slice(idx + 1) : entity.varName;
+}
+
+/** Remove a variable declaration (const/let/var x = ...) from source code. */
+function deleteEntityFromCode(code: string, varName: string): string {
+  const esc = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Match full declaration line including trailing newline
+  return code.replace(
+    new RegExp(`^(?:const|let|var)\\s+${esc}(?::[^=\\n;]+)?\\s*=\\s*[^\\n]+;?\\r?\\n?`, 'gm'),
+    '',
+  );
+}
+
+/* ── Import manager helpers ─────────────────────────────────────────────────*/
+
+/** Parse ALL named imports (including relative paths) from TypeScript source. */
+function parseAllImports(code: string): { packageName: string; names: string[] }[] {
+  const re = /import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+  const result: { packageName: string; names: string[] }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const names = m[1].split(',').map((n) => n.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
+    if (names.length > 0) result.push({ packageName: m[2], names });
+  }
+  return result;
+}
+
+/** Read package.json dependencies from VFS. */
+async function readPackageJsonDeps(projectRoot: string): Promise<string[]> {
+  try {
+    const path = `${projectRoot}/package.json`;
+    const res = await fetch(vfsApiUrl(path, 'readFile'));
+    if (!res.ok) return [];
+    const { data } = await res.json() as { data: string };
+    const pkg = JSON.parse(atob(data)) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    return Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) });
+  } catch {
+    return [];
+  }
+}
+
+const _SCAN_SKIP = new Set(['node_modules', 'dist', 'build', '.git', 'coverage', '__tests__', '.cache']);
+
+/**
+ * Recursively collect .ts/.tsx file paths under rootDir, skipping common non-source dirs.
+ * Excludes the current file (currentUri) and .d.ts files.
+ */
+/**
+ * Find all exported class names in a TypeScript file.
+ * Catches both `export class Foo` and `export default class Foo`.
+ * Used when scanning project files that may not import minislib directly.
+ */
+function parseExportedClassNames(code: string): string[] {
+  const names: string[] = [];
+  const re = /export\s+(?:default\s+)?class\s+(\w+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) names.push(m[1]);
+  return names;
+}
+
+async function scanProjectTsFiles(rootDir: string, currentUri: string, maxDepth = 4): Promise<string[]> {
+  const results: string[] = [];
+  async function scan(dir: string, depth: number) {
+    if (depth > maxDepth) return;
+    const entries = await vfsReadDir(dir);
+    await Promise.all(entries.map(async ({ name, isDir }) => {
+      if (isDir) {
+        if (!_SCAN_SKIP.has(name)) await scan(`${dir}/${name}`, depth + 1);
+      } else if (
+        (name.endsWith('.ts') || name.endsWith('.tsx')) &&
+        !name.endsWith('.d.ts')
+      ) {
+        const fullPath = `${dir}/${name}`;
+        if (fullPath !== currentUri) results.push(fullPath);
+      }
+    }));
+  }
+  await scan(rootDir, 0);
+  return results;
+}
+
+/**
+ * Patch named import statements in TypeScript source.
+ * add: [{pkg, name}] — names to add to import { ... } from 'pkg'
+ * remove: [{pkg, name}] — names to remove (removes whole line if empty)
+ */
+function patchImportsInCode(
+  code: string,
+  add: { pkg: string; name: string }[],
+  remove: { pkg: string; name: string }[],
+): string {
+  const addByPkg = new Map<string, Set<string>>();
+  for (const { pkg, name } of add) {
+    if (!addByPkg.has(pkg)) addByPkg.set(pkg, new Set());
+    addByPkg.get(pkg)!.add(name);
+  }
+  const removeByPkg = new Map<string, Set<string>>();
+  for (const { pkg, name } of remove) {
+    if (!removeByPkg.has(pkg)) removeByPkg.set(pkg, new Set());
+    removeByPkg.get(pkg)!.add(name);
+  }
+
+  let result = code;
+  const allPkgs = new Set([...addByPkg.keys(), ...removeByPkg.keys()]);
+
+  // Process packages in reverse-index order so splice offsets stay valid
+  const matchedRanges: { pkg: string; start: number; end: number; match: string }[] = [];
+  for (const pkg of allPkgs) {
+    const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`import\\s*\\{([^}]*)\\}\\s*from\\s*['"]${escaped}['"]`);
+    const m = re.exec(result);
+    if (m) matchedRanges.push({ pkg, start: m.index, end: m.index + m[0].length, match: m[0] });
+  }
+  // Sort descending by start so we can splice without shifting earlier indices
+  matchedRanges.sort((a, b) => b.start - a.start);
+
+  for (const { pkg, start, end, match } of matchedRanges) {
+    const toAdd = addByPkg.get(pkg) ?? new Set<string>();
+    const toRemove = removeByPkg.get(pkg) ?? new Set<string>();
+    const inner = /\{([^}]*)\}/.exec(match)?.[1] ?? '';
+    let names = inner.split(',').map((n) => n.trim()).filter(Boolean);
+    names = names.filter((n) => !toRemove.has(n));
+    for (const n of toAdd) { if (!names.includes(n)) names.push(n); }
+
+    if (names.length === 0) {
+      // Remove the whole import line (including trailing newline)
+      const lineStart = result.lastIndexOf('\n', start) + 1;
+      const lineEnd = result.indexOf('\n', end);
+      result = result.slice(0, lineStart) + (lineEnd >= 0 ? result.slice(lineEnd + 1) : '');
+    } else {
+      const newImport = `import { ${names.join(', ')} } from '${pkg}'`;
+      result = result.slice(0, start) + newImport + result.slice(end);
+    }
+    addByPkg.delete(pkg); // mark as handled
+  }
+
+  // Insert new import lines for packages that had no existing import
+  for (const [pkg, names] of addByPkg) {
+    if (names.size === 0) continue;
+    const newLine = `import { ${[...names].join(', ')} } from '${pkg}';\n`;
+    // Insert after the last existing import line
+    const lastImportRe = /^import\s[^\n]+$/gm;
+    let lastIdx = 0;
+    let lm: RegExpExecArray | null;
+    while ((lm = lastImportRe.exec(result)) !== null) lastIdx = lm.index + lm[0].length;
+    result = lastIdx > 0
+      ? result.slice(0, lastIdx) + '\n' + newLine + result.slice(lastIdx)
+      : newLine + result;
+  }
+
+  return result;
+}
+
+/* ── ImportButton — manage import { ... } from '...' in the source file ──────*/
+
+/** All relevant named exports from @mhersztowski/minislib. */
+const MINISLIB_EXPORTS = [
+  'Node', 'MObject', 'Signal', 'MProperty', 'MTimer',
+  'MStateMachine', 'MState', 'MEventBus', 'MCommandStack',
+  'MListModel', 'MLogger',
+];
+
+interface ImportCandidate {
+  pkg: string;       // '__project__' = defined in this file (no import needed)
+  name: string;
+  kind?: EntityKind;
+}
+
+function ImportButton({ uri, entities }: { uri: string; entities: MinisEntity[] }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [initial, setInitial] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState('');
+  const filterRef = useRef<HTMLInputElement>(null);
+
+  const handleOpen = useCallback(async () => {
+    setOpen(true);
+    setLoading(true);
+    setFilter('');
+    setCandidates([]);
+
+    const code = _state.currentCode;
+
+    // Build initial checked set from current imports
+    const allImports = parseAllImports(code);
+    const initSelected = new Set<string>();
+    for (const { packageName, names } of allImports) {
+      for (const name of names) initSelected.add(`${packageName}::${name}`);
+    }
+    setSelected(new Set(initSelected));
+    setInitial(new Set(initSelected));
+
+    const seen = new Set<string>();
+    const all: ImportCandidate[] = [];
+
+    // 1. Minislib builtins (always show)
+    for (const name of MINISLIB_EXPORTS) {
+      const key = `@mhersztowski/minislib::${name}`;
+      seen.add(key);
+      all.push({ pkg: '@mhersztowski/minislib', name });
+    }
+
+    // 2. Local project classes (defined in this file — no import needed)
+    for (const e of entities) {
+      if (e.kind !== 'class') continue;
+      const key = `__project__::${e.varName}`;
+      if (!seen.has(key)) { seen.add(key); all.push({ pkg: '__project__', name: e.varName, kind: 'class' }); }
+    }
+
+    // 3. Other .ts files in the same project
+    if (uri && !uri.startsWith('virtual://')) {
+      const projectRoot = deriveProjectRoot(uri);
+      const tsFiles = await scanProjectTsFiles(projectRoot, uri);
+      await Promise.all(tsFiles.map(async (filePath) => {
+        const code = await vfsReadFileText(filePath);
+        if (!code) return;
+        const relPath = toRelativeImportPath(uri, filePath);
+
+        // Collect class names: first try full minislib parse, then fall back to exported classes
+        const classNames = new Set<string>();
+        const { entities: fileEntities } = parseMinisEntities(code);
+        for (const e of fileEntities) {
+          if (e.kind === 'class') classNames.add(e.varName);
+        }
+        // Always also pick up plain `export class Foo` — catches non-minislib classes
+        for (const name of parseExportedClassNames(code)) classNames.add(name);
+
+        for (const name of classNames) {
+          const key = `${relPath}::${name}`;
+          if (!seen.has(key)) { seen.add(key); all.push({ pkg: relPath, name, kind: 'class' }); }
+        }
+      }));
+    }
+
+    // 4. Classes from npm packages that have minislib-plugin.json
+    if (uri && !uri.startsWith('virtual://')) {
+      const projectRoot = deriveProjectRoot(uri);
+      const pkgNames = await readPackageJsonDeps(projectRoot);
+      await Promise.all(
+        pkgNames
+          .filter((p) => p !== '@mhersztowski/minislib')
+          .map(async (pkgName) => {
+            const defs = await fetchManifest(projectRoot, pkgName);
+            for (const [className, def] of Object.entries(defs)) {
+              const key = `${pkgName}::${className}`;
+              if (!seen.has(key)) { seen.add(key); all.push({ pkg: pkgName, name: className, kind: def.kind }); }
+            }
+          }),
+      );
+    }
+
+    // 4. Any currently-imported names not yet in candidates (relative paths + unknown packages)
+    for (const { packageName, names } of allImports) {
+      for (const name of names) {
+        const key = `${packageName}::${name}`;
+        if (!seen.has(key)) { seen.add(key); all.push({ pkg: packageName, name }); }
+      }
+    }
+
+    setCandidates(all);
+    setLoading(false);
+    setTimeout(() => filterRef.current?.focus(), 60);
+  }, [uri, entities]);
+
+  const toggleKey = useCallback((key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleApply = useCallback(() => {
+    const model = findModel(uri);
+    if (!model) { setOpen(false); return; }
+    const add: { pkg: string; name: string }[] = [];
+    const remove: { pkg: string; name: string }[] = [];
+    for (const c of candidates) {
+      if (c.pkg === '__project__') continue;
+      const key = `${c.pkg}::${c.name}`;
+      const was = initial.has(key);
+      const now = selected.has(key);
+      if (now && !was) add.push({ pkg: c.pkg, name: c.name });
+      if (!now && was) remove.push({ pkg: c.pkg, name: c.name });
+    }
+    if (add.length > 0 || remove.length > 0)
+      replaceModelContent(model, patchImportsInCode(_state.currentCode, add, remove));
+    setOpen(false);
+  }, [uri, candidates, selected, initial]);
+
+  const filtered = useMemo(() => {
+    const q = filter.toLowerCase();
+    return q
+      ? candidates.filter((c) => c.name.toLowerCase().includes(q) || c.pkg.toLowerCase().includes(q))
+      : candidates;
+  }, [candidates, filter]);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, ImportCandidate[]>();
+    for (const c of filtered) {
+      if (!map.has(c.pkg)) map.set(c.pkg, []);
+      map.get(c.pkg)!.push(c);
+    }
+    return map;
+  }, [filtered]);
+
+  const groupOrder = useMemo(() => {
+    const order: string[] = [];
+    if (groups.has('__project__')) order.push('__project__');
+    // Relative paths = other project files (e.g. ./sensor, ../shared/types)
+    for (const k of groups.keys()) {
+      if (k.startsWith('.')) order.push(k);
+    }
+    if (groups.has('@mhersztowski/minislib')) order.push('@mhersztowski/minislib');
+    // npm packages last
+    for (const k of groups.keys()) {
+      if (k !== '__project__' && !k.startsWith('.') && k !== '@mhersztowski/minislib') order.push(k);
+    }
+    return order;
+  }, [groups]);
+
+  const hasChanges = useMemo(() => {
+    for (const c of candidates) {
+      if (c.pkg === '__project__') continue;
+      const key = `${c.pkg}::${c.name}`;
+      if (initial.has(key) !== selected.has(key)) return true;
+    }
+    return false;
+  }, [candidates, selected, initial]);
+
+  const selectedCount = candidates.filter(
+    (c) => c.pkg !== '__project__' && selected.has(`${c.pkg}::${c.name}`),
+  ).length;
+
+  return (
+    <>
+      <Tooltip title="Manage imports — add/remove MObject / Node subclasses">
+        <Button
+          size="small"
+          onClick={handleOpen}
+          sx={{
+            fontSize: 10, color: '#89dceb', textTransform: 'none',
+            py: 0, px: 1, minWidth: 0,
+            borderLeft: '1px solid #313244', borderRadius: 0,
+            '&:hover': { background: '#1a2e2e' },
+          }}
+        >
+          + Import
+        </Button>
+      </Tooltip>
+
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', color: '#cdd6f4', m: 2 } }}
+      >
+        <DialogTitle
+          sx={{ fontSize: 13, fontWeight: 600, py: 1, px: 2, borderBottom: '1px solid #313244', display: 'flex', alignItems: 'center', gap: 1 }}
+        >
+          <span style={{ fontSize: 16 }}>📦</span>
+          Manage Imports
+          <Box sx={{ flex: 1 }} />
+          <IconButton size="small" onClick={() => setOpen(false)} sx={{ color: '#585b70', p: 0.25 }}>
+            <CloseIcon sx={{ fontSize: 15 }} />
+          </IconButton>
+        </DialogTitle>
+
+        <Box sx={{ px: 2, pt: 1.5, pb: 0.5 }} onKeyDown={(e) => e.stopPropagation()}>
+          <TextField
+            inputRef={filterRef}
+            size="small"
+            placeholder="Filter classes or packages…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            fullWidth
+            sx={{
+              '& .MuiInputBase-root': { fontSize: 12, background: '#13131e', color: '#cdd6f4', height: 28 },
+              '& .MuiOutlinedInput-notchedOutline': { borderColor: '#313244' },
+              '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#89dceb' },
+              '& input': { py: 0, px: 1 },
+            }}
+          />
+        </Box>
+
+        <DialogContent sx={{ p: 0, maxHeight: 400, overflowY: 'auto' }}>
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4, gap: 1.5 }}>
+              <CircularProgress size={20} sx={{ color: '#89dceb' }} />
+              <Typography sx={{ fontSize: 12, color: '#585b70' }}>Scanning project files and packages…</Typography>
+            </Box>
+          ) : filtered.length === 0 ? (
+            <Typography sx={{ fontSize: 12, color: '#45475a', px: 2, py: 2 }}>
+              No matches. Add another <code style={{ color: '#89dceb' }}>.ts</code> file to the project, or a package with a <code style={{ color: '#89dceb' }}>minislib-plugin.json</code> manifest.
+            </Typography>
+          ) : (
+            groupOrder.map((pkg) => {
+              const items = groups.get(pkg) ?? [];
+              const isProject = pkg === '__project__';
+              const pkgLabel = isProject
+                ? '📁 This file'
+                : pkg.startsWith('.')
+                ? `📄 ${pkg}`
+                : pkg === '@mhersztowski/minislib'
+                ? '⚡ @mhersztowski/minislib'
+                : `🧩 ${pkg}`;
+              return (
+                <Box key={pkg}>
+                  {/* Group header */}
+                  <Box sx={{ px: 2, py: 0.4, background: '#181825', borderBottom: '1px solid #313244', position: 'sticky', top: 0, zIndex: 1 }}>
+                    <Typography sx={{ fontSize: 10, color: '#585b70', fontWeight: 600, letterSpacing: 0.4 }}>
+                      {pkgLabel}
+                    </Typography>
+                  </Box>
+                  {items.map((c) => {
+                    const key = `${c.pkg}::${c.name}`;
+                    const checked = selected.has(key);
+                    const kindColor = c.kind ? (KIND_COLOR[c.kind] ?? '#cdd6f4') : '#cdd6f4';
+                    return (
+                      <Box
+                        key={key}
+                        onClick={() => !isProject && toggleKey(key)}
+                        sx={{
+                          display: 'flex', alignItems: 'center', px: 1.5, py: 0.25,
+                          cursor: isProject ? 'default' : 'pointer',
+                          borderBottom: '1px solid #1e1e2e22',
+                          '&:hover': { background: isProject ? 'transparent' : '#2a2a3e' },
+                        }}
+                      >
+                        {isProject ? (
+                          <Box sx={{ width: 30, display: 'flex', justifyContent: 'center' }}>
+                            <Typography sx={{ fontSize: 9, color: '#45475a' }}>—</Typography>
+                          </Box>
+                        ) : (
+                          <Checkbox
+                            size="small"
+                            checked={checked}
+                            onChange={() => toggleKey(key)}
+                            onClick={(e) => e.stopPropagation()}
+                            sx={{ p: 0.25, color: '#45475a', '&.Mui-checked': { color: '#89dceb' } }}
+                          />
+                        )}
+                        <Typography
+                          sx={{ fontSize: 12, fontFamily: 'monospace', ml: 0.5, flex: 1, color: '#cdd6f4' }}
+                        >
+                          {c.name}
+                        </Typography>
+                        {c.kind && (
+                          <Chip
+                            label={c.kind}
+                            size="small"
+                            sx={{
+                              fontSize: 9, height: 15, ml: 1,
+                              color: kindColor,
+                              border: `1px solid ${kindColor}44`,
+                              background: `${kindColor}11`,
+                            }}
+                          />
+                        )}
+                        {isProject && (
+                          <Chip
+                            label="this file"
+                            size="small"
+                            sx={{ fontSize: 9, height: 15, ml: 1, color: '#45475a', border: '1px solid #31324444', background: 'transparent' }}
+                          />
+                        )}
+                      </Box>
+                    );
+                  })}
+                </Box>
+              );
+            })
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ borderTop: '1px solid #313244', px: 2, py: 0.75, gap: 1 }}>
+          <Typography sx={{ fontSize: 10, color: '#45475a', flex: 1 }}>
+            {selectedCount} selected
+          </Typography>
+          <Button
+            size="small"
+            onClick={() => setOpen(false)}
+            sx={{ fontSize: 11, color: '#585b70', textTransform: 'none', py: 0.25, px: 1 }}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="small"
+            onClick={handleApply}
+            disabled={!hasChanges}
+            sx={{
+              fontSize: 11, color: '#a6e3a1', textTransform: 'none', py: 0.25, px: 1,
+              border: '1px solid #a6e3a144',
+              '&.Mui-disabled': { color: '#45475a44', borderColor: '#31324444' },
+            }}
+          >
+            Apply
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
+/* ── VfsFilePicker ───────────────────────────────────────────────────────────*/
+
+function VfsFilePicker({
+  rootPath,
+  onSelect,
+  onClose,
+}: {
+  rootPath: string;
+  onSelect: (path: string, code: string) => void;
+  onClose: () => void;
+}) {
+  const [currentPath, setCurrentPath] = useState(rootPath);
+  const [entries, setEntries] = useState<{ name: string; isDir: boolean }[]>([]);
+  const [loadingDir, setLoadingDir] = useState(false);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    setLoadingDir(true);
+    setSelectedPath(null);
+    vfsReadDir(currentPath).then((es) => {
+      setEntries(es.filter((e) => e.isDir || /\.(ts|tsx)$/.test(e.name)));
+      setLoadingDir(false);
+    });
+  }, [currentPath]);
+
+  const breadcrumbs = currentPath.split('/').filter(Boolean);
+
+  const handleNavigate = (name: string) => {
+    setCurrentPath((prev) => (prev.endsWith('/') ? prev + name : `${prev}/${name}`));
+  };
+
+  const handleConfirm = async () => {
+    if (!selectedPath) return;
+    setImporting(true);
+    const code = await vfsReadFileText(selectedPath);
+    setImporting(false);
+    if (code !== null) onSelect(selectedPath, code);
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      maxWidth="sm"
+      fullWidth
+      PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', color: '#cdd6f4', m: 2 } }}
+    >
+      <DialogTitle sx={{ fontSize: 13, fontWeight: 600, py: 1, px: 2, borderBottom: '1px solid #313244', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <span style={{ fontSize: 15 }}>📂</span> Import Source File
+        <Box sx={{ flex: 1 }} />
+        <IconButton size="small" onClick={onClose} sx={{ color: '#585b70', p: 0.25 }}>
+          <CloseIcon sx={{ fontSize: 15 }} />
+        </IconButton>
+      </DialogTitle>
+
+      {/* Breadcrumbs */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, px: 1.5, py: 0.5, background: '#13131e', borderBottom: '1px solid #313244', flexWrap: 'wrap', minHeight: 30 }}>
+        <Button size="small" onClick={() => setCurrentPath('/')}
+          sx={{ fontSize: 10, color: '#585b70', textTransform: 'none', py: 0, px: 0.5, minWidth: 0 }}>
+          /
+        </Button>
+        {breadcrumbs.map((part, i) => (
+          <span key={i} style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: '#45475a', marginRight: 2 }}>/</span>
+            <Button
+              size="small"
+              onClick={() => setCurrentPath('/' + breadcrumbs.slice(0, i + 1).join('/'))}
+              sx={{ fontSize: 10, color: i === breadcrumbs.length - 1 ? '#89dceb' : '#585b70', textTransform: 'none', py: 0, px: 0.5, minWidth: 0 }}
+            >
+              {part}
+            </Button>
+          </span>
+        ))}
+      </Box>
+
+      <DialogContent sx={{ p: 0, maxHeight: 340, overflowY: 'auto' }}>
+        {loadingDir ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+            <CircularProgress size={18} sx={{ color: '#89dceb' }} />
+          </Box>
+        ) : entries.length === 0 ? (
+          <Typography sx={{ fontSize: 12, color: '#45475a', p: 2 }}>Empty directory</Typography>
+        ) : (
+          [...entries]
+            .sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name))
+            .map((e) => {
+              const fullPath = `${currentPath}/${e.name}`.replace(/\/+/g, '/');
+              const isSel = selectedPath === fullPath;
+              return (
+                <Box
+                  key={e.name}
+                  onClick={() => e.isDir ? handleNavigate(e.name) : setSelectedPath(isSel ? null : fullPath)}
+                  sx={{
+                    display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 0.4,
+                    cursor: 'pointer',
+                    background: isSel ? '#2a2a3e' : 'transparent',
+                    borderBottom: '1px solid #1e1e2e33',
+                    '&:hover': { background: e.isDir ? '#1e1e3e' : '#2a2a3e' },
+                  }}
+                >
+                  <span style={{ fontSize: 12 }}>{e.isDir ? '📁' : '📄'}</span>
+                  <Typography sx={{ fontSize: 12, fontFamily: 'monospace', flex: 1, color: e.isDir ? '#89b4fa' : '#cdd6f4' }}>
+                    {e.name}
+                  </Typography>
+                  {e.isDir && <Typography sx={{ fontSize: 10, color: '#45475a' }}>›</Typography>}
+                </Box>
+              );
+            })
+        )}
+      </DialogContent>
+
+      <DialogActions sx={{ borderTop: '1px solid #313244', px: 2, py: 0.75, gap: 1 }}>
+        {selectedPath && (
+          <Typography sx={{ fontSize: 10, color: '#585b70', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {selectedPath.split('/').pop()}
+          </Typography>
+        )}
+        <Button size="small" onClick={onClose} sx={{ fontSize: 11, color: '#585b70', textTransform: 'none' }}>Cancel</Button>
+        <Button
+          size="small"
+          onClick={handleConfirm}
+          disabled={!selectedPath || importing}
+          sx={{ fontSize: 11, color: '#a6e3a1', textTransform: 'none', border: '1px solid #a6e3a144', '&.Mui-disabled': { color: '#45475a44', borderColor: '#31324444' } }}
+        >
+          {importing ? 'Loading…' : 'Import'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/* ── Scene tree components ───────────────────────────────────────────────────*/
+
+function NodeTreeRow({
+  item, depth, selectedId, onSelect, expandedIds, onToggleExpand, onContextMenu, cutVarName,
+  onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, dragOverId,
+}: {
+  item: NodeTreeItem;
+  depth: number;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  expandedIds: Set<string>;
+  onToggleExpand: (id: string) => void;
+  onContextMenu: (e: React.MouseEvent, item: NodeTreeItem) => void;
+  cutVarName?: string | null;
+  onDragStart?: (varName: string) => void;
+  onDragEnd?: () => void;
+  onDragOver?: (id: string) => void;
+  onDragLeave?: () => void;
+  onDrop?: (targetVarName: string) => void;
+  dragOverId?: string | null;
+}) {
+  const hasChildren = item.children.length > 0;
+  const expanded = expandedIds.has(item.id);
+  const isSel = selectedId === item.id;
+  const isCut = cutVarName === item.varName;
+  const isDragOver = dragOverId === item.id;
+  const color = KIND_COLOR[item.kind] ?? '#cdd6f4';
+  const icon = KIND_ICON[item.kind] ?? '📦';
+
+  return (
+    <>
+      <Box
+        data-treeid={item.id}
+        draggable
+        onClick={() => onSelect(item.id)}
+        onDragStart={(e) => { e.stopPropagation(); onDragStart?.(item.varName); }}
+        onDragEnd={() => onDragEnd?.()}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); onDragOver?.(item.id); }}
+        onDragLeave={(e) => { e.stopPropagation(); onDragLeave?.(); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDrop?.(item.varName); }}
+        title={item.label}
+        sx={{
+          display: 'flex', alignItems: 'center',
+          pl: `${6 + depth * 12}px`, pr: 0.5, py: '2px',
+          cursor: 'grab',
+          opacity: isCut ? 0.4 : 1,
+          background: isDragOver ? '#2a1a50' : isSel ? '#2a2040' : 'transparent',
+          borderLeft: isDragOver ? '2px solid #cba6f7' : isSel ? `2px solid ${color}` : '2px solid transparent',
+          outline: isDragOver ? '1px dashed #cba6f766' : 'none',
+          '&:hover': { background: isDragOver ? '#2a1a50' : isSel ? '#2a2040' : '#1e1e3e' },
+        }}
+      >
+        <Box
+          component="span"
+          onClick={(e) => { e.stopPropagation(); if (hasChildren) onToggleExpand(item.id); }}
+          sx={{ width: 14, fontSize: 8, color: '#45475a', mr: 0.25, flexShrink: 0, cursor: hasChildren ? 'pointer' : 'default', userSelect: 'none' }}
+        >
+          {hasChildren ? (expanded ? '▼' : '▶') : '·'}
+        </Box>
+        <span style={{ fontSize: 11, marginRight: 3, flexShrink: 0 }}>{icon}</span>
+        <Typography
+          sx={{ fontSize: 11, fontFamily: 'monospace', flex: 1, color: '#cdd6f4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '18px' }}
+        >
+          {item.varName}
+        </Typography>
+      </Box>
+      {hasChildren && expanded && item.children.map((child) => (
+        <NodeTreeRow
+          key={child.id} item={child} depth={depth + 1}
+          selectedId={selectedId} onSelect={onSelect}
+          expandedIds={expandedIds} onToggleExpand={onToggleExpand}
+          onContextMenu={onContextMenu} cutVarName={cutVarName}
+          onDragStart={onDragStart} onDragEnd={onDragEnd}
+          onDragOver={onDragOver} onDragLeave={onDragLeave}
+          onDrop={onDrop} dragOverId={dragOverId}
+        />
+      ))}
+    </>
+  );
+}
+
+/** Single imported-file section inside the tree panel. */
+function ImportedFileSection({
+  filePath, extEntities, localEntities, uri, onRemove,
+}: {
+  filePath: string;
+  extEntities: MinisEntity[];
+  localEntities: MinisEntity[];
+  uri: string;
+  onRemove: () => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState<MinisEntity | null>(null);
+  const [parentVarName, setParentVarName] = useState('');
+
+  const tree = useMemo(() => buildNodeTree(extEntities, ''), [extEntities]);
+  const classes = useMemo(() => extEntities.filter((e) => e.kind === 'class'), [extEntities]);
+  const fileName = filePath.split('/').pop() ?? filePath;
+
+  const toggleExpand = (id: string) =>
+    setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const handleAdd = (entity: MinisEntity) => { setPending(entity); setParentVarName(''); };
+
+  const handleConfirm = useCallback(() => {
+    if (!pending) return;
+    const model = findModel(uri);
+    if (!model) return;
+
+    const taken = new Set(_state.entities.map((e) => e.varName));
+    const base = pending.varName.charAt(0).toLowerCase() + pending.varName.slice(1);
+    const varName = generateVarName(base, taken);
+    const relPath = toRelativeImportPath(uri, filePath);
+    const arg = parentVarName.trim();
+    const snippet = `const ${varName} = new ${pending.varName}(${arg});\n`;
+
+    let code = model.getValue();
+    code = patchImportsInCode(code, [{ pkg: relPath, name: pending.varName }], []);
+    code = code.trimEnd() + '\n' + snippet;
+    replaceModelContent(model, code);
+    setPending(null);
+  }, [pending, uri, filePath, parentVarName]);
+
+  const parentOptions = useMemo(
+    () => localEntities.filter((e) => e.kind === 'class' || e.kind === 'instance'),
+    [localEntities],
+  );
+
+  return (
+    <Box sx={{ borderTop: '1px solid #313244' }}>
+      {/* Header */}
+      <Box
+        sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.4, background: '#181825', cursor: 'pointer', '&:hover': { background: '#1e1e2e' } }}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span style={{ fontSize: 9, color: '#45475a', marginRight: 4 }}>{expanded ? '▼' : '▶'}</span>
+        <span style={{ fontSize: 11, marginRight: 4 }}>📎</span>
+        <Typography sx={{ fontSize: 10, fontFamily: 'monospace', flex: 1, color: '#89dceb', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={filePath}>
+          {fileName}
+        </Typography>
+        <Tooltip title="Remove import">
+          <IconButton size="small" onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            sx={{ p: 0.2, color: '#585b70', '&:hover': { color: '#f38ba8' } }}>
+            <CloseIcon sx={{ fontSize: 11 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {expanded && (
+        <>
+          {classes.length === 0 ? (
+            <Typography sx={{ fontSize: 10, color: '#45475a', px: 2, py: 0.5 }}>No classes found</Typography>
+          ) : (
+            <>
+              {/* Flat class list with "Add" buttons */}
+              {classes.map((cls) => (
+                <Box key={cls.varName} sx={{ display: 'flex', alignItems: 'center', pl: 2, pr: 0.5, py: '2px', '&:hover': { background: '#1e1e2e' } }}>
+                  <span style={{ fontSize: 11, marginRight: 3 }}>{KIND_ICON['class']}</span>
+                  <Typography sx={{ fontSize: 11, fontFamily: 'monospace', flex: 1, color: '#4fc3f7' }}>{cls.varName}</Typography>
+                  <Tooltip title="Add to current file">
+                    <Button size="small" onClick={() => handleAdd(cls)}
+                      sx={{ fontSize: 9, color: '#a6e3a1', textTransform: 'none', py: 0, px: 0.5, minWidth: 0, '&:hover': { background: '#1e3e1e' } }}>
+                      + Add
+                    </Button>
+                  </Tooltip>
+                </Box>
+              ))}
+
+              {/* Inline form when a class is being added */}
+              {pending && (
+                <Box sx={{ mx: 1, mb: 0.5, p: 1, background: '#13131e', border: '1px solid #313244', borderRadius: 1 }}
+                  onKeyDown={(e) => e.stopPropagation()}>
+                  <Typography sx={{ fontSize: 10, color: '#89dceb', mb: 0.5 }}>
+                    Add <strong>{pending.varName}</strong> to code
+                  </Typography>
+                  <Autocomplete
+                    size="small"
+                    freeSolo
+                    options={parentOptions.map((e) => e.varName)}
+                    value={parentVarName}
+                    onInputChange={(_, v) => setParentVarName(v)}
+                    renderInput={(params) => (
+                      <TextField {...params} placeholder="Parent (optional)"
+                        sx={{
+                          '& .MuiInputBase-root': { fontSize: 11, background: '#1e1e2e', color: '#cdd6f4', height: 26 },
+                          '& .MuiOutlinedInput-notchedOutline': { borderColor: '#313244' },
+                          '& input': { py: 0, px: 0.5 },
+                        }}
+                      />
+                    )}
+                  />
+                  <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, justifyContent: 'flex-end' }}>
+                    <Button size="small" onClick={() => setPending(null)}
+                      sx={{ fontSize: 9, color: '#585b70', textTransform: 'none', py: 0, px: 0.75 }}>
+                      Cancel
+                    </Button>
+                    <Button size="small" onClick={handleConfirm}
+                      sx={{ fontSize: 9, color: '#a6e3a1', textTransform: 'none', py: 0, px: 0.75, border: '1px solid #a6e3a144' }}>
+                      Confirm
+                    </Button>
+                  </Box>
+                </Box>
+              )}
+
+              {/* Entity hierarchy from the file */}
+              {extEntities.some((e) => e.kind !== 'class') && (
+                <Box sx={{ opacity: 0.6 }}>
+                  {tree.map((item) => (
+                    <NodeTreeRow key={item.id} item={item} depth={1}
+                      selectedId={null} onSelect={() => {}}
+                      expandedIds={expandedIds} onToggleExpand={toggleExpand}
+                      onContextMenu={() => {}} />
+                  ))}
+                </Box>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </Box>
+  );
+}
+
+type ClipboardOp = 'copy' | 'cut';
+interface TreeClipboard { op: ClipboardOp; entity: MinisEntity }
+
+/** Collapsible left panel showing the Node/MObject hierarchy tree. */
+function NodeTreePanel({
+  entities,
+  currentCode,
+  uri,
+  selectedEntityId,
+  onSelectEntity,
+  importedClasses,
+}: {
+  entities: MinisEntity[];
+  currentCode: string;
+  uri: string;
+  selectedEntityId: string | null;
+  onSelectEntity: (id: string) => void;
+  importedClasses: ImportedClass[];
+}) {
+  const [open, setOpen] = useState(true);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [importedFiles, setImportedFiles] = useState<{ path: string; entities: MinisEntity[] }[]>([]);
+
+  // Context menu
+  const [ctxMenu, setCtxMenu] = useState<{ mouseX: number; mouseY: number; item: NodeTreeItem | null } | null>(null);
+  const closeCtx = () => setCtxMenu(null);
+
+  // Clipboard
+  const [clipboard, setClipboard] = useState<TreeClipboard | null>(null);
+
+  const tree = useMemo(() => buildNodeTree(entities, currentCode), [entities, currentCode]);
+
+  // Native contextmenu listener on the scroll container — bypasses React synthetic event issues
+  const treeScrollRef = useRef<HTMLDivElement>(null);
+  const treeDataRef = useRef(tree);
+  useEffect(() => { treeDataRef.current = tree; }, [tree]);
+
+  useEffect(() => {
+    const el = treeScrollRef.current;
+    if (!el) return;
+    const handler = (e: MouseEvent) => {
+      e.preventDefault();
+      // Walk up from click target to find [data-treeid]
+      let target: HTMLElement | null = e.target as HTMLElement;
+      let found: NodeTreeItem | null = null;
+      while (target && target !== el) {
+        const id = target.getAttribute('data-treeid');
+        if (id) {
+          const findItem = (items: NodeTreeItem[]): NodeTreeItem | null => {
+            for (const it of items) {
+              if (it.id === id) return it;
+              const f = findItem(it.children);
+              if (f) return f;
+            }
+            return null;
+          };
+          found = findItem(treeDataRef.current);
+          break;
+        }
+        target = target.parentElement;
+      }
+      // Always show context menu — item=null means "no parent" (root-level new)
+      setCtxMenu({ mouseX: e.clientX, mouseY: e.clientY, item: found });
+    };
+    el.addEventListener('contextmenu', handler);
+    return () => el.removeEventListener('contextmenu', handler);
+  }, []);
+
+  const toggleExpand = (id: string) =>
+    setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const handleFileImport = (path: string, code: string) => {
+    setFilePickerOpen(false);
+    if (importedFiles.find((f) => f.path === path)) return;
+    const { entities: extEntities } = parseMinisEntities(code);
+    setImportedFiles((prev) => [...prev, { path, entities: extEntities }]);
+  };
+
+  const removeImport = (path: string) =>
+    setImportedFiles((prev) => prev.filter((f) => f.path !== path));
+
+  const projectRoot = uri ? deriveProjectRoot(uri) : '/';
+
+  // Drag-and-drop reparenting
+  const dragVarRef = useRef<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const handleDragStart = useCallback((varName: string) => {
+    dragVarRef.current = varName;
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    dragVarRef.current = null;
+    setDragOverId(null);
+  }, []);
+
+  const handleDragOver = useCallback((id: string) => {
+    setDragOverId(id);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverId(null);
+  }, []);
+
+  const handleDrop = useCallback((targetVarName: string) => {
+    const dragVar = dragVarRef.current;
+    if (!dragVar || dragVar === targetVarName) { setDragOverId(null); return; }
+    const model = findModel(uri);
+    if (!model) { setDragOverId(null); return; }
+    const patched = patchConstructorArg(model.getValue(), dragVar, 0, targetVarName);
+    if (patched) replaceModelContent(model, patched);
+    dragVarRef.current = null;
+    setDragOverId(null);
+  }, [uri]);
+
+  // All class names available for instantiation: local classes + imported classes
+  const availableClasses = useMemo(() => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const e of entities) {
+      if (e.kind === 'class' && !seen.has(e.varName)) { seen.add(e.varName); result.push(e.varName); }
+    }
+    for (const ic of importedClasses) {
+      if (!seen.has(ic.className)) { seen.add(ic.className); result.push(ic.className); }
+    }
+    return result;
+  }, [entities, importedClasses]);
+
+  // ── Context menu handlers ────────────────────────────────────────────────
+
+  const resolveEntity = (item: NodeTreeItem | null) => item ? (entities.find((e) => e.id === item.id) ?? null) : null;
+
+  const handleCtxNewClass = useCallback((className: string) => {
+    if (!ctxMenu) return;
+    closeCtx();
+    const entity = ctxMenu.item ? resolveEntity(ctxMenu.item) : null;
+    const taken = new Set(_state.entities.map((e) => e.varName));
+    const base = className.charAt(0).toLowerCase() + className.slice(1);
+    const newVar = generateVarName(base, taken);
+    // If parent entity exists, pass it as first constructor arg; otherwise create root object
+    const snippet = entity
+      ? `const ${newVar} = new ${className}(${entity.varName});\n`
+      : `const ${newVar} = new ${className}();\n`;
+    insertAtEnd(snippet, uri);
+    addSnippet(snippet, true);
+  }, [ctxMenu, uri]);
+
+  const handleCtxCut = useCallback(() => {
+    if (!ctxMenu) return;
+    const entity = resolveEntity(ctxMenu.item);
+    if (entity) setClipboard({ op: 'cut', entity });
+    closeCtx();
+  }, [ctxMenu]);
+
+  const handleCtxCopy = useCallback(() => {
+    if (!ctxMenu) return;
+    const entity = resolveEntity(ctxMenu.item);
+    if (entity) setClipboard({ op: 'copy', entity });
+    closeCtx();
+  }, [ctxMenu]);
+
+  const handleCtxPaste = useCallback(() => {
+    if (!ctxMenu || !clipboard) return;
+    closeCtx();
+    const target = resolveEntity(ctxMenu.item);
+    const model = findModel(uri);
+    if (!target || !model) return;
+
+    if (clipboard.op === 'cut') {
+      // Move: reparent by patching first constructor arg
+      const patched = patchConstructorArg(model.getValue(), clipboard.entity.varName, 0, target.varName);
+      if (patched) replaceModelContent(model, patched);
+      setClipboard(null);
+    } else {
+      // Copy: duplicate instance with target as parent
+      const className = getEntityClassName(clipboard.entity);
+      const taken = new Set(_state.entities.map((e) => e.varName));
+      const base = className.charAt(0).toLowerCase() + className.slice(1);
+      const newVar = generateVarName(base, taken);
+      const snippet = `const ${newVar} = new ${className}(${target.varName});\n`;
+      const newCode = model.getValue().trimEnd() + '\n' + snippet;
+      replaceModelContent(model, newCode);
+      addSnippet(snippet, true);
+    }
+  }, [ctxMenu, clipboard, uri]);
+
+  const handleCtxDelete = useCallback(() => {
+    if (!ctxMenu) return;
+    closeCtx();
+    const entity = resolveEntity(ctxMenu.item);
+    const model = findModel(uri);
+    if (!entity || !model) return;
+    replaceModelContent(model, deleteEntityFromCode(model.getValue(), entity.varName));
+  }, [ctxMenu, uri]);
+
+  const cutVarName = clipboard?.op === 'cut' ? clipboard.entity.varName : null;
+  const PANEL_W = 200;
+
+  return (
+    <>
+      {/* Toggle strip / full panel */}
+      <Box
+        onContextMenu={(e) => e.preventDefault()}
+        sx={{
+          width: open ? PANEL_W : 24,
+          minWidth: open ? PANEL_W : 24,
+          display: 'flex',
+          flexDirection: 'column',
+          borderRight: '1px solid #313244',
+          background: '#13131e',
+          transition: 'width 0.15s, min-width 0.15s',
+          overflow: 'hidden',
+          position: 'relative',
+        }}
+      >
+        {/* Header row */}
+        <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #313244', background: '#181825', flexShrink: 0, height: 28 }}>
+          {open && (
+            <Typography sx={{ fontSize: 10, color: '#585b70', fontWeight: 600, letterSpacing: 0.5, pl: 1, flex: 1, whiteSpace: 'nowrap' }}>
+              SCENE TREE
+            </Typography>
+          )}
+          <Tooltip title={open ? 'Collapse tree' : 'Expand tree'}>
+            <IconButton
+              size="small"
+              onClick={() => setOpen((v) => !v)}
+              sx={{ p: 0.25, color: '#45475a', borderRadius: 0, width: 24, '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}
+            >
+              <Typography sx={{ fontSize: 11, lineHeight: 1 }}>{open ? '‹' : '›'}</Typography>
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        {open && (
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Local entity tree — ref here for native contextmenu listener */}
+            <Box ref={treeScrollRef} sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              {tree.length === 0 ? (
+                <Typography sx={{ fontSize: 10, color: '#45475a', p: 1, textAlign: 'center' }}>No entities</Typography>
+              ) : (
+                tree.map((item) => (
+                  <NodeTreeRow
+                    key={item.id} item={item} depth={0}
+                    selectedId={selectedEntityId}
+                    onSelect={onSelectEntity}
+                    expandedIds={expandedIds}
+                    onToggleExpand={toggleExpand}
+                    onContextMenu={(e, it) => setCtxMenu({ mouseX: e.clientX, mouseY: e.clientY, item: it })}
+                    cutVarName={cutVarName}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    dragOverId={dragOverId}
+                  />
+                ))
+              )}
+
+              {/* Imported file sections */}
+              {importedFiles.map((f) => (
+                <ImportedFileSection
+                  key={f.path}
+                  filePath={f.path}
+                  extEntities={f.entities}
+                  localEntities={entities}
+                  uri={uri}
+                  onRemove={() => removeImport(f.path)}
+                />
+              ))}
+            </Box>
+
+            {/* "Import file" button at bottom */}
+            <Box sx={{ borderTop: '1px solid #313244', flexShrink: 0 }}>
+              <Button
+                size="small"
+                fullWidth
+                onClick={() => setFilePickerOpen(true)}
+                sx={{ fontSize: 10, color: '#89dceb', textTransform: 'none', py: 0.4, borderRadius: 0, '&:hover': { background: '#1a2e2e' } }}
+              >
+                + Import file
+              </Button>
+            </Box>
+          </Box>
+        )}
+      </Box>
+
+      {/* Context menu */}
+      <Menu
+        open={ctxMenu !== null}
+        onClose={closeCtx}
+        anchorReference="anchorPosition"
+        anchorPosition={ctxMenu ? { top: ctxMenu.mouseY, left: ctxMenu.mouseX } : undefined}
+        PaperProps={{ sx: { background: '#1e1e2e', border: '1px solid #313244', py: 0.25, minWidth: 180 } }}
+      >
+        {/* New object — one item per available class */}
+        {availableClasses.length === 0 ? (
+          <MenuItem disabled sx={{ fontSize: 11, color: '#45475a', py: 0.4 }}>
+            No classes to instantiate — define a class or use + Import
+          </MenuItem>
+        ) : (
+          <>
+            <Box sx={{ px: 1.5, py: 0.3 }}>
+              <Typography sx={{ fontSize: 9, color: '#45475a', fontWeight: 600, letterSpacing: 0.5 }}>
+                {ctxMenu?.item ? `NEW CHILD OF ${ctxMenu.item.varName}` : 'NEW OBJECT'}
+              </Typography>
+            </Box>
+            {availableClasses.map((cls) => (
+              <MenuItem
+                key={cls}
+                onClick={() => handleCtxNewClass(cls)}
+                sx={{ fontSize: 12, color: '#a6e3a1', py: 0.4, pl: 2, gap: 1, '&:hover': { background: '#1a3a1e' } }}
+              >
+                <span style={{ fontSize: 11 }}>📦</span>
+                <Typography component="span" sx={{ fontFamily: 'monospace', fontSize: 12 }}>{cls}</Typography>
+              </MenuItem>
+            ))}
+          </>
+        )}
+        <Divider sx={{ borderColor: '#313244', my: 0.25 }} />
+        <MenuItem onClick={handleCtxCut} sx={{ fontSize: 12, color: '#cdd6f4', py: 0.5, gap: 1.25, '&:hover': { background: '#313244' } }}>
+          <span style={{ fontSize: 13 }}>✂️</span> Cut
+        </MenuItem>
+        <MenuItem onClick={handleCtxCopy} sx={{ fontSize: 12, color: '#cdd6f4', py: 0.5, gap: 1.25, '&:hover': { background: '#313244' } }}>
+          <span style={{ fontSize: 13 }}>📋</span> Copy
+        </MenuItem>
+        <MenuItem
+          onClick={handleCtxPaste}
+          disabled={clipboard === null}
+          sx={{ fontSize: 12, color: '#cdd6f4', py: 0.5, gap: 1.25, '&:hover': { background: '#313244' }, '&.Mui-disabled': { color: '#45475a' } }}
+        >
+          <span style={{ fontSize: 13 }}>📌</span> Paste as child
+          {clipboard && (
+            <Typography sx={{ fontSize: 9, color: '#585b70', ml: 'auto', pl: 1 }}>
+              {clipboard.op === 'cut' ? '(move)' : '(copy)'} {clipboard.entity.varName}
+            </Typography>
+          )}
+        </MenuItem>
+        <Divider sx={{ borderColor: '#313244', my: 0.25 }} />
+        <MenuItem onClick={handleCtxDelete} sx={{ fontSize: 12, color: '#f38ba8', py: 0.5, gap: 1.25, '&:hover': { background: '#3e1e1e' } }}>
+          <span style={{ fontSize: 13 }}>🗑</span> Delete
+        </MenuItem>
+      </Menu>
+
+      {/* VFS file picker dialog */}
+      {filePickerOpen && (
+        <VfsFilePicker
+          rootPath={projectRoot}
+          onSelect={handleFileImport}
+          onClose={() => setFilePickerOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 /* ── Main panel ──────────────────────────────────────────────────────────────*/
 
 function VisualMinisLibPanel() {
-  const { entities, connections, uri, isMinisFile, savedPositions, externalClassDefs, importedClasses } = usePluginState();
+  const { entities, connections, uri, isMinisFile, savedPositions, externalClassDefs, importedClasses, currentCode } = usePluginState();
   const snippets = useSnippets();
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const pendingSelectName = useRef<string | null>(null);
@@ -2615,6 +3973,21 @@ function VisualMinisLibPanel() {
     setEdges((es) => applyEdgeChanges(changes, es));
   }, [connections, uri, setEdges]);
 
+  // Delete entity from source code (called from × button via globalEventBus or Delete key via onNodesDelete)
+  const handleDeleteEntity = useCallback((varName: string) => {
+    const model = findModel(uri);
+    if (!model) return;
+    replaceModelContent(model, deleteEntityFromCode(model.getValue(), varName));
+  }, [uri]);
+
+  // × button on node header emits this event
+  useEffect(() => {
+    const unsub = globalEventBus.on<{ varName: string }>('minislib:deleteEntity', ({ varName }) => {
+      handleDeleteEntity(varName);
+    });
+    return unsub;
+  }, [handleDeleteEntity]);
+
   const selectedEntity = selectedEntityId ? entities.find((e) => e.id === selectedEntityId) ?? null : null;
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2645,6 +4018,7 @@ function VisualMinisLibPanel() {
           <AddNodeMenu uri={uri} externalClassDefs={externalClassDefs} importedClasses={importedClasses} entities={entities} />
         </Box>
         <NewClassButton uri={uri} onCreated={(varName) => { pendingSelectName.current = varName; }} />
+        <ImportButton uri={uri} entities={entities} />
         <SaveSourceButton uri={uri} />
         <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
           <IconButton size="small" onClick={toggleFullscreen} sx={{ px: 1, borderLeft: '1px solid #313244', borderRadius: 0, color: '#585b70', '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}>
@@ -2663,59 +4037,75 @@ function VisualMinisLibPanel() {
           </Typography>
         </Box>
       ) : (
-        <>
-      {/* ReactFlow canvas */}
-      <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }} onContextMenu={(e) => e.preventDefault()}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={NODE_TYPES}
-          onNodesChange={(changes: NodeChange[]) => setNodes((ns) => applyNodeChanges(changes, ns))}
-          onEdgesChange={handleEdgesChange}
-          onConnect={handleConnect}
-          onNodeClick={handleNodeClick}
-          onNodeDragStop={handleNodeDragStop}
-          defaultViewport={_savedViewport ?? { x: 0, y: 0, zoom: 1 }}
-          fitView={_savedViewport === null}
-          fitViewOptions={{ padding: 0.2 }}
-          onMoveEnd={(_, vp) => { _savedViewport = vp; }}
-          minZoom={0.3}
-          maxZoom={2}
-          proOptions={{ hideAttribution: true }}
-          style={{ background: '#181825' }}
-        >
-          <Background color="#313244" variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <Controls style={{ background: '#1e1e2e', border: '1px solid #313244' }} showInteractive={false} />
-        </ReactFlow>
-        {edges.some((e) => e.selected) && (
-          <Box sx={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 10, display: 'flex', alignItems: 'center', gap: 0.5, background: '#313244', border: '1px solid #45475a', borderRadius: 1, px: 1, py: 0.5 }}>
-            <Typography sx={{ fontSize: 11, color: '#cdd6f4' }}>Connection selected</Typography>
-            <Tooltip title="Delete connection">
-              <IconButton size="small" onClick={() => handleEdgesChange(edges.filter((e) => e.selected).map((e) => ({ type: 'remove' as const, id: e.id })))} sx={{ color: '#f38ba8', p: 0.25 }}>
-                <CloseIcon sx={{ fontSize: 14 }} />
-              </IconButton>
-            </Tooltip>
+        <Box sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+          {/* Left: collapsible scene tree */}
+          <NodeTreePanel
+            entities={entities}
+            currentCode={currentCode}
+            uri={uri}
+            selectedEntityId={selectedEntityId}
+            onSelectEntity={(id) => setSelectedEntityId((prev) => (prev === id ? null : id))}
+            importedClasses={importedClasses}
+          />
+
+          {/* Right: ReactFlow canvas + properties + snippets */}
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+            {/* ReactFlow canvas */}
+            <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }} onContextMenu={(e) => e.preventDefault()}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={NODE_TYPES}
+                onNodesChange={(changes: NodeChange[]) => setNodes((ns) => applyNodeChanges(changes, ns))}
+                onNodesDelete={(deleted) => {
+                  for (const n of deleted) handleDeleteEntity((n.data as MinisNodeData).entity.varName);
+                }}
+                onEdgesChange={handleEdgesChange}
+                onConnect={handleConnect}
+                onNodeClick={handleNodeClick}
+                onNodeDragStop={handleNodeDragStop}
+                defaultViewport={_savedViewport ?? { x: 0, y: 0, zoom: 1 }}
+                fitView={_savedViewport === null}
+                fitViewOptions={{ padding: 0.2 }}
+                onMoveEnd={(_, vp) => { _savedViewport = vp; }}
+                minZoom={0.3}
+                maxZoom={2}
+                proOptions={{ hideAttribution: true }}
+                style={{ background: '#181825' }}
+              >
+                <Background color="#313244" variant={BackgroundVariant.Dots} gap={16} size={1} />
+                <Controls style={{ background: '#1e1e2e', border: '1px solid #313244' }} showInteractive={false} />
+              </ReactFlow>
+              {edges.some((e) => e.selected) && (
+                <Box sx={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 10, display: 'flex', alignItems: 'center', gap: 0.5, background: '#313244', border: '1px solid #45475a', borderRadius: 1, px: 1, py: 0.5 }}>
+                  <Typography sx={{ fontSize: 11, color: '#cdd6f4' }}>Connection selected</Typography>
+                  <Tooltip title="Delete connection">
+                    <IconButton size="small" onClick={() => handleEdgesChange(edges.filter((e) => e.selected).map((e) => ({ type: 'remove' as const, id: e.id })))} sx={{ color: '#f38ba8', p: 0.25 }}>
+                      <CloseIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              )}
+            </Box>
+
+            {/* Properties / class builder — shown when a node is selected */}
+            {selectedEntity && (
+              selectedEntity.kind === 'class'
+                ? <ClassBuilderPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
+                : <PropertiesPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
+            )}
+
+            {/* Generated snippets */}
+            {snippets.length > 0 && (
+              <Box sx={{ borderTop: '1px solid #313244', maxHeight: 130, overflowY: 'auto', background: '#13131e' }}>
+                <Typography sx={{ fontSize: 10, color: '#45475a', px: 1.5, py: 0.5, letterSpacing: 1, textTransform: 'uppercase' }}>
+                  Generated
+                </Typography>
+                {snippets.map((s) => <SnippetRow key={s.id} snippet={s} />)}
+              </Box>
+            )}
           </Box>
-        )}
-      </Box>
-
-      {/* Properties / class builder — shown when a node is selected */}
-      {selectedEntity && (
-        selectedEntity.kind === 'class'
-          ? <ClassBuilderPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
-          : <PropertiesPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
-      )}
-
-      {/* Generated snippets */}
-      {snippets.length > 0 && (
-        <Box sx={{ borderTop: '1px solid #313244', maxHeight: 130, overflowY: 'auto', background: '#13131e' }}>
-          <Typography sx={{ fontSize: 10, color: '#45475a', px: 1.5, py: 0.5, letterSpacing: 1, textTransform: 'uppercase' }}>
-            Generated
-          </Typography>
-          {snippets.map((s) => <SnippetRow key={s.id} snippet={s} />)}
         </Box>
-      )}
-        </>
       )}
     </Box>
     </MinisContainerCtx.Provider>
