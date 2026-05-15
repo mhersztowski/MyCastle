@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { loadPlugins, unloadPlugins } from './PluginLoader';
+import { setSecretsOwner } from './secretsOwner';
 
 export interface PluginContextValue {
   /** Increments every time a plugin load cycle completes. 0 = not loaded yet. */
@@ -17,6 +18,12 @@ export function PluginProvider({ children }: { children: React.ReactNode }) {
   const { currentUser, token, isAdmin } = useAuth();
   const loadedForUser = useRef<string | null>(null);
   const [pluginsVersion, setPluginsVersion] = useState(0);
+
+  // Default plugin-secrets owner = the logged-in user. Cross-user pages
+  // override this for their subtree via <SecretsOwnerScope>.
+  useEffect(() => {
+    setSecretsOwner(currentUser?.name ?? null);
+  }, [currentUser]);
 
   useEffect(() => {
     const userName = currentUser?.name ?? null;

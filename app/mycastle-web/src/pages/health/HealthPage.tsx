@@ -36,7 +36,7 @@ interface ExerciseDef {
   plannedSetReps: number[];   // one entry per set, e.g. [12, 10, 8]
   plannedWeight?: number;
   description?: string;
-  photo?: string;             // base64 data URL
+  photo?: string;             // base64 data URL or external image URL
   notes?: string;
 }
 
@@ -209,6 +209,16 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
               </FormControl>
             </Box>
           </Box>
+
+          <TextField
+            label="Photo URL"
+            value={photo && !photo.startsWith('data:') ? photo : ''}
+            onChange={e => setPhoto(e.target.value || undefined)}
+            size="small"
+            placeholder="https://… (or use the thumbnail above to upload a file)"
+            helperText={photo?.startsWith('data:') ? 'Uploaded file in use — clear it to paste a URL instead' : undefined}
+            disabled={photo?.startsWith('data:')}
+          />
 
           <TextField
             label="Description"
@@ -564,11 +574,15 @@ const SessionCard: React.FC<SessionCardProps> = ({ session, programs, onDelete }
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const HealthPage: React.FC = () => {
-  const { readFile, writeFile } = useFilesystem();
+  const { readFile, writeFile, isDataLoaded } = useFilesystem();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [tab, setTab] = useState(0);
+
+  // Gate that prevents auto-save from overwriting on-disk data before the
+  // initial read has completed. Set to true only after readFile finishes.
+  const hasLoadedRef = useRef(false);
 
   // Debounced save — reads latest data from ref so closures never go stale
   const saveDataRef = useRef<{ programs: TrainingProgram[]; sessions: WorkoutSession[] }>({ programs: [], sessions: [] });
@@ -577,6 +591,7 @@ const HealthPage: React.FC = () => {
   useEffect(() => { writeFileRef.current = writeFile; }, [writeFile]);
 
   const scheduleSave = useCallback((programs: TrainingProgram[], sessions: WorkoutSession[]) => {
+    if (!hasLoadedRef.current) return;
     saveDataRef.current = { programs, sessions };
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
@@ -612,8 +627,11 @@ const HealthPage: React.FC = () => {
   const [deleteSession, setDeleteSession] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success'|'error' }>({ open: false, message: '', severity: 'success' });
 
-  // Load
+  // Load — wait until FilesystemService has built the directory tree, otherwise
+  // readFile returns null even when the file exists on disk, and the first
+  // auto-save would clobber it with an empty/partial state.
   useEffect(() => {
+    if (!isDataLoaded || hasLoadedRef.current) return;
     readFile(HEALTH_PATH).then(file => {
       if (file) {
         try {
@@ -622,8 +640,11 @@ const HealthPage: React.FC = () => {
           setSessions(data.sessions ?? []);
         } catch { /* fresh */ }
       }
-    }).finally(() => setLoading(false));
-  }, [readFile]);
+    }).finally(() => {
+      hasLoadedRef.current = true;
+      setLoading(false);
+    });
+  }, [readFile, isDataLoaded]);
 
 
   // Program CRUD

@@ -19,6 +19,9 @@ import type { PygameService } from './modules/pygame/index.js';
 import type { PicoSdkService } from './modules/picosdk/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
 import type { PluginService } from './modules/plugins/PluginService.js';
+import type { BackendPluginService } from './modules/plugins/BackendPluginService.js';
+import type { PluginRequestContext } from './modules/plugins/backendPluginTypes.js';
+import type { SecretsService } from './modules/secrets/SecretsService.js';
 
 interface CrudConfig {
   filePath: string;
@@ -63,6 +66,8 @@ export class MycastleHttpServer extends HttpUploadServer {
   private pygameService: PygameService | null;
   private picoSdkService: PicoSdkService | null = null;
   private pluginService: PluginService | null = null;
+  private backendPluginService: BackendPluginService | null = null;
+  private secretsService: SecretsService | null = null;
   private rootDir: string | null;
   private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
@@ -80,7 +85,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -90,6 +95,8 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.pygameService = pygameService ?? null;
     this.picoSdkService = picoSdkService ?? null;
     this.pluginService = pluginService ?? null;
+    this.backendPluginService = backendPluginService ?? null;
+    this.secretsService = secretsService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.ownStaticDir = staticDir ?? null;
     this.resolveSwaggerUiDir();
@@ -155,6 +162,116 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
 
     await super.handleRequest(req, res);
+  }
+
+  /**
+   * Dispatches `/api/users/{owner}/{basePath}/*` to a loaded backend plugin route.
+   * `basePath` is the plugin's friendly URL segment (from its manifest, default = plugin id),
+   * or the collision-proof `plugin/{pluginId}` fallback. Returns true if the request was
+   * handled (response sent).
+   *
+   * Called twice per request: pre-auth with `user = null` (only `public` routes match),
+   * and post-auth with the authenticated user (non-public routes, with an ownership check).
+   * A non-public route reached pre-auth returns false so the normal auth gate runs;
+   * a path owned by no plugin returns false so core routing takes over.
+   */
+  private async tryBackendPlugin(
+    req: IncomingMessage,
+    res: ServerResponse,
+    apiPath: string,
+    method: string,
+    user: AuthTokenPayload | null,
+  ): Promise<boolean> {
+    if (!this.backendPluginService) return false;
+    const m = apiPath.match(/^\/users\/([^/]+)\/(.+)$/);
+    if (!m) return false;
+
+    const owner = decodeURIComponent(m[1]);
+    const rest = m[2]; // path after /api/users/{owner}/ — e.g. "google-photos/auth-url"
+
+    const route = this.backendPluginService.matchRoute(owner, method, rest);
+    if (!route) return false;
+
+    if (!route.public) {
+      if (!user) return false; // defer to the auth gate
+      if (user.userName !== owner && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return true;
+      }
+    }
+
+    let body: unknown;
+    if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+      try {
+        body = await this.parseRequestBody(req);
+      } catch {
+        body = undefined;
+      }
+    }
+
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const ctx: PluginRequestContext = {
+      req,
+      res,
+      method,
+      query: url.searchParams,
+      body,
+      user: user ?? null,
+      ownerUserName: owner,
+      json: (status, data) => this.sendJsonResponse(res, status, data),
+      text: (status, b, contentType = 'text/plain; charset=utf-8') => {
+        res.writeHead(status, { 'Content-Type': contentType });
+        res.end(b);
+      },
+      redirect: (location) => {
+        res.writeHead(302, { Location: location });
+        res.end();
+      },
+    };
+
+    await this.backendPluginService.invokeRoute(route, ctx);
+    return true;
+  }
+
+  /**
+   * Fetch JSON from the Immich server with retry on transient failures.
+   * Immich behind a reverse proxy intermittently returns 5xx or HTML error
+   * pages; we retry a few times before surfacing a 502 so the gallery does not
+   * fail on a single flaky upstream response.
+   */
+  private async immichFetchJson(
+    url: string,
+    init: Parameters<typeof fetch>[1],
+    maxTries = 3,
+  ): Promise<{ status: number; data: unknown }> {
+    let lastError = 'unknown error';
+    for (let attempt = 0; attempt < maxTries; attempt++) {
+      try {
+        const resp = await fetch(url, init);
+        const text = await resp.text();
+        const looksHtml = text.trimStart().startsWith('<');
+        // Transient upstream failure (proxy 5xx or HTML error page) — retry.
+        if ((resp.status >= 500 || looksHtml) && attempt < maxTries - 1) {
+          lastError = looksHtml ? `non-JSON response (status ${resp.status})` : `upstream ${resp.status}`;
+          await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+          continue;
+        }
+        if (looksHtml) {
+          return { status: 502, data: { error: `Immich returned a non-JSON response (status ${resp.status})` } };
+        }
+        try {
+          return { status: resp.status, data: JSON.parse(text) };
+        } catch {
+          return { status: 502, data: { error: 'Immich returned invalid JSON' } };
+        }
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : 'fetch error';
+        if (attempt < maxTries - 1) {
+          await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+        }
+      }
+    }
+    return { status: 502, data: { error: `Immich proxy failed: ${lastError}` } };
   }
 
   private async handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -264,13 +381,12 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (apiPath === '/immich/login' && method === 'POST') {
       try {
         const body = await this.parseRequestBody(req) as { immichUrl: string; email: string; password: string };
-        const resp = await fetch(`${body.immichUrl}/api/auth/login`, {
+        const { status, data } = await this.immichFetchJson(`${body.immichUrl}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: body.email, password: body.password }),
         });
-        const data = await resp.json();
-        this.sendJsonResponse(res, resp.status, data);
+        this.sendJsonResponse(res, status, data);
       } catch (e) {
         this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
       }
@@ -279,32 +395,22 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     // GET /api/immich/albums?immichUrl=...&accessToken=...
     if (apiPath === '/immich/albums' && method === 'GET') {
-      try {
-        const p = new URL(req.url!, 'http://localhost').searchParams;
-        const resp = await fetch(`${p.get('immichUrl')}/api/albums`, {
-          headers: { Authorization: `Bearer ${p.get('accessToken')}` },
-        });
-        const data = await resp.json();
-        this.sendJsonResponse(res, resp.status, data);
-      } catch (e) {
-        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
-      }
+      const p = new URL(req.url!, 'http://localhost').searchParams;
+      const { status, data } = await this.immichFetchJson(`${p.get('immichUrl')}/api/albums`, {
+        headers: { Authorization: `Bearer ${p.get('accessToken')}` },
+      });
+      this.sendJsonResponse(res, status, data);
       return;
     }
 
     // GET /api/immich/albums/:albumId?immichUrl=...&accessToken=...
     const albumMatch = apiPath.match(/^\/immich\/albums\/([^/]+)$/);
     if (albumMatch && method === 'GET') {
-      try {
-        const p = new URL(req.url!, 'http://localhost').searchParams;
-        const resp = await fetch(`${p.get('immichUrl')}/api/albums/${albumMatch[1]}`, {
-          headers: { Authorization: `Bearer ${p.get('accessToken')}` },
-        });
-        const data = await resp.json();
-        this.sendJsonResponse(res, resp.status, data);
-      } catch (e) {
-        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
-      }
+      const p = new URL(req.url!, 'http://localhost').searchParams;
+      const { status, data } = await this.immichFetchJson(`${p.get('immichUrl')}/api/albums/${albumMatch[1]}`, {
+        headers: { Authorization: `Bearer ${p.get('accessToken')}` },
+      });
+      this.sendJsonResponse(res, status, data);
       return;
     }
 
@@ -497,11 +603,155 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Plugin secrets — GET a single value. Public route: a `shared` secret is
+    // readable by anyone (incl. anonymously, e.g. a viewer of the owner's page);
+    // a private secret requires owner/admin auth. List/write/delete are auth-only.
+    const secretGetMatch = apiPath.match(/^\/users\/([^/]+)\/plugin-secrets\/([^/]+)\/([^/]+)$/);
+    if (secretGetMatch && method === 'GET') {
+      const owner = decodeURIComponent(secretGetMatch[1]);
+      const pluginId = decodeURIComponent(secretGetMatch[2]);
+      const key = decodeURIComponent(secretGetMatch[3]);
+      if (!this.secretsService) {
+        this.sendJsonResponse(res, 503, { error: 'Secrets service not available' });
+        return;
+      }
+      const secret = await this.secretsService.get(owner, pluginId, key);
+      if (!secret) {
+        this.sendJsonResponse(res, 404, { error: 'Secret not found' });
+        return;
+      }
+      if (!secret.shared) {
+        const u = checkAuth(req, this.jwtService, this.apiKeyService);
+        if (!u) {
+          this.sendJsonResponse(res, 401, { error: 'Unauthorized' });
+          return;
+        }
+        if (u.userName !== owner && !u.isAdmin) {
+          this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+          return;
+        }
+      }
+      this.sendJsonResponse(res, 200, { key, value: secret.value, shared: secret.shared });
+      return;
+    }
+
+    // Backend plugin routes marked `public` (e.g. OAuth callbacks) — handled before auth.
+    if (await this.tryBackendPlugin(req, res, apiPath, method, null)) return;
+
     // --- Protected endpoints (auth required) ---
 
     const user = checkAuth(req, this.jwtService, this.apiKeyService);
     if (!user) {
       this.sendJsonResponse(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+
+    // Backend plugin routes requiring auth — dispatched to the owning user's plugin.
+    if (await this.tryBackendPlugin(req, res, apiPath, method, user)) return;
+
+    // Backend plugins: GET /users/{userName}/backend-plugins — loaded + available plugins
+    const backendPluginsListMatch = apiPath.match(/^\/users\/([^/]+)\/backend-plugins$/);
+    if (backendPluginsListMatch && method === 'GET') {
+      const targetUser = decodeURIComponent(backendPluginsListMatch[1]);
+      if (user.userName !== targetUser && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.backendPluginService) {
+        this.sendJsonResponse(res, 200, { loaded: [], available: [] });
+        return;
+      }
+      const loaded = this.backendPluginService.getLoadedForUser(targetUser);
+      const available = await this.backendPluginService.listPlugins(targetUser);
+      this.sendJsonResponse(res, 200, { loaded, available });
+      return;
+    }
+
+    // Backend plugins: POST /users/{userName}/backend-plugins/{pluginId}/reload — rebuild + reactivate
+    const backendPluginReloadMatch = apiPath.match(/^\/users\/([^/]+)\/backend-plugins\/([^/]+)\/reload$/);
+    if (backendPluginReloadMatch && method === 'POST') {
+      const targetUser = decodeURIComponent(backendPluginReloadMatch[1]);
+      const pluginId = decodeURIComponent(backendPluginReloadMatch[2]);
+      if (user.userName !== targetUser && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.backendPluginService) {
+        this.sendJsonResponse(res, 503, { error: 'Backend plugin service not available' });
+        return;
+      }
+      const ok = await this.backendPluginService.reloadPlugin(targetUser, pluginId);
+      this.sendJsonResponse(res, ok ? 200 : 404,
+        ok ? { ok: true } : { error: `Plugin ${pluginId} not found or failed to load` });
+      return;
+    }
+
+    // Plugin secrets — list keys + metadata (owner or admin only; values not returned)
+    const secretListMatch = apiPath.match(/^\/users\/([^/]+)\/plugin-secrets\/([^/]+)$/);
+    if (secretListMatch && method === 'GET') {
+      const owner = decodeURIComponent(secretListMatch[1]);
+      const pluginId = decodeURIComponent(secretListMatch[2]);
+      if (user.userName !== owner && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.secretsService) {
+        this.sendJsonResponse(res, 503, { error: 'Secrets service not available' });
+        return;
+      }
+      const items = await this.secretsService.list(owner, pluginId);
+      this.sendJsonResponse(res, 200, { items });
+      return;
+    }
+
+    // Plugin secrets — write / delete a single key (owner or admin only)
+    const secretWriteMatch = apiPath.match(/^\/users\/([^/]+)\/plugin-secrets\/([^/]+)\/([^/]+)$/);
+    if (secretWriteMatch && (method === 'PUT' || method === 'DELETE')) {
+      const owner = decodeURIComponent(secretWriteMatch[1]);
+      const pluginId = decodeURIComponent(secretWriteMatch[2]);
+      const key = decodeURIComponent(secretWriteMatch[3]);
+      if (user.userName !== owner && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.secretsService) {
+        this.sendJsonResponse(res, 503, { error: 'Secrets service not available' });
+        return;
+      }
+      if (method === 'DELETE') {
+        await this.secretsService.delete(owner, pluginId, key);
+        this.sendJsonResponse(res, 200, { ok: true });
+        return;
+      }
+      const body = await this.parseRequestBody(req) as { value?: unknown; shared?: boolean };
+      if (typeof body.value !== 'string') {
+        this.sendJsonResponse(res, 400, { error: 'value (string) is required' });
+        return;
+      }
+      await this.secretsService.set(owner, pluginId, key, body.value, body.shared === true);
+      this.sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    // Cross-user Markdown read: GET /users/{userName}/md/{path} — lets any
+    // authenticated user view another user's Markdown page (read-only). Powers
+    // the /viewer/md/u/:userName/* route so embedded Plugin Script blocks can
+    // run against the page owner's shared secrets.
+    const mdReadMatch = apiPath.match(/^\/users\/([^/]+)\/md\/(.+)$/);
+    if (mdReadMatch && method === 'GET') {
+      const targetUser = decodeURIComponent(mdReadMatch[1]);
+      const relPath = decodeURIComponent(mdReadMatch[2]);
+      // Reject path traversal; only .md files under the user's md/ directory.
+      if (relPath.includes('..') || !relPath.endsWith('.md')) {
+        this.sendJsonResponse(res, 400, { error: 'Invalid path' });
+        return;
+      }
+      try {
+        const file = await this.fileSystem.readFile(`Minis/Users/${targetUser}/md/${relPath}`);
+        this.sendJsonResponse(res, 200, { content: file.content });
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'File not found' });
+      }
       return;
     }
 
@@ -590,14 +840,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Plugins: GET /users/{userName}/plugins — list manifests
+    // Plugins: GET /users/{userName}/plugins — list manifests.
+    // Readable by any authenticated user so the cross-user MD viewer can load
+    // the page owner's plugins (their Plugin Script namespaces).
     const pluginsListMatch = apiPath.match(/^\/users\/([^/]+)\/plugins$/);
     if (pluginsListMatch && method === 'GET') {
       const targetUser = decodeURIComponent(pluginsListMatch[1]);
-      if (user.userName !== targetUser && !user.isAdmin) {
-        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
-        return;
-      }
       if (!this.pluginService) {
         this.sendJsonResponse(res, 200, []);
         return;
@@ -607,15 +855,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
-    // Plugins: GET /users/{userName}/plugins/{pluginId}/bundle.js — built CJS bundle
+    // Plugins: GET /users/{userName}/plugins/{pluginId}/bundle.js — built CJS bundle.
+    // Readable by any authenticated user (see plugins-list note above).
     const pluginBundleMatch = apiPath.match(/^\/users\/([^/]+)\/plugins\/([^/]+)\/bundle\.js$/);
     if (pluginBundleMatch && method === 'GET') {
       const targetUser = decodeURIComponent(pluginBundleMatch[1]);
       const pluginId = decodeURIComponent(pluginBundleMatch[2]);
-      if (user.userName !== targetUser && !user.isAdmin) {
-        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
-        return;
-      }
       if (!this.pluginService) {
         this.sendJsonResponse(res, 404, { error: 'Plugin service not available' });
         return;

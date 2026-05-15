@@ -65,6 +65,7 @@ const UserDataEditorPage = lazy(() => import('./pages/workspace/UserDataEditorPa
 import SimpleEditorPage from './pages/editor/SimpleEditorPage';
 import MdEditorPage from './pages/editor/MdEditorPage';
 import MdViewerPage from './pages/viewer/MdViewerPage';
+import SharedMdViewerPage from './pages/viewer/SharedMdViewerPage';
 import UIDesignerPage from './pages/designer/UIDesignerPage';
 import FormEngineDesignerPage from './pages/designer/FormEngineDesignerPage';
 import AutomateDesignerPage from './pages/automate/AutomateDesignerPage';
@@ -164,10 +165,11 @@ function AppRoot() {
     <PageHooksRunner>
       <Routes>
         {/* Full-page routes without layout (mycastle) */}
-        <Route path="/workspace/md/*" element={<RequireAuth><MinimalTopBar><WorkspaceMdPage /></MinimalTopBar></RequireAuth>} />
+        <Route path="/workspace/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><WorkspaceMdPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/simple/*" element={<RequireAuth><MinimalTopBar><SimpleEditorPage /></MinimalTopBar></RequireAuth>} />
-        <Route path="/editor/md/*" element={<RequireAuth><MinimalTopBar><MdEditorPage /></MinimalTopBar></RequireAuth>} />
-        <Route path="/viewer/md/*" element={<RequireAuth><MinimalTopBar><MdViewerPage /></MinimalTopBar></RequireAuth>} />
+        <Route path="/editor/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdEditorPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        <Route path="/viewer/md/u/:userName/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><SharedMdViewerPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        <Route path="/viewer/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdViewerPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/ui/:id?" element={<RequireAuth><MinimalTopBar><UIDesignerPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/automate/:id?" element={<RequireAuth><MinimalTopBar><AutomateDesignerPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/form/*" element={<RequireAuth><MinimalTopBar><FormEngineDesignerPage /></MinimalTopBar></RequireAuth>} />

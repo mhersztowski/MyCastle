@@ -41,6 +41,7 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import LinkIcon from '@mui/icons-material/Link';
 import ExtensionIcon from '@mui/icons-material/Extension';
+import { pluginRegistry } from '../../../modules/web-plugins';
 
 interface CommandItem {
   title: string;
@@ -367,7 +368,7 @@ const commands: CommandItem[] = [
   },
   {
     title: 'Plugin Script',
-    description: 'Script with access to auth, http, reactive output',
+    description: 'Pusty blok skryptu (auth, http, md, table, reactive)',
     icon: <ExtensionIcon sx={{ color: '#7c4dff' }} />,
     command: ({ editor, range }) => {
       editor
@@ -382,6 +383,33 @@ const commands: CommandItem[] = [
     },
   },
 ];
+
+/**
+ * Slash-command items for every Plugin Script template contributed by a loaded
+ * web plugin (via `api.scripts.registerTemplate()`). Rebuilt on each `/` query so
+ * the list reflects whichever plugins are currently loaded.
+ */
+function buildPluginTemplateCommands(): CommandItem[] {
+  return pluginRegistry.getTemplates().map(({ pluginName, template }) => ({
+    title: `Plugin Script: ${template.label}`,
+    // Always lead the description with the source plugin so it's clear where the template comes from.
+    description: template.description
+      ? `${pluginName} — ${template.description}`
+      : `Szablon z pluginu ${pluginName}`,
+    icon: <ExtensionIcon sx={{ color: '#7c4dff' }} />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertPluginScript(template.code, {
+          mode: template.mode ?? 'manual',
+          label: template.label,
+        })
+        .run();
+    },
+  }));
+}
 
 interface CommandListProps {
   items: CommandItem[];
@@ -473,7 +501,10 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
         <List dense disablePadding>
           {items.length > 0 ? (
             items.map((item, index) => (
-              <ListItem key={item.title} disablePadding ref={(el) => { itemRefs.current[index] = el as HTMLDivElement | null; }}>
+              // Index key: plugin templates from different plugins can share a
+              // title (e.g. two galleries both contribute "Status polaczenia"),
+              // and duplicate keys leave stale ghost rows on filter changes.
+              <ListItem key={index} disablePadding ref={(el) => { itemRefs.current[index] = el as HTMLDivElement | null; }}>
                 <ListItemButton
                   selected={index === selectedIndex}
                   onClick={() => selectItem(index)}
@@ -541,7 +572,7 @@ function buildSuggestionConfig(
       props.command({ editor, range });
     },
     items: ({ query }) => {
-      const all = [pageCommand, ...commands];
+      const all = [pageCommand, ...commands, ...buildPluginTemplateCommands()];
       return all.filter((item) =>
         item.title.toLowerCase().startsWith(query.toLowerCase())
       );

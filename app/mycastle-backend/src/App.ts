@@ -13,6 +13,8 @@ import { PygameService } from './modules/pygame/index.js';
 import { PicoSdkService } from './modules/picosdk/index.js';
 import { LspProxyService } from './modules/lsp/LspProxyService.js';
 import { PluginService } from './modules/plugins/PluginService.js';
+import { BackendPluginService } from './modules/plugins/BackendPluginService.js';
+import { SecretsService } from './modules/secrets/SecretsService.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -51,6 +53,8 @@ export class App {
   readonly pygameService: PygameService;
   readonly picoSdkService: PicoSdkService | null;
   readonly pluginService: PluginService;
+  readonly backendPluginService: BackendPluginService;
+  readonly secretsService: SecretsService;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
   private lspProxyService!: LspProxyService;
@@ -109,6 +113,8 @@ export class App {
     if (!picoSdkDockerImage) console.log('PicoSdk service: not configured (set PICOSDK_DOCKER_IMAGE)');
 
     this.pluginService = new PluginService(config.rootDir);
+    this.backendPluginService = new BackendPluginService(config.rootDir);
+    this.secretsService = new SecretsService(config.rootDir);
 
     this.httpServer = new MycastleHttpServer(
       config.httpPort,
@@ -123,6 +129,8 @@ export class App {
       this.pygameService,
       this.picoSdkService,
       this.pluginService,
+      this.backendPluginService,
+      this.secretsService,
     );
   }
 
@@ -150,6 +158,9 @@ export class App {
 
     await this.apiKeyService.load();
     console.log('API key service loaded');
+
+    await this.secretsService.initialize();
+    console.log('Secrets service initialized');
 
     await this.dataSource.initialize();
     console.log('DataSource initialized:', this.dataSource.getStats());
@@ -250,6 +261,13 @@ export class App {
     });
     console.log('IoT service started (SQLite + MQTT)');
 
+    // Load user backend plugins (build + activate; routes dispatched by the HTTP server)
+    try {
+      await this.backendPluginService.loadAllUsers();
+    } catch (err) {
+      console.warn('BackendPluginService failed to load plugins:', err);
+    }
+
     this._mqttServer.setAutomateService(this.automateService);
 
     // Nightly cleanup of orphaned project directories (every day at 03:00 UTC)
@@ -332,6 +350,12 @@ export class App {
       this.iotService.stop();
     } catch (err) {
       console.warn('Error stopping IoT service:', err);
+    }
+
+    try {
+      await this.backendPluginService.shutdownAll();
+    } catch (err) {
+      console.warn('Error shutting down backend plugins:', err);
     }
 
     try {
