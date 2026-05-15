@@ -56,6 +56,7 @@ import {
   PhotoLibrary as PhotoLibraryIcon,
   AutoMode as AutoModeIcon,
   Notifications as NotificationsIcon,
+  FitnessCenter as FitnessCenterIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -141,6 +142,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'Calendar', icon: <CalendarMonthIcon />, path: `/user/${userName}/pim/calendar` },
             { text: 'To-Do List', icon: <ChecklistIcon />, path: `/user/${userName}/pim/todolist` },
             { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },
+            { text: 'Health', icon: <FitnessCenterIcon />, path: `/user/${userName}/pim/health` },
             { text: 'Persons', icon: <PersonIcon />, path: `/user/${userName}/pim/person` },
             { text: 'Projects', icon: <FolderIcon />, path: `/user/${userName}/pim/project` },
             { text: 'Agent', icon: <SmartToyIcon />, path: `/user/${userName}/pim/agent` },

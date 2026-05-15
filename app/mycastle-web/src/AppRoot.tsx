@@ -95,6 +95,7 @@ import ReceiptSettingsPage from './pages/settings/ReceiptSettingsPage';
 import PageHooksSettingsPage from './pages/settings/PageHooksSettingsPage';
 import CastleAgentPage from './pages/agent/CastleAgentPage';
 import ShoppingPage from './pages/shopping/ShoppingPage';
+import HealthPage from './pages/health/HealthPage';
 
 // Layout pages — minis
 import HomePage from './pages/HomePage';
@@ -257,6 +258,7 @@ function AppRoot() {
                   <Route path="/user/:userName/pim/person" element={<CastlePersonPage />} />
                   <Route path="/user/:userName/pim/project" element={<CastleProjectPage />} />
                   <Route path="/user/:userName/pim/shopping" element={<ShoppingPage />} />
+                  <Route path="/user/:userName/pim/health" element={<HealthPage />} />
                   <Route path="/user/:userName/pim/automate" element={<AutomateListPage />} />
                   <Route path="/user/:userName/pim/objectviewer" element={<ObjectViewerPage />} />
                   <Route path="/user/:userName/pim/components" element={<ComponentsPage />} />
