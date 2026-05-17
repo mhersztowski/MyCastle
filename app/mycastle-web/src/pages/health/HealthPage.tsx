@@ -1,15 +1,14 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Accordion, AccordionDetails, AccordionSummary,
-  Alert, Box, Button, ButtonGroup, Chip, CircularProgress,
+  Alert, Box, Button, Chip, CircularProgress,
   Collapse, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControl, IconButton, InputAdornment, InputLabel,
-  ListItemIcon, ListItemText, Menu, MenuItem, Paper,
+  MenuItem, Paper,
   Select, Snackbar, Tab, Table, TableBody, TableCell,
   TableHead, TableRow, Tabs, TextField, Tooltip, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DateRangeIcon from '@mui/icons-material/DateRange';
@@ -17,7 +16,6 @@ import DirectionsRunIcon from '@mui/icons-material/DirectionsRun';
 import EditIcon from '@mui/icons-material/Edit';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import FitnessCenterIcon from '@mui/icons-material/FitnessCenter';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { v4 as uuidv4 } from 'uuid';
@@ -693,9 +691,7 @@ const HealthPage: React.FC = () => {
   }, [programs, sessions, scheduleSave]);
 
   // Export
-  const [exportAnchor, setExportAnchor] = useState<null | HTMLElement>(null);
-
-  const buildExportText = useCallback(() => {
+  const buildProgramText = useCallback(() => {
     const lines: string[] = ['=== PROGRAMY TRENINGOWE ==='];
     programs.forEach((prog, pi) => {
       lines.push(`\n${pi + 1}. ${prog.name}${prog.description ? ` — ${prog.description}` : ''}`);
@@ -705,7 +701,11 @@ const HealthPage: React.FC = () => {
         lines.push(`   • ${ex.name} [${CATEGORY_LABELS[ex.category]}]: ${displayPlan(ex)}${!ex.plannedWeight ? ' (waga ciała)' : ''}`);
       });
     });
-    lines.push('', '=== DZIENNIK TRENINGÓW ===');
+    return lines.join('\n');
+  }, [programs]);
+
+  const buildWorkoutLogText = useCallback(() => {
+    const lines: string[] = ['=== DZIENNIK TRENINGÓW ==='];
     sessions.forEach(sess => {
       const prog = programs.find(p => p.id === sess.programId);
       lines.push(`\n📅 ${formatDate(sess.date)}${prog ? ` [${prog.name}]` : ''}`);
@@ -724,22 +724,19 @@ const HealthPage: React.FC = () => {
     return lines.join('\n');
   }, [programs, sessions]);
 
-  const handleExportJson = useCallback(() => {
-    setExportAnchor(null);
-    const blob = new Blob([JSON.stringify({ type: 'health_data', programs, sessions }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `health_${todayIso()}.json`; a.click();
-    URL.revokeObjectURL(url);
-    setSnackbar({ open: true, message: 'JSON downloaded', severity: 'success' });
-  }, [programs, sessions]);
-
-  const handleExportClipboard = useCallback(async () => {
-    setExportAnchor(null);
+  const handleExportProgram = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(buildExportText());
-      setSnackbar({ open: true, message: 'Copied to clipboard', severity: 'success' });
+      await navigator.clipboard.writeText(buildProgramText());
+      setSnackbar({ open: true, message: 'Program copied to clipboard', severity: 'success' });
     } catch { setSnackbar({ open: true, message: 'Failed to copy', severity: 'error' }); }
-  }, [buildExportText]);
+  }, [buildProgramText]);
+
+  const handleExportWorkoutLog = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildWorkoutLogText());
+      setSnackbar({ open: true, message: 'Workout log copied to clipboard', severity: 'success' });
+    } catch { setSnackbar({ open: true, message: 'Failed to copy', severity: 'error' }); }
+  }, [buildWorkoutLogText]);
 
   // Weekly summary
   interface WeekAgg { start: string; sessions: WorkoutSession[] }
@@ -763,14 +760,8 @@ const HealthPage: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}>
         <FitnessCenterIcon color="primary" />
         <Typography variant="h5" sx={{ flex: 1 }}>Health &amp; Fitness</Typography>
-        <ButtonGroup variant="outlined" size="small">
-          <Button startIcon={<FileDownloadIcon />} onClick={handleExportClipboard}>Export</Button>
-          <Button size="small" onClick={e => setExportAnchor(e.currentTarget)} sx={{ px: 0.5 }}><ArrowDropDownIcon fontSize="small" /></Button>
-        </ButtonGroup>
-        <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)}>
-          <MenuItem onClick={handleExportClipboard}><ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon><ListItemText primary="Copy to clipboard" secondary="Czytelny tekst dla AI" /></MenuItem>
-          <MenuItem onClick={handleExportJson}><ListItemIcon><FileDownloadIcon fontSize="small" /></ListItemIcon><ListItemText primary="Download JSON" secondary="Plik .json" /></MenuItem>
-        </Menu>
+        <Button variant="outlined" size="small" startIcon={<ContentCopyIcon />} onClick={handleExportProgram}>Export Program</Button>
+        <Button variant="outlined" size="small" startIcon={<ContentCopyIcon />} onClick={handleExportWorkoutLog}>Export Workout Log</Button>
         {saving
           ? <Chip icon={<CircularProgress size={12} />} label="Saving…" size="small" variant="outlined" />
           : savedAt && <Chip icon={<CheckCircleOutlineIcon />} label={`Saved ${savedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`} size="small" color="success" variant="outlined" />
@@ -892,7 +883,7 @@ const HealthPage: React.FC = () => {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 3 }}>
             {DAY_NAMES.map((dayName, dayIdx) => {
               const isToday = dayIdx === todayDayIndex();
-              const prog = programs.find(p => p.scheduledDays.includes(dayIdx));
+              const dayProgs = programs.filter(p => p.scheduledDays.includes(dayIdx));
               return (
                 <Paper key={dayIdx} variant="outlined"
                   sx={{ px: 2, py: 1, display: 'flex', alignItems: 'flex-start', gap: 2,
@@ -901,15 +892,19 @@ const HealthPage: React.FC = () => {
                     sx={{ minWidth: 100, pt: 0.5 }}>
                     {dayName}{isToday && <Chip label="today" size="small" color="primary" sx={{ ml: 1, height: 18, fontSize: 10 }} />}
                   </Typography>
-                  {prog ? (
-                    <Box>
-                      <Typography variant="body2" fontWeight={600}>{prog.name}</Typography>
-                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
-                        {prog.exercises.map(ex => (
-                          <Chip key={ex.id} label={`${ex.name} ${displayPlan(ex)}`}
-                            color={CATEGORY_COLORS[ex.category]} size="small" variant="outlined" />
-                        ))}
-                      </Box>
+                  {dayProgs.length > 0 ? (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1 }}>
+                      {dayProgs.map(prog => (
+                        <Box key={prog.id}>
+                          <Typography variant="body2" fontWeight={600}>{prog.name}</Typography>
+                          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
+                            {prog.exercises.map(ex => (
+                              <Chip key={ex.id} label={`${ex.name} ${displayPlan(ex)}`}
+                                color={CATEGORY_COLORS[ex.category]} size="small" variant="outlined" />
+                            ))}
+                          </Box>
+                        </Box>
+                      ))}
                     </Box>
                   ) : (
                     <Typography variant="body2" color="text.disabled" sx={{ fontStyle: 'italic', pt: 0.5 }}>rest day</Typography>
