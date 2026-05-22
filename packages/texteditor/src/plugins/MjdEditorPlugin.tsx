@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { defineEditorPlugin, globalEventBus, MjdVfsLoader } from '@mhersztowski/web-client';
+import { defineEditorPlugin, globalEventBus } from '../monaco';
+import { MjdVfsLoader } from '../mjd';
 import type { FileSystemProvider } from '@mhersztowski/core';
 
 const DEF_TAB_URI = 'virtual://mjd-def-editor';

@@ -54,7 +54,7 @@ import SeedIcon from '@mui/icons-material/AutoFixHigh';
 import CodeIcon from '@mui/icons-material/Code';
 import type { FileSystemProvider, DirectoryEntry } from '@mhersztowski/core';
 import { FileType } from '@mhersztowski/core';
-import { defineEditorPlugin, globalEventBus } from '@mhersztowski/web-client';
+import { defineEditorPlugin, globalEventBus } from '../monaco';
 
 /* ── Types ────────────────────────────────────────────────────────────────────*/
 

@@ -43,7 +43,7 @@ interface MountDialogState {
   error: string | null;
 }
 
-/* ── Icons (inline SVG to avoid @mui/icons-material dep in web-client) ── */
+/* ── Icons (inline SVG to avoid @mui/icons-material dep in texteditor core) ── */
 
 function AddIcon() {
   return (

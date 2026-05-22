@@ -59,7 +59,7 @@ import {
   applyEdgeChanges,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { defineEditorPlugin, globalEventBus, globalPluginRegistry } from '@mhersztowski/web-client';
+import { defineEditorPlugin, globalEventBus, globalPluginRegistry } from '../monaco';
 import * as Blockly from 'blockly';
 import { javascriptGenerator, Order } from 'blockly/javascript';
 import ToggleButton from '@mui/material/ToggleButton';
@@ -4273,8 +4273,11 @@ export const VisualMinisLibPlugin = defineEditorPlugin(
 
 // HMR: after Vite replaces this module, re-activate the plugin so the new closure
 // (new _state, new listeners) is used instead of the stale old one.
-if (import.meta.hot) {
-  import.meta.hot.accept(async () => {
+// `import.meta.hot` is only defined when this file is compiled directly by Vite
+// (app dev mode); shipped as a pre-built package it is undefined and this is a no-op.
+const _viteHot = (import.meta as { hot?: { accept(cb: () => void | Promise<void>): void } }).hot;
+if (_viteHot) {
+  _viteHot.accept(async () => {
     // Deactivate old plugin (disposes old listeners, resets old _state)
     await globalPluginRegistry.deactivate(PLUGIN_ID);
     // Replace with new plugin definition from this module evaluation

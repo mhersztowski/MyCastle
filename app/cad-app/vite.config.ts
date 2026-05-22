@@ -22,7 +22,7 @@ export default defineConfig({
       '@emotion/react': resolve(__dirname, 'node_modules/@emotion/react'),
       '@emotion/styled': resolve(__dirname, 'node_modules/@emotion/styled'),
     },
-    dedupe: ['react', 'react-dom', 'three', '@emotion/react', '@emotion/styled', '@mhersztowski/core'],
+    dedupe: ['react', 'react-dom', 'three', '@emotion/react', '@emotion/styled', '@mhersztowski/core', 'monaco-editor'],
   },
   assetsInclude: ['**/*.wasm'],
   optimizeDeps: {
@@ -30,6 +30,7 @@ export default defineConfig({
     // Exclude local workspace packages + opencascade.js (Emscripten module, incompatible with pre-bundling)
     exclude: [
       '@mhersztowski/web-client',
+      '@mhersztowski/texteditor',
       '@mhersztowski/core',
       '@mhersztowski/ui-core',
       '@mhersztowski/ui-components-scene3d',

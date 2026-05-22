@@ -35,7 +35,7 @@ import { EditorInstance } from '@mhersztowski/web-client';
 import { minisApi } from '../../services/MinisApiService';
 import { useAuth } from '../../modules/auth';
 import { AccountMenu } from '../../components/AccountMenu';
-import { CppIntelliSense } from '../../plugins/CppIntelliSensePlugin';
+import { CppIntelliSense } from '@mhersztowski/texteditor';
 
 // ── Language map ──────────────────────────────────────────────────────────────
 

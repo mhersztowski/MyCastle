@@ -20,7 +20,7 @@ import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/mat
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Project } from '@mhersztowski/core-cad';
 import type { SceneGraph } from '@mhersztowski/core-scene3d';
-import { readProject } from '../vfs/cadProjectApi';
+import { CAD_EXT, readFileAt, userProjectsDir } from '../vfs/cadProjectApi';
 import { loadProjectFromText } from '../io/CadExporter';
 import { cadProjectToSceneGraph } from '../bridge/CadToScene';
 
@@ -248,18 +248,21 @@ function VrCanvas({ sceneGraph }: { sceneGraph: SceneGraph }) {
 
 interface Props {
   projectName: string;
+  /** VFS directory the project lives in. Defaults to the user's projects dir. */
+  dir?: string;
 }
 
-export function VrViewerPage({ projectName }: Props) {
+export function VrViewerPage({ projectName, dir }: Props) {
   const [sceneGraph, setSceneGraph] = useState<SceneGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const baseDir = dir ?? userProjectsDir();
 
     async function load() {
       try {
-        const jsonText = await readProject(projectName);
+        const jsonText = await readFileAt(baseDir, projectName, CAD_EXT);
         if (cancelled) return;
         const proj = new Project();
         loadProjectFromText(jsonText, proj);
@@ -272,7 +275,7 @@ export function VrViewerPage({ projectName }: Props) {
 
     load();
     return () => { cancelled = true; };
-  }, [projectName]);
+  }, [projectName, dir]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>

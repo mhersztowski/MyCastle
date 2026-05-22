@@ -9,14 +9,9 @@ export * from './filesystem';
 // url helpers
 export { configureUrls, getHttpUrl, getMqttUrl } from './utils/urlHelper';
 
-// vfs — VFS UI components
-export * from './vfs';
-
-// monaco — Monaco Editor wrapper
-export * from './monaco';
+// text editor — Monaco editor stack (monaco/vfs/mjd + built-in plugins).
+// Moved to @mhersztowski/texteditor; re-exported here for backward compatibility.
+export * from '@mhersztowski/texteditor';
 
 // typedoc — TypeDoc JSON viewer
 export * from './typedoc';
-
-// mjd — MJD definition & data editors
-export * from './mjd';

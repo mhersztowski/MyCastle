@@ -7,6 +7,7 @@ import { SceneViewerPage } from './pages/SceneViewerPage';
 import { VrViewerPage } from './pages/VrViewerPage';
 import 'allotment/dist/style.css';
 import '@mhersztowski/ui-components-scene3d/styles.css';
+import '@mhersztowski/texteditor/dist/index.css';
 
 const theme = createTheme({
   palette: {
@@ -27,16 +28,18 @@ const theme = createTheme({
 });
 
 // Simple path-based routing without react-router.
-// /viewer/scene/:projectName  → SceneViewerPage
-// /viewer/vr/:projectName     → VrViewerPage
-// everything else             → App (editor)
+// /viewer/scene/:projectName?dir=  → SceneViewerPage
+// /viewer/vr/:projectName?dir=     → VrViewerPage
+// everything else                  → App (editor)
 const path = window.location.pathname;
 const sceneMatch = /^\/viewer\/scene\/(.+)$/.exec(path);
 const vrMatch    = /^\/viewer\/vr\/(.+)$/.exec(path);
+// Optional VFS directory the project lives in (defaults applied by the page).
+const viewerDir = new URLSearchParams(window.location.search).get('dir') ?? undefined;
 
 function Root() {
-  if (sceneMatch) return <SceneViewerPage projectName={decodeURIComponent(sceneMatch[1])} />;
-  if (vrMatch)    return <VrViewerPage    projectName={decodeURIComponent(vrMatch[1])} />;
+  if (sceneMatch) return <SceneViewerPage projectName={decodeURIComponent(sceneMatch[1])} dir={viewerDir} />;
+  if (vrMatch)    return <VrViewerPage    projectName={decodeURIComponent(vrMatch[1])} dir={viewerDir} />;
   return <App />;
 }
 

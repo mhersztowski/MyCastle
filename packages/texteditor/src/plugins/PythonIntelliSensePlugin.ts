@@ -1,6 +1,6 @@
 import * as monaco from 'monaco-editor';
 import type { FileSystemProvider } from '@mhersztowski/core';
-import type { IPlugin } from '@mhersztowski/web-client';
+import type { IPlugin } from '../monaco';
 
 // ── URI / VFS path helpers ────────────────────────────────────────────────────
 

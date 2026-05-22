@@ -17,7 +17,7 @@ import { useState, useEffect, type ReactNode } from 'react';
 import * as prod from 'react/jsx-runtime';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { defineEditorPlugin } from '@mhersztowski/web-client';
+import { defineEditorPlugin } from '../monaco';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';

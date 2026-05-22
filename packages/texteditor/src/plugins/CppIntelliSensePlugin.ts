@@ -28,7 +28,7 @@
 
 import * as monaco from 'monaco-editor';
 import type { FileSystemProvider } from '@mhersztowski/core';
-import type { IPlugin, IPluginManifest } from '@mhersztowski/web-client';
+import type { IPlugin, IPluginManifest } from '../monaco';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

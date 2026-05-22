@@ -11,31 +11,34 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { SimpleViewer, SceneDeserializer } from '@mhersztowski/core-scene3d';
 import type { SceneGraph } from '@mhersztowski/core-scene3d';
 import { Project } from '@mhersztowski/core-cad';
-import { readProject, readSceneProject } from '../vfs/cadProjectApi';
+import { CAD_EXT, SCENE_EXT, readFileAt, userProjectsDir } from '../vfs/cadProjectApi';
 import { loadProjectFromText } from '../io/CadExporter';
 import { cadProjectToSceneGraph } from '../bridge/CadToScene';
 
 interface Props {
   projectName: string;
+  /** VFS directory the project lives in. Defaults to the user's projects dir. */
+  dir?: string;
 }
 
-export function SceneViewerPage({ projectName }: Props) {
+export function SceneViewerPage({ projectName, dir }: Props) {
   const [sceneGraph, setSceneGraph] = useState<SceneGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const baseDir = dir ?? userProjectsDir();
 
     async function load() {
       try {
         // Prefer the saved Scene3D JSON (.scene.json); fall back to CAD conversion
         let graph: SceneGraph;
         try {
-          const sceneJson = await readSceneProject(projectName);
+          const sceneJson = await readFileAt(baseDir, projectName, SCENE_EXT);
           graph = SceneDeserializer.deserialize(sceneJson);
         } catch {
           // No .scene.json — convert from CAD project
-          const cadJson = await readProject(projectName);
+          const cadJson = await readFileAt(baseDir, projectName, CAD_EXT);
           if (cancelled) return;
           const proj = new Project();
           loadProjectFromText(cadJson, proj);
@@ -49,7 +52,7 @@ export function SceneViewerPage({ projectName }: Props) {
 
     load();
     return () => { cancelled = true; };
-  }, [projectName]);
+  }, [projectName, dir]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>

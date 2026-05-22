@@ -24,8 +24,8 @@ import IconButton from '@mui/material/IconButton';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { FileSystemProvider, DirectoryEntry } from '@mhersztowski/core';
 import { FileType } from '@mhersztowski/core';
-import type { IStatusBarItemHandle } from '@mhersztowski/web-client';
-import { defineEditorPlugin, globalEventBus } from '@mhersztowski/web-client';
+import type { IStatusBarItemHandle } from '../monaco';
+import { defineEditorPlugin, globalEventBus } from '../monaco';
 
 // ── VFS file cache ─────────────────────────────────────────────────────────────
 

@@ -8,8 +8,8 @@
  */
 
 import * as monaco from 'monaco-editor';
-import { defineEditorPlugin } from '@mhersztowski/web-client';
-import type { IPluginAPI } from '@mhersztowski/web-client';
+import { defineEditorPlugin } from '../monaco';
+import type { IPluginAPI } from '../monaco';
 
 /* ── LSP types (minimal subset) ─────────────────────────────────────────── */
 

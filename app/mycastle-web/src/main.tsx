@@ -37,7 +37,7 @@ import { useEffect } from 'react';
 import { useMqtt } from './modules/mqttclient';
 import { presenceService } from './services/PresenceService';
 import './global.css';
-import '@mhersztowski/web-client/dist/index.css';
+import '@mhersztowski/texteditor/dist/index.css';
 
 App.create();
 

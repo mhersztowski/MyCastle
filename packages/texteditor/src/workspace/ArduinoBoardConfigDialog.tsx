@@ -5,7 +5,7 @@ import {
   Typography, Chip, Box, Divider,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material';
-import type { VfsProjectContext } from '@mhersztowski/web-client';
+import type { VfsProjectContext } from '../vfs';
 
 // ---------------------------------------------------------------------------
 // Board option definitions (mirrors Arduino IDE Tools menu)

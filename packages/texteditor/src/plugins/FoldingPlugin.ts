@@ -1,4 +1,4 @@
-import { defineEditorPlugin } from '@mhersztowski/web-client';
+import { defineEditorPlugin } from '../monaco';
 import * as monaco from 'monaco-editor';
 
 // Languages with meaningful fold ranges in Monaco

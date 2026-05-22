@@ -9,6 +9,10 @@ import Looks3OutlinedIcon from '@mui/icons-material/Looks3Outlined';
 import LooksOneOutlinedIcon from '@mui/icons-material/LooksOneOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
+import CodeIcon from '@mui/icons-material/Code';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+import MinimizeIcon from '@mui/icons-material/Minimize';
 import { Project } from '@mhersztowski/core-cad';
 import type { Point2D, ViewMode } from '@mhersztowski/core-cad';
 import { CadCanvas } from './components/CadCanvas';
@@ -23,7 +27,9 @@ import { Toolbar } from './components/Toolbar';
 import { Cad3dView } from './components/Cad3dView';
 import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
+import { ResizeDivider } from './components/ResizeDivider';
 const AiPanel = lazy(() => import('./components/AiPanel').then(m => ({ default: m.AiPanel })));
+const CodeEditorPanel = lazy(() => import('./components/CodeEditorPanel').then(m => ({ default: m.CodeEditorPanel })));
 import { useProject } from './hooks/useProject';
 import type { ToolName } from './tools/types';
 
@@ -40,6 +46,10 @@ export default function App() {
   const [rightTab, setRightTab] = useState<RightTab>('layers');
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  // Code editor docked on the right of every mode — collapsed by default, opened via the </> button.
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorWidth, setEditorWidth] = useState(560);
+  const [editorFullscreen, setEditorFullscreen] = useState(false);
 
   const [aiSceneData, setAiSceneData] = useState<string | undefined>(undefined);
 
@@ -122,18 +132,29 @@ export default function App() {
           />
         </Tabs>
 
-        {/* AI toggle (all modes) */}
+        {/* AI + code-editor toggles (all modes) */}
         <Tooltip title={aiOpen ? 'Close AI assistant' : 'Open AI assistant'}>
           <IconButton
             size="small"
             onClick={() => setAiOpen(v => !v)}
             sx={{
               ml: mode === 'cad' ? 0 : 'auto',
-              mr: mode === 'cad' ? 0 : 1,
               color: aiOpen ? 'primary.main' : 'text.secondary',
             }}
           >
             <SmartToyOutlinedIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={editorOpen ? 'Close code editor' : 'Open code editor'}>
+          <IconButton
+            size="small"
+            onClick={() => setEditorOpen(v => !v)}
+            sx={{
+              mr: mode === 'cad' ? 0 : 1,
+              color: editorOpen ? 'primary.main' : 'text.secondary',
+            }}
+          >
+            <CodeIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
 
@@ -166,6 +187,10 @@ export default function App() {
           </Box>
         )}
       </Box>
+
+      {/* Workspace: mode panels (left) + toggleable code-editor side panel (right) */}
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
 
       {/* CAD panel */}
       <Box sx={{ flex: 1, display: mode === 'cad' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
@@ -297,6 +322,55 @@ export default function App() {
               <AiPanel project={project} version={version} />
             </Suspense>
           </Box>
+        )}
+      </Box>
+        </Box>
+
+        {/* Code editor — one shared instance; resizable, collapsible, full-screen */}
+        {editorOpen && (
+          <>
+            {!editorFullscreen && <ResizeDivider width={editorWidth} onResize={setEditorWidth} />}
+            <Box sx={
+              editorFullscreen
+                ? {
+                    position: 'fixed', inset: 0, zIndex: 1200,
+                    display: 'flex', flexDirection: 'column', bgcolor: 'background.paper',
+                  }
+                : {
+                    width: editorWidth, flexShrink: 0,
+                    display: 'flex', flexDirection: 'column',
+                    borderLeft: '1px solid rgba(255,255,255,0.08)',
+                    bgcolor: 'background.paper', overflow: 'hidden',
+                  }
+            }>
+              {/* Panel header */}
+              <Box sx={{
+                display: 'flex', alignItems: 'center', height: 28, px: 1, flexShrink: 0,
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+              }}>
+                <Box sx={{ fontSize: 11, fontFamily: 'monospace', color: 'text.secondary' }}>Editor</Box>
+                <Box sx={{ flex: 1 }} />
+                <Tooltip title="Minimize (reopen with the </> button)">
+                  <IconButton size="small" onClick={() => { setEditorFullscreen(false); setEditorOpen(false); }}>
+                    <MinimizeIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={editorFullscreen ? 'Exit full screen' : 'Full screen'}>
+                  <IconButton size="small" onClick={() => setEditorFullscreen(v => !v)}>
+                    {editorFullscreen
+                      ? <FullscreenExitIcon sx={{ fontSize: 16 }} />
+                      : <FullscreenIcon sx={{ fontSize: 16 }} />}
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              {/* Editor */}
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <Suspense fallback={null}>
+                  <CodeEditorPanel />
+                </Suspense>
+              </Box>
+            </Box>
+          </>
         )}
       </Box>
     </Box>

@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/core-backend" },
+    { "path": "./packages/texteditor" },
     { "path": "./packages/web-client" },
     { "path": "./packages/core-scene3d" },
     { "path": "./packages/ui-core" },

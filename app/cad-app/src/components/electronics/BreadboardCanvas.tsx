@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, IconButton, Tooltip, ToggleButton, ToggleButtonGroup } from '@mui/material';
 import NearMeIcon from '@mui/icons-material/NearMe';
 import CableIcon from '@mui/icons-material/Cable';
@@ -6,9 +6,17 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import UndoIcon from '@mui/icons-material/Undo';
-import { GRID, SNAP_RADIUS, WIRE_COLORS, type ComponentPlacement, type Wire, type WirePoint, type InteractionMode, type ElectronicsSchema } from '../../electronics/types';
+import Rotate90DegreesCwIcon from '@mui/icons-material/Rotate90DegreesCw';
+import FlipToFrontIcon from '@mui/icons-material/FlipToFront';
+import FlipToBackIcon from '@mui/icons-material/FlipToBack';
+import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
+import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
+import { GRID, SNAP_RADIUS, WIRE_COLORS, pinWorldCenter, rotationOffset, type ComponentPlacement, type Wire, type WirePoint, type InteractionMode, type ElectronicsSchema } from '../../electronics/types';
 import { getPartDef } from '../../electronics/partLibrary';
 import type { PartDef } from '../../electronics/types';
+import { ServerFileBrowser } from '../ServerFileBrowser';
+import { ElectronicsPropertiesPanel } from './ElectronicsPropertiesPanel';
+import { ELEC_EXT, readFileAt, writeFileAt } from '../../vfs/cadProjectApi';
 
 // ── Part renderer ─────────────────────────────────────────────────────────────
 
@@ -69,8 +77,8 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
         {part.pins.filter(p => p.x === 0).map(p => (
           <rect key={p.id} x={0} y={px(p.y)+GRID/2-3} width={px(0.5)} height={6} rx={1} fill="#c0c0c0" />
         ))}
-        {/* Right pin headers */}
-        {part.pins.filter(p => p.x === 3 || p.x === w-1).map(p => (
+        {/* Right pin headers — on the body's last column */}
+        {part.pins.filter(p => p.x === w-1).map(p => (
           <rect key={p.id} x={bodyX+bodyW} y={px(p.y)+GRID/2-3} width={px(0.5)} height={6} rx={1} fill="#c0c0c0" />
         ))}
         {/* Label */}
@@ -238,6 +246,40 @@ function PinDots({ part, activeWireMode, snapPinKey }: {
 
 function px(v: number) { return v * GRID; }
 
+// ── Pin labels (toggled per component via Properties) ─────────────────────────
+
+function PinLabels({ part, rotation }: { part: PartDef; rotation: number }) {
+  return (
+    <>
+      {part.pins.filter(p => p.label).map(p => {
+        const cx = px(p.x) + GRID / 2;
+        const cy = px(p.y) + GRID / 2;
+        // Counter-rotate each label so text stays upright whatever the
+        // component's rotation.
+        return (
+          <text
+            key={p.id}
+            x={cx}
+            y={cy}
+            transform={`rotate(${-rotation} ${cx} ${cy})`}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={7}
+            fontFamily="monospace"
+            fill="#4fc3f7"
+            stroke="#1a1a1a"
+            strokeWidth={2.5}
+            paintOrder="stroke"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {p.label}
+          </text>
+        );
+      })}
+    </>
+  );
+}
+
 // ── Snap helpers ──────────────────────────────────────────────────────────────
 
 interface SnapTarget { gx: number; gy: number; pinKey?: string; compId?: string }
@@ -249,23 +291,66 @@ function snapToNearest(
 ): SnapTarget {
   if (!wireMode) return { gx: Math.round(gx), gy: Math.round(gy) };
 
-  let best: SnapTarget = { gx: Math.round(gx), gy: Math.round(gy) };
+  // Pin centres, breadboard holes and the background dot grid all sit at
+  // half-cell offsets. A non-pin wire point must fall back to the floor()+0.5
+  // hole lattice — rounding to the integer cell corner left wires off-pin.
+  let best: SnapTarget = { gx: Math.floor(gx) + 0.5, gy: Math.floor(gy) + 0.5 };
   let bestDist = SNAP_RADIUS;
 
   for (const comp of components) {
     const part = getPartDef(comp.partId);
     if (!part) continue;
     for (const pin of part.pins) {
-      const px_ = comp.x + pin.x + 0.5;
-      const py_ = comp.y + pin.y + 0.5;
-      const dist = Math.hypot(gx - px_, gy - py_);
+      const c = pinWorldCenter(comp, part, pin);
+      const dist = Math.hypot(gx - c.x, gy - c.y);
       if (dist < bestDist) {
         bestDist = dist;
-        best = { gx: px_, gy: py_, pinKey: `${pin.x},${pin.y}`, compId: comp.id };
+        best = { gx: c.x, gy: c.y, pinKey: `${pin.x},${pin.y}`, compId: comp.id };
       }
     }
   }
   return best;
+}
+
+// ── Wire junction helpers ─────────────────────────────────────────────────────
+
+/** True if point p lies on segment a–b (small tolerance for float error). */
+function pointOnSegment(p: WirePoint, a: WirePoint, b: WirePoint): boolean {
+  const EPS = 0.05;
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const apx = p.x - a.x, apy = p.y - a.y;
+  const len2 = abx * abx + aby * aby;
+  if (len2 < EPS) return apx * apx + apy * apy < EPS;
+  const cross = apx * aby - apy * abx;
+  if ((cross * cross) / len2 > EPS) return false; // perpendicular distance too large
+  const t = (apx * abx + apy * aby) / len2;
+  return t >= -0.001 && t <= 1.001;
+}
+
+/** True if point p lies anywhere on the given wire's polyline. */
+function pointOnWire(p: WirePoint, wire: Wire): boolean {
+  for (let i = 0; i < wire.points.length - 1; i++) {
+    if (pointOnSegment(p, wire.points[i], wire.points[i + 1])) return true;
+  }
+  return false;
+}
+
+/** True if point p touches any of the given wires (electrical junction). */
+function isPointOnAnyWire(p: WirePoint, wires: Wire[]): boolean {
+  return wires.some(w => pointOnWire(p, w));
+}
+
+/** True if point p coincides with a component pin (pin centres are at half-cell). */
+function isPointOnAnyPin(p: WirePoint, components: ComponentPlacement[]): boolean {
+  for (const comp of components) {
+    const part = getPartDef(comp.partId);
+    if (!part) continue;
+    for (const pin of part.pins) {
+      const c = pinWorldCenter(comp, part, pin);
+      if (c.x === p.x && c.y === p.y) return true;
+    }
+  }
+  return false;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -289,13 +374,20 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<'component' | 'wire' | null>(null);
   const [wirePoints, setWirePoints] = useState<WirePoint[]>([]);
+  // Indices into wirePoints that connect to an existing wire (junctions).
+  const [wireJunctions, setWireJunctions] = useState<number[]>([]);
   const [wireColor, setWireColor] = useState(WIRE_COLORS[0]);
   const [cursorSnap, setCursorSnap] = useState<SnapTarget>({ gx: 0, gy: 0 });
   const [hoveredPinKey, setHoveredPinKey] = useState<{compId: string, pinKey: string} | null>(null);
+  // Rotation (degrees) applied to the next placed component (cycled with R in place mode).
+  const [placeRotation, setPlaceRotation] = useState(0);
 
   // View
   const [pan, setPan] = useState({ x: 40, y: 40 });
   const [zoom, setZoom] = useState(1);
+
+  // Server (VFS) open/save dialog
+  const [serverBrowser, setServerBrowser] = useState<'open' | 'save' | null>(null);
 
   // Drag refs (avoid stale closures)
   const dragRef = useRef<{
@@ -319,6 +411,8 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
   componentsRef.current = components;
   const wirePointsRef = useRef(wirePoints);
   wirePointsRef.current = wirePoints;
+  const wiresRef = useRef(wires);
+  wiresRef.current = wires;
   const wireColorRef = useRef(wireColor);
   wireColorRef.current = wireColor;
   const cursorSnapRef = useRef(cursorSnap);
@@ -327,6 +421,8 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
   panRef.current = pan;
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  const placeRotationRef = useRef(placeRotation);
+  placeRotationRef.current = placeRotation;
 
   // Resize observer
   useEffect(() => {
@@ -347,6 +443,8 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
       setSelectedId(null);
       setSelectedType(null);
       setWirePoints([]);
+      setWireJunctions([]);
+      setPlaceRotation(0);
     }
   }, [pendingPartId]);
 
@@ -360,12 +458,51 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
     return { gx: (sx - p.x) / (z * GRID), gy: (sy - p.y) / (z * GRID) };
   }, []);
 
+  // ── Z-order ─────────────────────────────────────────────────────────────────
+  // Render order = array order: an element later in the array is drawn on top.
+  // Moving the selected element toward the end raises its z-order, toward the
+  // start lowers it. Components and wires are independent layers.
+
+  const reorderSelected = useCallback((dir: 1 | -1) => {
+    if (!selectedId) return;
+    function step<T extends { id: string }>(arr: T[]): T[] {
+      const i = arr.findIndex(x => x.id === selectedId);
+      if (i < 0) return arr;
+      const j = i + dir;
+      if (j < 0 || j >= arr.length) return arr;
+      const next = arr.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    }
+    if (selectedType === 'component') setComponents(step);
+    else if (selectedType === 'wire') setWires(step);
+  }, [selectedId, selectedType]);
+
   // ── Keyboard ────────────────────────────────────────────────────────────────
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       if (modeRef.current === 'wire' && wirePointsRef.current.length > 0) {
+        // Esc finishes the wire immediately, trimmed back to the last point that
+        // connects to another wire or a pin (trailing free segments discarded).
+        const pts = wirePointsRef.current;
+        let lastConn = -1;
+        for (let i = 0; i < pts.length; i++) {
+          if (isPointOnAnyWire(pts[i], wiresRef.current) ||
+              isPointOnAnyPin(pts[i], componentsRef.current)) {
+            lastConn = i;
+          }
+        }
+        const finalPts = lastConn >= 1 ? pts.slice(0, lastConn + 1) : pts;
+        if (finalPts.length >= 2) {
+          setWires(ws => [...ws, {
+            id: crypto.randomUUID(),
+            points: finalPts,
+            color: wireColorRef.current,
+          }]);
+        }
         setWirePoints([]);
+        setWireJunctions([]);
       } else if (modeRef.current === 'place') {
         setMode('select');
         onPendingPartConsumed();
@@ -391,7 +528,34 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
         setComponents(cs => cs.slice(0, -1));
       }
     }
-  }, [selectedId, selectedType, wires, components, onPendingPartConsumed]);
+    if ((e.key === 'r' || e.key === 'R') && !(e.target instanceof HTMLInputElement)) {
+      // Place mode: rotate the ghost. Select mode: rotate the selected component.
+      if (modeRef.current === 'place') {
+        setPlaceRotation(r => (r + 90) % 360);
+      } else if (selectedId && selectedType === 'component') {
+        setComponents(cs => cs.map(c =>
+          c.id === selectedId ? { ...c, rotation: (c.rotation + 90) % 360 } : c
+        ));
+      }
+    }
+    if ((e.key === ']' || e.key === '[') && selectedId && !(e.target instanceof HTMLInputElement)) {
+      // ] raises z-order, [ lowers it — for the selected component or wire.
+      reorderSelected(e.key === ']' ? 1 : -1);
+    }
+  }, [selectedId, selectedType, wires, components, onPendingPartConsumed, reorderSelected]);
+
+  const rotateSelected = useCallback(() => {
+    if (!selectedId || selectedType !== 'component') return;
+    setComponents(cs => cs.map(c =>
+      c.id === selectedId ? { ...c, rotation: (c.rotation + 90) % 360 } : c
+    ));
+  }, [selectedId, selectedType]);
+
+  /** Patch the currently selected component (used by the Properties panel). */
+  const updateSelectedComponent = useCallback((updates: Partial<ComponentPlacement>) => {
+    if (!selectedId || selectedType !== 'component') return;
+    setComponents(cs => cs.map(c => (c.id === selectedId ? { ...c, ...updates } : c)));
+  }, [selectedId, selectedType]);
 
   // ── Mouse events ────────────────────────────────────────────────────────────
 
@@ -474,15 +638,18 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
         partId: pendingPartIdRef.current,
         x: Math.round(gx),
         y: Math.round(gy),
-        rotation: 0,
+        rotation: placeRotationRef.current,
       };
       setComponents(cs => [...cs, newComp]);
       // Stay in place mode (allow repeated placement)
     } else if (modeRef.current === 'wire') {
       const snap = snapToNearest(gx, gy, componentsRef.current, true);
+      const pt: WirePoint = { x: snap.gx, y: snap.gy };
+      const onWire = isPointOnAnyWire(pt, wiresRef.current);
       if (wirePointsRef.current.length === 0) {
         // Start new wire
-        setWirePoints([{ x: snap.gx, y: snap.gy }]);
+        setWirePoints([pt]);
+        setWireJunctions(onWire ? [0] : []);
       } else {
         // Add point or finish (double-click finishes)
         if (e.detail === 2 || (snap.compId && snap.pinKey && wirePointsRef.current.length > 0)) {
@@ -490,14 +657,17 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           if (wirePointsRef.current.length >= 1) {
             const newWire: Wire = {
               id: crypto.randomUUID(),
-              points: [...wirePointsRef.current, { x: snap.gx, y: snap.gy }],
+              points: [...wirePointsRef.current, pt],
               color: wireColorRef.current,
             };
             setWires(ws => [...ws, newWire]);
           }
           setWirePoints([]);
+          setWireJunctions([]);
         } else {
-          setWirePoints(pts => [...pts, { x: snap.gx, y: snap.gy }]);
+          const newIdx = wirePointsRef.current.length;
+          setWirePoints(pts => [...pts, pt]);
+          if (onWire) setWireJunctions(js => [...js, newIdx]);
         }
       }
     } else {
@@ -509,12 +679,13 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
 
   // Click on a component
   const handleComponentClick = useCallback((compId: string, e: React.MouseEvent) => {
+    // In wire/place mode the click must bubble to the canvas handler so a wire
+    // can start on a pin that sits on top of the component body.
+    if (modeRef.current !== 'select') return;
     e.stopPropagation();
     if (dragRef.current?.moved) return;
-    if (modeRef.current === 'select') {
-      setSelectedId(compId);
-      setSelectedType('component');
-    }
+    setSelectedId(compId);
+    setSelectedType('component');
   }, []);
 
   const handleComponentMouseDown = useCallback((compId: string, e: React.MouseEvent) => {
@@ -535,11 +706,12 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
   }, []);
 
   const handleWireClick = useCallback((wireId: string, e: React.MouseEvent) => {
+    // Let the click bubble in wire/place mode so a new wire can start on top
+    // of an existing one.
+    if (modeRef.current !== 'select') return;
     e.stopPropagation();
-    if (modeRef.current === 'select') {
-      setSelectedId(wireId);
-      setSelectedType('wire');
-    }
+    setSelectedId(wireId);
+    setSelectedType('wire');
   }, []);
 
   // ── Save / Load ──────────────────────────────────────────────────────────────
@@ -571,6 +743,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           setSelectedId(null);
           setSelectedType(null);
           setWirePoints([]);
+          setWireJunctions([]);
         } catch {
           alert('Invalid file format');
         }
@@ -587,6 +760,25 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
     setSelectedId(null);
     setSelectedType(null);
     setWirePoints([]);
+    setWireJunctions([]);
+  }, []);
+
+  // ── Server (VFS) Save / Load ──────────────────────────────────────────────────
+
+  const handleServerOpen = useCallback(async (dir: string, name: string) => {
+    const text = await readFileAt(dir, name, ELEC_EXT);
+    const schema = JSON.parse(text) as ElectronicsSchema;
+    setComponents(schema.components ?? []);
+    setWires(schema.wires ?? []);
+    setSelectedId(null);
+    setSelectedType(null);
+    setWirePoints([]);
+    setWireJunctions([]);
+  }, []);
+
+  const handleServerSave = useCallback(async (dir: string, name: string) => {
+    const schema: ElectronicsSchema = { version: 1, components: componentsRef.current, wires: wiresRef.current };
+    await writeFileAt(dir, name, ELEC_EXT, JSON.stringify(schema, null, 2));
   }, []);
 
   // ── Derived render values ──────────────────────────────────────────────────
@@ -594,11 +786,42 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
   const transformStr = `translate(${pan.x},${pan.y}) scale(${zoom})`;
   const inWireMode = mode === 'wire';
 
+  // Junction dots: a wire vertex that lies on another wire = electrical connection.
+  const junctionDots = useMemo(() => {
+    const out: { x: number; y: number; color: string }[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < wires.length; i++) {
+      for (const p of wires[i].points) {
+        for (let j = 0; j < wires.length; j++) {
+          if (i === j) continue;
+          if (pointOnWire(p, wires[j])) {
+            const key = `${p.x},${p.y}`;
+            if (!seen.has(key)) { seen.add(key); out.push({ x: p.x, y: p.y, color: wires[i].color }); }
+            break;
+          }
+        }
+      }
+    }
+    return out;
+  }, [wires]);
+
   // Pending part ghost (follows cursor)
   const pendingPart = pendingPartId ? getPartDef(pendingPartId) : null;
+  const ghostOffset = pendingPart
+    ? rotationOffset(pendingPart.width, pendingPart.height, placeRotation)
+    : { x: 0, y: 0 };
+
+  // Selected component fed to the Properties panel.
+  const selectedComponent = selectedType === 'component' && selectedId
+    ? components.find(c => c.id === selectedId) ?? null
+    : null;
+  const selectedComponentPart = selectedComponent
+    ? getPartDef(selectedComponent.partId) ?? null
+    : null;
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'row', flex: 1, overflow: 'hidden' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
       {/* Toolbar */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
@@ -612,7 +835,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
             if (v) {
               setMode(v);
               if (v !== 'place') onPendingPartConsumed();
-              if (v !== 'wire') setWirePoints([]);
+              if (v !== 'wire') { setWirePoints([]); setWireJunctions([]); }
             }
           }}
           size="small"
@@ -654,6 +877,29 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           </IconButton>
         </Tooltip>
 
+        <Tooltip title="Rotate selected 90° (R)">
+          <span>
+            <IconButton size="small" disabled={selectedType !== 'component'} onClick={rotateSelected}>
+              <Rotate90DegreesCwIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        <Tooltip title="Bring forward — raise z-order (])">
+          <span>
+            <IconButton size="small" disabled={!selectedId} onClick={() => reorderSelected(1)}>
+              <FlipToFrontIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Send backward — lower z-order ([)">
+          <span>
+            <IconButton size="small" disabled={!selectedId} onClick={() => reorderSelected(-1)}>
+              <FlipToBackIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+
         <Tooltip title="Delete selected (Del)">
           <span>
             <IconButton size="small" disabled={!selectedId} onClick={() => {
@@ -679,9 +925,19 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           </IconButton>
         </Tooltip>
 
-        <Box sx={{ display: 'flex', gap: 0.5, ml: 1 }}>
-          <Tooltip title="Open file"><IconButton size="small" onClick={handleLoad} sx={{ fontSize: 11, color: 'text.secondary' }}>Open</IconButton></Tooltip>
-          <Tooltip title="Save file"><IconButton size="small" onClick={handleSave} sx={{ fontSize: 11, color: 'text.secondary' }}>Save</IconButton></Tooltip>
+        <Box sx={{ display: 'flex', gap: 0.5, ml: 1, alignItems: 'center' }}>
+          <Tooltip title="Open from server">
+            <IconButton size="small" onClick={() => setServerBrowser('open')}>
+              <CloudDownloadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Save to server">
+            <IconButton size="small" onClick={() => setServerBrowser('save')}>
+              <CloudUploadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Open local file"><IconButton size="small" onClick={handleLoad} sx={{ fontSize: 11, color: 'text.secondary' }}>Open</IconButton></Tooltip>
+          <Tooltip title="Save local file"><IconButton size="small" onClick={handleSave} sx={{ fontSize: 11, color: 'text.secondary' }}>Save</IconButton></Tooltip>
           <Tooltip title="Clear all"><IconButton size="small" onClick={handleClear} sx={{ fontSize: 11, color: 'error.main' }}>Clear</IconButton></Tooltip>
         </Box>
       </Box>
@@ -699,10 +955,10 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           fontSize: 11, fontFamily: 'monospace', color: 'text.disabled',
           pointerEvents: 'none',
         }}>
-          {mode === 'place' && pendingPart && `Placing: ${pendingPart.name} — click to place · Esc to cancel`}
+          {mode === 'place' && pendingPart && `Placing: ${pendingPart.name} — click to place · R to rotate · Esc to cancel`}
           {mode === 'wire' && wirePoints.length === 0 && 'Wire mode — click on a pin or anywhere to start'}
-          {mode === 'wire' && wirePoints.length > 0 && `Wire in progress (${wirePoints.length} pts) — click to add point · double-click or click pin to finish · Esc to cancel`}
-          {mode === 'select' && selectedId && 'Del to delete · drag to move'}
+          {mode === 'wire' && wirePoints.length > 0 && `Wire in progress (${wirePoints.length} pts) — click to add point · double-click or click pin to finish · Esc finishes at last connection`}
+          {mode === 'select' && selectedId && (selectedType === 'component' ? 'Del to delete · drag to move · R to rotate · [ ] z-order' : 'Del to delete · [ ] z-order')}
         </Box>
 
         <svg
@@ -752,16 +1008,18 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
               if (!part) return null;
               const isSelected = selectedId === comp.id;
               const hpk = hoveredPinKey?.compId === comp.id ? hoveredPinKey.pinKey : null;
+              const off = rotationOffset(part.width, part.height, comp.rotation);
               return (
                 <g
                   key={comp.id}
-                  transform={`translate(${comp.x * GRID},${comp.y * GRID})`}
+                  transform={`translate(${(comp.x + off.x) * GRID},${(comp.y + off.y) * GRID}) rotate(${comp.rotation})`}
                   style={{ cursor: mode === 'select' ? 'pointer' : 'crosshair' }}
                   onClick={e => handleComponentClick(comp.id, e)}
                   onMouseDown={e => handleComponentMouseDown(comp.id, e)}
                 >
                   <PartBody part={part} w={part.width} h={part.height} selected={isSelected} />
                   <PinDots part={part} activeWireMode={inWireMode} snapPinKey={hpk} />
+                  {comp.showPinLabels && <PinLabels part={part} rotation={comp.rotation} />}
                 </g>
               );
             })}
@@ -785,6 +1043,24 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
               </>
             )}
 
+            {/* Junction dots — committed wire-to-wire connections */}
+            {junctionDots.map((d, i) => (
+              <circle key={`jd${i}`} cx={d.x * GRID} cy={d.y * GRID} r={4.5}
+                fill={d.color} stroke="#1a1a1a" strokeWidth={1.2}
+                style={{ pointerEvents: 'none' }} />
+            ))}
+
+            {/* Junction dots — in-progress wire connections */}
+            {inWireMode && wireJunctions.map(idx => {
+              const p = wirePoints[idx];
+              if (!p) return null;
+              return (
+                <circle key={`jp${idx}`} cx={p.x * GRID} cy={p.y * GRID} r={4.5}
+                  fill={wireColor} stroke="#1a1a1a" strokeWidth={1.2}
+                  style={{ pointerEvents: 'none' }} />
+              );
+            })}
+
             {/* Snap indicator */}
             {(inWireMode || mode === 'place') && (
               <circle
@@ -802,7 +1078,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
             {/* Ghost for component being placed */}
             {mode === 'place' && pendingPart && (
               <g
-                transform={`translate(${Math.round(cursorSnap.gx) * GRID},${Math.round(cursorSnap.gy) * GRID})`}
+                transform={`translate(${(Math.round(cursorSnap.gx) + ghostOffset.x) * GRID},${(Math.round(cursorSnap.gy) + ghostOffset.y) * GRID}) rotate(${placeRotation})`}
                 opacity={0.6}
                 style={{ pointerEvents: 'none' }}
               >
@@ -812,6 +1088,28 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           </g>
         </svg>
       </Box>
+      </Box>
+
+      {/* Properties panel — selected component */}
+      <ElectronicsPropertiesPanel
+        component={selectedComponent}
+        part={selectedComponentPart}
+        onChange={updateSelectedComponent}
+      />
+
+      {serverBrowser && (
+        <ServerFileBrowser
+          open
+          mode={serverBrowser}
+          title={serverBrowser === 'open' ? 'Open Schematic from Server' : 'Save Schematic to Server'}
+          extension={ELEC_EXT}
+          defaultName="breadboard"
+          storageKey="cad.electronicsBrowser.dir"
+          onClose={() => setServerBrowser(null)}
+          onOpen={handleServerOpen}
+          onSave={handleServerSave}
+        />
+      )}
     </Box>
   );
 }

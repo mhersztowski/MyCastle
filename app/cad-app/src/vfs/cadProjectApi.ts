@@ -2,7 +2,12 @@
  * Thin client for the cad-backend VFS REST API.
  *
  * Path convention (multi-user ready):
- *   /users/{userId}/projects/{name}.cad.json
+ *   /users/{userId}/projects/{name}{extension}
+ *
+ * Files may live in arbitrary sub-directories chosen by the user — every
+ * function is directory- and extension-aware so the same API serves CAD
+ * projects (`.cad.json`), Scene3D companions (`.scene.json`) and electronics
+ * schematics (`.elec.json`).
  *
  * For now userId defaults to 'default' (anonymous, single-user).
  * When auth is added, call setCurrentUserId() from the auth context.
@@ -12,6 +17,15 @@
  */
 
 const BASE = '/api/vfs';
+
+// ── file extensions ───────────────────────────────────────────────────────────
+
+/** CAD project file extension. */
+export const CAD_EXT = '.cad.json';
+/** Scene3D companion file extension (saved next to a CAD project). */
+export const SCENE_EXT = '.scene.json';
+/** Electronics schematic file extension. */
+export const ELEC_EXT = '.elec.json';
 
 // ── userId management ─────────────────────────────────────────────────────────
 
@@ -28,19 +42,24 @@ export function setCurrentUserId(id: string): void {
 
 // ── path helpers ──────────────────────────────────────────────────────────────
 
-/** VFS directory path for a user's projects. */
-export function userProjectsDir(userId = _currentUserId): string {
-  return `/users/${userId}/projects`;
+/** VFS root directory for a user — the top of the directory browser. */
+export function userRootDir(userId = _currentUserId): string {
+  return `/users/${userId}`;
 }
 
-/** VFS file path for a specific project. */
-export function userProjectFile(name: string, userId = _currentUserId): string {
-  return `/users/${userId}/projects/${sanitizeName(name)}.cad.json`;
+/** Default VFS directory for a user's projects (browser starts here). */
+export function userProjectsDir(userId = _currentUserId): string {
+  return `/users/${userId}/projects`;
 }
 
 /** Strip characters unsafe for filenames. */
 function sanitizeName(name: string): string {
   return name.trim().replace(/[/\\:*?"<>|]/g, '_') || 'untitled';
+}
+
+/** VFS file path for `{name}{extension}` inside an arbitrary directory. */
+function filePath(dir: string, name: string, extension: string): string {
+  return `${dir}/${sanitizeName(name)}${extension}`;
 }
 
 // ── low-level fetch helpers ───────────────────────────────────────────────────
@@ -84,96 +103,97 @@ function base64ToText(b64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-// ── public API ────────────────────────────────────────────────────────────────
+// ── directory browsing ────────────────────────────────────────────────────────
 
-export interface ProjectMeta {
-  name: string;    // display name (without .cad.json)
+export interface FileMeta {
+  name: string;    // display name (without the extension)
   mtime: number;   // modification timestamp (ms)
   size: number;    // bytes
 }
 
-/** List all projects for the given user, sorted newest-first. */
-export async function listProjects(userId = _currentUserId): Promise<ProjectMeta[]> {
-  const dir = userProjectsDir(userId);
-  let entries: Array<{ name: string; type: number }>;
+export interface DirListing {
+  /** Sub-directory names, sorted alphabetically. */
+  dirs: string[];
+  /** Files matching the requested extension, sorted newest-first. */
+  files: FileMeta[];
+}
 
+// VFS FileType enum: 1 = File, 2 = Directory.
+const FILE = 1;
+const DIRECTORY = 2;
+
+/**
+ * List a VFS directory: sub-directories plus the files whose name ends with
+ * `extension`. A missing directory yields an empty listing (not an error) so
+ * the browser can still let the user create one.
+ */
+export async function listDirectory(dir: string, extension: string): Promise<DirListing> {
+  let entries: Array<{ name: string; type: number }>;
   try {
     const res = await vfsGet<{ entries: Array<{ name: string; type: number }> }>('/readdir', dir);
     entries = res.entries;
   } catch {
-    // Directory doesn't exist yet (no projects saved) — return empty list.
-    return [];
+    return { dirs: [], files: [] };
   }
 
-  const cadFiles = entries.filter(e => e.type === 1 && e.name.endsWith('.cad.json'));
+  const dirs = entries
+    .filter(e => e.type === DIRECTORY)
+    .map(e => e.name)
+    .sort((a, b) => a.localeCompare(b));
 
-  const metas = await Promise.all(
-    cadFiles.map(async e => {
-      const filePath = `${dir}/${e.name}`;
+  const matched = entries.filter(e => e.type === FILE && e.name.endsWith(extension));
+  const files = await Promise.all(
+    matched.map(async e => {
+      const filePathAbs = `${dir}/${e.name}`;
+      const name = e.name.slice(0, -extension.length);
       try {
-        const stat = await vfsGet<{ mtime: number; size: number }>('/stat', filePath);
-        return {
-          name: e.name.slice(0, -'.cad.json'.length),
-          mtime: stat.mtime,
-          size: stat.size,
-        };
+        const stat = await vfsGet<{ mtime: number; size: number }>('/stat', filePathAbs);
+        return { name, mtime: stat.mtime, size: stat.size };
       } catch {
-        return { name: e.name.slice(0, -'.cad.json'.length), mtime: 0, size: 0 };
+        return { name, mtime: 0, size: 0 };
       }
     }),
   );
+  files.sort((a, b) => b.mtime - a.mtime);
 
-  return metas.sort((a, b) => b.mtime - a.mtime);
+  return { dirs, files };
 }
 
-/** Read a project's JSON string from the server. */
-export async function readProject(name: string, userId = _currentUserId): Promise<string> {
-  const res = await vfsGet<{ data: string }>('/readFile', userProjectFile(name, userId));
+/** Create a directory on the server (parent directories are auto-created). */
+export async function createDirectory(path: string): Promise<void> {
+  await vfsPost('/mkdir', path, {});
+}
+
+// ── directory- and extension-aware file I/O ──────────────────────────────────
+
+/** Read a file's text content from a specific directory. */
+export async function readFileAt(dir: string, name: string, extension: string): Promise<string> {
+  const res = await vfsGet<{ data: string }>('/readFile', filePath(dir, name, extension));
   return base64ToText(res.data);
 }
 
-/** Write (create or overwrite) a project on the server. */
-export async function writeProject(name: string, jsonText: string, userId = _currentUserId): Promise<void> {
-  await vfsPost('/writeFile', userProjectFile(name, userId), {
-    data: textToBase64(jsonText),
+/** Write (create or overwrite) a file in a specific directory. */
+export async function writeFileAt(
+  dir: string, name: string, extension: string, text: string,
+): Promise<void> {
+  await vfsPost('/writeFile', filePath(dir, name, extension), {
+    data: textToBase64(text),
     options: { create: true, overwrite: true },
   });
 }
 
-/** Delete a project from the server. */
-export async function deleteProject(name: string, userId = _currentUserId): Promise<void> {
-  await vfsPost('/delete', userProjectFile(name, userId), { options: {} });
+/** Delete a file from a specific directory. */
+export async function deleteFileAt(dir: string, name: string, extension: string): Promise<void> {
+  await vfsPost('/delete', filePath(dir, name, extension), { options: {} });
 }
 
-/** Rename a project on the server. */
-export async function renameProject(
-  oldName: string,
-  newName: string,
-  userId = _currentUserId,
+/** Rename a file within a specific directory. */
+export async function renameFileAt(
+  dir: string, oldName: string, newName: string, extension: string,
 ): Promise<void> {
   await vfsPost('/rename', null, {
-    oldPath: userProjectFile(oldName, userId),
-    newPath: userProjectFile(newName, userId),
+    oldPath: filePath(dir, oldName, extension),
+    newPath: filePath(dir, newName, extension),
     options: { overwrite: false },
-  });
-}
-
-// ── Scene3D companion files (.scene.json) ─────────────────────────────────────
-
-function userSceneFile(name: string, userId = _currentUserId): string {
-  return `/users/${userId}/projects/${sanitizeName(name)}.scene.json`;
-}
-
-/** Read the Scene3D JSON for a project (throws if not found). */
-export async function readSceneProject(name: string, userId = _currentUserId): Promise<string> {
-  const res = await vfsGet<{ data: string }>('/readFile', userSceneFile(name, userId));
-  return base64ToText(res.data);
-}
-
-/** Write (create or overwrite) the Scene3D JSON for a project. */
-export async function writeSceneProject(name: string, jsonText: string, userId = _currentUserId): Promise<void> {
-  await vfsPost('/writeFile', userSceneFile(name, userId), {
-    data: textToBase64(jsonText),
-    options: { create: true, overwrite: true },
   });
 }

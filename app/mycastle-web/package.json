@@ -16,6 +16,7 @@
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
     "@mhersztowski/core": "workspace:*",
+    "@mhersztowski/texteditor": "workspace:*",
     "@mhersztowski/web-client": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@mui/icons-material": "^6.1.0",

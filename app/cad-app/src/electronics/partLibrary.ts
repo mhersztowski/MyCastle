@@ -4,13 +4,18 @@ export type { PartDef };
 
 // ── Helper: generate side pins for DIP/SIP components ──────────────────────
 
-function leftRightPins(height: number, leftLabels: string[], rightLabels: string[]): PartDef['pins'] {
+function leftRightPins(
+  width: number, height: number, leftLabels: string[], rightLabels: string[],
+): PartDef['pins'] {
   const pins: PartDef['pins'] = [];
+  // Right-side pins sit on the body's last column — derived from width so a
+  // wider package still places them on its actual right edge.
+  const rightX = width - 1;
   for (let i = 0; i < height; i++) {
     if (leftLabels[i] !== undefined)
       pins.push({ id: `L${i}`, x: 0, y: i, label: leftLabels[i] });
     if (rightLabels[i] !== undefined)
-      pins.push({ id: `R${i}`, x: 3, y: i, label: rightLabels[i] });
+      pins.push({ id: `R${i}`, x: rightX, y: i, label: rightLabels[i] });
   }
   return pins;
 }
@@ -51,7 +56,7 @@ const arduinoNano: PartDef = {
   bodyColor: '#0d47a1',
   bodyShape: 'dip',
   label: 'Arduino\nNano',
-  pins: leftRightPins(15,
+  pins: leftRightPins(4, 15,
     ['TX1','RX0','RST','GND','D2','D3','D4','D5','D6','D7','D8','D9','D10','D11','D12'],
     ['D13','3V3','REF','A0','A1','A2','A3','A4','A5','A6','A7','5V','RST','GND','VIN'],
   ),
@@ -67,7 +72,7 @@ const esp32DevKit: PartDef = {
   bodyColor: '#1a237e',
   bodyShape: 'dip',
   label: 'ESP32',
-  pins: leftRightPins(19,
+  pins: leftRightPins(4, 19,
     ['3V3','EN','VP','VN','D34','D35','D32','D33','D25','D26','D27','D14','D12','D13','GND','D15','D2','D4','RX2'],
     ['GND','D23','D22','TX0','RX0','D21','D19','D18','D5','D17','D16','D4','D0','D2','D15','D8','D7','D6','D5'],
   ),
@@ -83,7 +88,7 @@ const esp8266Wemos: PartDef = {
   bodyColor: '#1565c0',
   bodyShape: 'dip',
   label: 'D1 Mini',
-  pins: leftRightPins(8,
+  pins: leftRightPins(4, 8,
     ['RST','A0','D0','D5','D6','D7','D8','3V3'],
     ['TX','RX','D1','D2','D3','D4','GND','5V'],
   ),
@@ -260,6 +265,24 @@ const oledI2c: PartDef = {
   ],
 };
 
+
+const esp32s3Pico: PartDef = {
+  id: 'esp32-s3-pico',
+  name: 'ESP32 S3 Pico',
+  category: 'microcontroller',
+  description: 'ESP32 dual-core Wi-Fi/BT development board, 38-pin',
+  width: 7,
+  height: 20,
+  bodyColor: '#1a237e',
+  bodyShape: 'dip',
+  label: 'ESP32S3Pico',
+  pins: leftRightPins(7, 20,
+    ['GP11','GP12','GND','GP13','GP14','GP15','GP16','GND','GP17','GP18','GP33','GP34','GND','GP35','GP36','GP37','GP38','GND','GP39', 'GP40'],
+    ['VBUS','VSYS','GND','3V3_EN','3V3(OUT)','GP10','GP9','GND','GP8','GP7','RUN','GP6','GND','GP5','GP4','GP2','GP1','GND','GP41', 'GP42'],
+  ),
+};
+
+
 // ── Registry ────────────────────────────────────────────────────────────────
 
 export const PART_LIBRARY: PartDef[] = [
@@ -277,6 +300,7 @@ export const PART_LIBRARY: PartDef[] = [
   dht22,
   potentiometer,
   oledI2c,
+  esp32s3Pico,
 ];
 
 export function getPartDef(id: string): PartDef | undefined {

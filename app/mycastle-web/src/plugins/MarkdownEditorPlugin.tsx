@@ -10,7 +10,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
-import { defineEditorPlugin, globalEventBus } from '@mhersztowski/web-client';
+import { defineEditorPlugin, globalEventBus } from '@mhersztowski/texteditor';
 import { MdEditor } from '../components/mdeditor';
 import { useMqtt } from '../modules/mqttclient/MqttContext';
 
