@@ -120,6 +120,11 @@ export function registerRgbIrBlocks(): void {
       updateUiColorShape(this, 'PALETTE');
       this.setOnChange((e: Blockly.Events.Abstract) => {
         const ce = e as unknown as { blockId?: string; element?: string; name?: string; newValue?: string };
+        // After XML deserialization all field values are set — safe to refresh preview.
+        if (e.type === Blockly.Events.FINISHED_LOADING) {
+          updateUiColorPreview(this);
+          return;
+        }
         if (ce.blockId !== this.id || ce.element !== 'field') return;
         if (ce.name === 'MODE') updateUiColorShape(this, ce.newValue ?? 'PALETTE');
         updateUiColorPreview(this);

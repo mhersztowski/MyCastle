@@ -173,9 +173,10 @@ function DetailView({ project, rawBase, modules, userName, repoUrl, onBack }: De
   const meta = platformMeta(project.softwarePlatform);
 
   useEffect(() => {
-    if (!project.hasDocs) return;
+    const docPath = project.readmePath ?? (project.hasDocs ? `${project.path}/docs/welcome.md` : null);
+    if (!docPath) return;
     setMdLoading(true);
-    fetch(`${rawBase}/${project.path}/docs/welcome.md`)
+    fetch(`${rawBase}/${docPath}`)
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setMd)
       .catch(() => setMd(null))

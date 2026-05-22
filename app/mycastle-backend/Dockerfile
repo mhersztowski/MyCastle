@@ -25,6 +25,7 @@ WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/core-backend/package.json packages/core-backend/
+COPY packages/texteditor/package.json packages/texteditor/
 COPY packages/web-client/package.json packages/web-client/
 COPY packages/ui-core/package.json packages/ui-core/
 COPY app/mycastle-backend/package.json app/mycastle-backend/
@@ -35,11 +36,13 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # Now copy source files and build
 COPY packages/core/ packages/core/
 COPY packages/core-backend/ packages/core-backend/
+COPY packages/texteditor/ packages/texteditor/
 COPY packages/web-client/ packages/web-client/
 COPY app/mycastle-backend/ app/mycastle-backend/
 COPY app/mycastle-web/ app/mycastle-web/
 RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
+RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 RUN pnpm --filter mycastle-backend build --silent
 RUN NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter mycastle-web build
