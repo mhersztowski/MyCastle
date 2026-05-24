@@ -109,6 +109,15 @@ function ThumbShape({ part }: { part: PartDef }) {
         )}
       </g>
     ),
+    buzzer: (
+      <g>
+        <circle cx={W / 2} cy={H * 0.42} r={Math.min(W, H) * 0.4} fill={part.bodyColor} stroke="#212121" strokeWidth={1} />
+        <circle cx={W / 2} cy={H * 0.42} r={Math.min(W, H) * 0.32} fill="none" stroke="#616161" strokeWidth={0.8} />
+        <circle cx={W / 2} cy={H * 0.42} r={1.5} fill="#212121" />
+        <line x1={W * 0.42} y1={H * 0.72} x2={W * 0.42} y2={H - 2} stroke="#bbb" strokeWidth={1.5} />
+        <line x1={W * 0.58} y1={H * 0.72} x2={W * 0.58} y2={H - 2} stroke="#bbb" strokeWidth={1.5} />
+      </g>
+    ),
   };
 
   return bodyShapes[part.bodyShape] ?? bodyShapes.ic;

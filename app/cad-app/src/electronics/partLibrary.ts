@@ -68,6 +68,7 @@ const esp32DevKit: PartDef = {
   category: 'microcontroller',
   description: 'ESP32 dual-core Wi-Fi/BT development board, 38-pin',
   width: 4,
+
   height: 20,
   bodyColor: '#1a237e',
   bodyShape: 'dip',
@@ -282,6 +283,78 @@ const esp32s3Pico: PartDef = {
   ),
 };
 
+const ky_018: PartDef = {
+  id: 'ky_018',
+  name: 'KY-018 Sensor',
+  category: 'sensor',
+  description: 'KY-018 photoresistor Sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'KY-018',
+  pins: [
+    { id: 'S',  x: 0, y: 1, label: 'S' },
+    { id: 'VCC', x: 0, y: 2, label: 'VCC' },
+    { id: 'GND',   x: 0, y: 3, label: 'GND' },
+  ],
+};
+
+const dht11: PartDef = {
+  id: 'dht11',
+  name: 'DHT11 Sensor',
+  category: 'sensor',
+  description: 'DHT11 temperature & humidity sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'DHT11',
+  pins: [
+    { id: 'VCC',  x: 0, y: 1, label: 'VCC' },
+    { id: 'DATA', x: 0, y: 2, label: 'DATA' },
+    { id: 'NC',   x: 0, y: 3, label: 'NC' },
+    { id: 'GND',   x: 0, y: 4, label: 'GND' },
+  ],
+};
+
+const hc_sr04: PartDef = {
+  id: 'hc_sr04',
+  name: 'HC-SR04 Sensor',
+  category: 'sensor',
+  description: 'HC-SR04 ultrasonic distance sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'HC-SR04',
+  pins: [
+    { id: 'VCC',  x: 0, y: 1, label: 'VCC' },
+    { id: 'TRIG', x: 0, y: 2, label: 'TRIG' },
+    { id: 'ECHO',   x: 0, y: 3, label: 'ECHO' },
+    { id: 'GND',   x: 0, y: 4, label: 'GND' },
+  ],
+};
+
+const tcrt5000: PartDef = {
+  id: 'tcrt5000',
+  name: 'TCRT5000 Sensor',
+  category: 'sensor',
+  description: 'TCRT5000 IR reflective sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'TCRT5000',
+  pins: [
+    { id: 'A0',  x: 0, y: 1, label: 'A0' },
+    { id: 'D0', x: 0, y: 2, label: 'D0' },
+    { id: 'GND',   x: 0, y: 3, label: 'GND' },
+    { id: 'VCC',   x: 0, y: 4, label: 'VCC' },
+  ],
+};
+
+
 
 // ── Registry ────────────────────────────────────────────────────────────────
 
@@ -301,6 +374,10 @@ export const PART_LIBRARY: PartDef[] = [
   potentiometer,
   oledI2c,
   esp32s3Pico,
+  ky_018,
+  dht11,
+  hc_sr04,
+  tcrt5000,
 ];
 
 export function getPartDef(id: string): PartDef | undefined {

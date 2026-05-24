@@ -57,6 +57,15 @@ export function ElectronicsPropertiesPanel({ component, part, onChange }: Props)
             </Typography>
           </Box>
 
+          {/* Free-text label rendered above the component (e.g. value / designator) */}
+          <TextField
+            label="Label"
+            size="small"
+            value={component.userLabel ?? ''}
+            onChange={e => onChange({ userLabel: e.target.value })}
+            placeholder={part.bodyShape === 'resistor' ? 'R 330 [Ω]' : 'e.g. U1'}
+          />
+
           {/* ShowPinLabels */}
           <FormControlLabel
             sx={{ ml: 0 }}
