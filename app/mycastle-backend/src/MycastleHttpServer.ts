@@ -4057,13 +4057,13 @@ Rules:
   }
 
   private async fetchJson(url: string): Promise<unknown> {
-    const r = await fetch(url);
+    const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
     return r.json();
   }
 
   private async fetchText(url: string): Promise<string> {
-    const r = await fetch(url);
+    const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
     return r.text();
   }

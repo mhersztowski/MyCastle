@@ -48,6 +48,7 @@ import {
   ExpandMore,
   ExpandLess,
   InsertDriveFile,
+  WarningAmber,
 } from '@mui/icons-material';
 import Collapse from '@mui/material/Collapse';
 import ReactMarkdown from 'react-markdown';
@@ -866,13 +867,13 @@ function UPythonProjectPage() {
           )}
           {/* Upload + Terminal — widoczne tylko na mobilnym */}
           <Box sx={{ display: { xs: 'flex', sm: 'none' } }}>
-            <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Upload to device'}>
+            <Tooltip title={!selectedDeviceName ? 'No device — open Config to select one' : 'Upload to device'}>
               <span>
                 <IconButton
-                  color="inherit"
+                  color={!selectedDeviceName ? 'warning' : 'inherit'}
                   size="small"
                   onClick={openUploadDialog}
-                  disabled={(!generatedCode && !codeEdited) || !selectedDeviceName}
+                  disabled={!generatedCode && !codeEdited}
                 >
                   <UploadIcon fontSize="small" />
                 </IconButton>
@@ -1319,12 +1320,13 @@ function UPythonProjectPage() {
       {/* Bottom status bar */}
       <AppBar position="static" elevation={0} color="default" sx={{ borderTop: 1, borderColor: 'divider', display: { xs: 'none', sm: 'block' } }}>
         <Toolbar variant="dense" sx={{ minHeight: 36 }}>
-          <Tooltip title={!selectedDeviceName ? 'Select a device first (Config panel)' : 'Upload to device'}>
+          <Tooltip title={!selectedDeviceName ? 'No device — open Config to select one' : 'Upload to device'}>
             <span>
               <IconButton
                 size="small"
                 onClick={openUploadDialog}
-                disabled={(!generatedCode && !codeEdited) || !selectedDeviceName}
+                disabled={!generatedCode && !codeEdited}
+                color={!selectedDeviceName ? 'warning' : 'default'}
               >
                 <UploadIcon fontSize="small" />
               </IconButton>
@@ -1335,6 +1337,17 @@ function UPythonProjectPage() {
               <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {!selectedDeviceName && (
+            <Chip
+              icon={<WarningAmber sx={{ fontSize: '14px !important' }} />}
+              label="No device — open Config"
+              size="small"
+              color="warning"
+              variant="outlined"
+              onClick={() => setConfigOpen(true)}
+              sx={{ ml: 1, fontSize: '0.7rem', height: 22, cursor: 'pointer' }}
+            />
+          )}
           <Box sx={{ flexGrow: 1 }} />
           <Typography variant="caption" color="text.secondary">
             {boardProfiles[board]?.name ?? board}
