@@ -124,22 +124,52 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUserna
     return mqttClient.syncDirinfo(path);
   }, [isConnected]);
 
+  // Apply the path prefix BEFORE (re)connecting so the first read/write that
+  // fires once isConnected flips true already uses the correct user scope.
   useEffect(() => {
     mqttClient.setUserBasePath(userBasePath ?? '');
   }, [userBasePath]);
 
+  // Hook up the file-change listener once; cleaned up when the provider unmounts.
   useEffect(() => {
     const handleFileChanged = (path: string, action: string) => {
       setLastFileChange({ path, action, timestamp: Date.now() });
     };
     mqttClient.onFileChanged(handleFileChanged);
-
-    connect();
-    return () => {
-      mqttClient.offFileChanged(handleFileChanged);
-      disconnect();
-    };
+    return () => mqttClient.offFileChanged(handleFileChanged);
   }, []);
+
+  // (Re)connect whenever credentials change — login/logout drops the anonymous
+  // session and brings a fresh one up with the new JWT. The cleanup disconnects
+  // so the next render starts from a clean slate.
+  useEffect(() => {
+    let cancelled = false;
+    setIsConnecting(true);
+    setError(null);
+
+    (async () => {
+      try {
+        // Make sure a stale session isn't reused under different credentials.
+        mqttClient.disconnect();
+        setIsConnected(false);
+        const options = mqttUsername && mqttPassword
+          ? { username: mqttUsername, password: mqttPassword }
+          : undefined;
+        await mqttClient.connect(undefined, options);
+        if (!cancelled) setIsConnected(true);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Connection failed');
+      } finally {
+        if (!cancelled) setIsConnecting(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      mqttClient.disconnect();
+      setIsConnected(false);
+    };
+  }, [mqttUsername, mqttPassword]);
 
   const value: MqttContextValue = {
     isConnected,

@@ -14,44 +14,22 @@ interface Props {
   onClose: () => void;
   /** Called after a successful open or save with the project name */
   onDone?: (name: string) => void;
-  /** Returns current Scene3D JSON to save alongside the CAD project */
-  getSceneData?: () => string | null;
-  /** Called when the opened project has a companion .scene.json */
-  onSceneData?: (json: string) => void;
 }
 
 /**
  * CAD project open/save dialog — a thin wrapper around {@link ServerFileBrowser}
- * that adds CAD-specific behaviour: loading via {@link loadProjectFromText},
- * the `.scene.json` Scene3D companion, and per-row viewer links.
+ * that adds CAD-specific behaviour: loading via {@link loadProjectFromText} and
+ * per-row viewer links. Scene3D files are handled by their own menu actions so
+ * each file is opened / saved independently.
  */
-export function ProjectBrowser({ open, mode, project, onClose, onDone, getSceneData, onSceneData }: Props) {
+export function ProjectBrowser({ open, mode, project, onClose, onDone }: Props) {
   async function handleOpen(dir: string, name: string) {
     const jsonText = await readFileAt(dir, name, CAD_EXT);
     loadProjectFromText(jsonText, project);
-
-    // Try to load the companion Scene3D file (non-fatal if absent)
-    if (onSceneData) {
-      try {
-        onSceneData(await readFileAt(dir, name, SCENE_EXT));
-      } catch {
-        // No .scene.json saved yet — that's fine
-      }
-    }
   }
 
   async function handleSave(dir: string, name: string) {
     await writeFileAt(dir, name, CAD_EXT, JSON.stringify(project.toJSON()));
-
-    // Also save the Scene3D data if available
-    const sceneJson = getSceneData?.();
-    if (sceneJson) {
-      try {
-        await writeFileAt(dir, name, SCENE_EXT, sceneJson);
-      } catch {
-        // Non-fatal — CAD data was saved successfully
-      }
-    }
   }
 
   return (

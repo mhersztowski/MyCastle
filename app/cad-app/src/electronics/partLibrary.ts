@@ -68,6 +68,7 @@ const esp32DevKit: PartDef = {
   category: 'microcontroller',
   description: 'ESP32 dual-core Wi-Fi/BT development board, 38-pin',
   width: 4,
+
   height: 20,
   bodyColor: '#1a237e',
   bodyShape: 'dip',
@@ -179,6 +180,26 @@ const pushButton: PartDef = {
   ],
 };
 
+const joystickPs: PartDef = {
+  id: 'joystick-ps',
+  name: 'Joystick (PS-style)',
+  category: 'active',
+  description: '2-axis analog thumbstick module with push-button (KY-023)',
+  width: 5,
+  height: 6,
+  bodyColor: '#0d47a1',
+  bodyShape: 'joystick',
+  label: 'JOY',
+  // 5-pin header on the bottom edge — y = h-1 so they render as bottom pins.
+  pins: [
+    { id: 'gnd', x: 0, y: 5, label: 'GND' },
+    { id: 'vcc', x: 1, y: 5, label: '+5V' },
+    { id: 'vrx', x: 2, y: 5, label: 'VRx' },
+    { id: 'vry', x: 3, y: 5, label: 'VRy' },
+    { id: 'sw',  x: 4, y: 5, label: 'SW' },
+  ],
+};
+
 const capacitorCeramic: PartDef = {
   id: 'capacitor-ceramic',
   name: 'Capacitor (Ceramic)',
@@ -257,11 +278,12 @@ const oledI2c: PartDef = {
   bodyColor: '#1a1a2e',
   bodyShape: 'ic',
   label: 'OLED\n0.96"',
+  // 4-pin header on the bottom edge — y = h-1 so they render as proper bottom pins.
   pins: [
-    { id: 'gnd',  x: 0, y: 6, label: 'GND' },
-    { id: 'vcc',  x: 1, y: 6, label: 'VCC' },
-    { id: 'scl',  x: 2, y: 6, label: 'SCL' },
-    { id: 'sda',  x: 3, y: 6, label: 'SDA' },
+    { id: 'gnd',  x: 1, y: 7, label: 'GND' },
+    { id: 'vcc',  x: 2, y: 7, label: 'VCC' },
+    { id: 'scl',  x: 3, y: 7, label: 'SCL' },
+    { id: 'sda',  x: 4, y: 7, label: 'SDA' },
   ],
 };
 
@@ -282,6 +304,134 @@ const esp32s3Pico: PartDef = {
   ),
 };
 
+const ky_018: PartDef = {
+  id: 'ky_018',
+  name: 'KY-018 Sensor',
+  category: 'sensor',
+  description: 'KY-018 photoresistor Sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'KY-018',
+  pins: [
+    { id: 'S',  x: 0, y: 1, label: 'S' },
+    { id: 'VCC', x: 0, y: 2, label: 'VCC' },
+    { id: 'GND',   x: 0, y: 3, label: 'GND' },
+  ],
+};
+
+const dht11: PartDef = {
+  id: 'dht11',
+  name: 'DHT11 Sensor',
+  category: 'sensor',
+  description: 'DHT11 temperature & humidity sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'DHT11',
+  pins: [
+    { id: 'VCC',  x: 0, y: 1, label: 'VCC' },
+    { id: 'DATA', x: 0, y: 2, label: 'DATA' },
+    { id: 'NC',   x: 0, y: 3, label: 'NC' },
+    { id: 'GND',   x: 0, y: 4, label: 'GND' },
+  ],
+};
+
+const hc_sr04: PartDef = {
+  id: 'hc_sr04',
+  name: 'HC-SR04 Sensor',
+  category: 'sensor',
+  description: 'HC-SR04 ultrasonic distance sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'HC-SR04',
+  pins: [
+    { id: 'VCC',  x: 0, y: 1, label: 'VCC' },
+    { id: 'TRIG', x: 0, y: 2, label: 'TRIG' },
+    { id: 'ECHO',   x: 0, y: 3, label: 'ECHO' },
+    { id: 'GND',   x: 0, y: 4, label: 'GND' },
+  ],
+};
+
+const tcrt5000: PartDef = {
+  id: 'tcrt5000',
+  name: 'TCRT5000 Sensor',
+  category: 'sensor',
+  description: 'TCRT5000 IR reflective sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'TCRT5000',
+  pins: [
+    { id: 'A0',  x: 0, y: 1, label: 'A0' },
+    { id: 'D0', x: 0, y: 2, label: 'D0' },
+    { id: 'GND',   x: 0, y: 3, label: 'GND' },
+    { id: 'VCC',   x: 0, y: 4, label: 'VCC' },
+  ],
+};
+
+const max72198: PartDef = {
+  id: 'max72198',
+  name: 'MAX72198',
+  category: 'display',
+  description: 'MAX72198 led matrix',
+  width: 5,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'MAX72198',
+  pins: [
+    { id: 'CLK',  x: 0, y: 1, label: 'CLK' },
+    { id: 'CS', x: 0, y: 2, label: 'CS' },
+    { id: 'DIN',   x: 0, y: 3, label: 'DIN' },
+    { id: 'GND',   x: 0, y: 4, label: 'GND' },
+    { id: 'VCC',   x: 0, y: 5, label: 'VCC' },
+  ],
+};
+
+const ath20_bmp280: PartDef = {
+  id: 'ath20_bmp280',
+  name: 'ATH20_BMP280 Sensor',
+  category: 'sensor',
+  description: 'ATH20_BMP280 sensor',
+  width: 4,
+  height: 5,
+  bodyColor: '#37474f',
+  bodyShape: 'ic',
+  label: 'ATH20_BMP280',
+  pins: [
+    { id: 'VCC',  x: 0, y: 1, label: 'VCC' },
+    { id: 'SDA', x: 0, y: 2, label: 'SDA' },
+    { id: 'GND',   x: 0, y: 3, label: 'GND' },
+    { id: 'SCL',   x: 0, y: 4, label: 'SCL' },
+  ],
+};
+
+const lcd1602i2c: PartDef = {
+  id: 'lcd1602i2c',
+  name: 'LCD1602 I2C',
+  category: 'display',
+  description: 'LCD1602 display module, I2C',
+  width: 6,
+  height: 8,
+  bodyColor: '#1a1a2e',
+  bodyShape: 'ic',
+  label: 'LCD1602',
+  // 4-pin I²C header on the bottom edge — y = h-1 so they render as bottom pins.
+  pins: [
+    { id: 'SCL', x: 1, y: 7, label: 'SCL' },
+    { id: 'SDA', x: 2, y: 7, label: 'SDA' },
+    { id: 'VCC', x: 3, y: 7, label: 'VCC' },
+    { id: 'GND', x: 4, y: 7, label: 'GND' },
+  ],
+};
+
+
 
 // ── Registry ────────────────────────────────────────────────────────────────
 
@@ -295,12 +445,20 @@ export const PART_LIBRARY: PartDef[] = [
   ledGreen,
   ledBlue,
   pushButton,
+  joystickPs,
   capacitorCeramic,
   npnTransistor,
   dht22,
   potentiometer,
   oledI2c,
   esp32s3Pico,
+  ky_018,
+  dht11,
+  hc_sr04,
+  tcrt5000,
+  max72198,
+  ath20_bmp280,
+  lcd1602i2c,
 ];
 
 export function getPartDef(id: string): PartDef | undefined {

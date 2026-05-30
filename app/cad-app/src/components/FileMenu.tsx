@@ -16,10 +16,13 @@ import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
+import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type { Project } from '@mhersztowski/core-cad';
 import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSVG, importJSON } from '../io/CadExporter';
 import { ProjectBrowser } from './ProjectBrowser';
+import { ServerFileBrowser } from './ServerFileBrowser';
+import { SCENE_EXT, readFileAt, writeFileAt } from '../vfs/cadProjectApi';
 
 interface Props {
   project: Project;
@@ -36,7 +39,11 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
   const [browserMode, setBrowserMode] = useState<BrowserMode | null>(null);
+  const [sceneSaveOpen, setSceneSaveOpen] = useState(false);
+  const [sceneOpenOpen, setSceneOpenOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const hasSceneData = Boolean(getSceneData?.());
 
   const open = Boolean(anchor);
   const close = () => setAnchor(null);
@@ -55,6 +62,27 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
   function handleSaveServer() {
     close();
     setBrowserMode('save');
+  }
+
+  function handleSaveSceneServer() {
+    close();
+    setSceneSaveOpen(true);
+  }
+
+  function handleOpenSceneServer() {
+    close();
+    setSceneOpenOpen(true);
+  }
+
+  async function handleWriteScene(dir: string, name: string) {
+    const sceneJson = getSceneData?.();
+    if (!sceneJson) throw new Error('No Scene 3D data to save — open the Scene 3D tab first.');
+    await writeFileAt(dir, name, SCENE_EXT, sceneJson);
+  }
+
+  async function handleReadScene(dir: string, name: string) {
+    const sceneJson = await readFileAt(dir, name, SCENE_EXT);
+    onSceneData?.(sceneJson);
   }
 
   function handleSaveJSON() {
@@ -139,11 +167,22 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
 
         <MenuItem onClick={handleOpenServer} dense>
           <ListItemIcon><CloudDownloadOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} /></ListItemIcon>
-          <ListItemText primary="Open from Server…" secondary="Browse server projects" />
+          <ListItemText primary="Open CAD from Server…" secondary="Reads .cad.json only" />
         </MenuItem>
         <MenuItem onClick={handleSaveServer} dense>
           <ListItemIcon><CloudUploadOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} /></ListItemIcon>
-          <ListItemText primary="Save to Server…" secondary="Persist in VFS" />
+          <ListItemText primary="Save CAD to Server…" secondary="Writes .cad.json only" />
+        </MenuItem>
+        <MenuItem onClick={handleOpenSceneServer} dense>
+          <ListItemIcon><ViewInArIcon fontSize="small" sx={{ color: 'primary.main' }} /></ListItemIcon>
+          <ListItemText primary="Open Scene 3D from Server…" secondary="Reads .scene.json only" />
+        </MenuItem>
+        <MenuItem onClick={handleSaveSceneServer} dense disabled={!hasSceneData}>
+          <ListItemIcon><ViewInArIcon fontSize="small" sx={{ color: hasSceneData ? 'primary.main' : undefined }} /></ListItemIcon>
+          <ListItemText
+            primary="Save Scene 3D to Server…"
+            secondary={hasSceneData ? 'Writes .scene.json only' : 'No scene loaded — open Scene 3D first'}
+          />
         </MenuItem>
 
         <Divider />
@@ -208,10 +247,34 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
           open={Boolean(browserMode)}
           mode={browserMode}
           project={project}
-          getSceneData={getSceneData}
-          onSceneData={onSceneData}
           onClose={() => setBrowserMode(null)}
-          onDone={name => setToast({ msg: `${browserMode === 'open' ? 'Opened' : 'Saved'}: ${name}`, severity: 'success' })}
+          onDone={name => setToast({ msg: `${browserMode === 'open' ? 'Opened CAD' : 'Saved CAD'}: ${name}`, severity: 'success' })}
+        />
+      )}
+
+      {sceneOpenOpen && (
+        <ServerFileBrowser
+          open
+          mode="open"
+          title="Open Scene 3D from Server"
+          extension={SCENE_EXT}
+          storageKey="cad.projectBrowser.dir"
+          onClose={() => setSceneOpenOpen(false)}
+          onOpen={handleReadScene}
+          onDone={name => setToast({ msg: `Opened scene: ${name}`, severity: 'success' })}
+        />
+      )}
+
+      {sceneSaveOpen && (
+        <ServerFileBrowser
+          open
+          mode="save"
+          title="Save Scene 3D to Server"
+          extension={SCENE_EXT}
+          storageKey="cad.projectBrowser.dir"
+          onClose={() => setSceneSaveOpen(false)}
+          onSave={handleWriteScene}
+          onDone={name => setToast({ msg: `Saved scene: ${name}`, severity: 'success' })}
         />
       )}
     </>

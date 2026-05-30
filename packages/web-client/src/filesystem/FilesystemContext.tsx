@@ -139,6 +139,16 @@ export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children
     return filesystemService.syncDirinfo(dirinfoPath, content);
   }, []);
 
+  // Reset the loaded gate whenever MQTT drops. A reconnect (e.g. after login)
+  // raises isConnected again, which re-triggers loadAllData below — this time
+  // through the user-scoped path prefix that the new session installed.
+  useEffect(() => {
+    if (!isConnected) {
+      setIsDataLoaded(false);
+      setRootDir(null);
+    }
+  }, [isConnected]);
+
   // Auto-load all data when MQTT connects
   useEffect(() => {
     if (isConnected && !isDataLoaded && !loadingRef.current) {

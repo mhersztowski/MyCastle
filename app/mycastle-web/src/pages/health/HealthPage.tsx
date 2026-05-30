@@ -3,10 +3,11 @@ import {
   Accordion, AccordionDetails, AccordionSummary,
   Alert, Box, Button, Chip, CircularProgress,
   Collapse, Dialog, DialogActions, DialogContent, DialogTitle,
-  Divider, FormControl, IconButton, InputAdornment, InputLabel,
-  MenuItem, Paper,
-  Select, Snackbar, Tab, Table, TableBody, TableCell,
-  TableHead, TableRow, Tabs, TextField, Tooltip, Typography,
+  Divider, FormControl, FormControlLabel, IconButton, InputAdornment, InputLabel,
+  LinearProgress, MenuItem, Paper,
+  Select, Snackbar, Switch, Tab, Table, TableBody, TableCell,
+  TableHead, TableRow, Tabs, TextField,
+  Tooltip, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -18,6 +19,11 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import FitnessCenterIcon from '@mui/icons-material/FitnessCenter';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PauseIcon from '@mui/icons-material/Pause';
+import SkipNextIcon from '@mui/icons-material/SkipNext';
+import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
+import PlayCircleFilledIcon from '@mui/icons-material/PlayCircleFilled';
 import { v4 as uuidv4 } from 'uuid';
 import { useFilesystem } from '../../modules/filesystem';
 
@@ -25,17 +31,51 @@ import { useFilesystem } from '../../modules/filesystem';
 
 const HEALTH_PATH = 'data/health.json';
 
-type ExerciseCategory = 'calisthenics' | 'kettlebell' | 'dumbbell' | 'barbell' | 'other';
+type ExerciseCategory = 'calisthenics' | 'kettlebell' | 'dumbbell' | 'barbell' | 'break' | 'other';
+
+/** How a set's planned value is measured: by repetitions or by hold time. */
+type PlanUnit = 'reps' | 'time';
+
+/** One planned set — each carries its own reps/time unit. */
+interface PlannedSet {
+  value: number;          // reps, or seconds when unit === 'time'
+  unit: PlanUnit;
+  description?: string;   // optional per-set note, e.g. 'warm-up', 'AMRAP'
+}
 
 interface ExerciseDef {
   id: string;
   name: string;
   category: ExerciseCategory;
-  plannedSetReps: number[];   // one entry per set, e.g. [12, 10, 8]
+  sets: PlannedSet[];     // one entry per set; each set has its own unit
   plannedWeight?: number;
   description?: string;
-  photo?: string;             // base64 data URL or external image URL
+  photo?: string;         // base64 data URL or external image URL
   notes?: string;
+}
+
+/** Legacy on-disk exercise shape (parallel arrays + exercise-level unit). */
+type LegacyExercise = Omit<ExerciseDef, 'sets'> & {
+  sets?: PlannedSet[];
+  plannedSetReps?: number[];
+  planUnit?: PlanUnit;
+  plannedSetDescriptions?: string[];
+};
+
+/** Migrate a possibly-legacy exercise to the per-set `sets[]` model. */
+function normalizeExercise(ex: LegacyExercise): ExerciseDef {
+  if (Array.isArray(ex.sets)) {
+    return { ...ex, sets: ex.sets } as ExerciseDef;
+  }
+  const unit: PlanUnit = ex.planUnit === 'time' ? 'time' : 'reps';
+  const reps = Array.isArray(ex.plannedSetReps) ? ex.plannedSetReps : [];
+  const descs = Array.isArray(ex.plannedSetDescriptions) ? ex.plannedSetDescriptions : [];
+  return {
+    id: ex.id, name: ex.name, category: ex.category,
+    sets: reps.map((value, i) => ({ value, unit, description: descs[i] || undefined })),
+    plannedWeight: ex.plannedWeight, description: ex.description,
+    photo: ex.photo, notes: ex.notes,
+  };
 }
 
 interface TrainingProgram {
@@ -44,8 +84,13 @@ interface TrainingProgram {
   description?: string;
   exercises: ExerciseDef[];
   scheduledDays: number[]; // 0=Mon … 6=Sun
+  /** When true, logging a workout runs the guided step-by-step live player. */
+  isLiveSession?: boolean;
+  /** Optional overall live-session duration in seconds — a countdown for the whole workout. */
+  liveSessionSeconds?: number;
 }
 
+/** `reps` holds repetitions achieved, or seconds held for a time-based exercise. */
 interface WorkoutSetLog { reps: number; weight?: number }
 interface WorkoutExerciseLog { exerciseDefId: string; sets: WorkoutSetLog[]; notes?: string }
 interface WorkoutSession {
@@ -69,11 +114,11 @@ const DAY_NAMES  = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sat
 
 const CATEGORY_LABELS: Record<ExerciseCategory, string> = {
   calisthenics: 'Kalistenika', kettlebell: 'Kettlebell',
-  dumbbell: 'Hantle', barbell: 'Sztanga', other: 'Inne',
+  dumbbell: 'Hantle', barbell: 'Sztanga', break: 'Przerwa', other: 'Inne',
 };
-const CATEGORY_COLORS: Record<ExerciseCategory, 'primary'|'warning'|'success'|'error'|'default'> = {
+const CATEGORY_COLORS: Record<ExerciseCategory, 'primary'|'warning'|'success'|'error'|'info'|'default'> = {
   calisthenics: 'primary', kettlebell: 'warning',
-  dumbbell: 'success', barbell: 'error', other: 'default',
+  dumbbell: 'success', barbell: 'error', break: 'info', other: 'default',
 };
 
 function todayIso() { return new Date().toISOString().slice(0, 10); }
@@ -95,14 +140,58 @@ function weekLabel(startStr: string) {
   const f = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   return `${f(s)} – ${f(e)}`;
 }
+/** Whether an exercise's sets are all reps, all time, or a mix. */
+function exerciseUnits(def: ExerciseDef): 'reps' | 'time' | 'mixed' {
+  if (def.sets.length === 0) return 'reps';
+  return def.sets.every(s => s.unit === 'time') ? 'time'
+    : def.sets.every(s => s.unit === 'reps') ? 'reps' : 'mixed';
+}
+
+/** Column label for an exercise's set values (handles mixed-unit exercises). */
+function unitColumnLabel(def: ExerciseDef | undefined, timeSuffix = ''): string {
+  if (!def) return 'Reps';
+  const u = exerciseUnits(def);
+  return u === 'time' ? `Time${timeSuffix}` : u === 'reps' ? 'Reps' : 'Reps / Time';
+}
+
+/** Unit of a specific set index, falling back to the last defined set. */
+function setUnitAt(def: ExerciseDef | undefined, idx: number): PlanUnit {
+  if (!def || def.sets.length === 0) return 'reps';
+  return (def.sets[idx] ?? def.sets[def.sets.length - 1]).unit;
+}
+
+/** Planned value of a specific set index, falling back to the first/last set. */
+function setValueAt(def: ExerciseDef | undefined, idx: number): number {
+  if (!def || def.sets.length === 0) return 0;
+  return (def.sets[idx] ?? def.sets[0]).value;
+}
+
+/** Format a duration in seconds — `Ns` under a minute, otherwise `m:ss` / `Nmin`. */
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return s === 0 ? `${m}min` : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** Format a single set's value according to the exercise unit. */
+function formatSetValue(value: number, unit: PlanUnit): string {
+  return unit === 'time' ? formatDuration(value) : String(value);
+}
+
+/** Format seconds as a fixed m:ss clock — used by the live countdown. */
+function formatClock(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 function displayPlan(def: ExerciseDef): string {
-  const r = def.plannedSetReps;
-  if (r.length === 0) return '—';
-  const allSame = r.every(x => x === r[0]);
+  const sets = def.sets;
+  if (sets.length === 0) return '—';
   const weightStr = def.plannedWeight ? ` @ ${def.plannedWeight} kg` : '';
-  return allSame
-    ? `${r.length} × ${r[0]}${weightStr}`
-    : `${r.map((x, i) => `${i + 1}:${x}`).join(' / ')}${weightStr}`;
+  const uniform = sets.every(s => s.unit === sets[0].unit && s.value === sets[0].value);
+  return uniform
+    ? `${sets.length} × ${formatSetValue(sets[0].value, sets[0].unit)}${weightStr}`
+    : `${sets.map(s => formatSetValue(s.value, s.unit)).join(' / ')}${weightStr}`;
 }
 
 function getAllExercises(programs: TrainingProgram[]): ExerciseDef[] {
@@ -122,7 +211,9 @@ interface ExerciseDialogProps {
 const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, initial }) => {
   const [name, setName] = useState('');
   const [category, setCategory] = useState<ExerciseCategory>('calisthenics');
-  const [setReps, setSetReps] = useState<number[]>([10, 10, 10]);
+  const [sets, setSets] = useState<PlannedSet[]>([
+    { value: 10, unit: 'reps' }, { value: 10, unit: 'reps' }, { value: 10, unit: 'reps' },
+  ]);
   const [weight, setWeight] = useState('');
   const [description, setDescription] = useState('');
   const [photo, setPhoto] = useState<string | undefined>(undefined);
@@ -133,7 +224,9 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
     if (open) {
       setName(initial?.name ?? '');
       setCategory(initial?.category ?? 'calisthenics');
-      setSetReps(initial?.plannedSetReps?.length ? [...initial.plannedSetReps] : [10, 10, 10]);
+      setSets(initial?.sets?.length
+        ? initial.sets.map(s => ({ ...s }))
+        : [{ value: 10, unit: 'reps' }, { value: 10, unit: 'reps' }, { value: 10, unit: 'reps' }]);
       setWeight(initial?.plannedWeight?.toString() ?? '');
       setDescription(initial?.description ?? '');
       setPhoto(initial?.photo);
@@ -141,10 +234,13 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
     }
   }, [open, initial]);
 
-  const updateRep = (idx: number, val: string) =>
-    setSetReps(prev => prev.map((r, i) => i === idx ? (parseInt(val) || 0) : r));
-  const addSet = () => setSetReps(prev => [...prev, prev[prev.length - 1] ?? 10]);
-  const removeSet = (idx: number) => setSetReps(prev => prev.filter((_, i) => i !== idx));
+  const updateSet = (idx: number, patch: Partial<PlannedSet>) =>
+    setSets(prev => prev.map((s, i) => i === idx ? { ...s, ...patch } : s));
+  const addSet = () => setSets(prev => {
+    const last = prev[prev.length - 1];
+    return [...prev, { value: last?.value ?? 10, unit: last?.unit ?? 'reps' }];
+  });
+  const removeSet = (idx: number) => setSets(prev => prev.filter((_, i) => i !== idx));
 
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -155,10 +251,12 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
   };
 
   const handleSave = () => {
-    if (!name.trim() || setReps.length === 0) return;
+    if (!name.trim() || sets.length === 0) return;
     onSave({
       id: initial?.id ?? uuidv4(), name: name.trim(), category,
-      plannedSetReps: setReps,
+      sets: sets.map(s => ({
+        value: s.value, unit: s.unit, description: s.description?.trim() || undefined,
+      })),
       plannedWeight: weight ? parseFloat(weight) : undefined,
       description: description.trim() || undefined,
       photo,
@@ -201,7 +299,16 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
               <TextField label="Name" value={name} onChange={e => setName(e.target.value)} required autoFocus size="small" />
               <FormControl size="small">
                 <InputLabel>Category</InputLabel>
-                <Select value={category} onChange={e => setCategory(e.target.value as ExerciseCategory)} label="Category">
+                <Select
+                  value={category}
+                  label="Category"
+                  onChange={e => {
+                    const c = e.target.value as ExerciseCategory;
+                    setCategory(c);
+                    // A break is naturally a timed rest — switch its sets to time.
+                    if (c === 'break') setSets(prev => prev.map(s => ({ ...s, unit: 'time' })));
+                  }}
+                >
                   {Object.entries(CATEGORY_LABELS).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
                 </Select>
               </FormControl>
@@ -233,29 +340,45 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
             placeholder={category === 'calisthenics' ? 'bodyweight' : ''} />
 
           <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
-              Planned sets — reps per set
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+              Planned sets — each set has its own reps/time unit
             </Typography>
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ py: 0.5, width: 60 }}>Set</TableCell>
-                  <TableCell sx={{ py: 0.5 }}>Reps</TableCell>
+                  <TableCell sx={{ py: 0.5, width: 40 }}>Set</TableCell>
+                  <TableCell sx={{ py: 0.5, width: 100 }}>Value</TableCell>
+                  <TableCell sx={{ py: 0.5, width: 100 }}>Unit</TableCell>
+                  <TableCell sx={{ py: 0.5 }}>Description</TableCell>
                   <TableCell sx={{ py: 0.5, width: 40 }} />
                 </TableRow>
               </TableHead>
               <TableBody>
-                {setReps.map((r, idx) => (
+                {sets.map((s, idx) => (
                   <TableRow key={idx}>
                     <TableCell sx={{ py: 0.5 }}>
                       <Typography variant="body2" color="text.secondary">{idx + 1}</Typography>
                     </TableCell>
                     <TableCell sx={{ py: 0.5 }}>
-                      <TextField value={r} onChange={e => updateRep(idx, e.target.value)}
-                        size="small" type="number" sx={{ width: 90 }} inputProps={{ min: 0 }} />
+                      <TextField value={s.value} onChange={e => updateSet(idx, { value: parseInt(e.target.value) || 0 })}
+                        size="small" type="number" sx={{ width: 88 }} inputProps={{ min: 0 }}
+                        InputProps={s.unit === 'time'
+                          ? { endAdornment: <InputAdornment position="end">s</InputAdornment> }
+                          : undefined} />
                     </TableCell>
                     <TableCell sx={{ py: 0.5 }}>
-                      <IconButton size="small" onClick={() => removeSet(idx)} disabled={setReps.length <= 1}>
+                      <Select value={s.unit} size="small" sx={{ minWidth: 86 }}
+                        onChange={e => updateSet(idx, { unit: e.target.value as PlanUnit })}>
+                        <MenuItem value="reps">Reps</MenuItem>
+                        <MenuItem value="time">Time</MenuItem>
+                      </Select>
+                    </TableCell>
+                    <TableCell sx={{ py: 0.5 }}>
+                      <TextField value={s.description ?? ''} onChange={e => updateSet(idx, { description: e.target.value })}
+                        size="small" fullWidth placeholder="e.g. warm-up, AMRAP" />
+                    </TableCell>
+                    <TableCell sx={{ py: 0.5 }}>
+                      <IconButton size="small" onClick={() => removeSet(idx)} disabled={sets.length <= 1}>
                         <DeleteIcon fontSize="small" />
                       </IconButton>
                     </TableCell>
@@ -272,7 +395,7 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave} variant="contained" disabled={!name.trim() || setReps.length === 0}>
+        <Button onClick={handleSave} variant="contained" disabled={!name.trim() || sets.length === 0}>
           {initial ? 'Save' : 'Add'}
         </Button>
       </DialogActions>
@@ -284,15 +407,22 @@ const ExerciseDialog: React.FC<ExerciseDialogProps> = ({ open, onClose, onSave, 
 
 interface ProgramDialogProps {
   open: boolean; onClose: () => void;
-  onSave: (name: string, description: string) => void;
+  onSave: (name: string, description: string, isLiveSession: boolean, liveSessionSeconds?: number) => void;
   initial?: TrainingProgram | null;
 }
 const ProgramDialog: React.FC<ProgramDialogProps> = ({ open, onClose, onSave, initial }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [isLiveSession, setIsLiveSession] = useState(false);
+  const [liveMinutes, setLiveMinutes] = useState('');
 
   useEffect(() => {
-    if (open) { setName(initial?.name ?? ''); setDescription(initial?.description ?? ''); }
+    if (open) {
+      setName(initial?.name ?? '');
+      setDescription(initial?.description ?? '');
+      setIsLiveSession(initial?.isLiveSession ?? false);
+      setLiveMinutes(initial?.liveSessionSeconds ? String(Math.round(initial.liveSessionSeconds / 60)) : '');
+    }
   }, [open, initial]);
 
   return (
@@ -303,11 +433,43 @@ const ProgramDialog: React.FC<ProgramDialogProps> = ({ open, onClose, onSave, in
           <TextField label="Program name" value={name} onChange={e => setName(e.target.value)} required autoFocus size="small"
             placeholder="e.g. Kalistenika, Siłownia, Full Body" />
           <TextField label="Description" value={description} onChange={e => setDescription(e.target.value)} size="small" multiline rows={2} />
+          <FormControlLabel
+            sx={{ ml: 0, alignItems: 'flex-start' }}
+            control={<Switch checked={isLiveSession} onChange={e => setIsLiveSession(e.target.checked)} size="small" />}
+            label={
+              <Box sx={{ ml: 0.5 }}>
+                <Typography variant="body2">Live session</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Guided step-by-step workout — timed exercises run a countdown with play/pause and prev/next
+                </Typography>
+              </Box>
+            }
+          />
+          {isLiveSession && (
+            <TextField
+              label="Total session time"
+              type="number"
+              size="small"
+              value={liveMinutes}
+              onChange={e => setLiveMinutes(e.target.value)}
+              sx={{ maxWidth: 240 }}
+              inputProps={{ min: 0 }}
+              InputProps={{ endAdornment: <InputAdornment position="end">min</InputAdornment> }}
+              helperText="Optional — overall countdown shown during the live session"
+            />
+          )}
         </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={() => { if (name.trim()) { onSave(name.trim(), description.trim()); onClose(); } }}
+        <Button
+          onClick={() => {
+            if (!name.trim()) return;
+            const secs = liveMinutes && parseFloat(liveMinutes) > 0
+              ? Math.round(parseFloat(liveMinutes) * 60) : undefined;
+            onSave(name.trim(), description.trim(), isLiveSession, secs);
+            onClose();
+          }}
           variant="contained" disabled={!name.trim()}>
           {initial ? 'Save' : 'Create'}
         </Button>
@@ -344,7 +506,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ open, onClose, onSave, pr
     const prog = programs.find(p => p.id === pid);
     setEntries(prog ? prog.exercises.map(def => ({
       exerciseDefId: def.id,
-      sets: def.plannedSetReps.map(r => ({ reps: String(r), weight: def.plannedWeight ? String(def.plannedWeight) : '' })),
+      sets: def.sets.map(s => ({ reps: String(s.value), weight: def.plannedWeight ? String(def.plannedWeight) : '' })),
     })) : []);
   }, [open, programs]);
 
@@ -353,7 +515,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ open, onClose, onSave, pr
     const prog = programs.find(p => p.id === pid);
     setEntries(prog ? prog.exercises.map(def => ({
       exerciseDefId: def.id,
-      sets: def.plannedSetReps.map(r => ({ reps: String(r), weight: def.plannedWeight ? String(def.plannedWeight) : '' })),
+      sets: def.sets.map(s => ({ reps: String(s.value), weight: def.plannedWeight ? String(def.plannedWeight) : '' })),
     })) : []);
   };
 
@@ -363,7 +525,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ open, onClose, onSave, pr
   const addSet = (ei: number) => {
     const def = findExercise(programs, entries[ei].exerciseDefId);
     setEntries(prev => prev.map((e, i) => i !== ei ? e : {
-      ...e, sets: [...e.sets, { reps: String(def?.plannedSetReps?.[e.sets.length] ?? def?.plannedSetReps?.[0] ?? 10), weight: def?.plannedWeight ? String(def.plannedWeight) : '' }],
+      ...e, sets: [...e.sets, { reps: String(def ? setValueAt(def, e.sets.length) : 10), weight: def?.plannedWeight ? String(def.plannedWeight) : '' }],
     }));
   };
   const removeSet = (ei: number, si: number) =>
@@ -442,7 +604,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ open, onClose, onSave, pr
                   <TableHead>
                     <TableRow>
                       <TableCell sx={{ py: 0.5, width: 40 }}>#</TableCell>
-                      <TableCell sx={{ py: 0.5 }}>Reps</TableCell>
+                      <TableCell sx={{ py: 0.5 }}>{unitColumnLabel(def, ' (s)')}</TableCell>
                       <TableCell sx={{ py: 0.5 }}>Weight kg</TableCell>
                       <TableCell sx={{ py: 0.5, width: 40 }} />
                     </TableRow>
@@ -452,7 +614,10 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ open, onClose, onSave, pr
                       <TableRow key={si}>
                         <TableCell sx={{ py: 0.5 }}><Typography variant="body2" color="text.secondary">{si + 1}</Typography></TableCell>
                         <TableCell sx={{ py: 0.5 }}>
-                          <TextField value={s.reps} onChange={e => updateSet(ei, si, 'reps', e.target.value)} size="small" type="number" sx={{ width: 90 }} inputProps={{ min: 0 }} />
+                          <TextField value={s.reps} onChange={e => updateSet(ei, si, 'reps', e.target.value)} size="small" type="number" sx={{ width: 100 }} inputProps={{ min: 0 }}
+                            InputProps={setUnitAt(def, si) === 'time'
+                              ? { endAdornment: <InputAdornment position="end">s</InputAdornment> }
+                              : undefined} />
                         </TableCell>
                         <TableCell sx={{ py: 0.5 }}>
                           <TextField value={s.weight} onChange={e => updateSet(ei, si, 'weight', e.target.value)} size="small" type="number" sx={{ width: 110 }} inputProps={{ min: 0, step: 0.5 }} placeholder={def?.category === 'calisthenics' ? 'bw' : ''} />
@@ -539,19 +704,19 @@ const SessionCard: React.FC<SessionCardProps> = ({ session, programs, onDelete }
                   <TableHead>
                     <TableRow>
                       <TableCell sx={{ py: 0.25, fontWeight: 600 }}>#</TableCell>
-                      <TableCell sx={{ py: 0.25, fontWeight: 600 }}>Reps</TableCell>
+                      <TableCell sx={{ py: 0.25, fontWeight: 600 }}>{unitColumnLabel(def)}</TableCell>
                       <TableCell sx={{ py: 0.25, fontWeight: 600 }}>Weight</TableCell>
                       <TableCell sx={{ py: 0.25, fontWeight: 600 }}>vs plan</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {ex.sets.map((s, si) => {
-                      const repOk = def ? s.reps >= (def.plannedSetReps[si] ?? def.plannedSetReps[0] ?? 0) : true;
+                      const repOk = def ? s.reps >= setValueAt(def, si) : true;
                       const wOk = !def?.plannedWeight || (s.weight != null && s.weight >= def.plannedWeight);
                       return (
                         <TableRow key={si}>
                           <TableCell sx={{ py: 0.25 }}>{si + 1}</TableCell>
-                          <TableCell sx={{ py: 0.25 }}><Typography variant="body2" color={repOk ? 'success.main' : 'error.main'}>{s.reps}</Typography></TableCell>
+                          <TableCell sx={{ py: 0.25 }}><Typography variant="body2" color={repOk ? 'success.main' : 'error.main'}>{formatSetValue(s.reps, setUnitAt(def, si))}</Typography></TableCell>
                           <TableCell sx={{ py: 0.25 }}><Typography variant="body2" color={wOk ? 'success.main' : 'error.main'}>{s.weight != null ? `${s.weight} kg` : 'bw'}</Typography></TableCell>
                           <TableCell sx={{ py: 0.25 }}>{repOk && wOk ? <Chip label="✓" size="small" color="success" /> : <Chip label="below" size="small" color="warning" />}</TableCell>
                         </TableRow>
@@ -566,6 +731,237 @@ const SessionCard: React.FC<SessionCardProps> = ({ session, programs, onDelete }
         </Box>
       </Collapse>
     </Paper>
+  );
+};
+
+// ─── LiveSessionPlayer ────────────────────────────────────────────────────────
+
+/** One set of one exercise — the program flattened into a guided sequence. */
+interface LiveStep {
+  exercise: ExerciseDef;
+  setIndex: number;   // 0-based set within the exercise
+  totalSets: number;
+  value: number;      // reps, or seconds when unit === 'time'
+  unit: PlanUnit;
+  description?: string;
+}
+
+function buildLiveSteps(program: TrainingProgram): LiveStep[] {
+  return program.exercises.flatMap(ex =>
+    ex.sets.map((s, i) => ({
+      exercise: ex, setIndex: i, totalSets: ex.sets.length,
+      value: s.value, unit: s.unit, description: s.description || undefined,
+    })),
+  );
+}
+
+interface LiveSessionPlayerProps {
+  program: TrainingProgram;
+  onClose: () => void;
+  onComplete: (session: WorkoutSession) => void;
+}
+
+/**
+ * Guided step-by-step workout player. Walks through every set of a program;
+ * timed exercises run a live countdown with a progress bar, untimed ones show
+ * the rep target. Play/pause, prev and next control the flow; on finish the
+ * planned values are logged as a {@link WorkoutSession}.
+ */
+const LiveSessionPlayer: React.FC<LiveSessionPlayerProps> = ({ program, onClose, onComplete }) => {
+  const steps = useMemo(() => buildLiveSteps(program), [program]);
+  const totalSessionSeconds = program.liveSessionSeconds ?? 0;
+  const hasSessionTimer = totalSessionSeconds > 0;
+  const [stepIndex, setStepIndex] = useState(0);
+  const [remaining, setRemaining] = useState(() => steps[0]?.unit === 'time' ? steps[0].value : 0);
+  const [running, setRunning] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+
+  const finished = stepIndex >= steps.length;
+  const current: LiveStep | null = finished ? null : steps[stepIndex];
+  const next: LiveStep | undefined = steps[stepIndex + 1];
+
+  const goNext = useCallback(() => setStepIndex(i => i + 1), []);
+  const goPrev = useCallback(() => setStepIndex(i => Math.max(0, i - 1)), []);
+
+  // Load the duration when the active step changes.
+  useEffect(() => {
+    setRemaining(current && current.unit === 'time' ? current.value : 0);
+  }, [current]);
+
+  // Countdown — ticks the active timed step and auto-advances when it elapses.
+  useEffect(() => {
+    if (!running || finished || current?.unit !== 'time') return;
+    const id = setInterval(() => {
+      setRemaining(prev => {
+        if (prev <= 1) { goNext(); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [running, finished, current, stepIndex, goNext]);
+
+  // Whole-session clock — counts elapsed time up while the workout runs.
+  useEffect(() => {
+    if (!running || finished) return;
+    const id = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(id);
+  }, [running, finished]);
+
+  /** Log the steps completed so far (breaks excluded) as a workout session. */
+  const finish = useCallback((uptoExclusive: number) => {
+    const byExercise = new Map<string, WorkoutSetLog[]>();
+    for (let i = 0; i < uptoExclusive && i < steps.length; i++) {
+      const st = steps[i];
+      if (st.exercise.category === 'break') continue; // rests are not logged work
+      const sets = byExercise.get(st.exercise.id) ?? [];
+      sets.push({ reps: st.value, weight: st.exercise.plannedWeight });
+      byExercise.set(st.exercise.id, sets);
+    }
+    if (byExercise.size > 0) {
+      onComplete({
+        id: uuidv4(), date: todayIso(), programId: program.id,
+        exercises: [...byExercise].map(([exerciseDefId, sets]) => ({ exerciseDefId, sets })),
+      });
+    }
+    onClose();
+  }, [steps, program.id, onComplete, onClose]);
+
+  const isBreak = current?.exercise.category === 'break';
+  const progressPct = current && current.unit === 'time' && current.value > 0
+    ? ((current.value - remaining) / current.value) * 100
+    : 0;
+  const sessionOver = hasSessionTimer && elapsed >= totalSessionSeconds;
+
+  return (
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <PlayCircleFilledIcon color="primary" />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle1" fontWeight={700} noWrap>{program.name}</Typography>
+          <Typography variant="caption" color="text.secondary">Live session</Typography>
+        </Box>
+        {!finished && (
+          <Typography variant="body2" color="text.secondary">
+            Step {stepIndex + 1} / {steps.length}
+          </Typography>
+        )}
+      </DialogTitle>
+
+      <DialogContent dividers>
+        {!finished && (
+          <Box sx={{ mb: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <Typography variant="caption" color="text.secondary">Session time</Typography>
+              <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}
+                color={sessionOver ? 'error.main' : 'text.secondary'}>
+                {formatClock(elapsed)}{hasSessionTimer ? ` / ${formatClock(totalSessionSeconds)}` : ''}
+              </Typography>
+            </Box>
+            {hasSessionTimer && (
+              <LinearProgress
+                variant="determinate"
+                value={Math.min(100, (elapsed / totalSessionSeconds) * 100)}
+                color={sessionOver ? 'error' : 'secondary'}
+                sx={{ height: 6, borderRadius: 3, mt: 0.5 }}
+              />
+            )}
+          </Box>
+        )}
+        {finished ? (
+          <Box sx={{ textAlign: 'center', py: 4 }}>
+            <CheckCircleOutlineIcon sx={{ fontSize: 72, color: 'success.main', mb: 1 }} />
+            <Typography variant="h6">Workout complete!</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {steps.length} step{steps.length !== 1 ? 's' : ''} done · {formatClock(elapsed)} elapsed
+            </Typography>
+          </Box>
+        ) : current ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 2 }}>
+            {current.exercise.photo && (
+              <Box sx={{ width: 140, height: 140, borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
+                <img src={current.exercise.photo} alt={current.exercise.name}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </Box>
+            )}
+            <Box sx={{ textAlign: 'center' }}>
+              <Chip label={CATEGORY_LABELS[current.exercise.category]}
+                color={CATEGORY_COLORS[current.exercise.category]} size="small" sx={{ mb: 0.5 }} />
+              <Typography variant="h5" fontWeight={700}>{current.exercise.name}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {isBreak ? 'Rest' : `Set ${current.setIndex + 1} / ${current.totalSets}`}
+              </Typography>
+              {current.description && (
+                <Typography variant="body2" color="primary" sx={{ fontStyle: 'italic', mt: 0.25 }}>
+                  {current.description}
+                </Typography>
+              )}
+            </Box>
+
+            {current.unit === 'time' ? (
+              <Box sx={{ width: '100%', textAlign: 'center' }}>
+                <Typography variant="h1" sx={{ fontWeight: 300, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
+                  {formatClock(remaining)}
+                </Typography>
+                <LinearProgress
+                  variant="determinate"
+                  value={progressPct}
+                  color={isBreak ? 'info' : 'primary'}
+                  sx={{ height: 10, borderRadius: 5, mt: 1 }}
+                />
+              </Box>
+            ) : (
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h1" sx={{ fontWeight: 300, lineHeight: 1.1 }}>{current.value}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  reps{current.exercise.plannedWeight ? ` @ ${current.exercise.plannedWeight} kg` : ''}
+                </Typography>
+              </Box>
+            )}
+
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+              {next ? `Next: ${next.exercise.name}` : 'Last step'}
+            </Typography>
+          </Box>
+        ) : null}
+      </DialogContent>
+
+      <DialogActions sx={{ flexWrap: 'wrap', gap: 1, p: 2 }}>
+        {finished ? (
+          <>
+            <Button onClick={onClose} color="inherit">Close without saving</Button>
+            <Box sx={{ flex: 1 }} />
+            <Button variant="contained" color="success" startIcon={<CheckCircleOutlineIcon />}
+              onClick={() => finish(steps.length)}>
+              Save session
+            </Button>
+          </>
+        ) : (
+          <>
+            <Tooltip title="Previous step">
+              <span>
+                <IconButton onClick={goPrev} disabled={stepIndex === 0}><SkipPreviousIcon /></IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={running ? 'Pause' : 'Play'}>
+              <span>
+                <IconButton
+                  onClick={() => setRunning(r => !r)}
+                  color="primary"
+                  sx={{ border: 1, borderColor: 'divider' }}
+                >
+                  {running ? <PauseIcon /> : <PlayArrowIcon />}
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Next step">
+              <IconButton onClick={goNext}><SkipNextIcon /></IconButton>
+            </Tooltip>
+            <Box sx={{ flex: 1 }} />
+            <Button color="error" onClick={() => finish(stepIndex)}>Finish</Button>
+          </>
+        )}
+      </DialogActions>
+    </Dialog>
   );
 };
 
@@ -614,6 +1010,30 @@ const HealthPage: React.FC = () => {
       }
     }, 800);
   }, []);
+
+  // Flush a pending debounced save when the page hides or the component unmounts.
+  // Without this, closing the tab / WebView within 800 ms of an edit drops the
+  // change before it is shipped to the backend — exactly what was happening
+  // when clearing the Android app data lost recent edits.
+  useEffect(() => {
+    const flush = () => {
+      if (!saveTimerRef.current) return;
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      writeFileRef.current(
+        HEALTH_PATH,
+        JSON.stringify({ type: 'health_data', ...saveDataRef.current } satisfies HealthData, null, 2),
+      ).catch(err => console.error('[Health] flush write failed:', err));
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      flush();
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
+    };
+  }, []);
+
   const [programs, setPrograms] = useState<TrainingProgram[]>([]);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
 
@@ -621,6 +1041,7 @@ const HealthPage: React.FC = () => {
   const [programDialog, setProgramDialog] = useState<{ open: boolean; prog: TrainingProgram | null }>({ open: false, prog: null });
   const [exDialog, setExDialog] = useState<{ open: boolean; programId: string; ex: ExerciseDef | null }>({ open: false, programId: '', ex: null });
   const [sessionDialog, setSessionDialog] = useState(false);
+  const [livePlayer, setLivePlayer] = useState<TrainingProgram | null>(null);
   const [deleteProgram, setDeleteProgram] = useState<string | null>(null);
   const [deleteSession, setDeleteSession] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success'|'error' }>({ open: false, message: '', severity: 'success' });
@@ -634,7 +1055,10 @@ const HealthPage: React.FC = () => {
       if (file) {
         try {
           const data: HealthData = JSON.parse(file.toString());
-          setPrograms(data.programs ?? []);
+          // Migrate legacy exercises (exercise-level unit + parallel arrays) to sets[].
+          setPrograms((data.programs ?? []).map(p => ({
+            ...p, exercises: (p.exercises ?? []).map(normalizeExercise),
+          })));
           setSessions(data.sessions ?? []);
         } catch { /* fresh */ }
       }
@@ -646,11 +1070,11 @@ const HealthPage: React.FC = () => {
 
 
   // Program CRUD
-  const handleSaveProgram = useCallback((name: string, desc: string) => {
+  const handleSaveProgram = useCallback((name: string, desc: string, isLiveSession: boolean, liveSessionSeconds?: number) => {
     const editing = programDialog.prog;
     const next = editing
-      ? programs.map(p => p.id === editing.id ? { ...p, name, description: desc || undefined } : p)
-      : [...programs, { id: uuidv4(), name, description: desc || undefined, exercises: [], scheduledDays: [] }];
+      ? programs.map(p => p.id === editing.id ? { ...p, name, description: desc || undefined, isLiveSession, liveSessionSeconds } : p)
+      : [...programs, { id: uuidv4(), name, description: desc || undefined, isLiveSession, liveSessionSeconds, exercises: [], scheduledDays: [] }];
     setPrograms(next);
     scheduleSave(next, sessions);
   }, [programDialog.prog, programs, sessions, scheduleSave]);
@@ -715,9 +1139,10 @@ const HealthPage: React.FC = () => {
         if (def) lines.push(`    Plan: ${displayPlan(def)}`);
         ex.sets.forEach((s, si) => {
           const wStr = s.weight != null ? `@ ${s.weight} kg` : '(waga ciała)';
-          const repOk = def ? s.reps >= (def.plannedSetReps[si] ?? def.plannedSetReps[0] ?? 0) : true;
+          const repOk = def ? s.reps >= setValueAt(def, si) : true;
           const wOk = !def?.plannedWeight || (s.weight != null && s.weight >= def.plannedWeight);
-          lines.push(`    Seria ${si + 1}: ${s.reps} powt. ${wStr} ${repOk && wOk ? '✓' : '✗'}`);
+          const valStr = setUnitAt(def, si) === 'time' ? formatDuration(s.reps) : `${s.reps} powt.`;
+          lines.push(`    Seria ${si + 1}: ${valStr} ${wStr} ${repOk && wOk ? '✓' : '✗'}`);
         });
       });
     });
@@ -795,6 +1220,10 @@ const HealthPage: React.FC = () => {
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, pr: 1, flexWrap: 'wrap' }}>
                     <Typography variant="subtitle1" fontWeight={700}>{prog.name}</Typography>
+                    {prog.isLiveSession && (
+                      <Chip label="Live" size="small" color="primary"
+                        icon={<PlayCircleFilledIcon />} sx={{ height: 22, fontSize: 11 }} />
+                    )}
                     {prog.description && <Typography variant="body2" color="text.secondary">{prog.description}</Typography>}
                     <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto', flexWrap: 'wrap' }}>
                       {DAY_SHORT.map((d, idx) => (
@@ -855,10 +1284,18 @@ const HealthPage: React.FC = () => {
                       </TableBody>
                     </Table>
                   )}
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1 }}>
-                    <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => setExDialog({ open: true, programId: prog.id, ex: null })}>
-                      Add exercise
-                    </Button>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1, gap: 1, flexWrap: 'wrap' }}>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => setExDialog({ open: true, programId: prog.id, ex: null })}>
+                        Add exercise
+                      </Button>
+                      {prog.isLiveSession && prog.exercises.length > 0 && (
+                        <Button size="small" variant="contained" color="success" startIcon={<PlayArrowIcon />}
+                          onClick={() => setLivePlayer(prog)}>
+                          Start Live Session
+                        </Button>
+                      )}
+                    </Box>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                       <Button size="small" startIcon={<EditIcon />} onClick={() => setProgramDialog({ open: true, prog })}>
                         Edit program
@@ -1007,6 +1444,17 @@ const HealthPage: React.FC = () => {
         onSave={handleSaveExercise} initial={exDialog.ex} />
 
       <SessionDialog open={sessionDialog} onClose={() => setSessionDialog(false)} onSave={handleAddSession} programs={programs} />
+
+      {livePlayer && (
+        <LiveSessionPlayer
+          program={livePlayer}
+          onClose={() => setLivePlayer(null)}
+          onComplete={s => {
+            handleAddSession(s);
+            setSnackbar({ open: true, message: 'Live session logged', severity: 'success' });
+          }}
+        />
+      )}
 
       <Dialog open={!!deleteProgram} onClose={() => setDeleteProgram(null)}>
         <DialogTitle>Delete program?</DialogTitle>

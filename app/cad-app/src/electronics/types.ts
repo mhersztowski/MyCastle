@@ -31,7 +31,9 @@ export type BodyShape =
   | 'button'
   | 'capacitor'
   | 'transistor'
-  | 'dip';
+  | 'dip'
+  | 'buzzer'
+  | 'joystick';
 
 export interface PartDef {
   id: string;
@@ -60,6 +62,8 @@ export interface ComponentPlacement {
   rotation: number;
   /** When true, the component's pin labels are drawn on the canvas. */
   showPinLabels?: boolean;
+  /** Free-text annotation rendered above the component (e.g. `R 330 [Ω]`, `U1`). */
+  userLabel?: string;
 }
 
 export interface WirePoint {

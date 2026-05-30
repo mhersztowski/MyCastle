@@ -100,9 +100,10 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
     const bodyX = leads, bodyW = px(w) - leads * 2;
     return (
       <g>
-        {/* Leads */}
-        <line x1={0} y1={GRID/2} x2={leads} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
-        <line x1={leads+bodyW} y1={GRID/2} x2={px(w)} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
+        {/* Leads — end exactly at the pin centres (cell centres) so the visible
+            stub doesn't overshoot the breadboard hole. */}
+        <line x1={GRID/2} y1={GRID/2} x2={leads} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
+        <line x1={leads+bodyW} y1={GRID/2} x2={px(w)-GRID/2} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
         {/* Body */}
         <rect x={bodyX} y={GRID/2-6} width={bodyW} height={12} rx={4} fill={part.bodyColor} stroke="#8d6e63" strokeWidth={1} />
         {/* Resistance color bands (decorative) */}
@@ -121,9 +122,9 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
     const color = part.indicatorColor ?? part.bodyColor;
     return (
       <g>
-        {/* Leads */}
-        <line x1={0} y1={GRID/2} x2={leads} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
-        <line x1={leads+domeR*1.5} y1={GRID/2} x2={px(w)} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
+        {/* Leads end at the pin centres (cell centres). */}
+        <line x1={GRID/2} y1={GRID/2} x2={leads} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
+        <line x1={leads+domeR*1.5} y1={GRID/2} x2={px(w)-GRID/2} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
         {/* Flat cathode side */}
         <polygon points={`${bodyX},${GRID/2-10} ${bodyX},${GRID/2+10} ${bodyX+domeR},${GRID/2}`}
           fill={color} stroke={part.bodyColor} strokeWidth={1} />
@@ -157,8 +158,9 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
     const bodyX = leads, bodyW = GRID * 1.2;
     return (
       <g>
-        <line x1={0} y1={GRID/2} x2={leads} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
-        <line x1={leads+bodyW} y1={GRID/2} x2={px(w)} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
+        {/* Leads end at the pin centres (cell centres). */}
+        <line x1={GRID/2} y1={GRID/2} x2={leads} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
+        <line x1={leads+bodyW} y1={GRID/2} x2={px(w)-GRID/2} y2={GRID/2} stroke="#bbb" strokeWidth={2} />
         <rect x={bodyX} y={GRID/2-9} width={bodyW} height={18} rx={3} fill={part.bodyColor} stroke="#f57f17" strokeWidth={1} />
         {selected && <rect x={bodyX} y={GRID/2-9} width={bodyW} height={18} rx={3} fill="none" stroke="#4fc3f7" strokeWidth={2} />}
       </g>
@@ -175,12 +177,87 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
           fill={part.bodyColor} stroke={strokeColor} strokeWidth={strokeWidth} />
         {/* Flat side */}
         <line x1={cx} y1={cy-bodyR} x2={cx} y2={cy+bodyR} stroke={strokeColor} strokeWidth={strokeWidth} />
-        {/* Leads */}
+        {/* Leads — end at the pin centres (cell centres). */}
         {part.pins.map(p => (
-          <line key={p.id} x1={px(p.x)+GRID/2} y1={px(p.y)} x2={px(p.x)+GRID/2} y2={cy+bodyR} stroke="#bbb" strokeWidth={2} />
+          <line key={p.id} x1={px(p.x)+GRID/2} y1={px(p.y)+GRID/2} x2={px(p.x)+GRID/2} y2={cy+bodyR} stroke="#bbb" strokeWidth={2} />
         ))}
         <text x={cx-4} y={cy+4} fontSize={7} fontFamily="monospace" fill="white">{part.label}</text>
         {selected && <circle cx={cx} cy={cy} r={bodyR+2} fill="none" stroke="#4fc3f7" strokeWidth={2} />}
+      </g>
+    );
+  }
+
+  if (part.bodyShape === 'buzzer') {
+    // Round piezo buzzer — body fills the upper rows, leads drop from the
+    // bottom of the body straight down to the pin row.
+    const cx = px(w) / 2;
+    const bodyAreaH = px(h - 1);          // reserve the last row for pins
+    const cy = bodyAreaH / 2;
+    const bodyR = Math.min(px(w), bodyAreaH) / 2 - 2;
+    return (
+      <g>
+        <circle cx={cx} cy={cy} r={bodyR} fill={part.bodyColor} stroke="#212121" strokeWidth={1} />
+        <circle cx={cx} cy={cy} r={bodyR - 3} fill="none" stroke="#616161" strokeWidth={0.8} />
+        {/* Sound hole */}
+        <circle cx={cx} cy={cy} r={2.5} fill="#212121" />
+        {/* + polarity marker */}
+        <text x={cx + bodyR * 0.55} y={cy - bodyR * 0.45} fontSize={8} fontFamily="monospace"
+          fontWeight="bold" fill="white" textAnchor="middle" dominantBaseline="middle">+</text>
+        {/* Leads from the lower edge of the body to each pin centre */}
+        {part.pins.map(p => {
+          const lx = px(p.x) + GRID / 2;
+          const ly = px(p.y) + GRID / 2;
+          const dx = lx - cx;
+          const inside = dx * dx <= bodyR * bodyR;
+          // Start where the vertical line crosses the body circle (lower side);
+          // fall back to the body's bottom tangent if the pin sits outside it.
+          const y0 = inside ? cy + Math.sqrt(bodyR * bodyR - dx * dx) : cy + bodyR;
+          return <line key={p.id} x1={lx} y1={y0} x2={lx} y2={ly} stroke="#bbb" strokeWidth={2} />;
+        })}
+        {selected && <circle cx={cx} cy={cy} r={bodyR + 2} fill="none" stroke="#4fc3f7" strokeWidth={2} />}
+      </g>
+    );
+  }
+
+  if (part.bodyShape === 'joystick') {
+    // PS-style 2-axis thumbstick module (KY-023): square PCB with a round
+    // thumbstick centred above the bottom-edge pin header.
+    const cx = px(w) / 2;
+    const stickR = Math.min(px(w), px(h - 1)) / 2 - 6;
+    const cy = stickR + 6;
+    return (
+      <g>
+        <rect x={2} y={2} width={px(w) - 4} height={px(h) - 4} rx={3}
+          fill={part.bodyColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+        {/* Thumbstick base ring */}
+        <circle cx={cx} cy={cy} r={stickR}
+          fill="#37474f" stroke="#000" strokeWidth={1} />
+        <circle cx={cx} cy={cy} r={stickR * 0.78}
+          fill="#455a64" stroke="#263238" strokeWidth={0.8} />
+        {/* Thumbstick cap */}
+        <circle cx={cx} cy={cy} r={stickR * 0.55}
+          fill="#212121" stroke="#000" strokeWidth={1} />
+        <circle cx={cx} cy={cy} r={stickR * 0.45}
+          fill="#37474f" />
+        {/* 2-axis hint */}
+        <line x1={cx - stickR * 0.32} y1={cy} x2={cx + stickR * 0.32} y2={cy}
+          stroke="#90a4ae" strokeWidth={0.6} opacity={0.7} />
+        <line x1={cx} y1={cy - stickR * 0.32} x2={cx} y2={cy + stickR * 0.32}
+          stroke="#90a4ae" strokeWidth={0.6} opacity={0.7} />
+        {/* Pin headers along the bottom-edge row */}
+        {part.pins.filter(p => p.y === h - 1).map(p => (
+          <rect key={p.id}
+            x={px(p.x) + GRID / 2 - 3} y={px(h) - 6}
+            width={6} height={6} rx={1} fill="#c0c0c0" />
+        ))}
+        {part.label && (
+          <text x={cx} y={px(h - 1) - 4} textAnchor="middle" dominantBaseline="alphabetic"
+            fontSize={8} fontFamily="monospace" fill="white" opacity={0.85}>
+            {part.label}
+          </text>
+        )}
+        {selected && <rect x={2} y={2} width={px(w) - 4} height={px(h) - 4} rx={3}
+          fill="none" stroke="#4fc3f7" strokeWidth={2} />}
       </g>
     );
   }
@@ -197,9 +274,17 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
       {part.pins.filter(p => p.x === w-1 || p.x === w).map(p => (
         <line key={p.id} x1={px(w)-2} y1={px(p.y)+GRID/2} x2={px(w)} y2={px(p.y)+GRID/2} stroke="#c0c0c0" strokeWidth={2} />
       ))}
-      {/* Bottom pins */}
-      {part.pins.filter(p => p.y === h-1 || p.y === h).map(p => (
+      {/* Bottom pins — exclude corners that are already drawn as left/right pins */}
+      {part.pins.filter(p => (p.y === h-1 || p.y === h) && p.x !== 0 && p.x !== w-1 && p.x !== w).map(p => (
         <line key={p.id} x1={px(p.x)+GRID/2} y1={px(h)-2} x2={px(p.x)+GRID/2} y2={px(h)} stroke="#c0c0c0" strokeWidth={2} />
+      ))}
+      {/* Interior pins — fall back to a small square marker so unusually-placed
+          pins (e.g. a header strip mid-body) are still visible on the canvas. */}
+      {part.pins.filter(p =>
+        p.x !== 0 && p.x !== w-1 && p.x !== w &&
+        p.y !== 0 && p.y !== h-1 && p.y !== h
+      ).map(p => (
+        <rect key={p.id} x={px(p.x)+GRID/2-3} y={px(p.y)+GRID/2-3} width={6} height={6} rx={1} fill="#c0c0c0" />
       ))}
       {part.label && (
         <text x={px(w)/2} y={px(h)/2} textAnchor="middle" dominantBaseline="middle"
@@ -248,20 +333,33 @@ function px(v: number) { return v * GRID; }
 
 // ── Pin labels (toggled per component via Properties) ─────────────────────────
 
-function PinLabels({ part, rotation }: { part: PartDef; rotation: number }) {
+function PinLabels({ part }: { part: PartDef }) {
+  // Labels sit in the component's LOCAL frame and rotate with the package —
+  // counter-rotating to keep them upright caused overlap on rotated DIP-style
+  // chips because the text axis ended up parallel to the closely-spaced pin
+  // row. Letting text rotate with the body matches PCB / breadboard convention
+  // (read horizontal chip labels with a slight head tilt) and avoids collisions
+  // by aligning each label perpendicular to its pin row.
+  const LABEL_INSET = 12;
+  const w = part.width, h = part.height;
   return (
     <>
       {part.pins.filter(p => p.label).map(p => {
         const cx = px(p.x) + GRID / 2;
         const cy = px(p.y) + GRID / 2;
-        // Counter-rotate each label so text stays upright whatever the
-        // component's rotation.
+        // Shift along ONE axis only — perpendicular to the edge the pin sits on.
+        // A combined diagonal shift for corner pins (top-most of a DIP row) was
+        // dragging those labels off the pin column once the chip was rotated.
+        let ox = 0, oy = 0;
+        if (p.x <= 0) ox = LABEL_INSET;
+        else if (p.x >= w - 1) ox = -LABEL_INSET;
+        else if (p.y <= 0) oy = LABEL_INSET;
+        else if (p.y >= h - 1) oy = -LABEL_INSET;
         return (
           <text
             key={p.id}
-            x={cx}
-            y={cy}
-            transform={`rotate(${-rotation} ${cx} ${cy})`}
+            x={cx + ox}
+            y={cy + oy}
             textAnchor="middle"
             dominantBaseline="middle"
             fontSize={7}
@@ -280,6 +378,34 @@ function PinLabels({ part, rotation }: { part: PartDef; rotation: number }) {
   );
 }
 
+// ── Free-text label rendered above each component (value / designator) ───────
+
+function ComponentLabel({ part, text, rotation }: { part: PartDef; text: string; rotation: number }) {
+  // Anchor above the component's bounding box. Counter-rotating around the
+  // anchor keeps the text upright on screen for any component rotation.
+  const cx = px(part.width) / 2;
+  const cy = -6;
+  return (
+    <text
+      x={cx}
+      y={cy}
+      transform={`rotate(${-rotation} ${cx} ${cy})`}
+      textAnchor="middle"
+      dominantBaseline="alphabetic"
+      fontSize={10}
+      fontFamily="monospace"
+      fontWeight={600}
+      fill="#fff"
+      stroke="#1a1a1a"
+      strokeWidth={3}
+      paintOrder="stroke"
+      style={{ pointerEvents: 'none', userSelect: 'none' }}
+    >
+      {text}
+    </text>
+  );
+}
+
 // ── Snap helpers ──────────────────────────────────────────────────────────────
 
 interface SnapTarget { gx: number; gy: number; pinKey?: string; compId?: string }
@@ -291,10 +417,11 @@ function snapToNearest(
 ): SnapTarget {
   if (!wireMode) return { gx: Math.round(gx), gy: Math.round(gy) };
 
-  // Pin centres, breadboard holes and the background dot grid all sit at
-  // half-cell offsets. A non-pin wire point must fall back to the floor()+0.5
-  // hole lattice — rounding to the integer cell corner left wires off-pin.
-  let best: SnapTarget = { gx: Math.floor(gx) + 0.5, gy: Math.floor(gy) + 0.5 };
+  // Wire fallback snaps to the half-cell lattice (0, 0.5, 1, 1.5, …) — twice
+  // as dense as the integer cell grid. Pin centres and breadboard holes sit at
+  // p+0.5, integer cell corners sit at p — both are valid wire vertices and
+  // both align with the dotgrid rendered behind the canvas.
+  let best: SnapTarget = { gx: Math.round(gx * 2) / 2, gy: Math.round(gy * 2) / 2 };
   let bestDist = SNAP_RADIUS;
 
   for (const comp of components) {
@@ -974,35 +1101,29 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           onContextMenu={e => e.preventDefault()}
         >
           <defs>
-            {/* Dot grid background pattern */}
-            <pattern id="dotgrid" x={pan.x % (GRID * zoom)} y={pan.y % (GRID * zoom)}
-              width={GRID * zoom} height={GRID * zoom} patternUnits="userSpaceOnUse">
-              <circle cx={GRID * zoom / 2} cy={GRID * zoom / 2} r={Math.max(0.5, zoom * 1.2)} fill="#333" />
-            </pattern>
+            {/* Dot grid background pattern. In wire mode the lattice is twice as
+                dense AND placed at tile corners (world 0, 0.5, 1, …) so dots
+                land on integer cell corners AND breadboard / pin half-cell
+                positions — matching the wire snap. Other modes keep one dot
+                per cell centre. */}
+            {(() => {
+              const step = (inWireMode ? GRID / 2 : GRID) * zoom;
+              const cx = inWireMode ? 0 : step / 2;
+              return (
+                <pattern id="dotgrid" x={pan.x % step} y={pan.y % step}
+                  width={step} height={step} patternUnits="userSpaceOnUse">
+                  <circle cx={cx} cy={cx}
+                    r={Math.max(0.5, zoom * (inWireMode ? 0.9 : 1.2))} fill="#333" />
+                </pattern>
+              );
+            })()}
           </defs>
           {/* Background grid */}
           <rect width={svgSize.w} height={svgSize.h} fill="#1a1a1a" />
           <rect width={svgSize.w} height={svgSize.h} fill="url(#dotgrid)" />
 
           <g transform={transformStr}>
-            {/* Placed wires */}
-            {wires.map(wire => (
-              <polyline
-                key={wire.id}
-                points={wire.points.map(p => `${p.x * GRID},${p.y * GRID}`).join(' ')}
-                stroke={wire.color}
-                strokeWidth={3}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ cursor: 'pointer' }}
-                onClick={e => handleWireClick(wire.id, e)}
-                opacity={selectedId === wire.id ? 1 : 0.85}
-                filter={selectedId === wire.id ? 'drop-shadow(0 0 3px #4fc3f7)' : undefined}
-              />
-            ))}
-
-            {/* Placed components */}
+            {/* Placed components — drawn below wires so the wire layer stays on top. */}
             {components.map(comp => {
               const part = getPartDef(comp.partId);
               if (!part) return null;
@@ -1019,7 +1140,40 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
                 >
                   <PartBody part={part} w={part.width} h={part.height} selected={isSelected} />
                   <PinDots part={part} activeWireMode={inWireMode} snapPinKey={hpk} />
-                  {comp.showPinLabels && <PinLabels part={part} rotation={comp.rotation} />}
+                  {comp.showPinLabels && <PinLabels part={part} />}
+                  {comp.userLabel && <ComponentLabel part={part} text={comp.userLabel} rotation={comp.rotation} />}
+                </g>
+              );
+            })}
+
+            {/* Placed wires — always rendered on top of components. Wider transparent
+                hit area keeps the thin stroke clickable. */}
+            {wires.map(wire => {
+              const pts = wire.points.map(p => `${p.x * GRID},${p.y * GRID}`).join(' ');
+              const isSelected = selectedId === wire.id;
+              return (
+                <g key={wire.id}>
+                  <polyline
+                    points={pts}
+                    stroke="transparent"
+                    strokeWidth={14}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ cursor: mode === 'select' ? 'pointer' : 'crosshair' }}
+                    onClick={e => handleWireClick(wire.id, e)}
+                  />
+                  <polyline
+                    points={pts}
+                    stroke={wire.color}
+                    strokeWidth={3}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ pointerEvents: 'none' }}
+                    opacity={isSelected ? 1 : 0.85}
+                    filter={isSelected ? 'drop-shadow(0 0 3px #4fc3f7)' : undefined}
+                  />
                 </g>
               );
             })}
