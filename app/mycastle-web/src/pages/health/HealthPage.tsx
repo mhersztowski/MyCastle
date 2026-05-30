@@ -1010,6 +1010,30 @@ const HealthPage: React.FC = () => {
       }
     }, 800);
   }, []);
+
+  // Flush a pending debounced save when the page hides or the component unmounts.
+  // Without this, closing the tab / WebView within 800 ms of an edit drops the
+  // change before it is shipped to the backend — exactly what was happening
+  // when clearing the Android app data lost recent edits.
+  useEffect(() => {
+    const flush = () => {
+      if (!saveTimerRef.current) return;
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      writeFileRef.current(
+        HEALTH_PATH,
+        JSON.stringify({ type: 'health_data', ...saveDataRef.current } satisfies HealthData, null, 2),
+      ).catch(err => console.error('[Health] flush write failed:', err));
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      flush();
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
+    };
+  }, []);
+
   const [programs, setPrograms] = useState<TrainingProgram[]>([]);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
 

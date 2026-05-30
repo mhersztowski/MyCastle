@@ -219,6 +219,49 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
     );
   }
 
+  if (part.bodyShape === 'joystick') {
+    // PS-style 2-axis thumbstick module (KY-023): square PCB with a round
+    // thumbstick centred above the bottom-edge pin header.
+    const cx = px(w) / 2;
+    const stickR = Math.min(px(w), px(h - 1)) / 2 - 6;
+    const cy = stickR + 6;
+    return (
+      <g>
+        <rect x={2} y={2} width={px(w) - 4} height={px(h) - 4} rx={3}
+          fill={part.bodyColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+        {/* Thumbstick base ring */}
+        <circle cx={cx} cy={cy} r={stickR}
+          fill="#37474f" stroke="#000" strokeWidth={1} />
+        <circle cx={cx} cy={cy} r={stickR * 0.78}
+          fill="#455a64" stroke="#263238" strokeWidth={0.8} />
+        {/* Thumbstick cap */}
+        <circle cx={cx} cy={cy} r={stickR * 0.55}
+          fill="#212121" stroke="#000" strokeWidth={1} />
+        <circle cx={cx} cy={cy} r={stickR * 0.45}
+          fill="#37474f" />
+        {/* 2-axis hint */}
+        <line x1={cx - stickR * 0.32} y1={cy} x2={cx + stickR * 0.32} y2={cy}
+          stroke="#90a4ae" strokeWidth={0.6} opacity={0.7} />
+        <line x1={cx} y1={cy - stickR * 0.32} x2={cx} y2={cy + stickR * 0.32}
+          stroke="#90a4ae" strokeWidth={0.6} opacity={0.7} />
+        {/* Pin headers along the bottom-edge row */}
+        {part.pins.filter(p => p.y === h - 1).map(p => (
+          <rect key={p.id}
+            x={px(p.x) + GRID / 2 - 3} y={px(h) - 6}
+            width={6} height={6} rx={1} fill="#c0c0c0" />
+        ))}
+        {part.label && (
+          <text x={cx} y={px(h - 1) - 4} textAnchor="middle" dominantBaseline="alphabetic"
+            fontSize={8} fontFamily="monospace" fill="white" opacity={0.85}>
+            {part.label}
+          </text>
+        )}
+        {selected && <rect x={2} y={2} width={px(w) - 4} height={px(h) - 4} rx={3}
+          fill="none" stroke="#4fc3f7" strokeWidth={2} />}
+      </g>
+    );
+  }
+
   // Generic IC / ic shape
   return (
     <g>
@@ -234,6 +277,14 @@ function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: numbe
       {/* Bottom pins — exclude corners that are already drawn as left/right pins */}
       {part.pins.filter(p => (p.y === h-1 || p.y === h) && p.x !== 0 && p.x !== w-1 && p.x !== w).map(p => (
         <line key={p.id} x1={px(p.x)+GRID/2} y1={px(h)-2} x2={px(p.x)+GRID/2} y2={px(h)} stroke="#c0c0c0" strokeWidth={2} />
+      ))}
+      {/* Interior pins — fall back to a small square marker so unusually-placed
+          pins (e.g. a header strip mid-body) are still visible on the canvas. */}
+      {part.pins.filter(p =>
+        p.x !== 0 && p.x !== w-1 && p.x !== w &&
+        p.y !== 0 && p.y !== h-1 && p.y !== h
+      ).map(p => (
+        <rect key={p.id} x={px(p.x)+GRID/2-3} y={px(p.y)+GRID/2-3} width={6} height={6} rx={1} fill="#c0c0c0" />
       ))}
       {part.label && (
         <text x={px(w)/2} y={px(h)/2} textAnchor="middle" dominantBaseline="middle"
@@ -366,10 +417,11 @@ function snapToNearest(
 ): SnapTarget {
   if (!wireMode) return { gx: Math.round(gx), gy: Math.round(gy) };
 
-  // Pin centres, breadboard holes and the background dot grid all sit at
-  // half-cell offsets. A non-pin wire point must fall back to the floor()+0.5
-  // hole lattice — rounding to the integer cell corner left wires off-pin.
-  let best: SnapTarget = { gx: Math.floor(gx) + 0.5, gy: Math.floor(gy) + 0.5 };
+  // Wire fallback snaps to the half-cell lattice (0, 0.5, 1, 1.5, …) — twice
+  // as dense as the integer cell grid. Pin centres and breadboard holes sit at
+  // p+0.5, integer cell corners sit at p — both are valid wire vertices and
+  // both align with the dotgrid rendered behind the canvas.
+  let best: SnapTarget = { gx: Math.round(gx * 2) / 2, gy: Math.round(gy * 2) / 2 };
   let bestDist = SNAP_RADIUS;
 
   for (const comp of components) {
@@ -1049,11 +1101,22 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
           onContextMenu={e => e.preventDefault()}
         >
           <defs>
-            {/* Dot grid background pattern */}
-            <pattern id="dotgrid" x={pan.x % (GRID * zoom)} y={pan.y % (GRID * zoom)}
-              width={GRID * zoom} height={GRID * zoom} patternUnits="userSpaceOnUse">
-              <circle cx={GRID * zoom / 2} cy={GRID * zoom / 2} r={Math.max(0.5, zoom * 1.2)} fill="#333" />
-            </pattern>
+            {/* Dot grid background pattern. In wire mode the lattice is twice as
+                dense AND placed at tile corners (world 0, 0.5, 1, …) so dots
+                land on integer cell corners AND breadboard / pin half-cell
+                positions — matching the wire snap. Other modes keep one dot
+                per cell centre. */}
+            {(() => {
+              const step = (inWireMode ? GRID / 2 : GRID) * zoom;
+              const cx = inWireMode ? 0 : step / 2;
+              return (
+                <pattern id="dotgrid" x={pan.x % step} y={pan.y % step}
+                  width={step} height={step} patternUnits="userSpaceOnUse">
+                  <circle cx={cx} cy={cx}
+                    r={Math.max(0.5, zoom * (inWireMode ? 0.9 : 1.2))} fill="#333" />
+                </pattern>
+              );
+            })()}
           </defs>
           {/* Background grid */}
           <rect width={svgSize.w} height={svgSize.h} fill="#1a1a1a" />

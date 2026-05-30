@@ -32,7 +32,8 @@ export type BodyShape =
   | 'capacitor'
   | 'transistor'
   | 'dip'
-  | 'buzzer';
+  | 'buzzer'
+  | 'joystick';
 
 export interface PartDef {
   id: string;

@@ -118,6 +118,17 @@ function ThumbShape({ part }: { part: PartDef }) {
         <line x1={W * 0.58} y1={H * 0.72} x2={W * 0.58} y2={H - 2} stroke="#bbb" strokeWidth={1.5} />
       </g>
     ),
+    joystick: (
+      <g>
+        <rect x={2} y={2} width={W - 4} height={H - 4} rx={2} fill={part.bodyColor} stroke="#000" strokeWidth={0.8} />
+        <circle cx={W / 2} cy={H * 0.42} r={Math.min(W, H) * 0.28} fill="#37474f" stroke="#000" strokeWidth={0.8} />
+        <circle cx={W / 2} cy={H * 0.42} r={Math.min(W, H) * 0.16} fill="#212121" />
+        <line x1={W * 0.2} y1={H - 3} x2={W * 0.2} y2={H - 1} stroke="#bbb" strokeWidth={1.2} />
+        <line x1={W * 0.4} y1={H - 3} x2={W * 0.4} y2={H - 1} stroke="#bbb" strokeWidth={1.2} />
+        <line x1={W * 0.6} y1={H - 3} x2={W * 0.6} y2={H - 1} stroke="#bbb" strokeWidth={1.2} />
+        <line x1={W * 0.8} y1={H - 3} x2={W * 0.8} y2={H - 1} stroke="#bbb" strokeWidth={1.2} />
+      </g>
+    ),
   };
 
   return bodyShapes[part.bodyShape] ?? bodyShapes.ic;
