@@ -18,6 +18,10 @@ const CORS_ORIGIN = process.env.CAD_CORS_ORIGIN ?? '*';
 // NodeFS auto-creates parent dirs on writeFile, so no bootstrapping needed.
 const vfs = new NodeFS({ rootDir: DATA_DIR });
 
+// ── Debug log (in-memory, for mobile diagnostics) ────────────────────────────
+const DEBUG_BUFFER: string[] = [];
+const DEBUG_MAX = 300;
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function setCors(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -110,6 +114,28 @@ const server = http.createServer(async (req, res) => {
   // Serve built frontend for non-API requests
   if (!url.pathname.startsWith('/api/')) {
     if (serveStatic(req, res)) return;
+  }
+
+  // ── Debug log ──────────────────────────────────────────────────────────────
+  if (url.pathname === '/api/debug-log') {
+    if (req.method === 'GET') {
+      const clear = url.searchParams.get('clear') === '1';
+      const lines = [...DEBUG_BUFFER];
+      if (clear) DEBUG_BUFFER.length = 0;
+      json(res, { lines, count: lines.length });
+      return;
+    }
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      const incoming = Array.isArray(body.lines) ? (body.lines as string[]) : [];
+      for (const line of incoming) {
+        process.stdout.write(`\x1b[36m[DBG]\x1b[0m ${line}\n`);
+        DEBUG_BUFFER.push(line);
+      }
+      if (DEBUG_BUFFER.length > DEBUG_MAX) DEBUG_BUFFER.splice(0, DEBUG_BUFFER.length - DEBUG_MAX);
+      json(res, { ok: true, total: DEBUG_BUFFER.length });
+      return;
+    }
   }
 
   // Strip /api/vfs prefix so the route is just /stat, /readdir, etc.

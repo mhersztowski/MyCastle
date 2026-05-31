@@ -802,12 +802,32 @@ export function SimpleViewer({
   const debugLinesRef = useRef<string[]>([]);
   const debugScrollRef = useRef<HTMLDivElement>(null);
   const [, setDebugVer] = useState(0);
+  const pendingSendRef = useRef<string[]>([]);
+  const debugSessionRef = useRef(`s${Date.now().toString(36)}`);
+
   const addLog = useCallback((msg: string) => {
     if (!debugLog) return;
     const now = new Date();
     const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
-    debugLinesRef.current = [...debugLinesRef.current.slice(-(DEBUG_MAX - 1)), `${ts} ${msg}`];
+    const line = `${ts} ${msg}`;
+    debugLinesRef.current = [...debugLinesRef.current.slice(-(DEBUG_MAX - 1)), line];
+    pendingSendRef.current.push(`[${debugSessionRef.current}] ${line}`);
     setDebugVer(v => v + 1);
+  }, [debugLog]);
+
+  // Auto-flush pending lines to cad-backend every 2s
+  useEffect(() => {
+    if (!debugLog) return;
+    const id = setInterval(() => {
+      const lines = pendingSendRef.current.splice(0);
+      if (lines.length === 0) return;
+      fetch('/api/debug-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lines }),
+      }).catch(() => { /* ignore network errors */ });
+    }, 2000);
+    return () => clearInterval(id);
   }, [debugLog]);
 
   // Auto-scroll debug panel to bottom on new entries
