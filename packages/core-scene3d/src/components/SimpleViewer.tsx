@@ -868,6 +868,29 @@ export function SimpleViewer({
     }
   }, [debugLog]);
 
+  // pointercancel → synthetic pointerup — fixes TransformControls getting stuck when stylus
+  // is lifted quickly (browser fires cancel instead of up; Three.js TC doesn't handle cancel).
+  useEffect(() => {
+    if (!glInstance) return;
+    const el = glInstance.domElement;
+    const onCancel = (e: PointerEvent) => {
+      addLog?.(`✕ ${e.pointerType} cancel pid=${e.pointerId}`);
+      try {
+        el.dispatchEvent(new PointerEvent('pointerup', {
+          pointerId: e.pointerId,
+          pointerType: e.pointerType,
+          button: 0,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          bubbles: true,
+          cancelable: false,
+        }));
+      } catch { /* ignore */ }
+    };
+    el.addEventListener('pointercancel', onCancel);
+    return () => el.removeEventListener('pointercancel', onCancel);
+  }, [glInstance, addLog]);
+
   // Native pointer event logging on the canvas
   useEffect(() => {
     if (!glInstance || !debugLog) return;
