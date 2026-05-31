@@ -1,6 +1,6 @@
 import { Matrix4, Vector3, Euler, Quaternion, type Object3D } from 'three';
 
-export type NodeType = 'mesh' | 'light' | 'camera' | 'group';
+export type NodeType = 'mesh' | 'light' | 'camera' | 'group' | 'audio';
 
 export interface SceneNodeData {
   id: string;

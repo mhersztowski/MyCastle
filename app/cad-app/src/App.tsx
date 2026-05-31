@@ -14,6 +14,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import MinimizeIcon from '@mui/icons-material/Minimize';
+import HeadphonesIcon from '@mui/icons-material/Headphones';
 import { Project } from '@mhersztowski/core-cad';
 import type { Point2D, ViewMode } from '@mhersztowski/core-cad';
 import { CadCanvas } from './components/CadCanvas';
@@ -30,6 +31,7 @@ import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
 import { ResizeDivider } from './components/ResizeDivider';
 import { RepositoryPanel } from './components/RepositoryPanel';
+import { AudioPanel } from './components/AudioPanel';
 import { TemplatesPanel } from './components/TemplatesPanel';
 import { FileSystemPanel } from './components/FileSystemPanel';
 import { getCurrentUserId } from './vfs/cadProjectApi';
@@ -43,7 +45,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'repository';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'audio' | 'repository';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -240,6 +242,12 @@ export default function App() {
             value="electronics"
             label="Electronics"
             icon={<ElectricalServicesIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+          />
+          <Tab
+            value="audio"
+            label="Audio"
+            icon={<HeadphonesIcon sx={{ fontSize: 16 }} />}
             iconPosition="start"
           />
           <Tab
@@ -460,6 +468,13 @@ export default function App() {
         </Box>
         <TemplatesPanel mode="electronics" templates={activeTemplates.filter(t => t.mode === 'electronics')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
       </Box>
+
+      {/* Audio panel */}
+      {mode === 'audio' && (
+        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+          <AudioPanel />
+        </Box>
+      )}
 
       {/* Repository panel */}
       {mode === 'repository' && (

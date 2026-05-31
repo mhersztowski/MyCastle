@@ -220,6 +220,20 @@ export interface SelectedNodeCamera {
   bottom: number;
 }
 
+export interface SelectedNodeAudio {
+  src: string;
+  volume: number;
+  loop: boolean;
+  autoplay: boolean;
+  rolloffFactor: number;
+  maxDistance: number;
+  refDistance: number;
+  distanceModel: 'linear' | 'inverse' | 'exponential';
+  coneInnerAngle: number;
+  coneOuterAngle: number;
+  coneOuterGain: number;
+}
+
 export interface SelectedNodeData {
   id: string;
   name: string;
@@ -231,6 +245,7 @@ export interface SelectedNodeData {
   material?: SelectedNodeMaterial;
   light?: SelectedNodeLight;
   camera?: SelectedNodeCamera;
+  audio?: SelectedNodeAudio;
 }
 
 // ─── Scene Settings ───────────────────────────────────────────
@@ -269,6 +284,8 @@ export interface PropertiesPanelProps {
   onSetActiveCamera?: (nodeId: string | null) => void;
   sceneSettings?: SceneSettings;
   onSceneSettingsChange?: (settings: SceneSettings) => void;
+  /** Opens a file picker for audio files; resolves to a VFS path or null if cancelled. */
+  onBrowseAudioFile?: () => Promise<string | null>;
   className?: string;
 }
 

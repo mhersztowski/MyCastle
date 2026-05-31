@@ -8,3 +8,6 @@ export { CameraNode } from './CameraNode';
 export type { CameraNodeData } from './CameraNode';
 
 export { GroupNode } from './GroupNode';
+
+export { AudioNode } from './AudioNode';
+export type { AudioDistanceModel, AudioNodeData } from './AudioNode';

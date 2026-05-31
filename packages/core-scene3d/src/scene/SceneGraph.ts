@@ -7,6 +7,8 @@ import type { LightNodeData } from '../nodes/LightNode';
 import { CameraNode } from '../nodes/CameraNode';
 import type { CameraNodeData } from '../nodes/CameraNode';
 import { GroupNode } from '../nodes/GroupNode';
+import { AudioNode } from '../nodes/AudioNode';
+import type { AudioNodeData } from '../nodes/AudioNode';
 
 export interface SceneGraphData {
   version: string;
@@ -137,6 +139,24 @@ export class SceneGraph {
         case 'group':
           node = new GroupNode(baseFields(nodeData));
           break;
+        case 'audio': {
+          const d = nodeData as AudioNodeData;
+          node = new AudioNode({
+            ...baseFields(d),
+            src: d.src,
+            volume: d.volume,
+            loop: d.loop,
+            autoplay: d.autoplay,
+            rolloffFactor: d.rolloffFactor,
+            maxDistance: d.maxDistance,
+            refDistance: d.refDistance,
+            distanceModel: d.distanceModel,
+            coneInnerAngle: d.coneInnerAngle,
+            coneOuterAngle: d.coneOuterAngle,
+            coneOuterGain: d.coneOuterGain,
+          });
+          break;
+        }
         default:
           node = new SceneNode({ ...baseFields(nodeData), type: nodeData.type });
       }

@@ -18,6 +18,7 @@ import Tooltip from '@mui/material/Tooltip';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 
 const AXIS_COLORS = { x: '#ef5350', y: '#66bb6a', z: '#42a5f5' };
 
@@ -169,6 +170,7 @@ export function PropertiesPanel({
   onSetActiveCamera,
   sceneSettings,
   onSceneSettingsChange,
+  onBrowseAudioFile,
   className,
 }: PropertiesPanelProps) {
   const [editingName, setEditingName] = useState(false);
@@ -735,6 +737,98 @@ export function PropertiesPanel({
                     />
                   </PropertyRow>
                 ))}
+              </AccordionDetails>
+            </Accordion>
+          )}
+
+          {node.audio && (
+            <Accordion defaultExpanded disableGutters sx={accordionSx}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
+                <Typography sx={sectionTitleSx}>Audio</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
+                <Box sx={{ mb: 0.75 }}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', mb: 0.25, display: 'block' }}>
+                    Source URL
+                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <TextField
+                      size="small"
+                      value={node.audio.src}
+                      onChange={(e) => handleChange('audio.src', e.target.value)}
+                      placeholder="https://... or /users/.../audio.mp3"
+                      sx={{
+                        flex: 1,
+                        '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' },
+                        '& .MuiInputBase-input': { py: 0.25, px: 0.5 },
+                        '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' },
+                      }}
+                    />
+                    {onBrowseAudioFile && (
+                      <Tooltip title="Browse project audio files">
+                        <IconButton
+                          size="small"
+                          sx={{ p: 0.25, flexShrink: 0 }}
+                          onClick={async () => {
+                            const path = await onBrowseAudioFile();
+                            if (path != null) handleChange('audio.src', path);
+                          }}
+                        >
+                          <FolderOpenIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                </Box>
+                <PropertyRow label="Volume">
+                  <Slider size="small" value={node.audio.volume} min={0} max={1} step={0.01}
+                    onChange={(_, v) => handleChange('audio.volume', v as number)} sx={{ flex: 1 }} />
+                  <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                    {node.audio.volume.toFixed(2)}
+                  </Typography>
+                </PropertyRow>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0, mb: 0.5 }}>
+                  <FormControlLabel
+                    control={<Checkbox size="small" checked={node.audio.loop} onChange={(e) => handleChange('audio.loop', e.target.checked)} sx={{ p: 0.25 }} />}
+                    label={<Typography sx={{ fontSize: '0.7rem' }}>Loop</Typography>}
+                    sx={{ ml: 0, mr: 1 }}
+                  />
+                  <FormControlLabel
+                    control={<Checkbox size="small" checked={node.audio.autoplay} onChange={(e) => handleChange('audio.autoplay', e.target.checked)} sx={{ p: 0.25 }} />}
+                    label={<Typography sx={{ fontSize: '0.7rem' }}>Autoplay</Typography>}
+                    sx={{ ml: 0, mr: 0 }}
+                  />
+                </Box>
+                <PropertyRow label="Distance Model">
+                  <Select size="small" value={node.audio.distanceModel}
+                    onChange={(e) => handleChange('audio.distanceModel', e.target.value)}
+                    sx={selectSx}>
+                    <MenuItem value="inverse" sx={menuItemSx}>INVERSE</MenuItem>
+                    <MenuItem value="linear" sx={menuItemSx}>LINEAR</MenuItem>
+                    <MenuItem value="exponential" sx={menuItemSx}>EXPONENTIAL</MenuItem>
+                  </Select>
+                </PropertyRow>
+                <PropertyRow label="Ref Dist">
+                  <TextField size="small" type="number" value={node.audio.refDistance}
+                    onChange={(e) => handleChange('audio.refDistance', parseFloat(e.target.value) || 1)}
+                    slotProps={{ htmlInput: { step: 0.1, min: 0 } }}
+                    sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
+                  />
+                </PropertyRow>
+                <PropertyRow label="Max Dist">
+                  <TextField size="small" type="number" value={node.audio.maxDistance}
+                    onChange={(e) => handleChange('audio.maxDistance', parseFloat(e.target.value) || 0)}
+                    slotProps={{ htmlInput: { step: 1, min: 0 } }}
+                    sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
+                  />
+                </PropertyRow>
+                <PropertyRow label="Rolloff">
+                  <TextField size="small" type="number" value={node.audio.rolloffFactor}
+                    onChange={(e) => handleChange('audio.rolloffFactor', parseFloat(e.target.value) || 0)}
+                    slotProps={{ htmlInput: { step: 0.1, min: 0 } }}
+                    sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
+                  />
+                </PropertyRow>
               </AccordionDetails>
             </Accordion>
           )}

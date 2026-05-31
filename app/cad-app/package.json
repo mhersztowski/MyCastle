@@ -26,14 +26,17 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "allotment": "^1.20.5",
+    "howler": "^2.2.4",
+    "lamejs": "^1.2.1",
     "monaco-editor": "^0.52.0",
+    "opencascade.js": "2.0.0-beta.b5ff984",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "three": "^0.182.0",
-    "three-bvh-csg": "^0.0.18",
-    "opencascade.js": "2.0.0-beta.b5ff984"
+    "three-bvh-csg": "^0.0.18"
   },
   "devDependencies": {
+    "@types/howler": "^2.2.13",
     "@types/react": "18.2.79",
     "@types/react-dom": "18.2.25",
     "@types/three": "^0.182.0",

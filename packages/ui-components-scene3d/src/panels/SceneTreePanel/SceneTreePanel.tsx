@@ -27,6 +27,7 @@ import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutli
 import FileCopyIcon from '@mui/icons-material/FileCopy';
 import FileUploadIcon from '@mui/icons-material/FileUpload';
 import AddIcon from '@mui/icons-material/Add';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import {
   CubeIcon,
   SphereIcon,
@@ -55,6 +56,7 @@ function getNodeIcon(type: string, name?: string) {
     return <DirectionalLightIcon size={14} />;
   }
   if (type === 'camera') return <CameraIcon size={14} />;
+  if (type === 'audio') return <VolumeUpIcon sx={{ fontSize: 14 }} />;
   return <FolderIcon size={14} />;
 }
 
@@ -76,6 +78,8 @@ const addMenuItems = [
   { type: 'orthographic-camera', label: 'Orthographic Camera', icon: <CameraIcon size={14} /> },
   { type: 'group', label: 'Group', icon: <FolderIcon size={14} /> },
   { type: 'divider3' },
+  { type: 'audio', label: 'Audio Source', icon: <VolumeUpIcon sx={{ fontSize: 14 }} /> },
+  { type: 'divider4' },
   { type: 'import-mesh', label: 'Import Mesh...', icon: <FileUploadIcon sx={{ fontSize: 14 }} /> },
 ] as const;
 
@@ -621,7 +625,7 @@ export function SceneTreePanel({
         >
           <MenuList dense>
             {addMenuItems.map((item, i) =>
-              item.type === 'divider' || item.type === 'divider2' || item.type === 'divider3' ? (
+              item.type === 'divider' || item.type === 'divider2' || item.type === 'divider3' || item.type === 'divider4' ? (
                 <Divider key={`add-div-${i}`} sx={{ my: 0.25 }} />
               ) : (
                 <MenuItem

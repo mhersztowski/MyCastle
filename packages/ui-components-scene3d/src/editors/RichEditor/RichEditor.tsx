@@ -3,7 +3,7 @@ import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMod
 import { useDialog, DEFAULT_SCENE_SETTINGS } from '@mhersztowski/ui-core';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
-import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, FBXImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS } from '@mhersztowski/core-scene3d';
+import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, AudioNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, FBXImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS } from '@mhersztowski/core-scene3d';
 import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode } from '@mhersztowski/core-scene3d';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -60,6 +60,11 @@ function buildTreeNodes(node: SceneNode): SceneTreeNodeData {
       name = 'Group';
     }
   }
+  if (node.type === 'audio') {
+    if (!name || name.startsWith('audio-')) {
+      name = 'Audio Source';
+    }
+  }
 
   return {
     id: node.id,
@@ -74,6 +79,7 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
   const meshNode = node.type === 'mesh' ? (node as unknown as MeshNode) : null;
   const lightNode = node.type === 'light' ? (node as unknown as LightNode) : null;
   const cameraNode = node.type === 'camera' ? (node as unknown as CameraNode) : null;
+  const audioNode = node.type === 'audio' ? (node as unknown as AudioNode) : null;
 
   return {
     id: node.id,
@@ -149,11 +155,26 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
           shadowRadius: lightNode.shadowRadius,
         }
       : undefined,
+    audio: audioNode
+      ? {
+          src: audioNode.src,
+          volume: audioNode.volume,
+          loop: audioNode.loop,
+          autoplay: audioNode.autoplay,
+          rolloffFactor: audioNode.rolloffFactor,
+          maxDistance: audioNode.maxDistance,
+          refDistance: audioNode.refDistance,
+          distanceModel: audioNode.distanceModel,
+          coneInnerAngle: audioNode.coneInnerAngle,
+          coneOuterAngle: audioNode.coneOuterAngle,
+          coneOuterGain: audioNode.coneOuterGain,
+        }
+      : undefined,
   };
 }
 
 interface ClipboardData {
-  type: 'mesh' | 'light';
+  type: 'mesh' | 'light' | 'audio';
   data: Record<string, unknown>;
   isCut: boolean;
   sourceId: string;
@@ -168,9 +189,11 @@ interface RichEditorExtendedProps extends RichEditorProps {
   onImportFromCad?: () => void;
   cadEntityCount?: number;
   debugLog?: boolean;
+  onBrowseAudioFile?: () => Promise<string | null>;
+  resolveAudioSrc?: (src: string) => Promise<string>;
 }
 
-export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog }: RichEditorExtendedProps) {
+export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog, onBrowseAudioFile, resolveAudioSrc }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
@@ -410,6 +433,12 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     setSelectedNodeId(node.id);
   }, [sceneGraph]);
 
+  const addAudio = useCallback((parentId?: string) => {
+    const node = new AudioNode({ name: 'Audio Source' });
+    sceneGraph.addNode(node, parentId);
+    setSelectedNodeId(node.id);
+  }, [sceneGraph]);
+
   const handleNodeAdd = useCallback((type: string, parentId?: string) => {
     if (type === 'ambient-light') {
       addLight('ambient', parentId);
@@ -427,10 +456,12 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
       addCamera('orthographic', parentId);
     } else if (type === 'group') {
       addGroup(parentId);
+    } else if (type === 'audio') {
+      addAudio(parentId);
     } else {
       addMesh(type as 'box' | 'sphere' | 'cylinder' | 'cone' | 'plane' | 'torus', parentId);
     }
-  }, [addMesh, addLight, addCamera, addGroup]);
+  }, [addMesh, addLight, addCamera, addGroup, addAudio]);
 
   // ─── Delete / Duplicate ─────────────────────────────────────
 
@@ -467,6 +498,23 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
         lightType: lightNode.lightType,
         color: lightNode.color,
         intensity: lightNode.intensity,
+      });
+    } else if (node.type === 'audio') {
+      const an = node as unknown as AudioNode;
+      clone = new AudioNode({
+        name: node.name + ' Copy',
+        position: [node.position[0] + 1.5, node.position[1], node.position[2]],
+        src: an.src,
+        volume: an.volume,
+        loop: an.loop,
+        autoplay: false,
+        rolloffFactor: an.rolloffFactor,
+        maxDistance: an.maxDistance,
+        refDistance: an.refDistance,
+        distanceModel: an.distanceModel,
+        coneInnerAngle: an.coneInnerAngle,
+        coneOuterAngle: an.coneOuterAngle,
+        coneOuterGain: an.coneOuterGain,
       });
     } else {
       return;
@@ -956,6 +1004,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
                   sceneSettings={sceneSettings}
                   onPlaneClick={onPlaneClick}
                   debugLog={debugLog}
+                  resolveAudioSrc={resolveAudioSrc}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -993,6 +1042,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
                     onSetActiveCamera={handleSetActiveCamera}
                     sceneSettings={sceneSettings}
                     onSceneSettingsChange={setSceneSettings}
+                    onBrowseAudioFile={onBrowseAudioFile}
                   />
                 </Allotment.Pane>
               </Allotment>
@@ -1035,6 +1085,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
                   sceneSettings={sceneSettings}
                   onPlaneClick={onPlaneClick}
                   debugLog={debugLog}
+                  resolveAudioSrc={resolveAudioSrc}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1052,6 +1103,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
                 onSetActiveCamera={handleSetActiveCamera}
                 sceneSettings={sceneSettings}
                 onSceneSettingsChange={setSceneSettings}
+                onBrowseAudioFile={onBrowseAudioFile}
               />
             </Allotment.Pane>
           </Allotment>

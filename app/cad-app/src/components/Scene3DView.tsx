@@ -1,13 +1,22 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Box, Snackbar, Alert, IconButton, Tooltip } from '@mui/material';
+import { Box, Snackbar, Alert, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, List, ListItem, ListItemButton, ListItemText, Typography } from '@mui/material';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import FolderIcon from '@mui/icons-material/Folder';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import { RichEditor } from '@mhersztowski/ui-components-scene3d';
 import { SceneDeserializer, SceneSerializer } from '@mhersztowski/core-scene3d';
 import type { Project } from '@mhersztowski/core-cad';
 import { cadProjectToSceneJson } from '../bridge/CadToScene';
 import { ServerFileBrowser } from './ServerFileBrowser';
-import { SCENE_EXT, readFileAt, writeFileAt } from '../vfs/cadProjectApi';
+import { SCENE_EXT, readFileAt, writeFileAt, vfsListDir, vfsReadFileBin, userProjectsDir } from '../vfs/cadProjectApi';
 import type { ActiveTemplate } from './RepositoryPanel';
+
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a'];
+const AUDIO_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+  flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4',
+};
 
 interface Props {
   project: Project;
@@ -40,6 +49,10 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   const [serverMode, setServerMode] = useState<'open' | 'save' | null>(null);
   const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
   const [debugLog, setDebugLog] = useState(false);
+  const [audioPickerOpen, setAudioPickerOpen] = useState(false);
+  const [audioPickerPath, setAudioPickerPath] = useState(userProjectsDir());
+  const [audioPickerEntries, setAudioPickerEntries] = useState<{ name: string; isDir: boolean }[]>([]);
+  const audioPickerResolveRef = useRef<((path: string | null) => void) | null>(null);
 
   // Auto-load scene written by AI agent (or inserted from Templates panel)
   useEffect(() => {
@@ -97,6 +110,66 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     await writeFileAt(dir, name, SCENE_EXT, json);
   }, []);
 
+  const loadAudioPickerDir = useCallback((path: string) => {
+    vfsListDir(path).then(entries => {
+      const filtered = entries.filter(e =>
+        e.isDir || AUDIO_EXTENSIONS.some(ext => e.name.toLowerCase().endsWith(ext))
+      );
+      filtered.sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      setAudioPickerEntries(filtered);
+      setAudioPickerPath(path);
+    }).catch(() => {
+      setAudioPickerEntries([]);
+    });
+  }, []);
+
+  const handleBrowseAudioFile = useCallback((): Promise<string | null> => {
+    return new Promise((resolve) => {
+      audioPickerResolveRef.current = resolve;
+      const root = userProjectsDir();
+      setAudioPickerPath(root);
+      loadAudioPickerDir(root);
+      setAudioPickerOpen(true);
+    });
+  }, [loadAudioPickerDir]);
+
+  const handleAudioPickerNavigate = useCallback((dirName: string) => {
+    loadAudioPickerDir(`${audioPickerPath}/${dirName}`);
+  }, [audioPickerPath, loadAudioPickerDir]);
+
+  const handleAudioPickerUp = useCallback(() => {
+    const root = userProjectsDir();
+    const parent = audioPickerPath.replace(/\/[^/]+$/, '') || root;
+    loadAudioPickerDir(parent.startsWith(root) ? parent : root);
+  }, [audioPickerPath, loadAudioPickerDir]);
+
+  const handleAudioPickerSelect = useCallback((name: string) => {
+    const vfsPath = `${audioPickerPath}/${name}`;
+    const url = `${window.location.origin}/api/vfs/stream?path=${encodeURIComponent(vfsPath)}`;
+    audioPickerResolveRef.current?.(url);
+    audioPickerResolveRef.current = null;
+    setAudioPickerOpen(false);
+  }, [audioPickerPath]);
+
+  const handleAudioPickerClose = useCallback(() => {
+    audioPickerResolveRef.current?.(null);
+    audioPickerResolveRef.current = null;
+    setAudioPickerOpen(false);
+  }, []);
+
+  const resolveAudioSrc = useCallback(async (src: string): Promise<string> => {
+    if (src && !src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:')) {
+      const bytes = await vfsReadFileBin(src);
+      const ext = src.split('.').pop()?.toLowerCase() ?? '';
+      const blob = new Blob([bytes], { type: AUDIO_MIME[ext] ?? 'audio/mpeg' });
+      return URL.createObjectURL(blob);
+    }
+    return src;
+  }, []);
+
   const cadCount = project.entityRegistry.getAll().length;
 
   return (
@@ -115,6 +188,8 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           onPlaneClick={placementTemplate?.mode === 'scene3d' ? handlePlaneClick : undefined}
           style={{ height: '100%' }}
           debugLog={debugLog}
+          onBrowseAudioFile={handleBrowseAudioFile}
+          resolveAudioSrc={resolveAudioSrc}
         />
         {/* Debug toggle — visible on mobile for diagnosing gizmo/touch issues */}
         <Tooltip title={debugLog ? 'Hide debug log' : 'Show debug log'}>
@@ -159,6 +234,48 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           onDone={name => { setServerMode(null); setToast({ msg: `Saved scene: ${name}`, severity: 'success' }); }}
         />
       )}
+
+      <Dialog open={audioPickerOpen} onClose={handleAudioPickerClose} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontSize: '0.9rem', py: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          {audioPickerPath !== userProjectsDir() && (
+            <IconButton size="small" onClick={handleAudioPickerUp} sx={{ p: 0.25, mr: 0.5 }}>
+              <ArrowBackIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          )}
+          <Box sx={{ flex: 1, overflow: 'hidden' }}>
+            <Typography sx={{ fontSize: '0.9rem', fontWeight: 500 }}>Select File</Typography>
+            <Typography variant="caption" sx={{ fontSize: '0.7rem', color: 'text.secondary', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {audioPickerPath}
+            </Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, minHeight: 120 }}>
+          {audioPickerEntries.length === 0 ? (
+            <Box sx={{ px: 2, py: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8rem' }}>
+                No audio files (.mp3, .wav, .ogg, .flac, .aac, .m4a) found here.
+              </Typography>
+            </Box>
+          ) : (
+            <List dense disablePadding>
+              {audioPickerEntries.map(entry => (
+                <ListItem key={entry.name} disablePadding>
+                  <ListItemButton onClick={() => entry.isDir ? handleAudioPickerNavigate(entry.name) : handleAudioPickerSelect(entry.name)}>
+                    {entry.isDir
+                      ? <FolderIcon sx={{ fontSize: 16, color: '#ffb74d', mr: 1, flexShrink: 0 }} />
+                      : <InsertDriveFileIcon sx={{ fontSize: 16, color: 'text.disabled', mr: 1, flexShrink: 0 }} />
+                    }
+                    <ListItemText
+                      primary={entry.name}
+                      slotProps={{ primary: { sx: { fontSize: '0.8rem', color: entry.isDir ? 'text.primary' : 'text.secondary' } } }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Snackbar
         open={Boolean(toast)}

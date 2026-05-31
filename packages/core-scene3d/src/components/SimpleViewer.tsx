@@ -7,6 +7,7 @@ import type { SceneNode } from '../scene/SceneNode';
 import type { MeshNode, BufferGeometryData } from '../nodes/MeshNode';
 import type { LightNode } from '../nodes/LightNode';
 import type { CameraNode } from '../nodes/CameraNode';
+import type { AudioNode as SceneAudioNode } from '../nodes/AudioNode';
 import type { CSSProperties, ReactElement, RefObject } from 'react';
 import type { CameraPresetName, SceneSettings } from '@mhersztowski/ui-core';
 import { CAMERA_PRESETS } from './cameraPresets';
@@ -42,6 +43,8 @@ export interface SimpleViewerProps {
   onPlaneClick?: (wx: number, wz: number) => void;
   /** Show a floating debug log overlay — useful for diagnosing gizmo / touch issues on mobile. */
   debugLog?: boolean;
+  /** Resolves a VFS path (e.g. /users/default/projects/audio.mp3) to a playable URL (e.g. blob:). */
+  resolveAudioSrc?: (src: string) => Promise<string>;
 }
 
 function SelectableMesh({
@@ -187,7 +190,7 @@ function GizmoControls({
       if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
       if (isDraggingGizmoRef) isDraggingGizmoRef.current = false;
     };
-  }, [isDraggingGizmoRef]);
+  }, [isDraggingGizmoRef, addLog]);
 
   if (!targetObject) return null;
 
@@ -196,7 +199,7 @@ function GizmoControls({
       ref={controlsRef}
       object={targetObject}
       mode={transformMode}
-      size={isTouchDevice ? 1.2 : 0.7}
+      size={isTouchDevice ? 2.0 : 0.7}
     />
   );
 }
@@ -404,18 +407,138 @@ function SceneLight({
   }
 }
 
+// Shared AudioListener — one per browser context, attached to active camera
+let _sharedAudioListener: THREE.AudioListener | null = null;
+function getSharedAudioListener(): THREE.AudioListener {
+  if (!_sharedAudioListener) _sharedAudioListener = new THREE.AudioListener();
+  return _sharedAudioListener;
+}
+
+function AudioListenerEffect() {
+  const { camera } = useThree();
+  useEffect(() => {
+    const listener = getSharedAudioListener();
+    camera.add(listener);
+    return () => { camera.remove(listener); };
+  }, [camera]);
+  return null;
+}
+
+function SceneAudio({
+  node,
+  audioNode,
+  isSelected,
+  onSelect,
+  resolveAudioSrc,
+}: {
+  node: SceneNode;
+  audioNode: SceneAudioNode;
+  isSelected: boolean;
+  onSelect?: (nodeId: string) => void;
+  resolveAudioSrc?: (src: string) => Promise<string>;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    node._threeObject = groupRef.current;
+    return () => { node._threeObject = null; };
+  }, [node]);
+
+  useEffect(() => {
+    if (!audioNode.src) return;
+    const group = groupRef.current;
+    if (!group) return;
+
+    const listener = getSharedAudioListener();
+    const sound = new THREE.PositionalAudio(listener);
+    let mounted = true;
+    const blobRef = { url: null as string | null };
+
+    const doLoad = async () => {
+      let url = audioNode.src;
+      if (resolveAudioSrc) {
+        try {
+          const resolved = await resolveAudioSrc(url);
+          if (resolved.startsWith('blob:')) blobRef.url = resolved;
+          url = resolved;
+        } catch { /* fallback to original src */ }
+      }
+      if (!mounted) {
+        if (blobRef.url) { URL.revokeObjectURL(blobRef.url); blobRef.url = null; }
+        return;
+      }
+      const loader = new THREE.AudioLoader();
+      loader.load(url, (buffer: AudioBuffer) => {
+        if (!mounted) return;
+        sound.setBuffer(buffer);
+        sound.setRefDistance(audioNode.refDistance);
+        sound.setRolloffFactor(audioNode.rolloffFactor);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sound as any).setDistanceModel?.(audioNode.distanceModel);
+        sound.setMaxDistance(audioNode.maxDistance);
+        sound.setVolume(audioNode.volume);
+        sound.setLoop(audioNode.loop);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pa = sound as any;
+        pa.setConeInnerAngle?.(audioNode.coneInnerAngle);
+        pa.setConeOuterAngle?.(audioNode.coneOuterAngle);
+        pa.setConeOuterGain?.(audioNode.coneOuterGain);
+        group.add(sound);
+        if (audioNode.autoplay) sound.play();
+      }, undefined, () => { /* ignore load errors */ });
+    };
+
+    doLoad();
+
+    return () => {
+      mounted = false;
+      if (sound.isPlaying) sound.stop();
+      try { sound.disconnect(); } catch { /* ignore */ }
+      group.remove(sound);
+      if (blobRef.url) { URL.revokeObjectURL(blobRef.url); blobRef.url = null; }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioNode.src, audioNode.refDistance, audioNode.distanceModel, audioNode.maxDistance,
+      audioNode.rolloffFactor, audioNode.volume, audioNode.loop, audioNode.autoplay,
+      audioNode.coneInnerAngle, audioNode.coneOuterAngle, audioNode.coneOuterGain, resolveAudioSrc]);
+
+  return (
+    <group
+      ref={groupRef}
+      name={node.id}
+      position={node.position}
+      rotation={node.rotation as [number, number, number]}
+      scale={node.scale}
+      onClick={(e) => { e.stopPropagation(); onSelect?.(node.id); }}
+    >
+      {/* Speaker visual: wireframe octahedron */}
+      <mesh>
+        <octahedronGeometry args={[0.18, 0]} />
+        <meshBasicMaterial color={isSelected ? '#4fc3f7' : '#ffd54f'} wireframe />
+      </mesh>
+      {/* Transparent fill for easier hit testing */}
+      <mesh>
+        <octahedronGeometry args={[0.18, 0]} />
+        <meshBasicMaterial color={isSelected ? '#4fc3f7' : '#ffd54f'} transparent opacity={0.06} />
+      </mesh>
+    </group>
+  );
+}
+
 function SceneRenderer({
   sceneGraph,
   version,
   selectedNodeId,
   onNodeSelect,
   renderMode = 'realistic',
+  resolveAudioSrc,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
   selectedNodeId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
   renderMode?: SceneRenderMode;
+  resolveAudioSrc?: (src: string) => Promise<string>;
 }) {
   const objects = useMemo(() => {
     if (!sceneGraph) return [];
@@ -457,12 +580,24 @@ function SceneRenderer({
             onSelect={onNodeSelect}
           />,
         );
+      } else if (node.type === 'audio') {
+        const audioNode = node as unknown as SceneAudioNode;
+        result.push(
+          <SceneAudio
+            key={node.id}
+            node={node}
+            audioNode={audioNode}
+            isSelected={node.id === selectedNodeId}
+            onSelect={onNodeSelect}
+            resolveAudioSrc={resolveAudioSrc}
+          />,
+        );
       }
     });
 
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneGraph, version, selectedNodeId, onNodeSelect, renderMode]);
+  }, [sceneGraph, version, selectedNodeId, onNodeSelect, renderMode, resolveAudioSrc]);
 
   return <group>{objects}</group>;
 }
@@ -691,6 +826,7 @@ function SceneContent({
   onPlaneClick,
   isDraggingGizmoRef,
   addLog,
+  resolveAudioSrc,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -709,9 +845,10 @@ function SceneContent({
   onPlaneClick?: (wx: number, wz: number) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
   addLog?: (msg: string) => void;
+  resolveAudioSrc?: (src: string) => Promise<string>;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
-  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
+  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio';
   const presetConfig = CAMERA_PRESETS[cameraPreset];
 
   // Log showGizmo state changes
@@ -743,6 +880,7 @@ function SceneContent({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         <Environment preset={sceneSettings.environmentPreset as any} />
       )}
+      <AudioListenerEffect />
       <ambientLight intensity={0.3} />
       <directionalLight position={[10, 10, 5]} intensity={0.7} />
       {showGrid && <gridHelper args={[20, 20, '#444444', '#333333']} />}
@@ -752,6 +890,7 @@ function SceneContent({
         selectedNodeId={selectedNodeId}
         onNodeSelect={onNodeSelect}
         renderMode={renderMode}
+        resolveAudioSrc={resolveAudioSrc}
       />
       {showGizmo && sceneGraph && selectedNodeId && (
         <GizmoControls
@@ -798,6 +937,7 @@ export function SimpleViewer({
   sceneSettings,
   onPlaneClick,
   debugLog = false,
+  resolveAudioSrc,
 }: SimpleViewerProps) {
   const scaleXRef = useRef<HTMLSpanElement>(null);
   const scaleYRef = useRef<HTMLSpanElement>(null);
@@ -937,7 +1077,7 @@ export function SimpleViewer({
   // R3F fires onPointerMissed for EVERY tap on the gizmo (<primitive> has no R3F handlers).
   // On mobile/stylus a tap always emits click → onPointerMissed → deselects node → gizmo gone.
   // Fix: suppress deselection whenever transform handles are visible.
-  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
+  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio';
 
   return (
     <div
@@ -947,6 +1087,7 @@ export function SimpleViewer({
         width,
         height,
         overflow: 'hidden',
+        touchAction: 'none',
         ...style,
       }}
     >
@@ -979,6 +1120,7 @@ export function SimpleViewer({
           onPlaneClick={onPlaneClick}
           isDraggingGizmoRef={isDraggingGizmoRef}
           addLog={addLog}
+          resolveAudioSrc={resolveAudioSrc}
         />
       </Canvas>
       {selectedNode && (

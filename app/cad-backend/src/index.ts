@@ -5,6 +5,7 @@ import { dirname, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import { NodeFS, VfsError } from '@mhersztowski/core';
+import { JwtService, checkAuth } from '@mhersztowski/core-backend';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -13,6 +14,17 @@ const PORT = parseInt(process.env.CAD_BACKEND_PORT ?? '1897', 10);
 const PUBLIC_DIR = resolve(__dirname, '../public');
 // Allow any origin in dev; in production set CAD_CORS_ORIGIN explicitly
 const CORS_ORIGIN = process.env.CAD_CORS_ORIGIN ?? '*';
+// Shared JWT secret with mycastle-backend — set the same JWT_SECRET env var in both services
+const JWT_SECRET = process.env.JWT_SECRET ?? 'dev-secret';
+
+const jwtService = new JwtService(JWT_SECRET);
+// When false (default), all VFS operations are allowed without a token.
+// Set CAD_REQUIRE_AUTH=true in production to enforce JWT on write operations.
+const REQUIRE_AUTH = process.env.CAD_REQUIRE_AUTH === 'true';
+
+// VFS paths matching /users/{userId}/projects or /users/{userId}/projects/**
+// are publicly readable without authentication.
+const PUBLIC_PROJECT_PATH = /^\/users\/[^/]+\/projects(\/.*)?$/;
 
 // Root VFS — all paths are /users/{userId}/projects/{name}.cad.json
 // NodeFS auto-creates parent dirs on writeFile, so no bootstrapping needed.
@@ -86,6 +98,16 @@ const MIME: Record<string, string> = {
   '.woff': 'font/woff',
 };
 
+const STREAM_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+  flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  mp4: 'video/mp4', webm: 'video/webm',
+  pdf: 'application/pdf',
+  glb: 'model/gltf-binary', gltf: 'model/gltf+json',
+};
+
 function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   if (!fs.existsSync(PUBLIC_DIR)) return false;
   const url = new URL(req.url!, `http://localhost`);
@@ -142,6 +164,23 @@ const server = http.createServer(async (req, res) => {
   const route = url.pathname.replace(/^\/api\/vfs/, '');
   const path = url.searchParams.get('path') ?? '/';
 
+  // Auth check: when REQUIRE_AUTH=true, GET on public project paths is open,
+  // all writes require a valid Bearer JWT token.
+  const isPublicRead =
+    req.method === 'GET' &&
+    (route === '/capabilities' || (
+      ['/stat', '/readdir', '/readFile', '/stream'].includes(route) &&
+      PUBLIC_PROJECT_PATH.test(path)
+    ));
+
+  if (REQUIRE_AUTH && !isPublicRead) {
+    const user = checkAuth(req, jwtService);
+    if (!user) {
+      json(res, { error: 'Unauthorized', code: 'Unauthorized' }, 401);
+      return;
+    }
+  }
+
   try {
     if (req.method === 'GET') {
       switch (route) {
@@ -164,6 +203,20 @@ const server = http.createServer(async (req, res) => {
         case '/readFile': {
           const bytes = await vfs.readFile(path);
           json(res, { data: Buffer.from(bytes).toString('base64') });
+          break;
+        }
+
+        case '/stream': {
+          const bytes = await vfs.readFile(path);
+          const ext = path.split('.').pop()?.toLowerCase() ?? '';
+          const mime = STREAM_MIME[ext] ?? 'application/octet-stream';
+          res.writeHead(200, {
+            'Content-Type': mime,
+            'Content-Length': bytes.length,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-cache',
+          });
+          res.end(Buffer.from(bytes));
           break;
         }
 
