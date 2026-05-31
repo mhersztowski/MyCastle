@@ -608,7 +608,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
 
   const placementFetchingRef = useRef(false);
 
-  const handlePlacementClick = useCallback((e: React.MouseEvent) => {
+  const handlePlacementClick = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
     if (!placementTemplate?.cadFile || placementFetchingRef.current) return;
     const { gx, gy } = clientToGrid(e.clientX, e.clientY);
@@ -739,9 +739,9 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
     setComponents(cs => cs.map(c => (c.id === selectedId ? { ...c, ...updates } : c)));
   }, [selectedId, selectedType]);
 
-  // ── Mouse events ────────────────────────────────────────────────────────────
+  // ── Pointer events ───────────────────────────────────────────────────────────
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+  const handleMouseMove = useCallback((e: React.PointerEvent) => {
     const { gx, gy } = clientToGrid(e.clientX, e.clientY);
     const snap = snapToNearest(gx, gy, componentsRef.current, modeRef.current === 'wire');
     setCursorSnap(snap);
@@ -771,7 +771,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
     }
   }, [clientToGrid]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: React.PointerEvent) => {
     // Middle or right mouse → pan
     if (e.button === 1 || e.button === 2) {
       e.preventDefault();
@@ -783,10 +783,12 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
         origPanY: panRef.current.y,
         moved: false,
       };
+      svgRef.current?.setPointerCapture(e.pointerId);
     }
   }, []);
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e: React.PointerEvent) => {
+    svgRef.current?.releasePointerCapture(e.pointerId);
     dragRef.current = null;
   }, []);
 
@@ -870,7 +872,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
     setSelectedType('component');
   }, []);
 
-  const handleComponentMouseDown = useCallback((compId: string, e: React.MouseEvent) => {
+  const handleComponentMouseDown = useCallback((compId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.stopPropagation();
     if (modeRef.current !== 'select') return;
@@ -885,6 +887,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
       origCompY: comp.y,
       moved: false,
     };
+    svgRef.current?.setPointerCapture(e.pointerId);
   }, []);
 
   const handleWireClick = useCallback((wireId: string, e: React.MouseEvent) => {
@@ -1147,10 +1150,10 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
           ref={svgRef}
           width={svgSize.w}
           height={svgSize.h}
-          style={{ display: 'block', cursor: mode === 'place' ? 'crosshair' : mode === 'wire' ? 'crosshair' : 'default' }}
-          onMouseMove={handleMouseMove}
-          onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUp}
+          style={{ display: 'block', cursor: mode === 'place' ? 'crosshair' : mode === 'wire' ? 'crosshair' : 'default', touchAction: 'none' }}
+          onPointerMove={handleMouseMove}
+          onPointerDown={handleMouseDown}
+          onPointerUp={handleMouseUp}
           onClick={handleSvgClick}
           onWheel={handleWheel}
           onContextMenu={e => e.preventDefault()}
@@ -1191,7 +1194,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
                   transform={`translate(${(comp.x + off.x) * GRID},${(comp.y + off.y) * GRID}) rotate(${comp.rotation})`}
                   style={{ cursor: mode === 'select' ? 'pointer' : 'crosshair' }}
                   onClick={e => handleComponentClick(comp.id, e)}
-                  onMouseDown={e => handleComponentMouseDown(comp.id, e)}
+                  onPointerDown={e => handleComponentMouseDown(comp.id, e)}
                 >
                   <PartBody part={part} w={part.width} h={part.height} selected={isSelected} />
                   <PinDots part={part} activeWireMode={inWireMode} snapPinKey={hpk} />
@@ -1301,7 +1304,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
         {placementTemplate && (
           <Box
             sx={{ position: 'absolute', inset: 0, cursor: 'copy', zIndex: 20 }}
-            onMouseDown={handlePlacementClick}
+            onPointerDown={handlePlacementClick}
           />
         )}
       </Box>

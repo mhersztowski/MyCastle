@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect, useCallback, useState, MutableRefObject } from 'react';
+import { useRef, useMemo, useEffect, useCallback, useState, MutableRefObject, useLayoutEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment } from '@react-three/drei';
 import * as THREE from 'three';
@@ -40,6 +40,8 @@ export interface SimpleViewerProps {
   sceneSettings?: SceneSettings;
   /** Called when the user clicks on the Y=0 floor plane (for template placement). wx/wz = world X/Z coordinates. */
   onPlaneClick?: (wx: number, wz: number) => void;
+  /** Show a floating debug log overlay — useful for diagnosing gizmo / touch issues on mobile. */
+  debugLog?: boolean;
 }
 
 function SelectableMesh({
@@ -107,12 +109,14 @@ function GizmoControls({
   transformMode,
   onObjectChange,
   isDraggingGizmoRef,
+  addLog,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
   transformMode: 'translate' | 'rotate' | 'scale';
   onObjectChange?: (obj: THREE.Object3D) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
+  addLog?: (msg: string) => void;
 }) {
   const { scene } = useThree();
   const controlsRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -138,10 +142,10 @@ function GizmoControls({
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
-    const callback = () => handleDragEnd();
+    const callback = () => { addLog?.('gizmo mouseUp'); handleDragEnd(); };
     controls.addEventListener('mouseUp', callback);
     return () => controls.removeEventListener('mouseUp', callback);
-  }, [handleDragEnd]);
+  }, [handleDragEnd, addLog]);
 
   useEffect(() => {
     const controls = controlsRef.current;
@@ -158,6 +162,7 @@ function GizmoControls({
     const controls = controlsRef.current;
     if (!controls) return;
     const onDraggingChanged = (e: { value: boolean }) => {
+      addLog?.(`dragging-changed ${e.value}`);
       if (e.value) {
         if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
         if (isDraggingGizmoRef) isDraggingGizmoRef.current = true;
@@ -166,6 +171,7 @@ function GizmoControls({
         dragEndTimerRef.current = setTimeout(() => {
           if (isDraggingGizmoRef) isDraggingGizmoRef.current = false;
           dragEndTimerRef.current = null;
+          addLog?.('dragging guard cleared');
         }, 250);
       }
     };
@@ -678,6 +684,7 @@ function SceneContent({
   onObjectChange,
   onPlaneClick,
   isDraggingGizmoRef,
+  addLog,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -695,10 +702,20 @@ function SceneContent({
   onObjectChange?: (obj: THREE.Object3D) => void;
   onPlaneClick?: (wx: number, wz: number) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
+  addLog?: (msg: string) => void;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
   const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
   const presetConfig = CAMERA_PRESETS[cameraPreset];
+
+  // Log showGizmo state changes
+  const prevShowGizmoRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevShowGizmoRef.current !== showGizmo) {
+      addLog?.(`showGizmo=${showGizmo} node=${selectedNodeId?.slice(0, 8) ?? 'none'}`);
+      prevShowGizmoRef.current = showGizmo;
+    }
+  });
 
   return (
     <>
@@ -737,6 +754,7 @@ function SceneContent({
           transformMode={transformMode}
           onObjectChange={onObjectChange}
           isDraggingGizmoRef={isDraggingGizmoRef}
+          addLog={addLog}
         />
       )}
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
@@ -773,10 +791,31 @@ export function SimpleViewer({
   renderMode = 'realistic',
   sceneSettings,
   onPlaneClick,
+  debugLog = false,
 }: SimpleViewerProps) {
   const scaleXRef = useRef<HTMLSpanElement>(null);
   const scaleYRef = useRef<HTMLSpanElement>(null);
   const scaleZRef = useRef<HTMLSpanElement>(null);
+
+  // ── Debug log ────────────────────────────────────────────────────────────────
+  const DEBUG_MAX = 24;
+  const debugLinesRef = useRef<string[]>([]);
+  const debugScrollRef = useRef<HTMLDivElement>(null);
+  const [, setDebugVer] = useState(0);
+  const addLog = useCallback((msg: string) => {
+    if (!debugLog) return;
+    const now = new Date();
+    const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+    debugLinesRef.current = [...debugLinesRef.current.slice(-(DEBUG_MAX - 1)), `${ts} ${msg}`];
+    setDebugVer(v => v + 1);
+  }, [debugLog]);
+
+  // Auto-scroll debug panel to bottom on new entries
+  useLayoutEffect(() => {
+    if (debugScrollRef.current) {
+      debugScrollRef.current.scrollTop = debugScrollRef.current.scrollHeight;
+    }
+  });
 
   // Gizmo drag guard — prevents onPointerMissed from deselecting while dragging a gizmo handle
   const isDraggingGizmoRef = useRef(false);
@@ -787,9 +826,34 @@ export function SimpleViewer({
   const [glInstance, setGlInstance] = useState<THREE.WebGLRenderer | null>(null);
   const filterPenHover = useCallback((e: PointerEvent) => {
     if (e.pointerType === 'pen' && e.pressure === 0 && !isDraggingGizmoRef.current) {
+      addLog(`pen hover blocked p=0`);
       e.stopImmediatePropagation();
     }
-  }, []);
+  }, [addLog]);
+
+  // Native pointer event logging on the canvas
+  useEffect(() => {
+    if (!glInstance || !debugLog) return;
+    const el = glInstance.domElement;
+    const onDown = (e: PointerEvent) => {
+      addLog(`↓ ${e.pointerType} btn=${e.button} p=${e.pressure.toFixed(2)} (${e.offsetX.toFixed(0)},${e.offsetY.toFixed(0)})`);
+    };
+    const onUp = (e: PointerEvent) => {
+      addLog(`↑ ${e.pointerType} btn=${e.button} p=${e.pressure.toFixed(2)}`);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (e.pressure > 0) addLog(`→ ${e.pointerType} p=${e.pressure.toFixed(2)} (${e.offsetX.toFixed(0)},${e.offsetY.toFixed(0)})`);
+    };
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointermove', onMove);
+    return () => {
+      el.removeEventListener('pointerdown', onDown);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointermove', onMove);
+    };
+  }, [glInstance, debugLog, addLog]);
+
   useEffect(() => {
     if (!glInstance) return;
     const el = glInstance.domElement;
@@ -829,7 +893,12 @@ export function SimpleViewer({
       <Canvas
         camera={{ position: [5, 5, 5], fov: 75 }}
         style={{ background: backgroundColor }}
-        onPointerMissed={() => { if (!isDraggingGizmoRef.current && !showGizmo) onNodeSelect?.(null); }}
+        onPointerMissed={(e) => {
+          const drag = isDraggingGizmoRef.current;
+          const type = (e as unknown as PointerEvent).pointerType ?? 'mouse';
+          addLog(`miss ${type} drag=${drag} gizmo=${showGizmo} → ${!drag && !showGizmo ? 'DESELECT' : 'blocked'}`);
+          if (!drag && !showGizmo) onNodeSelect?.(null);
+        }}
         onCreated={({ gl }) => setGlInstance(gl)}
       >
         <SceneContent
@@ -849,6 +918,7 @@ export function SimpleViewer({
           onObjectChange={handleLiveTransform}
           onPlaneClick={onPlaneClick}
           isDraggingGizmoRef={isDraggingGizmoRef}
+          addLog={addLog}
         />
       </Canvas>
       {selectedNode && (
@@ -882,6 +952,43 @@ export function SimpleViewer({
           <div>
             <span style={{ color: '#4488ff', marginRight: 6 }}>Z</span>
             <span ref={scaleZRef}>{selectedNode.scale[2].toFixed(3)}</span>
+          </div>
+        </div>
+      )}
+      {debugLog && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            right: 8,
+            maxHeight: 220,
+            background: 'rgba(0,0,0,0.82)',
+            backdropFilter: 'blur(4px)',
+            borderRadius: 6,
+            border: '1px solid rgba(79,195,247,0.35)',
+            padding: '4px 6px',
+            pointerEvents: 'none',
+            zIndex: 20,
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <div style={{ fontFamily: 'monospace', fontSize: 9, color: '#4fc3f7', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 2, flexShrink: 0 }}>
+            DEBUG LOG — {isTouchDevice ? 'TOUCH' : 'MOUSE'} DEVICE
+          </div>
+          <div
+            ref={debugScrollRef}
+            style={{ overflowY: 'auto', fontFamily: 'monospace', fontSize: 10, lineHeight: '15px', color: '#ccc', wordBreak: 'break-all' }}
+          >
+            {debugLinesRef.current.map((line, i) => (
+              <div key={i} style={{ color: line.includes('DESELECT') ? '#ff7070' : line.includes('blocked') ? '#7fc97f' : line.includes('↓') ? '#ffe082' : '#ccc' }}>
+                {line}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontFamily: 'monospace', fontSize: 9, color: '#555', marginTop: 2, flexShrink: 0 }}>
+            selected: {selectedNodeId?.slice(0,8) ?? 'none'} | gizmo: {String(showGizmo)} | drag: {String(isDraggingGizmoRef.current)}
           </div>
         </div>
       )}

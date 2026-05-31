@@ -167,9 +167,10 @@ interface RichEditorExtendedProps extends RichEditorProps {
   onSaveToServer?: () => void;
   onImportFromCad?: () => void;
   cadEntityCount?: number;
+  debugLog?: boolean;
 }
 
-export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount }: RichEditorExtendedProps) {
+export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
@@ -954,6 +955,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
                   renderMode={renderMode}
                   sceneSettings={sceneSettings}
                   onPlaneClick={onPlaneClick}
+                  debugLog={debugLog}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1032,6 +1034,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
                   renderMode={renderMode}
                   sceneSettings={sceneSettings}
                   onPlaneClick={onPlaneClick}
+                  debugLog={debugLog}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>

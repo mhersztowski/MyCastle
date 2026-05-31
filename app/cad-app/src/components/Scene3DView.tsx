@@ -1,5 +1,6 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Box, Snackbar, Alert } from '@mui/material';
+import { Box, Snackbar, Alert, IconButton, Tooltip } from '@mui/material';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import { RichEditor } from '@mhersztowski/ui-components-scene3d';
 import { SceneDeserializer, SceneSerializer } from '@mhersztowski/core-scene3d';
 import type { Project } from '@mhersztowski/core-cad';
@@ -38,6 +39,7 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   }, [externalMergeRef]);
   const [serverMode, setServerMode] = useState<'open' | 'save' | null>(null);
   const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
+  const [debugLog, setDebugLog] = useState(false);
 
   // Auto-load scene written by AI agent (or inserted from Templates panel)
   useEffect(() => {
@@ -100,7 +102,7 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* RichEditor fills the rest — includes SceneTree, viewport, Properties panels */}
-      <Box sx={{ flex: 1, overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <RichEditor
           key={editorKey}
           initialSceneData={sceneData}
@@ -112,7 +114,24 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           cadEntityCount={cadCount}
           onPlaneClick={placementTemplate?.mode === 'scene3d' ? handlePlaneClick : undefined}
           style={{ height: '100%' }}
+          debugLog={debugLog}
         />
+        {/* Debug toggle — visible on mobile for diagnosing gizmo/touch issues */}
+        <Tooltip title={debugLog ? 'Hide debug log' : 'Show debug log'}>
+          <IconButton
+            size="small"
+            onClick={() => setDebugLog(v => !v)}
+            sx={{
+              position: 'absolute', bottom: 8, right: 8, zIndex: 30,
+              bgcolor: debugLog ? 'rgba(255,80,80,0.25)' : 'rgba(0,0,0,0.4)',
+              border: '1px solid', borderColor: debugLog ? 'error.main' : 'rgba(255,255,255,0.15)',
+              color: debugLog ? 'error.main' : 'text.disabled',
+              '&:hover': { bgcolor: debugLog ? 'rgba(255,80,80,0.4)' : 'rgba(255,255,255,0.1)' },
+            }}
+          >
+            <BugReportIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       {serverMode === 'open' && (
