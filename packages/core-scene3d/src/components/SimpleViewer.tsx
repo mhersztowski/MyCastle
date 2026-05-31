@@ -131,13 +131,19 @@ function GizmoControls({
     if (!node) return;
 
     if (transformMode === 'translate') {
-      node.setPosition(targetObject.position.toArray() as [number, number, number]);
+      const p = targetObject.position;
+      node.setPosition([p.x, p.y, p.z]);
+      addLog?.(`pos saved (${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)})`);
     } else if (transformMode === 'rotate') {
-      node.setRotation([targetObject.rotation.x, targetObject.rotation.y, targetObject.rotation.z]);
+      const r = targetObject.rotation;
+      node.setRotation([r.x, r.y, r.z]);
+      addLog?.(`rot saved (${r.x.toFixed(2)},${r.y.toFixed(2)},${r.z.toFixed(2)})`);
     } else if (transformMode === 'scale') {
-      node.setScale(targetObject.scale.toArray() as [number, number, number]);
+      const s = targetObject.scale;
+      node.setScale([s.x, s.y, s.z]);
+      addLog?.(`scale saved (${s.x.toFixed(2)},${s.y.toFixed(2)},${s.z.toFixed(2)})`);
     }
-  }, [targetObject, sceneGraph, selectedNodeId, transformMode]);
+  }, [targetObject, sceneGraph, selectedNodeId, transformMode, addLog]);
 
   useEffect(() => {
     const controls = controlsRef.current;
@@ -844,12 +850,23 @@ export function SimpleViewer({
   // (stylus near screen but not touching). Skipped during an active gizmo drag so that
   // the zero-pressure event after a brief lift doesn't drop the drag track.
   const [glInstance, setGlInstance] = useState<THREE.WebGLRenderer | null>(null);
+  // Pen hover events are logged only to the on-screen overlay (not sent to server) to avoid flooding the buffer
+  const hoverBlockCountRef = useRef(0);
   const filterPenHover = useCallback((e: PointerEvent) => {
     if (e.pointerType === 'pen' && e.pressure === 0 && !isDraggingGizmoRef.current) {
-      addLog(`pen hover blocked p=0`);
+      hoverBlockCountRef.current++;
+      // Only show every 20th hover-blocked event in the overlay, never send to server
+      if (debugLog && hoverBlockCountRef.current % 20 === 1) {
+        const now = new Date();
+        const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+        const line = `${ts} hover blocked ×${hoverBlockCountRef.current}`;
+        debugLinesRef.current = [...debugLinesRef.current.slice(-(DEBUG_MAX - 1)), line];
+        setDebugVer(v => v + 1);
+        // NOT pushed to pendingSendRef — don't flood server buffer
+      }
       e.stopImmediatePropagation();
     }
-  }, [addLog]);
+  }, [debugLog]);
 
   // Native pointer event logging on the canvas
   useEffect(() => {
