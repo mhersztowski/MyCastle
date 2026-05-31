@@ -14,6 +14,7 @@ COPY packages/core-cad/package.json         packages/core-cad/
 COPY packages/core-scene3d/package.json     packages/core-scene3d/
 COPY packages/ui-core/package.json          packages/ui-core/
 COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
+COPY packages/texteditor/package.json       packages/texteditor/
 COPY packages/web-client/package.json       packages/web-client/
 COPY app/cad-app/package.json               app/cad-app/
 COPY app/cad-backend/package.json           app/cad-backend/
@@ -26,6 +27,7 @@ COPY packages/core-cad/         packages/core-cad/
 COPY packages/core-scene3d/     packages/core-scene3d/
 COPY packages/ui-core/          packages/ui-core/
 COPY packages/ui-components-scene3d/ packages/ui-components-scene3d/
+COPY packages/texteditor/       packages/texteditor/
 COPY packages/web-client/       packages/web-client/
 COPY app/cad-app/               app/cad-app/
 COPY app/cad-backend/           app/cad-backend/
@@ -35,6 +37,7 @@ RUN pnpm --filter @mhersztowski/core-cad build --silent
 RUN pnpm --filter @mhersztowski/ui-core build --silent
 RUN pnpm --filter @mhersztowski/core-scene3d build --silent
 RUN pnpm --filter @mhersztowski/ui-components-scene3d build --silent
+RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 # Build frontend → outputs to app/cad-backend/public/
 RUN pnpm --filter cad-app build
