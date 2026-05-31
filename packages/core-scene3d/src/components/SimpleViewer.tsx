@@ -103,14 +103,12 @@ function GizmoControls({
   selectedNodeId,
   transformMode,
   onObjectChange,
-  orbitRef,
   isDraggingGizmoRef,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
   transformMode: 'translate' | 'rotate' | 'scale';
   onObjectChange?: (obj: THREE.Object3D) => void;
-  orbitRef: RefObject<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   isDraggingGizmoRef?: MutableRefObject<boolean>;
 }) {
   const { scene } = useThree();
@@ -150,14 +148,13 @@ function GizmoControls({
     return () => controls.removeEventListener('change', callback);
   }, [onObjectChange, targetObject]);
 
-  // Disable OrbitControls while dragging and guard onPointerMissed from deselecting.
-  // Uses a grace-period timeout on drag-end so stylus/pen brief lifts don't clear selection.
+  // Guard onPointerMissed from deselecting during drag.
+  // Grace-period timeout on drag-end covers stylus/pen brief lifts between strokes.
   const dragEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
     const onDraggingChanged = (e: { value: boolean }) => {
-      if (orbitRef.current) orbitRef.current.enabled = !e.value;
       if (e.value) {
         if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
         if (isDraggingGizmoRef) isDraggingGizmoRef.current = true;
@@ -173,10 +170,9 @@ function GizmoControls({
     return () => {
       controls.removeEventListener('dragging-changed', onDraggingChanged);
       if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
-      if (orbitRef.current) orbitRef.current.enabled = true;
       if (isDraggingGizmoRef) isDraggingGizmoRef.current = false;
     };
-  }, [orbitRef, isDraggingGizmoRef]);
+  }, [isDraggingGizmoRef]);
 
   if (!targetObject) return null;
 
@@ -697,7 +693,6 @@ function SceneContent({
   onPlaneClick?: (wx: number, wz: number) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
 }) {
-  const orbitRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
   const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
   const presetConfig = CAMERA_PRESETS[cameraPreset];
@@ -707,7 +702,8 @@ function SceneContent({
       {activeCameraNodeId && sceneGraph
         ? <ActiveSceneCamera sceneGraph={sceneGraph} activeCameraNodeId={activeCameraNodeId} />
         : null}
-      <OrbitControls ref={orbitRef} makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
+      {/* Orbit disabled when a gizmo is shown — prevents camera competing with transform drag */}
+      <OrbitControls makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId && !showGizmo} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
       {sceneSettings?.backgroundType === 'solid' && (
         <color attach="background" args={[sceneSettings.backgroundColor]} />
       )}
@@ -737,7 +733,6 @@ function SceneContent({
           selectedNodeId={selectedNodeId}
           transformMode={transformMode}
           onObjectChange={onObjectChange}
-          orbitRef={orbitRef}
           isDraggingGizmoRef={isDraggingGizmoRef}
         />
       )}
