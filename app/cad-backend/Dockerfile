@@ -19,7 +19,7 @@ COPY packages/web-client/package.json       packages/web-client/
 COPY app/cad-app/package.json               app/cad-app/
 COPY app/cad-backend/package.json           app/cad-backend/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --fetch-timeout 120000 --reporter silent
+    pnpm install --frozen-lockfile --fetch-timeout 120000
 
 # ── build all packages + apps ─────────────────────────────────────────────────
 COPY packages/core/             packages/core/
@@ -53,9 +53,16 @@ WORKDIR /app
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json             packages/core/
+COPY packages/core-cad/package.json         packages/core-cad/
+COPY packages/core-scene3d/package.json     packages/core-scene3d/
+COPY packages/ui-core/package.json          packages/ui-core/
+COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
+COPY packages/texteditor/package.json       packages/texteditor/
+COPY packages/web-client/package.json       packages/web-client/
+COPY app/cad-app/package.json               app/cad-app/
 COPY app/cad-backend/package.json           app/cad-backend/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --reporter silent
+    pnpm install --frozen-lockfile --prod
 
 COPY --from=base /app/packages/core/dist/       packages/core/dist/
 COPY --from=base /app/app/cad-backend/dist/     app/cad-backend/dist/
