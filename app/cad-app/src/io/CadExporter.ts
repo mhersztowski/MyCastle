@@ -1,8 +1,12 @@
 import * as THREE from 'three';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import type { Entity, Layer, Project, ProjectData } from '@mhersztowski/core-cad';
+import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
+import type { Entity, EntityInput, Layer, Project, ProjectData } from '@mhersztowski/core-cad';
 import { build3dEntityObject } from '../renderer/EntityMeshBuilder';
+import { getOcc } from '../cad3d/occ/occLoader';
+import { OccScope, entitiesToWires, wiresToFace } from '../cad3d/occ/occConvert';
+import { parseSTLBuffer, SceneGraph, MeshNode, LightNode, SceneSerializer } from '@mhersztowski/core-scene3d';
 
 // ── Download helper ────────────────────────────────────────────────────────────
 
@@ -43,6 +47,48 @@ export function loadProjectFromText(jsonText: string, project: Project): void {
   project.entityRegistry.fromData(data.entities);
   project.settings = { ...data.settings };
   project.snapEngine.setGridSize(project.settings.gridSize);
+  project.eventBus.emit('project:loaded', null);
+}
+
+export function shiftEntity(entity: Entity, dx: number, dy: number): Entity {
+  switch (entity.type) {
+    case 'line': return { ...entity, x1: entity.x1 + dx, y1: entity.y1 + dy, x2: entity.x2 + dx, y2: entity.y2 + dy };
+    case 'circle': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'arc': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'rect': return { ...entity, x: entity.x + dx, y: entity.y + dy };
+    case 'polyline': return { ...entity, points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+    case 'freehand': return { ...entity, points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+    case 'text': return { ...entity, x: entity.x + dx, y: entity.y + dy };
+    case 'image': return { ...entity, x: entity.x + dx, y: entity.y + dy };
+    case 'dimension': return { ...entity, x1: entity.x1 + dx, y1: entity.y1 + dy, x2: entity.x2 + dx, y2: entity.y2 + dy };
+    case 'box3d': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'cylinder3d': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'sphere3d': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    default: return entity;
+  }
+}
+
+export function computeEntitiesCentroid(entities: Entity[]): { x: number; y: number } {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const e of entities) {
+    const bb = e.boundingBox;
+    if (bb) {
+      minX = Math.min(minX, bb.minX); maxX = Math.max(maxX, bb.maxX);
+      minY = Math.min(minY, bb.minY); maxY = Math.max(maxY, bb.maxY);
+    }
+  }
+  return isFinite(minX) ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } : { x: 0, y: 0 };
+}
+
+export function mergeProjectFromText(jsonText: string, project: Project): void {
+  const data = JSON.parse(jsonText) as ProjectData;
+  for (const layer of data.layers.layers) {
+    if (layer.id === '0') continue;
+    project.layerSystem.addWithId(layer);
+  }
+  for (const entity of data.entities) {
+    project.entityRegistry.addWithId({ ...entity, id: crypto.randomUUID() });
+  }
   project.eventBus.emit('project:loaded', null);
 }
 
@@ -372,5 +418,302 @@ export function exportGLTF(project: Project, binary = false): Promise<void> {
       (error) => reject(error),
       { binary },
     );
+  });
+}
+
+// ── STL export ─────────────────────────────────────────────────────────────────
+
+export function exportSTL(project: Project): void {
+  const group = buildExportScene(project);
+  const exporter = new STLExporter();
+  const result = exporter.parse(group, { binary: false }) as string;
+  downloadBlob(result, `${projectName(project)}.stl`, 'model/stl');
+}
+
+// ── STEP export ────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function entityToOccShape(oc: any, entity: Entity, sc: OccScope): unknown | null {
+  try {
+    if (entity.type === 'box3d') {
+      const { cx, cy, width: w, depth: d, height: h } = entity;
+      const box = sc.track(new oc.BRepPrimAPI_MakeBox_3(
+        sc.track(new oc.gp_Pnt_3(cx - w / 2, cy - d / 2, 0)), w, d, h,
+      ));
+      box.Build(sc.track(new oc.Message_ProgressRange_1()));
+      return box.IsDone() ? box.Shape() : null;
+    }
+
+    if (entity.type === 'cylinder3d') {
+      const { cx, cy, radius, height } = entity;
+      const cyl = sc.track(new oc.BRepPrimAPI_MakeCylinder_3(
+        sc.track(new oc.gp_Ax2_3(
+          sc.track(new oc.gp_Pnt_3(cx, cy, 0)),
+          sc.track(new oc.gp_Dir_4(0, 0, 1)),
+        )),
+        radius, height,
+      ));
+      cyl.Build(sc.track(new oc.Message_ProgressRange_1()));
+      return cyl.IsDone() ? cyl.Solid() : null;
+    }
+
+    if (entity.type === 'sphere3d') {
+      const { cx, cy, radius } = entity;
+      const sph = sc.track(new oc.BRepPrimAPI_MakeSphere_5(
+        sc.track(new oc.gp_Pnt_3(cx, cy, 0)), radius,
+      ));
+      sph.Build(sc.track(new oc.Message_ProgressRange_1()));
+      return sph.IsDone() ? sph.Solid() : null;
+    }
+
+    // 2D entities with extrusion height → extruded solid
+    if (entity.extrudeHeight > 0 && (
+      entity.type === 'line' || entity.type === 'circle' || entity.type === 'arc' ||
+      entity.type === 'rect' || entity.type === 'polyline'
+    )) {
+      const wires = entitiesToWires(oc, [entity as unknown as Record<string, unknown>], sc);
+      const face = wiresToFace(oc, wires, sc);
+      if (!face) return null;
+      const prism = sc.track(new oc.BRepPrimAPI_MakePrism_1(
+        face as object,
+        sc.track(new oc.gp_Vec_4(0, 0, entity.extrudeHeight)),
+        false, true,
+      ));
+      prism.Build(sc.track(new oc.Message_ProgressRange_1()));
+      return prism.IsDone() ? prism.Shape() : null;
+    }
+
+    // Flat 2D entities → edges / wires
+    if (entity.type === 'line') {
+      return sc.track(new oc.BRepBuilderAPI_MakeEdge_3(
+        sc.track(new oc.gp_Pnt_3(entity.x1, entity.y1, 0)),
+        sc.track(new oc.gp_Pnt_3(entity.x2, entity.y2, 0)),
+      )).Edge();
+    }
+
+    if (entity.type === 'circle') {
+      const ax2 = sc.track(new oc.gp_Ax2_3(
+        sc.track(new oc.gp_Pnt_3(entity.cx, entity.cy, 0)),
+        sc.track(new oc.gp_Dir_4(0, 0, 1)),
+      ));
+      const circ = sc.track(new oc.gp_Circ_2(ax2, entity.radius));
+      const edge = sc.track(new oc.BRepBuilderAPI_MakeEdge_8(circ)).Edge();
+      return sc.track(new oc.BRepBuilderAPI_MakeWire_2(edge)).Wire();
+    }
+
+    if (entity.type === 'arc') {
+      const ax2 = sc.track(new oc.gp_Ax2_3(
+        sc.track(new oc.gp_Pnt_3(entity.cx, entity.cy, 0)),
+        sc.track(new oc.gp_Dir_4(0, 0, 1)),
+      ));
+      const circ = sc.track(new oc.gp_Circ_2(ax2, entity.radius));
+      return sc.track(new oc.BRepBuilderAPI_MakeEdge_9(circ, entity.startAngle, entity.endAngle)).Edge();
+    }
+
+    // rect, polyline (flat) → closed wire via entitiesToWires
+    const wires = entitiesToWires(oc, [entity as unknown as Record<string, unknown>], sc);
+    return wires.length > 0 ? wires[0] : null;
+
+  } catch {
+    return null;
+  }
+}
+
+export async function exportSTEP(project: Project): Promise<void> {
+  const oc = await getOcc();
+  const name = projectName(project);
+  const sc = new OccScope();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const writer: any = new oc.STEPControl_Writer_1();
+  try {
+    const compound = sc.track(new oc.TopoDS_Compound());
+    const builder = sc.track(new oc.BRep_Builder());
+    builder.MakeCompound(compound);
+    let hasShapes = false;
+
+    for (const entity of project.entityRegistry.getAll()) {
+      if (!entity.visible) continue;
+      const layer = project.layerSystem.get(entity.layerId);
+      if (layer && !layer.visible) continue;
+      const shape = entityToOccShape(oc, entity, sc);
+      if (shape) {
+        builder.Add(compound, shape);
+        hasShapes = true;
+      }
+    }
+
+    if (!hasShapes) throw new Error('No exportable entities — add 3D objects or set extrude height on 2D shapes');
+
+    writer.Transfer(
+      compound,
+      oc.STEPControl_StepModelType.STEPControl_AsIs,
+      true,
+      sc.track(new oc.Message_ProgressRange_1()),
+    );
+    writer.Write('/export.step');
+    const content: string = oc.FS.readFile('/export.step', { encoding: 'utf8' });
+    downloadBlob(content, `${name}.step`, 'model/step');
+  } finally {
+    writer.delete();
+    sc.dispose();
+  }
+}
+
+// ── DXF import ─────────────────────────────────────────────────────────────────
+
+function findLayerId(project: Project, layerName: string): string {
+  for (const layer of project.layerSystem.getAll()) {
+    if (layer.name === layerName) return layer.id;
+  }
+  return project.layerSystem.getActiveId();
+}
+
+function parseDxfEntities(text: string, project: Project): EntityInput[] {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const tokens: [number, string][] = [];
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const code = parseInt(lines[i].trim(), 10);
+    if (!isNaN(code)) tokens.push([code, lines[i + 1].trim()]);
+  }
+
+  let inEntities = false;
+  const result: EntityInput[] = [];
+  let ti = 0;
+
+  while (ti < tokens.length) {
+    const [code, val] = tokens[ti];
+
+    if (code === 0 && val === 'SECTION') {
+      if (ti + 1 < tokens.length && tokens[ti + 1][0] === 2 && tokens[ti + 1][1] === 'ENTITIES') {
+        inEntities = true;
+        ti += 2;
+        continue;
+      }
+    }
+
+    if (code === 0 && val === 'ENDSEC' && inEntities) break;
+
+    if (!inEntities) { ti++; continue; }
+
+    if (code !== 0) { ti++; continue; }
+
+    const entityType = val.toUpperCase();
+    ti++;
+
+    const props = new Map<number, string[]>();
+    while (ti < tokens.length && tokens[ti][0] !== 0) {
+      const [ec, ev] = tokens[ti];
+      const arr = props.get(ec) ?? [];
+      arr.push(ev);
+      props.set(ec, arr);
+      ti++;
+    }
+
+    const n = (c: number, def = 0, idx = 0): number => {
+      const a = props.get(c);
+      if (!a || idx >= a.length) return def;
+      const v = parseFloat(a[idx]);
+      return isNaN(v) ? def : v;
+    };
+    const str = (c: number, def = ''): string => props.get(c)?.[0] ?? def;
+
+    const layerId = findLayerId(project, str(8, '0'));
+    const base = {
+      layerId,
+      color: 'bylayer' as const,
+      lineType: 'bylayer' as const,
+      lineWidth: 'bylayer' as const,
+      visible: true,
+      locked: false,
+      extrudeHeight: 0,
+    };
+
+    if (entityType === 'LINE') {
+      result.push({ ...base, type: 'line', x1: n(10), y1: n(20), x2: n(11), y2: n(21) });
+    } else if (entityType === 'CIRCLE') {
+      result.push({ ...base, type: 'circle', cx: n(10), cy: n(20), radius: n(40) });
+    } else if (entityType === 'ARC') {
+      result.push({
+        ...base, type: 'arc',
+        cx: n(10), cy: n(20), radius: n(40),
+        startAngle: (n(50) * Math.PI) / 180,
+        endAngle: (n(51) * Math.PI) / 180,
+      });
+    } else if (entityType === 'LWPOLYLINE') {
+      const xs = props.get(10) ?? [];
+      const ys = props.get(20) ?? [];
+      const count = Math.min(xs.length, ys.length);
+      if (count >= 2) {
+        const points = Array.from({ length: count }, (_, k) => ({
+          x: parseFloat(xs[k]) || 0,
+          y: parseFloat(ys[k]) || 0,
+        }));
+        const flags = parseInt(props.get(70)?.[0] ?? '0', 10) || 0;
+        result.push({ ...base, type: 'polyline', points, closed: (flags & 1) === 1 });
+      }
+    }
+  }
+
+  return result;
+}
+
+export function importDXF(file: File, project: Project): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const inputs = parseDxfEntities(e.target!.result as string, project);
+        for (const input of inputs) project.entityRegistry.add(input);
+        project.eventBus.emit('project:loaded', null);
+        resolve();
+      } catch (err) {
+        reject(new Error(`DXF import failed: ${(err as Error).message}`));
+      }
+    };
+    reader.onerror = () => reject(new Error('File read error'));
+    reader.readAsText(file);
+  });
+}
+
+// ── STL import ─────────────────────────────────────────────────────────────────
+
+/** Parses an STL file and returns a Scene 3D JSON string ready for Scene3DView. */
+export function importSTL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const bufferData = parseSTLBuffer(e.target!.result as ArrayBuffer);
+
+        const graph = new SceneGraph();
+
+        graph.addNode(new MeshNode({
+          name: file.name.replace(/\.stl$/i, ''),
+          geometry: { type: 'custom', bufferData },
+          material: { color: '#90caf9', opacity: 1, wireframe: false },
+        }));
+
+        graph.addNode(new LightNode({
+          name: 'Ambient',
+          lightType: 'ambient',
+          color: '#ffffff',
+          intensity: 0.5,
+        }));
+
+        graph.addNode(new LightNode({
+          name: 'Directional',
+          lightType: 'directional',
+          color: '#ffffff',
+          intensity: 1.0,
+          position: [5, 10, 5],
+        }));
+
+        resolve(SceneSerializer.serialize(graph));
+      } catch (err) {
+        reject(new Error(`STL parse failed: ${(err as Error).message}`));
+      }
+    };
+    reader.onerror = () => reject(new Error('File read error'));
+    reader.readAsArrayBuffer(file);
   });
 }

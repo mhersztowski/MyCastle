@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
 import { Box } from '@mui/material';
-import type { Point2D, Project, SnapResult } from '@mhersztowski/core-cad';
+import type { Entity, Point2D, Project, ProjectData, SnapResult } from '@mhersztowski/core-cad';
 import type { ViewMode } from '@mhersztowski/core-cad';
 import { CadRenderer } from '../renderer/CadRenderer';
+import { buildEntityObject } from '../renderer/EntityMeshBuilder';
+import { shiftEntity, computeEntitiesCentroid } from '../io/CadExporter';
 import { DimensionOverlay } from './DimensionOverlay';
 import { GripOverlay } from './GripOverlay';
 import { ScaleBar } from './ScaleBar';
@@ -27,6 +30,7 @@ import { textTool } from '../tools/TextTool';
 import { imageTool } from '../tools/ImageTool';
 import type { DimensionLabel, PenInput, Tool, ToolName } from '../tools/types';
 import { DEFAULT_PEN_INPUT } from '../tools/types';
+import type { ActiveTemplate } from './RepositoryPanel';
 
 interface Props {
   project: Project;
@@ -36,6 +40,16 @@ interface Props {
   injectedPoint?: Point2D | null;
   injectedAngle?: number | null;
   onLastPoint?: (p: Point2D) => void;
+  /** Armed template for serial stamp-placement at cursor position. */
+  placementTemplate?: ActiveTemplate | null;
+  /** Called when Esc is pressed while placement is active. */
+  onCancelPlacement?: () => void;
+}
+
+interface PlacementData {
+  entities: Entity[];
+  centroid: { x: number; y: number };
+  layers: ProjectData['layers'];
 }
 
 const filletTool = new FilletTool();
@@ -62,11 +76,12 @@ const tools: Record<ToolName, Tool> = {
   sphere3d: new Sphere3dTool(),
 };
 
-export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint }: Props) {
+export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CadRenderer | null>(null);
   const prevToolRef = useRef<ToolName>(activeTool);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
+  const placementDataRef = useRef<PlacementData | null>(null);
 
   const mouseRef = useRef({ isPanning: false, lastX: 0, lastY: 0, isDown: false });
   const [dimLabels, setDimLabels] = useState<DimensionLabel[]>([]);
@@ -108,6 +123,48 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   useEffect(() => {
     rendererRef.current?.setViewMode(viewMode);
   }, [viewMode]);
+
+  // Placement template: fetch entities, build ghost objects
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    if (!placementTemplate || (placementTemplate.mode !== 'cad' && placementTemplate.mode !== 'electronics')) {
+      renderer.clearPlacement();
+      placementDataRef.current = null;
+      return;
+    }
+    const fileUrl = placementTemplate.cadFile;
+    if (!fileUrl) return;
+    const url = fileUrl.startsWith('http') ? fileUrl : `${placementTemplate.rawBase.replace(/\/$/, '')}/${fileUrl}`;
+    fetch(url)
+      .then(r => r.json())
+      .then((data: ProjectData) => {
+        const entities = data.entities ?? [];
+        const centroid = computeEntitiesCentroid(entities);
+        placementDataRef.current = { entities, centroid, layers: data.layers };
+        // Build ghost THREE objects
+        const objs = entities.map(entity => {
+          const obj = buildEntityObject(entity, undefined, false);
+          obj.traverse(o => {
+            const mat = (o as THREE.Line).material as THREE.LineBasicMaterial | undefined;
+            if (mat) {
+              mat.transparent = true;
+              mat.opacity = 0.45;
+              mat.color.setHex(0x66aaff);
+              mat.needsUpdate = true;
+            }
+          });
+          return obj;
+        });
+        rendererRef.current?.setPlacementObjects(objs, centroid.x, centroid.y);
+      })
+      .catch(console.error);
+
+    return () => {
+      rendererRef.current?.clearPlacement();
+      placementDataRef.current = null;
+    };
+  }, [placementTemplate]);
 
   // Reset previous tool when tool changes
   useEffect(() => {
@@ -228,11 +285,16 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       renderer.showSnapMarker(snap.mode !== 'nearest' ? snap.point : null);
     }
 
+    // Move placement ghost if armed
+    if (placementTemplate && placementDataRef.current) {
+      renderer.movePlacement(snap.point.x, snap.point.y);
+    }
+
     const tool = tools[activeTool];
     tool.onPointerMove(snap.point, { project, snapResult: snap, pen });
     renderer.setPreview(tool.getPreview());
     setDimLabels(tool.getDimensionLabels?.() ?? []);
-  }, [activeTool, project, getSnapPoint]);
+  }, [activeTool, project, getSnapPoint, placementTemplate]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     canvasRef.current?.setPointerCapture(e.pointerId);
@@ -258,6 +320,24 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     const { snapResult: snap, pen } = result;
     setPenInput(pen);
 
+    // Placement mode: stamp entities at clicked world position
+    if (placementTemplate && placementDataRef.current && e.button === 0 && !is3d) {
+      const pdata = placementDataRef.current;
+      const dx = snap.point.x - pdata.centroid.x;
+      const dy = snap.point.y - pdata.centroid.y;
+      for (const layer of pdata.layers.layers) {
+        if (layer.id === '0') continue;
+        project.layerSystem.addWithId(layer);
+      }
+      for (const entity of pdata.entities) {
+        const shifted = shiftEntity(entity, dx, dy);
+        project.entityRegistry.addWithId({ ...shifted, id: crypto.randomUUID() });
+      }
+      project.eventBus.emit('project:loaded', null);
+      renderer.syncAll();
+      return;
+    }
+
     if (activeTool === 'select') {
       const rect = canvasRef.current!.getBoundingClientRect();
       const sx = e.clientX - rect.left;
@@ -279,7 +359,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     renderer.syncAll();
     setDimLabels(tool.getDimensionLabels?.() ?? []);
     onLastPoint?.(snap.point);
-  }, [activeTool, project, getSnapPoint, onLastPoint]);
+  }, [activeTool, project, getSnapPoint, onLastPoint, placementTemplate]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     canvasRef.current?.releasePointerCapture(e.pointerId);
@@ -322,20 +402,33 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.target as HTMLElement).tagName === 'INPUT') return;
 
+    if (e.key === 'Escape' && placementTemplate) {
+      onCancelPlacement?.();
+      return;
+    }
+
     const tool = tools[activeTool];
     const snap: SnapResult = { point: cursorWorld, mode: 'nearest' };
     tool.onKeyDown(e.key, { project, snapResult: snap, pen: DEFAULT_PEN_INPUT });
     rendererRef.current?.setPreview(tool.getPreview());
     rendererRef.current?.syncAll();
 
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); project.undo(); }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); project.redo(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      e.preventDefault();
+      project.undo();
+      rendererRef.current?.syncAll();
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+      e.preventDefault();
+      project.redo();
+      rendererRef.current?.syncAll();
+    }
 
     if (e.key === ':') window.dispatchEvent(new Event('cad:focus-cmdline'));
-  }, [activeTool, project, cursorWorld]);
+  }, [activeTool, project, cursorWorld, placementTemplate, onCancelPlacement]);
 
   const is3d = viewMode === '3d';
-  const cursor = is3d ? 'default' : activeTool === 'select' ? 'default' : 'crosshair';
+  const cursor = placementTemplate ? 'copy' : is3d ? 'default' : activeTool === 'select' ? 'default' : 'crosshair';
 
   return (
     <Box

@@ -21,6 +21,7 @@ export interface Cad3dState {
   tree: FeatureTree;
   selectedId: string | null;
   editingSketchId: string | null;
+  mergeFeatures: (json: string) => void;
   addSketch: (plane?: SketchPlane, offset?: number, planeMatrix?: number[]) => void;
   startEditSketch: (id: string) => void;
   exitSketch: () => void;
@@ -231,6 +232,28 @@ export function useCad3d(): Cad3dState {
 
   const selectFeature = useCallback((id: string | null) => { setSelectedId(id); }, []);
 
+  const mergeFeatures = useCallback((json: string) => {
+    try {
+      const data = JSON.parse(json) as FeatureTree;
+      const idMap = new Map<string, string>();
+      for (const f of data.features) {
+        idMap.set(f.id, crypto.randomUUID());
+      }
+      const remapped = data.features.map(f => {
+        const base = { ...f, id: idMap.get(f.id)! } as Feature & { sketchId?: string | null };
+        if (base.sketchId) base.sketchId = idMap.get(base.sketchId) ?? base.sketchId;
+        return base as Feature;
+      });
+      setTree(prev => {
+        const next = { ...prev, features: [...prev.features, ...remapped] };
+        save(next);
+        return next;
+      });
+    } catch (e) {
+      console.error('[useCad3d] mergeFeatures failed', e);
+    }
+  }, []);
+
   const clearTree = useCallback(() => {
     sketchProjectsRef.current.clear();
     const next: FeatureTree = { version: 1 as const, features: [] };
@@ -242,6 +265,7 @@ export function useCad3d(): Cad3dState {
 
   return {
     tree, selectedId, editingSketchId,
+    mergeFeatures,
     addSketch, startEditSketch, exitSketch, getSketchProject,
     addExtrude, addPocket, addHole, addGroove, addMirror, addRevolve, addShell, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
     removeFeature, updateFeature, toggleFeature, moveFeature,

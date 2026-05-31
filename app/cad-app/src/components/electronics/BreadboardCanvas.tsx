@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, IconButton, Tooltip, ToggleButton, ToggleButtonGroup } from '@mui/material';
 import NearMeIcon from '@mui/icons-material/NearMe';
 import CableIcon from '@mui/icons-material/Cable';
@@ -17,6 +17,7 @@ import type { PartDef } from '../../electronics/types';
 import { ServerFileBrowser } from '../ServerFileBrowser';
 import { ElectronicsPropertiesPanel } from './ElectronicsPropertiesPanel';
 import { ELEC_EXT, readFileAt, writeFileAt } from '../../vfs/cadProjectApi';
+import type { ActiveTemplate } from '../RepositoryPanel';
 
 // ── Part renderer ─────────────────────────────────────────────────────────────
 
@@ -485,9 +486,11 @@ function isPointOnAnyPin(p: WirePoint, components: ComponentPlacement[]): boolea
 interface Props {
   pendingPartId: string | null;
   onPendingPartConsumed: () => void;
+  mergeSchemaRef?: MutableRefObject<((schema: ElectronicsSchema) => void) | null>;
+  placementTemplate?: ActiveTemplate | null;
 }
 
-export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props) {
+export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSchemaRef, placementTemplate }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ w: 800, h: 600 });
@@ -495,6 +498,22 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
   // Schema state
   const [components, setComponents] = useState<ComponentPlacement[]>([]);
   const [wires, setWires] = useState<Wire[]>([]);
+
+  // Imperative merge API for external template insertion
+  useEffect(() => {
+    if (!mergeSchemaRef) return;
+    mergeSchemaRef.current = (incoming: ElectronicsSchema) => {
+      setComponents(prev => [
+        ...prev,
+        ...(incoming.components ?? []).map(c => ({ ...c, id: crypto.randomUUID() })),
+      ]);
+      setWires(prev => [
+        ...prev,
+        ...(incoming.wires ?? []).map(w => ({ ...w, id: crypto.randomUUID() })),
+      ]);
+    };
+    return () => { if (mergeSchemaRef) mergeSchemaRef.current = null; };
+  }, [mergeSchemaRef]);
 
   // Interaction
   const [mode, setMode] = useState<InteractionMode>('select');
@@ -584,6 +603,42 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
     const z = zoomRef.current;
     return { gx: (sx - p.x) / (z * GRID), gy: (sy - p.y) / (z * GRID) };
   }, []);
+
+  // ── Template placement ───────────────────────────────────────────────────────
+
+  const placementFetchingRef = useRef(false);
+
+  const handlePlacementClick = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if (!placementTemplate?.cadFile || placementFetchingRef.current) return;
+    const { gx, gy } = clientToGrid(e.clientX, e.clientY);
+    const url = placementTemplate.cadFile.startsWith('http')
+      ? placementTemplate.cadFile
+      : `${placementTemplate.rawBase.replace(/\/$/, '')}/${placementTemplate.cadFile}`;
+    placementFetchingRef.current = true;
+    fetch(url)
+      .then(r => r.json())
+      .then((schema: ElectronicsSchema) => {
+        const comps = schema.components ?? [];
+        if (comps.length === 0) return;
+        const cx = comps.reduce((s, c) => s + c.x, 0) / comps.length;
+        const cy = comps.reduce((s, c) => s + c.y, 0) / comps.length;
+        const dx = Math.round(gx - cx);
+        const dy = Math.round(gy - cy);
+        const shifted: ElectronicsSchema = {
+          version: 1,
+          components: comps.map(c => ({ ...c, x: c.x + dx, y: c.y + dy })),
+          wires: (schema.wires ?? []).map(w => ({
+            ...w,
+            points: w.points.map(p => ({ x: p.x + dx, y: p.y + dy })),
+          })),
+        };
+        setComponents(prev => [...prev, ...shifted.components.map(c => ({ ...c, id: crypto.randomUUID() }))]);
+        setWires(prev => [...prev, ...shifted.wires.map(w => ({ ...w, id: crypto.randomUUID() }))]);
+      })
+      .catch(e => console.error('[BreadboardCanvas] placement failed', e))
+      .finally(() => { placementFetchingRef.current = false; });
+  }, [placementTemplate, clientToGrid]);
 
   // ── Z-order ─────────────────────────────────────────────────────────────────
   // Render order = array order: an element later in the array is drawn on top.
@@ -1241,6 +1296,14 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed }: Props
             )}
           </g>
         </svg>
+
+        {/* Placement overlay — armed template stamp mode */}
+        {placementTemplate && (
+          <Box
+            sx={{ position: 'absolute', inset: 0, cursor: 'copy', zIndex: 20 }}
+            onMouseDown={handlePlacementClick}
+          />
+        )}
       </Box>
       </Box>
 

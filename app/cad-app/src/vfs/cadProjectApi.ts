@@ -197,3 +197,57 @@ export async function renameFileAt(
     options: { overwrite: false },
   });
 }
+
+// ── generic VFS browsing & binary I/O (for FileSystemPanel) ──────────────────
+
+export interface VfsDirEntry {
+  name: string;
+  isDir: boolean;
+}
+
+/** List ALL entries in a VFS directory (no extension filter). */
+export async function vfsListDir(path: string): Promise<VfsDirEntry[]> {
+  let entries: Array<{ name: string; type: number }>;
+  try {
+    const res = await vfsGet<{ entries: Array<{ name: string; type: number }> }>('/readdir', path);
+    entries = res.entries;
+  } catch {
+    return [];
+  }
+  return entries.map(e => ({ name: e.name, isDir: e.type === DIRECTORY }));
+}
+
+function bytesToBase64(data: Uint8Array): string {
+  const chunkSize = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < data.length; i += chunkSize) {
+    parts.push(String.fromCharCode.apply(null, Array.from(data.subarray(i, i + chunkSize))));
+  }
+  return btoa(parts.join(''));
+}
+
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/** Read any VFS file as raw bytes. */
+export async function vfsReadFileBin(path: string): Promise<Uint8Array<ArrayBuffer>> {
+  const res = await vfsGet<{ data: string }>('/readFile', path);
+  return base64ToBytes(res.data);
+}
+
+/** Write any VFS file from raw bytes (creates parent dirs automatically). */
+export async function vfsWriteFileBin(path: string, data: Uint8Array): Promise<void> {
+  await vfsPost('/writeFile', path, {
+    data: bytesToBase64(data),
+    options: { create: true, overwrite: true },
+  });
+}
+
+/** Delete a file or empty directory at an absolute VFS path. */
+export async function vfsDeletePath(path: string): Promise<void> {
+  await vfsPost('/delete', path, { options: { recursive: true } });
+}

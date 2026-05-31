@@ -56,6 +56,10 @@ function ActionBtn({ tool, activeTool, onToolChange }: {
 }
 
 export function ActionBar({ activeTool, onToolChange, project }: Props) {
+  const desc = project.historyManager.getDescription();
+  const undoTitle = desc.undoLabel ? `Undo: ${desc.undoLabel} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
+  const redoTitle = desc.redoLabel ? `Redo: ${desc.redoLabel} (Ctrl+Y)` : 'Redo (Ctrl+Y)';
+
   return (
     <Box sx={{
       display: 'flex', flexDirection: 'row', alignItems: 'center',
@@ -75,7 +79,7 @@ export function ActionBar({ activeTool, onToolChange, project }: Props) {
 
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5, borderColor: 'rgba(255,255,255,0.1)' }} />
 
-      <Tooltip title="Undo (Ctrl+Z)" placement="bottom">
+      <Tooltip title={undoTitle} placement="bottom">
         <span>
           <IconButton
             size="small"
@@ -87,7 +91,7 @@ export function ActionBar({ activeTool, onToolChange, project }: Props) {
           </IconButton>
         </span>
       </Tooltip>
-      <Tooltip title="Redo (Ctrl+Y)" placement="bottom">
+      <Tooltip title={redoTitle} placement="bottom">
         <span>
           <IconButton
             size="small"

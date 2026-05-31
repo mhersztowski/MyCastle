@@ -10,18 +10,28 @@ export interface SceneNodeData {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+  castShadow?: boolean;
+  receiveShadow?: boolean;
+  frustumCulled?: boolean;
+  renderOrder?: number;
+  userData?: string;
   metadata?: Record<string, unknown>;
   children?: SceneNodeData[];
 }
 
 export class SceneNode {
-  readonly id: string;
+  id: string;
   name: string;
   type: NodeType;
   visible: boolean;
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+  castShadow: boolean;
+  receiveShadow: boolean;
+  frustumCulled: boolean;
+  renderOrder: number;
+  userData: string;
   parent: SceneNode | null = null;
   children: SceneNode[] = [];
   metadata: Record<string, unknown>;
@@ -36,6 +46,11 @@ export class SceneNode {
     this.position = data.position ?? [0, 0, 0];
     this.rotation = data.rotation ?? [0, 0, 0];
     this.scale = data.scale ?? [1, 1, 1];
+    this.castShadow = data.castShadow ?? false;
+    this.receiveShadow = data.receiveShadow ?? false;
+    this.frustumCulled = data.frustumCulled ?? true;
+    this.renderOrder = data.renderOrder ?? 0;
+    this.userData = data.userData ?? '';
     this.metadata = data.metadata ?? {};
   }
 
@@ -255,6 +270,34 @@ export class SceneNode {
       case 'scale':
         this.setScale(value as [number, number, number]);
         return true;
+      case 'castShadow':
+        this.castShadow = value as boolean;
+        if (this._threeObject) this._threeObject.castShadow = value as boolean;
+        this.notifyChange();
+        return true;
+      case 'receiveShadow':
+        this.receiveShadow = value as boolean;
+        if (this._threeObject) this._threeObject.receiveShadow = value as boolean;
+        this.notifyChange();
+        return true;
+      case 'frustumCulled':
+        this.frustumCulled = value as boolean;
+        if (this._threeObject) this._threeObject.frustumCulled = value as boolean;
+        this.notifyChange();
+        return true;
+      case 'renderOrder':
+        this.renderOrder = value as number;
+        if (this._threeObject) this._threeObject.renderOrder = value as number;
+        this.notifyChange();
+        return true;
+      case 'userData':
+        this.userData = value as string;
+        this.notifyChange();
+        return true;
+      case '__regenerateId':
+        this.id = crypto.randomUUID();
+        this.notifyChange();
+        return true;
       default:
         return false;
     }
@@ -269,6 +312,11 @@ export class SceneNode {
       position: [...this.position],
       rotation: [...this.rotation],
       scale: [...this.scale],
+      castShadow: this.castShadow,
+      receiveShadow: this.receiveShadow,
+      frustumCulled: this.frustumCulled,
+      renderOrder: this.renderOrder,
+      userData: this.userData,
       metadata: { ...this.metadata },
       children: this.children.map((c) => c.toData()),
     };

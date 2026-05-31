@@ -216,6 +216,18 @@ export class Project {
     this.eventBus.emit('selection:changed', []);
   }
 
+  /** Begin a compound (atomic) undo/redo group. All Project mutations until
+   *  commitCompound() will be collapsed into a single history entry. */
+  beginCompound(): void {
+    this.historyManager.beginBatch();
+  }
+
+  /** Commit the compound group with a description visible in the Undo tooltip. */
+  commitCompound(description: string): void {
+    this.historyManager.commitBatch(description);
+    this.eventBus.emit('history:changed', this.historyManager.getDescription());
+  }
+
   undo(): void {
     const op = this.historyManager.undo();
     if (op) this.eventBus.emit('history:changed', this.historyManager.getDescription());

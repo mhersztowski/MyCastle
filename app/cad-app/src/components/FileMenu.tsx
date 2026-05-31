@@ -19,7 +19,7 @@ import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type { Project } from '@mhersztowski/core-cad';
-import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSVG, importJSON } from '../io/CadExporter';
+import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSTEP, exportSTL, exportSVG, importDXF, importJSON, importSTL } from '../io/CadExporter';
 import { ProjectBrowser } from './ProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
 import { SCENE_EXT, readFileAt, writeFileAt } from '../vfs/cadProjectApi';
@@ -42,6 +42,8 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
   const [sceneSaveOpen, setSceneSaveOpen] = useState(false);
   const [sceneOpenOpen, setSceneOpenOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dxfInputRef = useRef<HTMLInputElement>(null);
+  const stlImportRef = useRef<HTMLInputElement>(null);
 
   const hasSceneData = Boolean(getSceneData?.());
 
@@ -104,6 +106,58 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
       setToast({ msg: 'Project loaded', severity: 'success' });
     } catch (err) {
       setToast({ msg: (err as Error).message, severity: 'error' });
+    }
+  }
+
+  function handleImportDXFClick() {
+    close();
+    dxfInputRef.current?.click();
+  }
+
+  async function handleDxfFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      await importDXF(file, project);
+      setToast({ msg: 'DXF imported', severity: 'success' });
+    } catch (err) {
+      setToast({ msg: (err as Error).message, severity: 'error' });
+    }
+  }
+
+  function handleImportSTLClick() {
+    close();
+    stlImportRef.current?.click();
+  }
+
+  async function handleStlFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const sceneJson = await importSTL(file);
+      onSceneData?.(sceneJson);
+      setToast({ msg: `STL loaded into Scene 3D: ${file.name}`, severity: 'success' });
+    } catch (err) {
+      setToast({ msg: (err as Error).message, severity: 'error' });
+    }
+  }
+
+  function handleSTL() {
+    close();
+    exportSTL(project);
+  }
+
+  async function handleSTEP() {
+    close();
+    setBusy(true);
+    try {
+      await exportSTEP(project);
+    } catch (err) {
+      setToast({ msg: `STEP export failed: ${(err as Error).message}`, severity: 'error' });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -191,6 +245,14 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
           <ListItemIcon><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Open JSON (local)…</ListItemText>
         </MenuItem>
+        <MenuItem onClick={handleImportDXFClick} dense>
+          <ListItemIcon><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Import DXF (local)…" secondary="Adds entities to current project" />
+        </MenuItem>
+        <MenuItem onClick={handleImportSTLClick} dense>
+          <ListItemIcon><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Import STL (local)…" secondary="Loads mesh into Scene 3D tab" />
+        </MenuItem>
         <MenuItem onClick={handleSaveJSON} dense>
           <ListItemIcon><SaveOutlinedIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Save JSON (local)</ListItemText>
@@ -210,6 +272,14 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
           <ListItemIcon><DownloadOutlinedIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Export OBJ" secondary="3D mesh (Wavefront)" />
         </MenuItem>
+        <MenuItem onClick={handleSTL} dense>
+          <ListItemIcon><DownloadOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Export STL" secondary="3D mesh (stereolithography)" />
+        </MenuItem>
+        <MenuItem onClick={handleSTEP} dense>
+          <ListItemIcon><DownloadOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Export STEP" secondary="3D solid (ISO 10303)" />
+        </MenuItem>
         <MenuItem onClick={() => handleGLTF(false)} dense>
           <ListItemIcon><DownloadOutlinedIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Export glTF" secondary="3D scene (JSON)" />
@@ -227,6 +297,22 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
         accept=".json,.cad.json"
         style={{ display: 'none' }}
         onChange={handleFileChange}
+      />
+      {/* Hidden file input for DXF import */}
+      <input
+        ref={dxfInputRef}
+        type="file"
+        accept=".dxf"
+        style={{ display: 'none' }}
+        onChange={handleDxfFileChange}
+      />
+      {/* Hidden file input for STL import */}
+      <input
+        ref={stlImportRef}
+        type="file"
+        accept=".stl"
+        style={{ display: 'none' }}
+        onChange={handleStlFileChange}
       />
 
       <Snackbar

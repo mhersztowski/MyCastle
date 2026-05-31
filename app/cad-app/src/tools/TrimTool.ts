@@ -133,8 +133,10 @@ export class TrimTool implements Tool {
     const before = tSegments.slice(0, removedIdx + 1);
     const after = tSegments.slice(removedIdx + 1);
 
+    // Wrap in compound so update+add are a single undoable step.
+    ctx.project.beginCompound();
+
     if (before.length >= 2 && after.length >= 2) {
-      // Two remaining pieces: update original + add a new line
       const p1 = before[0], p2 = before[before.length - 1];
       const p3 = after[0], p4 = after[after.length - 1];
       ctx.project.updateEntity(target.id, { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
@@ -144,17 +146,16 @@ export class TrimTool implements Tool {
         lineWidth: target.lineWidth, visible: true, locked: false, extrudeHeight: 0,
       });
     } else if (before.length >= 2) {
-      // Only left piece remains
       const p1 = before[0], p2 = before[before.length - 1];
       ctx.project.updateEntity(target.id, { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
     } else if (after.length >= 2) {
-      // Only right piece remains
       const p3 = after[0], p4 = after[after.length - 1];
       ctx.project.updateEntity(target.id, { x1: p3.x, y1: p3.y, x2: p4.x, y2: p4.y });
     } else {
-      // Nothing remains → delete
       ctx.project.removeEntity(target.id);
     }
+
+    ctx.project.commitCompound('Trim line');
   }
 
   onPointerMove(_point: Point2D, _ctx: ToolContext): void {}

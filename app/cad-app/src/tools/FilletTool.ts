@@ -106,13 +106,12 @@ export class FilletTool implements Tool {
     const arcStart = normalizeAngle(Math.atan2(t1.y - arcCy, t1.x - arcCx));
     const arcEnd = normalizeAngle(Math.atan2(t2.y - arcCy, t2.x - arcCx));
 
-    // Trim both lines
+    // Trim both lines + insert arc — one atomic undo step
+    ctx.project.beginCompound();
     ctx.project.batchUpdate([
       { id: l1.id, changes: nearestEndChanges(l1, t1) },
       { id: l2.id, changes: nearestEndChanges(l2, t2) },
     ], 'Fillet (trim)');
-
-    // Insert arc
     ctx.project.addEntity({
       type: 'arc',
       cx: arcCx, cy: arcCy, radius: r,
@@ -120,6 +119,7 @@ export class FilletTool implements Tool {
       layerId: l1.layerId, color: l1.color, lineType: l1.lineType,
       lineWidth: l1.lineWidth, visible: true, locked: false, extrudeHeight: 0,
     });
+    ctx.project.commitCompound('Fillet');
   }
 
   onPointerMove(_point: Point2D, _ctx: ToolContext): void {}

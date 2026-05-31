@@ -75,6 +75,12 @@ export class MeshNode extends SceneNode {
   }
 
   override setProperty(property: string, value: unknown): boolean {
+    if (property.startsWith('geometry.params.')) {
+      const key = property.slice('geometry.params.'.length);
+      this.geometry = { ...this.geometry, params: { ...(this.geometry.params ?? {}), [key]: value as number } };
+      this.notifyChange();
+      return true;
+    }
     switch (property) {
       case 'material.color':
         this.setMaterialColor(value as string);

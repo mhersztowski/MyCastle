@@ -14,6 +14,8 @@ export class CadRenderer {
   private meshMap = new Map<string, THREE.Object3D>();
   private entitiesGroup: THREE.Group;
   private previewGroup: THREE.Group;
+  private placementGroup: THREE.Group;
+  private placementCentroid = { x: 0, y: 0 };
   private gridGroup: THREE.Group;
   private lightsGroup: THREE.Group;
   private snapMarker: THREE.Object3D;
@@ -65,8 +67,10 @@ export class CadRenderer {
     this.gridGroup = new THREE.Group();
     this.entitiesGroup = new THREE.Group();
     this.previewGroup = new THREE.Group();
+    this.placementGroup = new THREE.Group();
+    this.placementGroup.visible = false;
     this.lightsGroup = new THREE.Group();
-    this.scene.add(this.gridGroup, this.entitiesGroup, this.previewGroup, this.lightsGroup);
+    this.scene.add(this.gridGroup, this.entitiesGroup, this.previewGroup, this.placementGroup, this.lightsGroup);
 
     // Snap marker
     const markerGeo = new THREE.BufferGeometry();
@@ -244,6 +248,25 @@ export class CadRenderer {
     if (obj) this.previewGroup.add(obj);
   }
 
+  setPlacementObjects(objs: THREE.Object3D[] | null, centroidX: number, centroidY: number): void {
+    while (this.placementGroup.children.length)
+      this.placementGroup.remove(this.placementGroup.children[0]);
+    if (!objs || objs.length === 0) { this.placementGroup.visible = false; return; }
+    this.placementCentroid = { x: centroidX, y: centroidY };
+    for (const obj of objs) this.placementGroup.add(obj);
+    this.placementGroup.visible = true;
+  }
+
+  movePlacement(wx: number, wy: number): void {
+    this.placementGroup.position.set(wx - this.placementCentroid.x, wy - this.placementCentroid.y, 0.5);
+  }
+
+  clearPlacement(): void {
+    while (this.placementGroup.children.length)
+      this.placementGroup.remove(this.placementGroup.children[0]);
+    this.placementGroup.visible = false;
+  }
+
   // ── 2D helpers ──────────────────────────────────────────────────────────────
 
   worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
@@ -353,6 +376,7 @@ export class CadRenderer {
 
   dispose(): void {
     cancelAnimationFrame(this.animFrameId);
+    this.clearPlacement();
     this.orbitControls?.dispose();
     this.renderer.dispose();
   }

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import {
   Box, Button, ButtonGroup, Chip, Divider, Menu, MenuItem,
@@ -30,10 +30,14 @@ import { SketchEditor } from './cad3d/SketchEditor';
 import type { SketchFeature, SketchPlane } from '../cad3d/types';
 import { planeFromFace } from '../cad3d/subSelect';
 import type { SubSelectMode, SubHit } from '../cad3d/subSelect';
+import type { ActiveTemplate } from './RepositoryPanel';
 
 interface Props {
   project: Project;
   version: number;
+  mergeTreeRef?: MutableRefObject<((json: string) => void) | null>;
+  /** Armed template for serial placement — each click in the viewport adds the template at origin. */
+  placementTemplate?: ActiveTemplate | null;
 }
 
 function fmt(v: number) { return v.toFixed(2); }
@@ -69,9 +73,10 @@ function SubHitLabel({ hit }: { hit: SubHit | null }) {
   );
 }
 
-export function Cad3dView({ project, version }: Props) {
+export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }: Props) {
   const {
     tree, selectedId, editingSketchId,
+    mergeFeatures,
     addSketch, startEditSketch, exitSketch, getSketchProject,
     addExtrude, addPocket, addHole, addGroove,
     addMirror, addRevolve, addShell, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
@@ -83,9 +88,29 @@ export function Cad3dView({ project, version }: Props) {
   const [sceneRoot, setSceneRoot] = useState<THREE.Object3D | null>(null);
   const [subSelectMode, setSubSelectMode] = useState<SubSelectMode>('object');
   const [subHit, setSubHit] = useState<SubHit | null>(null);
+  const placementFetchingRef = useRef(false);
+
+  useEffect(() => {
+    if (!mergeTreeRef) return;
+    mergeTreeRef.current = mergeFeatures;
+    return () => { mergeTreeRef.current = null; };
+  }, [mergeTreeRef, mergeFeatures]);
 
   const handleSceneChange = useCallback((root: THREE.Object3D) => setSceneRoot(root), []);
   const handleSubSelect = useCallback((hit: SubHit | null) => setSubHit(hit), []);
+
+  const handleViewportPlacementClick = useCallback(() => {
+    if (!placementTemplate || placementTemplate.mode !== 'cad3d') return;
+    const fileUrl = placementTemplate.cadFile;
+    if (!fileUrl || !mergeTreeRef?.current || placementFetchingRef.current) return;
+    const url = fileUrl.startsWith('http') ? fileUrl : `${placementTemplate.rawBase.replace(/\/$/, '')}/${fileUrl}`;
+    placementFetchingRef.current = true;
+    fetch(url)
+      .then(r => r.text())
+      .then(text => { mergeTreeRef.current?.(text); })
+      .catch(e => console.error('[Cad3dView] placement failed', e))
+      .finally(() => { placementFetchingRef.current = false; });
+  }, [placementTemplate, mergeTreeRef]);
 
   const handleModeChange = (_: React.MouseEvent, value: SubSelectMode | null) => {
     if (value) { setSubSelectMode(value); setSubHit(null); }
@@ -290,6 +315,13 @@ export function Cad3dView({ project, version }: Props) {
             onSceneChange={handleSceneChange}
             onSubSelect={handleSubSelect}
           />
+          {/* Placement overlay — click anywhere in viewport to stamp template */}
+          {placementTemplate?.mode === 'cad3d' && (
+            <Box
+              sx={{ position: 'absolute', inset: 0, cursor: 'copy', zIndex: 10 }}
+              onClick={handleViewportPlacementClick}
+            />
+          )}
           {/* Sub-selection mode indicator overlay */}
           {subSelectMode !== 'object' && (
             <Box sx={{

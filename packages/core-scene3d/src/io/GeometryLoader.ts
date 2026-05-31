@@ -1,6 +1,7 @@
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import * as THREE from 'three';
 import type { BufferGeometryData } from '../nodes/MeshNode';
 
@@ -73,6 +74,55 @@ export function parseSTLBuffer(buffer: ArrayBuffer): BufferGeometryData {
   }
 
   return extractBufferData(geometry);
+}
+
+export function parseFBXBuffer(buffer: ArrayBuffer): BufferGeometryData {
+  const loader = new FBXLoader();
+  const group = loader.parse(buffer, '');
+
+  const allPositions: number[] = [];
+  const allNormals: number[] = [];
+  const allIndices: number[] = [];
+  let hasNormals = true;
+  let vertexOffset = 0;
+
+  group.traverse((child) => {
+    if (!(child as THREE.Mesh).isMesh) return;
+    const geo = (child as THREE.Mesh).geometry as THREE.BufferGeometry;
+
+    const pos = geo.getAttribute('position');
+    if (!pos) return;
+
+    for (let i = 0; i < pos.count * 3; i++) {
+      allPositions.push((pos.array as Float32Array)[i]);
+    }
+
+    const norm = geo.getAttribute('normal');
+    if (norm) {
+      for (let i = 0; i < norm.count * 3; i++) {
+        allNormals.push((norm.array as Float32Array)[i]);
+      }
+    } else {
+      hasNormals = false;
+    }
+
+    const idx = geo.getIndex();
+    if (idx) {
+      for (let i = 0; i < idx.count; i++) {
+        allIndices.push((idx.array as Uint16Array | Uint32Array)[i] + vertexOffset);
+      }
+    }
+
+    vertexOffset += pos.count;
+  });
+
+  if (allPositions.length === 0) throw new Error('No mesh found in FBX file');
+
+  return {
+    positions: allPositions,
+    normals: hasNormals && allNormals.length > 0 ? allNormals : undefined,
+    indices: allIndices.length > 0 ? allIndices : undefined,
+  };
 }
 
 export function parseGLTFBuffer(buffer: ArrayBuffer): Promise<BufferGeometryData> {

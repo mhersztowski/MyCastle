@@ -1,14 +1,17 @@
 import { useRef, useMemo, useEffect, useCallback, MutableRefObject } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, TransformControls } from '@react-three/drei';
+import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SceneGraph } from '../scene/SceneGraph';
 import type { SceneNode } from '../scene/SceneNode';
 import type { MeshNode, BufferGeometryData } from '../nodes/MeshNode';
 import type { LightNode } from '../nodes/LightNode';
+import type { CameraNode } from '../nodes/CameraNode';
 import type { CSSProperties, ReactElement, RefObject } from 'react';
-import type { CameraPresetName } from '@mhersztowski/ui-core';
+import type { CameraPresetName, SceneSettings } from '@mhersztowski/ui-core';
 import { CAMERA_PRESETS } from './cameraPresets';
+
+export type SceneRenderMode = 'realistic' | 'solid' | 'normal' | 'wireframe';
 
 export interface SimpleViewerProps {
   sceneGraph?: SceneGraph;
@@ -27,6 +30,16 @@ export interface SimpleViewerProps {
   autoFit?: boolean;
   /** Pass a ref; its `.current` will be set to a `fitScene()` function for imperative triggering. */
   fitSceneRef?: MutableRefObject<(() => void) | null>;
+  /** Show orientation gizmo in the bottom-left corner. Default true. */
+  showAxesGizmo?: boolean;
+  /** ID of a scene CameraNode to use as the viewport camera; null = editor camera. */
+  activeCameraNodeId?: string | null;
+  /** Viewport shading mode. Default 'realistic'. */
+  renderMode?: SceneRenderMode;
+  /** Scene-level settings: background, environment, fog. */
+  sceneSettings?: SceneSettings;
+  /** Called when the user clicks on the Y=0 floor plane (for template placement). wx/wz = world X/Z coordinates. */
+  onPlaneClick?: (wx: number, wz: number) => void;
 }
 
 function SelectableMesh({
@@ -34,11 +47,13 @@ function SelectableMesh({
   meshNode,
   isSelected,
   onSelect,
+  renderMode = 'realistic',
 }: {
   node: SceneNode;
   meshNode: MeshNode;
   isSelected: boolean;
   onSelect?: (nodeId: string) => void;
+  renderMode?: SceneRenderMode;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
 
@@ -60,14 +75,25 @@ function SelectableMesh({
       }}
     >
       <MeshGeometry type={meshNode.geometry.type} params={meshNode.geometry.params} bufferData={meshNode.geometry.bufferData} />
-      <meshStandardMaterial
-        color={meshNode.material.color}
-        opacity={meshNode.material.opacity}
-        transparent={meshNode.material.opacity < 1}
-        wireframe={meshNode.material.wireframe}
-        emissive={isSelected ? '#4fc3f7' : '#000000'}
-        emissiveIntensity={isSelected ? 0.15 : 0}
-      />
+      {renderMode === 'solid' && (
+        <meshLambertMaterial color={isSelected ? '#4fc3f7' : '#888888'} />
+      )}
+      {renderMode === 'normal' && (
+        <meshNormalMaterial />
+      )}
+      {renderMode === 'wireframe' && (
+        <meshBasicMaterial wireframe color={isSelected ? '#4fc3f7' : '#aaaaaa'} />
+      )}
+      {(renderMode === 'realistic' || renderMode == null) && (
+        <meshStandardMaterial
+          color={meshNode.material.color}
+          opacity={meshNode.material.opacity}
+          transparent={meshNode.material.opacity < 1}
+          wireframe={meshNode.material.wireframe}
+          emissive={isSelected ? '#4fc3f7' : '#000000'}
+          emissiveIntensity={isSelected ? 0.15 : 0}
+        />
+      )}
     </mesh>
   );
 }
@@ -76,10 +102,12 @@ function GizmoControls({
   sceneGraph,
   selectedNodeId,
   transformMode,
+  onObjectChange,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
   transformMode: 'translate' | 'rotate' | 'scale';
+  onObjectChange?: (obj: THREE.Object3D) => void;
 }) {
   const { scene } = useThree();
   const controlsRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -110,6 +138,14 @@ function GizmoControls({
     return () => controls.removeEventListener('mouseUp', callback);
   }, [handleDragEnd]);
 
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const callback = () => { if (targetObject) onObjectChange?.(targetObject); };
+    controls.addEventListener('change', callback);
+    return () => controls.removeEventListener('change', callback);
+  }, [onObjectChange, targetObject]);
+
   if (!targetObject) return null;
 
   return (
@@ -119,6 +155,125 @@ function GizmoControls({
       mode={transformMode}
       size={0.7}
     />
+  );
+}
+
+function CameraGizmoShape({
+  color,
+  cameraType,
+  fov,
+  near,
+  far,
+  left,
+  right,
+  top,
+  bottom,
+}: {
+  color: string;
+  cameraType: 'perspective' | 'orthographic';
+  fov: number;
+  near: number;
+  far: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}) {
+  const frustumGeo = useMemo(() => {
+    let nL: number, nR: number, nT: number, nB: number;
+    let fL: number, fR: number, fT: number, fB: number;
+
+    if (cameraType === 'orthographic') {
+      nL = left;  nR = right; nT = top;   nB = bottom;
+      fL = left;  fR = right; fT = top;   fB = bottom;
+    } else {
+      const aspect = 16 / 9;
+      const tanV = Math.tan((fov * Math.PI / 180) / 2);
+      const tanH = tanV * aspect;
+      nL = -near * tanH; nR = near * tanH; nT = near * tanV; nB = -near * tanV;
+      fL = -far * tanH;  fR = far * tanH;  fT = far * tanV;  fB = -far * tanV;
+    }
+
+    const verts = new Float32Array([
+      // 4 corner rays near → far
+      nR, nT, -near,  fR, fT, -far,
+      nL, nT, -near,  fL, fT, -far,
+      nR, nB, -near,  fR, fB, -far,
+      nL, nB, -near,  fL, fB, -far,
+      // near rect
+      nR, nT, -near,  nL, nT, -near,
+      nL, nT, -near,  nL, nB, -near,
+      nL, nB, -near,  nR, nB, -near,
+      nR, nB, -near,  nR, nT, -near,
+      // far rect
+      fR, fT, -far,   fL, fT, -far,
+      fL, fT, -far,   fL, fB, -far,
+      fL, fB, -far,   fR, fB, -far,
+      fR, fB, -far,   fR, fT, -far,
+    ]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    return geo;
+  }, [cameraType, fov, near, far, left, right, top, bottom]);
+
+  useEffect(() => () => frustumGeo.dispose(), [frustumGeo]);
+
+  return (
+    <>
+      <mesh>
+        <boxGeometry args={[0.32, 0.22, 0.14]} />
+        <meshBasicMaterial color={color} wireframe />
+      </mesh>
+      <mesh position={[0, 0, -0.09]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.055, 0.055, 0.05, 12]} />
+        <meshBasicMaterial color={color} wireframe />
+      </mesh>
+      <lineSegments geometry={frustumGeo}>
+        <lineBasicMaterial color={color} />
+      </lineSegments>
+    </>
+  );
+}
+
+function SceneCamera({
+  node,
+  cameraNode,
+  isSelected,
+  onSelect,
+}: {
+  node: SceneNode;
+  cameraNode: CameraNode;
+  isSelected: boolean;
+  onSelect?: (nodeId: string) => void;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    node._threeObject = groupRef.current;
+    return () => { node._threeObject = null; };
+  }, [node]);
+
+  return (
+    <group
+      ref={groupRef}
+      name={node.id}
+      position={node.position}
+      rotation={node.rotation as [number, number, number]}
+      scale={node.scale}
+      onClick={(e) => { e.stopPropagation(); onSelect?.(node.id); }}
+    >
+      <CameraGizmoShape
+        color={isSelected ? '#4fc3f7' : '#66aaff'}
+        cameraType={cameraNode.cameraType}
+        fov={cameraNode.fov}
+        near={cameraNode.near}
+        far={cameraNode.far}
+        left={cameraNode.left}
+        right={cameraNode.right}
+        top={cameraNode.top}
+        bottom={cameraNode.bottom}
+      />
+    </group>
   );
 }
 
@@ -136,6 +291,18 @@ function SceneLight({
     return () => { node._threeObject = null; };
   }, [node]);
 
+  // Sync shadow sub-properties imperatively after every render (point / directional lights)
+  useEffect(() => {
+    const light = ref.current as THREE.PointLight | THREE.DirectionalLight | null;
+    if (!light?.shadow) return;
+    light.shadow.bias = lightNode.shadowBias;
+    light.shadow.normalBias = lightNode.shadowNormalBias;
+    light.shadow.radius = lightNode.shadowRadius;
+    // shadow.intensity added in Three.js r166
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ('intensity' in light.shadow) (light.shadow as any).intensity = lightNode.shadowIntensity;
+  });
+
   switch (lightNode.lightType) {
     case 'ambient':
       return (
@@ -151,6 +318,33 @@ function SceneLight({
           ref={ref as RefObject<THREE.PointLight>}
           position={node.position}
           color={lightNode.color}
+          intensity={lightNode.intensity}
+          distance={lightNode.distance}
+          decay={lightNode.decay}
+          castShadow={node.castShadow}
+        />
+      );
+    case 'spot':
+      return (
+        <spotLight
+          ref={ref as RefObject<THREE.SpotLight>}
+          position={node.position}
+          color={lightNode.color}
+          intensity={lightNode.intensity}
+          distance={lightNode.distance}
+          angle={lightNode.angle}
+          penumbra={lightNode.penumbra}
+          decay={lightNode.decay}
+          castShadow={node.castShadow}
+        />
+      );
+    case 'hemisphere':
+      return (
+        <hemisphereLight
+          ref={ref as RefObject<THREE.HemisphereLight>}
+          position={node.position}
+          color={lightNode.color}
+          groundColor={lightNode.groundColor}
           intensity={lightNode.intensity}
         />
       );
@@ -172,11 +366,13 @@ function SceneRenderer({
   version,
   selectedNodeId,
   onNodeSelect,
+  renderMode = 'realistic',
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
   selectedNodeId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
+  renderMode?: SceneRenderMode;
 }) {
   const objects = useMemo(() => {
     if (!sceneGraph) return [];
@@ -195,6 +391,7 @@ function SceneRenderer({
             meshNode={meshNode}
             isSelected={node.id === selectedNodeId}
             onSelect={onNodeSelect}
+            renderMode={renderMode}
           />,
         );
       } else if (node.type === 'light') {
@@ -206,12 +403,23 @@ function SceneRenderer({
             lightNode={lightNode}
           />,
         );
+      } else if (node.type === 'camera') {
+        const cameraNode = node as unknown as CameraNode;
+        result.push(
+          <SceneCamera
+            key={node.id}
+            node={node}
+            cameraNode={cameraNode}
+            isSelected={node.id === selectedNodeId}
+            onSelect={onNodeSelect}
+          />,
+        );
       }
     });
 
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneGraph, version, selectedNodeId, onNodeSelect]);
+  }, [sceneGraph, version, selectedNodeId, onNodeSelect, renderMode]);
 
   return <group>{objects}</group>;
 }
@@ -249,7 +457,7 @@ function MeshGeometry({
       if (!bufferData) return <boxGeometry />;
       return <CustomBufferGeometry data={bufferData} />;
     case 'sphere':
-      return <sphereGeometry args={[params?.['radius'] ?? 1, 32, 32]} />;
+      return <sphereGeometry args={[params?.['radius'] ?? 1, params?.['widthSegments'] ?? 32, params?.['heightSegments'] ?? 32]} />;
     case 'cylinder':
       return (
         <cylinderGeometry
@@ -257,22 +465,22 @@ function MeshGeometry({
             params?.['radiusTop'] ?? 1,
             params?.['radiusBottom'] ?? 1,
             params?.['height'] ?? 2,
-            32,
+            params?.['radialSegments'] ?? 32,
           ]}
         />
       );
     case 'plane':
       return (
-        <planeGeometry args={[params?.['width'] ?? 10, params?.['height'] ?? 10]} />
+        <planeGeometry args={[params?.['width'] ?? 10, params?.['height'] ?? 10, params?.['widthSegments'] ?? 1, params?.['heightSegments'] ?? 1]} />
       );
     case 'cone':
       return (
-        <coneGeometry args={[params?.['radius'] ?? 1, params?.['height'] ?? 2, 32]} />
+        <coneGeometry args={[params?.['radius'] ?? 1, params?.['height'] ?? 2, params?.['radialSegments'] ?? 32]} />
       );
     case 'torus':
       return (
         <torusGeometry
-          args={[params?.['radius'] ?? 1, params?.['tube'] ?? 0.4, 16, 100]}
+          args={[params?.['radius'] ?? 1, params?.['tube'] ?? 0.4, params?.['radialSegments'] ?? 16, params?.['tubularSegments'] ?? 100]}
         />
       );
     case 'box':
@@ -283,6 +491,9 @@ function MeshGeometry({
             params?.['width'] ?? 1,
             params?.['height'] ?? 1,
             params?.['depth'] ?? 1,
+            params?.['widthSegments'] ?? 1,
+            params?.['heightSegments'] ?? 1,
+            params?.['depthSegments'] ?? 1,
           ]}
         />
       );
@@ -363,6 +574,62 @@ function FitCameraEffect({
   return null;
 }
 
+function ActiveSceneCamera({
+  sceneGraph,
+  activeCameraNodeId,
+}: {
+  sceneGraph: SceneGraph;
+  activeCameraNodeId: string;
+}) {
+  const node = sceneGraph.findNode(activeCameraNodeId);
+  if (!node || node.type !== 'camera') return null;
+  const cam = node as unknown as CameraNode;
+
+  if (cam.cameraType === 'orthographic') {
+    return (
+      <DreiOrthographicCamera
+        makeDefault
+        position={node.position}
+        rotation={node.rotation as [number, number, number]}
+        near={cam.near}
+        far={cam.far}
+        left={cam.left}
+        right={cam.right}
+        top={cam.top}
+        bottom={cam.bottom}
+      />
+    );
+  }
+  return (
+    <DreiPerspectiveCamera
+      makeDefault
+      position={node.position}
+      rotation={node.rotation as [number, number, number]}
+      fov={cam.fov}
+      near={cam.near}
+      far={cam.far}
+    />
+  );
+}
+
+
+function PlacementPlane({ onPlaneClick }: { onPlaneClick: (wx: number, wz: number) => void }) {
+  return (
+    <mesh
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[0, 0, 0]}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        onPlaneClick(e.point.x, e.point.z);
+      }}
+    >
+      <planeGeometry args={[10000, 10000]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
+
 function SceneContent({
   sceneGraph,
   version,
@@ -373,6 +640,12 @@ function SceneContent({
   onNodeSelect,
   autoFit,
   fitSceneRef,
+  showAxesGizmo,
+  activeCameraNodeId,
+  renderMode = 'realistic',
+  sceneSettings,
+  onObjectChange,
+  onPlaneClick,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -383,14 +656,36 @@ function SceneContent({
   onNodeSelect?: (nodeId: string | null) => void;
   autoFit?: boolean;
   fitSceneRef?: MutableRefObject<(() => void) | null>;
+  showAxesGizmo?: boolean;
+  activeCameraNodeId?: string | null;
+  renderMode?: SceneRenderMode;
+  sceneSettings?: SceneSettings;
+  onObjectChange?: (obj: THREE.Object3D) => void;
+  onPlaneClick?: (wx: number, wz: number) => void;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
-  const showGizmo = selectedNode?.type === 'mesh';
+  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
   const presetConfig = CAMERA_PRESETS[cameraPreset];
 
   return (
     <>
-      <OrbitControls makeDefault mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
+      {activeCameraNodeId && sceneGraph
+        ? <ActiveSceneCamera sceneGraph={sceneGraph} activeCameraNodeId={activeCameraNodeId} />
+        : null}
+      <OrbitControls makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
+      {sceneSettings?.backgroundType === 'solid' && (
+        <color attach="background" args={[sceneSettings.backgroundColor]} />
+      )}
+      {sceneSettings?.fogType === 'linear' && (
+        <fog attach="fog" args={[sceneSettings.fogColor, sceneSettings.fogNear, sceneSettings.fogFar]} />
+      )}
+      {sceneSettings?.fogType === 'exp2' && (
+        <fogExp2 attach="fog" args={[sceneSettings.fogColor, sceneSettings.fogDensity]} />
+      )}
+      {sceneSettings?.environmentPreset && sceneSettings.environmentPreset !== 'none' && (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        <Environment preset={sceneSettings.environmentPreset as any} />
+      )}
       <ambientLight intensity={0.3} />
       <directionalLight position={[10, 10, 5]} intensity={0.7} />
       {showGrid && <gridHelper args={[20, 20, '#444444', '#333333']} />}
@@ -399,15 +694,26 @@ function SceneContent({
         version={version}
         selectedNodeId={selectedNodeId}
         onNodeSelect={onNodeSelect}
+        renderMode={renderMode}
       />
       {showGizmo && sceneGraph && selectedNodeId && (
         <GizmoControls
           sceneGraph={sceneGraph}
           selectedNodeId={selectedNodeId}
           transformMode={transformMode}
+          onObjectChange={onObjectChange}
         />
       )}
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
+      {onPlaneClick && <PlacementPlane onPlaneClick={onPlaneClick} />}
+      {showAxesGizmo !== false && (
+        <GizmoHelper alignment="bottom-left" margin={[72, 72]}>
+          <GizmoViewport
+            axisColors={['#e05555', '#55cc55', '#4488ff']}
+            labelColor="white"
+          />
+        </GizmoHelper>
+      )}
     </>
   );
 }
@@ -427,11 +733,29 @@ export function SimpleViewer({
   style,
   autoFit,
   fitSceneRef,
+  showAxesGizmo,
+  activeCameraNodeId,
+  renderMode = 'realistic',
+  sceneSettings,
+  onPlaneClick,
 }: SimpleViewerProps) {
+  const scaleXRef = useRef<HTMLSpanElement>(null);
+  const scaleYRef = useRef<HTMLSpanElement>(null);
+  const scaleZRef = useRef<HTMLSpanElement>(null);
+
+  const handleLiveTransform = useCallback((obj: THREE.Object3D) => {
+    if (scaleXRef.current) scaleXRef.current.textContent = obj.scale.x.toFixed(3);
+    if (scaleYRef.current) scaleYRef.current.textContent = obj.scale.y.toFixed(3);
+    if (scaleZRef.current) scaleZRef.current.textContent = obj.scale.z.toFixed(3);
+  }, []);
+
+  const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
+
   return (
     <div
       className={className}
       style={{
+        position: 'relative',
         width,
         height,
         overflow: 'hidden',
@@ -453,8 +777,48 @@ export function SimpleViewer({
           onNodeSelect={onNodeSelect}
           autoFit={autoFit}
           fitSceneRef={fitSceneRef}
+          showAxesGizmo={showAxesGizmo}
+          activeCameraNodeId={activeCameraNodeId}
+          renderMode={renderMode}
+          sceneSettings={sceneSettings}
+          onObjectChange={handleLiveTransform}
+          onPlaneClick={onPlaneClick}
         />
       </Canvas>
+      {selectedNode && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 12,
+            right: 12,
+            background: 'rgba(0,0,0,0.55)',
+            backdropFilter: 'blur(4px)',
+            borderRadius: 4,
+            padding: '4px 8px',
+            pointerEvents: 'none',
+            fontFamily: 'monospace',
+            fontSize: 11,
+            lineHeight: '18px',
+            color: '#ccc',
+            userSelect: 'none',
+            zIndex: 10,
+          }}
+        >
+          <div style={{ color: '#777', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 1 }}>Scale</div>
+          <div>
+            <span style={{ color: '#e05555', marginRight: 6 }}>X</span>
+            <span ref={scaleXRef}>{selectedNode.scale[0].toFixed(3)}</span>
+          </div>
+          <div>
+            <span style={{ color: '#55cc55', marginRight: 6 }}>Y</span>
+            <span ref={scaleYRef}>{selectedNode.scale[1].toFixed(3)}</span>
+          </div>
+          <div>
+            <span style={{ color: '#4488ff', marginRight: 6 }}>Z</span>
+            <span ref={scaleZRef}>{selectedNode.scale[2].toFixed(3)}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

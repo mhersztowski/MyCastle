@@ -1,8 +1,10 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName } from '@mhersztowski/ui-core';
-import { useDialog } from '@mhersztowski/ui-core';
-import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS } from '@mhersztowski/core-scene3d';
-import type { SceneNode, LightType, BufferGeometryData } from '@mhersztowski/core-scene3d';
+import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName, SceneSettings } from '@mhersztowski/ui-core';
+import { useDialog, DEFAULT_SCENE_SETTINGS } from '@mhersztowski/ui-core';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
+import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, FBXImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS } from '@mhersztowski/core-scene3d';
+import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode } from '@mhersztowski/core-scene3d';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Menu from '@mui/material/Menu';
@@ -10,10 +12,17 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
+import Tooltip from '@mui/material/Tooltip';
+import IconButton from '@mui/material/IconButton';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import SaveAsIcon from '@mui/icons-material/SaveAs';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import FileUploadIcon from '@mui/icons-material/FileUpload';
 import SettingsIcon from '@mui/icons-material/Settings';
+import UndoIcon from '@mui/icons-material/Undo';
+import RedoIcon from '@mui/icons-material/Redo';
+import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
+import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
 import Divider from '@mui/material/Divider';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
@@ -63,6 +72,7 @@ function buildTreeNodes(node: SceneNode): SceneTreeNodeData {
 function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
   const meshNode = node.type === 'mesh' ? (node as unknown as MeshNode) : null;
   const lightNode = node.type === 'light' ? (node as unknown as LightNode) : null;
+  const cameraNode = node.type === 'camera' ? (node as unknown as CameraNode) : null;
 
   return {
     id: node.id,
@@ -74,11 +84,69 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
       rotation: [...node.rotation],
       scale: [...node.scale],
     },
+    object: {
+      castShadow: node.castShadow,
+      receiveShadow: node.receiveShadow,
+      frustumCulled: node.frustumCulled,
+      renderOrder: node.renderOrder,
+      userData: node.userData,
+    },
+    geometry: meshNode
+      ? (() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const threeGeo = (meshNode as any)._threeObject?.geometry as any;
+          const attributes = threeGeo
+            ? {
+                indexCount: threeGeo.index?.count as number | undefined,
+                positionCount: threeGeo.attributes?.position?.count as number | undefined,
+                normalCount: threeGeo.attributes?.normal?.count as number | undefined,
+                uvCount: threeGeo.attributes?.uv?.count as number | undefined,
+              }
+            : undefined;
+          let bounds: [number, number, number] | undefined;
+          if (threeGeo && typeof threeGeo.computeBoundingBox === 'function') {
+            threeGeo.computeBoundingBox();
+            const bb = threeGeo.boundingBox;
+            if (bb) {
+              bounds = [
+                parseFloat((bb.max.x - bb.min.x).toFixed(4)),
+                parseFloat((bb.max.y - bb.min.y).toFixed(4)),
+                parseFloat((bb.max.z - bb.min.z).toFixed(4)),
+              ];
+            }
+          }
+          return {
+            geoType: meshNode.geometry.type,
+            params: { ...(meshNode.geometry.params ?? {}) },
+            vertexCount: meshNode.geometry.bufferData ? Math.floor(meshNode.geometry.bufferData.positions.length / 3) : undefined,
+            indexCount: meshNode.geometry.bufferData?.indices?.length,
+            fileName: meshNode.geometry.fileName,
+            attributes,
+            bounds,
+          };
+        })()
+      : undefined,
     material: meshNode
       ? { color: meshNode.material.color, opacity: meshNode.material.opacity, wireframe: meshNode.material.wireframe }
       : undefined,
+    camera: cameraNode
+      ? { cameraType: cameraNode.cameraType, fov: cameraNode.fov, near: cameraNode.near, far: cameraNode.far, left: cameraNode.left, right: cameraNode.right, top: cameraNode.top, bottom: cameraNode.bottom }
+      : undefined,
     light: lightNode
-      ? { lightType: lightNode.lightType, color: lightNode.color, intensity: lightNode.intensity }
+      ? {
+          lightType: lightNode.lightType,
+          color: lightNode.color,
+          groundColor: lightNode.groundColor,
+          intensity: lightNode.intensity,
+          distance: lightNode.distance,
+          decay: lightNode.decay,
+          angle: lightNode.angle,
+          penumbra: lightNode.penumbra,
+          shadowIntensity: lightNode.shadowIntensity,
+          shadowBias: lightNode.shadowBias,
+          shadowNormalBias: lightNode.shadowNormalBias,
+          shadowRadius: lightNode.shadowRadius,
+        }
       : undefined,
   };
 }
@@ -91,8 +159,14 @@ interface ClipboardData {
 }
 
 const MESH_COLORS = ['#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8', '#4dd0e1', '#aed581', '#ff8a65'];
+const HISTORY_MAX = 50;
 
-export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, onSceneChange }: RichEditorProps) {
+interface RichEditorExtendedProps extends RichEditorProps {
+  onOpenFromServer?: () => void;
+  onSaveToServer?: () => void;
+}
+
+export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
@@ -108,16 +182,28 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [externalFitRef]) as React.MutableRefObject<(() => void) | null>;
+  const historyRef = useRef<string[]>([]);
+  const historyPointerRef = useRef(-1);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const clipboardRef = useRef<ClipboardData | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const stlFileInputRef = useRef<HTMLInputElement>(null);
+  const fbxFileInputRef = useRef<HTMLInputElement>(null);
   const sceneFileInputRef = useRef<HTMLInputElement>(null);
   const importParentIdRef = useRef<string | undefined>(undefined);
   const [canPaste, setCanPaste] = useState(false);
+  const [activeCameraNodeId, setActiveCameraNodeId] = useState<string | null>(null);
+  const [renderMode, setRenderMode] = useState<SceneRenderMode>('realistic');
+  const [sceneSettings, setSceneSettings] = useState<SceneSettings>(DEFAULT_SCENE_SETTINGS);
   const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null);
   const [cameraPreset, setCameraPreset] = useState<CameraPresetName>(() =>
     (localStorage.getItem('scene3d-camera-preset') as CameraPresetName) || 'standard',
   );
   const settingsDialog = useDialog();
+  const theme = useTheme();
+  const isCompact = useMediaQuery(theme.breakpoints.down('md'));
 
   const [sceneGraph, setSceneGraph] = useState(() => {
     if (initialSceneData) {
@@ -161,10 +247,55 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     return graph;
   });
 
+  // Seed history with the initial snapshot on mount / when sceneGraph object is replaced
+  useEffect(() => {
+    const initial = SceneSerializer.serialize(sceneGraph);
+    historyRef.current = [initial];
+    historyPointerRef.current = 0;
+    setCanUndo(false);
+    setCanRedo(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneGraph]);
+
   const bump = useCallback(() => {
     setVersion((v) => v + 1);
-    onSceneChange?.(SceneSerializer.serialize(sceneGraph));
+    const current = SceneSerializer.serialize(sceneGraph);
+    onSceneChange?.(current);
+
+    const pointer = historyPointerRef.current;
+    let history = historyRef.current.slice(0, pointer + 1);
+    history = [...history, current];
+    if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+    historyRef.current = history;
+    historyPointerRef.current = history.length - 1;
+    setCanUndo(historyPointerRef.current > 0);
+    setCanRedo(false);
   }, [sceneGraph, onSceneChange]);
+
+  const mergeScene = useCallback((json: string) => {
+    try {
+      // Regenerate all node IDs to avoid conflicts when inserting same template multiple times
+      const data = JSON.parse(json);
+      function reId(node: Record<string, unknown>) {
+        node.id = crypto.randomUUID();
+        if (Array.isArray(node.children)) (node.children as Record<string, unknown>[]).forEach(reId);
+      }
+      if (data.root) reId(data.root);
+      const templateGraph = SceneDeserializer.deserialize(JSON.stringify(data));
+      for (const child of [...templateGraph.root.children]) {
+        sceneGraph.addNode(child, sceneGraph.root.id);
+      }
+      bump();
+    } catch (e) {
+      console.error('[RichEditor] mergeScene failed', e);
+    }
+  }, [sceneGraph, bump]);
+
+  useEffect(() => {
+    if (!externalMergeRef) return;
+    externalMergeRef.current = mergeScene;
+    return () => { externalMergeRef.current = null; };
+  }, [externalMergeRef, mergeScene]);
 
   // Emit initial scene JSON on mount so the parent always has up-to-date data
   useEffect(() => {
@@ -176,6 +307,55 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     sceneGraph.onChange = bump;
     return () => { sceneGraph.onChange = null; };
   }, [sceneGraph, bump]);
+
+  const undo = useCallback(() => {
+    const pointer = historyPointerRef.current;
+    if (pointer <= 0) return;
+    const newPointer = pointer - 1;
+    const snapshot = historyRef.current[newPointer];
+    try {
+      const newGraph = SceneDeserializer.deserialize(snapshot);
+      historyPointerRef.current = newPointer;
+      setSceneGraph(newGraph);
+      setSelectedNodeId(null);
+      setCanUndo(newPointer > 0);
+      setCanRedo(true);
+      onSceneChange?.(snapshot);
+    } catch { /* invalid snapshot, skip */ }
+  }, [onSceneChange]);
+
+  const redo = useCallback(() => {
+    const pointer = historyPointerRef.current;
+    if (pointer >= historyRef.current.length - 1) return;
+    const newPointer = pointer + 1;
+    const snapshot = historyRef.current[newPointer];
+    try {
+      const newGraph = SceneDeserializer.deserialize(snapshot);
+      historyPointerRef.current = newPointer;
+      setSceneGraph(newGraph);
+      setSelectedNodeId(null);
+      setCanUndo(true);
+      setCanRedo(newPointer < historyRef.current.length - 1);
+      onSceneChange?.(snapshot);
+    } catch { /* invalid snapshot, skip */ }
+  }, [onSceneChange]);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const el = containerRef.current;
+      if (!el || !el.getBoundingClientRect().width) return; // hidden (display:none)
+      if ((e.target as HTMLElement).matches?.('input, textarea, [contenteditable]')) return;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        undo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [undo, redo]);
 
   // ─── Add operations ─────────────────────────────────────────
 
@@ -191,13 +371,30 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     setSelectedNodeId(node.id);
   }, [sceneGraph]);
 
-  const addLight = useCallback((lightType: 'point' | 'directional', parentId?: string) => {
-    const name = lightType === 'point' ? 'Point Light' : 'Directional Light';
+  const addLight = useCallback((lightType: 'ambient' | 'point' | 'directional' | 'spot' | 'hemisphere', parentId?: string) => {
+    const nameMap: Record<string, string> = {
+      ambient: 'Ambient Light', point: 'Point Light', directional: 'Directional Light',
+      spot: 'Spot Light', hemisphere: 'Hemisphere Light',
+    };
+    const posMap: Record<string, [number, number, number]> = {
+      ambient: [0, 0, 0], directional: [5, 10, 5], hemisphere: [0, 10, 0],
+      point: [0, 3, 0], spot: [5, 10, 7.5],
+    };
     const node = new LightNode({
-      name,
+      name: nameMap[lightType],
       lightType,
-      position: lightType === 'directional' ? [5, 10, 5] : [0, 3, 0],
-      intensity: lightType === 'point' ? 1 : 0.8,
+      position: posMap[lightType],
+      intensity: lightType === 'point' || lightType === 'spot' ? 1 : 0.8,
+    });
+    sceneGraph.addNode(node, parentId);
+    setSelectedNodeId(node.id);
+  }, [sceneGraph]);
+
+  const addCamera = useCallback((cameraType: 'perspective' | 'orthographic', parentId?: string) => {
+    const node = new CameraNode({
+      name: cameraType === 'orthographic' ? 'Orthographic Camera' : 'Perspective Camera',
+      cameraType,
+      position: [0, 5, 10],
     });
     sceneGraph.addNode(node, parentId);
     setSelectedNodeId(node.id);
@@ -210,23 +407,38 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
   }, [sceneGraph]);
 
   const handleNodeAdd = useCallback((type: string, parentId?: string) => {
-    if (type === 'point-light') {
+    if (type === 'ambient-light') {
+      addLight('ambient', parentId);
+    } else if (type === 'point-light') {
       addLight('point', parentId);
     } else if (type === 'directional-light') {
       addLight('directional', parentId);
+    } else if (type === 'spot-light') {
+      addLight('spot', parentId);
+    } else if (type === 'hemisphere-light') {
+      addLight('hemisphere', parentId);
+    } else if (type === 'perspective-camera') {
+      addCamera('perspective', parentId);
+    } else if (type === 'orthographic-camera') {
+      addCamera('orthographic', parentId);
     } else if (type === 'group') {
       addGroup(parentId);
     } else {
       addMesh(type as 'box' | 'sphere' | 'cylinder' | 'cone' | 'plane' | 'torus', parentId);
     }
-  }, [addMesh, addLight, addGroup]);
+  }, [addMesh, addLight, addCamera, addGroup]);
 
   // ─── Delete / Duplicate ─────────────────────────────────────
+
+  const handleSetActiveCamera = useCallback((nodeId: string | null) => {
+    setActiveCameraNodeId(nodeId);
+  }, []);
 
   const deleteNode = useCallback((nodeId: string) => {
     sceneGraph.removeNode(nodeId);
     if (selectedNodeId === nodeId) setSelectedNodeId(null);
-  }, [sceneGraph, selectedNodeId]);
+    if (activeCameraNodeId === nodeId) setActiveCameraNodeId(null);
+  }, [sceneGraph, selectedNodeId, activeCameraNodeId]);
 
   const handleDuplicate = useCallback((nodeId: string) => {
     const node = sceneGraph.findNode(nodeId);
@@ -375,6 +587,9 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     const node = sceneGraph.findNode(nodeId);
     if (!node) return;
     node.setProperty(property, value);
+    if (property === '__regenerateId') {
+      setSelectedNodeId(node.id);
+    }
   }, [sceneGraph]);
 
   // ─── Viewport selection ─────────────────────────────────────
@@ -428,6 +643,34 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     if (!file) return;
 
     const ext = file.name.split('.').pop()?.toLowerCase();
+
+    // FBX: full scene import — hierarchy, materials, animations
+    if (ext === 'fbx') {
+      try {
+        const buffer = await file.arrayBuffer();
+        const result = FBXImporter.importFromBuffer(buffer);
+        const importedRoots = [...result.graph.root.children];
+        if (importedRoots.length > 0) {
+          const baseName = file.name.replace(/\.[^.]+$/, '');
+          const label = result.animationCount > 0
+            ? `${baseName} (${result.animationCount} anim)`
+            : baseName;
+          const wrapper = new GroupNode({ name: label });
+          sceneGraph.addNode(wrapper, importParentIdRef.current);
+          for (const node of importedRoots) {
+            sceneGraph.addNode(node, wrapper.id);
+          }
+          setSelectedNodeId(wrapper.id);
+        } else {
+          console.warn('[FBX Import] No nodes were extracted from', file.name);
+        }
+      } catch (error) {
+        console.error('[FBX Import] Failed to parse', file.name, error);
+      }
+      e.target.value = '';
+      return;
+    }
+
     let bufferData: BufferGeometryData;
 
     try {
@@ -462,6 +705,16 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
 
   // ─── File menu operations ──────────────────────────────────
 
+  const handleImportSTLFromMenu = useCallback(() => {
+    setFileMenuAnchor(null);
+    stlFileInputRef.current?.click();
+  }, []);
+
+  const handleImportFBXFromMenu = useCallback(() => {
+    setFileMenuAnchor(null);
+    fbxFileInputRef.current?.click();
+  }, []);
+
   const handleSaveAs = useCallback(() => {
     setFileMenuAnchor(null);
     const json = SceneSerializer.serialize(sceneGraph);
@@ -491,6 +744,7 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
       setVersion(0);
       clipboardRef.current = null;
       setCanPaste(false);
+      // History is seeded by the useEffect on sceneGraph change
     } catch {
       // Invalid scene file — ignore
     }
@@ -556,11 +810,16 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
     { id: 'sep-1', label: '', type: 'separator' },
     { id: 'grid', label: '', icon: <GridIcon />, onClick: () => setShowGrid(!showGrid), active: showGrid, tooltip: 'Toggle Grid' },
     { id: 'sep-2', label: '', type: 'separator' },
+    { id: 'render-realistic', label: 'Realistic', onClick: () => setRenderMode('realistic'), active: renderMode === 'realistic', tooltip: 'Realistic — PBR materials with lighting' },
+    { id: 'render-solid', label: 'Solid', onClick: () => setRenderMode('solid'), active: renderMode === 'solid', tooltip: 'Solid — flat diffuse shading' },
+    { id: 'render-normal', label: 'Normal', onClick: () => setRenderMode('normal'), active: renderMode === 'normal', tooltip: 'Normal — visualize vertex normals as color' },
+    { id: 'render-wire', label: 'Wire', onClick: () => setRenderMode('wireframe'), active: renderMode === 'wireframe', tooltip: 'Wireframe — show geometry edges only' },
+    { id: 'sep-3', label: '', type: 'separator' },
     { id: 'settings', label: '', icon: <SettingsIcon sx={{ fontSize: 16 }} />, onClick: settingsDialog.open, tooltip: 'Settings' },
   ];
 
   return (
-    <Box className={className} style={style} sx={{ display: 'flex', flexDirection: 'column', height: '100%', bgcolor: 'background.default', color: 'text.primary' }}>
+    <Box ref={containerRef} className={className} style={style} sx={{ display: 'flex', flexDirection: 'column', height: '100%', bgcolor: 'background.default', color: 'text.primary' }}>
       {/* ─── Menu bar ──────────────────────────────────────────── */}
       <Box
         sx={{
@@ -590,6 +849,20 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
         >
           File
         </Button>
+        <Tooltip title="Undo (Ctrl+Z)" placement="bottom">
+          <span>
+            <IconButton size="small" onClick={undo} disabled={!canUndo} sx={{ p: 0.5 }}>
+              <UndoIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Redo (Ctrl+Y)" placement="bottom">
+          <span>
+            <IconButton size="small" onClick={redo} disabled={!canRedo} sx={{ p: 0.5 }}>
+              <RedoIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Menu
           anchorEl={fileMenuAnchor}
           open={fileMenuAnchor !== null}
@@ -605,6 +878,28 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
             <ListItemIcon><SaveAsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
             <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Save As</ListItemText>
             <Typography sx={{ fontSize: '0.65rem', color: 'text.disabled', ml: 3 }}>Ctrl+Shift+S</Typography>
+          </MenuItem>
+          {(onOpenFromServer || onSaveToServer) && <Divider />}
+          {onOpenFromServer && (
+            <MenuItem onClick={() => { setFileMenuAnchor(null); onOpenFromServer(); }} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
+              <ListItemIcon><CloudDownloadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} /></ListItemIcon>
+              <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Open Scene from Server…</ListItemText>
+            </MenuItem>
+          )}
+          {onSaveToServer && (
+            <MenuItem onClick={() => { setFileMenuAnchor(null); onSaveToServer(); }} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
+              <ListItemIcon><CloudUploadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} /></ListItemIcon>
+              <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Save Scene to Server…</ListItemText>
+            </MenuItem>
+          )}
+          <Divider />
+          <MenuItem onClick={handleImportSTLFromMenu} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
+            <ListItemIcon><FileUploadIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Import STL…</ListItemText>
+          </MenuItem>
+          <MenuItem onClick={handleImportFBXFromMenu} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
+            <ListItemIcon><FileUploadIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Import FBX…</ListItemText>
           </MenuItem>
           <Divider />
           <MenuItem onClick={handleExportOBJ} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
@@ -623,52 +918,123 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
       </Box>
       <Toolbar items={toolbarItems} />
       <Box sx={{ flex: 1, overflow: 'hidden' }}>
-        <Allotment>
-          <Allotment.Pane preferredSize={220} minSize={150} maxSize={400}>
-            <SceneTreePanel
-              nodes={treeNodes}
-              selectedNodeId={selectedNodeId}
-              onNodeSelect={setSelectedNodeId}
-              onNodeVisibilityToggle={handleVisibilityToggle}
-              onNodeAdd={handleNodeAdd}
-              onNodeDelete={deleteNode}
-              onNodeRename={handleNodeRename}
-              onNodeReparent={handleNodeReparent}
-              onNodeDuplicate={handleDuplicate}
-              onImportMesh={handleImportMesh}
-              onNodeCut={handleCut}
-              onNodeCopy={handleCopy}
-              onNodePaste={handlePaste}
-              canPaste={canPaste}
-            />
-          </Allotment.Pane>
-          <Allotment.Pane>
-            <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#2a2a2a' }}>
-              <SimpleViewer
-                sceneGraph={sceneGraph}
-                version={version}
-                showGrid={showGrid}
-                selectedNodeId={selectedNodeId}
-                transformMode={transformMode}
-                cameraPreset={cameraPreset}
-                onNodeSelect={handleViewportSelect}
-                fitSceneRef={fitSceneRef}
-              />
-              <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
-                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Perspective
-                </Typography>
+        {isCompact ? (
+          /* ── Compact (mobile/tablet): viewport | [tree / properties] ── */
+          <Allotment>
+            <Allotment.Pane>
+              <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#2a2a2a' }}>
+                <SimpleViewer
+                  sceneGraph={sceneGraph}
+                  version={version}
+                  showGrid={showGrid}
+                  selectedNodeId={selectedNodeId}
+                  transformMode={transformMode}
+                  cameraPreset={cameraPreset}
+                  onNodeSelect={handleViewportSelect}
+                  fitSceneRef={fitSceneRef}
+                  activeCameraNodeId={activeCameraNodeId}
+                  renderMode={renderMode}
+                  sceneSettings={sceneSettings}
+                  onPlaneClick={onPlaneClick}
+                />
+                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
+                  <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Perspective
+                  </Typography>
+                </Box>
               </Box>
-            </Box>
-          </Allotment.Pane>
-          <Allotment.Pane preferredSize={260} minSize={200} maxSize={400}>
-            <PropertiesPanel
-              node={selectedNodeData}
-              onPropertyChange={handlePropertyChange}
-              onNodeRename={handleNodeRename}
-            />
-          </Allotment.Pane>
-        </Allotment>
+            </Allotment.Pane>
+            <Allotment.Pane preferredSize={280} minSize={180} maxSize={440}>
+              <Allotment vertical>
+                <Allotment.Pane preferredSize="45%" minSize={120}>
+                  <SceneTreePanel
+                    nodes={treeNodes}
+                    selectedNodeId={selectedNodeId}
+                    onNodeSelect={setSelectedNodeId}
+                    onNodeVisibilityToggle={handleVisibilityToggle}
+                    onNodeAdd={handleNodeAdd}
+                    onNodeDelete={deleteNode}
+                    onNodeRename={handleNodeRename}
+                    onNodeReparent={handleNodeReparent}
+                    onNodeDuplicate={handleDuplicate}
+                    onImportMesh={handleImportMesh}
+                    onNodeCut={handleCut}
+                    onNodeCopy={handleCopy}
+                    onNodePaste={handlePaste}
+                    canPaste={canPaste}
+                  />
+                </Allotment.Pane>
+                <Allotment.Pane minSize={120}>
+                  <PropertiesPanel
+                    node={selectedNodeData}
+                    onPropertyChange={handlePropertyChange}
+                    onNodeRename={handleNodeRename}
+                    activeCameraNodeId={activeCameraNodeId}
+                    onSetActiveCamera={handleSetActiveCamera}
+                    sceneSettings={sceneSettings}
+                    onSceneSettingsChange={setSceneSettings}
+                  />
+                </Allotment.Pane>
+              </Allotment>
+            </Allotment.Pane>
+          </Allotment>
+        ) : (
+          /* ── Desktop: tree | viewport | properties ── */
+          <Allotment>
+            <Allotment.Pane preferredSize={220} minSize={150} maxSize={400}>
+              <SceneTreePanel
+                nodes={treeNodes}
+                selectedNodeId={selectedNodeId}
+                onNodeSelect={setSelectedNodeId}
+                onNodeVisibilityToggle={handleVisibilityToggle}
+                onNodeAdd={handleNodeAdd}
+                onNodeDelete={deleteNode}
+                onNodeRename={handleNodeRename}
+                onNodeReparent={handleNodeReparent}
+                onNodeDuplicate={handleDuplicate}
+                onImportMesh={handleImportMesh}
+                onNodeCut={handleCut}
+                onNodeCopy={handleCopy}
+                onNodePaste={handlePaste}
+                canPaste={canPaste}
+              />
+            </Allotment.Pane>
+            <Allotment.Pane>
+              <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#2a2a2a' }}>
+                <SimpleViewer
+                  sceneGraph={sceneGraph}
+                  version={version}
+                  showGrid={showGrid}
+                  selectedNodeId={selectedNodeId}
+                  transformMode={transformMode}
+                  cameraPreset={cameraPreset}
+                  onNodeSelect={handleViewportSelect}
+                  fitSceneRef={fitSceneRef}
+                  activeCameraNodeId={activeCameraNodeId}
+                  renderMode={renderMode}
+                  sceneSettings={sceneSettings}
+                  onPlaneClick={onPlaneClick}
+                />
+                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
+                  <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Perspective
+                  </Typography>
+                </Box>
+              </Box>
+            </Allotment.Pane>
+            <Allotment.Pane preferredSize={260} minSize={200} maxSize={400}>
+              <PropertiesPanel
+                node={selectedNodeData}
+                onPropertyChange={handlePropertyChange}
+                onNodeRename={handleNodeRename}
+                activeCameraNodeId={activeCameraNodeId}
+                onSetActiveCamera={handleSetActiveCamera}
+                sceneSettings={sceneSettings}
+                onSceneSettingsChange={setSceneSettings}
+              />
+            </Allotment.Pane>
+          </Allotment>
+        )}
       </Box>
       <Box
         sx={{
@@ -696,7 +1062,21 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
       <input
         ref={fileInputRef}
         type="file"
-        accept=".obj,.stl,.gltf,.glb"
+        accept=".obj,.stl,.fbx,.gltf,.glb"
+        style={{ display: 'none' }}
+        onChange={handleFileSelected}
+      />
+      <input
+        ref={stlFileInputRef}
+        type="file"
+        accept=".stl"
+        style={{ display: 'none' }}
+        onChange={handleFileSelected}
+      />
+      <input
+        ref={fbxFileInputRef}
+        type="file"
+        accept=".fbx"
         style={{ display: 'none' }}
         onChange={handleFileSelected}
       />

@@ -163,6 +163,23 @@ export interface SelectedNodeTransform {
   scale: [number, number, number];
 }
 
+export interface SelectedNodeGeometryAttributes {
+  indexCount?: number;
+  positionCount?: number;
+  normalCount?: number;
+  uvCount?: number;
+}
+
+export interface SelectedNodeGeometry {
+  geoType: string;
+  params: Record<string, number>;
+  vertexCount?: number;
+  indexCount?: number;
+  fileName?: string;
+  attributes?: SelectedNodeGeometryAttributes;
+  bounds?: [number, number, number];
+}
+
 export interface SelectedNodeMaterial {
   color: string;
   opacity: number;
@@ -172,7 +189,35 @@ export interface SelectedNodeMaterial {
 export interface SelectedNodeLight {
   lightType: string;
   color: string;
+  groundColor?: string;
   intensity: number;
+  distance?: number;
+  decay?: number;
+  angle?: number;
+  penumbra?: number;
+  shadowIntensity?: number;
+  shadowBias?: number;
+  shadowNormalBias?: number;
+  shadowRadius?: number;
+}
+
+export interface SelectedNodeObject {
+  castShadow: boolean;
+  receiveShadow: boolean;
+  frustumCulled: boolean;
+  renderOrder: number;
+  userData: string;
+}
+
+export interface SelectedNodeCamera {
+  cameraType: 'perspective' | 'orthographic';
+  fov: number;
+  near: number;
+  far: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 }
 
 export interface SelectedNodeData {
@@ -181,14 +226,49 @@ export interface SelectedNodeData {
   type: string;
   visible: boolean;
   transform: SelectedNodeTransform;
+  object?: SelectedNodeObject;
+  geometry?: SelectedNodeGeometry;
   material?: SelectedNodeMaterial;
   light?: SelectedNodeLight;
+  camera?: SelectedNodeCamera;
 }
+
+// ─── Scene Settings ───────────────────────────────────────────
+
+export type SceneBackgroundType = 'default' | 'solid';
+export type SceneEnvironmentPreset = 'none' | 'apartment' | 'city' | 'dawn' | 'forest' | 'lobby' | 'night' | 'park' | 'studio' | 'sunset' | 'warehouse';
+export type SceneFogType = 'none' | 'linear' | 'exp2';
+
+export interface SceneSettings {
+  backgroundType: SceneBackgroundType;
+  backgroundColor: string;
+  environmentPreset: SceneEnvironmentPreset;
+  fogType: SceneFogType;
+  fogColor: string;
+  fogNear: number;
+  fogFar: number;
+  fogDensity: number;
+}
+
+export const DEFAULT_SCENE_SETTINGS: SceneSettings = {
+  backgroundType: 'default',
+  backgroundColor: '#1a1a2e',
+  environmentPreset: 'none',
+  fogType: 'none',
+  fogColor: '#aaaaaa',
+  fogNear: 1,
+  fogFar: 100,
+  fogDensity: 0.02,
+};
 
 export interface PropertiesPanelProps {
   node?: SelectedNodeData | null;
   onPropertyChange?: (nodeId: string, property: string, value: unknown) => void;
   onNodeRename?: (nodeId: string, newName: string) => void;
+  activeCameraNodeId?: string | null;
+  onSetActiveCamera?: (nodeId: string | null) => void;
+  sceneSettings?: SceneSettings;
+  onSceneSettingsChange?: (settings: SceneSettings) => void;
   className?: string;
 }
 
@@ -210,8 +290,12 @@ export interface RichEditorProps {
   initialSceneData?: string;
   /** Pass a ref; its `.current` will be set to a `fitScene()` function for imperative camera fit. */
   fitSceneRef?: MutableRefObject<(() => void) | null>;
+  /** Pass a ref; its `.current` will be set to a `mergeScene(json)` function that adds nodes from a serialized SceneGraph into the current scene without replacing it. */
+  mergeSceneRef?: MutableRefObject<((json: string) => void) | null>;
   /** Called on mount and after every scene change with the current serialized SceneGraph JSON. */
   onSceneChange?: (json: string) => void;
+  /** Called when the user clicks the Y=0 floor plane (template placement mode). wx/wz = world X/Z coordinates. */
+  onPlaneClick?: (wx: number, wz: number) => void;
 }
 
 // ─── Viewer Prop Types ────────────────────────────────────────────

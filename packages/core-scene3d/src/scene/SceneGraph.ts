@@ -70,6 +70,23 @@ export class SceneGraph {
   static fromData(data: SceneGraphData): SceneGraph {
     const graph = new SceneGraph();
 
+    function baseFields(d: SceneNodeData) {
+      return {
+        id: d.id,
+        name: d.name,
+        visible: d.visible,
+        position: d.position,
+        rotation: d.rotation,
+        scale: d.scale,
+        castShadow: d.castShadow,
+        receiveShadow: d.receiveShadow,
+        frustumCulled: d.frustumCulled,
+        renderOrder: d.renderOrder,
+        userData: d.userData,
+        metadata: d.metadata,
+      };
+    }
+
     function buildNode(nodeData: SceneNodeData): SceneNode {
       let node: SceneNode;
 
@@ -77,13 +94,7 @@ export class SceneGraph {
         case 'mesh': {
           const d = nodeData as MeshNodeData;
           node = new MeshNode({
-            id: d.id,
-            name: d.name,
-            visible: d.visible,
-            position: d.position,
-            rotation: d.rotation,
-            scale: d.scale,
-            metadata: d.metadata,
+            ...baseFields(d),
             geometry: d.geometry,
             material: d.material,
           });
@@ -92,57 +103,42 @@ export class SceneGraph {
         case 'light': {
           const d = nodeData as LightNodeData;
           node = new LightNode({
-            id: d.id,
-            name: d.name,
-            visible: d.visible,
-            position: d.position,
-            rotation: d.rotation,
-            scale: d.scale,
-            metadata: d.metadata,
+            ...baseFields(d),
             lightType: d.lightType,
             color: d.color,
+            groundColor: d.groundColor,
             intensity: d.intensity,
+            distance: d.distance,
+            decay: d.decay,
+            angle: d.angle,
+            penumbra: d.penumbra,
+            shadowIntensity: d.shadowIntensity,
+            shadowBias: d.shadowBias,
+            shadowNormalBias: d.shadowNormalBias,
+            shadowRadius: d.shadowRadius,
           });
           break;
         }
         case 'camera': {
           const d = nodeData as CameraNodeData;
           node = new CameraNode({
-            id: d.id,
-            name: d.name,
-            visible: d.visible,
-            position: d.position,
-            rotation: d.rotation,
-            scale: d.scale,
-            metadata: d.metadata,
+            ...baseFields(d),
+            cameraType: d.cameraType,
             fov: d.fov,
             near: d.near,
             far: d.far,
+            left: d.left,
+            right: d.right,
+            top: d.top,
+            bottom: d.bottom,
           });
           break;
         }
         case 'group':
-          node = new GroupNode({
-            id: nodeData.id,
-            name: nodeData.name,
-            visible: nodeData.visible,
-            position: nodeData.position,
-            rotation: nodeData.rotation,
-            scale: nodeData.scale,
-            metadata: nodeData.metadata,
-          });
+          node = new GroupNode(baseFields(nodeData));
           break;
         default:
-          node = new SceneNode({
-            id: nodeData.id,
-            name: nodeData.name,
-            type: nodeData.type,
-            visible: nodeData.visible,
-            position: nodeData.position,
-            rotation: nodeData.rotation,
-            scale: nodeData.scale,
-            metadata: nodeData.metadata,
-          });
+          node = new SceneNode({ ...baseFields(nodeData), type: nodeData.type });
       }
 
       if (nodeData.children) {

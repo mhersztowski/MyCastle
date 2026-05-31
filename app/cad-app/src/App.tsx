@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, IconButton, Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip } from '@mui/material';
 import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined';
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
@@ -8,6 +8,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import Looks3OutlinedIcon from '@mui/icons-material/Looks3Outlined';
 import LooksOneOutlinedIcon from '@mui/icons-material/LooksOneOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
+import StorageIcon from '@mui/icons-material/Storage';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import CodeIcon from '@mui/icons-material/Code';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
@@ -28,6 +29,13 @@ import { Cad3dView } from './components/Cad3dView';
 import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
 import { ResizeDivider } from './components/ResizeDivider';
+import { RepositoryPanel } from './components/RepositoryPanel';
+import { TemplatesPanel } from './components/TemplatesPanel';
+import { FileSystemPanel } from './components/FileSystemPanel';
+import { getCurrentUserId } from './vfs/cadProjectApi';
+import type { ElectronicsSchema } from './electronics/types';
+import { loadProjectFromText, mergeProjectFromText } from './io/CadExporter';
+import type { ActiveTemplate, CadProjectEntry, TemplateMode } from './components/RepositoryPanel';
 const AiPanel = lazy(() => import('./components/AiPanel').then(m => ({ default: m.AiPanel })));
 const CodeEditorPanel = lazy(() => import('./components/CodeEditorPanel').then(m => ({ default: m.CodeEditorPanel })));
 import { useProject } from './hooks/useProject';
@@ -35,7 +43,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'repository';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -92,15 +100,119 @@ export default function App() {
     if (v) setCadViewMode(v);
   }, []);
 
+  const handleOpenCadFromRepo = useCallback((jsonText: string) => {
+    loadProjectFromText(jsonText, project);
+    setMode('cad');
+  }, []);
+
+  const [sceneExternalKey, setSceneExternalKey] = useState(0);
+  const mergeSceneRef = useRef<((json: string) => void) | null>(null);
+  const mergeTreeRef = useRef<((json: string) => void) | null>(null);
+  const mergeElecSchemaRef = useRef<((schema: ElectronicsSchema) => void) | null>(null);
+
+  const handleOpenSceneFromRepo = useCallback((jsonText: string) => {
+    setAiSceneData(jsonText);
+    setSavedSceneJson(jsonText);
+    setSceneExternalKey(k => k + 1);
+    setMode('scene3d');
+  }, []);
+
+  const [activeTemplates, setActiveTemplates] = useState<ActiveTemplate[]>(() => {
+    try { return JSON.parse(localStorage.getItem('cad-active-templates') ?? '[]'); }
+    catch { return []; }
+  });
+
+  const addedProjectIds = useMemo(() => new Set(activeTemplates.map(t => t.projectId)), [activeTemplates]);
+
+  const handleAddProjectTemplates = useCallback((proj: CadProjectEntry, rawBase: string) => {
+    setActiveTemplates(prev => {
+      const filtered = prev.filter(t => t.projectId !== proj.id);
+      const next = [
+        ...filtered,
+        ...Object.entries(proj.templates ?? {}).flatMap(([m, entries]) =>
+          (entries ?? []).map(t => ({ ...t, projectId: proj.id, rawBase, mode: m as TemplateMode }))
+        ),
+      ];
+      localStorage.setItem('cad-active-templates', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const handleRemoveProjectTemplates = useCallback((projectId: string) => {
+    setActiveTemplates(prev => {
+      const next = prev.filter(t => t.projectId !== projectId);
+      localStorage.setItem('cad-active-templates', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const handleInsertActiveTemplate = useCallback(async (template: ActiveTemplate) => {
+    const fileUrl = template.mode === 'scene3d' ? template.sceneFile : template.cadFile;
+    if (!fileUrl) return;
+    const url = fileUrl.startsWith('http') ? fileUrl : `${template.rawBase.replace(/\/$/, '')}/${fileUrl}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const text = await resp.text();
+    switch (template.mode) {
+      case 'scene3d':
+        if (mergeSceneRef.current && mode === 'scene3d') {
+          mergeSceneRef.current(text);
+        } else {
+          handleOpenSceneFromRepo(text);
+        }
+        break;
+      case 'cad3d':
+        mergeTreeRef.current?.(text);
+        break;
+      case 'cad':
+        mergeProjectFromText(text, project);
+        break;
+      case 'electronics':
+        if (mergeElecSchemaRef.current) {
+          try {
+            mergeElecSchemaRef.current(JSON.parse(text) as ElectronicsSchema);
+          } catch (e) {
+            console.error('[App] electronics template parse failed', e);
+          }
+        }
+        break;
+    }
+  }, [handleOpenSceneFromRepo, mode]);
+
+  const [placementTemplate, setPlacementTemplate] = useState<ActiveTemplate | null>(null);
+
+  const handleArmTemplate = useCallback((t: ActiveTemplate | null) => {
+    setPlacementTemplate(t);
+    if (t) {
+      // Auto-switch to the matching mode
+      const modeMap: Record<TemplateMode, AppMode> = { cad: 'cad', cad3d: 'cad3d', scene3d: 'scene3d', electronics: 'electronics' };
+      setMode(modeMap[t.mode]);
+    }
+  }, []);
+
+  const handleCancelPlacement = useCallback(() => setPlacementTemplate(null), []);
+
+  // Global Esc cancels placement regardless of which element has focus
+  useEffect(() => {
+    if (!placementTemplate) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPlacementTemplate(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [placementTemplate]);
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh', overflow: 'hidden', bgcolor: 'background.default' }}>
       {/* Top bar: mode tabs + 2D/3D toggle */}
       <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center' }}>
-        <FileMenu
-          project={project}
-          getSceneData={() => savedSceneJson}
-          onSceneData={json => { setAiSceneData(json); setSavedSceneJson(json); }}
-        />
+        {(mode === 'cad' || mode === 'cad3d') && (
+          <FileMenu
+            project={project}
+            getSceneData={() => savedSceneJson}
+            onSceneData={json => { setAiSceneData(json); setSavedSceneJson(json); }}
+          />
+        )}
         <Tabs
           value={mode}
           onChange={(_, v: AppMode) => setMode(v)}
@@ -128,6 +240,12 @@ export default function App() {
             value="electronics"
             label="Electronics"
             icon={<ElectricalServicesIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+          />
+          <Tab
+            value="repository"
+            label="Repository"
+            icon={<StorageIcon sx={{ fontSize: 16 }} />}
             iconPosition="start"
           />
         </Tabs>
@@ -207,6 +325,8 @@ export default function App() {
               injectedPoint={injectedPoint}
               injectedAngle={injectedAngle}
               onLastPoint={handleLastPoint}
+              placementTemplate={placementTemplate?.mode === 'cad' || placementTemplate?.mode === 'electronics' ? placementTemplate : null}
+              onCancelPlacement={handleCancelPlacement}
             />
           </Box>
 
@@ -248,6 +368,7 @@ export default function App() {
           )}
         </Box>
 
+        <TemplatesPanel mode="cad" templates={activeTemplates.filter(t => t.mode === 'cad')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
         <StatusBar project={project} activeTool={activeTool} viewMode={cadViewMode} />
         {cadViewMode === '2d' && (
           <CommandLine
@@ -262,9 +383,10 @@ export default function App() {
 
       {/* CAD 3D panel */}
       {mode === 'cad3d' && (
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
           <Box sx={{ flex: 1, overflow: 'hidden' }}>
-            <Cad3dView project={project} version={version} />
+            <Cad3dView project={project} version={version} mergeTreeRef={mergeTreeRef} placementTemplate={placementTemplate?.mode === 'cad3d' ? placementTemplate : null} />
           </Box>
           {aiOpen && (
             <Box sx={{
@@ -277,53 +399,82 @@ export default function App() {
               </Suspense>
             </Box>
           )}
+          </Box>
+          <TemplatesPanel mode="cad3d" templates={activeTemplates.filter(t => t.mode === 'cad3d')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
         </Box>
       )}
 
       {/* Scene 3D panel */}
-      <Box sx={{ flex: 1, display: mode === 'scene3d' ? 'flex' : 'none', flexDirection: 'row', overflow: 'hidden' }}>
-        <Box sx={{ flex: 1, overflow: 'hidden' }}>
-          <Scene3DView
-            project={project}
-            externalSceneData={aiSceneData}
-            onSceneDataChange={json => setSavedSceneJson(json)}
-          />
-        </Box>
-        {aiOpen && (
-          <Box sx={{
-            width: 380, display: 'flex', flexDirection: 'column',
-            borderLeft: '1px solid rgba(255,255,255,0.08)',
-            bgcolor: 'background.paper', overflow: 'hidden',
-          }}>
-            <Suspense fallback={null}>
-              <AiPanel project={project} version={version} onSceneData={setAiSceneData} />
-            </Suspense>
+      <Box sx={{ flex: 1, display: mode === 'scene3d' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, overflow: 'hidden' }}>
+            <Scene3DView
+              project={project}
+              externalSceneData={aiSceneData}
+              externalSceneKey={sceneExternalKey}
+              mergeSceneRef={mergeSceneRef}
+              onSceneDataChange={json => setSavedSceneJson(json)}
+              placementTemplate={placementTemplate?.mode === 'scene3d' ? placementTemplate : null}
+            />
           </Box>
-        )}
+          {aiOpen && (
+            <Box sx={{
+              width: 380, display: 'flex', flexDirection: 'column',
+              borderLeft: '1px solid rgba(255,255,255,0.08)',
+              bgcolor: 'background.paper', overflow: 'hidden',
+            }}>
+              <Suspense fallback={null}>
+                <AiPanel project={project} version={version} onSceneData={setAiSceneData} />
+              </Suspense>
+            </Box>
+          )}
+        </Box>
+        <TemplatesPanel mode="scene3d" templates={activeTemplates.filter(t => t.mode === 'scene3d')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
+        <FileSystemPanel rootPath={`/users/${getCurrentUserId()}`} title="Project Files" />
       </Box>
 
       {/* Electronics panel */}
-      <Box sx={{ flex: 1, display: mode === 'electronics' ? 'flex' : 'none', flexDirection: 'row', overflow: 'hidden' }}>
-        <ComponentLibrary
-          selectedPartId={selectedPartId}
-          onSelectPart={id => setSelectedPartId(id)}
-        />
-        <BreadboardCanvas
-          pendingPartId={selectedPartId}
-          onPendingPartConsumed={() => {}}
-        />
-        {aiOpen && (
-          <Box sx={{
-            width: 380, display: 'flex', flexDirection: 'column',
-            borderLeft: '1px solid rgba(255,255,255,0.08)',
-            bgcolor: 'background.paper', overflow: 'hidden',
-          }}>
-            <Suspense fallback={null}>
-              <AiPanel project={project} version={version} />
-            </Suspense>
-          </Box>
-        )}
+      <Box sx={{ flex: 1, display: mode === 'electronics' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+          <ComponentLibrary
+            selectedPartId={selectedPartId}
+            onSelectPart={id => setSelectedPartId(id)}
+          />
+          <BreadboardCanvas
+            pendingPartId={selectedPartId}
+            onPendingPartConsumed={() => {}}
+            mergeSchemaRef={mergeElecSchemaRef}
+            placementTemplate={placementTemplate?.mode === 'electronics' ? placementTemplate : null}
+          />
+          {aiOpen && (
+            <Box sx={{
+              width: 380, display: 'flex', flexDirection: 'column',
+              borderLeft: '1px solid rgba(255,255,255,0.08)',
+              bgcolor: 'background.paper', overflow: 'hidden',
+            }}>
+              <Suspense fallback={null}>
+                <AiPanel project={project} version={version} />
+              </Suspense>
+            </Box>
+          )}
+        </Box>
+        <TemplatesPanel mode="electronics" templates={activeTemplates.filter(t => t.mode === 'electronics')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
       </Box>
+
+      {/* Repository panel */}
+      {mode === 'repository' && (
+        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+          <RepositoryPanel
+            onOpenCadProject={handleOpenCadFromRepo}
+            onOpenSceneProject={handleOpenSceneFromRepo}
+            addedProjectIds={addedProjectIds}
+            onAddProjectTemplates={handleAddProjectTemplates}
+            onRemoveProjectTemplates={handleRemoveProjectTemplates}
+            armedTemplateId={placementTemplate?.id ?? null}
+            onArm={handleArmTemplate}
+          />
+        </Box>
+      )}
         </Box>
 
         {/* Code editor — one shared instance; resizable, collapsible, full-screen */}

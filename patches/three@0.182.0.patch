@@ -1,0 +1,32 @@
+diff --git a/examples/jsm/loaders/FBXLoader.js b/examples/jsm/loaders/FBXLoader.js
+index 9fa199384752afffe08f5be0dee89451fc631ac4..149d66f6732f3068507263fc5df20d1d7653dbfd 100644
+--- a/examples/jsm/loaders/FBXLoader.js
++++ b/examples/jsm/loaders/FBXLoader.js
+@@ -2355,11 +2355,11 @@ class GeometryParser {
+ 
+ 		const mappingType = UVNode.MappingInformationType;
+ 		const referenceType = UVNode.ReferenceInformationType;
+-		const buffer = UVNode.UV.a;
++		const buffer = UVNode.UV?.a ?? [];
+ 		let indexBuffer = [];
+ 		if ( referenceType === 'IndexToDirect' ) {
+ 
+-			indexBuffer = UVNode.UVIndex.a;
++			indexBuffer = UVNode.UVIndex?.a ?? [];
+ 
+ 		}
+ 
+@@ -2378,11 +2378,11 @@ class GeometryParser {
+ 
+ 		const mappingType = ColorNode.MappingInformationType;
+ 		const referenceType = ColorNode.ReferenceInformationType;
+-		const buffer = ColorNode.Colors.a;
++		const buffer = ColorNode.Colors?.a ?? [];
+ 		let indexBuffer = [];
+ 		if ( referenceType === 'IndexToDirect' ) {
+ 
+-			indexBuffer = ColorNode.ColorIndex.a;
++			indexBuffer = ColorNode.ColorIndex?.a ?? [];
+ 
+ 		}
+ 
