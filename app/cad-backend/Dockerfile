@@ -10,6 +10,7 @@ WORKDIR /app
 # ── install deps (cached until lockfile changes) ──────────────────────────────
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json             packages/core/
+COPY packages/core-backend/package.json     packages/core-backend/
 COPY packages/core-cad/package.json         packages/core-cad/
 COPY packages/core-scene3d/package.json     packages/core-scene3d/
 COPY packages/ui-core/package.json          packages/ui-core/
@@ -24,6 +25,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 # ── build all packages + apps ─────────────────────────────────────────────────
 COPY packages/core/             packages/core/
+COPY packages/core-backend/     packages/core-backend/
 COPY packages/core-cad/         packages/core-cad/
 COPY packages/core-scene3d/     packages/core-scene3d/
 COPY packages/ui-core/          packages/ui-core/
@@ -34,6 +36,7 @@ COPY app/cad-app/               app/cad-app/
 COPY app/cad-backend/           app/cad-backend/
 
 RUN pnpm --filter @mhersztowski/core build --silent
+RUN pnpm --filter @mhersztowski/core-backend build --silent
 RUN pnpm --filter @mhersztowski/core-cad build --silent
 RUN pnpm --filter @mhersztowski/ui-core build --silent
 RUN pnpm --filter @mhersztowski/core-scene3d build --silent
@@ -54,6 +57,7 @@ WORKDIR /app
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json             packages/core/
+COPY packages/core-backend/package.json     packages/core-backend/
 COPY packages/core-cad/package.json         packages/core-cad/
 COPY packages/core-scene3d/package.json     packages/core-scene3d/
 COPY packages/ui-core/package.json          packages/ui-core/
@@ -66,9 +70,10 @@ COPY patches/                               patches/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
-COPY --from=base /app/packages/core/dist/       packages/core/dist/
-COPY --from=base /app/app/cad-backend/dist/     app/cad-backend/dist/
-COPY --from=base /app/app/cad-backend/public/   app/cad-backend/public/
+COPY --from=base /app/packages/core/dist/          packages/core/dist/
+COPY --from=base /app/packages/core-backend/dist/  packages/core-backend/dist/
+COPY --from=base /app/app/cad-backend/dist/        app/cad-backend/dist/
+COPY --from=base /app/app/cad-backend/public/      app/cad-backend/public/
 
 WORKDIR /app/app/cad-backend
 ENV NODE_ENV=production

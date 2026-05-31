@@ -225,6 +225,7 @@ export interface SelectedNodeAudio {
   volume: number;
   loop: boolean;
   autoplay: boolean;
+  positional: boolean;
   rolloffFactor: number;
   maxDistance: number;
   refDistance: number;

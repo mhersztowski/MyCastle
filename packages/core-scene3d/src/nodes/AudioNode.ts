@@ -9,6 +9,7 @@ export interface AudioNodeData extends SceneNodeData {
   volume: number;
   loop: boolean;
   autoplay: boolean;
+  positional: boolean;
   rolloffFactor: number;
   maxDistance: number;
   refDistance: number;
@@ -23,6 +24,7 @@ export class AudioNode extends SceneNode {
   volume: number;
   loop: boolean;
   autoplay: boolean;
+  positional: boolean;
   rolloffFactor: number;
   maxDistance: number;
   refDistance: number;
@@ -37,6 +39,7 @@ export class AudioNode extends SceneNode {
     this.volume = data?.volume ?? 1;
     this.loop = data?.loop ?? false;
     this.autoplay = data?.autoplay ?? false;
+    this.positional = data?.positional ?? true;
     this.rolloffFactor = data?.rolloffFactor ?? 1;
     this.maxDistance = data?.maxDistance ?? 10000;
     this.refDistance = data?.refDistance ?? 1;
@@ -62,6 +65,10 @@ export class AudioNode extends SceneNode {
         return true;
       case 'audio.autoplay':
         this.autoplay = value as boolean;
+        this.notifyChange();
+        return true;
+      case 'audio.positional':
+        this.positional = value as boolean;
         this.notifyChange();
         return true;
       case 'audio.rolloffFactor':
@@ -105,6 +112,7 @@ export class AudioNode extends SceneNode {
       volume: this.volume,
       loop: this.loop,
       autoplay: this.autoplay,
+      positional: this.positional,
       rolloffFactor: this.rolloffFactor,
       maxDistance: this.maxDistance,
       refDistance: this.refDistance,

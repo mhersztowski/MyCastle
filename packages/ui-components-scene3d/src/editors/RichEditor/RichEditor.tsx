@@ -161,6 +161,7 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
           volume: audioNode.volume,
           loop: audioNode.loop,
           autoplay: audioNode.autoplay,
+          positional: audioNode.positional ?? true,
           rolloffFactor: audioNode.rolloffFactor,
           maxDistance: audioNode.maxDistance,
           refDistance: audioNode.refDistance,

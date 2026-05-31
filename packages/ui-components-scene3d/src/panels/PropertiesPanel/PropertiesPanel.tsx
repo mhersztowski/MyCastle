@@ -796,39 +796,46 @@ export function PropertiesPanel({
                   <FormControlLabel
                     control={<Checkbox size="small" checked={node.audio.autoplay} onChange={(e) => handleChange('audio.autoplay', e.target.checked)} sx={{ p: 0.25 }} />}
                     label={<Typography sx={{ fontSize: '0.7rem' }}>Autoplay</Typography>}
+                    sx={{ ml: 0, mr: 1 }}
+                  />
+                  <FormControlLabel
+                    control={<Checkbox size="small" checked={node.audio.positional ?? true} onChange={(e) => handleChange('audio.positional', e.target.checked)} sx={{ p: 0.25 }} />}
+                    label={<Typography sx={{ fontSize: '0.7rem' }}>Positional</Typography>}
                     sx={{ ml: 0, mr: 0 }}
                   />
                 </Box>
-                <PropertyRow label="Distance Model">
-                  <Select size="small" value={node.audio.distanceModel}
-                    onChange={(e) => handleChange('audio.distanceModel', e.target.value)}
-                    sx={selectSx}>
-                    <MenuItem value="inverse" sx={menuItemSx}>INVERSE</MenuItem>
-                    <MenuItem value="linear" sx={menuItemSx}>LINEAR</MenuItem>
-                    <MenuItem value="exponential" sx={menuItemSx}>EXPONENTIAL</MenuItem>
-                  </Select>
-                </PropertyRow>
-                <PropertyRow label="Ref Dist">
-                  <TextField size="small" type="number" value={node.audio.refDistance}
-                    onChange={(e) => handleChange('audio.refDistance', parseFloat(e.target.value) || 1)}
-                    slotProps={{ htmlInput: { step: 0.1, min: 0 } }}
-                    sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
-                  />
-                </PropertyRow>
-                <PropertyRow label="Max Dist">
-                  <TextField size="small" type="number" value={node.audio.maxDistance}
-                    onChange={(e) => handleChange('audio.maxDistance', parseFloat(e.target.value) || 0)}
-                    slotProps={{ htmlInput: { step: 1, min: 0 } }}
-                    sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
-                  />
-                </PropertyRow>
-                <PropertyRow label="Rolloff">
-                  <TextField size="small" type="number" value={node.audio.rolloffFactor}
-                    onChange={(e) => handleChange('audio.rolloffFactor', parseFloat(e.target.value) || 0)}
-                    slotProps={{ htmlInput: { step: 0.1, min: 0 } }}
-                    sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
-                  />
-                </PropertyRow>
+                {(node.audio.positional ?? true) && (<>
+                  <PropertyRow label="Distance Model">
+                    <Select size="small" value={node.audio.distanceModel}
+                      onChange={(e) => handleChange('audio.distanceModel', e.target.value)}
+                      sx={selectSx}>
+                      <MenuItem value="inverse" sx={menuItemSx}>INVERSE</MenuItem>
+                      <MenuItem value="linear" sx={menuItemSx}>LINEAR</MenuItem>
+                      <MenuItem value="exponential" sx={menuItemSx}>EXPONENTIAL</MenuItem>
+                    </Select>
+                  </PropertyRow>
+                  <PropertyRow label="Ref Dist">
+                    <TextField size="small" type="number" value={node.audio.refDistance}
+                      onChange={(e) => handleChange('audio.refDistance', parseFloat(e.target.value) || 1)}
+                      slotProps={{ htmlInput: { step: 0.1, min: 0 } }}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
+                    />
+                  </PropertyRow>
+                  <PropertyRow label="Max Dist">
+                    <TextField size="small" type="number" value={node.audio.maxDistance}
+                      onChange={(e) => handleChange('audio.maxDistance', parseFloat(e.target.value) || 0)}
+                      slotProps={{ htmlInput: { step: 1, min: 0 } }}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
+                    />
+                  </PropertyRow>
+                  <PropertyRow label="Rolloff">
+                    <TextField size="small" type="number" value={node.audio.rolloffFactor}
+                      onChange={(e) => handleChange('audio.rolloffFactor', parseFloat(e.target.value) || 0)}
+                      slotProps={{ htmlInput: { step: 0.1, min: 0 } }}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } }}
+                    />
+                  </PropertyRow>
+                </>)}
               </AccordionDetails>
             </Accordion>
           )}

@@ -450,7 +450,10 @@ function SceneAudio({
     if (!group) return;
 
     const listener = getSharedAudioListener();
-    const sound = new THREE.PositionalAudio(listener);
+    const positional = audioNode.positional ?? true;
+    const sound: THREE.Audio = positional
+      ? new THREE.PositionalAudio(listener)
+      : new THREE.Audio(listener);
     let mounted = true;
     const blobRef = { url: null as string | null };
 
@@ -471,18 +474,21 @@ function SceneAudio({
       loader.load(url, (buffer: AudioBuffer) => {
         if (!mounted) return;
         sound.setBuffer(buffer);
-        sound.setRefDistance(audioNode.refDistance);
-        sound.setRolloffFactor(audioNode.rolloffFactor);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sound as any).setDistanceModel?.(audioNode.distanceModel);
-        sound.setMaxDistance(audioNode.maxDistance);
         sound.setVolume(audioNode.volume);
         sound.setLoop(audioNode.loop);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pa = sound as any;
-        pa.setConeInnerAngle?.(audioNode.coneInnerAngle);
-        pa.setConeOuterAngle?.(audioNode.coneOuterAngle);
-        pa.setConeOuterGain?.(audioNode.coneOuterGain);
+        if (positional) {
+          const ps = sound as THREE.PositionalAudio;
+          ps.setRefDistance(audioNode.refDistance);
+          ps.setRolloffFactor(audioNode.rolloffFactor);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (ps as any).setDistanceModel?.(audioNode.distanceModel);
+          ps.setMaxDistance(audioNode.maxDistance);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const pa = ps as any;
+          pa.setConeInnerAngle?.(audioNode.coneInnerAngle);
+          pa.setConeOuterAngle?.(audioNode.coneOuterAngle);
+          pa.setConeOuterGain?.(audioNode.coneOuterGain);
+        }
         group.add(sound);
         if (audioNode.autoplay) sound.play();
       }, undefined, () => { /* ignore load errors */ });
@@ -498,9 +504,10 @@ function SceneAudio({
       if (blobRef.url) { URL.revokeObjectURL(blobRef.url); blobRef.url = null; }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioNode.src, audioNode.refDistance, audioNode.distanceModel, audioNode.maxDistance,
-      audioNode.rolloffFactor, audioNode.volume, audioNode.loop, audioNode.autoplay,
-      audioNode.coneInnerAngle, audioNode.coneOuterAngle, audioNode.coneOuterGain, resolveAudioSrc]);
+  }, [audioNode.src, audioNode.positional, audioNode.refDistance, audioNode.distanceModel,
+      audioNode.maxDistance, audioNode.rolloffFactor, audioNode.volume, audioNode.loop,
+      audioNode.autoplay, audioNode.coneInnerAngle, audioNode.coneOuterAngle,
+      audioNode.coneOuterGain, resolveAudioSrc]);
 
   return (
     <group
