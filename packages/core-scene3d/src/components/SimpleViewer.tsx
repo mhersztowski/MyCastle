@@ -98,6 +98,9 @@ function SelectableMesh({
   );
 }
 
+// True for touch screens and stylus devices — used to increase gizmo hit area
+const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
 function GizmoControls({
   sceneGraph,
   selectedNodeId,
@@ -181,7 +184,7 @@ function GizmoControls({
       ref={controlsRef}
       object={targetObject}
       mode={transformMode}
-      size={0.7}
+      size={isTouchDevice ? 1.2 : 0.7}
     />
   );
 }
@@ -807,6 +810,10 @@ export function SimpleViewer({
   }, []);
 
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
+  // R3F fires onPointerMissed for EVERY tap on the gizmo (<primitive> has no R3F handlers).
+  // On mobile/stylus a tap always emits click → onPointerMissed → deselects node → gizmo gone.
+  // Fix: suppress deselection whenever transform handles are visible.
+  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
 
   return (
     <div
@@ -822,7 +829,7 @@ export function SimpleViewer({
       <Canvas
         camera={{ position: [5, 5, 5], fov: 75 }}
         style={{ background: backgroundColor }}
-        onPointerMissed={() => { if (!isDraggingGizmoRef.current) onNodeSelect?.(null); }}
+        onPointerMissed={() => { if (!isDraggingGizmoRef.current && !showGizmo) onNodeSelect?.(null); }}
         onCreated={({ gl }) => setGlInstance(gl)}
       >
         <SceneContent

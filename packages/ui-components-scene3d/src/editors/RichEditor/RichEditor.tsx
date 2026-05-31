@@ -23,6 +23,7 @@ import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
+import DownloadingIcon from '@mui/icons-material/Downloading';
 import Divider from '@mui/material/Divider';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
@@ -164,9 +165,11 @@ const HISTORY_MAX = 50;
 interface RichEditorExtendedProps extends RichEditorProps {
   onOpenFromServer?: () => void;
   onSaveToServer?: () => void;
+  onImportFromCad?: () => void;
+  cadEntityCount?: number;
 }
 
-export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer }: RichEditorExtendedProps) {
+export function RichEditor({ className, style, initialSceneData, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
@@ -891,6 +894,21 @@ export function RichEditor({ className, style, initialSceneData, fitSceneRef: ex
               <ListItemIcon><CloudUploadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} /></ListItemIcon>
               <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Save Scene to Server…</ListItemText>
             </MenuItem>
+          )}
+          {onImportFromCad && (
+            <>
+              <Divider />
+              <MenuItem
+                onClick={() => { setFileMenuAnchor(null); onImportFromCad(); }}
+                disabled={!cadEntityCount}
+                sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}
+              >
+                <ListItemIcon><DownloadingIcon sx={{ fontSize: 16, color: 'success.main' }} /></ListItemIcon>
+                <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>
+                  Import from CAD{cadEntityCount ? ` (${cadEntityCount})` : ''}
+                </ListItemText>
+              </MenuItem>
+            </>
           )}
           <Divider />
           <MenuItem onClick={handleImportSTLFromMenu} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
