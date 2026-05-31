@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect, useCallback, MutableRefObject } from 'react';
+import { useRef, useMemo, useEffect, useCallback, useState, MutableRefObject } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment } from '@react-three/drei';
 import * as THREE from 'three';
@@ -103,11 +103,13 @@ function GizmoControls({
   selectedNodeId,
   transformMode,
   onObjectChange,
+  orbitRef,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
   transformMode: 'translate' | 'rotate' | 'scale';
   onObjectChange?: (obj: THREE.Object3D) => void;
+  orbitRef: RefObject<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 }) {
   const { scene } = useThree();
   const controlsRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -145,6 +147,21 @@ function GizmoControls({
     controls.addEventListener('change', callback);
     return () => controls.removeEventListener('change', callback);
   }, [onObjectChange, targetObject]);
+
+  // Disable OrbitControls while dragging a gizmo so orbit doesn't steal the pointer
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const onDraggingChanged = (e: { value: boolean }) => {
+      if (orbitRef.current) orbitRef.current.enabled = !e.value;
+    };
+    controls.addEventListener('dragging-changed', onDraggingChanged);
+    return () => {
+      controls.removeEventListener('dragging-changed', onDraggingChanged);
+      // Always re-enable orbit when this gizmo unmounts
+      if (orbitRef.current) orbitRef.current.enabled = true;
+    };
+  }, [orbitRef]);
 
   if (!targetObject) return null;
 
@@ -663,6 +680,7 @@ function SceneContent({
   onObjectChange?: (obj: THREE.Object3D) => void;
   onPlaneClick?: (wx: number, wz: number) => void;
 }) {
+  const orbitRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
   const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera';
   const presetConfig = CAMERA_PRESETS[cameraPreset];
@@ -672,7 +690,7 @@ function SceneContent({
       {activeCameraNodeId && sceneGraph
         ? <ActiveSceneCamera sceneGraph={sceneGraph} activeCameraNodeId={activeCameraNodeId} />
         : null}
-      <OrbitControls makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
+      <OrbitControls ref={orbitRef} makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
       {sceneSettings?.backgroundType === 'solid' && (
         <color attach="background" args={[sceneSettings.backgroundColor]} />
       )}
@@ -702,6 +720,7 @@ function SceneContent({
           selectedNodeId={selectedNodeId}
           transformMode={transformMode}
           onObjectChange={onObjectChange}
+          orbitRef={orbitRef}
         />
       )}
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
@@ -743,6 +762,27 @@ export function SimpleViewer({
   const scaleYRef = useRef<HTMLSpanElement>(null);
   const scaleZRef = useRef<HTMLSpanElement>(null);
 
+  // Pen/stylus hover filter — block pointer events where pointerType='pen' but pressure=0
+  // (stylus near screen but not touching). Prevents gizmos reacting before actual contact.
+  const [glInstance, setGlInstance] = useState<THREE.WebGLRenderer | null>(null);
+  const filterPenHover = useCallback((e: PointerEvent) => {
+    if (e.pointerType === 'pen' && e.pressure === 0) {
+      e.stopImmediatePropagation();
+    }
+  }, []);
+  useEffect(() => {
+    if (!glInstance) return;
+    const el = glInstance.domElement;
+    el.addEventListener('pointermove', filterPenHover, { capture: true });
+    el.addEventListener('pointerover', filterPenHover, { capture: true });
+    el.addEventListener('pointerenter', filterPenHover, { capture: true });
+    return () => {
+      el.removeEventListener('pointermove', filterPenHover, { capture: true });
+      el.removeEventListener('pointerover', filterPenHover, { capture: true });
+      el.removeEventListener('pointerenter', filterPenHover, { capture: true });
+    };
+  }, [glInstance, filterPenHover]);
+
   const handleLiveTransform = useCallback((obj: THREE.Object3D) => {
     if (scaleXRef.current) scaleXRef.current.textContent = obj.scale.x.toFixed(3);
     if (scaleYRef.current) scaleYRef.current.textContent = obj.scale.y.toFixed(3);
@@ -766,6 +806,7 @@ export function SimpleViewer({
         camera={{ position: [5, 5, 5], fov: 75 }}
         style={{ background: backgroundColor }}
         onPointerMissed={() => onNodeSelect?.(null)}
+        onCreated={({ gl }) => setGlInstance(gl)}
       >
         <SceneContent
           sceneGraph={sceneGraph}

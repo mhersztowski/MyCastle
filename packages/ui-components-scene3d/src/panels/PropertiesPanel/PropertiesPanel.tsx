@@ -360,6 +360,44 @@ export function PropertiesPanel({
 
           <Accordion defaultExpanded disableGutters sx={accordionSx}>
             <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
+              <Typography sx={sectionTitleSx}>Transform</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
+              <Vector3Row
+                label="Position"
+                values={node.transform.position}
+                step={0.1}
+                onChange={(axis, value) => {
+                  const pos: [number, number, number] = [...node.transform.position];
+                  pos[axis] = value;
+                  handleChange('position', pos);
+                }}
+              />
+              <Vector3Row
+                label="Rotation °"
+                values={node.transform.rotation.map((r) => parseFloat((r * (180 / Math.PI)).toFixed(4))) as [number, number, number]}
+                step={1}
+                onChange={(axis, value) => {
+                  const rot: [number, number, number] = [...node.transform.rotation];
+                  rot[axis] = value * (Math.PI / 180);
+                  handleChange('rotation', rot);
+                }}
+              />
+              <Vector3Row
+                label="Scale"
+                values={node.transform.scale}
+                step={0.1}
+                onChange={(axis, value) => {
+                  const scl: [number, number, number] = [...node.transform.scale];
+                  scl[axis] = value;
+                  handleChange('scale', scl);
+                }}
+              />
+            </AccordionDetails>
+          </Accordion>
+
+          <Accordion defaultExpanded disableGutters sx={accordionSx}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
               <Typography sx={sectionTitleSx}>Object</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
@@ -455,44 +493,6 @@ export function PropertiesPanel({
                   </Box>
                 </>
               )}
-            </AccordionDetails>
-          </Accordion>
-
-          <Accordion defaultExpanded disableGutters sx={accordionSx}>
-            <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
-              <Typography sx={sectionTitleSx}>Transform</Typography>
-            </AccordionSummary>
-            <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
-              <Vector3Row
-                label="Position"
-                values={node.transform.position}
-                step={0.1}
-                onChange={(axis, value) => {
-                  const pos: [number, number, number] = [...node.transform.position];
-                  pos[axis] = value;
-                  handleChange('position', pos);
-                }}
-              />
-              <Vector3Row
-                label="Rotation °"
-                values={node.transform.rotation.map((r) => parseFloat((r * (180 / Math.PI)).toFixed(4))) as [number, number, number]}
-                step={1}
-                onChange={(axis, value) => {
-                  const rot: [number, number, number] = [...node.transform.rotation];
-                  rot[axis] = value * (Math.PI / 180);
-                  handleChange('rotation', rot);
-                }}
-              />
-              <Vector3Row
-                label="Scale"
-                values={node.transform.scale}
-                step={0.1}
-                onChange={(axis, value) => {
-                  const scl: [number, number, number] = [...node.transform.scale];
-                  scl[axis] = value;
-                  handleChange('scale', scl);
-                }}
-              />
             </AccordionDetails>
           </Accordion>
 
