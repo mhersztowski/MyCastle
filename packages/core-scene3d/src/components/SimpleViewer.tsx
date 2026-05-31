@@ -104,12 +104,14 @@ function GizmoControls({
   transformMode,
   onObjectChange,
   orbitRef,
+  isDraggingGizmoRef,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
   transformMode: 'translate' | 'rotate' | 'scale';
   onObjectChange?: (obj: THREE.Object3D) => void;
   orbitRef: RefObject<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  isDraggingGizmoRef?: MutableRefObject<boolean>;
 }) {
   const { scene } = useThree();
   const controlsRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -148,20 +150,33 @@ function GizmoControls({
     return () => controls.removeEventListener('change', callback);
   }, [onObjectChange, targetObject]);
 
-  // Disable OrbitControls while dragging a gizmo so orbit doesn't steal the pointer
+  // Disable OrbitControls while dragging and guard onPointerMissed from deselecting.
+  // Uses a grace-period timeout on drag-end so stylus/pen brief lifts don't clear selection.
+  const dragEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
     const onDraggingChanged = (e: { value: boolean }) => {
       if (orbitRef.current) orbitRef.current.enabled = !e.value;
+      if (e.value) {
+        if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
+        if (isDraggingGizmoRef) isDraggingGizmoRef.current = true;
+      } else {
+        // Delay clearing so a stylus re-contact within 250ms doesn't fire onPointerMissed
+        dragEndTimerRef.current = setTimeout(() => {
+          if (isDraggingGizmoRef) isDraggingGizmoRef.current = false;
+          dragEndTimerRef.current = null;
+        }, 250);
+      }
     };
     controls.addEventListener('dragging-changed', onDraggingChanged);
     return () => {
       controls.removeEventListener('dragging-changed', onDraggingChanged);
-      // Always re-enable orbit when this gizmo unmounts
+      if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
       if (orbitRef.current) orbitRef.current.enabled = true;
+      if (isDraggingGizmoRef) isDraggingGizmoRef.current = false;
     };
-  }, [orbitRef]);
+  }, [orbitRef, isDraggingGizmoRef]);
 
   if (!targetObject) return null;
 
@@ -663,6 +678,7 @@ function SceneContent({
   sceneSettings,
   onObjectChange,
   onPlaneClick,
+  isDraggingGizmoRef,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -679,6 +695,7 @@ function SceneContent({
   sceneSettings?: SceneSettings;
   onObjectChange?: (obj: THREE.Object3D) => void;
   onPlaneClick?: (wx: number, wz: number) => void;
+  isDraggingGizmoRef?: MutableRefObject<boolean>;
 }) {
   const orbitRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
@@ -721,6 +738,7 @@ function SceneContent({
           transformMode={transformMode}
           onObjectChange={onObjectChange}
           orbitRef={orbitRef}
+          isDraggingGizmoRef={isDraggingGizmoRef}
         />
       )}
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
@@ -762,11 +780,15 @@ export function SimpleViewer({
   const scaleYRef = useRef<HTMLSpanElement>(null);
   const scaleZRef = useRef<HTMLSpanElement>(null);
 
+  // Gizmo drag guard — prevents onPointerMissed from deselecting while dragging a gizmo handle
+  const isDraggingGizmoRef = useRef(false);
+
   // Pen/stylus hover filter — block pointer events where pointerType='pen' but pressure=0
-  // (stylus near screen but not touching). Prevents gizmos reacting before actual contact.
+  // (stylus near screen but not touching). Skipped during an active gizmo drag so that
+  // the zero-pressure event after a brief lift doesn't drop the drag track.
   const [glInstance, setGlInstance] = useState<THREE.WebGLRenderer | null>(null);
   const filterPenHover = useCallback((e: PointerEvent) => {
-    if (e.pointerType === 'pen' && e.pressure === 0) {
+    if (e.pointerType === 'pen' && e.pressure === 0 && !isDraggingGizmoRef.current) {
       e.stopImmediatePropagation();
     }
   }, []);
@@ -805,7 +827,7 @@ export function SimpleViewer({
       <Canvas
         camera={{ position: [5, 5, 5], fov: 75 }}
         style={{ background: backgroundColor }}
-        onPointerMissed={() => onNodeSelect?.(null)}
+        onPointerMissed={() => { if (!isDraggingGizmoRef.current) onNodeSelect?.(null); }}
         onCreated={({ gl }) => setGlInstance(gl)}
       >
         <SceneContent
@@ -824,6 +846,7 @@ export function SimpleViewer({
           sceneSettings={sceneSettings}
           onObjectChange={handleLiveTransform}
           onPlaneClick={onPlaneClick}
+          isDraggingGizmoRef={isDraggingGizmoRef}
         />
       </Canvas>
       {selectedNode && (

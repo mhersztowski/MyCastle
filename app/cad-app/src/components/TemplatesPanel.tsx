@@ -117,7 +117,7 @@ export function TemplatesPanel({
   armedTemplateId?: string | null;
   onArm?: (t: ActiveTemplate | null) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   if (templates.length === 0) return null;

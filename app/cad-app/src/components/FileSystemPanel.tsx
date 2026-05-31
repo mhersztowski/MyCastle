@@ -63,7 +63,7 @@ interface Props {
 }
 
 export function FileSystemPanel({ rootPath, title = 'Files' }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [entries, setEntries] = useState<VfsDirEntry[]>([]);
   const [loading, setLoading] = useState(false);
