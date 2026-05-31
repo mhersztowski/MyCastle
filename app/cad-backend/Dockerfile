@@ -41,7 +41,7 @@ RUN pnpm --filter @mhersztowski/ui-components-scene3d build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 # Build frontend → outputs to app/cad-backend/public/
-RUN pnpm --filter cad-app build
+RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm --filter cad-app build
 RUN pnpm --filter cad-backend build --silent
 
 # ── production image ──────────────────────────────────────────────────────────
