@@ -1191,7 +1191,7 @@ export function SimpleViewer({
           }}
         >
           <div style={{ fontFamily: 'monospace', fontSize: 9, color: '#4fc3f7', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 2, flexShrink: 0 }}>
-            DEBUG LOG — {isTouchDevice ? 'TOUCH' : 'MOUSE'} DEVICE
+            DEBUG LOG
           </div>
           <div
             ref={debugScrollRef}
