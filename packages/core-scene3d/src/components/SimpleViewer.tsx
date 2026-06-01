@@ -451,7 +451,7 @@ function SceneAudio({
 
     const listener = getSharedAudioListener();
     const positional = audioNode.positional ?? true;
-    const sound: THREE.Audio = positional
+    const sound: THREE.Audio<GainNode> | THREE.PositionalAudio = positional
       ? new THREE.PositionalAudio(listener)
       : new THREE.Audio(listener);
     let mounted = true;
@@ -477,7 +477,7 @@ function SceneAudio({
         sound.setVolume(audioNode.volume);
         sound.setLoop(audioNode.loop);
         if (positional) {
-          const ps = sound as THREE.PositionalAudio;
+          const ps = sound as unknown as THREE.PositionalAudio;
           ps.setRefDistance(audioNode.refDistance);
           ps.setRolloffFactor(audioNode.rolloffFactor);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
