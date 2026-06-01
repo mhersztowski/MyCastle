@@ -45,6 +45,8 @@ export interface SimpleViewerProps {
   debugLog?: boolean;
   /** Resolves a VFS path (e.g. /users/default/projects/audio.mp3) to a playable URL (e.g. blob:). */
   resolveAudioSrc?: (src: string) => Promise<string>;
+  /** Size of the transform gizmo handles. Default 0.7. */
+  gizmoSize?: number;
 }
 
 function SelectableMesh({
@@ -103,8 +105,6 @@ function SelectableMesh({
   );
 }
 
-// True for touch screens and stylus devices — used to increase gizmo hit area
-const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
 function GizmoControls({
   sceneGraph,
@@ -113,6 +113,7 @@ function GizmoControls({
   onObjectChange,
   isDraggingGizmoRef,
   addLog,
+  gizmoSize = 0.7,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
@@ -120,6 +121,7 @@ function GizmoControls({
   onObjectChange?: (obj: THREE.Object3D) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
   addLog?: (msg: string) => void;
+  gizmoSize?: number;
 }) {
   const { scene } = useThree();
   const controlsRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -199,7 +201,7 @@ function GizmoControls({
       ref={controlsRef}
       object={targetObject}
       mode={transformMode}
-      size={isTouchDevice ? 2.0 : 0.7}
+      size={gizmoSize}
     />
   );
 }
@@ -834,6 +836,7 @@ function SceneContent({
   isDraggingGizmoRef,
   addLog,
   resolveAudioSrc,
+  gizmoSize = 0.7,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -853,6 +856,7 @@ function SceneContent({
   isDraggingGizmoRef?: MutableRefObject<boolean>;
   addLog?: (msg: string) => void;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  gizmoSize?: number;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
   const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio';
@@ -907,6 +911,7 @@ function SceneContent({
           onObjectChange={onObjectChange}
           isDraggingGizmoRef={isDraggingGizmoRef}
           addLog={addLog}
+          gizmoSize={gizmoSize}
         />
       )}
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
@@ -945,6 +950,7 @@ export function SimpleViewer({
   onPlaneClick,
   debugLog = false,
   resolveAudioSrc,
+  gizmoSize = 0.7,
 }: SimpleViewerProps) {
   const scaleXRef = useRef<HTMLSpanElement>(null);
   const scaleYRef = useRef<HTMLSpanElement>(null);
@@ -1128,6 +1134,7 @@ export function SimpleViewer({
           isDraggingGizmoRef={isDraggingGizmoRef}
           addLog={addLog}
           resolveAudioSrc={resolveAudioSrc}
+          gizmoSize={gizmoSize}
         />
       </Canvas>
       {selectedNode && (
