@@ -54,7 +54,7 @@ export class FBXImporter {
       console.groupEnd();
     }
 
-    function getMaterial(mat: THREE.Material | null | undefined): MaterialDescriptor {
+    function getMaterial(mat: THREE.Material | null | undefined): Partial<MaterialDescriptor> {
       if (!mat) return { color: '#cccccc', opacity: 1, wireframe: false };
       const c = (mat as { color?: THREE.Color }).color;
       return {

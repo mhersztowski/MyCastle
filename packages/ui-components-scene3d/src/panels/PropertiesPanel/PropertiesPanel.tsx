@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import type { PropertiesPanelProps, SceneSettings } from '@mhersztowski/ui-core';
+import React, { useState, useCallback } from 'react';
+import type { PropertiesPanelProps, SceneSettings, SceneGeometryEntry } from '@mhersztowski/ui-core';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
@@ -13,19 +13,27 @@ import AccordionSummary from '@mui/material/AccordionSummary';
 import AccordionDetails from '@mui/material/AccordionDetails';
 import Chip from '@mui/material/Chip';
 import Button from '@mui/material/Button';
+import Menu from '@mui/material/Menu';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import LinkIcon from '@mui/icons-material/Link';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import Popover from '@mui/material/Popover';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import PaletteIcon from '@mui/icons-material/Palette';
 
 const AXIS_COLORS = { x: '#ef5350', y: '#66bb6a', z: '#42a5f5' };
 
 const GEO_TYPE_LABELS: Record<string, string> = {
-  box: 'Box Geometry', sphere: 'Sphere Geometry', cylinder: 'Cylinder Geometry',
-  plane: 'Plane Geometry', cone: 'Cone Geometry', torus: 'Torus Geometry', custom: 'Buffer Geometry',
+  box: 'Box', sphere: 'Sphere', cylinder: 'Cylinder',
+  plane: 'Plane', cone: 'Cone', torus: 'Torus', custom: 'Buffer', procedural: 'Procedural', nodes: 'Geometry Nodes',
 };
+
+const DEFAULT_PROCEDURAL_CODE = `// Return a THREE.BufferGeometry\nconst geo = new THREE.SphereGeometry(1, 32, 16);\nreturn geo;`;
 
 const GEO_PARAM_DEFS: Record<string, Array<{ key: string; label: string; step: number; min?: number; integer?: boolean }>> = {
   box: [
@@ -141,6 +149,94 @@ function Vector3Row({
   );
 }
 
+const FAV_STORAGE_KEY = 'scene3d_fav_colors';
+const MAX_FAV = 20;
+
+function ColorInput({
+  label, value, onChange, favColors, onFavChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  favColors: string[];
+  onFavChange: (colors: string[]) => void;
+}) {
+  const normVal = value.toLowerCase();
+  const isFav = favColors.includes(normVal);
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+
+  const toggleFav = () => {
+    if (isFav) onFavChange(favColors.filter(c => c !== normVal));
+    else onFavChange([normVal, ...favColors].slice(0, MAX_FAV));
+  };
+
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', minWidth: 50, flexShrink: 0 }}>
+        {label}
+      </Typography>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: 28, height: 20, border: 'none', padding: 0, cursor: 'pointer', background: 'none', flexShrink: 0 }}
+      />
+      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', flex: 1, minWidth: 0 }}>
+        {value}
+      </Typography>
+      <Tooltip title={isFav ? 'Remove from favorites' : 'Add to favorites'}>
+        <IconButton size="small" onClick={toggleFav} sx={{ p: 0.25, flexShrink: 0, color: isFav ? 'warning.main' : 'text.disabled' }}>
+          {isFav ? <StarIcon sx={{ fontSize: 13 }} /> : <StarBorderIcon sx={{ fontSize: 13 }} />}
+        </IconButton>
+      </Tooltip>
+      <Tooltip title={favColors.length > 0 ? 'Pick from favorites' : 'No favorites saved'}>
+        <span>
+          <IconButton
+            size="small"
+            disabled={favColors.length === 0}
+            onClick={(e) => setAnchorEl(e.currentTarget)}
+            sx={{ p: 0.25, flexShrink: 0, color: favColors.length > 0 ? 'text.secondary' : 'text.disabled' }}
+          >
+            <PaletteIcon sx={{ fontSize: 13 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Popover
+        open={Boolean(anchorEl)}
+        anchorEl={anchorEl}
+        onClose={() => setAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        slotProps={{ paper: { sx: { bgcolor: 'background.paper', p: 1 } } }}
+      >
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, maxWidth: 168 }}>
+          {favColors.map((c) => (
+            <Tooltip key={c} title={c} placement="top">
+              <Box
+                component="span"
+                onClick={() => { onChange(c); setAnchorEl(null); }}
+                sx={{
+                  display: 'inline-block',
+                  width: 18, height: 18,
+                  bgcolor: c,
+                  borderRadius: '50%',
+                  cursor: 'pointer',
+                  border: '2px solid',
+                  borderColor: c === normVal ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.15)',
+                  boxSizing: 'border-box',
+                  flexShrink: 0,
+                  transition: 'transform 0.1s, border-color 0.1s',
+                  '&:hover': { transform: 'scale(1.25)', borderColor: 'rgba(255,255,255,0.7)' },
+                }}
+              />
+            </Tooltip>
+          ))}
+        </Box>
+      </Popover>
+    </Box>
+  );
+}
+
 function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
@@ -171,10 +267,24 @@ export function PropertiesPanel({
   sceneSettings,
   onSceneSettingsChange,
   onBrowseAudioFile,
+  onEditGeometryNodes,
+  onEditMesh,
+  sceneGeometries,
+  onAssignGeometry,
   className,
 }: PropertiesPanelProps) {
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
+  const [geoLinkAnchor, setGeoLinkAnchor] = useState<HTMLElement | null>(null);
+
+  const [favColors, setFavColors] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) ?? '[]') as string[]; }
+    catch { return []; }
+  });
+  const updateFavColors = useCallback((next: string[]) => {
+    setFavColors(next);
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(next));
+  }, []);
 
   const handleChange = useCallback(
     (property: string, value: unknown) => {
@@ -244,17 +354,7 @@ export function PropertiesPanel({
                 </Select>
               </PropertyRow>
               {sceneSettings?.backgroundType === 'solid' && (
-                <PropertyRow label="Color">
-                  <input
-                    type="color"
-                    value={sceneSettings.backgroundColor}
-                    onChange={(e) => patchScene({ backgroundColor: e.target.value })}
-                    style={{ width: 28, height: 20, border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                  />
-                  <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                    {sceneSettings.backgroundColor}
-                  </Typography>
-                </PropertyRow>
+                <ColorInput label="Color" value={sceneSettings.backgroundColor} onChange={(v) => patchScene({ backgroundColor: v })} favColors={favColors} onFavChange={updateFavColors} />
               )}
 
               {/* Environment */}
@@ -285,17 +385,7 @@ export function PropertiesPanel({
                 </Select>
               </PropertyRow>
               {sceneSettings?.fogType !== 'none' && sceneSettings?.fogType !== undefined && (
-                <PropertyRow label="Fog Color">
-                  <input
-                    type="color"
-                    value={sceneSettings.fogColor}
-                    onChange={(e) => patchScene({ fogColor: e.target.value })}
-                    style={{ width: 28, height: 20, border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                  />
-                  <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                    {sceneSettings.fogColor}
-                  </Typography>
-                </PropertyRow>
+                <ColorInput label="Fog Color" value={sceneSettings.fogColor} onChange={(v) => patchScene({ fogColor: v })} favColors={favColors} onFavChange={updateFavColors} />
               )}
               {sceneSettings?.fogType === 'linear' && (
                 <>
@@ -504,13 +594,135 @@ export function PropertiesPanel({
                 <Typography sx={sectionTitleSx}>Geometry</Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
+
+                {/* ── Geometry data-block: UUID + link picker ── */}
+                {node.geometry.geoId && (() => {
+                  const linkedEntries = (sceneGeometries ?? []).filter(e => e.nodeId !== node.id && e.geoId === node.geometry!.geoId);
+                  const otherEntries = (sceneGeometries ?? []).filter(e => e.nodeId !== node.id);
+                  return (
+                    <Box sx={{ mb: 0.75, display: 'flex', alignItems: 'center', gap: 0.25, bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 0.5, px: 0.75, py: 0.4 }}>
+                      <Typography sx={{ fontFamily: 'monospace', fontSize: '0.6rem', color: 'text.disabled', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
+                        {node.geometry.geoId.slice(0, 8)}
+                        <Typography component="span" sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.2)' }}>
+                          …{node.geometry.geoId.slice(-4)}
+                        </Typography>
+                      </Typography>
+                      {linkedEntries.length > 0 && (
+                        <Chip label={`×${linkedEntries.length + 1}`} size="small" color="primary"
+                          sx={{ height: 14, fontSize: '0.55rem', '.MuiChip-label': { px: 0.5 } }} />
+                      )}
+                      <Tooltip title="Copy full geometry UUID">
+                        <IconButton size="small" sx={{ p: 0.25 }} onClick={() => navigator.clipboard.writeText(node.geometry!.geoId!)}>
+                          <ContentCopyIcon sx={{ fontSize: 11 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Regenerate geometry UUID">
+                        <IconButton size="small" sx={{ p: 0.25 }} onClick={() => handleChange('geometry.id', crypto.randomUUID())}>
+                          <RefreshIcon sx={{ fontSize: 11 }} />
+                        </IconButton>
+                      </Tooltip>
+                      {otherEntries.length > 0 && (
+                        <Tooltip title="Link geometry from another object">
+                          <IconButton size="small" sx={{ p: 0.25, color: geoLinkAnchor ? 'primary.main' : undefined }}
+                            onClick={(e) => setGeoLinkAnchor(e.currentTarget)}>
+                            <LinkIcon sx={{ fontSize: 11 }} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      <Menu
+                        anchorEl={geoLinkAnchor}
+                        open={Boolean(geoLinkAnchor)}
+                        onClose={() => setGeoLinkAnchor(null)}
+                        slotProps={{ paper: { sx: { maxHeight: 300, minWidth: 200 } } }}
+                      >
+                        {otherEntries.map((entry: SceneGeometryEntry) => (
+                          <MenuItem
+                            key={entry.nodeId}
+                            sx={{ ...menuItemSx, gap: 0.75, display: 'flex', alignItems: 'center' }}
+                            onClick={() => { onAssignGeometry?.(node.id, entry.nodeId); setGeoLinkAnchor(null); }}
+                          >
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography sx={{ fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {entry.nodeName}
+                              </Typography>
+                              <Typography sx={{ fontSize: '0.58rem', color: 'text.disabled', fontFamily: 'monospace' }}>
+                                {entry.geoType} · {entry.geoId.slice(0, 6)}
+                              </Typography>
+                            </Box>
+                            {entry.geoId === node.geometry!.geoId && (
+                              <Chip label="linked" size="small" color="primary"
+                                sx={{ height: 14, fontSize: '0.55rem', '.MuiChip-label': { px: 0.5 } }} />
+                            )}
+                          </MenuItem>
+                        ))}
+                      </Menu>
+                    </Box>
+                  );
+                })()}
+
                 <PropertyRow label="Type">
-                  <Typography variant="caption" sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
-                    {GEO_TYPE_LABELS[node.geometry.geoType] ?? node.geometry.geoType}
-                  </Typography>
+                  <Select
+                    size="small"
+                    value={node.geometry.geoType}
+                    onChange={(e) => handleChange('geometry.type', e.target.value)}
+                    sx={selectSx}
+                  >
+                    {Object.entries(GEO_TYPE_LABELS).filter(([k]) => k !== 'custom').map(([k, label]) => (
+                      <MenuItem key={k} value={k} sx={menuItemSx}>{label.toUpperCase()}</MenuItem>
+                    ))}
+                  </Select>
                 </PropertyRow>
 
-                {node.geometry.geoType === 'custom' ? (
+                <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5 }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    sx={{ fontSize: '0.7rem', textTransform: 'none', borderColor: 'rgba(255,255,255,0.2)', color: 'warning.main', flex: 1 }}
+                    onClick={() => onEditMesh?.(node.id)}
+                  >
+                    Edit Mesh
+                  </Button>
+                  {node.geometry.geoType === 'nodes' && (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      sx={{ fontSize: '0.7rem', textTransform: 'none', borderColor: 'rgba(255,255,255,0.2)', color: 'primary.main', flex: 1 }}
+                      onClick={() => onEditGeometryNodes?.(node.id, node.geometry!.nodesGraph ?? { nodes: [], edges: [] })}
+                    >
+                      Node Editor
+                    </Button>
+                  )}
+                </Box>
+
+                {node.geometry.geoType === 'procedural' && (
+                  <Box sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', mb: 0.25, display: 'block' }}>
+                      Code <Typography component="span" variant="caption" sx={{ color: 'text.disabled', fontSize: '0.6rem' }}>(THREE is available)</Typography>
+                    </Typography>
+                    <textarea
+                      value={node.geometry.code ?? DEFAULT_PROCEDURAL_CODE}
+                      onChange={(e) => handleChange('geometry.code', e.target.value)}
+                      rows={10}
+                      spellCheck={false}
+                      style={{
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                        lineHeight: 1.5,
+                        background: '#111',
+                        color: '#d4d4d4',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 4,
+                        padding: '6px 8px',
+                        resize: 'vertical',
+                        outline: 'none',
+                      }}
+                    />
+                  </Box>
+                )}
+
+                {node.geometry.geoType === 'custom' && (
                   <>
                     {node.geometry.fileName && (
                       <PropertyRow label="File">
@@ -534,7 +746,9 @@ export function PropertiesPanel({
                       </PropertyRow>
                     )}
                   </>
-                ) : (
+                )}
+
+                {!['custom', 'procedural', 'nodes'].includes(node.geometry.geoType) && (
                   (GEO_PARAM_DEFS[node.geometry.geoType] ?? []).map(({ key, label, step, min, integer }) => {
                     const val = node.geometry!.params[key] ?? GEO_PARAM_DEFAULTS[node.geometry!.geoType]?.[key] ?? 1;
                     return (
@@ -626,52 +840,309 @@ export function PropertiesPanel({
             </Accordion>
           )}
 
-          {node.material && (
-            <Accordion defaultExpanded disableGutters sx={accordionSx}>
-              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
-                <Typography sx={sectionTitleSx}>Material</Typography>
-              </AccordionSummary>
-              <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
-                <PropertyRow label="Color">
-                  <input
-                    type="color"
-                    value={node.material.color}
-                    onChange={(e) => handleChange('material.color', e.target.value)}
-                    style={{ width: 28, height: 20, border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                  />
-                  <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                    {node.material.color}
-                  </Typography>
-                </PropertyRow>
-                <PropertyRow label="Opacity">
-                  <Slider
-                    size="small"
-                    value={node.material.opacity}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(_, v) => handleChange('material.opacity', v as number)}
-                    sx={{ flex: 1 }}
-                  />
-                  <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
-                    {node.material.opacity.toFixed(2)}
-                  </Typography>
-                </PropertyRow>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      size="small"
-                      checked={node.material.wireframe}
-                      onChange={(e) => handleChange('material.wireframe', e.target.checked)}
-                      sx={{ p: 0.25 }}
+          {node.material && (() => {
+            const mat = node.material;
+            const matType = mat.matType;
+            const hasColor = !['MeshDepthMaterial', 'MeshNormalMaterial'].includes(matType);
+            const hasOpacity = hasColor;
+            const hasEmissive = ['MeshLambertMaterial','MeshPhongMaterial','MeshToonMaterial','MeshStandardMaterial','MeshPhysicalMaterial'].includes(matType);
+            const hasFlatShading = ['MeshLambertMaterial','MeshMatcapMaterial','MeshPhongMaterial','MeshToonMaterial','MeshStandardMaterial','MeshPhysicalMaterial','MeshNormalMaterial'].includes(matType);
+            const hasBlending = !['MeshDepthMaterial','MeshNormalMaterial','ShadowMaterial'].includes(matType);
+            const hasAlpha = !['MeshDepthMaterial','MeshNormalMaterial'].includes(matType);
+            const hasVertexColors = !['MeshDepthMaterial','MeshNormalMaterial'].includes(matType);
+            const hasForceSinglePass = ['MeshBasicMaterial','MeshStandardMaterial','MeshPhysicalMaterial'].includes(matType);
+            const hasReflectivity = ['MeshBasicMaterial','MeshLambertMaterial','MeshPhongMaterial'].includes(matType);
+            const tfSx = { flex: 1, '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' }, '& .MuiInputBase-input': { py: 0.25, px: 0.5 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' } };
+            return (
+              <Accordion defaultExpanded disableGutters sx={accordionSx}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
+                  <Typography sx={sectionTitleSx}>Material</Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
+                  {/* UUID bar */}
+                  {mat.matId && (
+                    <Box sx={{ mb: 0.75, display: 'flex', alignItems: 'center', gap: 0.25, bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 0.5, px: 0.75, py: 0.4 }}>
+                      <Typography sx={{ fontFamily: 'monospace', fontSize: '0.6rem', color: 'text.disabled', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {mat.matId.slice(0, 8)}
+                        <Typography component="span" sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.2)' }}>…{mat.matId.slice(-4)}</Typography>
+                      </Typography>
+                      <Tooltip title="Copy material UUID">
+                        <IconButton size="small" sx={{ p: 0.25 }} onClick={() => navigator.clipboard.writeText(mat.matId!)}>
+                          <ContentCopyIcon sx={{ fontSize: 11 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Regenerate material UUID">
+                        <IconButton size="small" sx={{ p: 0.25 }} onClick={() => handleChange('material.id', crypto.randomUUID())}>
+                          <RefreshIcon sx={{ fontSize: 11 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  )}
+
+                  {/* Type */}
+                  <PropertyRow label="Type">
+                    <Select size="small" value={matType}
+                      onChange={(e) => handleChange('material.type', e.target.value)} sx={selectSx}>
+                      {['MeshBasicMaterial','MeshDepthMaterial','MeshNormalMaterial','MeshLambertMaterial',
+                        'MeshMatcapMaterial','MeshPhongMaterial','MeshToonMaterial','MeshStandardMaterial',
+                        'MeshPhysicalMaterial','ShadowMaterial'].map((t) => (
+                        <MenuItem key={t} value={t} sx={menuItemSx}>{t}</MenuItem>
+                      ))}
+                    </Select>
+                  </PropertyRow>
+
+                  {/* Color */}
+                  {hasColor && (
+                    <ColorInput label="Color" value={mat.color} onChange={(v) => handleChange('material.color', v)} favColors={favColors} onFavChange={updateFavColors} />
+                  )}
+
+                  {/* Opacity */}
+                  {hasOpacity && (
+                    <PropertyRow label="Opacity">
+                      <Slider size="small" value={mat.opacity} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.opacity', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {mat.opacity.toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                  )}
+
+                  {/* Emissive */}
+                  {hasEmissive && (<>
+                    <ColorInput label="Emissive" value={mat.emissive ?? '#000000'} onChange={(v) => handleChange('material.emissive', v)} favColors={favColors} onFavChange={updateFavColors} />
+                    <PropertyRow label="Emissive Int">
+                      <Slider size="small" value={mat.emissiveIntensity ?? 1} min={0} max={5} step={0.01}
+                        onChange={(_, v) => handleChange('material.emissiveIntensity', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.emissiveIntensity ?? 1).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                  </>)}
+
+                  {/* Specular + Shininess (Phong) */}
+                  {matType === 'MeshPhongMaterial' && (<>
+                    <ColorInput label="Specular" value={mat.specular ?? '#111111'} onChange={(v) => handleChange('material.specular', v)} favColors={favColors} onFavChange={updateFavColors} />
+                    <PropertyRow label="Shininess">
+                      <TextField size="small" type="number" value={mat.shininess ?? 30}
+                        onChange={(e) => handleChange('material.shininess', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 1, min: 0 } }} sx={tfSx} />
+                    </PropertyRow>
+                  </>)}
+
+                  {/* Roughness + Metalness (Standard, Physical) */}
+                  {['MeshStandardMaterial','MeshPhysicalMaterial'].includes(matType) && (<>
+                    <PropertyRow label="Roughness">
+                      <Slider size="small" value={mat.roughness ?? 1} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.roughness', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.roughness ?? 1).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <PropertyRow label="Metalness">
+                      <Slider size="small" value={mat.metalness ?? 0} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.metalness', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.metalness ?? 0).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                  </>)}
+
+                  {/* Reflectivity */}
+                  {hasReflectivity && (
+                    <PropertyRow label="Reflectivity">
+                      <Slider size="small" value={mat.reflectivity ?? 1} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.reflectivity', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.reflectivity ?? 1).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                  )}
+
+                  {/* Physical-only */}
+                  {matType === 'MeshPhysicalMaterial' && (<>
+                    <PropertyRow label="IOR">
+                      <TextField size="small" type="number" value={mat.ior ?? 1.5}
+                        onChange={(e) => handleChange('material.ior', parseFloat(e.target.value) || 1)}
+                        slotProps={{ htmlInput: { step: 0.01, min: 1 } }} sx={tfSx} />
+                    </PropertyRow>
+                    <PropertyRow label="Clearcoat">
+                      <Slider size="small" value={mat.clearcoat ?? 0} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.clearcoat', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.clearcoat ?? 0).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <PropertyRow label="CC Rough">
+                      <Slider size="small" value={mat.clearcoatRoughness ?? 0} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.clearcoatRoughness', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.clearcoatRoughness ?? 0).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <PropertyRow label="Dispersion">
+                      <TextField size="small" type="number" value={mat.dispersion ?? 0}
+                        onChange={(e) => handleChange('material.dispersion', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 0.01, min: 0 } }} sx={tfSx} />
+                    </PropertyRow>
+                    <PropertyRow label="Iridescence">
+                      <Slider size="small" value={mat.iridescence ?? 0} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.iridescence', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.iridescence ?? 0).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <PropertyRow label="Irid. IOR">
+                      <TextField size="small" type="number" value={mat.iridescenceIOR ?? 1.3}
+                        onChange={(e) => handleChange('material.iridescenceIOR', parseFloat(e.target.value) || 1)}
+                        slotProps={{ htmlInput: { step: 0.01, min: 1 } }} sx={tfSx} />
+                    </PropertyRow>
+                    <PropertyRow label="Film Min nm">
+                      <TextField size="small" type="number" value={mat.thinFilmThicknessMin ?? 100}
+                        onChange={(e) => handleChange('material.thinFilmThicknessMin', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 10, min: 0 } }} sx={tfSx} />
+                    </PropertyRow>
+                    <PropertyRow label="Film Max nm">
+                      <TextField size="small" type="number" value={mat.thinFilmThicknessMax ?? 400}
+                        onChange={(e) => handleChange('material.thinFilmThicknessMax', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 10, min: 0 } }} sx={tfSx} />
+                    </PropertyRow>
+                    <PropertyRow label="Sheen">
+                      <Slider size="small" value={mat.sheen ?? 0} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.sheen', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.sheen ?? 0).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <PropertyRow label="Sheen Rough">
+                      <Slider size="small" value={mat.sheenRoughness ?? 1} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.sheenRoughness', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.sheenRoughness ?? 1).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <ColorInput label="Sheen Color" value={mat.sheenColor ?? '#000000'} onChange={(v) => handleChange('material.sheenColor', v)} favColors={favColors} onFavChange={updateFavColors} />
+                    <PropertyRow label="Transmission">
+                      <Slider size="small" value={mat.transmission ?? 0} min={0} max={1} step={0.01}
+                        onChange={(_, v) => handleChange('material.transmission', v as number)} sx={{ flex: 1 }} />
+                      <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>
+                        {(mat.transmission ?? 0).toFixed(2)}
+                      </Typography>
+                    </PropertyRow>
+                    <PropertyRow label="Thickness">
+                      <TextField size="small" type="number" value={mat.thickness ?? 0}
+                        onChange={(e) => handleChange('material.thickness', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 0.1, min: 0 } }} sx={tfSx} />
+                    </PropertyRow>
+                    <ColorInput label="Atten Color" value={mat.attenuationColor ?? '#ffffff'} onChange={(v) => handleChange('material.attenuationColor', v)} favColors={favColors} onFavChange={updateFavColors} />
+                    <PropertyRow label="Atten Dist">
+                      <TextField size="small" type="number" value={mat.attenuationDistance ?? 0}
+                        onChange={(e) => handleChange('material.attenuationDistance', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 0.1, min: 0 } }} sx={tfSx} />
+                    </PropertyRow>
+                  </>)}
+
+                  {/* Depth Material: depth packing */}
+                  {matType === 'MeshDepthMaterial' && (
+                    <PropertyRow label="Depth Pack">
+                      <Select size="small" value={mat.depthPacking ?? 'basic'}
+                        onChange={(e) => handleChange('material.depthPacking', e.target.value)} sx={selectSx}>
+                        <MenuItem value="basic" sx={menuItemSx}>BASIC</MenuItem>
+                        <MenuItem value="rgba" sx={menuItemSx}>RGBA</MenuItem>
+                      </Select>
+                    </PropertyRow>
+                  )}
+
+                  {/* Common flags row */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0, mt: 0.5 }}>
+                    <FormControlLabel
+                      control={<Checkbox size="small" checked={mat.wireframe}
+                        onChange={(e) => handleChange('material.wireframe', e.target.checked)} sx={{ p: 0.25 }} />}
+                      label={<Typography sx={{ fontSize: '0.7rem' }}>Wireframe</Typography>}
+                      sx={{ ml: 0, mr: 1 }}
                     />
-                  }
-                  label={<Typography sx={{ fontSize: '0.7rem' }}>Wireframe</Typography>}
-                  sx={{ ml: 0 }}
-                />
-              </AccordionDetails>
-            </Accordion>
-          )}
+                    {hasOpacity && (
+                      <FormControlLabel
+                        control={<Checkbox size="small" checked={mat.transparent}
+                          onChange={(e) => handleChange('material.transparent', e.target.checked)} sx={{ p: 0.25 }} />}
+                        label={<Typography sx={{ fontSize: '0.7rem' }}>Transparent</Typography>}
+                        sx={{ ml: 0, mr: 1 }}
+                      />
+                    )}
+                    {hasFlatShading && (
+                      <FormControlLabel
+                        control={<Checkbox size="small" checked={mat.flatShading ?? false}
+                          onChange={(e) => handleChange('material.flatShading', e.target.checked)} sx={{ p: 0.25 }} />}
+                        label={<Typography sx={{ fontSize: '0.7rem' }}>Flat Shading</Typography>}
+                        sx={{ ml: 0, mr: 1 }}
+                      />
+                    )}
+                    {hasVertexColors && (
+                      <FormControlLabel
+                        control={<Checkbox size="small" checked={mat.vertexColors}
+                          onChange={(e) => handleChange('material.vertexColors', e.target.checked)} sx={{ p: 0.25 }} />}
+                        label={<Typography sx={{ fontSize: '0.7rem' }}>Vtx Colors</Typography>}
+                        sx={{ ml: 0, mr: 1 }}
+                      />
+                    )}
+                    {hasForceSinglePass && (
+                      <FormControlLabel
+                        control={<Checkbox size="small" checked={mat.forceSinglePass}
+                          onChange={(e) => handleChange('material.forceSinglePass', e.target.checked)} sx={{ p: 0.25 }} />}
+                        label={<Typography sx={{ fontSize: '0.7rem' }}>Single Pass</Typography>}
+                        sx={{ ml: 0, mr: 0 }}
+                      />
+                    )}
+                  </Box>
+
+                  {/* Side */}
+                  <PropertyRow label="Side">
+                    <Select size="small" value={mat.side}
+                      onChange={(e) => handleChange('material.side', e.target.value)} sx={selectSx}>
+                      <MenuItem value="front" sx={menuItemSx}>FRONT</MenuItem>
+                      <MenuItem value="back" sx={menuItemSx}>BACK</MenuItem>
+                      <MenuItem value="double" sx={menuItemSx}>DOUBLE</MenuItem>
+                    </Select>
+                  </PropertyRow>
+
+                  {/* Blending */}
+                  {hasBlending && (
+                    <PropertyRow label="Blending">
+                      <Select size="small" value={mat.blending}
+                        onChange={(e) => handleChange('material.blending', e.target.value)} sx={selectSx}>
+                        <MenuItem value="normal" sx={menuItemSx}>NORMAL</MenuItem>
+                        <MenuItem value="additive" sx={menuItemSx}>ADDITIVE</MenuItem>
+                        <MenuItem value="subtractive" sx={menuItemSx}>SUBTRACTIVE</MenuItem>
+                        <MenuItem value="multiply" sx={menuItemSx}>MULTIPLY</MenuItem>
+                      </Select>
+                    </PropertyRow>
+                  )}
+
+                  {/* Depth Test / Write + Alpha Test */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0, mt: 0.25 }}>
+                    <FormControlLabel
+                      control={<Checkbox size="small" checked={mat.depthTest}
+                        onChange={(e) => handleChange('material.depthTest', e.target.checked)} sx={{ p: 0.25 }} />}
+                      label={<Typography sx={{ fontSize: '0.7rem' }}>Depth Test</Typography>}
+                      sx={{ ml: 0, mr: 1 }}
+                    />
+                    <FormControlLabel
+                      control={<Checkbox size="small" checked={mat.depthWrite}
+                        onChange={(e) => handleChange('material.depthWrite', e.target.checked)} sx={{ p: 0.25 }} />}
+                      label={<Typography sx={{ fontSize: '0.7rem' }}>Depth Write</Typography>}
+                      sx={{ ml: 0, mr: 0 }}
+                    />
+                  </Box>
+                  {hasAlpha && (
+                    <PropertyRow label="Alpha Test">
+                      <TextField size="small" type="number" value={mat.alphaTest}
+                        onChange={(e) => handleChange('material.alphaTest', parseFloat(e.target.value) || 0)}
+                        slotProps={{ htmlInput: { step: 0.01, min: 0, max: 1 } }} sx={tfSx} />
+                    </PropertyRow>
+                  )}
+                </AccordionDetails>
+              </Accordion>
+            );
+          })()}
 
           {node.camera && (
             <Accordion defaultExpanded disableGutters sx={accordionSx}>
@@ -851,29 +1322,9 @@ export function PropertiesPanel({
                     {node.light.lightType}
                   </Typography>
                 </PropertyRow>
-                <PropertyRow label="Color">
-                  <input
-                    type="color"
-                    value={node.light.color}
-                    onChange={(e) => handleChange('light.color', e.target.value)}
-                    style={{ width: 28, height: 20, border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                  />
-                  <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                    {node.light.color}
-                  </Typography>
-                </PropertyRow>
+                <ColorInput label="Color" value={node.light.color} onChange={(v) => handleChange('light.color', v)} favColors={favColors} onFavChange={updateFavColors} />
                 {node.light.lightType === 'hemisphere' && (
-                  <PropertyRow label="Ground Color">
-                    <input
-                      type="color"
-                      value={node.light.groundColor ?? '#444444'}
-                      onChange={(e) => handleChange('light.groundColor', e.target.value)}
-                      style={{ width: 28, height: 20, border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                    />
-                    <Typography variant="caption" sx={{ color: 'text.disabled', fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                      {node.light.groundColor ?? '#444444'}
-                    </Typography>
-                  </PropertyRow>
+                  <ColorInput label="Ground Color" value={node.light.groundColor ?? '#444444'} onChange={(v) => handleChange('light.groundColor', v)} favColors={favColors} onFavChange={updateFavColors} />
                 )}
                 <PropertyRow label="Intensity">
                   <Slider

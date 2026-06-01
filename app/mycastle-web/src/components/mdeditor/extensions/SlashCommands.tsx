@@ -38,6 +38,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import DynamicFormIcon from '@mui/icons-material/DynamicForm';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import TerminalIcon from '@mui/icons-material/Terminal';
+import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import LinkIcon from '@mui/icons-material/Link';
 import ExtensionIcon from '@mui/icons-material/Extension';
@@ -351,6 +352,14 @@ const commands: CommandItem[] = [
         .deleteRange(range)
         .insertAutomateFlow('')
         .run();
+    },
+  },
+  {
+    title: 'CAD View',
+    description: 'Embed a CAD / Scene3D / Electronics project',
+    icon: <ViewInArIcon color="info" />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).insertCadView('scene3d', '').run();
     },
   },
   {

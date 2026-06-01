@@ -4,15 +4,218 @@ import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, Perspecti
 import * as THREE from 'three';
 import type { SceneGraph } from '../scene/SceneGraph';
 import type { SceneNode } from '../scene/SceneNode';
-import type { MeshNode, BufferGeometryData } from '../nodes/MeshNode';
+import type { MeshNode, BufferGeometryData, MaterialDescriptor } from '../nodes/MeshNode';
+import type { GeoNodeGraph } from '../geometry-nodes/types';
+import { evaluateGeoNodeGraph } from '../geometry-nodes/evaluate';
 import type { LightNode } from '../nodes/LightNode';
 import type { CameraNode } from '../nodes/CameraNode';
 import type { AudioNode as SceneAudioNode } from '../nodes/AudioNode';
-import type { CSSProperties, ReactElement, RefObject } from 'react';
+import type { CSSProperties, ReactElement, ReactNode, RefObject } from 'react';
 import type { CameraPresetName, SceneSettings } from '@mhersztowski/ui-core';
 import { CAMERA_PRESETS } from './cameraPresets';
 
 export type SceneRenderMode = 'realistic' | 'solid' | 'normal' | 'wireframe';
+
+function toThreeSide(side: MaterialDescriptor['side']): THREE.Side {
+  if (side === 'back') return THREE.BackSide;
+  if (side === 'double') return THREE.DoubleSide;
+  return THREE.FrontSide;
+}
+
+function toThreeBlending(blending: MaterialDescriptor['blending']): THREE.Blending {
+  if (blending === 'additive') return THREE.AdditiveBlending;
+  if (blending === 'subtractive') return THREE.SubtractiveBlending;
+  if (blending === 'multiply') return THREE.MultiplyBlending;
+  return THREE.NormalBlending;
+}
+
+function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSelected: boolean }) {
+  const side = toThreeSide(mat.side);
+  const blending = toThreeBlending(mat.blending);
+  // For materials that support emissive, use selection highlight via emissive channel
+  const selEmissive = isSelected ? '#4fc3f7' : (mat.emissive ?? '#000000');
+  const selEmissiveIntensity = isSelected ? 0.15 : (mat.emissiveIntensity ?? 1);
+
+  switch (mat.type) {
+    case 'MeshBasicMaterial':
+      return (
+        <meshBasicMaterial
+          color={mat.color}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1}
+          wireframe={mat.wireframe}
+          side={side}
+          blending={blending}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+          alphaTest={mat.alphaTest}
+          vertexColors={mat.vertexColors}
+          forceSinglePass={mat.forceSinglePass}
+        />
+      );
+
+    case 'MeshDepthMaterial':
+      return (
+        <meshDepthMaterial
+          wireframe={mat.wireframe}
+          side={side}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          depthPacking={mat.depthPacking === 'rgba' ? (THREE as any).RGBADepthPacking ?? 3201 : (THREE as any).BasicDepthPacking ?? 3200}
+        />
+      );
+
+    case 'MeshNormalMaterial':
+      return (
+        <meshNormalMaterial
+          wireframe={mat.wireframe}
+          side={side}
+          flatShading={mat.flatShading}
+        />
+      );
+
+    case 'MeshLambertMaterial':
+      return (
+        <meshLambertMaterial
+          color={mat.color}
+          emissive={selEmissive}
+          emissiveIntensity={selEmissiveIntensity}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1}
+          wireframe={mat.wireframe}
+          side={side}
+          blending={blending}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+          alphaTest={mat.alphaTest}
+          vertexColors={mat.vertexColors}
+          flatShading={mat.flatShading}
+          reflectivity={mat.reflectivity}
+        />
+      );
+
+    case 'MeshMatcapMaterial':
+      return (
+        <meshMatcapMaterial
+          color={mat.color}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1}
+          side={side}
+          flatShading={mat.flatShading}
+          alphaTest={mat.alphaTest}
+        />
+      );
+
+    case 'MeshPhongMaterial':
+      return (
+        <meshPhongMaterial
+          color={mat.color}
+          emissive={selEmissive}
+          emissiveIntensity={selEmissiveIntensity}
+          specular={mat.specular ?? '#111111'}
+          shininess={mat.shininess ?? 30}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1}
+          wireframe={mat.wireframe}
+          side={side}
+          blending={blending}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+          alphaTest={mat.alphaTest}
+          vertexColors={mat.vertexColors}
+          flatShading={mat.flatShading}
+          reflectivity={mat.reflectivity}
+        />
+      );
+
+    case 'MeshToonMaterial':
+      return (
+        <meshToonMaterial
+          color={mat.color}
+          emissive={selEmissive}
+          emissiveIntensity={selEmissiveIntensity}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1}
+          wireframe={mat.wireframe}
+          side={side}
+          blending={blending}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+          alphaTest={mat.alphaTest}
+          vertexColors={mat.vertexColors}
+        />
+      );
+
+    case 'MeshPhysicalMaterial':
+      return (
+        <meshPhysicalMaterial
+          color={mat.color}
+          emissive={selEmissive}
+          emissiveIntensity={selEmissiveIntensity}
+          roughness={mat.roughness ?? 1}
+          metalness={mat.metalness ?? 0}
+          ior={mat.ior ?? 1.5}
+          clearcoat={mat.clearcoat ?? 0}
+          clearcoatRoughness={mat.clearcoatRoughness ?? 0}
+          iridescence={mat.iridescence ?? 0}
+          iridescenceIOR={mat.iridescenceIOR ?? 1.3}
+          iridescenceThicknessRange={[mat.thinFilmThicknessMin ?? 100, mat.thinFilmThicknessMax ?? 400]}
+          sheen={mat.sheen ?? 0}
+          sheenRoughness={mat.sheenRoughness ?? 1}
+          sheenColor={mat.sheenColor ?? '#000000'}
+          transmission={mat.transmission ?? 0}
+          thickness={mat.thickness ?? 0}
+          attenuationDistance={mat.attenuationDistance ?? Infinity}
+          attenuationColor={mat.attenuationColor ?? '#ffffff'}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1 || (mat.transmission ?? 0) > 0}
+          wireframe={mat.wireframe}
+          side={side}
+          blending={blending}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+          alphaTest={mat.alphaTest}
+          vertexColors={mat.vertexColors}
+          flatShading={mat.flatShading}
+          forceSinglePass={mat.forceSinglePass}
+        />
+      );
+
+    case 'ShadowMaterial':
+      return (
+        <shadowMaterial
+          color={mat.color}
+          opacity={mat.opacity}
+          transparent={mat.transparent}
+          side={side}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+        />
+      );
+
+    case 'MeshStandardMaterial':
+    default:
+      return (
+        <meshStandardMaterial
+          color={mat.color}
+          emissive={selEmissive}
+          emissiveIntensity={selEmissiveIntensity}
+          roughness={mat.roughness ?? 1}
+          metalness={mat.metalness ?? 0}
+          opacity={mat.opacity}
+          transparent={mat.transparent || mat.opacity < 1}
+          wireframe={mat.wireframe}
+          side={side}
+          blending={blending}
+          depthTest={mat.depthTest}
+          depthWrite={mat.depthWrite}
+          alphaTest={mat.alphaTest}
+          vertexColors={mat.vertexColors}
+          flatShading={mat.flatShading}
+          forceSinglePass={mat.forceSinglePass}
+        />
+      );
+  }
+}
 
 export interface SimpleViewerProps {
   sceneGraph?: SceneGraph;
@@ -47,6 +250,8 @@ export interface SimpleViewerProps {
   resolveAudioSrc?: (src: string) => Promise<string>;
   /** Size of the transform gizmo handles. Default 0.7. */
   gizmoSize?: number;
+  /** Called when a gizmo drag ends — useful for animation recording. */
+  onGizmoTransformEnd?: (nodeId: string, mode: 'translate' | 'rotate' | 'scale', value: [number, number, number]) => void;
 }
 
 function SelectableMesh({
@@ -81,7 +286,7 @@ function SelectableMesh({
         onSelect?.(node.id);
       }}
     >
-      <MeshGeometry type={meshNode.geometry.type} params={meshNode.geometry.params} bufferData={meshNode.geometry.bufferData} />
+      <MeshGeometry type={meshNode.geometry.type} params={meshNode.geometry.params} bufferData={meshNode.geometry.bufferData} code={meshNode.geometry.code} nodesGraph={meshNode.geometry.nodesGraph} />
       {renderMode === 'solid' && (
         <meshLambertMaterial color={isSelected ? '#4fc3f7' : '#888888'} />
       )}
@@ -92,14 +297,7 @@ function SelectableMesh({
         <meshBasicMaterial wireframe color={isSelected ? '#4fc3f7' : '#aaaaaa'} />
       )}
       {(renderMode === 'realistic' || renderMode == null) && (
-        <meshStandardMaterial
-          color={meshNode.material.color}
-          opacity={meshNode.material.opacity}
-          transparent={meshNode.material.opacity < 1}
-          wireframe={meshNode.material.wireframe}
-          emissive={isSelected ? '#4fc3f7' : '#000000'}
-          emissiveIntensity={isSelected ? 0.15 : 0}
-        />
+        <RealisticMaterial mat={meshNode.material} isSelected={isSelected} />
       )}
     </mesh>
   );
@@ -111,6 +309,7 @@ function GizmoControls({
   selectedNodeId,
   transformMode,
   onObjectChange,
+  onTransformEnd,
   isDraggingGizmoRef,
   addLog,
   gizmoSize = 0.7,
@@ -119,6 +318,7 @@ function GizmoControls({
   selectedNodeId: string;
   transformMode: 'translate' | 'rotate' | 'scale';
   onObjectChange?: (obj: THREE.Object3D) => void;
+  onTransformEnd?: (nodeId: string, mode: 'translate' | 'rotate' | 'scale', value: [number, number, number]) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
   addLog?: (msg: string) => void;
   gizmoSize?: number;
@@ -137,18 +337,24 @@ function GizmoControls({
 
     if (transformMode === 'translate') {
       const p = targetObject.position;
-      node.setPosition([p.x, p.y, p.z]);
+      const val: [number, number, number] = [p.x, p.y, p.z];
+      node.setPosition(val);
       addLog?.(`pos saved (${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)})`);
+      onTransformEnd?.(selectedNodeId, 'translate', val);
     } else if (transformMode === 'rotate') {
       const r = targetObject.rotation;
-      node.setRotation([r.x, r.y, r.z]);
+      const val: [number, number, number] = [r.x, r.y, r.z];
+      node.setRotation(val);
       addLog?.(`rot saved (${r.x.toFixed(2)},${r.y.toFixed(2)},${r.z.toFixed(2)})`);
+      onTransformEnd?.(selectedNodeId, 'rotate', val);
     } else if (transformMode === 'scale') {
       const s = targetObject.scale;
-      node.setScale([s.x, s.y, s.z]);
+      const val: [number, number, number] = [s.x, s.y, s.z];
+      node.setScale(val);
       addLog?.(`scale saved (${s.x.toFixed(2)},${s.y.toFixed(2)},${s.z.toFixed(2)})`);
+      onTransformEnd?.(selectedNodeId, 'scale', val);
     }
-  }, [targetObject, sceneGraph, selectedNodeId, transformMode, addLog]);
+  }, [targetObject, sceneGraph, selectedNodeId, transformMode, addLog, onTransformEnd]);
 
   useEffect(() => {
     const controls = controlsRef.current;
@@ -534,6 +740,110 @@ function SceneAudio({
   );
 }
 
+function SceneGroup({
+  node,
+  isSelected,
+  onSelect,
+  children,
+}: {
+  node: SceneNode;
+  isSelected: boolean;
+  onSelect?: (nodeId: string) => void;
+  children?: ReactNode;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  useEffect(() => {
+    node._threeObject = groupRef.current;
+    return () => { node._threeObject = null; };
+  }, [node]);
+  return (
+    <group
+      ref={groupRef}
+      name={node.id}
+      position={node.position}
+      rotation={node.rotation as [number, number, number]}
+      scale={node.scale}
+      onClick={(e) => { e.stopPropagation(); onSelect?.(node.id); }}
+    >
+      {/* invisible hit target so the group itself is clickable */}
+      {isSelected && <mesh visible={false}><sphereGeometry args={[0.001]} /></mesh>}
+      {children}
+    </group>
+  );
+}
+
+type RenderCtx = {
+  selectedNodeId?: string | null;
+  onNodeSelect?: (id: string) => void;
+  renderMode?: SceneRenderMode;
+  resolveAudioSrc?: (src: string) => Promise<string>;
+};
+
+function renderSceneNode(node: SceneNode, ctx: RenderCtx): ReactElement | null {
+  if (!node.visible) return null;
+
+  if (node.type === 'group') {
+    const children = node.children
+      .map(child => renderSceneNode(child, ctx))
+      .filter((el): el is ReactElement => el !== null);
+    return (
+      <SceneGroup key={node.id} node={node} isSelected={node.id === ctx.selectedNodeId} onSelect={ctx.onNodeSelect}>
+        {children}
+      </SceneGroup>
+    );
+  }
+
+  if (node.type === 'mesh') {
+    return (
+      <SelectableMesh
+        key={node.id}
+        node={node}
+        meshNode={node as unknown as MeshNode}
+        isSelected={node.id === ctx.selectedNodeId}
+        onSelect={ctx.onNodeSelect}
+        renderMode={ctx.renderMode}
+      />
+    );
+  }
+
+  if (node.type === 'light') {
+    return (
+      <SceneLight
+        key={node.id}
+        node={node}
+        lightNode={node as unknown as LightNode}
+      />
+    );
+  }
+
+  if (node.type === 'camera') {
+    return (
+      <SceneCamera
+        key={node.id}
+        node={node}
+        cameraNode={node as unknown as CameraNode}
+        isSelected={node.id === ctx.selectedNodeId}
+        onSelect={ctx.onNodeSelect}
+      />
+    );
+  }
+
+  if (node.type === 'audio') {
+    return (
+      <SceneAudio
+        key={node.id}
+        node={node}
+        audioNode={node as unknown as SceneAudioNode}
+        isSelected={node.id === ctx.selectedNodeId}
+        onSelect={ctx.onNodeSelect}
+        resolveAudioSrc={ctx.resolveAudioSrc}
+      />
+    );
+  }
+
+  return null;
+}
+
 function SceneRenderer({
   sceneGraph,
   version,
@@ -551,64 +861,35 @@ function SceneRenderer({
 }) {
   const objects = useMemo(() => {
     if (!sceneGraph) return [];
-    const result: ReactElement[] = [];
-
-    sceneGraph.traverse((node: SceneNode) => {
-      if (node === sceneGraph.root) return;
-      if (!node.visible) return;
-
-      if (node.type === 'mesh') {
-        const meshNode = node as unknown as MeshNode;
-        result.push(
-          <SelectableMesh
-            key={node.id}
-            node={node}
-            meshNode={meshNode}
-            isSelected={node.id === selectedNodeId}
-            onSelect={onNodeSelect}
-            renderMode={renderMode}
-          />,
-        );
-      } else if (node.type === 'light') {
-        const lightNode = node as unknown as LightNode;
-        result.push(
-          <SceneLight
-            key={node.id}
-            node={node}
-            lightNode={lightNode}
-          />,
-        );
-      } else if (node.type === 'camera') {
-        const cameraNode = node as unknown as CameraNode;
-        result.push(
-          <SceneCamera
-            key={node.id}
-            node={node}
-            cameraNode={cameraNode}
-            isSelected={node.id === selectedNodeId}
-            onSelect={onNodeSelect}
-          />,
-        );
-      } else if (node.type === 'audio') {
-        const audioNode = node as unknown as SceneAudioNode;
-        result.push(
-          <SceneAudio
-            key={node.id}
-            node={node}
-            audioNode={audioNode}
-            isSelected={node.id === selectedNodeId}
-            onSelect={onNodeSelect}
-            resolveAudioSrc={resolveAudioSrc}
-          />,
-        );
-      }
-    });
-
-    return result;
+    const ctx: RenderCtx = { selectedNodeId, onNodeSelect, renderMode, resolveAudioSrc };
+    return sceneGraph.root.children
+      .map(child => renderSceneNode(child, ctx))
+      .filter((el): el is ReactElement => el !== null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneGraph, version, selectedNodeId, onNodeSelect, renderMode, resolveAudioSrc]);
 
   return <group>{objects}</group>;
+}
+
+function GeoNodesGeometry({ graph }: { graph: GeoNodeGraph }) {
+  const geometry = useMemo(() => evaluateGeoNodeGraph(graph), [graph]);
+  return <primitive object={geometry} attach="geometry" />;
+}
+
+function ProceduralGeometry({ code }: { code: string }) {
+  const geometry = useMemo(() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+      const fn = new Function('THREE', code);
+      const result = fn(THREE);
+      if (result instanceof THREE.BufferGeometry) return result;
+    } catch {
+      // fall through to fallback
+    }
+    return new THREE.SphereGeometry(1, 8, 4);
+  }, [code]);
+
+  return <primitive object={geometry} attach="geometry" />;
 }
 
 function CustomBufferGeometry({ data }: { data: BufferGeometryData }) {
@@ -634,12 +915,20 @@ function MeshGeometry({
   type,
   params,
   bufferData,
+  code,
+  nodesGraph,
 }: {
   type: string;
   params?: Record<string, number>;
   bufferData?: BufferGeometryData;
+  code?: string;
+  nodesGraph?: GeoNodeGraph;
 }) {
   switch (type) {
+    case 'nodes':
+      return <GeoNodesGeometry graph={nodesGraph ?? { nodes: [], edges: [] }} />;
+    case 'procedural':
+      return <ProceduralGeometry code={code ?? ''} />;
     case 'custom':
       if (!bufferData) return <boxGeometry />;
       return <CustomBufferGeometry data={bufferData} />;
@@ -832,6 +1121,7 @@ function SceneContent({
   renderMode = 'realistic',
   sceneSettings,
   onObjectChange,
+  onTransformEnd,
   onPlaneClick,
   isDraggingGizmoRef,
   addLog,
@@ -852,6 +1142,7 @@ function SceneContent({
   renderMode?: SceneRenderMode;
   sceneSettings?: SceneSettings;
   onObjectChange?: (obj: THREE.Object3D) => void;
+  onTransformEnd?: (nodeId: string, mode: 'translate' | 'rotate' | 'scale', value: [number, number, number]) => void;
   onPlaneClick?: (wx: number, wz: number) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
   addLog?: (msg: string) => void;
@@ -859,7 +1150,7 @@ function SceneContent({
   gizmoSize?: number;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
-  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio';
+  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio' || selectedNode?.type === 'group';
   const presetConfig = CAMERA_PRESETS[cameraPreset];
 
   // Log showGizmo state changes
@@ -909,6 +1200,7 @@ function SceneContent({
           selectedNodeId={selectedNodeId}
           transformMode={transformMode}
           onObjectChange={onObjectChange}
+          onTransformEnd={onTransformEnd}
           isDraggingGizmoRef={isDraggingGizmoRef}
           addLog={addLog}
           gizmoSize={gizmoSize}
@@ -951,6 +1243,7 @@ export function SimpleViewer({
   debugLog = false,
   resolveAudioSrc,
   gizmoSize = 0.7,
+  onGizmoTransformEnd,
 }: SimpleViewerProps) {
   const scaleXRef = useRef<HTMLSpanElement>(null);
   const scaleYRef = useRef<HTMLSpanElement>(null);
@@ -1090,7 +1383,7 @@ export function SimpleViewer({
   // R3F fires onPointerMissed for EVERY tap on the gizmo (<primitive> has no R3F handlers).
   // On mobile/stylus a tap always emits click → onPointerMissed → deselects node → gizmo gone.
   // Fix: suppress deselection whenever transform handles are visible.
-  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio';
+  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio' || selectedNode?.type === 'group';
 
   return (
     <div
@@ -1110,8 +1403,8 @@ export function SimpleViewer({
         onPointerMissed={(e) => {
           const drag = isDraggingGizmoRef.current;
           const type = (e as unknown as PointerEvent).pointerType ?? 'mouse';
-          addLog(`miss ${type} drag=${drag} gizmo=${showGizmo} → ${!drag && !showGizmo ? 'DESELECT' : 'blocked'}`);
-          if (!drag && !showGizmo) onNodeSelect?.(null);
+          addLog(`miss ${type} drag=${drag} gizmo=${showGizmo} → ${!drag ? 'DESELECT' : 'blocked'}`);
+          if (!drag) onNodeSelect?.(null);
         }}
         onCreated={({ gl }) => setGlInstance(gl)}
       >
@@ -1130,6 +1423,7 @@ export function SimpleViewer({
           renderMode={renderMode}
           sceneSettings={sceneSettings}
           onObjectChange={handleLiveTransform}
+          onTransformEnd={onGizmoTransformEnd}
           onPlaneClick={onPlaneClick}
           isDraggingGizmoRef={isDraggingGizmoRef}
           addLog={addLog}

@@ -135,6 +135,7 @@ export interface SceneTreeNodeData {
   type: string;
   visible: boolean;
   children?: SceneTreeNodeData[];
+  metadata?: Record<string, unknown>;
 }
 
 // ─── Panel Prop Types ─────────────────────────────────────────────
@@ -153,6 +154,7 @@ export interface SceneTreePanelProps {
   onNodeCopy?: (nodeId: string) => void;
   onNodePaste?: () => void;
   onImportMesh?: (parentId?: string) => void;
+  onCreatePrefab?: (nodeId: string) => void;
   canPaste?: boolean;
   className?: string;
 }
@@ -170,9 +172,21 @@ export interface SelectedNodeGeometryAttributes {
   uvCount?: number;
 }
 
+export interface SceneGeometryEntry {
+  nodeId: string;
+  nodeName: string;
+  geoId: string;
+  geoType: string;
+}
+
 export interface SelectedNodeGeometry {
+  /** UUID of the geometry data-block (same on nodes sharing geometry). */
+  geoId?: string;
   geoType: string;
   params: Record<string, number>;
+  code?: string;
+  /** Opaque — cast to GeoNodeGraph in consumers that depend on core-scene3d. */
+  nodesGraph?: unknown;
   vertexCount?: number;
   indexCount?: number;
   fileName?: string;
@@ -180,10 +194,65 @@ export interface SelectedNodeGeometry {
   bounds?: [number, number, number];
 }
 
+export type MaterialType =
+  | 'MeshBasicMaterial'
+  | 'MeshDepthMaterial'
+  | 'MeshNormalMaterial'
+  | 'MeshLambertMaterial'
+  | 'MeshMatcapMaterial'
+  | 'MeshPhongMaterial'
+  | 'MeshToonMaterial'
+  | 'MeshStandardMaterial'
+  | 'MeshPhysicalMaterial'
+  | 'ShadowMaterial';
+
+export type MaterialSide = 'front' | 'back' | 'double';
+export type MaterialBlending = 'normal' | 'additive' | 'subtractive' | 'multiply';
+
 export interface SelectedNodeMaterial {
+  matId?: string;
+  matType: MaterialType;
+
   color: string;
   opacity: number;
+  transparent: boolean;
   wireframe: boolean;
+  side: MaterialSide;
+  blending: MaterialBlending;
+  depthTest: boolean;
+  depthWrite: boolean;
+  alphaTest: number;
+  vertexColors: boolean;
+  forceSinglePass: boolean;
+
+  emissive?: string;
+  emissiveIntensity?: number;
+  reflectivity?: number;
+  flatShading?: boolean;
+
+  specular?: string;
+  shininess?: number;
+
+  roughness?: number;
+  metalness?: number;
+
+  ior?: number;
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  dispersion?: number;
+  iridescence?: number;
+  iridescenceIOR?: number;
+  thinFilmThicknessMin?: number;
+  thinFilmThicknessMax?: number;
+  sheen?: number;
+  sheenRoughness?: number;
+  sheenColor?: string;
+  transmission?: number;
+  attenuationDistance?: number;
+  attenuationColor?: string;
+  thickness?: number;
+
+  depthPacking?: 'basic' | 'rgba';
 }
 
 export interface SelectedNodeLight {
@@ -287,6 +356,14 @@ export interface PropertiesPanelProps {
   onSceneSettingsChange?: (settings: SceneSettings) => void;
   /** Opens a file picker for audio files; resolves to a VFS path or null if cancelled. */
   onBrowseAudioFile?: () => Promise<string | null>;
+  /** Opens the geometry node graph editor for a mesh node. Receives nodeId + current nodesGraph (opaque — cast to GeoNodeGraph in consumers). */
+  onEditGeometryNodes?: (nodeId: string, currentGraph: unknown) => void;
+  /** Opens the Blender-style mesh edit mode for a mesh node. */
+  onEditMesh?: (nodeId: string) => void;
+  /** All mesh nodes in the scene — for geometry linking. */
+  sceneGeometries?: SceneGeometryEntry[];
+  /** Assigns geometry from sourceNodeId to targetNodeId (copies descriptor incl. same id). */
+  onAssignGeometry?: (targetNodeId: string, sourceNodeId: string) => void;
   className?: string;
 }
 
@@ -314,6 +391,20 @@ export interface RichEditorProps {
   onSceneChange?: (json: string) => void;
   /** Called when the user clicks the Y=0 floor plane (template placement mode). wx/wz = world X/Z coordinates. */
   onPlaneClick?: (wx: number, wz: number) => void;
+  /** Opens the geometry node graph editor for a mesh node with 'nodes' geometry type. */
+  onEditGeometryNodes?: (nodeId: string, currentGraph: unknown) => void;
+  /** Opens the Blender-style mesh edit mode for the selected mesh node. */
+  onEditMesh?: (nodeId: string) => void;
+  /** If provided, its .current will be set to a function that applies a property change to a node — lets external dialogs write back into the scene graph. */
+  propertyChangeRef?: MutableRefObject<((nodeId: string, property: string, value: unknown) => void) | null>;
+  /** If provided, its .current will be set to a function that returns the GeometryDescriptor (as unknown) for a given nodeId — lets external dialogs read geometry for edit mode. */
+  getNodeGeometryRef?: MutableRefObject<((nodeId: string) => unknown) | null>;
+  /** Called when a prefab is created or renamed. data = JSON.stringify(PrefabEntry). */
+  onSavePrefab?: (id: string, name: string, data: string) => Promise<void>;
+  /** Called when a prefab is deleted. */
+  onDeletePrefab?: (id: string) => Promise<void>;
+  /** JSON-serialized PrefabEntry[] — overrides prefabs embedded in the scene JSON on mount. */
+  initialPrefabs?: string;
 }
 
 // ─── Viewer Prop Types ────────────────────────────────────────────

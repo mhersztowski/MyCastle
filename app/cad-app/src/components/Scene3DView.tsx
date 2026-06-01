@@ -1,16 +1,24 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Box, Snackbar, Alert, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, List, ListItem, ListItemButton, ListItemText, Typography } from '@mui/material';
+import { Box, Snackbar, Alert, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemButton, ListItemText, Typography } from '@mui/material';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import FolderIcon from '@mui/icons-material/Folder';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import CloseIcon from '@mui/icons-material/Close';
 import { RichEditor } from '@mhersztowski/ui-components-scene3d';
 import { SceneDeserializer, SceneSerializer } from '@mhersztowski/core-scene3d';
+import type { GeoNodeGraph } from '@mhersztowski/core-scene3d';
 import type { Project } from '@mhersztowski/core-cad';
 import { cadProjectToSceneJson } from '../bridge/CadToScene';
-import { ServerFileBrowser } from './ServerFileBrowser';
-import { SCENE_EXT, readFileAt, writeFileAt, vfsListDir, vfsReadFileBin, userProjectsDir } from '../vfs/cadProjectApi';
+import { Scene3DProjectBrowser } from './Scene3DProjectBrowser';
+import { writeScene3dFile, vfsListDir, vfsReadFileBin, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs } from '../vfs/cadProjectApi';
+import type { PrefabEntry } from '@mhersztowski/core-scene3d';
+import type { ProjectPrefabGroup } from '@mhersztowski/ui-components-scene3d';
 import type { ActiveTemplate } from './RepositoryPanel';
+import { GeometryNodesEditor } from './GeometryNodesEditor';
+import { MeshEditModeDialog } from './MeshEditModeDialog';
+import { evaluateDescriptor, geometryToEditable } from '../edit-mode/meshConverter';
+import type { EditableMesh } from '../edit-mode/types';
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a'];
 const AUDIO_MIME: Record<string, string> = {
@@ -47,12 +55,62 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     return () => { clearInterval(id); externalMergeRef.current = null; };
   }, [externalMergeRef]);
   const [serverMode, setServerMode] = useState<'open' | 'save' | null>(null);
+  const [currentProject, setCurrentProject] = useState<string | null>(null);
+  const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const [initialPrefabs, setInitialPrefabs] = useState<string | undefined>(undefined);
+  const [allProjectsPrefabs, setAllProjectsPrefabs] = useState<ProjectPrefabGroup[]>([]);
+  const currentProjectRef = useRef<string | null>(null);
+
+  const refreshAllPrefabs = useCallback(async () => {
+    try {
+      const raw = await listAllScene3dPrefabs();
+      setAllProjectsPrefabs(raw as ProjectPrefabGroup[]);
+    } catch { /* ok */ }
+  }, []);
+
+  useEffect(() => { refreshAllPrefabs(); }, [refreshAllPrefabs]);
   const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
   const [debugLog, setDebugLog] = useState(false);
   const [audioPickerOpen, setAudioPickerOpen] = useState(false);
   const [audioPickerPath, setAudioPickerPath] = useState(userProjectsDir());
   const [audioPickerEntries, setAudioPickerEntries] = useState<{ name: string; isDir: boolean }[]>([]);
   const audioPickerResolveRef = useRef<((path: string | null) => void) | null>(null);
+
+  // Geometry nodes editor dialog
+  const [geoNodesState, setGeoNodesState] = useState<{ nodeId: string; graph: GeoNodeGraph } | null>(null);
+  const propertyChangeRef = useRef<((nodeId: string, property: string, value: unknown) => void) | null>(null);
+  const getNodeGeometryRef = useRef<((nodeId: string) => unknown) | null>(null);
+  const [editMeshState, setEditMeshState] = useState<{ nodeId: string; mesh: EditableMesh } | null>(null);
+
+  const handleEditGeometryNodes = useCallback((nodeId: string, currentGraph: unknown) => {
+    setGeoNodesState({ nodeId, graph: currentGraph as GeoNodeGraph });
+  }, []);
+
+  const handleGeoNodesChange = useCallback((newGraph: GeoNodeGraph) => {
+    if (!geoNodesState) return;
+    setGeoNodesState((prev) => prev ? { ...prev, graph: newGraph } : null);
+    propertyChangeRef.current?.(geoNodesState.nodeId, 'geometry.nodesGraph', newGraph);
+  }, [geoNodesState]);
+
+  const handleEditMesh = useCallback((nodeId: string) => {
+    const desc = getNodeGeometryRef.current?.(nodeId) as Parameters<typeof evaluateDescriptor>[0] | null;
+    if (!desc) return;
+    try {
+      const geo = evaluateDescriptor(desc);
+      const mesh = geometryToEditable(geo);
+      setEditMeshState({ nodeId, mesh });
+    } catch (e) {
+      console.error('[Scene3DView] handleEditMesh failed', e);
+    }
+  }, []);
+
+  const handleEditMeshApply = useCallback((bufferData: { positions: number[]; normals: number[] }) => {
+    if (!editMeshState) return;
+    // Change type first, then set bufferData — SceneGraph.onChange is debounced so both coalesce into one bump.
+    propertyChangeRef.current?.(editMeshState.nodeId, 'geometry.type', 'custom');
+    propertyChangeRef.current?.(editMeshState.nodeId, 'geometry.bufferData', bufferData);
+    setEditMeshState(null);
+  }, [editMeshState]);
 
   // Auto-load scene written by AI agent (or inserted from Templates panel)
   useEffect(() => {
@@ -97,18 +155,46 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     }
   }, [placementTemplate, mergeSceneRef]);
 
-  const handleReadScene = useCallback(async (dir: string, name: string) => {
-    const json = await readFileAt(dir, name, SCENE_EXT);
+  const handleOpenProject = useCallback(async (json: string, project: string, file: string) => {
     sceneJsonRef.current = json;
+    let prefabsJson: string | undefined;
+    try {
+      const prefabs = await listScene3dPrefabs(project) as PrefabEntry[];
+      prefabsJson = JSON.stringify(prefabs);
+    } catch { /* no prefabs dir yet — that's fine */ }
+    currentProjectRef.current = project;
     setSceneData(json);
+    setInitialPrefabs(prefabsJson);
     setEditorKey(`server-open-${Date.now()}`);
-  }, []);
+    setCurrentProject(project);
+    setCurrentFile(file);
+    setToast({ msg: `Opened: ${project} / ${file}`, severity: 'success' });
+    refreshAllPrefabs();
+  }, [refreshAllPrefabs]);
 
-  const handleWriteScene = useCallback(async (dir: string, name: string) => {
+  const handleSaveProject = useCallback(async (project: string, file: string) => {
     const json = sceneJsonRef.current;
     if (!json) throw new Error('No scene data to save.');
-    await writeFileAt(dir, name, SCENE_EXT, json);
+    await writeScene3dFile(project, file, json);
+    currentProjectRef.current = project;
+    setCurrentProject(project);
+    setCurrentFile(file);
+    setToast({ msg: `Saved: ${project} / ${file}`, severity: 'success' });
   }, []);
+
+  const handleSavePrefab = useCallback(async (id: string, _name: string, data: string) => {
+    const project = currentProjectRef.current;
+    if (!project) return;
+    await writeScene3dPrefab(project, id, data);
+    refreshAllPrefabs();
+  }, [refreshAllPrefabs]);
+
+  const handleDeletePrefab = useCallback(async (id: string) => {
+    const project = currentProjectRef.current;
+    if (!project) return;
+    await deleteScene3dPrefab(project, id);
+    refreshAllPrefabs();
+  }, [refreshAllPrefabs]);
 
   const loadAudioPickerDir = useCallback((path: string) => {
     vfsListDir(path).then(entries => {
@@ -179,6 +265,12 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
         <RichEditor
           key={editorKey}
           initialSceneData={sceneData}
+          initialPrefabs={initialPrefabs}
+          onSavePrefab={handleSavePrefab}
+          onDeletePrefab={handleDeletePrefab}
+          currentProject={currentProject ?? undefined}
+          currentFile={currentFile ?? undefined}
+          otherProjectsPrefabs={allProjectsPrefabs.filter(g => g.project !== currentProject)}
           mergeSceneRef={mergeSceneRef}
           onSceneChange={handleSceneChange}
           onOpenFromServer={() => setServerMode('open')}
@@ -190,6 +282,10 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           debugLog={debugLog}
           onBrowseAudioFile={handleBrowseAudioFile}
           resolveAudioSrc={resolveAudioSrc}
+          onEditGeometryNodes={handleEditGeometryNodes}
+          onEditMesh={handleEditMesh}
+          propertyChangeRef={propertyChangeRef}
+          getNodeGeometryRef={getNodeGeometryRef}
         />
         {/* Debug toggle — visible on mobile for diagnosing gizmo/touch issues */}
         <Tooltip title={debugLog ? 'Hide debug log' : 'Show debug log'}>
@@ -209,31 +305,13 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
         </Tooltip>
       </Box>
 
-      {serverMode === 'open' && (
-        <ServerFileBrowser
-          open
-          mode="open"
-          title="Open Scene 3D from Server"
-          extension={SCENE_EXT}
-          storageKey="cad.projectBrowser.dir"
-          onClose={() => setServerMode(null)}
-          onOpen={handleReadScene}
-          onDone={name => { setServerMode(null); setToast({ msg: `Opened scene: ${name}`, severity: 'success' }); }}
-        />
-      )}
-
-      {serverMode === 'save' && (
-        <ServerFileBrowser
-          open
-          mode="save"
-          title="Save Scene 3D to Server"
-          extension={SCENE_EXT}
-          storageKey="cad.projectBrowser.dir"
-          onClose={() => setServerMode(null)}
-          onSave={handleWriteScene}
-          onDone={name => { setServerMode(null); setToast({ msg: `Saved scene: ${name}`, severity: 'success' }); }}
-        />
-      )}
+      <Scene3DProjectBrowser
+        open={serverMode === 'open' || serverMode === 'save'}
+        mode={serverMode ?? 'open'}
+        onClose={() => setServerMode(null)}
+        onOpen={handleOpenProject}
+        onSave={handleSaveProject}
+      />
 
       <Dialog open={audioPickerOpen} onClose={handleAudioPickerClose} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontSize: '0.9rem', py: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -276,6 +354,43 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ── Geometry Nodes Editor dialog ─────────────────────── */}
+      <Dialog
+        open={Boolean(geoNodesState)}
+        onClose={() => setGeoNodesState(null)}
+        maxWidth={false}
+        fullWidth
+        PaperProps={{ sx: { width: '90vw', height: '80vh', maxWidth: '1200px', background: '#141414', display: 'flex', flexDirection: 'column' } }}
+      >
+        <DialogTitle sx={{ py: 0.75, px: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid rgba(255,255,255,0.08)', background: '#1a1a1a' }}>
+          <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, flexGrow: 1 }}>Geometry Nodes</Typography>
+          <IconButton size="small" onClick={() => setGeoNodesState(null)} sx={{ color: 'text.disabled' }}>
+            <CloseIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {geoNodesState && (
+            <GeometryNodesEditor
+              graph={geoNodesState.graph}
+              onChange={handleGeoNodesChange}
+            />
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 1.5, py: 0.75, borderTop: '1px solid rgba(255,255,255,0.08)', background: '#1a1a1a' }}>
+          <Button size="small" onClick={() => setGeoNodesState(null)} sx={{ fontSize: '0.72rem', textTransform: 'none' }}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Mesh Edit Mode dialog ─────────────────────────── */}
+      <MeshEditModeDialog
+        open={Boolean(editMeshState)}
+        initialMesh={editMeshState?.mesh ?? null}
+        onApply={handleEditMeshApply}
+        onClose={() => setEditMeshState(null)}
+      />
 
       <Snackbar
         open={Boolean(toast)}

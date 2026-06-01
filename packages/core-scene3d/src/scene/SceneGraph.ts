@@ -9,15 +9,21 @@ import type { CameraNodeData } from '../nodes/CameraNode';
 import { GroupNode } from '../nodes/GroupNode';
 import { AudioNode } from '../nodes/AudioNode';
 import type { AudioNodeData } from '../nodes/AudioNode';
+import type { AnimationClip } from '../animation/types';
+import type { PrefabEntry } from '../prefabs/types';
 
 export interface SceneGraphData {
   version: string;
   root: SceneNodeData;
+  animation?: AnimationClip | null;
+  prefabs?: PrefabEntry[];
 }
 
 export class SceneGraph {
   root: SceneNode;
   onChange: (() => void) | null = null;
+  animation: AnimationClip | null = null;
+  prefabs: PrefabEntry[] = [];
 
   private _notifyScheduled = false;
 
@@ -66,6 +72,8 @@ export class SceneGraph {
     return {
       version: '1.0.0',
       root: this.root.toData(),
+      animation: this.animation ?? undefined,
+      prefabs: this.prefabs.length > 0 ? this.prefabs : undefined,
     };
   }
 
@@ -172,6 +180,8 @@ export class SceneGraph {
 
     graph.root = buildNode(data.root);
     graph.root.traverse((n) => { n._onChange = graph._handleChange; });
+    if (data.animation) graph.animation = data.animation;
+    if (data.prefabs) graph.prefabs = data.prefabs;
     return graph;
   }
 }

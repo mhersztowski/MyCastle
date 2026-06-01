@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import type { SceneTreePanelProps, SceneTreeNodeData } from '@mhersztowski/ui-core';
 import Box from '@mui/material/Box';
 import List from '@mui/material/List';
@@ -15,6 +15,7 @@ import Divider from '@mui/material/Divider';
 import TextField from '@mui/material/TextField';
 import Paper from '@mui/material/Paper';
 import Popper from '@mui/material/Popper';
+import Tooltip from '@mui/material/Tooltip';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -27,6 +28,9 @@ import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutli
 import FileCopyIcon from '@mui/icons-material/FileCopy';
 import FileUploadIcon from '@mui/icons-material/FileUpload';
 import AddIcon from '@mui/icons-material/Add';
+import CodeIcon from '@mui/icons-material/Code';
+import CategoryIcon from '@mui/icons-material/Category';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import {
   CubeIcon,
@@ -60,13 +64,15 @@ function getNodeIcon(type: string, name?: string) {
   return <FolderIcon size={14} />;
 }
 
-const addMenuItems = [
+const addMenuItems: Array<{ type: string; label?: string; icon?: React.ReactNode }> = [
   { type: 'box', label: 'Box', icon: <CubeIcon size={14} /> },
   { type: 'sphere', label: 'Sphere', icon: <SphereIcon size={14} /> },
   { type: 'cylinder', label: 'Cylinder', icon: <CylinderIcon size={14} /> },
   { type: 'cone', label: 'Cone', icon: <ConeIcon size={14} /> },
   { type: 'plane', label: 'Plane', icon: <PlaneIcon size={14} /> },
   { type: 'torus', label: 'Torus', icon: <TorusIcon size={14} /> },
+  { type: 'procedural', label: 'Procedural Mesh', icon: <CodeIcon sx={{ fontSize: 14 }} /> },
+  { type: 'nodes', label: 'Geometry Nodes', icon: <AccountTreeIcon sx={{ fontSize: 14 }} /> },
   { type: 'divider' },
   { type: 'ambient-light', label: 'Ambient Light', icon: <AmbientLightIcon size={14} /> },
   { type: 'point-light', label: 'Point Light', icon: <PointLightIcon size={14} /> },
@@ -81,7 +87,7 @@ const addMenuItems = [
   { type: 'audio', label: 'Audio Source', icon: <VolumeUpIcon sx={{ fontSize: 14 }} /> },
   { type: 'divider4' },
   { type: 'import-mesh', label: 'Import Mesh...', icon: <FileUploadIcon sx={{ fontSize: 14 }} /> },
-] as const;
+];
 
 const menuItemSx = {
   fontSize: '0.75rem',
@@ -236,10 +242,31 @@ function TreeNode({
             }}
           />
         ) : (
-          <ListItemText
-            primary={node.name}
-            primaryTypographyProps={{ fontSize: '0.75rem', noWrap: true }}
-          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, flex: 1 }}>
+            <Typography sx={{ fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+              {node.name}
+            </Typography>
+            {Boolean(node.metadata?.prefabId) && (
+              <Tooltip title={`Prefab: ${String(node.metadata?.prefabName ?? node.metadata?.prefabId ?? '')}`} placement="right">
+                <Box sx={{
+                  flexShrink: 0,
+                  fontSize: '0.55rem',
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  px: 0.5,
+                  py: 0.2,
+                  borderRadius: 0.5,
+                  bgcolor: 'rgba(255,165,0,0.18)',
+                  color: '#ffaa44',
+                  border: '1px solid rgba(255,165,0,0.35)',
+                  letterSpacing: '0.02em',
+                  userSelect: 'none',
+                }}>
+                  P
+                </Box>
+              </Tooltip>
+            )}
+          </Box>
         )}
 
         <IconButton
@@ -307,6 +334,7 @@ export function SceneTreePanel({
   onNodeCopy,
   onNodePaste,
   onImportMesh,
+  onCreatePrefab,
   canPaste,
   className,
 }: SceneTreePanelProps) {
@@ -443,8 +471,10 @@ export function SceneTreePanel({
     } else if (action === 'rename' && nodeId) {
       const nd = findNodeData(nodes, nodeId);
       if (nd) handleRenameStart(nodeId, nd.name);
+    } else if (action === 'create-prefab' && nodeId) {
+      onCreatePrefab?.(nodeId);
     }
-  }, [contextMenu, closeMenu, onNodeAdd, onNodeDelete, onNodeDuplicate, onNodeCut, onNodeCopy, onNodePaste, onImportMesh, nodes, handleRenameStart]);
+  }, [contextMenu, closeMenu, onNodeAdd, onNodeDelete, onNodeDuplicate, onNodeCut, onNodeCopy, onNodePaste, onImportMesh, onCreatePrefab, nodes, handleRenameStart]);
 
   // ─── Drag & drop handlers ─────────────────────────────────
 
@@ -601,6 +631,11 @@ export function SceneTreePanel({
           <ListItemIcon><ContentPasteIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Paste</ListItemText>
           <Typography sx={shortcutSx}>Ctrl+V</Typography>
+        </MenuItem>
+        <Divider onMouseEnter={handleOtherItemEnter} sx={{ my: 0.25 }} />
+        <MenuItem onMouseEnter={handleOtherItemEnter} onClick={() => handleMenuAction('create-prefab')} disabled={!hasNodeSelected} sx={menuItemSx}>
+          <ListItemIcon><CategoryIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Save as Prefab</ListItemText>
         </MenuItem>
         <Divider onMouseEnter={handleOtherItemEnter} sx={{ my: 0.25 }} />
         <MenuItem onMouseEnter={handleOtherItemEnter} onClick={() => handleMenuAction('delete')} disabled={!hasNodeSelected} sx={menuItemSx}>

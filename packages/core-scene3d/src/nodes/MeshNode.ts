@@ -1,7 +1,13 @@
 import { SceneNode } from '../scene/SceneNode';
 import type { SceneNodeData } from '../scene/SceneNode';
+import type { GeoNodeGraph } from '../geometry-nodes/types';
+import { DEFAULT_GEO_NODE_GRAPH } from '../geometry-nodes/types';
 
-export type GeometryType = 'box' | 'sphere' | 'cylinder' | 'plane' | 'cone' | 'torus' | 'custom';
+export type GeometryType = 'box' | 'sphere' | 'cylinder' | 'plane' | 'cone' | 'torus' | 'custom' | 'procedural' | 'nodes';
+
+export const DEFAULT_PROCEDURAL_CODE = `// Return a THREE.BufferGeometry
+const geo = new THREE.SphereGeometry(1, 32, 16);
+return geo;`;
 
 export interface BufferGeometryData {
   positions: number[];
@@ -10,22 +16,115 @@ export interface BufferGeometryData {
 }
 
 export interface GeometryDescriptor {
+  /** Stable UUID that identifies this geometry data-block. Shared between objects that use the same mesh. */
+  id?: string;
   type: GeometryType;
   params?: Record<string, number>;
   bufferData?: BufferGeometryData;
   fileName?: string;
+  code?: string;
+  nodesGraph?: GeoNodeGraph;
 }
 
+// ─── Material ─────────────────────────────────────────────────────
+
+export type MaterialType =
+  | 'MeshBasicMaterial'
+  | 'MeshDepthMaterial'
+  | 'MeshNormalMaterial'
+  | 'MeshLambertMaterial'
+  | 'MeshMatcapMaterial'
+  | 'MeshPhongMaterial'
+  | 'MeshToonMaterial'
+  | 'MeshStandardMaterial'
+  | 'MeshPhysicalMaterial'
+  | 'ShadowMaterial';
+
+export type MaterialSide = 'front' | 'back' | 'double';
+export type MaterialBlending = 'normal' | 'additive' | 'subtractive' | 'multiply';
+
 export interface MaterialDescriptor {
+  /** UUID of the material data-block. */
+  id?: string;
+  type: MaterialType;
+
+  // ── Universal ────────────────────────────────────────────────
   color: string;
   opacity: number;
+  transparent: boolean;
   wireframe: boolean;
+  side: MaterialSide;
+  blending: MaterialBlending;
+  depthTest: boolean;
+  depthWrite: boolean;
+  alphaTest: number;
+  vertexColors: boolean;
+  forceSinglePass: boolean;
+
+  // ── Standard / Physical / Lambert / Phong / Toon ──────────
+  emissive?: string;
+  emissiveIntensity?: number;
+
+  // ── Basic / Lambert / Phong ───────────────────────────────
+  reflectivity?: number;
+
+  // ── Normal / Lambert / Phong / Matcap / Standard / Physical
+  flatShading?: boolean;
+
+  // ── Phong ─────────────────────────────────────────────────
+  specular?: string;
+  shininess?: number;
+
+  // ── Standard / Physical ──────────────────────────────────
+  roughness?: number;
+  metalness?: number;
+
+  // ── Physical ─────────────────────────────────────────────
+  ior?: number;
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  dispersion?: number;
+  iridescence?: number;
+  iridescenceIOR?: number;
+  thinFilmThicknessMin?: number;
+  thinFilmThicknessMax?: number;
+  sheen?: number;
+  sheenRoughness?: number;
+  sheenColor?: string;
+  transmission?: number;
+  attenuationDistance?: number;
+  attenuationColor?: string;
+  thickness?: number;
+
+  // ── Depth ─────────────────────────────────────────────────
+  depthPacking?: 'basic' | 'rgba';
 }
+
+export const DEFAULT_MATERIAL: MaterialDescriptor = {
+  type: 'MeshStandardMaterial',
+  color: '#4fc3f7',
+  opacity: 1,
+  transparent: false,
+  wireframe: false,
+  side: 'front',
+  blending: 'normal',
+  depthTest: true,
+  depthWrite: true,
+  alphaTest: 0,
+  vertexColors: false,
+  forceSinglePass: false,
+  emissive: '#000000',
+  emissiveIntensity: 1,
+  roughness: 1,
+  metalness: 0,
+  flatShading: false,
+};
 
 export interface MeshNodeData extends SceneNodeData {
   type: 'mesh';
   geometry: GeometryDescriptor;
-  material: MaterialDescriptor;
+  /** Partial is accepted for backward-compatibility with old serialized scenes. */
+  material: Partial<MaterialDescriptor>;
 }
 
 export class MeshNode extends SceneNode {
@@ -34,16 +133,20 @@ export class MeshNode extends SceneNode {
 
   constructor(data?: Partial<MeshNodeData>) {
     super({ ...data, type: 'mesh' });
-    this.geometry = data?.geometry ?? { type: 'box' };
-    this.material = data?.material ?? {
-      color: '#4fc3f7',
-      opacity: 1,
-      wireframe: false,
-    };
+
+    const geo = data?.geometry ?? { type: 'box' };
+    this.geometry = geo.id ? geo : { ...geo, id: crypto.randomUUID() };
+
+    const mat = data?.material;
+    this.material = mat
+      ? { ...DEFAULT_MATERIAL, ...mat, type: mat.type ?? 'MeshStandardMaterial', id: mat.id ?? crypto.randomUUID() }
+      : { ...DEFAULT_MATERIAL, id: crypto.randomUUID() };
   }
 
+  // ── Live-update helpers (patch THREE object directly for smooth dragging) ──
+
   setMaterialColor(color: string): void {
-    this.material.color = color;
+    this.material = { ...this.material, color };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mat = (this._threeObject as any)?.material;
     if (mat?.color?.set) mat.color.set(color);
@@ -51,18 +154,16 @@ export class MeshNode extends SceneNode {
   }
 
   setMaterialOpacity(opacity: number): void {
-    this.material.opacity = opacity;
+    const transparent = opacity < 1 || this.material.transparent;
+    this.material = { ...this.material, opacity, transparent };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mat = (this._threeObject as any)?.material;
-    if (mat) {
-      mat.opacity = opacity;
-      mat.transparent = opacity < 1;
-    }
+    if (mat) { mat.opacity = opacity; mat.transparent = transparent; }
     this.notifyChange();
   }
 
   setMaterialWireframe(wireframe: boolean): void {
-    this.material.wireframe = wireframe;
+    this.material = { ...this.material, wireframe };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mat = (this._threeObject as any)?.material;
     if (mat) mat.wireframe = wireframe;
@@ -70,7 +171,7 @@ export class MeshNode extends SceneNode {
   }
 
   setGeometry(geometry: GeometryDescriptor): void {
-    this.geometry = geometry;
+    this.geometry = geometry.id ? geometry : { ...geometry, id: crypto.randomUUID() };
     this.notifyChange();
   }
 
@@ -81,7 +182,35 @@ export class MeshNode extends SceneNode {
       this.notifyChange();
       return true;
     }
+
     switch (property) {
+      case 'geometry.id':
+        this.geometry = { ...this.geometry, id: value as string };
+        this.notifyChange();
+        return true;
+      case 'material.id':
+        this.material = { ...this.material, id: value as string };
+        this.notifyChange();
+        return true;
+      case 'geometry.type':
+        this.geometry = {
+          id: crypto.randomUUID(),
+          type: value as GeometryType,
+          ...(value === 'procedural' ? { code: this.geometry.code ?? DEFAULT_PROCEDURAL_CODE } : {}),
+          ...(value === 'nodes' ? { nodesGraph: this.geometry.nodesGraph ?? DEFAULT_GEO_NODE_GRAPH } : {}),
+        };
+        this.notifyChange();
+        return true;
+      case 'geometry.code':
+        this.geometry = { ...this.geometry, code: value as string };
+        this.notifyChange();
+        return true;
+      case 'geometry.nodesGraph':
+        this.geometry = { ...this.geometry, nodesGraph: value as GeoNodeGraph };
+        this.notifyChange();
+        return true;
+
+      // ── Material: live-update for smooth slider dragging ──────
       case 'material.color':
         this.setMaterialColor(value as string);
         return true;
@@ -91,7 +220,25 @@ export class MeshNode extends SceneNode {
       case 'material.wireframe':
         this.setMaterialWireframe(value as boolean);
         return true;
+
       default:
+        // Generic material property — just update the descriptor and let R3F re-render
+        if (property.startsWith('material.')) {
+          const key = property.slice('material.'.length);
+          // Live-update numeric props on the THREE material where possible
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const mat = (this._threeObject as any)?.material;
+          if (mat) {
+            if (key === 'roughness' && mat.roughness !== undefined) mat.roughness = value as number;
+            else if (key === 'metalness' && mat.metalness !== undefined) mat.metalness = value as number;
+            else if (key === 'emissive' && mat.emissive?.set) mat.emissive.set(value as string);
+            else if (key === 'emissiveIntensity' && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = value as number;
+            else if (key === 'shininess' && mat.shininess !== undefined) mat.shininess = value as number;
+          }
+          this.material = { ...this.material, [key]: value };
+          this.notifyChange();
+          return true;
+        }
         return super.setProperty(property, value);
     }
   }

@@ -158,6 +158,17 @@ async function fetchPackageTypesFromCdn(pkg: string): Promise<{ libPath: string;
   return null;
 }
 
+/**
+ * Strip .js / .mjs / .cjs extensions from relative import specifiers in .d.ts content.
+ * @types/three v0.130+ uses `export * from "./src/Three.js"` — with TypeScript's
+ * default node moduleResolution this does NOT resolve to ./src/Three.d.ts (it looks
+ * for ./src/Three.js.d.ts which doesn't exist). Removing the extension lets TypeScript
+ * probe ./src/Three.ts → ./src/Three.d.ts via its standard extension-probing chain.
+ */
+function normalizeDtsImports(content: string): string {
+  return content.replace(/(['"])(\.\.?\/[^'"]+)\.[cm]?js\1/g, '$1$2$1');
+}
+
 // ── Plugin factory ────────────────────────────────────────────────────────────
 
 export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
@@ -422,41 +433,71 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
   function connectOnce<T extends unknown[]>(signal: Signal<T>, slot: (...args: T) => void, context?: MObject): void;
 }`;
 
-      const MINISLIB_STUB_URI = monaco.Uri.parse('file:///ts-ambient/minislib-stub.d.ts');
-      if (!monaco.editor.getModel(MINISLIB_STUB_URI)) {
-        monaco.editor.createModel(MINISLIB_STUB, 'typescript', MINISLIB_STUB_URI);
-      }
-      // Also mark as resolved so the CDN fallback is never attempted for this package.
       resolvedPkgs.add('@mhersztowski/minislib');
-      console.log('[TSPlugin] @mhersztowski/minislib stub registered');
 
-      // Register express stub as a Monaco model — no addExtraLib, no worker restart.
-      // TypeScript finds ambient module declarations in all models included in the compilation.
-      const STUB_URI = monaco.Uri.parse('file:///ts-ambient/express-stub.d.ts');
-      if (!monaco.editor.getModel(STUB_URI)) {
-        monaco.editor.createModel(EXPRESS_STUB, 'typescript', STUB_URI);
+      // ── DTS extra-lib store ────────────────────────────────────────────────
+      // .d.ts type definition files are accumulated here and pushed to Monaco's
+      // TypeScript service via a single debounced setExtraLibs() call.
+      //
+      // Why not createModel()?  For packages like @types/three with 900+ .d.ts
+      // files, calling createModel('typescript') 900 times triggers 900 incremental
+      // TypeScript worker syncs in rapid succession — the worker is perpetually
+      // catching up and never settles to answer completion queries.
+      //
+      // setExtraLibs() causes ONE worker restart.  All files are committed in that
+      // single batch; after restart the worker is idle and IntelliSense works.
+      const dtsLibStore = new Map<string, string>(); // filePath → content
+      let dtsFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+      function scheduleDtsFlush() {
+        if (dtsFlushTimer) clearTimeout(dtsFlushTimer);
+        dtsFlushTimer = setTimeout(() => {
+          dtsFlushTimer = null;
+          const libs = Array.from(dtsLibStore.entries())
+            .map(([filePath, content]) => ({ content, filePath }));
+          monaco.languages.typescript.typescriptDefaults.setExtraLibs(libs);
+          console.log(`[TSPlugin] setExtraLibs: ${libs.length} type definition files`);
+        }, 200);
       }
-      console.log('[TSPlugin] express stub registered as model (no worker restart)');
+
+      function registerDtsLib(rawPath: string, content: string) {
+        let filePath: string;
+        if (rawPath.startsWith('file://')) {
+          filePath = rawPath;
+        } else if (rawPath.startsWith('/')) {
+          filePath = 'file://' + rawPath;
+        } else {
+          filePath = 'file:///ts-ambient/' + rawPath.replace(/[^a-zA-Z0-9._-]/g, '_');
+        }
+        if (dtsLibStore.has(filePath)) return;
+        // Normalize .js→(no ext) in relative imports so TypeScript's node module
+        // resolution finds the corresponding .d.ts via its extension-probing chain.
+        dtsLibStore.set(filePath, normalizeDtsImports(content));
+        scheduleDtsFlush();
+      }
+
+      // Pre-register built-in stubs via the same batch mechanism.
+      dtsLibStore.set('file:///ts-ambient/express-stub.d.ts', EXPRESS_STUB);
+      dtsLibStore.set('file:///ts-ambient/minislib-stub.d.ts', MINISLIB_STUB);
+      scheduleDtsFlush();
+      console.log('[TSPlugin] express + minislib stubs queued');
 
       // Track which lib URIs have already been registered to avoid duplicate models.
+      // Used only for source files (.ts/.tsx/.js) — .d.ts files use dtsLibStore.
       const createdLibModels = new Set<string>();
 
       /**
-       * Register a type-definition file as a Monaco model visible to the TS service.
-       * createModel() does NOT restart the worker — it syncs incrementally.
-       * TypeScript module resolution calls fileExists/readFile on the Monaco host,
-       * which checks monaco.editor.getModel(), so models at file:///node_modules/...
-       * are found during bare-import resolution (e.g. require('express')).
+       * Register a TypeScript/JS SOURCE file as a Monaco model so the TS service
+       * can resolve relative imports between project files.
+       * Only called for non-.d.ts files; .d.ts files go through registerDtsLib().
        */
       function registerLib(libPath: string, content: string) {
-        // Normalise to a file:// URI so TypeScript module resolution can find it.
         let uriStr: string;
         if (libPath.startsWith('file://')) {
           uriStr = libPath;
         } else if (libPath.startsWith('/')) {
           uriStr = 'file://' + libPath;
         } else {
-          // Non-path key (e.g. 'ts:something.d.ts') → place in ambient virtual dir.
           uriStr = 'file:///ts-ambient/' + libPath.replace(/[^a-zA-Z0-9._-]/g, '_');
         }
         if (createdLibModels.has(uriStr)) return;
@@ -490,6 +531,34 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
       }
 
       /**
+       * Recursively walk a VFS package directory and register every .d.ts file as a
+       * Monaco model. Required for packages like @types/three where types span 900+
+       * files with relative imports — Monaco's TS worker needs each file registered
+       * individually so TypeScript's module resolution can follow the import graph.
+       */
+      async function registerAllDtsInDir(dir: string): Promise<void> {
+        let entries: Awaited<ReturnType<typeof provider.readDirectory>>;
+        try {
+          entries = await provider.readDirectory(dir);
+        } catch {
+          return;
+        }
+        await Promise.allSettled(
+          entries.map(async ({ name, type }) => {
+            const fullPath = `${dir}/${name}`;
+            if (type === 2 /* FileType.Directory */ && name !== 'node_modules') {
+              await registerAllDtsInDir(fullPath);
+            } else if (type === 1 /* FileType.File */ && name.endsWith('.d.ts')) {
+              const uri = vfsPathToUri(fullPath);
+              if (dtsLibStore.has(uri)) return;
+              const content = await readVfs(fullPath);
+              if (content) registerDtsLib(uri, content);
+            }
+          }),
+        );
+      }
+
+      /**
        * Load package types from VFS node_modules.
        * Registers at 'file:///node_modules/...' so TypeScript resolves bare imports.
        */
@@ -503,34 +572,59 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
 
           let typesFile: string | null = null;
           try {
-            const meta = JSON.parse(pkgJsonContent) as { types?: string; typings?: string };
-            typesFile = meta.types ?? meta.typings ?? 'index.d.ts';
-          } catch {
-            typesFile = 'index.d.ts';
-          }
-          if (!typesFile) continue;
+            const meta = JSON.parse(pkgJsonContent) as {
+              types?: string;
+              typings?: string;
+              exports?: Record<string, unknown>;
+            };
+            typesFile = meta.types ?? meta.typings ?? null;
 
-          const dtsVfsPath = `${pkgDir}/${typesFile.startsWith('./') ? typesFile.slice(2) : typesFile}`;
-          const content = await readVfs(dtsVfsPath);
-          if (content) {
-            // Register at the actual VFS path as a file:// URI so TypeScript's module
-            // resolution (which walks UP from the file's directory) finds it directly.
-            // e.g. file:///home/app/node/test/node_modules/@types/express/index.d.ts
-            const vfsUri = vfsPathToUri(dtsVfsPath); // file:///home/.../node_modules/...
-            registerLib(vfsUri, content);
-            // Also register without file:// prefix as some TS host normalizations differ
-            registerLib(dtsVfsPath, content);
-            return true;
+            // Support exports map for packages that declare types only via
+            // exports['.'].types (e.g. three v0.182 has no root types/typings field).
+            if (!typesFile && meta.exports) {
+              const mainExport = meta.exports['.'];
+              if (mainExport && typeof mainExport === 'object') {
+                const m = mainExport as Record<string, unknown>;
+                typesFile =
+                  (typeof m.types === 'string' ? m.types : null) ??
+                  (typeof m.typings === 'string' ? m.typings : null) ??
+                  (m.import && typeof (m.import as Record<string, string>).types === 'string'
+                    ? (m.import as Record<string, string>).types : null) ??
+                  (m.require && typeof (m.require as Record<string, string>).types === 'string'
+                    ? (m.require as Record<string, string>).types : null);
+              }
+            }
+          } catch { /* bad json */ }
+
+          // Verify there's a reachable .d.ts entry in this package directory.
+          const normalized = typesFile
+            ? (typesFile.startsWith('./') ? typesFile.slice(2) : typesFile)
+            : 'index.d.ts';
+          const entryPath = `${pkgDir}/${normalized}`;
+          const hasEntry =
+            (await readVfs(entryPath)) !== null ||
+            (normalized !== 'index.d.ts' && (await readVfs(`${pkgDir}/index.d.ts`)) !== null);
+          if (!hasEntry) continue;
+
+          // Register package.json as a Monaco model so TypeScript's module resolver
+          // can read the 'types' field when it encounters a bare import specifier.
+          const pkgJsonUri = vfsPathToUri(pkgJsonPath);
+          if (!createdLibModels.has(pkgJsonUri)) {
+            createdLibModels.add(pkgJsonUri);
+            const pkgJsonMonacoUri = monaco.Uri.parse(pkgJsonUri);
+            if (!monaco.editor.getModel(pkgJsonMonacoUri)) {
+              monaco.editor.createModel(pkgJsonContent, 'json', pkgJsonMonacoUri);
+            }
           }
 
-          const fallbackVfsPath = `${pkgDir}/index.d.ts`;
-          const fallbackContent = await readVfs(fallbackVfsPath);
-          if (fallbackContent) {
-            const vfsUri = vfsPathToUri(fallbackVfsPath);
-            registerLib(vfsUri, fallbackContent);
-            registerLib(fallbackVfsPath, fallbackContent);
-            return true;
-          }
+          // Register ALL .d.ts files in the package — not just the entry point.
+          // TypeScript resolves relative imports inside .d.ts files through Monaco
+          // models, so every file the type graph references must be registered.
+          // (e.g. @types/three has 900+ files; loading only index.d.ts leaves all
+          // relative re-exports unresolvable and kills IntelliSense.)
+          console.log(`[TSPlugin] VFS types: scanning all .d.ts in ${pkgDir}`);
+          await registerAllDtsInDir(pkgDir);
+          return true;
         }
         return false;
       }
@@ -608,11 +702,16 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
 
         processedFiles.add(vfsPath);
 
-        // Only register as extra lib if Monaco doesn't already have a model for this URI
+        // .d.ts files go through the batch setExtraLibs mechanism; source files
+        // become individual Monaco models so the TS worker can resolve relative imports.
         const modelUri = vfsPathToUri(vfsPath);
-        const monacoUri = monaco.Uri.parse(modelUri);
-        if (!monaco.editor.getModel(monacoUri)) {
-          registerLib(modelUri, content);
+        if (vfsPath.endsWith('.d.ts')) {
+          registerDtsLib(modelUri, content);
+        } else {
+          const monacoUri = monaco.Uri.parse(modelUri);
+          if (!monaco.editor.getModel(monacoUri)) {
+            registerLib(modelUri, content);
+          }
         }
 
         await resolveImports(vfsPath, content, nodeModulesDir, visited);
@@ -691,11 +790,12 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
         await resolveImports(vfsPath, code, nodeModulesDir);
         await loadAllPackageJsonDeps(fileDir, nodeModulesDir);
 
-        // All type-definition models are created synchronously via registerLib →
-        // createModel inside the resolve calls above. No setExtraLibs, no worker
-        // restart. The TS worker receives model content via incremental sync.
+        // .d.ts files are batched into dtsLibStore and flushed via a single debounced
+        // setExtraLibs() call (one worker restart, all 900+ files committed at once).
+        // Source files (.ts/.tsx) are registered as individual Monaco models so the TS
+        // worker can follow relative imports between project files without restarting.
 
-        console.log(`[TSPlugin] handleFile done: ${vfsPath} | pkgs: ${resolvedPkgs.size} | CDN hits: ${cdnHits} misses: ${cdnMisses} | models: ${createdLibModels.size}`);
+        console.log(`[TSPlugin] handleFile done: ${vfsPath} | pkgs: ${resolvedPkgs.size} | CDN hits: ${cdnHits} misses: ${cdnMisses} | dts: ${dtsLibStore.size} | models: ${createdLibModels.size}`);
 
         // ── Diagnostic probe (fire-and-forget, does not block completions) ────
         void (async () => {

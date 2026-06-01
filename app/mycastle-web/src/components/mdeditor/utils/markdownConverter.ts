@@ -157,6 +157,32 @@ function restoreUIFormsFromHtml(html: string, uiForms: { id: string; inline?: st
   return result;
 }
 
+// Helper to escape CAD view embeds (@[cad:mode:https://server/viewer/...]) from showdown.
+// Format: @[cad:{mode}:{fullViewerUrl}] — split only on first colon after mode.
+function escapeCadViewEmbedsForHtml(content: string): string {
+  const cadViews: { mode: string; url: string }[] = [];
+  const result = content.replace(/@\[cad:([^\]]+)\]/g, (_, params) => {
+    const firstColon = params.indexOf(':');
+    const mode = firstColon >= 0 ? params.slice(0, firstColon) : params;
+    const url  = firstColon >= 0 ? params.slice(firstColon + 1) : '';
+    cadViews.push({ mode: mode || 'scene3d', url });
+    return `%%CADVIEW_${cadViews.length - 1}%%`;
+  });
+  return JSON.stringify({ result, cadViews });
+}
+
+// Helper to restore CAD view embeds after showdown conversion
+function restoreCadViewEmbedsFromHtml(html: string, cadViews: { mode: string; url: string }[]): string {
+  let result = html;
+  cadViews.forEach((v, i) => {
+    const tag = `<div data-type="cad-view-embed" data-mode="${v.mode}" data-url="${v.url}"></div>`;
+    const ph = `%%CADVIEW_${i}%%`;
+    result = result.replace(`<p>${ph}</p>`, tag);
+    result = result.split(ph).join(tag);
+  });
+  return result;
+}
+
 // Helper to escape form-engine embeds (@[form:path]) to protect them from showdown
 function escapeFormEngineEmbedsForHtml(content: string): string {
   const formEmbeds: string[] = [];
@@ -971,8 +997,12 @@ export function markdownToHtml(markdown: string): string {
   const uiFormDataStr = escapeUIFormsForHtml(markdownWithoutFlows);
   const { result: markdownWithoutUIForms, uiForms } = JSON.parse(uiFormDataStr);
 
+  // Protect CAD view embeds from showdown processing
+  const cadViewDataStr = escapeCadViewEmbedsForHtml(markdownWithoutUIForms);
+  const { result: markdownWithoutCadViews, cadViews } = JSON.parse(cadViewDataStr);
+
   // Protect form-engine embeds from showdown processing
-  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutUIForms);
+  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutCadViews);
   const { result: markdownWithoutFormEngine, formEmbeds } = JSON.parse(formEngineDataStr);
 
   // Then, protect component embeds from showdown processing
@@ -996,6 +1026,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore UI form embeds
   html = restoreUIFormsFromHtml(html, uiForms);
+
+  // Restore CAD view embeds
+  html = restoreCadViewEmbedsFromHtml(html, cadViews);
 
   // Restore form-engine embeds
   html = restoreFormEngineEmbedsFromHtml(html, formEmbeds);
@@ -1096,6 +1129,18 @@ export function htmlToMarkdown(html: string): string {
     (_, path) => {
       formEngineEmbeds.push(path);
       return `##FORMEMBED${formEngineEmbeds.length - 1}##`;
+    },
+  );
+
+  // Pre-process: Replace CAD view embeds with placeholders before Turndown
+  const cadViews: { mode: string; url: string }[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="cad-view-embed"[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const modeM = match.match(/data-mode="([^"]*)"/);
+      const urlM  = match.match(/data-url="([^"]*)"/);
+      cadViews.push({ mode: modeM?.[1] || 'scene3d', url: urlM?.[1] || '' });
+      return `##CADVIEW${cadViews.length - 1}##`;
     },
   );
 
@@ -1211,6 +1256,13 @@ export function htmlToMarkdown(html: string): string {
   automateFlows.forEach((flow, index) => {
     const placeholder = `##AUTOMATEFLOW${index}##`;
     const replacement = flow.id ? `@[automate:${flow.id}${flow.autorun ? ':autorun' : ''}]` : '';
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore CAD view embeds as @[cad:mode:https://server/viewer/...]
+  cadViews.forEach((v, index) => {
+    const placeholder = `##CADVIEW${index}##`;
+    const replacement = `@[cad:${v.mode}:${v.url}]`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 

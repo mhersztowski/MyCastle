@@ -333,6 +333,43 @@ function entityToSvgElement(entity: Entity, layer: Layer | undefined): string {
   }
 }
 
+/** Build an SVG string from the project (no download — used by the read-only viewer). */
+export function buildSVGString(project: Project): string {
+  const entities = project.entityRegistry.getAll().filter(e => {
+    if (!e.visible) return false;
+    const layer = project.layerSystem.get(e.layerId);
+    return !layer || layer.visible;
+  });
+
+  if (entities.length === 0) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" style="background:#1e1e1e"></svg>';
+  }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const e of entities) {
+    minX = Math.min(minX, e.boundingBox.minX); minY = Math.min(minY, e.boundingBox.minY);
+    maxX = Math.max(maxX, e.boundingBox.maxX); maxY = Math.max(maxY, e.boundingBox.maxY);
+  }
+
+  const padding = 20;
+  const w = maxX - minX + padding * 2;
+  const h = maxY - minY + padding * 2;
+
+  const lines: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w.toFixed(2)} ${h.toFixed(2)}" style="background:#1e1e1e;width:100%;height:100%">`,
+    `<g transform="translate(${(padding - minX).toFixed(2)},${(h - padding + minY).toFixed(2)}) scale(1,-1)">`,
+  ];
+
+  for (const entity of entities) {
+    const layer = project.layerSystem.get(entity.layerId);
+    const el = entityToSvgElement(entity, layer);
+    if (el) lines.push(el);
+  }
+
+  lines.push('</g>', '</svg>');
+  return lines.join('\n');
+}
+
 export function exportSVG(project: Project): void {
   const entities = project.entityRegistry.getAll().filter(e => {
     if (!e.visible) return false;

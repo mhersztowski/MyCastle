@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, IconButton, Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip } from '@mui/material';
+import { Box, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, InputAdornment, List, ListItemButton, ListItemText, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined';
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
@@ -9,6 +10,9 @@ import Looks3OutlinedIcon from '@mui/icons-material/Looks3Outlined';
 import LooksOneOutlinedIcon from '@mui/icons-material/LooksOneOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
 import StorageIcon from '@mui/icons-material/Storage';
+import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CheckIcon from '@mui/icons-material/Check';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import CodeIcon from '@mui/icons-material/Code';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
@@ -34,7 +38,7 @@ import { RepositoryPanel } from './components/RepositoryPanel';
 import { AudioPanel } from './components/AudioPanel';
 import { TemplatesPanel } from './components/TemplatesPanel';
 import { FileSystemPanel } from './components/FileSystemPanel';
-import { getCurrentUserId } from './vfs/cadProjectApi';
+import { getCurrentUserId, listDirectory, listScene3dFiles, listScene3dProjects, userProjectsDir, CAD_EXT, ELEC_EXT } from './vfs/cadProjectApi';
 import type { ElectronicsSchema } from './electronics/types';
 import { loadProjectFromText, mergeProjectFromText } from './io/CadExporter';
 import type { ActiveTemplate, CadProjectEntry, TemplateMode } from './components/RepositoryPanel';
@@ -62,6 +66,13 @@ export default function App() {
   const [editorFullscreen, setEditorFullscreen] = useState(false);
 
   const [aiSceneData, setAiSceneData] = useState<string | undefined>(undefined);
+  type EmbedMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics';
+  const [embedOpen, setEmbedOpen] = useState(false);
+  const [embedMode, setEmbedMode] = useState<EmbedMode>('scene3d');
+  const [embedProject, setEmbedProject] = useState('');  // VFS path
+  const [embedProjects, setEmbedProjects] = useState<{ name: string; path: string }[]>([]);
+  const [embedLoading, setEmbedLoading] = useState(false);
+  const [embedCopied, setEmbedCopied] = useState(false);
 
   const [savedSceneJson, setSavedSceneJson] = useState<string | null>(null);
 
@@ -87,6 +98,47 @@ export default function App() {
     setInjectedPoint(null);
     setInjectedAngle(null);
   }, []);
+
+  // Load project list when embed dialog opens or mode changes
+  useEffect(() => {
+    if (!embedOpen) return;
+    setEmbedLoading(true);
+    setEmbedProjects([]);
+    const userId = getCurrentUserId();
+    const dir = userProjectsDir(userId);
+
+    (async () => {
+      try {
+        if (embedMode === 'scene3d') {
+          const projects = await listScene3dProjects();
+          const entries: { name: string; path: string }[] = [];
+          await Promise.all(projects.map(async p => {
+            try {
+              const files = await listScene3dFiles(p.name);
+              for (const f of files) {
+                entries.push({
+                  name: `${p.name} / ${f.name}`,
+                  path: `users/${userId}/scene3d/${p.name}/${f.name}`,
+                });
+              }
+            } catch { /* skip */ }
+          }));
+          setEmbedProjects(entries);
+        } else {
+          const ext = embedMode === 'electronics' ? ELEC_EXT : CAD_EXT;
+          const listing = await listDirectory(dir, ext);
+          setEmbedProjects(listing.files.map(f => ({
+            name: f.name,
+            path: `users/${userId}/projects/${f.name}`,
+          })));
+        }
+      } catch {
+        setEmbedProjects([]);
+      } finally {
+        setEmbedLoading(false);
+      }
+    })();
+  }, [embedOpen, embedMode]);
 
   // Auto-select newly placed entity and switch to Properties tab
   useEffect(() => {
@@ -276,11 +328,24 @@ export default function App() {
             size="small"
             onClick={() => setEditorOpen(v => !v)}
             sx={{
-              mr: mode === 'cad' ? 0 : 1,
+              mr: 0,
               color: editorOpen ? 'primary.main' : 'text.secondary',
             }}
           >
             <CodeIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Embed in Notes">
+          <IconButton
+            size="small"
+            onClick={() => {
+              const m = (['cad','cad3d','scene3d','electronics'] as const).includes(mode as 'cad')
+                ? mode as EmbedMode : 'scene3d';
+              setEmbedMode(m); setEmbedProject(''); setEmbedCopied(false); setEmbedOpen(true);
+            }}
+            sx={{ mr: mode === 'cad' ? 0 : 1, color: 'text.secondary' }}
+          >
+            <BookmarkAddOutlinedIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
 
@@ -539,6 +604,83 @@ export default function App() {
           </>
         )}
       </Box>
+
+      {/* ── Embed in Notes dialog ─────────────────────────────────────────── */}
+      {(() => {
+        const snippet = embedProject
+          ? `@[cad:${embedMode}:${window.location.origin}/viewer/${embedMode}/${embedProject}]`
+          : '';
+        return (
+          <Dialog open={embedOpen} onClose={() => setEmbedOpen(false)} maxWidth="xs" fullWidth>
+            <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 0 }}>
+              <Typography fontWeight={600}>Embed in Notes</Typography>
+              <IconButton size="small" onClick={() => setEmbedOpen(false)}><CloseIcon fontSize="small" /></IconButton>
+            </DialogTitle>
+            <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
+              {/* Mode tabs */}
+              <Tabs
+                value={embedMode}
+                onChange={(_, v: EmbedMode) => { setEmbedMode(v); setEmbedProject(''); setEmbedCopied(false); }}
+                variant="fullWidth"
+                sx={{ mb: 0.5, '& .MuiTab-root': { minHeight: 32, fontSize: 11, px: 0.5 } }}
+              >
+                <Tab value="cad" label="CAD 2D" />
+                <Tab value="cad3d" label="CAD 3D" />
+                <Tab value="scene3d" label="Scene 3D" />
+                <Tab value="electronics" label="Electronics" />
+              </Tabs>
+
+              {/* Project list */}
+              {embedLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : (
+                <List dense disablePadding sx={{ maxHeight: 200, overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  {embedProjects.length === 0 ? (
+                    <ListItemButton disabled>
+                      <ListItemText primary="No projects found" secondary="Save a project to the server first" />
+                    </ListItemButton>
+                  ) : embedProjects.map(p => (
+                    <ListItemButton
+                      key={p.path}
+                      selected={embedProject === p.path}
+                      onClick={() => { setEmbedProject(p.path); setEmbedCopied(false); }}
+                    >
+                      <ListItemText primary={p.name} secondary={p.path} secondaryTypographyProps={{ sx: { fontSize: 9, opacity: 0.55 } }} />
+                    </ListItemButton>
+                  ))}
+                </List>
+              )}
+
+              {/* Snippet */}
+              <TextField
+                label="Embed snippet"
+                value={snippet}
+                size="small"
+                fullWidth
+                placeholder="Select a project above"
+                InputProps={{
+                  readOnly: true,
+                  endAdornment: snippet ? (
+                    <InputAdornment position="end">
+                      <Tooltip title={embedCopied ? 'Copied!' : 'Copy'}>
+                        <IconButton size="small" onClick={() => {
+                          navigator.clipboard.writeText(snippet);
+                          setEmbedCopied(true);
+                          setTimeout(() => setEmbedCopied(false), 2000);
+                        }}>
+                          {embedCopied ? <CheckIcon sx={{ fontSize: 16, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}
+                        </IconButton>
+                      </Tooltip>
+                    </InputAdornment>
+                  ) : undefined,
+                }}
+              />
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </Box>
   );
 }

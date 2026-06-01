@@ -4,3 +4,6 @@ export * from './serialization';
 export * from './rendering';
 export * from './io';
 export * from './components';
+export * from './geometry-nodes';
+export * from './animation';
+export * from './prefabs';

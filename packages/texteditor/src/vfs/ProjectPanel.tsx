@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle } from 'react';
+import React, { forwardRef, useImperativeHandle } from 'react';
 import type { VfsProjectContext } from './types';
 import type { OutputLine } from './project/types';
 
@@ -83,6 +83,21 @@ export const ProjectPanel = forwardRef<ProjectPanelHandle, ProjectPanelProps>(
     const statusBg     = lastStatus === 'success' ? '#1a2e1a' :
                          lastStatus === 'error'   ? '#2e1a1a' : '#1e1e1e';
 
+    // Extract the last localhost URL from output lines — shown as an "Open" button
+    // when a dev server (e.g. Vite) has started and printed its address.
+    // Strip ANSI escape codes first — Vite embeds color codes inside the URL
+    // (e.g. http://localhost:\x1b[1m5173\x1b[22m/) which breaks naive regex matching.
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+
+    const serverUrl = (() => {
+      for (let i = outputLines.length - 1; i >= 0; i--) {
+        const clean = stripAnsi(outputLines[i].text);
+        const m = clean.match(/https?:\/\/localhost:[0-9]+[^\s\]))]*/);
+        if (m) return m[0];
+      }
+      return null;
+    })();
+
     return (
       <>
         {/* ── Project info strip ── */}
@@ -97,6 +112,20 @@ export const ProjectPanel = forwardRef<ProjectPanelHandle, ProjectPanelProps>(
             <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.7px', color: '#666', flexGrow: 1 }}>
               Project
             </span>
+            {serverUrl && (
+              <button
+                onClick={() => window.open(serverUrl, '_blank', 'noopener,noreferrer')}
+                title={`Open ${serverUrl}`}
+                style={iconBtnStyle('#4fc3f7')}
+              >
+                {/* External link icon */}
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M7 3H3a1 1 0 00-1 1v9a1 1 0 001 1h9a1 1 0 001-1V9" />
+                  <path d="M10 2h4v4" />
+                  <line x1="14" y1="2" x2="7" y2="9" />
+                </svg>
+              </button>
+            )}
             {running && (
               <button onClick={onStop} title="Stop" style={iconBtnStyle('#f48771')}>
                 <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
@@ -144,7 +173,7 @@ export const ProjectPanel = forwardRef<ProjectPanelHandle, ProjectPanelProps>(
                   color: lineColors[line.type],
                   whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                 }}>
-                  {line.text}
+                  {renderWithLinks(line.text)}
                 </div>
               ))}
               <div ref={outputEndRef as React.RefObject<HTMLDivElement>} />
@@ -155,6 +184,38 @@ export const ProjectPanel = forwardRef<ProjectPanelHandle, ProjectPanelProps>(
     );
   },
 );
+
+/* ── URL detection in output lines ── */
+
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+
+function renderWithLinks(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+
+  while ((m = URL_RE.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[0];
+    parts.push(
+      <a
+        key={m.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: '#4fc3f7', textDecoration: 'underline', cursor: 'pointer' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {url}
+      </a>,
+    );
+    last = m.index + url.length;
+  }
+
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 0 ? parts : text;
+}
 
 /* ── Helpers ── */
 

@@ -27,5 +27,16 @@ export function CodeEditorPanel() {
     provider.mkdir?.('/').catch(() => {});
   }, [provider]);
 
-  return <TextEditorWorkspace provider={provider} height="100%" />;
+  return (
+    <TextEditorWorkspace
+      provider={provider}
+      height="100%"
+      projectDeps={{
+        // Same-origin: Vite proxies /api/* → cad-backend (port 1897 internal).
+        // Passing userName lets NodeJsProject build the correct /api/users/{id}/nodejs/run URL.
+        baseUrl: '',
+        userName: getCurrentUserId(),
+      }}
+    />
+  );
 }

@@ -251,3 +251,121 @@ export async function vfsWriteFileBin(path: string, data: Uint8Array): Promise<v
 export async function vfsDeletePath(path: string): Promise<void> {
   await vfsPost('/delete', path, { options: { recursive: true } });
 }
+
+// ── Scene3D project API ───────────────────────────────────────────────────────
+
+const SCENE3D_BASE = '/api/scene3d/projects';
+
+export interface Scene3DProjectMeta {
+  name: string;
+  fileCount: number;
+  mtime: number;
+}
+
+export interface Scene3DFileMeta {
+  name: string;  // without .json extension
+  mtime: number;
+  size: number;
+}
+
+function scene3dHeaders(): Record<string, string> {
+  return { 'Content-Type': 'application/json', 'X-Cad-User': _currentUserId };
+}
+
+function scene3dUrl(path: string): string {
+  const url = new URL(`${SCENE3D_BASE}${path}`, window.location.origin);
+  url.searchParams.set('user', _currentUserId);
+  return url.toString();
+}
+
+async function scene3dFetch(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, { headers: scene3dHeaders(), ...init });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}) as { error?: string });
+    throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res;
+}
+
+/** List all Scene3D projects (top-level directories). */
+export async function listScene3dProjects(): Promise<Scene3DProjectMeta[]> {
+  const res = await scene3dFetch(scene3dUrl(''));
+  const data = await res.json() as { projects?: Scene3DProjectMeta[] };
+  return data.projects ?? [];
+}
+
+/** List all .json scene files inside a project. */
+export async function listScene3dFiles(project: string): Promise<Scene3DFileMeta[]> {
+  const res = await scene3dFetch(scene3dUrl(`/${encodeURIComponent(project)}`));
+  const data = await res.json() as { files?: Scene3DFileMeta[] };
+  return data.files ?? [];
+}
+
+/** Read a scene file from a project. */
+export async function readScene3dFile(project: string, file: string): Promise<string> {
+  const res = await scene3dFetch(scene3dUrl(`/${encodeURIComponent(project)}/${encodeURIComponent(file)}`));
+  const data = await res.json() as { data?: string };
+  return base64ToText(data.data!);
+}
+
+/** Write (create or overwrite) a scene file in a project. */
+export async function writeScene3dFile(project: string, file: string, json: string): Promise<void> {
+  await scene3dFetch(
+    scene3dUrl(`/${encodeURIComponent(project)}/${encodeURIComponent(file)}`),
+    { method: 'POST', body: JSON.stringify({ data: textToBase64(json) }) },
+  );
+}
+
+/** Delete a single scene file from a project. */
+export async function deleteScene3dFile(project: string, file: string): Promise<void> {
+  await scene3dFetch(
+    scene3dUrl(`/${encodeURIComponent(project)}/${encodeURIComponent(file)}`),
+    { method: 'DELETE' },
+  );
+}
+
+/** Delete an entire project directory and all files inside. */
+export async function deleteScene3dProject(project: string): Promise<void> {
+  await scene3dFetch(scene3dUrl(`/${encodeURIComponent(project)}`), { method: 'DELETE' });
+}
+
+/** Rename a project directory. */
+export async function renameScene3dProject(oldName: string, newName: string): Promise<void> {
+  await scene3dFetch(
+    scene3dUrl(`/${encodeURIComponent(oldName)}/rename`),
+    { method: 'POST', body: JSON.stringify({ newName }) },
+  );
+}
+
+/** List all prefabs from all projects, grouped by project name. */
+export async function listAllScene3dPrefabs(): Promise<{ project: string; prefabs: unknown[] }[]> {
+  const url = new URL('/api/scene3d/prefabs', window.location.origin);
+  url.searchParams.set('user', _currentUserId);
+  const res = await fetch(url.toString(), { headers: scene3dHeaders() });
+  if (!res.ok) return [];
+  const data = await res.json() as { projects?: { project: string; prefabs: unknown[] }[] };
+  return data.projects ?? [];
+}
+
+/** List all prefab entries stored in a project's prefabs/ directory. */
+export async function listScene3dPrefabs(project: string): Promise<unknown[]> {
+  const res = await scene3dFetch(scene3dUrl(`/${encodeURIComponent(project)}/prefabs`));
+  const data = await res.json() as { prefabs?: unknown[] };
+  return data.prefabs ?? [];
+}
+
+/** Write (create or overwrite) a prefab JSON file inside a project. */
+export async function writeScene3dPrefab(project: string, id: string, data: string): Promise<void> {
+  await scene3dFetch(
+    scene3dUrl(`/${encodeURIComponent(project)}/prefabs/${encodeURIComponent(id)}`),
+    { method: 'POST', body: JSON.stringify({ data: textToBase64(data) }) },
+  );
+}
+
+/** Delete a prefab JSON file from a project. */
+export async function deleteScene3dPrefab(project: string, id: string): Promise<void> {
+  await scene3dFetch(
+    scene3dUrl(`/${encodeURIComponent(project)}/prefabs/${encodeURIComponent(id)}`),
+    { method: 'DELETE' },
+  );
+}

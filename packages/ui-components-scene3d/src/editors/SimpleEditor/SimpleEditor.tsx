@@ -71,7 +71,26 @@ export function SimpleEditor({ className, style }: SimpleEditorProps) {
     return {
       id: node.id, name: node.name, type: node.type, visible: node.visible,
       transform: { position: [...node.position], rotation: [...node.rotation], scale: [...node.scale] },
-      material: meshNode ? { color: meshNode.material.color, opacity: meshNode.material.opacity, wireframe: meshNode.material.wireframe } : undefined,
+      material: meshNode ? {
+        matId: meshNode.material.id,
+        matType: meshNode.material.type,
+        color: meshNode.material.color,
+        opacity: meshNode.material.opacity,
+        transparent: meshNode.material.transparent,
+        wireframe: meshNode.material.wireframe,
+        side: meshNode.material.side,
+        blending: meshNode.material.blending,
+        depthTest: meshNode.material.depthTest,
+        depthWrite: meshNode.material.depthWrite,
+        alphaTest: meshNode.material.alphaTest,
+        vertexColors: meshNode.material.vertexColors,
+        forceSinglePass: meshNode.material.forceSinglePass,
+        emissive: meshNode.material.emissive,
+        emissiveIntensity: meshNode.material.emissiveIntensity,
+        flatShading: meshNode.material.flatShading,
+        roughness: meshNode.material.roughness,
+        metalness: meshNode.material.metalness,
+      } : undefined,
       light: lightNode ? { lightType: lightNode.lightType, color: lightNode.color, intensity: lightNode.intensity } : undefined,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
