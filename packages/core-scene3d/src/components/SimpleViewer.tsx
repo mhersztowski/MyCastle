@@ -453,7 +453,7 @@ function SceneAudio({
     const positional = audioNode.positional ?? true;
     const sound: THREE.Audio<GainNode> | THREE.PositionalAudio = positional
       ? new THREE.PositionalAudio(listener)
-      : new THREE.Audio(listener);
+      : new THREE.Audio<GainNode>(listener);
     let mounted = true;
     const blobRef = { url: null as string | null };
 
