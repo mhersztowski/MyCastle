@@ -89,6 +89,9 @@ export class MqttClient {
         protocol: brokerUrl.startsWith('wss') ? 'wss' : 'ws',
         username: options?.username,
         password: options?.password,
+        // Cap reconnect rate; auth failures stop the loop explicitly below.
+        reconnectPeriod: 2000,
+        connectTimeout: 10000,
       });
 
       this.client.on('connect', () => {
@@ -108,6 +111,21 @@ export class MqttClient {
       });
 
       this.client.on('error', (err) => {
+        // CONNACK return codes 4 (bad credentials) and 5 (not authorized) mean
+        // the broker will never accept this token. Stop the retry loop, drop
+        // the client, and fire a session-expired event so the AuthContext can
+        // clear storage and bounce the user to the login screen — otherwise
+        // mqtt.js retries every 2 s forever and every page that gates on
+        // isDataLoaded spins indefinitely.
+        const code = (err as { code?: number }).code;
+        if (code === 4 || code === 5) {
+          try { this.client?.end(true); } catch { /* ignore */ }
+          this.client = null;
+          this.connectionPromise = null;
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('minis:session-expired'));
+          }
+        }
         reject(err);
       });
     });

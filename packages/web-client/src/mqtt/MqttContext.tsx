@@ -130,28 +130,24 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUserna
     mqttClient.setUserBasePath(userBasePath ?? '');
   }, [userBasePath]);
 
-  // Hook up the file-change listener once; cleaned up when the provider unmounts.
+  // Connect + file-change subscription share the same lifecycle: on mount we
+  // attach the listener and connect; whenever credentials change React's
+  // cleanup detaches the listener and disconnects, then the new effect runs
+  // afresh with the new creds. No pre-emptive `disconnect()` inside — that
+  // used to wipe the listener that another effect had just registered.
   useEffect(() => {
+    let cancelled = false;
+
     const handleFileChanged = (path: string, action: string) => {
       setLastFileChange({ path, action, timestamp: Date.now() });
     };
     mqttClient.onFileChanged(handleFileChanged);
-    return () => mqttClient.offFileChanged(handleFileChanged);
-  }, []);
 
-  // (Re)connect whenever credentials change — login/logout drops the anonymous
-  // session and brings a fresh one up with the new JWT. The cleanup disconnects
-  // so the next render starts from a clean slate.
-  useEffect(() => {
-    let cancelled = false;
     setIsConnecting(true);
     setError(null);
 
     (async () => {
       try {
-        // Make sure a stale session isn't reused under different credentials.
-        mqttClient.disconnect();
-        setIsConnected(false);
         const options = mqttUsername && mqttPassword
           ? { username: mqttUsername, password: mqttPassword }
           : undefined;
@@ -166,6 +162,7 @@ export const MqttProvider: React.FC<MqttProviderProps> = ({ children, mqttUserna
 
     return () => {
       cancelled = true;
+      mqttClient.offFileChanged(handleFileChanged);
       mqttClient.disconnect();
       setIsConnected(false);
     };

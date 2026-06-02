@@ -22,14 +22,34 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const STORAGE_KEY = 'minis_current_user';
 
+/** Decode a JWT (no signature check) and return its `exp` in seconds, or null. */
+function jwtExp(token: string): number | null {
+  try {
+    const payload = JSON.parse(
+      atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')),
+    );
+    return typeof payload.exp === 'number' ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
 function restoreSession(): AuthSession | null {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return null;
     const parsed = JSON.parse(stored);
     // Support new format { user, token } and legacy format (user object directly)
-    if (parsed.token && parsed.user) return parsed as AuthSession;
-    return null;
+    if (!parsed.token || !parsed.user) return null;
+    // Drop expired tokens at restore — otherwise the MQTT broker rejects every
+    // reconnect with "Not Authorized" and pages depending on isDataLoaded spin
+    // forever. Clear the bad session so the user gets a fresh login prompt.
+    const exp = jwtExp(parsed.token);
+    if (exp !== null && exp * 1000 < Date.now()) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    return parsed as AuthSession;
   } catch {
     return null;
   }
