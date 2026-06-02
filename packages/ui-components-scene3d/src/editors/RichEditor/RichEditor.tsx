@@ -298,8 +298,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
   const [animLoop, setAnimLoop] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [showAnimPanel, setShowAnimPanel] = useState(false);
-  const [showHierarchyPanel, setShowHierarchyPanel] = useState(true);
-  const [showInspectorPanel, setShowInspectorPanel] = useState(true);
+  const [showSidePanel, setShowSidePanel] = useState(true);
   const [animPanelHeight, setAnimPanelHeight] = useState(200);
   const [leftTab, setLeftTab] = useState<'scene' | 'prefabs'>('scene');
   const [prefabNameDialogOpen, setPrefabNameDialogOpen] = useState(false);
@@ -1213,9 +1212,8 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     { id: 'sep-3', label: '', type: 'separator' },
     { id: 'settings', label: '', icon: <SettingsIcon sx={{ fontSize: 16 }} />, onClick: settingsDialog.open, tooltip: 'Settings' },
     { id: 'sep-4', label: '', type: 'separator' },
-    { id: 'hierarchy', label: 'Hier',    onClick: () => setShowHierarchyPanel(p => !p), active: showHierarchyPanel, tooltip: 'Toggle Hierarchy panel' },
-    { id: 'inspector', label: 'Inspect', onClick: () => setShowInspectorPanel(p => !p), active: showInspectorPanel, tooltip: 'Toggle Inspector panel' },
-    { id: 'animation', label: 'Anim',    onClick: () => setShowAnimPanel(p => !p),     active: showAnimPanel,      tooltip: 'Toggle Animation panel' },
+    { id: 'side',      label: 'Panels', onClick: () => setShowSidePanel(p => !p), active: showSidePanel, tooltip: 'Toggle Hierarchy + Inspector' },
+    { id: 'animation', label: 'Anim',   onClick: () => setShowAnimPanel(p => !p), active: showAnimPanel, tooltip: 'Toggle Animation panel' },
   ];
 
   return (
@@ -1385,10 +1383,10 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 </Box>
               </Box>
             </Allotment.Pane>
-            {(showHierarchyPanel || showInspectorPanel) && (
+            {showSidePanel && (
             <Allotment.Pane preferredSize={280} minSize={180} maxSize={440}>
               <Allotment vertical>
-                {showHierarchyPanel && (
+                {showSidePanel && (
                 <Allotment.Pane preferredSize="45%" minSize={120}>
                   <SceneTreePanel
                     nodes={treeNodes}
@@ -1409,7 +1407,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   />
                 </Allotment.Pane>
                 )}
-                {showInspectorPanel && (
+                {showSidePanel && (
                 <Allotment.Pane minSize={120}>
                   <PropertiesPanel
                     node={selectedNodeData}
@@ -1434,7 +1432,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
         ) : (
           /* ── Desktop: tree | viewport | properties ── */
           <Allotment>
-            {showHierarchyPanel && (
+            {showSidePanel && (
             <Allotment.Pane preferredSize={220} minSize={150} maxSize={400}>
               <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                 {/* Tab bar */}
@@ -1524,7 +1522,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 </Box>
               </Box>
             </Allotment.Pane>
-            {showInspectorPanel && (
+            {showSidePanel && (
             <Allotment.Pane preferredSize={260} minSize={200} maxSize={400}>
               <PropertiesPanel
                 node={selectedNodeData}

@@ -393,7 +393,11 @@ export function AnimationPanel({
         borderTop: 1,
         borderColor: 'divider',
         userSelect: 'none',
-        touchAction: 'none',
+        // Native pan must reach the inner overflow:auto containers so the
+        // timeline can be scrolled horizontally / track list vertically on
+        // touch. Specific interactive elements (ruler, keyframe hit boxes)
+        // opt back into 'none' locally where pointer-drag is intentional.
+        touchAction: 'auto',
         flexShrink: 0,
       }}
     >
@@ -597,7 +601,9 @@ export function AnimationPanel({
                     borderColor: 'divider',
                     bgcolor: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
                     '&:hover': { bgcolor: 'action.hover' },
-                    touchAction: 'none',
+                    // Allow vertical scroll on touch; long-press is cancelled
+                    // automatically once the browser starts panning.
+                    touchAction: 'pan-y',
                   }}
                   onContextMenu={e => handleTrackContextMenu(e, track.id)}
                   onPointerDown={e => handleTrackRowPointerDown(e, track.id)}
@@ -780,7 +786,10 @@ export function AnimationPanel({
                     borderColor: 'divider',
                     bgcolor: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
                     cursor: 'crosshair',
-                    touchAction: 'none',
+                    // Allow native pan along the time axis (horizontal) and
+                    // between tracks (vertical) on touch. Keyframe hit boxes
+                    // below opt into 'none' so dragging a KF still works.
+                    touchAction: 'pan-x pan-y',
                     '&:hover': { bgcolor: 'rgba(255,255,255,0.03)' },
                   }}
                   onContextMenu={e => handleTrackContextMenu(e, track.id)}

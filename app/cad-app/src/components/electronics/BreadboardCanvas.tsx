@@ -1,6 +1,9 @@
 import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, IconButton, Tooltip, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import { Box, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Tooltip, ToggleButton, ToggleButtonGroup } from '@mui/material';
 import NearMeIcon from '@mui/icons-material/NearMe';
+import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
+import TuneIcon from '@mui/icons-material/Tune';
 import CableIcon from '@mui/icons-material/Cable';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
@@ -570,6 +573,34 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
   const placeRotationRef = useRef(placeRotation);
   placeRotationRef.current = placeRotation;
 
+  // ── Multi-touch / stylus support ─────────────────────────────────────────────
+  // Active pointers indexed by pointerId. Two pointers = pinch / two-finger pan.
+  // Single touch in select mode pans the canvas; in other modes a touch tap
+  // commits the mode action just like a mouse click.
+  const pointersRef = useRef<Map<number, { x: number; y: number; type: string }>>(new Map());
+  // Pinch state captured at the moment the second pointer goes down — used to
+  // compute zoom factor (newDist / initialDist) and pan from midpoint delta.
+  const pinchRef = useRef<{
+    initialDist: number;
+    initialZoom: number;
+    worldPivot: { x: number; y: number };  // world point under midpoint at start
+  } | null>(null);
+  // Long-press timer for touch / pen context menu (replaces right-click + Del).
+  const longPressRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Click suppression after a drag / pinch / long-press — the next synthetic
+  // click should NOT trigger a place / wire-point. Cleared by the click handler.
+  const suppressClickRef = useRef(false);
+  // Drag-start threshold differs by input type — stylus jitter triggered drags
+  // on near-stationary taps at the old 3 px.
+  const dragThreshold = (type: string) => (type === 'mouse' ? 3 : 7);
+  const LONG_PRESS_MS = 500;
+  // Floating context menu shown on long-press (touch / pen) — anchors at screen
+  // coords. Mouse users keep using Del + R keyboard shortcuts.
+  const [ctxMenu, setCtxMenu] = useState<
+    | { x: number; y: number; target: { type: 'component' | 'wire'; id: string } }
+    | null
+  >(null);
+
   // Resize observer
   useEffect(() => {
     const el = containerRef.current;
@@ -741,56 +772,185 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
 
   // ── Pointer events ───────────────────────────────────────────────────────────
 
-  const handleMouseMove = useCallback((e: React.PointerEvent) => {
+  // ── Long-press helpers (touch / pen context menu) ─────────────────────────
+  const cancelLongPress = useCallback(() => {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
+  }, []);
+
+  const startLongPress = useCallback((
+    target: { type: 'component' | 'wire'; id: string },
+    screenX: number, screenY: number,
+  ) => {
+    cancelLongPress();
+    longPressRef.current = setTimeout(() => {
+      longPressRef.current = null;
+      suppressClickRef.current = true;       // don't deselect / place on release
+      setCtxMenu({ x: screenX, y: screenY, target });
+    }, LONG_PRESS_MS);
+  }, [cancelLongPress]);
+
+  // ── Wire commit / cancel (also wired to floating Finish / Cancel buttons) ─
+  const commitWireAt = useCallback((endPoint: WirePoint | null) => {
+    const pts = wirePointsRef.current;
+    if (pts.length === 0) return;
+    const full = endPoint ? [...pts, endPoint] : pts;
+    // Trim trailing free segments back to the last connection (pin/wire).
+    let lastConn = -1;
+    for (let i = 0; i < full.length; i++) {
+      if (isPointOnAnyWire(full[i], wiresRef.current) ||
+          isPointOnAnyPin(full[i], componentsRef.current)) {
+        lastConn = i;
+      }
+    }
+    const finalPts = lastConn >= 1 ? full.slice(0, lastConn + 1) : full;
+    if (finalPts.length >= 2) {
+      setWires(ws => [...ws, {
+        id: crypto.randomUUID(),
+        points: finalPts,
+        color: wireColorRef.current,
+      }]);
+    }
+    setWirePoints([]);
+    setWireJunctions([]);
+  }, []);
+
+  const cancelWire = useCallback(() => {
+    setWirePoints([]);
+    setWireJunctions([]);
+  }, []);
+
+  // ── Pinch helper — entered when a second pointer goes down ────────────────
+  const maybeEnterPinch = useCallback(() => {
+    if (pointersRef.current.size !== 2) return false;
+    cancelLongPress();
+    dragRef.current = null;
+    const pts = Array.from(pointersRef.current.values());
+    const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const midX = (pts[0].x + pts[1].x) / 2;
+    const midY = (pts[0].y + pts[1].y) / 2;
+    const rect = svgRef.current!.getBoundingClientRect();
+    const localX = midX - rect.left, localY = midY - rect.top;
+    const p = panRef.current, z = zoomRef.current;
+    pinchRef.current = {
+      initialDist: dist,
+      initialZoom: z,
+      worldPivot: { x: (localX - p.x) / (z * GRID), y: (localY - p.y) / (z * GRID) },
+    };
+    suppressClickRef.current = true;
+    return true;
+  }, [cancelLongPress]);
+
+  // ── Pointer move ──────────────────────────────────────────────────────────
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    }
+
+    // Pinch: zoom + pan around the midpoint between the two fingers.
+    if (pinchRef.current && pointersRef.current.size === 2) {
+      const pr = pinchRef.current;
+      const pts = Array.from(pointersRef.current.values());
+      const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const rect = svgRef.current!.getBoundingClientRect();
+      const localX = midX - rect.left, localY = midY - rect.top;
+      const newZoom = Math.max(0.2, Math.min(4, pr.initialZoom * (dist / pr.initialDist)));
+      setZoom(newZoom);
+      // Keep the world-pivot point under the screen midpoint as zoom changes.
+      setPan({
+        x: localX - pr.worldPivot.x * newZoom * GRID,
+        y: localY - pr.worldPivot.y * newZoom * GRID,
+      });
+      return;
+    }
+
+    // Snap preview (hover for mouse / pen, follows finger for touch).
     const { gx, gy } = clientToGrid(e.clientX, e.clientY);
     const snap = snapToNearest(gx, gy, componentsRef.current, modeRef.current === 'wire');
     setCursorSnap(snap);
-    if (snap.compId && snap.pinKey) {
-      setHoveredPinKey({ compId: snap.compId, pinKey: snap.pinKey });
-    } else {
-      setHoveredPinKey(null);
-    }
+    setHoveredPinKey(snap.compId && snap.pinKey
+      ? { compId: snap.compId, pinKey: snap.pinKey }
+      : null);
 
     const dr = dragRef.current;
     if (!dr) return;
 
-    const dx = e.clientX - dr.startClientX;
-    const dy = e.clientY - dr.startClientY;
-    if (Math.hypot(dx, dy) > 3) dr.moved = true;
+    const dxRaw = e.clientX - dr.startClientX;
+    const dyRaw = e.clientY - dr.startClientY;
+    if (!dr.moved && Math.hypot(dxRaw, dyRaw) > dragThreshold(e.pointerType)) {
+      dr.moved = true;
+      cancelLongPress();           // any real movement kills the long-press timer
+    }
     if (!dr.moved) return;
 
     if (dr.type === 'pan') {
-      setPan({ x: (dr.origPanX ?? 0) + dx, y: (dr.origPanY ?? 0) + dy });
+      setPan({ x: (dr.origPanX ?? 0) + dxRaw, y: (dr.origPanY ?? 0) + dyRaw });
     } else if (dr.type === 'component' && dr.compId) {
       const z = zoomRef.current;
-      const newGx = Math.round((dr.origCompX ?? 0) + dx / (z * GRID));
-      const newGy = Math.round((dr.origCompY ?? 0) + dy / (z * GRID));
+      const newGx = Math.round((dr.origCompX ?? 0) + dxRaw / (z * GRID));
+      const newGy = Math.round((dr.origCompY ?? 0) + dyRaw / (z * GRID));
       setComponents(cs => cs.map(c =>
         c.id === dr.compId ? { ...c, x: newGx, y: newGy } : c
       ));
     }
-  }, [clientToGrid]);
+  }, [clientToGrid, cancelLongPress]);
 
-  const handleMouseDown = useCallback((e: React.PointerEvent) => {
-    // Middle or right mouse → pan
-    if (e.button === 1 || e.button === 2) {
+  // ── Pointer down on empty SVG ─────────────────────────────────────────────
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    svgRef.current?.setPointerCapture(e.pointerId);
+
+    // Two-finger gesture takes precedence over everything else.
+    if (maybeEnterPinch()) { e.preventDefault(); return; }
+
+    // Mouse middle / right → classic pan.
+    if (e.pointerType === 'mouse' && (e.button === 1 || e.button === 2)) {
       e.preventDefault();
       dragRef.current = {
         type: 'pan',
-        startClientX: e.clientX,
-        startClientY: e.clientY,
-        origPanX: panRef.current.x,
-        origPanY: panRef.current.y,
+        startClientX: e.clientX, startClientY: e.clientY,
+        origPanX: panRef.current.x, origPanY: panRef.current.y,
         moved: false,
       };
-      svgRef.current?.setPointerCapture(e.pointerId);
+      return;
     }
-  }, []);
 
-  const handleMouseUp = useCallback((e: React.PointerEvent) => {
+    // Touch on empty SVG in SELECT mode → pan candidate (single-finger pan).
+    // place / wire modes consume the tap for the mode action instead.
+    if (e.pointerType === 'touch' && modeRef.current === 'select') {
+      dragRef.current = {
+        type: 'pan',
+        startClientX: e.clientX, startClientY: e.clientY,
+        origPanX: panRef.current.x, origPanY: panRef.current.y,
+        moved: false,
+      };
+    }
+  }, [maybeEnterPinch]);
+
+  // ── Pointer up / cancel ───────────────────────────────────────────────────
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    pointersRef.current.delete(e.pointerId);
     svgRef.current?.releasePointerCapture(e.pointerId);
+
+    // If a drag actually moved (pan / component), suppress the synthetic click
+    // that will fire next so we don't deselect / place anything on release.
+    if (dragRef.current?.moved) suppressClickRef.current = true;
     dragRef.current = null;
-  }, []);
+    cancelLongPress();
+
+    // Dropping from 2 → 1 pointers exits pinch; the remaining finger is a
+    // leftover from the gesture, not a new tap — suppress its click too.
+    if (pinchRef.current && pointersRef.current.size < 2) {
+      pinchRef.current = null;
+      suppressClickRef.current = true;
+    }
+  }, [cancelLongPress]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -811,6 +971,9 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
 
   // Click on canvas background
   const handleSvgClick = useCallback((e: React.MouseEvent) => {
+    // A pan / pinch / long-press just finished — eat this synthetic click so
+    // we don't deselect / place a component / drop a stray wire point.
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (dragRef.current?.moved) return;
     const { gx, gy } = clientToGrid(e.clientX, e.clientY);
 
@@ -835,19 +998,10 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
         setWirePoints([pt]);
         setWireJunctions(onWire ? [0] : []);
       } else {
-        // Add point or finish (double-click finishes)
+        // Finish on pin or via double-click (touch falls back to the on-canvas
+        // Finish button since e.detail===2 is unreliable on touch hardware).
         if (e.detail === 2 || (snap.compId && snap.pinKey && wirePointsRef.current.length > 0)) {
-          // Finish wire
-          if (wirePointsRef.current.length >= 1) {
-            const newWire: Wire = {
-              id: crypto.randomUUID(),
-              points: [...wirePointsRef.current, pt],
-              color: wireColorRef.current,
-            };
-            setWires(ws => [...ws, newWire]);
-          }
-          setWirePoints([]);
-          setWireJunctions([]);
+          commitWireAt(pt);
         } else {
           const newIdx = wirePointsRef.current.length;
           setWirePoints(pts => [...pts, pt]);
@@ -859,7 +1013,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
       setSelectedId(null);
       setSelectedType(null);
     }
-  }, [clientToGrid]);
+  }, [clientToGrid, commitWireAt]);
 
   // Click on a component
   const handleComponentClick = useCallback((compId: string, e: React.MouseEvent) => {
@@ -867,15 +1021,26 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
     // can start on a pin that sits on top of the component body.
     if (modeRef.current !== 'select') return;
     e.stopPropagation();
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (dragRef.current?.moved) return;
     setSelectedId(compId);
     setSelectedType('component');
   }, []);
 
   const handleComponentMouseDown = useCallback((compId: string, e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
+    // Only mouse buttons other than primary are ignored; touch / pen primaries
+    // also report button===0 so we accept them.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (modeRef.current !== 'select') return;
+
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    svgRef.current?.setPointerCapture(e.pointerId);
+
+    // A second simultaneous touch turns this into a pinch — bail out of the
+    // component drag so the user can zoom around the chip they tapped.
+    if (maybeEnterPinch()) { e.stopPropagation(); return; }
+
+    e.stopPropagation();
     const comp = componentsRef.current.find(c => c.id === compId);
     if (!comp) return;
     dragRef.current = {
@@ -887,17 +1052,31 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
       origCompY: comp.y,
       moved: false,
     };
-    svgRef.current?.setPointerCapture(e.pointerId);
-  }, []);
+
+    // Touch / pen: hold 500 ms to open the context menu (Delete / Rotate / Properties).
+    if (e.pointerType !== 'mouse') {
+      startLongPress({ type: 'component', id: compId }, e.clientX, e.clientY);
+    }
+  }, [maybeEnterPinch, startLongPress]);
 
   const handleWireClick = useCallback((wireId: string, e: React.MouseEvent) => {
     // Let the click bubble in wire/place mode so a new wire can start on top
     // of an existing one.
     if (modeRef.current !== 'select') return;
     e.stopPropagation();
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     setSelectedId(wireId);
     setSelectedType('wire');
   }, []);
+
+  // Long-press on a wire opens the same context menu as on a component.
+  const handleWirePointerDown = useCallback((wireId: string, e: React.PointerEvent) => {
+    if (modeRef.current !== 'select') return;
+    if (e.pointerType === 'mouse') return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    if (maybeEnterPinch()) { e.stopPropagation(); return; }
+    startLongPress({ type: 'wire', id: wireId }, e.clientX, e.clientY);
+  }, [maybeEnterPinch, startLongPress]);
 
   // ── Save / Load ──────────────────────────────────────────────────────────────
 
@@ -1140,10 +1319,11 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
           fontSize: 11, fontFamily: 'monospace', color: 'text.disabled',
           pointerEvents: 'none',
         }}>
-          {mode === 'place' && pendingPart && `Placing: ${pendingPart.name} — click to place · R to rotate · Esc to cancel`}
-          {mode === 'wire' && wirePoints.length === 0 && 'Wire mode — click on a pin or anywhere to start'}
-          {mode === 'wire' && wirePoints.length > 0 && `Wire in progress (${wirePoints.length} pts) — click to add point · double-click or click pin to finish · Esc finishes at last connection`}
-          {mode === 'select' && selectedId && (selectedType === 'component' ? 'Del to delete · drag to move · R to rotate · [ ] z-order' : 'Del to delete · [ ] z-order')}
+          {mode === 'place' && pendingPart && `Placing: ${pendingPart.name} — tap to place · R to rotate · Esc to cancel`}
+          {mode === 'wire' && wirePoints.length === 0 && 'Wire mode — tap a pin or anywhere to start · pinch to zoom'}
+          {mode === 'wire' && wirePoints.length > 0 && `Wire in progress (${wirePoints.length} pts) — tap to add · ✔ finish · ✕ cancel · tap pin to finish`}
+          {mode === 'select' && !selectedId && 'Select mode — single-finger pan · pinch to zoom · long-press for menu'}
+          {mode === 'select' && selectedId && (selectedType === 'component' ? 'Del · drag · R rotate · [ ] z-order · long-press for menu' : 'Del · [ ] z-order · long-press for menu')}
         </Box>
 
         <svg
@@ -1151,9 +1331,11 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
           width={svgSize.w}
           height={svgSize.h}
           style={{ display: 'block', cursor: mode === 'place' ? 'crosshair' : mode === 'wire' ? 'crosshair' : 'default', touchAction: 'none' }}
-          onPointerMove={handleMouseMove}
-          onPointerDown={handleMouseDown}
-          onPointerUp={handleMouseUp}
+          onPointerMove={handlePointerMove}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onPointerLeave={handlePointerUp}
           onClick={handleSvgClick}
           onWheel={handleWheel}
           onContextMenu={e => e.preventDefault()}
@@ -1220,6 +1402,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
                     strokeLinejoin="round"
                     style={{ cursor: mode === 'select' ? 'pointer' : 'crosshair' }}
                     onClick={e => handleWireClick(wire.id, e)}
+                    onPointerDown={e => handleWirePointerDown(wire.id, e)}
                   />
                   <polyline
                     points={pts}
@@ -1307,8 +1490,102 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
             onPointerDown={handlePlacementClick}
           />
         )}
+
+        {/* Wire-in-progress floating actions — touch users have no keyboard. */}
+        {inWireMode && wirePoints.length > 0 && (
+          <Box sx={{
+            position: 'absolute', top: 8, right: 8, zIndex: 15,
+            display: 'flex', gap: 0.75,
+            // Floating buttons must NOT consume native pan / pinch gestures
+            // when the user is panning the canvas around them.
+            pointerEvents: 'auto',
+          }}>
+            <Tooltip title="Finish wire (snaps trailing free segments)">
+              <IconButton
+                size="small"
+                onClick={() => { commitWireAt(null); suppressClickRef.current = true; }}
+                sx={{
+                  bgcolor: 'success.main', color: 'common.white',
+                  '&:hover': { bgcolor: 'success.dark' },
+                  boxShadow: 2, width: 40, height: 40,
+                }}
+              >
+                <CheckIcon sx={{ fontSize: 22 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Cancel wire">
+              <IconButton
+                size="small"
+                onClick={() => { cancelWire(); suppressClickRef.current = true; }}
+                sx={{
+                  bgcolor: 'error.main', color: 'common.white',
+                  '&:hover': { bgcolor: 'error.dark' },
+                  boxShadow: 2, width: 40, height: 40,
+                }}
+              >
+                <CloseIcon sx={{ fontSize: 22 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
       </Box>
+
+      {/* Long-press context menu — touch / pen Delete + Rotate + Properties */}
+      <Menu
+        open={ctxMenu !== null}
+        onClose={() => setCtxMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={ctxMenu ? { top: ctxMenu.y, left: ctxMenu.x } : undefined}
+      >
+        {ctxMenu && (
+          <MenuItem
+            onClick={() => {
+              if (ctxMenu.target.type === 'component') {
+                setComponents(cs => cs.filter(c => c.id !== ctxMenu.target.id));
+              } else {
+                setWires(ws => ws.filter(w => w.id !== ctxMenu.target.id));
+              }
+              if (selectedId === ctxMenu.target.id) {
+                setSelectedId(null);
+                setSelectedType(null);
+              }
+              setCtxMenu(null);
+            }}
+            dense
+          >
+            <ListItemIcon><DeleteOutlineIcon fontSize="small" sx={{ color: 'error.main' }} /></ListItemIcon>
+            <ListItemText>Delete</ListItemText>
+          </MenuItem>
+        )}
+        {ctxMenu?.target.type === 'component' && (
+          <MenuItem
+            onClick={() => {
+              setComponents(cs => cs.map(c =>
+                c.id === ctxMenu.target.id ? { ...c, rotation: (c.rotation + 90) % 360 } : c,
+              ));
+              setCtxMenu(null);
+            }}
+            dense
+          >
+            <ListItemIcon><Rotate90DegreesCwIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Rotate 90°</ListItemText>
+          </MenuItem>
+        )}
+        {ctxMenu?.target.type === 'component' && (
+          <MenuItem
+            onClick={() => {
+              setSelectedId(ctxMenu.target.id);
+              setSelectedType('component');
+              setCtxMenu(null);
+            }}
+            dense
+          >
+            <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Properties</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
 
       {/* Properties panel — selected component */}
       <ElectronicsPropertiesPanel
