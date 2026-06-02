@@ -28,8 +28,20 @@ COPY packages/core-backend/package.json packages/core-backend/
 COPY packages/texteditor/package.json packages/texteditor/
 COPY packages/web-client/package.json packages/web-client/
 COPY packages/ui-core/package.json packages/ui-core/
+COPY packages/core-scene3d/package.json packages/core-scene3d/
+COPY packages/core-cad/package.json packages/core-cad/
+COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
+COPY packages/minislib/package.json packages/minislib/
+COPY packages/minisc/package.json packages/minisc/
 COPY app/mycastle-backend/package.json app/mycastle-backend/
 COPY app/mycastle-web/package.json app/mycastle-web/
+COPY app/cad-backend/package.json app/cad-backend/
+COPY app/cad-app/package.json app/cad-app/
+COPY app/demo-scene-3d/package.json app/demo-scene-3d/
+COPY app/mycastle-mobile/package.json app/mycastle-mobile/
+COPY app/mycastle-watch/package.json app/mycastle-watch/
+COPY app/testminislib/package.json app/testminislib/
+COPY app/trail-map/package.json app/trail-map/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --fetch-timeout 120000 --reporter silent
 
