@@ -59,6 +59,8 @@ export default function App() {
   const [cadViewMode, setCadViewMode] = useState<ViewMode>('2d');
   const [rightTab, setRightTab] = useState<RightTab>('layers');
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  // Toggles Electronics ComponentLibrary (left) + Properties panel (right) as one.
+  const [electronicsSidePanels, setElectronicsSidePanels] = useState(true);
   const [aiOpen, setAiOpen] = useState(false);
   // Code editor docked on the right of every mode — collapsed by default, opened via the </> button.
   const [editorOpen, setEditorOpen] = useState(false);
@@ -509,15 +511,19 @@ export default function App() {
       {/* Electronics panel */}
       <Box sx={{ flex: 1, display: mode === 'electronics' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
-          <ComponentLibrary
-            selectedPartId={selectedPartId}
-            onSelectPart={id => setSelectedPartId(id)}
-          />
+          {electronicsSidePanels && (
+            <ComponentLibrary
+              selectedPartId={selectedPartId}
+              onSelectPart={id => setSelectedPartId(id)}
+            />
+          )}
           <BreadboardCanvas
             pendingPartId={selectedPartId}
             onPendingPartConsumed={() => {}}
             mergeSchemaRef={mergeElecSchemaRef}
             placementTemplate={placementTemplate?.mode === 'electronics' ? placementTemplate : null}
+            sidePanelsVisible={electronicsSidePanels}
+            onToggleSidePanels={() => setElectronicsSidePanels(v => !v)}
           />
           {aiOpen && (
             <Box sx={{

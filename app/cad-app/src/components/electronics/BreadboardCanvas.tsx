@@ -4,6 +4,7 @@ import NearMeIcon from '@mui/icons-material/NearMe';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import TuneIcon from '@mui/icons-material/Tune';
+import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import CableIcon from '@mui/icons-material/Cable';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
@@ -491,9 +492,17 @@ interface Props {
   onPendingPartConsumed: () => void;
   mergeSchemaRef?: MutableRefObject<((schema: ElectronicsSchema) => void) | null>;
   placementTemplate?: ActiveTemplate | null;
+  /** Whether the host should show the ComponentLibrary on the left.
+   *  When `false`, BreadboardCanvas also hides its own right-side Properties
+   *  panel so a single toggle button on the toolbar collapses both at once. */
+  sidePanelsVisible?: boolean;
+  onToggleSidePanels?: () => void;
 }
 
-export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSchemaRef, placementTemplate }: Props) {
+export function BreadboardCanvas({
+  pendingPartId, onPendingPartConsumed, mergeSchemaRef, placementTemplate,
+  sidePanelsVisible = true, onToggleSidePanels,
+}: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ w: 800, h: 600 });
@@ -921,9 +930,11 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
       return;
     }
 
-    // Touch on empty SVG in SELECT mode → pan candidate (single-finger pan).
+    // Primary press on empty SVG in SELECT mode → pan candidate. Covers
+    // single-finger touch, pen tip and mouse left-button drag. Click without
+    // movement still deselects via handleSvgClick (drag.moved stays false).
     // place / wire modes consume the tap for the mode action instead.
-    if (e.pointerType === 'touch' && modeRef.current === 'select') {
+    if (modeRef.current === 'select') {
       dragRef.current = {
         type: 'pan',
         startClientX: e.clientX, startClientY: e.clientY,
@@ -1289,6 +1300,18 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
           </IconButton>
         </Tooltip>
 
+        {onToggleSidePanels && (
+          <Tooltip title={sidePanelsVisible ? 'Hide components & properties' : 'Show components & properties'}>
+            <IconButton
+              size="small"
+              onClick={onToggleSidePanels}
+              sx={{ color: sidePanelsVisible ? 'primary.main' : 'text.secondary' }}
+            >
+              <ViewSidebarOutlinedIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+
         <Box sx={{ display: 'flex', gap: 0.5, ml: 1, alignItems: 'center' }}>
           <Tooltip title="Open from server">
             <IconButton size="small" onClick={() => setServerBrowser('open')}>
@@ -1322,7 +1345,7 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
           {mode === 'place' && pendingPart && `Placing: ${pendingPart.name} — tap to place · R to rotate · Esc to cancel`}
           {mode === 'wire' && wirePoints.length === 0 && 'Wire mode — tap a pin or anywhere to start · pinch to zoom'}
           {mode === 'wire' && wirePoints.length > 0 && `Wire in progress (${wirePoints.length} pts) — tap to add · ✔ finish · ✕ cancel · tap pin to finish`}
-          {mode === 'select' && !selectedId && 'Select mode — single-finger pan · pinch to zoom · long-press for menu'}
+          {mode === 'select' && !selectedId && 'Select mode — drag empty area to pan · pinch / wheel to zoom · long-press for menu'}
           {mode === 'select' && selectedId && (selectedType === 'component' ? 'Del · drag · R rotate · [ ] z-order · long-press for menu' : 'Del · [ ] z-order · long-press for menu')}
         </Box>
 
@@ -1587,12 +1610,15 @@ export function BreadboardCanvas({ pendingPartId, onPendingPartConsumed, mergeSc
         )}
       </Menu>
 
-      {/* Properties panel — selected component */}
-      <ElectronicsPropertiesPanel
-        component={selectedComponent}
-        part={selectedComponentPart}
-        onChange={updateSelectedComponent}
-      />
+      {/* Properties panel — hidden together with the host's ComponentLibrary
+          via the shared sidePanelsVisible toggle. */}
+      {sidePanelsVisible && (
+        <ElectronicsPropertiesPanel
+          component={selectedComponent}
+          part={selectedComponentPart}
+          onChange={updateSelectedComponent}
+        />
+      )}
 
       {serverBrowser && (
         <ServerFileBrowser
