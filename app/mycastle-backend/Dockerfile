@@ -23,6 +23,7 @@ WORKDIR /app
 
 # Copy only manifests first — pnpm install layer is cached until lockfile/package.json changes
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY patches/ patches/
 COPY packages/core/package.json packages/core/
 COPY packages/core-backend/package.json packages/core-backend/
 COPY packages/texteditor/package.json packages/texteditor/
