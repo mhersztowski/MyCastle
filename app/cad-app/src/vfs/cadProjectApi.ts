@@ -198,6 +198,42 @@ export async function renameFileAt(
   });
 }
 
+/**
+ * Walk `rootDir` recursively and return every file whose name ends with
+ * `extension`. `name` is the basename without the extension, `relPath` is the
+ * path relative to `rootDir` (with extension). Used by the embed-in-notes
+ * picker so files saved in arbitrary sub-directories show up — not only those
+ * in the legacy flat `projects/` folder.
+ */
+export async function listFilesRecursive(
+  rootDir: string, extension: string,
+): Promise<{ name: string; relPath: string }[]> {
+  const out: { name: string; relPath: string }[] = [];
+  async function walk(dir: string, relBase: string): Promise<void> {
+    let entries: Array<{ name: string; type: number }>;
+    try {
+      const res = await vfsGet<{ entries: Array<{ name: string; type: number }> }>('/readdir', dir);
+      entries = res.entries;
+    } catch {
+      return; // missing dir is fine — caller may pass a hypothetical root
+    }
+    for (const e of entries) {
+      const rel = relBase ? `${relBase}/${e.name}` : e.name;
+      if (e.type === DIRECTORY) {
+        await walk(`${dir}/${e.name}`, rel);
+      } else if (e.type === FILE && e.name.endsWith(extension)) {
+        out.push({
+          name: rel.slice(0, -extension.length), // includes folder prefix
+          relPath: rel,
+        });
+      }
+    }
+  }
+  await walk(rootDir, '');
+  out.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  return out;
+}
+
 // ── generic VFS browsing & binary I/O (for FileSystemPanel) ──────────────────
 
 export interface VfsDirEntry {

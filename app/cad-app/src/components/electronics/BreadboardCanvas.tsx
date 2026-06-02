@@ -599,6 +599,10 @@ export function BreadboardCanvas({
   // Click suppression after a drag / pinch / long-press — the next synthetic
   // click should NOT trigger a place / wire-point. Cleared by the click handler.
   const suppressClickRef = useRef(false);
+  // When a touch / pen press starts on a component or wire, remember it so the
+  // SELECT-mode tap on pointerup routes to the right select action — without
+  // this, the pointerup bubble to SVG would deselect instead.
+  const touchTapTargetRef = useRef<{ type: 'component' | 'wire'; id: string } | null>(null);
   // Drag-start threshold differs by input type — stylus jitter triggered drags
   // on near-stationary taps at the old 3 px.
   const dragThreshold = (type: string) => (type === 'mouse' ? 3 : 7);
@@ -853,6 +857,44 @@ export function BreadboardCanvas({
     return true;
   }, [cancelLongPress]);
 
+  // Per-mode tap action — declared here so pointerup can call it (touch / pen
+  // don't reliably get a synthetic `click` on mobile, esp. Safari iOS with
+  // touchAction:'none' + setPointerCapture). Mouse keeps its onClick path
+  // wrapping this for double-click detection.
+  const handleSvgTap = useCallback((clientX: number, clientY: number, doubleTap = false) => {
+    const { gx, gy } = clientToGrid(clientX, clientY);
+
+    if (modeRef.current === 'place' && pendingPartIdRef.current) {
+      const part = getPartDef(pendingPartIdRef.current);
+      if (!part) return;
+      const newComp: ComponentPlacement = {
+        id: crypto.randomUUID(),
+        partId: pendingPartIdRef.current,
+        x: Math.round(gx),
+        y: Math.round(gy),
+        rotation: placeRotationRef.current,
+      };
+      setComponents(cs => [...cs, newComp]);
+    } else if (modeRef.current === 'wire') {
+      const snap = snapToNearest(gx, gy, componentsRef.current, true);
+      const pt: WirePoint = { x: snap.gx, y: snap.gy };
+      const onWire = isPointOnAnyWire(pt, wiresRef.current);
+      if (wirePointsRef.current.length === 0) {
+        setWirePoints([pt]);
+        setWireJunctions(onWire ? [0] : []);
+      } else if (doubleTap || (snap.compId && snap.pinKey && wirePointsRef.current.length > 0)) {
+        commitWireAt(pt);
+      } else {
+        const newIdx = wirePointsRef.current.length;
+        setWirePoints(pts => [...pts, pt]);
+        if (onWire) setWireJunctions(js => [...js, newIdx]);
+      }
+    } else {
+      setSelectedId(null);
+      setSelectedType(null);
+    }
+  }, [clientToGrid, commitWireAt]);
+
   // ── Pointer move ──────────────────────────────────────────────────────────
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (pointersRef.current.has(e.pointerId)) {
@@ -949,19 +991,41 @@ export function BreadboardCanvas({
     pointersRef.current.delete(e.pointerId);
     svgRef.current?.releasePointerCapture(e.pointerId);
 
-    // If a drag actually moved (pan / component), suppress the synthetic click
-    // that will fire next so we don't deselect / place anything on release.
-    if (dragRef.current?.moved) suppressClickRef.current = true;
+    // Snapshot state BEFORE clearing — these flags drive both suppress logic
+    // AND the touch tap detection below.
+    const wasMoved = dragRef.current?.moved ?? false;
+    const wasPinching = pinchRef.current !== null;
+    const suppressedBefore = suppressClickRef.current;
+
+    if (wasMoved) suppressClickRef.current = true;
     dragRef.current = null;
     cancelLongPress();
 
-    // Dropping from 2 → 1 pointers exits pinch; the remaining finger is a
-    // leftover from the gesture, not a new tap — suppress its click too.
     if (pinchRef.current && pointersRef.current.size < 2) {
       pinchRef.current = null;
       suppressClickRef.current = true;
     }
-  }, [cancelLongPress]);
+
+    // Synthesise tap from pointerup for touch / pen — `click` is unreliable on
+    // mobile browsers when touchAction:'none' + setPointerCapture is in play
+    // (Safari iOS in particular). Mouse keeps its onClick path; we skip mouse
+    // here so we don't double-fire (mouse always synthesises click).
+    const tapTarget = touchTapTargetRef.current;
+    touchTapTargetRef.current = null;
+    if ((e.pointerType === 'touch' || e.pointerType === 'pen') &&
+        !wasMoved && !wasPinching && !suppressedBefore) {
+      if (tapTarget && modeRef.current === 'select') {
+        // Tap originated on a component / wire — route to selection rather
+        // than the empty-area deselect that handleSvgTap would do.
+        setSelectedId(tapTarget.id);
+        setSelectedType(tapTarget.type);
+      } else {
+        handleSvgTap(e.clientX, e.clientY);
+      }
+      // Eat any synthetic click that may still follow so it doesn't double-act.
+      suppressClickRef.current = true;
+    }
+  }, [cancelLongPress, handleSvgTap]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -980,51 +1044,14 @@ export function BreadboardCanvas({
     });
   }, []);
 
-  // Click on canvas background
+  // Click handler — used by mouse for double-click finish-wire support. Touch
+  // taps are handled in handlePointerUp which then sets suppressClickRef so
+  // this synthetic click is a no-op even if the browser does emit one.
   const handleSvgClick = useCallback((e: React.MouseEvent) => {
-    // A pan / pinch / long-press just finished — eat this synthetic click so
-    // we don't deselect / place a component / drop a stray wire point.
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (dragRef.current?.moved) return;
-    const { gx, gy } = clientToGrid(e.clientX, e.clientY);
-
-    if (modeRef.current === 'place' && pendingPartIdRef.current) {
-      const part = getPartDef(pendingPartIdRef.current);
-      if (!part) return;
-      const newComp: ComponentPlacement = {
-        id: crypto.randomUUID(),
-        partId: pendingPartIdRef.current,
-        x: Math.round(gx),
-        y: Math.round(gy),
-        rotation: placeRotationRef.current,
-      };
-      setComponents(cs => [...cs, newComp]);
-      // Stay in place mode (allow repeated placement)
-    } else if (modeRef.current === 'wire') {
-      const snap = snapToNearest(gx, gy, componentsRef.current, true);
-      const pt: WirePoint = { x: snap.gx, y: snap.gy };
-      const onWire = isPointOnAnyWire(pt, wiresRef.current);
-      if (wirePointsRef.current.length === 0) {
-        // Start new wire
-        setWirePoints([pt]);
-        setWireJunctions(onWire ? [0] : []);
-      } else {
-        // Finish on pin or via double-click (touch falls back to the on-canvas
-        // Finish button since e.detail===2 is unreliable on touch hardware).
-        if (e.detail === 2 || (snap.compId && snap.pinKey && wirePointsRef.current.length > 0)) {
-          commitWireAt(pt);
-        } else {
-          const newIdx = wirePointsRef.current.length;
-          setWirePoints(pts => [...pts, pt]);
-          if (onWire) setWireJunctions(js => [...js, newIdx]);
-        }
-      }
-    } else {
-      // Deselect
-      setSelectedId(null);
-      setSelectedType(null);
-    }
-  }, [clientToGrid, commitWireAt]);
+    handleSvgTap(e.clientX, e.clientY, e.detail === 2);
+  }, [handleSvgTap]);
 
   // Click on a component
   const handleComponentClick = useCallback((compId: string, e: React.MouseEvent) => {
@@ -1064,8 +1091,11 @@ export function BreadboardCanvas({
       moved: false,
     };
 
-    // Touch / pen: hold 500 ms to open the context menu (Delete / Rotate / Properties).
+    // Touch / pen: remember tap target so pointerup routes selection here
+    // (synthetic click on touch is unreliable on mobile Safari), and start
+    // long-press timer for the Delete / Rotate / Properties context menu.
     if (e.pointerType !== 'mouse') {
+      touchTapTargetRef.current = { type: 'component', id: compId };
       startLongPress({ type: 'component', id: compId }, e.clientX, e.clientY);
     }
   }, [maybeEnterPinch, startLongPress]);
@@ -1086,6 +1116,7 @@ export function BreadboardCanvas({
     if (e.pointerType === 'mouse') return;
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
     if (maybeEnterPinch()) { e.stopPropagation(); return; }
+    touchTapTargetRef.current = { type: 'wire', id: wireId };
     startLongPress({ type: 'wire', id: wireId }, e.clientX, e.clientY);
   }, [maybeEnterPinch, startLongPress]);
 
@@ -1197,11 +1228,21 @@ export function BreadboardCanvas({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'row', flex: 1, overflow: 'hidden' }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
-      {/* Toolbar */}
+      {/* Toolbar — horizontally scrollable on narrow viewports (mobile) so the
+          full set of tool icons stays reachable even when the canvas column is
+          squeezed by the side panels. Each immediate child keeps its natural
+          width (`flexShrink:0`) so nothing collapses to a useless sliver. */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
         bgcolor: 'background.paper', borderBottom: '1px solid rgba(255,255,255,0.08)',
-        flexShrink: 0,
+        flexShrink: 0, minWidth: 0,
+        overflowX: 'auto', overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        // Hide the scrollbar in WebKit / Blink — gestures still work.
+        '&::-webkit-scrollbar': { display: 'none' },
+        scrollbarWidth: 'none',
+        // Children must not shrink — keeps icons readable, swipe to reach them.
+        '& > *': { flexShrink: 0 },
       }}>
         <ToggleButtonGroup
           value={mode}

@@ -38,7 +38,7 @@ import { RepositoryPanel } from './components/RepositoryPanel';
 import { AudioPanel } from './components/AudioPanel';
 import { TemplatesPanel } from './components/TemplatesPanel';
 import { FileSystemPanel } from './components/FileSystemPanel';
-import { getCurrentUserId, listDirectory, listScene3dFiles, listScene3dProjects, userProjectsDir, CAD_EXT, ELEC_EXT } from './vfs/cadProjectApi';
+import { getCurrentUserId, listFilesRecursive, listScene3dFiles, listScene3dProjects, userRootDir, CAD_EXT, ELEC_EXT } from './vfs/cadProjectApi';
 import type { ElectronicsSchema } from './electronics/types';
 import { loadProjectFromText, mergeProjectFromText } from './io/CadExporter';
 import type { ActiveTemplate, CadProjectEntry, TemplateMode } from './components/RepositoryPanel';
@@ -107,7 +107,6 @@ export default function App() {
     setEmbedLoading(true);
     setEmbedProjects([]);
     const userId = getCurrentUserId();
-    const dir = userProjectsDir(userId);
 
     (async () => {
       try {
@@ -127,11 +126,14 @@ export default function App() {
           }));
           setEmbedProjects(entries);
         } else {
+          // Recursive scan from the user's root so files saved into any sub-
+          // directory show up — not just the legacy flat `projects/` folder.
           const ext = embedMode === 'electronics' ? ELEC_EXT : CAD_EXT;
-          const listing = await listDirectory(dir, ext);
-          setEmbedProjects(listing.files.map(f => ({
-            name: f.name,
-            path: `users/${userId}/projects/${f.name}`,
+          const root = userRootDir(userId);
+          const files = await listFilesRecursive(root, ext);
+          setEmbedProjects(files.map(f => ({
+            name: f.name,                                 // 'subdir/foo' (no ext)
+            path: `users/${userId}/${f.name}`,            // matches viewer's vfsPath shape
           })));
         }
       } catch {
