@@ -43,7 +43,7 @@ COPY app/mycastle-watch/package.json app/mycastle-watch/
 COPY app/testminislib/package.json app/testminislib/
 COPY app/trail-map/package.json app/trail-map/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --fetch-timeout 120000 --reporter silent
+    pnpm install --frozen-lockfile --fetch-timeout 120000
 
 # Now copy source files and build
 COPY packages/core/ packages/core/
