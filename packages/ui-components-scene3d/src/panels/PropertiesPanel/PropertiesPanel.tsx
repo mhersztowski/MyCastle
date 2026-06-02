@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import type { PropertiesPanelProps, SceneSettings, SceneGeometryEntry } from '@mhersztowski/ui-core';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -106,6 +106,61 @@ const sectionTitleSx = {
   letterSpacing: '0.04em',
 };
 
+/**
+ * Smart-round a number for inspector display: clamp near-zero noise (≤1e-9)
+ * to 0, otherwise toFixed(4) and strip trailing zeros via parseFloat.
+ * Examples: 0.30000000000000004 → "0.3", 1.234567 → "1.2346", -1e-15 → "0".
+ */
+function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  if (Math.abs(n) < 1e-9) return '0';
+  return parseFloat(n.toFixed(4)).toString();
+}
+
+/**
+ * One axis input that decouples display from the prop value while the field is
+ * focused — so typing "0.1234567" isn't truncated mid-keystroke by smart-round
+ * — and re-syncs to the rounded prop value on blur or when an external change
+ * (e.g. gizmo drag) arrives.
+ */
+function AxisInput({
+  value, step, onChange,
+}: {
+  value: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [text, setText] = useState(() => formatNumber(value));
+
+  // Re-sync the buffer to the prop whenever the external value changes AND we
+  // aren't currently editing — keeps gizmo drags reflected in the input.
+  useEffect(() => {
+    if (!focused) setText(formatNumber(value));
+  }, [value, focused]);
+
+  return (
+    <TextField
+      size="small"
+      type="number"
+      value={text}
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); setText(formatNumber(value)); }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = parseFloat(e.target.value);
+        if (!Number.isNaN(v)) onChange(v);
+      }}
+      slotProps={{ htmlInput: { step } }}
+      sx={{
+        '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' },
+        '& .MuiInputBase-input': { py: 0.25, px: 0.5 },
+        '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' },
+      }}
+    />
+  );
+}
+
 function Vector3Row({
   label,
   values,
@@ -130,18 +185,7 @@ function Vector3Row({
             >
               {axis.toUpperCase()}
             </Typography>
-            <TextField
-              size="small"
-              type="number"
-              value={values[i]}
-              onChange={(e) => onChange(i, parseFloat(e.target.value) || 0)}
-              slotProps={{ htmlInput: { step } }}
-              sx={{
-                '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' },
-                '& .MuiInputBase-input': { py: 0.25, px: 0.5 },
-                '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' },
-              }}
-            />
+            <AxisInput value={values[i]} step={step} onChange={(v) => onChange(i, v)} />
           </Box>
         ))}
       </Box>
@@ -467,7 +511,7 @@ export function PropertiesPanel({
               />
               <Vector3Row
                 label="Rotation °"
-                values={node.transform.rotation.map((r) => parseFloat((r * (180 / Math.PI)).toFixed(4))) as [number, number, number]}
+                values={node.transform.rotation.map((r) => r * (180 / Math.PI)) as [number, number, number]}
                 step={1}
                 onChange={(axis, value) => {
                   const rot: [number, number, number] = [...node.transform.rotation];

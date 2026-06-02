@@ -298,6 +298,8 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
   const [animLoop, setAnimLoop] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [showAnimPanel, setShowAnimPanel] = useState(false);
+  const [showHierarchyPanel, setShowHierarchyPanel] = useState(true);
+  const [showInspectorPanel, setShowInspectorPanel] = useState(true);
   const [animPanelHeight, setAnimPanelHeight] = useState(200);
   const [leftTab, setLeftTab] = useState<'scene' | 'prefabs'>('scene');
   const [prefabNameDialogOpen, setPrefabNameDialogOpen] = useState(false);
@@ -1211,7 +1213,9 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     { id: 'sep-3', label: '', type: 'separator' },
     { id: 'settings', label: '', icon: <SettingsIcon sx={{ fontSize: 16 }} />, onClick: settingsDialog.open, tooltip: 'Settings' },
     { id: 'sep-4', label: '', type: 'separator' },
-    { id: 'animation', label: 'Anim', onClick: () => setShowAnimPanel(p => !p), active: showAnimPanel, tooltip: 'Toggle Animation Panel' },
+    { id: 'hierarchy', label: 'Hier',    onClick: () => setShowHierarchyPanel(p => !p), active: showHierarchyPanel, tooltip: 'Toggle Hierarchy panel' },
+    { id: 'inspector', label: 'Inspect', onClick: () => setShowInspectorPanel(p => !p), active: showInspectorPanel, tooltip: 'Toggle Inspector panel' },
+    { id: 'animation', label: 'Anim',    onClick: () => setShowAnimPanel(p => !p),     active: showAnimPanel,      tooltip: 'Toggle Animation panel' },
   ];
 
   return (
@@ -1363,6 +1367,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   selectedNodeId={selectedNodeId}
                   transformMode={transformMode}
                   cameraPreset={cameraPreset}
+                  gizmoSize={1.4}
                   onNodeSelect={handleViewportSelect}
                   fitSceneRef={fitSceneRef}
                   activeCameraNodeId={activeCameraNodeId}
@@ -1380,8 +1385,10 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 </Box>
               </Box>
             </Allotment.Pane>
+            {(showHierarchyPanel || showInspectorPanel) && (
             <Allotment.Pane preferredSize={280} minSize={180} maxSize={440}>
               <Allotment vertical>
+                {showHierarchyPanel && (
                 <Allotment.Pane preferredSize="45%" minSize={120}>
                   <SceneTreePanel
                     nodes={treeNodes}
@@ -1401,6 +1408,8 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                     onCreatePrefab={handleCreatePrefab}
                   />
                 </Allotment.Pane>
+                )}
+                {showInspectorPanel && (
                 <Allotment.Pane minSize={120}>
                   <PropertiesPanel
                     node={selectedNodeData}
@@ -1417,12 +1426,15 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                     onAssignGeometry={handleAssignGeometry}
                   />
                 </Allotment.Pane>
+                )}
               </Allotment>
             </Allotment.Pane>
+            )}
           </Allotment>
         ) : (
           /* ── Desktop: tree | viewport | properties ── */
           <Allotment>
+            {showHierarchyPanel && (
             <Allotment.Pane preferredSize={220} minSize={150} maxSize={400}>
               <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                 {/* Tab bar */}
@@ -1484,6 +1496,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 </Box>
               </Box>
             </Allotment.Pane>
+            )}
             <Allotment.Pane>
               <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#2a2a2a' }}>
                 <SimpleViewer
@@ -1493,6 +1506,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   selectedNodeId={selectedNodeId}
                   transformMode={transformMode}
                   cameraPreset={cameraPreset}
+                  gizmoSize={1.4}
                   onNodeSelect={handleViewportSelect}
                   fitSceneRef={fitSceneRef}
                   activeCameraNodeId={activeCameraNodeId}
@@ -1510,6 +1524,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 </Box>
               </Box>
             </Allotment.Pane>
+            {showInspectorPanel && (
             <Allotment.Pane preferredSize={260} minSize={200} maxSize={400}>
               <PropertiesPanel
                 node={selectedNodeData}
@@ -1526,6 +1541,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 onAssignGeometry={handleAssignGeometry}
               />
             </Allotment.Pane>
+            )}
           </Allotment>
         )}
       </Box>
