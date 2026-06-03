@@ -37,6 +37,16 @@ import DownloadIcon from '@mui/icons-material/Download';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import SaveIcon from '@mui/icons-material/Save';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import FolderIcon from '@mui/icons-material/Folder';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import Switch from '@mui/material/Switch';
+import Slider from '@mui/material/Slider';
+import InputAdornment from '@mui/material/InputAdornment';
+import Select from '@mui/material/Select';
+import FormControl from '@mui/material/FormControl';
 import {
   ReactFlow,
   Background,
@@ -93,6 +103,52 @@ interface ParamDef {
   argIndex: number;
 }
 
+/**
+ * UI control hint for a property panel.
+ * If omitted, derived from the TS type ('boolean' → boolean toggle,
+ * 'number' → numeric input, union of string literals → select, anything
+ * else → plain text).
+ */
+type PropertyWidget =
+  | 'text'        // single-line string
+  | 'multiline'   // multi-line string (textarea)
+  | 'csv'         // comma-separated string with chip tokens
+  | 'regex'       // string with regex validation
+  | 'number'      // numeric input
+  | 'slider'      // numeric input with slider (uses min/max/step)
+  | 'boolean'     // switch
+  | 'select'      // dropdown (requires options)
+  | 'dirpath'     // string + VFS directory picker button
+  | 'filepath'    // string + VFS file picker button
+  | 'pathOrDir'   // string + picker that allows either a file or a directory
+  | 'color'       // string '#RRGGBB' or '#RRGGBBAA' with colour swatch picker
+  | 'datetime';   // number (ms-since-epoch) with datetime picker
+
+/**
+ * Schema for an `MProperty<T>` editable from the node panel.
+ *
+ * - `name`         — property name as declared in the class.
+ * - `type`         — TS type string (free-form, drives widget auto-detect).
+ * - `widget`       — explicit UI control override.
+ * - `default`      — source-code literal used when the user hasn't set it yet.
+ * - `description`  — tooltip / hint shown under the field.
+ * - `min/max/step` — numeric range for `slider` / `number`.
+ * - `options`      — pick list for `select` (raw source-code literals, e.g. `"'asc'"`).
+ * - `startPath`    — initial directory shown by the VFS picker.
+ */
+interface PropertyDef {
+  name: string;
+  type: string;
+  widget?: PropertyWidget;
+  default?: string;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  startPath?: string;
+}
+
 interface MinisEntity {
   id: string;
   varName: string;
@@ -104,6 +160,10 @@ interface MinisEntity {
   constructorArgs: string[];
   /** Parameter schema for this entity type. */
   paramDefs: ParamDef[];
+  /** MProperty schema for this entity type (live-editable from the panel). */
+  properties: PropertyDef[];
+  /** Current property values parsed from `varName.propName.value = …` assignments. */
+  propertyValues: Record<string, string>;
 }
 
 interface ParsedConnection {
@@ -147,6 +207,26 @@ const MINISLIB_BASE_KIND: Record<string, EntityKind> = {
   MListModel: 'listmodel',
   MLogger: 'logger',
 };
+
+/**
+ * Built-in JS constructors and common standard-library types — never shown as
+ * graph nodes even when they slip through as `new X(…)` in source.
+ */
+const JS_BUILTIN_CTORS = new Set([
+  'Date', 'RegExp', 'Error', 'TypeError', 'RangeError', 'SyntaxError',
+  'Map', 'Set', 'WeakMap', 'WeakSet',
+  'Promise', 'Proxy',
+  'Array', 'Object', 'Function', 'Symbol',
+  'ArrayBuffer', 'DataView', 'SharedArrayBuffer',
+  'Uint8Array', 'Uint16Array', 'Uint32Array',
+  'Int8Array', 'Int16Array', 'Int32Array',
+  'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
+  'URL', 'URLSearchParams', 'FormData', 'Headers', 'Request', 'Response',
+  'Blob', 'File', 'FileReader',
+  'TextEncoder', 'TextDecoder',
+  'AbortController', 'AbortSignal',
+  'Event', 'CustomEvent', 'EventTarget',
+]);
 
 const NODE_BUILTIN_SIGNALS: SignalPort[] = [
   { name: 'childAdded',    type: 'Node' },
@@ -299,7 +379,12 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
           })
       : [];
 
-    entities.push({ id: nextId(), varName: className, label: className, kind: 'class', signals, slots, constructorArgs: [], paramDefs });
+    const localProps = parseLocalProperties(body);
+    entities.push({
+      id: nextId(), varName: className, label: className, kind: 'class',
+      signals, slots, constructorArgs: [], paramDefs,
+      properties: localProps, propertyValues: {},
+    });
   }
 
   // 2. const x = new ClassName<T>(...)
@@ -308,15 +393,25 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
     const varName = m[1], className = m[3];
     const callStart = m.index + m[1].length + (code.slice(m.index).indexOf(m[2]));
     const constructorArgs = extractCallArgs(code, callStart);
+    const propertyValues = parsePropertyValues(code, varName);
 
     if (className === 'Signal') {
       const tm = /new\s+Signal<([^>]*)>/.exec(code.slice(m.index, m.index + 100));
-      entities.push({ id: nextId(), varName, label: varName, kind: 'signal', signals: [{ name: 'emit', type: tm?.[1] ?? '' }], slots: [], constructorArgs, paramDefs: [] });
+      entities.push({
+        id: nextId(), varName, label: varName, kind: 'signal',
+        signals: [{ name: 'emit', type: tm?.[1] ?? '' }], slots: [], constructorArgs, paramDefs: [],
+        properties: [], propertyValues: {},
+      });
       continue;
     }
     if (className === 'MProperty') {
       const tm = /new\s+MProperty<([^>]*)>/.exec(code.slice(m.index, m.index + 100));
-      entities.push({ id: nextId(), varName, label: varName, kind: 'property', signals: [{ name: 'changed', type: tm?.[1] ?? '' }], slots: [{ name: 'value' }], constructorArgs, paramDefs: BUILTIN_PARAM_DEFS['property'] ?? [] });
+      entities.push({
+        id: nextId(), varName, label: varName, kind: 'property',
+        signals: [{ name: 'changed', type: tm?.[1] ?? '' }], slots: [{ name: 'value' }],
+        constructorArgs, paramDefs: BUILTIN_PARAM_DEFS['property'] ?? [],
+        properties: [], propertyValues: {},
+      });
       continue;
     }
     const builtinKind = MINISLIB_BASE_KIND[className];
@@ -324,18 +419,48 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
       // MTimer constructor only accepts (parent?) — interval is set via .start().
       // Interval paramDefs apply only to MTimer.create(ms, parent) handled below.
       const paramDefs = className === 'MTimer' ? [] : (BUILTIN_PARAM_DEFS[builtinKind] ?? []);
-      entities.push({ id: nextId(), varName, label: `${varName}:${className}`, kind: builtinKind, signals: [...BUILTIN_SIGNALS[builtinKind]], slots: [], constructorArgs, paramDefs });
+      entities.push({
+        id: nextId(), varName, label: `${varName}:${className}`, kind: builtinKind,
+        signals: [...BUILTIN_SIGNALS[builtinKind]], slots: [], constructorArgs, paramDefs,
+        properties: [], propertyValues: {},
+      });
       continue;
     }
     if (knownClasses.has(className)) {
       // Check external manifest first, then fall back to in-file class definition
       const extDef = externalDefs.get(className);
       if (extDef) {
-        entities.push({ id: nextId(), varName, label: `${varName}:${className}`, kind: extDef.kind, signals: extDef.signals, slots: extDef.slots, constructorArgs, paramDefs: extDef.paramDefs });
+        // `kind: 'class'` in the manifest describes the class declaration —
+        // an instance (`new X()`) must show up as `'instance'` so the renderer
+        // picks PropertiesPanel (live MProperty editor) instead of
+        // ClassBuilderPanel (signal/slot definition tool). Specialised kinds
+        // (timer / property / fsm / …) are passed through as-is.
+        const instanceKind: EntityKind = extDef.kind === 'class' ? 'instance' : extDef.kind;
+        entities.push({
+          id: nextId(), varName, label: `${varName}:${className}`, kind: instanceKind,
+          signals: extDef.signals, slots: extDef.slots, constructorArgs, paramDefs: extDef.paramDefs,
+          properties: extDef.properties, propertyValues,
+        });
       } else {
         const proto = entities.find((e) => e.varName === className && e.kind === 'class');
-        entities.push({ id: nextId(), varName, label: `${varName}:${className}`, kind: 'instance', signals: proto?.signals ?? [], slots: proto?.slots ?? [], constructorArgs, paramDefs: proto?.paramDefs ?? [] });
+        entities.push({
+          id: nextId(), varName, label: `${varName}:${className}`, kind: 'instance',
+          signals: proto?.signals ?? [], slots: proto?.slots ?? [], constructorArgs,
+          paramDefs: proto?.paramDefs ?? [],
+          properties: proto?.properties ?? [], propertyValues,
+        });
       }
+    } else if (/^[A-Z]/.test(className) && !JS_BUILTIN_CTORS.has(className)) {
+      // Unknown class — neither imported, nor defined in the file, nor a
+      // minislib builtin. Showing it as a placeholder lets the user spot the
+      // missing import in the graph (instead of the node silently vanishing).
+      // Empty signal/slot lists make it clear the editor doesn't know its
+      // shape yet — the +Import dialog / + Import file workflow can backfill.
+      entities.push({
+        id: nextId(), varName, label: `${varName}:${className} (unknown)`, kind: 'instance',
+        signals: [], slots: [], constructorArgs, paramDefs: [],
+        properties: [], propertyValues,
+      });
     }
   }
 
@@ -346,7 +471,12 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
     if (entities.find((e) => e.varName === varName)) continue;
     const callStart = m.index + m[0].indexOf(m[2]);
     const constructorArgs = extractCallArgs(code, callStart);
-    entities.push({ id: nextId(), varName, label: `${varName}:MTimer`, kind: 'timer', signals: [{ name: 'timeout', type: '' }], slots: [], constructorArgs, paramDefs: BUILTIN_PARAM_DEFS['timer'] ?? [] });
+    entities.push({
+      id: nextId(), varName, label: `${varName}:MTimer`, kind: 'timer',
+      signals: [{ name: 'timeout', type: '' }], slots: [], constructorArgs,
+      paramDefs: BUILTIN_PARAM_DEFS['timer'] ?? [],
+      properties: [], propertyValues: {},
+    });
   }
 
   // 4. Existing .connect() calls
@@ -370,6 +500,154 @@ function generateConnectCode(src: MinisEntity, signalHandle: string, tgt: MinisE
   else if (tgt.kind === 'instance' || tgt.kind === 'class') targetExpr = `${tgt.varName}.${slotHandle}.bind(${tgt.varName})`;
   else targetExpr = `${tgt.varName}.${slotHandle}`;
   return `${sourceExpr}.connect(${targetExpr});`;
+}
+
+/* ── Property helpers (widget auto-detect, value ↔ literal, code patch) ────*/
+
+/**
+ * Parse string-literal union types like `"'asc' | 'desc'"` or
+ * `'a' | 'b' | 'c'` into `['asc', 'desc']` / `['a', 'b', 'c']`.
+ * Returns null for non-union types.
+ */
+function parseStringUnionOptions(tsType: string): string[] | null {
+  if (!tsType.includes('|') && !tsType.includes("'")) return null;
+  const parts = tsType.split('|').map(s => s.trim());
+  const opts: string[] = [];
+  for (const p of parts) {
+    const m = p.match(/^['"](.*?)['"]$/);
+    if (!m) return null;
+    opts.push(m[1]);
+  }
+  return opts.length >= 2 ? opts : null;
+}
+
+/** Pick a sensible default widget from the declared TS type. */
+function deriveWidget(prop: PropertyDef): PropertyWidget {
+  if (prop.widget) return prop.widget;
+  const t = prop.type.trim();
+  if (t === 'boolean') return 'boolean';
+  if (t === 'number') return 'number';
+  if (parseStringUnionOptions(t)) return 'select';
+  return 'text';
+}
+
+/** Effective option list — explicit `options` wins, otherwise parse from TS union type. */
+function effectiveOptions(prop: PropertyDef): string[] {
+  if (prop.options && prop.options.length > 0) {
+    // Manifest options may be either raw literals ("'asc'") or plain strings ("asc").
+    return prop.options.map(o => o.replace(/^['"](.*)['"]$/, '$1'));
+  }
+  return parseStringUnionOptions(prop.type) ?? [];
+}
+
+/** Convert a TS source-code literal back to a plain JS value for the UI. */
+function literalToValue(widget: PropertyWidget, literal: string | undefined): string | number | boolean {
+  if (literal === undefined || literal === null) {
+    if (widget === 'boolean') return false;
+    if (widget === 'number' || widget === 'slider' || widget === 'datetime') return 0;
+    return '';
+  }
+  const t = literal.trim().replace(/;$/, '').trim();
+  if (widget === 'boolean') return t === 'true';
+  if (widget === 'number' || widget === 'slider' || widget === 'datetime') {
+    // Strip numeric separators (1_000_000) and try Number()
+    const n = Number(t.replace(/_/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  }
+  // String-like: strip surrounding quotes if present, unescape simple sequences
+  const m = t.match(/^['"`](.*)['"`]$/s);
+  if (!m) return t;
+  return m[1].replace(/\\'/g, "'").replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '\n');
+}
+
+/** Convert a UI value into a TS source-code literal for code patching. */
+function valueToLiteral(widget: PropertyWidget, value: string | number | boolean): string {
+  if (widget === 'boolean') return value ? 'true' : 'false';
+  if (widget === 'number' || widget === 'slider' || widget === 'datetime') {
+    const n = typeof value === 'number' ? value : Number(value);
+    return String(Number.isFinite(n) ? n : 0);
+  }
+  // String-like: wrap in single quotes, escape backslash + quote + newline
+  const s = String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+  return `'${s}'`;
+}
+
+/**
+ * Parse every `varName.propName.value = expr;` assignment in the source and
+ * return a map { propName: rawExpression }. Picks the last assignment for
+ * each property (matching runtime semantics).
+ */
+function parsePropertyValues(code: string, varName: string): Record<string, string> {
+  const esc = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${esc}\\.(\\w+)\\.value\\s*=\\s*([^;\\n]+?)\\s*;?\\s*(?:\\r?\\n|$)`, 'g');
+  const out: Record<string, string> = {};
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) out[m[1]] = m[2].trim();
+  return out;
+}
+
+/**
+ * Patch (or insert) `varName.propName.value = newLiteral;` in the source.
+ *
+ * - If an assignment already exists, replace its RHS in place.
+ * - Otherwise, insert a new line right after `const varName = new …;`.
+ * - Returns null if neither the assignment nor the declaration can be found
+ *   (caller decides whether to bail or warn).
+ */
+function patchPropertyValue(
+  code: string,
+  varName: string,
+  propName: string,
+  newLiteral: string,
+): string | null {
+  const escVar = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escProp = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // 1. Replace existing assignment (anywhere in the file).
+  const assignRe = new RegExp(`(\\b${escVar}\\.${escProp}\\.value\\s*=\\s*)([^;\\n]+)(;?)`, 'g');
+  if (assignRe.test(code)) {
+    return code.replace(assignRe, (_match, lhs, _old, semi) => `${lhs}${newLiteral}${semi || ';'}`);
+  }
+
+  // 2. Insert just after the variable declaration.
+  const declRe = new RegExp(
+    `((?:const|let|var)\\s+${escVar}(?:\\s*:[^=]+)?\\s*=\\s*(?:new\\s+\\w+(?:<[^>]*>)?\\s*\\([^)]*\\)|MTimer\\.(?:create|singleShot)\\s*\\([^)]*\\))\\s*;?)`,
+  );
+  if (declRe.test(code)) {
+    return code.replace(declRe, `$1\n${varName}.${propName}.value = ${newLiteral};`);
+  }
+
+  return null;
+}
+
+/**
+ * Build a `PropertyDef[]` from a list of `.changed` signals (`name.changed`
+ * → property `name` of the carrier type). Drops anything that doesn't end
+ * with `.changed`. Used when a manifest lacks an explicit `properties` block.
+ */
+function deriveProperties(signals: Array<{ name: string; type: string }>): PropertyDef[] {
+  const out: PropertyDef[] = [];
+  const seen = new Set<string>();
+  for (const s of signals) {
+    if (!s.name.endsWith('.changed')) continue;
+    const name = s.name.slice(0, -'.changed'.length);
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({ name, type: s.type });
+  }
+  return out;
+}
+
+/** Parse `readonly foo = new MProperty<T>(default)` declarations from a class body. */
+function parseLocalProperties(body: string): PropertyDef[] {
+  const out: PropertyDef[] = [];
+  const re = /readonly\s+(\w+)\s*=\s*new\s+MProperty<([^>]+)>\s*\(\s*([^)]*?)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const [, name, type, defaultExpr] = m;
+    out.push({ name, type: type.trim(), default: defaultExpr.trim() || undefined });
+  }
+  return out;
 }
 
 /* ── Code patching (constructor arg update) ─────────────────────────────────*/
@@ -429,6 +707,7 @@ interface ExternalClassDef {
   signals: SignalPort[];
   slots: SlotPort[];
   paramDefs: ParamDef[];
+  properties: PropertyDef[];
 }
 
 interface MinislibPluginManifest {
@@ -438,6 +717,7 @@ interface MinislibPluginManifest {
     signals?: Array<{ name: string; type: string }>;
     slots?: Array<{ name: string }>;
     paramDefs?: ParamDef[];
+    properties?: PropertyDef[];
   }>;
 }
 
@@ -459,6 +739,22 @@ function vfsApiUrl(clientPath: string, op: string): string {
     }
   }
   return `/api/vfs/${op}?path=${encodeURIComponent(clientPath)}`;
+}
+
+/**
+ * Auth header for VFS requests. The host app (mycastle-web) stores the JWT
+ * inside `localStorage.minis_current_user`; without it every VFS endpoint
+ * answers 401 and the Import dialog silently sees no manifests.
+ */
+function vfsAuthHeader(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem('minis_current_user');
+    if (!raw) return {};
+    const token = (JSON.parse(raw) as { token?: string })?.token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Parse bare npm package imports from TypeScript source. */
@@ -486,35 +782,39 @@ function deriveProjectRoot(uri: string): string {
   return parts.slice(0, -1).join('/');
 }
 
-const _manifestCache = new Map<string, ExternalClassDef | null>();
+// Cache whole-manifest results so multiple class lookups for the same package
+// share one fetch. We deliberately don't cache misses — package install /
+// rebuild between dialog opens is common, and a sticky `null` would silently
+// hide newly-installed packages until a hard reload.
+const _manifestCache = new Map<string, Record<string, ExternalClassDef>>();
 
 async function fetchManifest(projectRoot: string, packageName: string): Promise<Record<string, ExternalClassDef>> {
   const manifestPath = `${projectRoot}/node_modules/${packageName}/minislib-plugin.json`;
-  const cacheKey = manifestPath;
-  if (_manifestCache.has(cacheKey)) {
-    const cached = _manifestCache.get(cacheKey);
-    return cached ? { [packageName]: cached } : {};
-  }
+  const cached = _manifestCache.get(manifestPath);
+  if (cached) return cached;
 
   try {
-    const res = await fetch(vfsApiUrl(manifestPath, 'readFile'));
-    if (!res.ok) { _manifestCache.set(cacheKey, null); return {}; }
+    const res = await fetch(vfsApiUrl(manifestPath, 'readFile'), { headers: vfsAuthHeader() });
+    if (!res.ok) return {};
     const { data } = await res.json() as { data: string };
     const manifest = JSON.parse(atob(data)) as MinislibPluginManifest;
     const result: Record<string, ExternalClassDef> = {};
     for (const [className, def] of Object.entries(manifest.classes)) {
-      const resolved: ExternalClassDef = {
+      // Auto-derive properties from .changed signals when no explicit
+      // `properties` block is given — every `MProperty<T>` emits a
+      // `<name>.changed: T` signal, so the listing is a free side-channel.
+      const properties: PropertyDef[] = def.properties ?? deriveProperties(def.signals ?? []);
+      result[className] = {
         kind: def.kind ?? 'class',
         signals: def.signals ?? [],
         slots: def.slots ?? [],
         paramDefs: def.paramDefs ?? [],
+        properties,
       };
-      result[className] = resolved;
-      _manifestCache.set(`${projectRoot}/node_modules/${packageName}/minislib-plugin.json:${className}`, resolved);
     }
+    _manifestCache.set(manifestPath, result);
     return result;
   } catch {
-    _manifestCache.set(cacheKey, null);
     return {};
   }
 }
@@ -525,18 +825,31 @@ export interface ExternalClassEntry {
   def: ExternalClassDef;
 }
 
-/** Load all external minislib-plugin.json manifests for packages imported in the code. */
+/**
+ * Load all external minislib-plugin.json manifests available to the project.
+ *
+ * We scan both:
+ *   1. Packages already imported in the current code (catches user-side imports).
+ *   2. Every dependency from `package.json` (so Add Instance can offer classes
+ *      from installed-but-not-yet-imported packages — same source the +Import
+ *      dialog uses to populate its checkbox list).
+ */
 async function loadExternalClassDefs(code: string, uri: string): Promise<{
   byClass: Map<string, ExternalClassDef>;
   entries: ExternalClassEntry[];
 }> {
-  const imports = parseNpmImports(code);
-  if (imports.length === 0) return { byClass: new Map(), entries: [] };
+  if (!uri || uri.startsWith('virtual://')) return { byClass: new Map(), entries: [] };
   const projectRoot = deriveProjectRoot(uri);
+  const fromImports = parseNpmImports(code).map(({ packageName }) => packageName);
+  const fromPackageJson = await readPackageJsonDeps(projectRoot);
+  // Skip @mhersztowski/minislib — it's handled separately as built-ins.
+  const pkgSet = new Set([...fromImports, ...fromPackageJson].filter((p) => p !== '@mhersztowski/minislib'));
+  if (pkgSet.size === 0) return { byClass: new Map(), entries: [] };
+
   const byClass = new Map<string, ExternalClassDef>();
   const entries: ExternalClassEntry[] = [];
   await Promise.all(
-    imports.map(async ({ packageName }) => {
+    Array.from(pkgSet).map(async (packageName) => {
       const defs = await fetchManifest(projectRoot, packageName);
       for (const [className, def] of Object.entries(defs)) {
         byClass.set(className, def);
@@ -572,7 +885,7 @@ async function saveManifestToVfs(fileUri: string, json: string): Promise<void> {
   const data = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(''));
   const res = await fetch(vfsApiUrl(manifestPath, 'writeFile'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...vfsAuthHeader() },
     body: JSON.stringify({ data, options: { create: true, overwrite: true } }),
   });
   if (!res.ok) throw new Error(`VFS write failed: ${res.status}`);
@@ -885,6 +1198,419 @@ function connectionsToEdges(connections: ParsedConnection[], entities: MinisEnti
   });
 }
 
+/* ── VFS picker dialog ──────────────────────────────────────────────────────*/
+
+interface VfsEntry { name: string; isDir: boolean; path: string }
+type PickerMode = 'file' | 'dir' | 'pathOrDir';
+
+interface VfsPickerDialogProps {
+  open: boolean;
+  mode: PickerMode;
+  title?: string;
+  startPath?: string;
+  /** Current value (used to highlight + expand parents on open). */
+  initialValue?: string;
+  onClose: () => void;
+  onPick: (path: string) => void;
+}
+
+function VfsPickerDialog({ open, mode, title, startPath, initialValue, onClose, onPick }: VfsPickerDialogProps) {
+  const [cwd, setCwd] = useState<string>(startPath ?? '/home');
+  const [entries, setEntries] = useState<VfsEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (dir: string) => {
+    setLoading(true); setError(null);
+    try {
+      const items = await vfsReadDir(dir);
+      // Sort: dirs first, alphabetically
+      items.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+      setEntries(items.map((e) => ({
+        name: e.name, isDir: e.isDir,
+        path: dir === '/' ? `/${e.name}` : `${dir}/${e.name}`,
+      })));
+    } catch (e) {
+      setError(String(e));
+      setEntries([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // Prefer initialValue if it looks like a sibling of startPath, else use startPath
+    const seed = initialValue && initialValue.includes('/')
+      ? initialValue.replace(/\/[^/]*$/, '') || '/'
+      : (startPath ?? '/home');
+    setCwd(seed);
+    setSelected(initialValue ?? null);
+    void load(seed);
+  }, [open, startPath, initialValue, load]);
+
+  useEffect(() => { if (open) void load(cwd); }, [cwd, open, load]);
+
+  const goUp = useCallback(() => {
+    if (cwd === '/' || cwd === '/home') return;
+    const parent = cwd.replace(/\/[^/]+$/, '') || '/';
+    setCwd(parent);
+  }, [cwd]);
+
+  const handleEntryClick = useCallback((e: VfsEntry) => {
+    if (e.isDir) {
+      setCwd(e.path);
+      if (mode === 'dir' || mode === 'pathOrDir') setSelected(e.path);
+    } else {
+      if (mode === 'file' || mode === 'pathOrDir') setSelected(e.path);
+    }
+  }, [mode]);
+
+  const canPick = selected !== null;
+  const pickCurrent = mode !== 'file';   // "Pick current folder" only when dirs are valid
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
+      PaperProps={{ sx: { background: '#1e1e2e', color: '#cdd6f4', border: '1px solid #313244' } }}>
+      <DialogTitle sx={{ fontSize: 13, fontWeight: 600, color: '#cba6f7', py: 1, borderBottom: '1px solid #313244' }}>
+        {title ?? (mode === 'dir' ? 'Choose directory' : mode === 'file' ? 'Choose file' : 'Choose file or directory')}
+      </DialogTitle>
+      <DialogContent sx={{ p: 0 }}>
+        {/* Path bar */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.75, background: '#181825', borderBottom: '1px solid #313244' }}>
+          <Tooltip title="Up one level">
+            <span>
+              <IconButton size="small" onClick={goUp} disabled={cwd === '/' || cwd === '/home'} sx={{ color: '#a6adc8', p: 0.25 }}>
+                <ExpandMoreIcon sx={{ fontSize: 14, transform: 'rotate(90deg)' }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: '#cdd6f4', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {cwd}
+          </Typography>
+          <Tooltip title="Refresh">
+            <IconButton size="small" onClick={() => load(cwd)} sx={{ color: '#a6adc8', p: 0.25 }}>
+              <RefreshIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+        {/* Entries list */}
+        <Box sx={{ maxHeight: 380, minHeight: 280, overflowY: 'auto', background: '#13131e' }}>
+          {loading && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress size={20} sx={{ color: '#cba6f7' }} />
+            </Box>
+          )}
+          {error && (
+            <Typography sx={{ fontSize: 11, color: '#f38ba8', px: 2, py: 2 }}>{error}</Typography>
+          )}
+          {!loading && !error && entries.length === 0 && (
+            <Typography sx={{ fontSize: 11, color: '#45475a', px: 2, py: 2 }}>(empty)</Typography>
+          )}
+          {!loading && entries.map((e) => {
+            const isSel = selected === e.path;
+            const dimFile = (mode === 'dir') && !e.isDir;
+            return (
+              <Box
+                key={e.path}
+                onClick={() => handleEntryClick(e)}
+                onDoubleClick={() => { if (!e.isDir && (mode === 'file' || mode === 'pathOrDir')) { onPick(e.path); onClose(); } }}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5,
+                  cursor: dimFile ? 'default' : 'pointer',
+                  opacity: dimFile ? 0.4 : 1,
+                  background: isSel ? '#2d2040' : 'transparent',
+                  '&:hover': { background: dimFile ? 'transparent' : '#181825' },
+                  borderLeft: isSel ? '2px solid #cba6f7' : '2px solid transparent',
+                }}
+              >
+                {e.isDir
+                  ? <FolderIcon sx={{ fontSize: 14, color: '#fab387' }} />
+                  : <InsertDriveFileIcon sx={{ fontSize: 14, color: '#89dceb' }} />}
+                <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: dimFile ? '#45475a' : '#cdd6f4' }}>
+                  {e.name}
+                </Typography>
+              </Box>
+            );
+          })}
+        </Box>
+        {/* Selection bar */}
+        <Box sx={{ px: 1.5, py: 0.75, background: '#181825', borderTop: '1px solid #313244', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography sx={{ fontSize: 10, color: '#6c7086' }}>Selected:</Typography>
+          <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: selected ? '#a6e3a1' : '#45475a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {selected ?? '(none)'}
+          </Typography>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ borderTop: '1px solid #313244', px: 1.5, py: 0.75, gap: 1 }}>
+        {pickCurrent && (
+          <Button size="small" onClick={() => { onPick(cwd); onClose(); }}
+            sx={{ fontSize: 10, color: '#89dceb', textTransform: 'none' }}>
+            Pick current folder
+          </Button>
+        )}
+        <Box sx={{ flex: 1 }} />
+        <Button size="small" onClick={onClose} sx={{ fontSize: 10, color: '#6c7086', textTransform: 'none' }}>Cancel</Button>
+        <Button size="small" disabled={!canPick} onClick={() => { if (selected) { onPick(selected); onClose(); } }}
+          sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none' }}>
+          OK
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/* ── Property widgets ────────────────────────────────────────────────────────*/
+
+interface PropertyRowProps {
+  def: PropertyDef;
+  value: string | number | boolean;
+  onCommit: (literal: string) => void;
+  color: string;
+}
+
+const FIELD_SX = {
+  '& .MuiInputBase-root': { fontSize: 11, background: '#1e1e2e', color: '#cdd6f4' },
+  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#313244' },
+  '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#cba6f7' },
+  '& input, & textarea': { py: 0.5, px: 1, fontFamily: 'monospace' },
+} as const;
+
+function PropertyRow({ def, value, onCommit, color }: PropertyRowProps) {
+  const widget = deriveWidget(def);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [localText, setLocalText] = useState<string>(String(value ?? ''));
+
+  useEffect(() => { setLocalText(String(value ?? '')); }, [value, def.name]);
+
+  const commitText = useCallback((s: string) => onCommit(valueToLiteral(widget, s)), [widget, onCommit]);
+  const commitNum  = useCallback((n: number) => onCommit(valueToLiteral(widget, n)), [widget, onCommit]);
+  const commitBool = useCallback((b: boolean) => onCommit(valueToLiteral('boolean', b)), [onCommit]);
+
+  const inputSx = FIELD_SX;
+  const labelSx = { fontSize: 10, color: '#6c7086', mb: 0.25 };
+
+  const renderControl = () => {
+    switch (widget) {
+      case 'boolean':
+        return (
+          <Switch
+            size="small"
+            checked={Boolean(value)}
+            onChange={(e) => commitBool(e.target.checked)}
+            sx={{ '& .MuiSwitch-thumb': { background: color }, '& .Mui-checked + .MuiSwitch-track': { background: `${color}88 !important` } }}
+          />
+        );
+      case 'select': {
+        const opts = effectiveOptions(def);
+        return (
+          <FormControl size="small" fullWidth>
+            <Select
+              value={String(value ?? '')}
+              onChange={(e) => commitText(String(e.target.value))}
+              displayEmpty
+              MenuProps={{ PaperProps: { sx: { background: '#1e1e2e', color: '#cdd6f4', border: '1px solid #313244' } } }}
+              sx={{ fontSize: 11, background: '#1e1e2e', color: '#cdd6f4', fontFamily: 'monospace',
+                '& .MuiOutlinedInput-notchedOutline': { borderColor: '#313244' },
+                '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#cba6f7' },
+                '& .MuiSelect-select': { py: 0.5, px: 1 } }}
+            >
+              {opts.map((o) => (
+                <MenuItem key={o} value={o} sx={{ fontSize: 11, fontFamily: 'monospace', color: '#cdd6f4', '&:hover': { background: '#313244' } }}>
+                  {o}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        );
+      }
+      case 'slider': {
+        const min = def.min ?? 0;
+        const max = def.max ?? 100;
+        const step = def.step ?? 1;
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Slider
+              size="small"
+              min={min} max={max} step={step}
+              value={typeof value === 'number' ? value : Number(value) || 0}
+              onChange={(_e, v) => commitNum(Array.isArray(v) ? v[0] : v)}
+              sx={{ color, flex: 1, '& .MuiSlider-rail': { color: '#313244' } }}
+            />
+            <TextField size="small" value={String(value ?? '')} type="number"
+              onChange={(e) => commitNum(Number(e.target.value) || 0)}
+              sx={{ ...inputSx, width: 70 }} />
+          </Box>
+        );
+      }
+      case 'number':
+        return (
+          <TextField size="small" fullWidth type="number"
+            value={localText}
+            onChange={(e) => { setLocalText(e.target.value); commitNum(Number(e.target.value) || 0); }}
+            inputProps={{ min: def.min, max: def.max, step: def.step ?? 'any' }}
+            sx={inputSx} />
+        );
+      case 'multiline':
+        return (
+          <TextField size="small" fullWidth multiline minRows={2} maxRows={6}
+            value={localText}
+            onChange={(e) => setLocalText(e.target.value)}
+            onBlur={() => commitText(localText)}
+            sx={inputSx} />
+        );
+      case 'color':
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <TextField size="small" fullWidth
+              value={localText}
+              onChange={(e) => setLocalText(e.target.value)}
+              onBlur={() => commitText(localText)}
+              sx={inputSx}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Box sx={{ width: 14, height: 14, borderRadius: '2px', background: localText || '#000', border: '1px solid #313244' }} />
+                  </InputAdornment>
+                ),
+              }} />
+            <input type="color"
+              value={(() => { const m = localText.match(/^#([0-9a-fA-F]{6})/); return m ? `#${m[1]}` : '#000000'; })()}
+              onChange={(e) => { const v = e.target.value; setLocalText(v); commitText(v); }}
+              style={{ width: 22, height: 22, border: '1px solid #313244', background: '#1e1e2e', cursor: 'pointer' }} />
+          </Box>
+        );
+      case 'datetime': {
+        const ms = typeof value === 'number' ? value : Number(value) || 0;
+        const iso = ms > 0 ? new Date(ms).toISOString().slice(0, 16) : '';
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <TextField size="small" fullWidth type="datetime-local" value={iso}
+              onChange={(e) => commitNum(e.target.value ? Date.parse(e.target.value) : 0)}
+              sx={inputSx} />
+            <Tooltip title="Clear">
+              <IconButton size="small" onClick={() => commitNum(0)} sx={{ color: '#6c7086', p: 0.25 }}>
+                <CloseIcon sx={{ fontSize: 12 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        );
+      }
+      case 'csv': {
+        const tokens = String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+        return (
+          <Box>
+            <TextField size="small" fullWidth value={localText}
+              onChange={(e) => setLocalText(e.target.value)}
+              onBlur={() => commitText(localText)}
+              placeholder="comma-separated"
+              sx={inputSx} />
+            {tokens.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.25, mt: 0.5 }}>
+                {tokens.map((t, i) => (
+                  <Chip key={`${t}-${i}`} label={t} size="small" onDelete={() => {
+                    const next = tokens.filter((_, j) => j !== i).join(',');
+                    setLocalText(next); commitText(next);
+                  }} sx={{ fontSize: 9, height: 16, bgcolor: '#2d2040', color: '#cdd6f4', '& .MuiChip-deleteIcon': { fontSize: 12, color: '#6c7086' } }} />
+                ))}
+              </Box>
+            )}
+          </Box>
+        );
+      }
+      case 'regex': {
+        let bad = false;
+        try { if (localText) new RegExp(localText); } catch { bad = true; }
+        return (
+          <TextField size="small" fullWidth
+            value={localText} error={bad}
+            onChange={(e) => setLocalText(e.target.value)}
+            onBlur={() => commitText(localText)}
+            placeholder="JS regex"
+            helperText={bad ? 'invalid regex' : undefined}
+            FormHelperTextProps={{ sx: { fontSize: 9, color: '#f38ba8', mx: 0.5, mt: 0.25 } }}
+            sx={{ ...inputSx, '& .MuiInputBase-root.Mui-error .MuiOutlinedInput-notchedOutline': { borderColor: '#f38ba8' } }} />
+        );
+      }
+      case 'dirpath':
+      case 'filepath':
+      case 'pathOrDir':
+        return (
+          <>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <TextField size="small" fullWidth
+                value={localText}
+                onChange={(e) => setLocalText(e.target.value)}
+                onBlur={() => commitText(localText)}
+                placeholder={widget === 'dirpath' ? '/path/to/dir' : widget === 'filepath' ? '/path/to/file' : '/path/to/file-or-dir'}
+                sx={inputSx} />
+              <Tooltip title={widget === 'dirpath' ? 'Browse directory' : widget === 'filepath' ? 'Browse file' : 'Browse file or directory'}>
+                <IconButton size="small" onClick={() => setPickerOpen(true)} sx={{ color: '#cba6f7', p: 0.25 }}>
+                  <FolderOpenIcon sx={{ fontSize: 14 }} />
+                </IconButton>
+              </Tooltip>
+            </Box>
+            <VfsPickerDialog
+              open={pickerOpen}
+              mode={widget === 'dirpath' ? 'dir' : widget === 'filepath' ? 'file' : 'pathOrDir'}
+              startPath={def.startPath ?? (localText.includes('/') ? localText.replace(/\/[^/]*$/, '') : '/home')}
+              initialValue={localText || undefined}
+              onClose={() => setPickerOpen(false)}
+              onPick={(p) => {
+                // VFS returns "/home/app/node/MyProj/src/x.ts" (browser-side VFS path)
+                // but Node.js runtime resolves paths against process.cwd() — usually
+                // the project root. Convert to "./src/x.ts" so `npm run start` /
+                // `tsx src/main.ts` can find the file regardless of where the
+                // user's MyCastle workspace lives on disk.
+                const projectRoot = _state.uri ? deriveProjectRoot(_state.uri) : '';
+                let normalised = p;
+                if (projectRoot && p.startsWith(projectRoot + '/')) {
+                  normalised = './' + p.slice(projectRoot.length + 1);
+                }
+                setLocalText(normalised);
+                commitText(normalised);
+              }}
+            />
+          </>
+        );
+      case 'text':
+      default:
+        return (
+          <TextField size="small" fullWidth
+            value={localText}
+            onChange={(e) => setLocalText(e.target.value)}
+            onBlur={() => commitText(localText)}
+            sx={inputSx} />
+        );
+    }
+  };
+
+  // Boolean rows put the toggle inline with the label for compactness
+  if (widget === 'boolean') {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.25 }}>
+        <Box>
+          <Typography sx={{ fontSize: 11, color: '#cdd6f4', fontFamily: 'monospace' }}>{def.name}</Typography>
+          {def.description && <Typography sx={{ fontSize: 9, color: '#6c7086' }}>{def.description}</Typography>}
+        </Box>
+        {renderControl()}
+      </Box>
+    );
+  }
+
+  return (
+    <Box>
+      <Typography sx={labelSx}>
+        <span style={{ fontFamily: 'monospace', color: '#a6adc8' }}>{def.name}</span>
+        <span style={{ color: '#45475a' }}>: {def.type}</span>
+      </Typography>
+      {renderControl()}
+      {def.description && <Typography sx={{ fontSize: 9, color: '#6c7086', mt: 0.25 }}>{def.description}</Typography>}
+    </Box>
+  );
+}
+
 /* ── Properties panel ────────────────────────────────────────────────────────*/
 
 function PropertiesPanel({ entity, onClose }: { entity: MinisEntity; onClose: () => void }) {
@@ -917,6 +1643,18 @@ function PropertiesPanel({ entity, onClose }: { entity: MinisEntity; onClose: ()
     const model = getEditorModel(uri);
     if (!model) return;
     const patched = patchConstructorArg(model.getValue(), entity.varName, def.argIndex, value);
+    if (!patched) return;
+    replaceModelContent(model, patched);
+  }, [entity.varName]);
+
+  // Patch a single `varName.propName.value = …` assignment in the source.
+  // The next parse cycle picks the new literal up automatically — no local state needed.
+  const handlePropertyCommit = useCallback((propName: string, newLiteral: string) => {
+    const { uri } = _state;
+    if (!uri) return;
+    const model = getEditorModel(uri);
+    if (!model) return;
+    const patched = patchPropertyValue(model.getValue(), entity.varName, propName, newLiteral);
     if (!patched) return;
     replaceModelContent(model, patched);
   }, [entity.varName]);
@@ -984,6 +1722,32 @@ function PropertiesPanel({ entity, onClose }: { entity: MinisEntity; onClose: ()
             </Box>
           ))}
         </Box>
+      )}
+
+      {/* Properties (live MProperty.value editor) */}
+      {entity.properties.length > 0 && (
+        <>
+          <Divider sx={{ borderColor: '#1e1e2e' }} />
+          <Typography sx={{ fontSize: 9, color: '#45475a', letterSpacing: 1, textTransform: 'uppercase', px: 1.5, pt: 0.75 }}>
+            Properties
+          </Typography>
+          <Box sx={{ px: 1.5, py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            {entity.properties.map((prop) => {
+              const widget = deriveWidget(prop);
+              const literal = entity.propertyValues[prop.name] ?? prop.default;
+              const value = literalToValue(widget, literal);
+              return (
+                <PropertyRow
+                  key={prop.name}
+                  def={prop}
+                  value={value}
+                  color={color}
+                  onCommit={(newLit) => handlePropertyCommit(prop.name, newLit)}
+                />
+              );
+            })}
+          </Box>
+        </>
       )}
 
       {/* Signals & Slots summary */}
@@ -2415,6 +3179,7 @@ const BUILTIN_MINISLIB_ENTRIES: FlatEntry[] = [
 function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }: { uri: string; externalClassDefs: ExternalClassEntry[]; importedClasses: ImportedClass[]; entities: MinisEntity[] }) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [filter, setFilter] = useState('');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -2422,22 +3187,48 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
     else setFilter('');
   }, [anchorEl]);
 
-  // Build flat list: builtins first, then manifest entries, then plain imports (deduplicated)
+  // Build flat list: builtins, then manifest entries, then in-file classes,
+  // then plain imports (deduplicated). The in-file branch picks up
+  // `class X extends Node {}` declared next to the wiring code — without it
+  // user-defined classes never showed up in Add Instance.
   const allEntries: FlatEntry[] = useMemo(() => {
     const manifestNames = new Set(externalClassDefs.map((e) => e.className));
     const fromManifest: FlatEntry[] = externalClassDefs.map((e) => ({
       packageName: e.packageName, className: e.className, paramDefs: e.def.paramDefs,
     }));
+    const fromLocal: FlatEntry[] = entities
+      .filter((e) => e.kind === 'class' && !manifestNames.has(e.varName))
+      .map((e) => ({ packageName: '__project__', className: e.varName, paramDefs: e.paramDefs }));
+    const localNames = new Set(fromLocal.map((e) => e.className));
     const fromImports: FlatEntry[] = importedClasses
-      .filter(({ className }) => !manifestNames.has(className))
+      .filter(({ className }) => !manifestNames.has(className) && !localNames.has(className))
       .map(({ packageName, className }) => ({ packageName, className }));
-    return [...BUILTIN_MINISLIB_ENTRIES, ...fromManifest, ...fromImports];
-  }, [externalClassDefs, importedClasses]);
+    return [...BUILTIN_MINISLIB_ENTRIES, ...fromManifest, ...fromLocal, ...fromImports];
+  }, [externalClassDefs, importedClasses, entities]);
 
   const q = filter.toLowerCase();
   const visible = q
     ? allEntries.filter((e) => e.className.toLowerCase().includes(q) || e.packageName.toLowerCase().includes(q))
     : allEntries;
+
+  // Group entries by package, preserving first-seen order (builtins → manifest → imports).
+  // While filtering, force groups expanded so users always see what matched.
+  const groups = useMemo(() => {
+    const map = new Map<string, FlatEntry[]>();
+    for (const e of visible) {
+      const arr = map.get(e.packageName);
+      if (arr) arr.push(e); else map.set(e.packageName, [e]);
+    }
+    return Array.from(map.entries());
+  }, [visible]);
+
+  const toggleGroup = (pkg: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(pkg)) next.delete(pkg); else next.add(pkg);
+      return next;
+    });
+  };
 
   const handleInsert = (entry: FlatEntry) => {
     setAnchorEl(null);
@@ -2455,6 +3246,20 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
     } else {
       snippet = `const ${varName} = new ${entry.className}();\n`;
     }
+
+    // Patch import for npm packages (manifest entries + bare imports). Skip
+    // pseudo-packages like '__project__' (local class in same file) and any
+    // unknown source — those need no import line.
+    const pkg = entry.packageName;
+    const needsImport = pkg && pkg !== '__project__' && !pkg.startsWith('virtual://');
+    if (needsImport) {
+      const model = findModel(targetUri);
+      if (model) {
+        const patched = patchImportsInCode(model.getValue(), [{ pkg, name: entry.className }], []);
+        replaceModelContent(model, patched);
+      }
+    }
+
     const inserted = insertAtEnd(snippet, targetUri);
     addSnippet(snippet, inserted);
   };
@@ -2504,21 +3309,50 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
         {visible.length === 0 && (
           <Typography sx={{ fontSize: 11, color: '#45475a', px: 2, py: 1 }}>No matches</Typography>
         )}
-        {visible.map((entry) => (
-          <MenuItem
-            key={`${entry.packageName}:${entry.className}`}
-            onClick={() => handleInsert(entry)}
-            sx={{ fontSize: 12, color: '#cdd6f4', py: 0.75, gap: 1.25, '&:hover': { background: '#313244' } }}
-          >
-            <span style={{ fontSize: 15, width: 22, textAlign: 'center', flexShrink: 0 }}>
-              {entry.packageName === '@mhersztowski/minislib' ? '⚡' : '🧩'}
-            </span>
-            <Box>
-              <Typography sx={{ fontSize: 12, color: '#81c784', fontWeight: 600, lineHeight: 1.4 }}>{entry.className}</Typography>
-              <Typography sx={{ fontSize: 10, color: '#6c7086' }}>{entry.packageName}</Typography>
-            </Box>
-          </MenuItem>
-        ))}
+        <Box sx={{ maxHeight: 480, overflowY: 'auto' }}>
+          {groups.map(([pkg, items]) => {
+            // While filtering, force expanded so user sees every hit.
+            const isCollapsed = !q && collapsed.has(pkg);
+            const isBuiltin = pkg === '@mhersztowski/minislib';
+            const isLocal = pkg === '__project__';
+            const headerIcon = isBuiltin ? '⚡' : isLocal ? '🏛' : '🧩';
+            const headerLabel = isLocal ? 'this file' : pkg;
+            const headerColor = isLocal ? '#a6e3a1' : '#cba6f7';
+            return (
+              <Box key={pkg}>
+                <Box
+                  onClick={() => toggleGroup(pkg)}
+                  sx={{
+                    display: 'flex', alignItems: 'center', gap: 0.75,
+                    px: 1.25, py: 0.5, cursor: 'pointer',
+                    background: '#181825', borderTop: '1px solid #313244',
+                    '&:hover': { background: '#202030' },
+                  }}
+                >
+                  <span style={{ fontSize: 9, width: 10, color: '#6c7086' }}>
+                    {isCollapsed ? '▸' : '▾'}
+                  </span>
+                  <span style={{ fontSize: 13 }}>{headerIcon}</span>
+                  <Typography sx={{ fontSize: 11, color: headerColor, fontWeight: 600, flex: 1, fontFamily: 'monospace' }}>
+                    {headerLabel}
+                  </Typography>
+                  <Typography sx={{ fontSize: 10, color: '#6c7086' }}>{items.length}</Typography>
+                </Box>
+                {!isCollapsed && items.map((entry) => (
+                  <MenuItem
+                    key={`${entry.packageName}:${entry.className}`}
+                    onClick={() => handleInsert(entry)}
+                    sx={{ fontSize: 12, color: '#cdd6f4', py: 0.4, pl: 4, gap: 0.75, '&:hover': { background: '#313244' } }}
+                  >
+                    <Typography sx={{ fontSize: 12, color: '#81c784', fontWeight: 500 }}>
+                      {entry.className}
+                    </Typography>
+                  </MenuItem>
+                ))}
+              </Box>
+            );
+          })}
+        </Box>
       </Menu>
     </>
   );
@@ -2562,7 +3396,7 @@ function SaveSourceButton({ uri }: { uri: string }) {
     try {
       const resp = await fetch(vfsApiUrl(vfsPath, 'writeFile'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...vfsAuthHeader() },
         body: JSON.stringify({ data: btoa(binary) }),
       });
       if (resp.ok) globalEventBus.emit('system:editor:didSave', { uri });
@@ -2645,7 +3479,7 @@ function toRelativeImportPath(fromFile: string, toFile: string): string {
 /** Read VFS directory contents. Returns [] on error. */
 async function vfsReadDir(path: string): Promise<{ name: string; isDir: boolean }[]> {
   try {
-    const res = await fetch(vfsApiUrl(path, 'readdir'));
+    const res = await fetch(vfsApiUrl(path, 'readdir'), { headers: vfsAuthHeader() });
     if (!res.ok) return [];
     const { entries } = await res.json() as { entries: { name: string; type: number }[] };
     return entries.map(({ name, type }) => ({ name, isDir: type === 2 }));
@@ -2655,7 +3489,7 @@ async function vfsReadDir(path: string): Promise<{ name: string; isDir: boolean 
 /** Read a VFS file and return its text content. Returns null on error. */
 async function vfsReadFileText(path: string): Promise<string | null> {
   try {
-    const res = await fetch(vfsApiUrl(path, 'readFile'));
+    const res = await fetch(vfsApiUrl(path, 'readFile'), { headers: vfsAuthHeader() });
     if (!res.ok) return null;
     const { data } = await res.json() as { data: string };
     return atob(data);
@@ -2697,7 +3531,7 @@ function parseAllImports(code: string): { packageName: string; names: string[] }
 async function readPackageJsonDeps(projectRoot: string): Promise<string[]> {
   try {
     const path = `${projectRoot}/package.json`;
-    const res = await fetch(vfsApiUrl(path, 'readFile'));
+    const res = await fetch(vfsApiUrl(path, 'readFile'), { headers: vfsAuthHeader() });
     if (!res.ok) return [];
     const { data } = await res.json() as { data: string };
     const pkg = JSON.parse(atob(data)) as {
@@ -3391,12 +4225,13 @@ function NodeTreeRow({
 
 /** Single imported-file section inside the tree panel. */
 function ImportedFileSection({
-  filePath, extEntities, localEntities, uri, onRemove,
+  filePath, extEntities, localEntities, uri, status, onRemove,
 }: {
   filePath: string;
   extEntities: MinisEntity[];
   localEntities: MinisEntity[];
   uri: string;
+  status?: { ok: boolean; message: string };
   onRemove: () => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -3459,8 +4294,25 @@ function ImportedFileSection({
 
       {expanded && (
         <>
+          {/* Outcome banner — tells the user exactly what was/wasn't written. */}
+          {status && (
+            <Box sx={{
+              mx: 1, my: 0.5, px: 1, py: 0.5,
+              fontSize: 10, borderRadius: 0.5,
+              background: status.ok ? '#1e3a2e' : '#3a1e22',
+              color: status.ok ? '#a6e3a1' : '#f38ba8',
+              border: `1px solid ${status.ok ? '#a6e3a144' : '#f38ba844'}`,
+              fontFamily: status.ok ? 'monospace' : 'inherit',
+              wordBreak: 'break-all',
+            }}>
+              {status.ok ? `✓ Added to active file: ${status.message}` : `⚠ ${status.message}`}
+            </Box>
+          )}
+
           {classes.length === 0 ? (
-            <Typography sx={{ fontSize: 10, color: '#45475a', px: 2, py: 0.5 }}>No classes found</Typography>
+            <Typography sx={{ fontSize: 10, color: '#45475a', px: 2, py: 0.5 }}>
+              No <code>extends Node/MObject</code> classes — only plain <code>export class X</code> were imported (no graph entities to add).
+            </Typography>
           ) : (
             <>
               {/* Flat class list with "Add" buttons */}
@@ -3554,7 +4406,11 @@ function NodeTreePanel({
   const [open, setOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filePickerOpen, setFilePickerOpen] = useState(false);
-  const [importedFiles, setImportedFiles] = useState<{ path: string; entities: MinisEntity[] }[]>([]);
+  const [importedFiles, setImportedFiles] = useState<{
+    path: string;
+    entities: MinisEntity[];
+    status: { ok: boolean; message: string };
+  }[]>([]);
 
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{ mouseX: number; mouseY: number; item: NodeTreeItem | null } | null>(null);
@@ -3606,9 +4462,39 @@ function NodeTreePanel({
 
   const handleFileImport = (path: string, code: string) => {
     setFilePickerOpen(false);
-    if (importedFiles.find((f) => f.path === path)) return;
     const { entities: extEntities } = parseMinisEntities(code);
-    setImportedFiles((prev) => [...prev, { path, entities: extEntities }]);
+
+    // Pick class names that should land in the import:
+    //   1. Strict pass — `class X extends Node/MObject/...` recognised by parseMinisEntities
+    //   2. Fallback — `export class X` regardless of base class (handles modules that
+    //      don't import minislib themselves but still export usable classes)
+    const strictClassNames = extEntities.filter((e) => e.kind === 'class').map((e) => e.varName);
+    const classNames = strictClassNames.length > 0 ? strictClassNames : parseExportedClassNames(code);
+
+    let status: { ok: boolean; message: string };
+    if (!uri) {
+      status = { ok: false, message: 'No active source file — open a .ts file first.' };
+    } else if (classNames.length === 0) {
+      status = { ok: false, message: `No exported classes found in ${path.split('/').pop()}.` };
+    } else {
+      const model = findModel(uri);
+      if (!model) {
+        status = { ok: false, message: 'Active editor model not found — try clicking inside the source tab first.' };
+      } else {
+        const relPath = toRelativeImportPath(uri, path);
+        const patched = patchImportsInCode(
+          model.getValue(),
+          classNames.map((name) => ({ pkg: relPath, name })),
+          [],
+        );
+        replaceModelContent(model, patched);
+        status = { ok: true, message: `import { ${classNames.join(', ')} } from '${relPath}'` };
+      }
+    }
+    console.log('[MinisLib] Import file:', path, '→', status.message);
+
+    if (importedFiles.find((f) => f.path === path)) return;
+    setImportedFiles((prev) => [...prev, { path, entities: extEntities, status }]);
   };
 
   const removeImport = (path: string) =>
@@ -3800,6 +4686,7 @@ function NodeTreePanel({
                   extEntities={f.entities}
                   localEntities={entities}
                   uri={uri}
+                  status={f.status}
                   onRemove={() => removeImport(f.path)}
                 />
               ))}
