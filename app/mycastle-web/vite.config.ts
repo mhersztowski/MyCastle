@@ -34,6 +34,12 @@ export default defineConfig({
         target: 'ws://localhost:1894',
         ws: true,
       },
+      // Public Drive file URLs — backend serves data/Minis/Users/{u}/drive/public/*
+      // without auth at /public/drive/users/{u}/{path}.
+      '/public': {
+        target: 'http://localhost:1894',
+        changeOrigin: true,
+      },
     },
   },
   build: {

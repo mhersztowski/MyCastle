@@ -98,6 +98,7 @@ import CastleAgentPage from './pages/agent/CastleAgentPage';
 import ShoppingPage from './pages/shopping/ShoppingPage';
 import HealthPage from './pages/health/HealthPage';
 import MemoryPage from './pages/memory/MemoryPage';
+import DrivePage from './pages/drive/DrivePage';
 
 // Layout pages — minis
 import HomePage from './pages/HomePage';
@@ -263,6 +264,7 @@ function AppRoot() {
                   <Route path="/user/:userName/pim/shopping" element={<ShoppingPage />} />
                   <Route path="/user/:userName/pim/health" element={<HealthPage />} />
                   <Route path="/user/:userName/pim/memory" element={<MemoryPage />} />
+                  <Route path="/user/:userName/pim/drive" element={<DrivePage />} />
                   <Route path="/user/:userName/pim/automate" element={<AutomateListPage />} />
                   <Route path="/user/:userName/pim/objectviewer" element={<ObjectViewerPage />} />
                   <Route path="/user/:userName/pim/components" element={<ComponentsPage />} />

@@ -52,6 +52,27 @@ const CRUD_CONFIGS: Record<string, CrudConfig> = {
   users: { filePath: `${MINIS_ROOT}/Admin/Users.json`, itemsKey: 'items', typeValue: 'users', lookupKey: 'id' },
 };
 
+/**
+ * MIME map used by the public Drive endpoint. HttpUploadServer's own
+ * MIME_TYPES is module-private, so we duplicate the entries we actually
+ * care about. Anything not listed falls back to application/octet-stream
+ * which makes browsers download rather than render — a safe default.
+ */
+const DRIVE_MIME: Record<string, string> = {
+  '.html': 'text/html', '.htm': 'text/html',
+  '.css': 'text/css', '.js': 'application/javascript', '.mjs': 'application/javascript',
+  '.json': 'application/json', '.xml': 'application/xml', '.csv': 'text/csv',
+  '.txt': 'text/plain', '.md': 'text/markdown',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.avif': 'image/avif', '.ico': 'image/x-icon', '.bmp': 'image/bmp',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.flac': 'audio/flac',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip', '.tar': 'application/x-tar', '.gz': 'application/gzip',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf',
+};
+
 export class MycastleHttpServer extends HttpUploadServer {
   private static readonly NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
   private swaggerUiDir: string | null = null;
@@ -161,7 +182,62 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Public Drive file serving — no auth required.
+    // GET /public/drive/users/{userName}/{path…}
+    //   → reads from data/Minis/Users/{userName}/drive/public/{path}
+    // Path traversal blocked: the request path MUST resolve INSIDE
+    // `drive/public/`; anything else gets a 403.
+    if (req.method === 'GET' && req.url?.startsWith('/public/drive/users/')) {
+      await this.handleDrivePublic(req, res);
+      return;
+    }
+
     await super.handleRequest(req, res);
+  }
+
+  private async handleDrivePublic(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const urlObj = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+      const m = urlObj.pathname.match(/^\/public\/drive\/users\/([^/]+)\/(.+)$/);
+      if (!m) { this.sendJsonResponse(res, 400, { error: 'Invalid public Drive URL' }); return; }
+
+      const userName = decodeURIComponent(m[1]);
+      const rest = decodeURIComponent(m[2]);
+      // Normalise + reject path-traversal attempts (../ outside drive/public).
+      const userBase = `Minis/Users/${userName}/drive/public`;
+      const requested = path.posix.normalize(`${userBase}/${rest}`);
+      if (!requested.startsWith(`${userBase}/`)) {
+        this.sendJsonResponse(res, 403, { error: 'Path traversal not allowed' });
+        return;
+      }
+
+      // FileSystem rootDir = data/; readBinaryFile reads relative to it.
+      let fileData;
+      try {
+        fileData = await this.fileSystem.readBinaryFile(requested);
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'File not found' });
+        return;
+      }
+
+      const ext = path.extname(rest).toLowerCase();
+      const mimeType = DRIVE_MIME[ext] ?? fileData.mimeType ?? 'application/octet-stream';
+      const buffer = Buffer.from(fileData.data, 'base64');
+
+      // Inline display in browser; client uses ?download=1 to force save dialog.
+      const force = urlObj.searchParams.get('download') === '1';
+      const filename = path.basename(rest);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Length', buffer.length);
+      res.setHeader('Content-Disposition',
+        `${force ? 'attachment' : 'inline'}; filename="${filename.replace(/"/g, '_')}"`);
+      res.writeHead(200);
+      res.end(buffer);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.sendJsonResponse(res, 500, { error: msg });
+    }
   }
 
   /**
