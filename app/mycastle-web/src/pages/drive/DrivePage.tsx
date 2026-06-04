@@ -236,22 +236,44 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-/** Download a file by streaming the VFS readFile endpoint to a Blob. */
-async function downloadFile(userName: string, relPath: string, name: string): Promise<void> {
-  const r = await fetch(apiUrl(userName, 'readFile', relPath), { headers: authHeaders() });
-  if (!r.ok) throw new Error(`download failed: ${r.status}`);
-  const json = await r.json() as { data?: string };
-  if (!json.data) throw new Error('empty response');
-  // base64 → Blob
-  const binary = atob(json.data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes]);
+/** Read the JWT from localStorage — same source as authHeaders(). */
+function authToken(): string | undefined {
+  try {
+    const raw = localStorage.getItem('minis_current_user');
+    return raw ? (JSON.parse(raw) as { token?: string }).token : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * Trigger a file download. Uses the backend's `?download=1` mode which streams
+ * raw bytes with `Content-Disposition: attachment` — works in:
+ *   - Desktop browsers (handled by the browser's native download UI)
+ *   - Android WebView (intercepted by `onShouldStartLoadWithRequest` in
+ *     `mycastle-mobile/App.tsx`, which hands the URL to the system browser /
+ *     Chrome so Android's download manager takes over)
+ *
+ * The old blob + `<a download>` trick worked on desktop only — Android WebView
+ * silently ignores the `download` attribute on JS-created blob URLs.
+ *
+ * Token goes in the query string because WebView nav + `window.open` cannot
+ * carry an Authorization header. The token URL is short-lived (per-session JWT).
+ */
+function downloadFile(userName: string, relPath: string, _name: string): void {
+  const token = authToken();
+  const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/readFile`, window.location.origin);
+  u.searchParams.set('path', backendPath(userName, relPath));
+  u.searchParams.set('download', '1');
+  if (token) u.searchParams.set('token', token);
+  // Anchor click — desktop browsers honor Content-Disposition: attachment and
+  // never actually navigate; Android WebView fires onShouldStartLoadWithRequest
+  // for this URL and the mobile shell delegates to the system browser.
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = name;
+  link.href = u.pathname + u.search;
+  link.rel = 'noopener';
+  // No `target="_blank"` — would leave a blank tab dangling on desktop.
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(link.href);
+  link.remove();
 }
 
 // Path under /drive/ that lives in the public subtree
@@ -330,10 +352,11 @@ export default function DrivePage(): React.JSX.Element {
   const hasPrev = currentPreviewIdx > 0;
   const hasNext = currentPreviewIdx >= 0 && currentPreviewIdx < fileEntries.length - 1;
 
-  // Layout flags. The right panel embed is desktop/tablet only (>=md, ~900px);
-  // on phone-sized screens we fall back to the existing full-screen Dialog.
+  // Layout flags. The right panel embed kicks in at tablet portrait (≥sm,
+  // ~600px) — small phones in portrait still fall back to the full-screen
+  // Dialog because the sidebar+panel can't both fit comfortably below 600px.
   const theme = useTheme();
-  const isWide = useMediaQuery(theme.breakpoints.up('md'));
+  const isWide = useMediaQuery(theme.breakpoints.up('sm'));
   const panelOpen = !!(viewing || mdEditing);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
@@ -547,9 +570,10 @@ export default function DrivePage(): React.JSX.Element {
   }, [userName, cwd, toast]);
 
   // Open .md in MdEditor.
-  //   - Desktop/tablet (≥md): inline split-view inside DrivePage — Drive listing
-  //     on the left, MdEditor on the right. Fullscreen toggle hides the left side.
-  //   - Mobile (<md): new tab to `/editor/md/{path}` (MdEditorPage uses
+  //   - Tablet portrait + desktop (≥sm): inline split-view inside DrivePage —
+  //     Drive listing on the left, MdEditor on the right. Fullscreen toggle
+  //     hides the left side.
+  //   - Phone portrait (<sm): new tab to `/editor/md/{path}` (MdEditorPage uses
   //     `mqttClient.readFile` which resolves against ROOT_DIR, hence the full path).
   const openInMdEditor = useCallback(async (entry: VfsEntry) => {
     const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
@@ -650,48 +674,57 @@ export default function DrivePage(): React.JSX.Element {
     }
   }, [newFileDialog, userName, cwd, refresh, toast]);
 
+  // Suggest a filename based on what the text content looks like — markdown
+  // header, JSON, XML, or plain text. Used both at dialog-open time and again
+  // after manual paste (mobile fallback path).
+  const suggestNameForText = (text: string): string => {
+    const trim = text.trim();
+    if (!trim) return 'clipboard.txt';
+    if (trim.startsWith('#')) return 'clipboard.md';
+    if ((trim.startsWith('{') && trim.endsWith('}')) || (trim.startsWith('[') && trim.endsWith(']'))) return 'clipboard.json';
+    if (trim.startsWith('<') && trim.endsWith('>')) return 'clipboard.xml';
+    return 'clipboard.txt';
+  };
+
   const openCreateFromClipboard = useCallback(async () => {
+    // Step 1 — try image clipboard via `read()`. Only modern desktop browsers
+    // in a secure context support it; on mobile / HTTP it silently fails.
     try {
-      // Prefer the richer `read()` API — picks up image blobs from screenshot
-      // tools (PrintScreen, Win+Shift+S, ⌘+Shift+4) which `readText()` misses.
       const clipReadable = navigator.clipboard as Clipboard & { read?: () => Promise<ClipboardItem[]> };
-      if (typeof clipReadable.read === 'function') {
-        try {
-          const items = await clipReadable.read();
-          for (const item of items) {
-            const imgType = item.types.find((t) => t.startsWith('image/'));
-            if (imgType) {
-              const blob = await item.getType(imgType);
-              const b64 = await blobToBase64(blob);
-              const ext = imgType.split('/')[1] || 'png';
-              const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-              setClipboardCreateDialog({
-                name: `clipboard-${ts}.${ext}`,
-                kind: 'image',
-                textContent: '',
-                imageB64: b64,
-                imageMime: imgType,
-              });
-              return;
-            }
+      if (typeof clipReadable?.read === 'function') {
+        const items = await clipReadable.read();
+        for (const item of items) {
+          const imgType = item.types.find((t) => t.startsWith('image/'));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            const b64 = await blobToBase64(blob);
+            const ext = imgType.split('/')[1] || 'png';
+            const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            setClipboardCreateDialog({
+              name: `clipboard-${ts}.${ext}`,
+              kind: 'image', textContent: '', imageB64: b64, imageMime: imgType,
+            });
+            return;
           }
-        } catch { /* clipboard.read() can fail (permission / no items) — try text */ }
+        }
       }
-      const text = await navigator.clipboard.readText();
-      if (!text) { toast('Schowek jest pusty', 'info'); return; }
-      // Heuristic filename — first chars hint at the format.
-      const trim = text.trim();
-      let suggested = 'clipboard.txt';
-      if (trim.startsWith('#')) suggested = 'clipboard.md';
-      else if ((trim.startsWith('{') && trim.endsWith('}')) || (trim.startsWith('[') && trim.endsWith(']'))) suggested = 'clipboard.json';
-      else if (trim.startsWith('<') && trim.endsWith('>')) suggested = 'clipboard.xml';
-      setClipboardCreateDialog({
-        name: suggested, kind: 'text', textContent: text, imageB64: '', imageMime: '',
-      });
-    } catch (err) {
-      toast(`Brak dostępu do schowka: ${(err as Error).message}`, 'error');
-    }
-  }, [toast]);
+    } catch { /* image clipboard not available — fall through to text */ }
+
+    // Step 2 — try text clipboard. Same constraints (secure context + permission).
+    // If this fails (mobile, HTTP, denied permission, or just empty clipboard),
+    // we still open the dialog with empty content and let the user paste manually
+    // via the OS keyboard. The text field auto-focuses so paste works immediately.
+    let prefilledText = '';
+    try {
+      prefilledText = await navigator.clipboard.readText();
+    } catch { /* clipboard API blocked — manual paste fallback */ }
+    setClipboardCreateDialog({
+      name: suggestNameForText(prefilledText),
+      kind: 'text',
+      textContent: prefilledText,
+      imageB64: '', imageMime: '',
+    });
+  }, []);
 
   const doCreateFromClipboard = useCallback(async () => {
     if (!clipboardCreateDialog) return;
@@ -824,7 +857,10 @@ export default function DrivePage(): React.JSX.Element {
       <Box sx={{
         p: 2,
         display: 'flex', flexDirection: 'column',
-        flex: showRightPanel ? `0 0 clamp(360px, 38%, 620px)` : 1,
+        // 280-620px sidebar: low end fits tablet portrait (~600px viewport)
+        // with ~320px left for the right panel; high end caps on ultrawides
+        // so the editor gets the dominant share.
+        flex: showRightPanel ? `0 0 clamp(280px, 36%, 620px)` : 1,
         minWidth: 0, overflow: 'hidden',
         borderRight: showRightPanel ? '1px solid' : 'none',
         borderColor: 'divider',
@@ -972,8 +1008,8 @@ export default function DrivePage(): React.JSX.Element {
               <TableRow>
                 <TableCell></TableCell>
                 <TableCell>Nazwa</TableCell>
-                <TableCell sx={{ width: 100 }}>Rozmiar</TableCell>
-                <TableCell sx={{ width: 200 }}>Modyfikowane</TableCell>
+                <TableCell sx={{ width: 100, display: { xs: 'none', sm: 'table-cell' } }}>Rozmiar</TableCell>
+                <TableCell sx={{ width: 200, display: { xs: 'none', sm: 'table-cell' } }}>Modyfikowane</TableCell>
                 <TableCell sx={{ width: 50 }}></TableCell>
               </TableRow>
             </TableHead>
@@ -999,8 +1035,12 @@ export default function DrivePage(): React.JSX.Element {
                         {pub && <Tooltip title="Publiczny — dostępny przez HTTP bez logowania"><PublicIcon fontSize="small" color="success" /></Tooltip>}
                       </Stack>
                     </TableCell>
-                    <TableCell>{e.type === DIR_TYPE ? '—' : formatBytes(e.size)}</TableCell>
-                    <TableCell><Typography variant="caption">{formatDate(e.mtime)}</Typography></TableCell>
+                    <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
+                      {e.type === DIR_TYPE ? '—' : formatBytes(e.size)}
+                    </TableCell>
+                    <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
+                      <Typography variant="caption">{formatDate(e.mtime)}</Typography>
+                    </TableCell>
                     <TableCell>
                       <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); setMenuFor({ anchor: ev.currentTarget, entry: e }); }}>
                         <MoreVertIcon />
@@ -1356,13 +1396,39 @@ export default function DrivePage(): React.JSX.Element {
                 </Typography>
               </Box>
             ) : (
-              <TextField fullWidth multiline rows={12} label="Treść (edytowalna)"
-                value={clipboardCreateDialog.textContent}
-                onChange={(e) => setClipboardCreateDialog({ ...clipboardCreateDialog, textContent: e.target.value })}
-                margin="normal"
-                slotProps={{ htmlInput: { style: { fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: 13 } } }}
-                helperText={`${clipboardCreateDialog.textContent.length} znaków`}
-              />
+              <>
+                {!clipboardCreateDialog.textContent && (
+                  <Alert severity="info" sx={{ mt: 1 }}>
+                    Twoja przeglądarka nie pozwala odczytać systemowego schowka automatycznie
+                    (typowo: telefon, tablet, lub strona pod HTTP).
+                    <br />
+                    <strong>Wklej zawartość ręcznie w polu poniżej</strong> —
+                    użyj <code>⌘V</code>/<code>Ctrl+V</code> na desktopie,
+                    lub przytrzymaj pole i wybierz <strong>Wklej</strong> na mobile.
+                  </Alert>
+                )}
+                <TextField fullWidth multiline rows={12} label="Treść (wklej lub edytuj)"
+                  autoFocus={!clipboardCreateDialog.textContent}
+                  value={clipboardCreateDialog.textContent}
+                  onChange={(e) => {
+                    const newText = e.target.value;
+                    setClipboardCreateDialog((prev) => {
+                      if (!prev) return null;
+                      // Re-detect filename only if it's still the default and we're
+                      // transitioning from empty → content (right after manual paste).
+                      // This catches the mobile fallback flow without surprising the
+                      // user who already renamed the file.
+                      const wasEmpty = !prev.textContent && newText;
+                      const stillDefault = prev.name === 'clipboard.txt';
+                      const nextName = (wasEmpty && stillDefault) ? suggestNameForText(newText) : prev.name;
+                      return { ...prev, textContent: newText, name: nextName };
+                    });
+                  }}
+                  margin="normal"
+                  slotProps={{ htmlInput: { style: { fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: 13 } } }}
+                  helperText={`${clipboardCreateDialog.textContent.length} znaków`}
+                />
+              </>
             )}
           </DialogContent>
           <DialogActions>

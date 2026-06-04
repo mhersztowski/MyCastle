@@ -716,6 +716,17 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     // --- Protected endpoints (auth required) ---
 
+    // Allow `?token=<jwt>` in the URL as a fallback when no Authorization header
+    // is present — needed for download URLs that the user opens in a new tab,
+    // and for Android WebView which can't attach custom headers when delegating
+    // a navigation to the system browser. Header still wins if present.
+    if (!req.headers.authorization) {
+      const queryToken = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`).searchParams.get('token');
+      if (queryToken) {
+        req.headers.authorization = `Bearer ${queryToken}`;
+      }
+    }
+
     const user = checkAuth(req, this.jwtService, this.apiKeyService);
     if (!user) {
       this.sendJsonResponse(res, 401, { error: 'Unauthorized' });
@@ -2358,7 +2369,24 @@ export class MycastleHttpServer extends HttpUploadServer {
           this.sendJsonResponse(res, 200, { entries }); return;
         }
         case 'readFile': {
-          const data = await this.vfs.readFile(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          const pathStr = assertPath(urlObj.searchParams.get('path') ?? '/');
+          const data = await this.vfs.readFile(pathStr);
+          // `download=1` → respond with raw bytes + Content-Disposition: attachment.
+          // Used by Drive UI and by Android WebView (which can't honor JS-side blob
+          // downloads — needs a real URL the OS can hand to the system browser).
+          if (urlObj.searchParams.get('download') === '1') {
+            const filename = pathStr.split('/').filter(Boolean).pop() || 'file';
+            // RFC 5987 filename* for non-ASCII names + plain ASCII fallback.
+            const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+            res.writeHead(200, {
+              'Content-Type': 'application/octet-stream',
+              'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+              'Content-Length': String(data.length),
+              'Cache-Control': 'no-store',
+            });
+            res.end(Buffer.from(data));
+            return;
+          }
           this.sendJsonResponse(res, 200, { data: Buffer.from(data).toString('base64') }); return;
         }
         case 'writeFile': {
