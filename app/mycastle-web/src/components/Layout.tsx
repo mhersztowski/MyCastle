@@ -143,6 +143,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'To-Do List', icon: <ChecklistIcon />, path: `/user/${userName}/pim/todolist` },
             { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },
             { text: 'Health', icon: <FitnessCenterIcon />, path: `/user/${userName}/pim/health` },
+            { text: 'Memory', icon: <PsychologyIcon />, path: `/user/${userName}/pim/memory` },
             { text: 'Persons', icon: <PersonIcon />, path: `/user/${userName}/pim/person` },
             { text: 'Projects', icon: <FolderIcon />, path: `/user/${userName}/pim/project` },
             { text: 'Agent', icon: <SmartToyIcon />, path: `/user/${userName}/pim/agent` },

@@ -1363,6 +1363,20 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Memory PIM page — AI proxy endpoints (POST /api/users/{userName}/memory/ai/{op})
+    //   /memory/ai/check          → sonnet judges a free-text answer
+    //   /memory/ai/generate-one   → opus generates one question + answer
+    //   /memory/ai/generate-batch → opus analyses existing and proposes N new ones
+    //   /memory/ai/explain        → opus deep-explains the question
+    //   /memory/ai/find-image     → Wikipedia search → first thumbnail
+    const memoryAiMatch = apiPath.match(/^\/users\/([^/]+)\/memory\/ai\/([\w-]+)$/);
+    if (memoryAiMatch && method === 'POST') {
+      const userName = decodeURIComponent(memoryAiMatch[1]);
+      const op = memoryAiMatch[2];
+      await this.handleMemoryAi(req, res, userName, op);
+      return;
+    }
+
     // Python: run python script (GET/SSE /api/users/{userName}/python/run?subpath=...&script=...)
     const pythonRunMatch = apiPath.match(/^\/users\/([^/]+)\/python\/run$/);
     if (pythonRunMatch && method === 'GET') {
@@ -2704,6 +2718,296 @@ const { password, ...safeBody } = body;
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'AI request failed' });
     }
+  }
+
+  // ─── Memory PIM page — AI proxy ───────────────────────────────────────────
+
+  /**
+   * Low-level Anthropic call shared by every Memory AI handler.
+   *
+   * - reads `ANTHROPIC_API_KEY` from env (set on the host / Coolify);
+   *   refuses gracefully when missing so the frontend can show a useful
+   *   error instead of a 500.
+   * - bounded timeout via AbortController (default 60 s) so a hung
+   *   Anthropic deploy doesn't lock the request indefinitely.
+   * - normalises every failure to a real Error message.
+   *
+   * `model` accepts the short alias `'opus' | 'sonnet' | 'haiku'` which
+   * maps to the current Claude 4.x ids, or a full model id.
+   */
+  private async callMemoryAnthropic(opts: {
+    model: 'opus' | 'sonnet' | 'haiku' | string;
+    system: string;
+    user: string;
+    maxTokens?: number;
+    timeoutMs?: number;
+  }): Promise<string> {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set on the server');
+
+    const MODEL_MAP: Record<string, string> = {
+      opus: 'claude-opus-4-7',
+      sonnet: 'claude-sonnet-4-6',
+      haiku: 'claude-haiku-4-5-20251001',
+    };
+    const model = MODEL_MAP[opts.model] ?? opts.model;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 60_000);
+    try {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: opts.maxTokens ?? 2048,
+          system: opts.system,
+          messages: [{ role: 'user', content: opts.user }],
+        }),
+      });
+      const data = await r.json() as { content?: Array<{ text?: string }>; error?: { message?: string } };
+      if (!r.ok) throw new Error(data.error?.message ?? `Anthropic error ${r.status}`);
+      const text = data.content?.[0]?.text;
+      if (!text) throw new Error('Anthropic returned empty content');
+      return text;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Strip leading/trailing markdown fences from a model's JSON reply
+   * (```json … ```), trim whitespace, then JSON.parse with a useful error
+   * when the model returned malformed JSON.
+   */
+  private parseAnthropicJson<T>(raw: string, label: string): T {
+    let text = raw.trim();
+    const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+    if (fenced) text = fenced[1].trim();
+    try { return JSON.parse(text) as T; }
+    catch (err) {
+      throw new Error(`${label}: model returned malformed JSON — ${(err as Error).message}. First 200 chars: ${text.slice(0, 200)}`);
+    }
+  }
+
+  private async handleMemoryAi(req: IncomingMessage, res: ServerResponse, userName: string, op: string): Promise<void> {
+    void userName;   // currently scoped per-token; reserved for future per-user history / rate-limit
+    try {
+      const body = await this.parseRequestBody(req) as Record<string, unknown>;
+      switch (op) {
+        case 'check':           return await this.memoryCheck(res, body);
+        case 'generate-one':    return await this.memoryGenerateOne(res, body);
+        case 'generate-batch':  return await this.memoryGenerateBatch(res, body);
+        case 'explain':         return await this.memoryExplain(res, body);
+        case 'find-image':      return await this.memoryFindImage(res, body);
+        default:
+          this.sendJsonResponse(res, 404, { error: `Unknown memory AI op: ${op}` });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.sendJsonResponse(res, 500, { error: msg });
+    }
+  }
+
+  private async memoryCheck(res: ServerResponse, body: Record<string, unknown>): Promise<void> {
+    const questionMarkdown = String(body.questionMarkdown ?? '');
+    const canonicalAnswer = String(body.canonicalAnswer ?? '');
+    const userAnswer = String(body.userAnswer ?? '');
+    if (!questionMarkdown || !userAnswer) {
+      this.sendJsonResponse(res, 400, { error: 'questionMarkdown and userAnswer are required' });
+      return;
+    }
+    const system = [
+      'You are a strict but fair quiz judge.',
+      'Compare the user\'s answer to the canonical answer for the given question.',
+      'Treat the user as correct when their answer captures the key facts of the canonical answer,',
+      'even if phrased differently. Be lenient on wording, strict on factual content.',
+      'Respond ONLY with a single JSON object, no markdown fences, with keys:',
+      '  "correct" (boolean) and "verdict" (string, 1-3 sentences explaining your decision).',
+      'DEFAULT LANGUAGE: Polish. Write the "verdict" field in Polish unless the question itself is in another language —',
+      'in that case match the question\'s language.',
+    ].join(' ');
+    const user = [
+      'Question (Markdown):',
+      questionMarkdown,
+      '',
+      'Canonical answer:',
+      canonicalAnswer || '(none — judge on plausibility / general correctness)',
+      '',
+      'User\'s answer:',
+      userAnswer,
+    ].join('\n');
+    const raw = await this.callMemoryAnthropic({ model: 'sonnet', system, user, maxTokens: 600 });
+    const parsed = this.parseAnthropicJson<{ correct: boolean; verdict: string }>(raw, 'check');
+    this.sendJsonResponse(res, 200, { correct: Boolean(parsed.correct), verdict: String(parsed.verdict ?? '') });
+  }
+
+  private async memoryGenerateOne(res: ServerResponse, body: Record<string, unknown>): Promise<void> {
+    const categoryName = String(body.categoryName ?? '');
+    const categoryDescription = String(body.categoryDescription ?? '');
+    const topic = body.topic ? String(body.topic) : '';
+    const preferredType = (body.preferredType === 'choice' ? 'choice' : body.preferredType === 'text' ? 'text' : 'text') as 'text' | 'choice';
+    const existing = Array.isArray(body.existingTitles) ? (body.existingTitles as unknown[]).map(String).slice(0, 30) : [];
+    const system = this.memoryGeneratorSystem(preferredType);
+    const user = [
+      `Category: ${categoryName}`,
+      categoryDescription ? `Category description: ${categoryDescription}` : '',
+      topic ? `Focus on this specific topic: ${topic}` : '',
+      existing.length > 0 ? `Do NOT duplicate these existing questions (use different angles/wording):\n${existing.map((t, i) => `${i + 1}. ${t}`).join('\n')}` : '',
+      'Return ONE question in the JSON schema described in the system prompt.',
+    ].filter(Boolean).join('\n\n');
+    const raw = await this.callMemoryAnthropic({ model: 'opus', system, user, maxTokens: 1500 });
+    const parsed = this.parseAnthropicJson<unknown>(raw, 'generate-one');
+    this.sendJsonResponse(res, 200, this.normaliseGeneratedQuestion(parsed));
+  }
+
+  private async memoryGenerateBatch(res: ServerResponse, body: Record<string, unknown>): Promise<void> {
+    const categoryName = String(body.categoryName ?? '');
+    const categoryDescription = String(body.categoryDescription ?? '');
+    const count = Math.max(1, Math.min(10, Number(body.count) || 3));
+    const existing = Array.isArray(body.existing) ? body.existing : [];
+    const existingDescs = existing.slice(0, 50).map((it) => {
+      const q = it as { questionMarkdown?: string; type?: string };
+      return `[${q.type ?? '?'}] ${(q.questionMarkdown ?? '').slice(0, 160).replace(/\s+/g, ' ')}`;
+    }).join('\n');
+
+    const system = this.memoryGeneratorSystem('any');
+    const user = [
+      `Category: ${categoryName}`,
+      categoryDescription ? `Category description: ${categoryDescription}` : '',
+      `Generate exactly ${count} NEW questions that COVER GAPS in the existing set below.`,
+      'Pick angles, sub-topics, difficulty levels, or formats that the existing items don\'t cover.',
+      'Mix `text` and `choice` types — at least one of each when count >= 2.',
+      '',
+      'Existing questions:',
+      existingDescs || '(none yet — feel free to span the whole topic)',
+      '',
+      `Return a JSON OBJECT with key "items" whose value is an array of exactly ${count} question objects matching the schema in the system prompt.`,
+    ].join('\n');
+    const raw = await this.callMemoryAnthropic({ model: 'opus', system, user, maxTokens: 4096 });
+    const parsed = this.parseAnthropicJson<{ items?: unknown[] }>(raw, 'generate-batch');
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.map((it) => this.normaliseGeneratedQuestion(it))
+      : [];
+    this.sendJsonResponse(res, 200, { items });
+  }
+
+  private async memoryExplain(res: ServerResponse, body: Record<string, unknown>): Promise<void> {
+    const questionMarkdown = String(body.questionMarkdown ?? '');
+    const answerMarkdown = String(body.answerMarkdown ?? '');
+    if (!questionMarkdown) {
+      this.sendJsonResponse(res, 400, { error: 'questionMarkdown is required' });
+      return;
+    }
+    const system = [
+      'You are a knowledgeable tutor.',
+      'Explain the given question and (optionally) its canonical answer in depth, as Markdown.',
+      'Structure your response: a short intro, then numbered or bulleted sections covering background,',
+      'why the answer is what it is, common misconceptions, related concepts, and one practical example.',
+      'DEFAULT LANGUAGE: Polish. Write the entire explanation in Polish unless the question itself is in another language —',
+      'in that case match the question\'s language.',
+      'No JSON, no code fences around the whole reply — just raw Markdown.',
+    ].join(' ');
+    const user = [
+      'Question:',
+      questionMarkdown,
+      '',
+      answerMarkdown ? `Canonical answer:\n${answerMarkdown}` : '(no canonical answer — explain the question on its merits)',
+    ].join('\n');
+    const raw = await this.callMemoryAnthropic({ model: 'opus', system, user, maxTokens: 2500 });
+    this.sendJsonResponse(res, 200, { explanation: raw });
+  }
+
+  private async memoryFindImage(res: ServerResponse, body: Record<string, unknown>): Promise<void> {
+    const query = String(body.query ?? '').trim();
+    if (!query) {
+      this.sendJsonResponse(res, 400, { error: 'query is required' });
+      return;
+    }
+    try {
+      const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&pithumbsize=600&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrlimit=3`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) { this.sendJsonResponse(res, 200, { image: null }); return; }
+      const data = await r.json() as {
+        query?: { pages?: Record<string, { title?: string; thumbnail?: { source?: string }; pageid?: number }> };
+      };
+      const pages = Object.values(data.query?.pages ?? {});
+      const withThumb = pages.find((p) => p.thumbnail?.source);
+      if (!withThumb || !withThumb.thumbnail?.source) {
+        this.sendJsonResponse(res, 200, { image: null });
+        return;
+      }
+      this.sendJsonResponse(res, 200, {
+        image: {
+          url: withThumb.thumbnail.source,
+          title: withThumb.title ?? query,
+          sourceUrl: `https://en.wikipedia.org/?curid=${withThumb.pageid ?? ''}`,
+        },
+      });
+    } catch (err) {
+      // Network blip / timeout — treat as "no image", don't fail the request.
+      void err;
+      this.sendJsonResponse(res, 200, { image: null });
+    }
+  }
+
+  private memoryGeneratorSystem(typeHint: 'text' | 'choice' | 'any'): string {
+    const typeRule = typeHint === 'any'
+      ? '"type" must be either "text" or "choice". When "choice", include a "choices" array of 3-5 objects {"label":"...","correct":bool} with exactly one correct.'
+      : typeHint === 'choice'
+        ? '"type" must be "choice". Include a "choices" array of 3-5 objects {"label":"...","correct":bool} with exactly one correct.'
+        : '"type" must be "text" — the answer is a short free-form text the user will type.';
+    return [
+      'You generate quiz questions for a knowledge-testing app.',
+      'Respond ONLY with a single JSON object, no markdown fences, no commentary.',
+      'Schema:',
+      '{',
+      '  "questionMarkdown": string,   // Markdown body of the question, can include lists or code',
+      '  "answerMarkdown":   string,   // Markdown body of the canonical answer (short for choice, can be longer for text)',
+      '  "type":             "text" | "choice",',
+      '  "choices":          [ { "label": string, "correct": boolean } ],   // ONLY when type === "choice"',
+      '  "imageQuery":       string    // optional 2-4 word phrase to search Wikipedia for an illustrative image; write the query in English for better Wikipedia coverage even when the question is in another language',
+      '}',
+      typeRule,
+      'DEFAULT LANGUAGE: Polish. Write both "questionMarkdown" and "answerMarkdown" (and "choices[].label") IN POLISH',
+      'unless the category name/description is clearly in another language — in that case match that language.',
+      'Use proper Polish diacritics (ą ć ę ł ń ó ś ź ż). Never use ASCII transliteration.',
+      'Keep questions self-contained and unambiguous.',
+    ].join('\n');
+  }
+
+  private normaliseGeneratedQuestion(raw: unknown): {
+    questionMarkdown: string;
+    answerMarkdown: string;
+    type: 'text' | 'choice';
+    choices?: Array<{ label: string; correct: boolean }>;
+    imageQuery?: string;
+  } {
+    const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const type: 'text' | 'choice' = o.type === 'choice' ? 'choice' : 'text';
+    const out: ReturnType<MycastleHttpServer['normaliseGeneratedQuestion']> = {
+      questionMarkdown: String(o.questionMarkdown ?? '').trim() || '(empty question)',
+      answerMarkdown: String(o.answerMarkdown ?? '').trim(),
+      type,
+    };
+    if (type === 'choice' && Array.isArray(o.choices)) {
+      out.choices = (o.choices as unknown[])
+        .filter((c) => c && typeof c === 'object')
+        .map((c) => ({
+          label: String((c as { label?: unknown }).label ?? '').trim(),
+          correct: Boolean((c as { correct?: unknown }).correct),
+        }))
+        .filter((c) => c.label.length > 0)
+        .slice(0, 6);
+    }
+    if (typeof o.imageQuery === 'string' && o.imageQuery.trim()) {
+      out.imageQuery = o.imageQuery.trim();
+    }
+    return out;
   }
 
   // --- Admin Firmware ---
