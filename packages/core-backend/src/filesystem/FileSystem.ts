@@ -180,32 +180,68 @@ export class FileSystem extends EventEmitter {
     await fs.rm(absolutePath, { recursive: true, force: true });
   }
 
+  /**
+   * Directories that are not user data and should never be traversed.
+   * They contain millions of files (node_modules) or symlinks that often
+   * break after rsync between machines — a single broken symlink there
+   * used to bring down `loadAllData()` for the whole frontend.
+   */
+  private static readonly EXCLUDED_DIRS = new Set([
+    'node_modules', '.git', '.next', '.cache', '.pnpm-store',
+    'dist', 'build', 'out', '.venv', '__pycache__',
+    '.gradle', '.idea', '.vscode',
+  ]);
+
   async listDirectory(dirPath: string = ''): Promise<DirectoryTree> {
     const absolutePath = this.getAbsolutePath(dirPath);
     const relativePath = this.getRelativePath(absolutePath);
 
-    return this.buildDirectoryTree(absolutePath, relativePath || '.');
+    const tree = await this.buildDirectoryTree(absolutePath, relativePath || '.');
+    if (!tree) {
+      throw new Error(`Directory not accessible: ${absolutePath}`);
+    }
+    return tree;
   }
 
-  private async buildDirectoryTree(absolutePath: string, relativePath: string): Promise<DirectoryTree> {
-    const stats = await fs.stat(absolutePath);
+  private async buildDirectoryTree(absolutePath: string, relativePath: string): Promise<DirectoryTree | null> {
+    let stats: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stats = await fs.stat(absolutePath);
+    } catch (err) {
+      // Broken symlink or missing target — typical for node_modules synced
+      // between machines (pnpm `.bin/*` symlinks). Skip silently instead of
+      // failing the whole tree walk; otherwise every frontend page that depends
+      // on `loadAllData()` (Health/Memory/Shopping/Todo/…) hangs on a spinner.
+      console.warn(`[FileSystem] skip ${absolutePath}: ${(err as Error).message}`);
+      return null;
+    }
+
     const name = path.basename(absolutePath) || path.basename(this.rootDir);
 
     if (!stats.isDirectory()) {
-      return {
-        name,
-        path: relativePath,
-        type: 'file',
-      };
+      return { name, path: relativePath, type: 'file' };
     }
 
-    const entries = await fs.readdir(absolutePath);
-    const children: DirectoryTree[] = [];
+    // Skip noise directories — frontend only reads `.json` + `.md`, never these.
+    // Returns an empty directory node so listings still show the folder exists.
+    if (FileSystem.EXCLUDED_DIRS.has(name)) {
+      return { name, path: relativePath, type: 'directory', children: [] };
+    }
 
+    let entries: string[];
+    try {
+      entries = await fs.readdir(absolutePath);
+    } catch (err) {
+      console.warn(`[FileSystem] readdir failed for ${absolutePath}: ${(err as Error).message}`);
+      return { name, path: relativePath, type: 'directory', children: [] };
+    }
+
+    const children: DirectoryTree[] = [];
     for (const entry of entries) {
       const entryAbsPath = path.join(absolutePath, entry);
       const entryRelPath = path.join(relativePath, entry);
-      children.push(await this.buildDirectoryTree(entryAbsPath, entryRelPath));
+      const child = await this.buildDirectoryTree(entryAbsPath, entryRelPath);
+      if (child) children.push(child);
     }
 
     return {
