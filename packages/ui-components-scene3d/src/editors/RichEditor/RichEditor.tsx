@@ -924,7 +924,16 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
       });
     }
 
-    sceneGraph.addNode(newNode);
+    // Drop the new node under the currently selected group (if any) — this is
+    // the replacement for drag-and-drop reparenting on touch devices where the
+    // user can't drag a row: long-press source → Cut → long-press destination
+    // group → Paste, and it lands inside that group.
+    let parentId: string | undefined;
+    if (selectedNodeId && selectedNodeId !== clip.sourceId) {
+      const sel = sceneGraph.findNode(selectedNodeId);
+      if (sel && sel.type === 'group') parentId = selectedNodeId;
+    }
+    sceneGraph.addNode(newNode, parentId);
     setSelectedNodeId(newNode.id);
 
     if (clip.isCut) {

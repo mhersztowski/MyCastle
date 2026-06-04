@@ -357,6 +357,10 @@ export default function DrivePage(): React.JSX.Element {
   // Dialog because the sidebar+panel can't both fit comfortably below 600px.
   const theme = useTheme();
   const isWide = useMediaQuery(theme.breakpoints.up('sm'));
+  // Below `md` (mobile and tablet portrait) the preview toolbar is too narrow
+  // to hold every action button — collapse copy/edit/download into a kebab menu.
+  const isCompact = useMediaQuery(theme.breakpoints.down('md'));
+  const [viewActionsMenu, setViewActionsMenu] = useState<HTMLElement | null>(null);
   const panelOpen = !!(viewing || mdEditing);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
@@ -1008,8 +1012,8 @@ export default function DrivePage(): React.JSX.Element {
               <TableRow>
                 <TableCell></TableCell>
                 <TableCell>Nazwa</TableCell>
-                <TableCell sx={{ width: 100, display: { xs: 'none', sm: 'table-cell' } }}>Rozmiar</TableCell>
-                <TableCell sx={{ width: 200, display: { xs: 'none', sm: 'table-cell' } }}>Modyfikowane</TableCell>
+                <TableCell sx={{ width: 100, display: { xs: 'none', md: 'table-cell' } }}>Rozmiar</TableCell>
+                <TableCell sx={{ width: 200, display: { xs: 'none', md: 'table-cell' } }}>Modyfikowane</TableCell>
                 <TableCell sx={{ width: 50 }}></TableCell>
               </TableRow>
             </TableHead>
@@ -1035,10 +1039,10 @@ export default function DrivePage(): React.JSX.Element {
                         {pub && <Tooltip title="Publiczny — dostępny przez HTTP bez logowania"><PublicIcon fontSize="small" color="success" /></Tooltip>}
                       </Stack>
                     </TableCell>
-                    <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
+                    <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
                       {e.type === DIR_TYPE ? '—' : formatBytes(e.size)}
                     </TableCell>
-                    <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
+                    <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
                       <Typography variant="caption">{formatDate(e.mtime)}</Typography>
                     </TableCell>
                     <TableCell>
@@ -1112,27 +1116,34 @@ export default function DrivePage(): React.JSX.Element {
             }}>
               {viewing?.entry.name ?? mdEditing?.entry.name}
             </Typography>
-            {viewing && (
+            {viewing && !isCompact && (
               <Chip size="small" variant="outlined" label={viewing.mime} />
             )}
-            {viewing && viewing.textContent !== undefined && (
+            {viewing && !isCompact && viewing.textContent !== undefined && (
               <Tooltip title="Kopiuj cały tekst do systemowego schowka">
                 <IconButton size="small" onClick={copyViewTextToSystem}>
                   <ContentCopyIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
-            {viewing && isMdEditable(viewing.entry.name) && (
+            {viewing && !isCompact && isMdEditable(viewing.entry.name) && (
               <Tooltip title="Edytuj w MdEditor">
                 <IconButton size="small" onClick={() => void openInMdEditor(viewing.entry)}>
                   <EditNoteIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
-            {viewing && (
+            {viewing && !isCompact && (
               <Tooltip title="Pobierz">
                 <IconButton size="small" onClick={() => void onDownload(viewing.entry)}>
                   <DownloadIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {viewing && isCompact && (
+              <Tooltip title="Akcje pliku">
+                <IconButton size="small" onClick={(ev) => setViewActionsMenu(ev.currentTarget)}>
+                  <MoreVertIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
@@ -1255,6 +1266,50 @@ export default function DrivePage(): React.JSX.Element {
         </Dialog>
       )}
 
+      {/* Preview actions menu — shared between mobile Dialog and the compact
+          panel toolbar (tablet portrait). Mirrors what desktop shows inline. */}
+      {viewing && (
+        <Menu
+          anchorEl={viewActionsMenu}
+          open={viewActionsMenu !== null}
+          onClose={() => setViewActionsMenu(null)}
+          slotProps={{ paper: { sx: { minWidth: 240 } } }}
+        >
+          <MenuItem disabled sx={{ opacity: '1 !important' }}>
+            <ListItemText
+              primary={viewing.entry.name}
+              secondary={viewing.mime}
+              primaryTypographyProps={{ noWrap: true, fontWeight: 500 }}
+              secondaryTypographyProps={{ variant: 'caption' }}
+            />
+          </MenuItem>
+          <Divider />
+          {viewing.textContent !== undefined && (
+            <MenuItem onClick={() => { void copyViewTextToSystem(); setViewActionsMenu(null); }}>
+              <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Kopiuj cały tekst" secondary="Do systemowego schowka" />
+            </MenuItem>
+          )}
+          {isMdEditable(viewing.entry.name) && (
+            <MenuItem onClick={() => {
+              void openInMdEditor(viewing.entry);
+              if (!isWide) setViewing(null);   // mobile Dialog: close on hand-off to new tab
+              setViewActionsMenu(null);
+            }}>
+              <ListItemIcon><EditNoteIcon fontSize="small" /></ListItemIcon>
+              <ListItemText
+                primary="Edytuj w MdEditor"
+                secondary={isWide ? 'Inline w prawym panelu' : 'W nowej karcie'}
+              />
+            </MenuItem>
+          )}
+          <MenuItem onClick={() => { void onDownload(viewing.entry); setViewActionsMenu(null); }}>
+            <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Pobierz" />
+          </MenuItem>
+        </Menu>
+      )}
+
       {/* View dialog — mobile fallback (desktop uses inline right panel) */}
       {viewing && !isWide && (
         <Dialog open onClose={() => setViewing(null)} maxWidth="lg" fullWidth>
@@ -1278,22 +1333,12 @@ export default function DrivePage(): React.JSX.Element {
             </Tooltip>
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
             <VisibilityIcon /> {viewing.entry.name}
-            <Chip size="small" label={viewing.mime} sx={{ ml: 1 }} variant="outlined" />
             <Box sx={{ flex: 1 }} />
-            {viewing.textContent !== undefined && (
-              <Tooltip title="Kopiuj cały tekst do systemowego schowka">
-                <IconButton size="small" onClick={copyViewTextToSystem}>
-                  <ContentCopyIcon />
-                </IconButton>
-              </Tooltip>
-            )}
-            {isMdEditable(viewing.entry.name) && (
-              <Tooltip title="Otwórz w MdEditor (nowa karta)">
-                <IconButton size="small" onClick={() => { void openInMdEditor(viewing.entry); setViewing(null); }}>
-                  <EditNoteIcon />
-                </IconButton>
-              </Tooltip>
-            )}
+            <Tooltip title="Akcje pliku">
+              <IconButton size="small" onClick={(ev) => setViewActionsMenu(ev.currentTarget)}>
+                <MoreVertIcon />
+              </IconButton>
+            </Tooltip>
           </DialogTitle>
           <DialogContent dividers sx={{ minHeight: 400 }}>
             {viewing.textContent !== undefined ? (

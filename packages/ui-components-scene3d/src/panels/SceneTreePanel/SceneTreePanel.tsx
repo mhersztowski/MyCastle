@@ -135,6 +135,13 @@ interface TreeNodeProps {
   onDragOverNode: (e: React.DragEvent, nodeId: string) => void;
   onDragLeaveNode: () => void;
   onDropOnNode: (e: React.DragEvent, targetNodeId: string) => void;
+  // Touch handlers — open context menu via long-press. Mouse keeps using
+  // the native onContextMenu (right click); touch devices have no right
+  // click, so without these long-press the menu is unreachable.
+  onRowPointerDown: (e: React.PointerEvent, nodeId: string) => void;
+  onRowPointerMove: (e: React.PointerEvent) => void;
+  onRowPointerUp: (e: React.PointerEvent) => void;
+  onRowPointerCancel: (e: React.PointerEvent) => void;
 }
 
 function TreeNode({
@@ -159,6 +166,10 @@ function TreeNode({
   onDragOverNode,
   onDragLeaveNode,
   onDropOnNode,
+  onRowPointerDown,
+  onRowPointerMove,
+  onRowPointerUp,
+  onRowPointerCancel,
 }: TreeNodeProps) {
   const hasChildren = node.children && node.children.length > 0;
   const isExpanded = expandedIds.has(node.id);
@@ -188,12 +199,24 @@ function TreeNode({
         onDragOver={(e) => onDragOverNode(e, node.id)}
         onDragLeave={onDragLeaveNode}
         onDrop={(e) => onDropOnNode(e, node.id)}
+        onPointerDown={(e) => onRowPointerDown(e, node.id)}
+        onPointerMove={onRowPointerMove}
+        onPointerUp={onRowPointerUp}
+        onPointerCancel={onRowPointerCancel}
+        data-tree-node-id={node.id}
         sx={{
           py: 0,
           pl: depth * 2 + 1,
           pr: 0.5,
           minHeight: 24,
           opacity: isDragging ? 0.35 : node.visible ? 1 : 0.4,
+          // Allow vertical scroll on touch (browser-managed); we only need
+          // pointer events for tap + long-press detection, not horizontal pan.
+          touchAction: 'pan-y',
+          // Disable iOS Safari's built-in long-press selection menu which
+          // would otherwise show "Copy/Lookup" over our context menu.
+          WebkitTouchCallout: 'none',
+          userSelect: 'none',
           '&.Mui-selected': { bgcolor: 'action.selected' },
           '&.Mui-selected:hover': { bgcolor: 'action.selected' },
           ...(isDragOver && {
@@ -312,6 +335,10 @@ function TreeNode({
               onDragOverNode={onDragOverNode}
               onDragLeaveNode={onDragLeaveNode}
               onDropOnNode={onDropOnNode}
+              onRowPointerDown={onRowPointerDown}
+              onRowPointerMove={onRowPointerMove}
+              onRowPointerUp={onRowPointerUp}
+              onRowPointerCancel={onRowPointerCancel}
             />
           ))}
         </Collapse>
@@ -526,6 +553,85 @@ export function SceneTreePanel({
     setDragOverId(null);
   }, []);
 
+  // ─── Touch long-press → context menu ──────────────────────
+  // Mobile devices have no right-click. Without this the cut/copy/paste menu
+  // is unreachable on tablets/phones — and since touch ignores HTML5 DnD too,
+  // the menu becomes the only way to reparent nodes (Cut on source, select
+  // target group, Paste). Mouse stays on the native onContextMenu path.
+  const longPressRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    nodeId: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current.timer);
+      longPressRef.current = null;
+    }
+  }, []);
+
+  const handleRowPointerDown = useCallback((e: React.PointerEvent, nodeId: string) => {
+    if (e.pointerType !== 'touch') return;
+    // Don't intercept long-press if the touch started on an interactive child
+    // (rename TextField, expand chevron, visibility eye) — those have their own
+    // gestures that the user expects to win.
+    const t = e.target as HTMLElement;
+    if (t.closest('input, textarea, button')) return;
+
+    const x = e.clientX;
+    const y = e.clientY;
+    cancelLongPress();
+    const timer = setTimeout(() => {
+      if (!longPressRef.current) return;
+      onNodeSelect?.(nodeId);
+      setContextMenu({ x, y, nodeId });
+      longPressRef.current = null;
+      // Subtle haptic confirmation where available (Android Chrome, some browsers).
+      try { (navigator as Navigator & { vibrate?: (p: number) => void }).vibrate?.(15); } catch { /* unsupported */ }
+    }, 500);
+    longPressRef.current = { pointerId: e.pointerId, startX: x, startY: y, nodeId, timer };
+  }, [onNodeSelect, cancelLongPress]);
+
+  const handleRowPointerMove = useCallback((e: React.PointerEvent) => {
+    const state = longPressRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    const dx = Math.abs(e.clientX - state.startX);
+    const dy = Math.abs(e.clientY - state.startY);
+    // Threshold high enough to tolerate jitter on capacitive screens but
+    // low enough to cancel as soon as the user is actually scrolling.
+    if (dx > 12 || dy > 12) cancelLongPress();
+  }, [cancelLongPress]);
+
+  const handleRowPointerUp = useCallback((e: React.PointerEvent) => {
+    const state = longPressRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    cancelLongPress();
+  }, [cancelLongPress]);
+
+  const handleRowPointerCancel = useCallback((e: React.PointerEvent) => {
+    const state = longPressRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    cancelLongPress();
+  }, [cancelLongPress]);
+
+  // Long-press on empty list area → "Add new" menu (mirror right-click).
+  const handleEmptyPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    if ((e.target as HTMLElement).closest('[data-tree-node-id]')) return;  // hit a row → row handler wins
+    const x = e.clientX;
+    const y = e.clientY;
+    cancelLongPress();
+    const timer = setTimeout(() => {
+      setContextMenu({ x, y, nodeId: null });
+      longPressRef.current = null;
+      try { (navigator as Navigator & { vibrate?: (p: number) => void }).vibrate?.(15); } catch { /* unsupported */ }
+    }, 500);
+    longPressRef.current = { pointerId: e.pointerId, startX: x, startY: y, nodeId: '', timer };
+  }, [cancelLongPress]);
+
   const hasNodeSelected = contextMenu?.nodeId != null;
 
   return (
@@ -552,6 +658,10 @@ export function SceneTreePanel({
         disablePadding
         sx={{ flex: 1, overflow: 'auto' }}
         onContextMenu={handleEmptyContextMenu}
+        onPointerDown={handleEmptyPointerDown}
+        onPointerMove={handleRowPointerMove}
+        onPointerUp={handleRowPointerUp}
+        onPointerCancel={handleRowPointerCancel}
         onDragOver={handleDragOverRoot}
         onDrop={handleDropOnRoot}
       >
@@ -584,6 +694,10 @@ export function SceneTreePanel({
               onDragOverNode={handleDragOverNode}
               onDragLeaveNode={handleDragLeaveNode}
               onDropOnNode={handleDropOnNode}
+              onRowPointerDown={handleRowPointerDown}
+              onRowPointerMove={handleRowPointerMove}
+              onRowPointerUp={handleRowPointerUp}
+              onRowPointerCancel={handleRowPointerCancel}
             />
           ))
         )}
