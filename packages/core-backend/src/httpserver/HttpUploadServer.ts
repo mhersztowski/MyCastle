@@ -5,7 +5,10 @@ import * as path from 'path';
 import * as url from 'url';
 import * as fs from 'fs';
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+// 500 MB — covers phone video uploads from the Drive UI. The /upload
+// endpoint streams chunks straight to disk, so memory pressure is bounded
+// by node's network buffer, not the file size itself.
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
 const MAX_OCR_BODY_SIZE = 30 * 1024 * 1024; // 30MB for multiple images
 
 interface UploadResult {

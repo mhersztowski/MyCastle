@@ -4216,12 +4216,16 @@ const { password, ...safeBody } = body;
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let totalSize = 0;
-      const MAX_BODY_SIZE = 5 * 1024 * 1024;
+      // 200 MB — covers phone videos (typically 30–150 MB after recording) once
+      // the Drive UI base64-wraps them (33% overhead → ~150 MB max real file).
+      // The previous 5 MB cap silently rejected every video upload from the
+      // Android WebView.
+      const MAX_BODY_SIZE = 200 * 1024 * 1024;
 
       req.on('data', (chunk: Buffer) => {
         totalSize += chunk.length;
         if (totalSize > MAX_BODY_SIZE) {
-          reject(new Error('Request body too large'));
+          reject(new Error(`Request body too large (max ${MAX_BODY_SIZE / 1024 / 1024}MB)`));
           req.destroy();
           return;
         }

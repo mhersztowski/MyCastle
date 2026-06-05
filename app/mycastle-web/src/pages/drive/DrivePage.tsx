@@ -47,6 +47,7 @@ import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import PublicIcon from '@mui/icons-material/Public';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import TodayIcon from '@mui/icons-material/Today';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
 // ─── VFS helpers ─────────────────────────────────────────────────────────────
@@ -116,7 +117,38 @@ async function vfsRename(userName: string, oldRel: string, newRel: string): Prom
   if (!r.ok) throw new Error(`rename failed: ${r.status}`);
 }
 
-async function vfsWriteFile(userName: string, relPath: string, dataB64: string): Promise<void> {
+async function vfsWriteFile(
+  userName: string,
+  relPath: string,
+  dataB64: string,
+  /** Optional callback fired as bytes are streamed up — used by the upload
+   *  dialog to draw a per-file progress bar. fetch() doesn't expose upload
+   *  progress, so we fall back to XHR for the request body. */
+  onProgress?: (pct: number) => void,
+): Promise<void> {
+  if (onProgress) {
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', apiUrl(userName, 'writeFile', relPath));
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      const auth = authHeaders().Authorization;
+      if (auth) xhr.setRequestHeader('Authorization', auth);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress(100);
+          resolve();
+        } else {
+          reject(new Error(`writeFile failed: ${xhr.status}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('writeFile failed: network error'));
+      xhr.send(JSON.stringify({ data: dataB64, options: { create: true, overwrite: true } }));
+    });
+    return;
+  }
   const r = await fetch(apiUrl(userName, 'writeFile', relPath), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -316,7 +348,18 @@ export default function DrivePage(): React.JSX.Element {
   const [cwd, setCwd] = useState('');                       // relative under /drive/
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null);
+  // Upload progress dialog state. `done` counts files already finished,
+  // `currentName` is the file mid-flight, `currentPct` its byte progress.
+  // Total file count is `done + (currentName ? 1 : 0) + remaining` — but
+  // we keep the `total` field so the overall bar doesn't jump backwards
+  // when the dialog closes.
+  const [uploading, setUploading] = useState<{
+    done: number;
+    total: number;
+    currentName: string | null;
+    currentPct: number;
+    failed: number;
+  } | null>(null);
   const [snack, setSnack] = useState<{ open: boolean; msg: string; severity: 'success'|'error'|'info' }>({ open: false, msg: '', severity: 'success' });
   const [menuFor, setMenuFor] = useState<{ anchor: HTMLElement; entry: VfsEntry } | null>(null);
   const [newFolderDialog, setNewFolderDialog] = useState(false);
@@ -349,7 +392,15 @@ export default function DrivePage(): React.JSX.Element {
   const [panelFullscreen, setPanelFullscreen] = useState(false);
   // Anchor element for the toolbar "Actions" dropdown.
   const [actionsMenu, setActionsMenu] = useState<HTMLElement | null>(null);
+  // Upload dialog — staging area: user picks files / drops them in, sees a
+  // summary with sizes, then commits with the upload button. Previous flow
+  // fired the native file picker and started uploading immediately, leaving
+  // no chance to review or remove items.
+  const [uploadDialog, setUploadDialog] = useState<{ files: File[] } | null>(null);
+  // Hidden input refs — two separate ones so the staging dialog and the
+  // legacy direct upload don't fight over the same `onChange` handler.
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogFileInputRef = useRef<HTMLInputElement>(null);
 
   // Preview-navigation derived state — only file entries (directories are
   // navigated by double-click into them, not previewed).
@@ -585,8 +636,12 @@ export default function DrivePage(): React.JSX.Element {
   //     hides the left side.
   //   - Phone portrait (<sm): new tab to `/editor/md/{path}` (MdEditorPage uses
   //     `mqttClient.readFile` which resolves against ROOT_DIR, hence the full path).
-  const openInMdEditor = useCallback(async (entry: VfsEntry) => {
-    const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+  // `relOverride` lets callers (Today journal, etc.) point at a file that
+  // isn't in the current cwd without first navigating there. When omitted
+  // we fall back to the per-entry cwd-based path, preserving existing
+  // call sites that pass just an entry from the file list.
+  const openInMdEditor = useCallback(async (entry: VfsEntry, relOverride?: string) => {
+    const rel = relOverride ?? (cwd ? `${cwd}/${entry.name}` : entry.name);
     if (!isWide) {
       const fullPath = `data/Minis/Users/${userName}/drive/${rel}`;
       const encoded = fullPath.split('/').map(encodeURIComponent).join('/');
@@ -628,6 +683,51 @@ export default function DrivePage(): React.JSX.Element {
     setMdEditing(null);
     setPanelFullscreen(false);
   }, []);
+
+  /**
+   * Open today's journal entry. Path convention: `Calendar/YYYY/MM/DD.md`
+   * (zero-padded). Creates the file with a small header template the first
+   * time it's opened on a given day, then jumps the file list to its folder
+   * and pops the MdEditor with that entry.
+   */
+  const openTodayJournal = useCallback(async () => {
+    const today = new Date();
+    const yyyy = String(today.getFullYear());
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const folderRel = `Calendar/${yyyy}/${mm}`;
+    const fileName = `${dd}.md`;
+    const rel = `${folderRel}/${fileName}`;
+
+    try {
+      // Ensure the year/month folders exist. vfsMkdir errors when a dir
+      // already exists, which is what we want for "create if missing" —
+      // swallow the failure with .catch(() => {}).
+      await vfsMkdir(userName, 'Calendar').catch(() => {});
+      await vfsMkdir(userName, `Calendar/${yyyy}`).catch(() => {});
+      await vfsMkdir(userName, folderRel).catch(() => {});
+
+      // Create the file with a small ISO-date + weekday template only on
+      // first open of the day, never clobbering an existing entry.
+      const stat = await vfsStat(userName, rel);
+      if (!stat) {
+        const weekday = today.toLocaleDateString('pl-PL', { weekday: 'long' });
+        const template = `# ${yyyy}-${mm}-${dd} (${weekday})\n\n`;
+        await vfsWriteFile(userName, rel, textToBase64(template));
+        toast(`Utworzono dziennik na dziś — ${yyyy}-${mm}-${dd}`);
+      }
+
+      // Jump the file list to the month folder so the user has context
+      // (other days that week, …) when they close the editor.
+      setCwd(folderRel);
+      // refresh() is triggered by useEffect on `cwd` change, so we don't
+      // need to await it here — just open the editor with an explicit path.
+      const fakeEntry: VfsEntry = { name: fileName, type: FILE_TYPE };
+      await openInMdEditor(fakeEntry, rel);
+    } catch (err) {
+      toast(`Błąd otwarcia dziennika: ${(err as Error).message}`, 'error');
+    }
+  }, [userName, openInMdEditor, toast]);
 
   // Step ±1 through `fileEntries` while previewing. Reuses `viewFile()` so
   // the same code path handles fetching, MIME detection and state swap.
@@ -774,21 +874,42 @@ export default function DrivePage(): React.JSX.Element {
   const upload = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
     if (arr.length === 0) return;
-    setUploading({ done: 0, total: arr.length });
+    // Base64 encoding inflates ~33%. The backend's JSON body cap is 200 MB,
+    // so anything past ~140 MB raw will be rejected before we even POST.
+    // Pre-flight check gives a useful error instead of a vague 500.
+    const HARD_LIMIT_BYTES = 140 * 1024 * 1024;
+    setUploading({ done: 0, total: arr.length, currentName: null, currentPct: 0, failed: 0 });
     let done = 0;
+    let failed = 0;
     for (const file of arr) {
+      // Show file name + reset per-file progress before each file starts.
+      setUploading({ done, total: arr.length, currentName: file.name, currentPct: 0, failed });
       try {
+        if (file.size > HARD_LIMIT_BYTES) {
+          throw new Error(`Plik za duży (${(file.size / 1024 / 1024).toFixed(1)} MB; limit ${(HARD_LIMIT_BYTES / 1024 / 1024).toFixed(0)} MB)`);
+        }
         const b64 = await fileToBase64(file);
         const rel = cwd ? `${cwd}/${file.name}` : file.name;
-        await vfsWriteFile(userName, rel, b64);
+        // Live byte progress via the XHR variant of vfsWriteFile.
+        await vfsWriteFile(userName, rel, b64, (pct) => {
+          setUploading((prev) => prev ? { ...prev, currentPct: pct } : prev);
+        });
       } catch (err) {
-        toast(`Błąd uploadu "${file.name}": ${(err as Error).message}`, 'error');
+        failed++;
+        const msg = (err as Error).message;
+        // Detect typical "body too large" failure modes from the backend
+        // and surface them with a friendlier hint than the raw HTTP code.
+        const friendly = /413|too large/i.test(msg)
+          ? `Plik za duży dla serwera (${(file.size / 1024 / 1024).toFixed(1)} MB) — zwiększ limit lub podziel`
+          : msg;
+        toast(`Błąd uploadu "${file.name}": ${friendly}`, 'error');
       }
       done++;
-      setUploading({ done, total: arr.length });
+      setUploading((prev) => prev ? { ...prev, done, currentPct: 100, failed } : prev);
     }
     setUploading(null);
-    toast(`Wgrano ${done} plik${done === 1 ? '' : (done < 5 ? 'i' : 'ów')}`);
+    const ok = done - failed;
+    if (ok > 0) toast(`Wgrano ${ok} z ${arr.length} plików`);
     await refresh();
   }, [userName, cwd, refresh, toast]);
 
@@ -804,6 +925,47 @@ export default function DrivePage(): React.JSX.Element {
       void upload(e.dataTransfer.files);
     }
   }, [upload]);
+
+  // ── Upload dialog: staging area for files before commit ────────────────
+
+  const openUploadDialog = useCallback(() => {
+    setUploadDialog({ files: [] });
+  }, []);
+
+  /** Append picked / dropped files to the staging list, skipping duplicates
+   *  (same name + same size = treat as already added). */
+  const addFilesToUploadDialog = useCallback((files: FileList | File[]) => {
+    const arr = Array.from(files);
+    if (arr.length === 0) return;
+    setUploadDialog((prev) => {
+      if (!prev) return prev;
+      const seen = new Set(prev.files.map(f => `${f.name}:${f.size}`));
+      const merged = [...prev.files];
+      for (const f of arr) {
+        const key = `${f.name}:${f.size}`;
+        if (!seen.has(key)) { merged.push(f); seen.add(key); }
+      }
+      return { files: merged };
+    });
+  }, []);
+
+  const removeFileFromUploadDialog = useCallback((idx: number) => {
+    setUploadDialog((prev) => prev ? { files: prev.files.filter((_, i) => i !== idx) } : prev);
+  }, []);
+
+  const onDialogFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) addFilesToUploadDialog(e.target.files);
+    e.target.value = '';   // reset so re-picking the same file fires onChange
+  }, [addFilesToUploadDialog]);
+
+  // Commit dialog: kicks the existing `upload()` pipeline with all staged
+  // files in one batch, then closes the dialog on success.
+  const commitUploadDialog = useCallback(async () => {
+    if (!uploadDialog || uploadDialog.files.length === 0) return;
+    const files = uploadDialog.files;
+    setUploadDialog(null);
+    await upload(files);
+  }, [uploadDialog, upload]);
 
   // ── Breadcrumbs ─────────────────────────────────────────────────────────
   const segments = useMemo(() => cwd ? cwd.split('/').filter(Boolean) : [], [cwd]);
@@ -892,6 +1054,15 @@ export default function DrivePage(): React.JSX.Element {
           )}
         </Typography>
         <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={onFileInputChange} />
+        <Tooltip title="Otwórz/utwórz dziennik na dziś — Calendar/{rok}/{miesiąc}/{dzień}.md">
+          <Button
+            variant="outlined"
+            startIcon={<TodayIcon />}
+            onClick={openTodayJournal}
+          >
+            Today
+          </Button>
+        </Tooltip>
         <Button
           variant="contained"
           endIcon={<KeyboardArrowDownIcon />}
@@ -906,9 +1077,9 @@ export default function DrivePage(): React.JSX.Element {
         onClose={() => setActionsMenu(null)}
         slotProps={{ paper: { sx: { minWidth: 260 } } }}
       >
-        <MenuItem onClick={() => { fileInputRef.current?.click(); setActionsMenu(null); }}>
+        <MenuItem onClick={() => { openUploadDialog(); setActionsMenu(null); }}>
           <ListItemIcon><CloudUploadIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="Upload plików…" secondary="Wybierz z dysku" />
+          <ListItemText primary="Upload plików…" secondary="Wybierz / przeciągnij, przejrzyj, wgraj" />
         </MenuItem>
         <MenuItem onClick={() => { setNewFolderDialog(true); setActionsMenu(null); }}>
           <ListItemIcon><CreateNewFolderIcon fontSize="small" /></ListItemIcon>
@@ -976,12 +1147,72 @@ export default function DrivePage(): React.JSX.Element {
         </Breadcrumbs>
       </Paper>
 
-      {/* Upload progress */}
+      {/* Upload progress dialog — full overview while files are being shipped:
+          per-file progress bar + name + overall position. Stops disabling
+          the inline area of the file list and is impossible to miss on
+          mobile, where the previous tiny LinearProgress was easy to scroll
+          past. */}
       {uploading && (
-        <Box sx={{ mb: 1 }}>
-          <LinearProgress variant="determinate" value={100 * uploading.done / uploading.total} />
-          <Typography variant="caption">Wgrywanie {uploading.done}/{uploading.total}…</Typography>
-        </Box>
+        <Dialog open hideBackdrop={false} maxWidth="xs" fullWidth disableEscapeKeyDown
+          slotProps={{ paper: { sx: { p: 0 } } }}>
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
+            <CloudUploadIcon />
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="subtitle1" sx={{ lineHeight: 1.2 }}>Wgrywanie plików</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {uploading.done} z {uploading.total} ukończonych
+                {uploading.failed > 0 && ` · ${uploading.failed} błąd`}
+              </Typography>
+            </Box>
+          </DialogTitle>
+          <DialogContent sx={{ pt: 0 }}>
+            {/* Overall — counts a fully-finished file as 100%, in-flight file as its byte %. */}
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography variant="caption" color="text.secondary">Łączny postęp</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {Math.round(((uploading.done + (uploading.currentName ? uploading.currentPct / 100 : 0)) / uploading.total) * 100)}%
+                </Typography>
+              </Box>
+              <LinearProgress
+                variant="determinate"
+                value={((uploading.done + (uploading.currentName ? uploading.currentPct / 100 : 0)) / uploading.total) * 100}
+                sx={{ height: 8, borderRadius: 1 }}
+              />
+            </Box>
+
+            {/* Current file — name + per-file progress. Hidden between files. */}
+            {uploading.currentName && (
+              <Box>
+                <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+                  <InsertDriveFileIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                  <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }} title={uploading.currentName}>
+                    {uploading.currentName}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {uploading.currentPct}%
+                  </Typography>
+                </Stack>
+                <LinearProgress
+                  variant="determinate"
+                  value={uploading.currentPct}
+                  sx={{ height: 6, borderRadius: 0.5 }}
+                  // While the file-reader is encoding to base64 the XHR hasn't
+                  // started yet, so we get a long 0% phase. An indeterminate
+                  // bar reads as "still working" instead of "stuck".
+                  {...(uploading.currentPct === 0 && { variant: 'indeterminate' as const })}
+                />
+                <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
+                  {uploading.currentPct === 0
+                    ? 'Przygotowywanie pliku…'
+                    : uploading.currentPct < 100
+                      ? 'Wysyłanie do serwera…'
+                      : 'Zapisywanie…'}
+                </Typography>
+              </Box>
+            )}
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* File list with drag-and-drop overlay */}
@@ -1490,6 +1721,105 @@ export default function DrivePage(): React.JSX.Element {
           </DialogActions>
         </Dialog>
       )}
+
+      {/* Upload staging dialog — pick / drop multiple files, review, commit. */}
+      {uploadDialog && (() => {
+        const UPLOAD_LIMIT = 140 * 1024 * 1024;   // pre-flight limit aligned with upload()
+        const totalBytes = uploadDialog.files.reduce((sum, f) => sum + f.size, 0);
+        const oversized = uploadDialog.files.filter(f => f.size > UPLOAD_LIMIT).length;
+        return (
+          <Dialog open onClose={() => setUploadDialog(null)} maxWidth="sm" fullWidth>
+            <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CloudUploadIcon /> Upload plików do <code>/{cwd || ''}</code>
+            </DialogTitle>
+            <DialogContent>
+              <input
+                ref={dialogFileInputRef} type="file" multiple
+                style={{ display: 'none' }} onChange={onDialogFileInputChange}
+              />
+
+              {/* Drop zone + pick button */}
+              <Box
+                onClick={() => dialogFileInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    addFilesToUploadDialog(e.dataTransfer.files);
+                  }
+                }}
+                sx={{
+                  border: '2px dashed', borderColor: 'divider',
+                  borderRadius: 1, p: 3, mt: 1, textAlign: 'center',
+                  cursor: 'pointer',
+                  bgcolor: 'action.hover',
+                  '&:hover': { borderColor: 'primary.main', bgcolor: 'action.selected' },
+                }}
+              >
+                <DriveFolderUploadIcon sx={{ fontSize: 36, color: 'text.secondary', mb: 0.5 }} />
+                <Typography variant="body2"><strong>Kliknij</strong>, aby wybrać pliki — lub przeciągnij tu z systemu</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Możesz dodawać kolejne — pliki nie znikają po kolejnym kliknięciu
+                </Typography>
+              </Box>
+
+              {/* Staged file list */}
+              {uploadDialog.files.length > 0 && (
+                <Box sx={{ mt: 2, maxHeight: 320, overflowY: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  {uploadDialog.files.map((f, i) => {
+                    const tooBig = f.size > UPLOAD_LIMIT;
+                    return (
+                      <Box key={`${f.name}-${i}`} sx={{
+                        display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.75,
+                        borderBottom: i < uploadDialog.files.length - 1 ? '1px solid' : 'none',
+                        borderColor: 'divider',
+                      }}>
+                        <InsertDriveFileIcon fontSize="small" sx={{ color: tooBig ? 'error.main' : 'text.secondary' }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" noWrap title={f.name}>{f.name}</Typography>
+                          <Typography variant="caption" color={tooBig ? 'error.main' : 'text.secondary'}>
+                            {formatBytes(f.size)}{tooBig && ` — za duży (max ${formatBytes(UPLOAD_LIMIT)})`}
+                          </Typography>
+                        </Box>
+                        <IconButton size="small" onClick={() => removeFileFromUploadDialog(i)}>
+                          <CloseIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    );
+                  })}
+                </Box>
+              )}
+
+              {/* Summary */}
+              <Box sx={{ mt: 2, display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Chip
+                  size="small" variant="outlined"
+                  label={`${uploadDialog.files.length} plik${uploadDialog.files.length === 1 ? '' : 'ów'}`}
+                />
+                <Chip
+                  size="small" variant="outlined"
+                  label={`Razem ${formatBytes(totalBytes)}`}
+                />
+                {oversized > 0 && (
+                  <Chip size="small" color="error" variant="outlined"
+                    label={`${oversized} za duży — usuń przed uploadem`} />
+                )}
+              </Box>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setUploadDialog(null)}>Anuluj</Button>
+              <Button
+                variant="contained"
+                startIcon={<CloudUploadIcon />}
+                disabled={uploadDialog.files.length === 0 || oversized > 0}
+                onClick={commitUploadDialog}
+              >
+                Wgraj {uploadDialog.files.length > 0 ? `(${uploadDialog.files.length})` : ''}
+              </Button>
+            </DialogActions>
+          </Dialog>
+        );
+      })()}
 
       <Snackbar open={snack.open} autoHideDuration={3500} onClose={() => setSnack({ ...snack, open: false })}>
         <Alert severity={snack.severity}>{snack.msg}</Alert>

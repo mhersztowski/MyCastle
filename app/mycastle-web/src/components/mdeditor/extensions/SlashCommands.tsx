@@ -601,6 +601,14 @@ function buildSuggestionConfig(
           return;
         }
 
+        // Touch devices = virtual keyboard at the bottom. Default `bottom-start`
+        // would put the palette directly under the cursor, smack in the path
+        // of the keyboard. Prefer `top-start` there so the palette opens
+        // ABOVE the cursor, in the visible area.
+        const isTouch = typeof window !== 'undefined'
+          && window.matchMedia('(pointer: coarse)').matches;
+        const initialPlacement: 'bottom-start' | 'top-start' = isTouch ? 'top-start' : 'bottom-start';
+
         popup = tippy('body', {
           getReferenceClientRect: props.clientRect as () => DOMRect,
           appendTo: () => document.body,
@@ -608,7 +616,7 @@ function buildSuggestionConfig(
           showOnCreate: true,
           interactive: true,
           trigger: 'manual',
-          placement: 'bottom-start',
+          placement: initialPlacement,
           // iOS Safari fixes
           touch: true,
           hideOnClick: false,
@@ -616,8 +624,15 @@ function buildSuggestionConfig(
             const vv = window.visualViewport;
             if (!vv) return;
             const update = () => instance.popperInstance?.update();
+            // Both `resize` (height change when keyboard opens/closes) AND
+            // `scroll` (Android often fires scroll before resize) matter — the
+            // popper position needs to track both for a smooth experience.
             vv.addEventListener('resize', update);
-            (instance as any)._vvCleanup = () => vv.removeEventListener('resize', update);
+            vv.addEventListener('scroll', update);
+            (instance as any)._vvCleanup = () => {
+              vv.removeEventListener('resize', update);
+              vv.removeEventListener('scroll', update);
+            };
           },
           onHide(instance) {
             (instance as any)._vvCleanup?.();
@@ -628,7 +643,7 @@ function buildSuggestionConfig(
               {
                 name: 'flip',
                 options: {
-                  fallbackPlacements: ['top-start', 'bottom-end', 'top-end'],
+                  fallbackPlacements: ['bottom-start', 'top-end', 'bottom-end'],
                 },
               },
               {
@@ -638,7 +653,37 @@ function buildSuggestionConfig(
                   padding: 8,
                 },
               },
-              // Keep popup above the virtual keyboard using Visual Viewport API
+              // Cap the popper height to whatever the visual viewport can
+              // actually show above OR below the cursor. Without this, even
+              // a perfect top/bottom flip leaves the bottom half of a tall
+              // palette hidden under the keyboard.
+              {
+                name: 'capHeight',
+                enabled: true,
+                phase: 'beforeWrite' as const,
+                requires: ['computeStyles'],
+                fn({ state }: { state: any }) {
+                  const vv = window.visualViewport;
+                  if (!vv) return;
+                  const refTop = state.rects?.reference?.top ?? 0;
+                  const refBottom = state.rects?.reference?.bottom ?? refTop;
+                  const visibleTop = vv.offsetTop;
+                  const visibleBottom = vv.offsetTop + vv.height;
+                  const spaceAbove = Math.max(0, refTop - visibleTop - 12);
+                  const spaceBelow = Math.max(0, visibleBottom - refBottom - 12);
+                  const maxH = Math.max(spaceAbove, spaceBelow);
+                  const popperEl: HTMLElement | undefined = state.elements?.popper;
+                  if (!popperEl) return;
+                  // Only constrain if it actually helps — avoid setting maxH on
+                  // tall desktops where the palette fits naturally.
+                  if (maxH > 100) {
+                    popperEl.style.maxHeight = `${Math.min(maxH, 480)}px`;
+                    popperEl.style.overflowY = 'auto';
+                  }
+                },
+              },
+              // Keep popup inside the visual viewport. Runs after capHeight
+              // so we already know the popper is shrinkable to fit.
               {
                 name: 'visualViewportFix',
                 enabled: true,
@@ -647,18 +692,35 @@ function buildSuggestionConfig(
                 fn({ state }: { state: any }) {
                   const vv = window.visualViewport;
                   if (!vv) return;
+                  const visibleTop = vv.offsetTop + 8;
                   const visibleBottom = vv.offsetTop + vv.height - 8;
                   const styles = state.styles?.popper;
                   if (!styles) return;
                   const top = parseFloat(styles.top ?? '0');
-                  const popperHeight = state.rects?.popper?.height ?? 0;
+                  const popperEl: HTMLElement | undefined = state.elements?.popper;
+                  // After capHeight clamps the element, prefer measured height
+                  // over the popper's pre-clamp computed height.
+                  const popperHeight = popperEl?.getBoundingClientRect().height
+                    ?? state.rects?.popper?.height
+                    ?? 0;
+                  const refTop = state.rects?.reference?.top ?? top;
+                  const refBottom = state.rects?.reference?.bottom ?? refTop;
+
                   if (top + popperHeight > visibleBottom) {
-                    const refTop = state.rects?.reference?.top ?? top;
+                    // Try flipping above the caret.
                     const aboveTop = refTop - popperHeight - 8;
-                    if (aboveTop >= vv.offsetTop + 8) {
+                    if (aboveTop >= visibleTop) {
                       styles.top = `${aboveTop}px`;
                     } else {
-                      styles.top = `${Math.max(vv.offsetTop + 8, visibleBottom - popperHeight)}px`;
+                      // Doesn't fit either way — pin to top of visible area.
+                      styles.top = `${visibleTop}px`;
+                    }
+                  } else if (top < visibleTop) {
+                    // The popper went off the top — pin below the caret instead.
+                    if (refBottom + popperHeight + 8 <= visibleBottom) {
+                      styles.top = `${refBottom + 8}px`;
+                    } else {
+                      styles.top = `${visibleTop}px`;
                     }
                   }
                 },
