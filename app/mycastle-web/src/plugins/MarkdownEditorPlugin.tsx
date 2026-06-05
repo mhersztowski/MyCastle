@@ -170,6 +170,7 @@ function MarkdownEditorPanel() {
         initialContent={content}
         onSave={handleSave}
         autoSaveDelay={2000}
+        filePath={mqttPath}
       />
     </Box>
   );

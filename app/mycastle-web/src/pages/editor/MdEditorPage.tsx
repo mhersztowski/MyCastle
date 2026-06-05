@@ -186,6 +186,7 @@ const MdEditorPage: React.FC = () => {
               onSave={handleSave}
               placeholder="Start writing... Type '/' for commands"
               autoFocus
+              filePath={filePath}
             />
           </Paper>
         )}

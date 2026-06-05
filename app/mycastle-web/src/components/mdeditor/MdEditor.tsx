@@ -60,6 +60,10 @@ export interface MdEditorProps {
   editable?: boolean;
   autoFocus?: boolean;
   autoSaveDelay?: number; // ms, default 2000; 0 = disabled
+  /** Current document path — used by the `/event` dialog to derive a base
+   *  date from `{yyyy}/{mm}/{dd}.md` daily-journal files when inserting
+   *  events from a template. Optional; absence falls back to today. */
+  filePath?: string;
 }
 
 const MdEditor: React.FC<MdEditorProps> = ({
@@ -71,6 +75,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
   editable = true,
   autoFocus = false,
   autoSaveDelay = 30000,
+  filePath,
 }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -934,15 +939,22 @@ const MdEditor: React.FC<MdEditorProps> = ({
       <EventDialog
         open
         onClose={() => setEventDialog(null)}
+        filePath={filePath}
         onInsert={({ attrs }) => {
           // Insert the structured EventBlock node — renders as a card via
           // ReactNodeViewRenderer, persists to markdown through the
           // converter's escapeEvents/restoreEvents pair so the JSON attrs
           // round-trip on save/load without lossy text serialisation.
+          //
+          // In template mode the dialog calls this once per resolved event,
+          // so each becomes a separate node. We can't pre-compute insertion
+          // positions (each insert shifts following ones), so we always use
+          // the *editor's current selection end* — the cards just stack
+          // sequentially from where the slash was triggered.
           eventDialog.editor
             .chain()
             .focus()
-            .insertContentAt(eventDialog.range.from, {
+            .insertContent({
               type: 'eventBlock',
               attrs,
             })

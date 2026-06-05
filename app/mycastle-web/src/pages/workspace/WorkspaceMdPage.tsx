@@ -331,6 +331,7 @@ const WorkspaceMdPage: React.FC = () => {
             onSave={handleSave}
             onLinkClick={handleLinkClick}
             onCreatePage={handleCreatePage}
+            filePath={filePath}
           />
         )}
       </Box>

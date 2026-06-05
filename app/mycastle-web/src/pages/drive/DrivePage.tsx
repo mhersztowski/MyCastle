@@ -1599,6 +1599,7 @@ export default function DrivePage(): React.JSX.Element {
                   initialContent={mdEditing.initialContent}
                   onSave={saveMdContent}
                   autoSaveDelay={2000}              /* faster than the default 30s */
+                  filePath={mdEditing.rel}          /* drives template-tab base date */
                 />
               </Box>
             )}

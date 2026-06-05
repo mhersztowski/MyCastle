@@ -15,11 +15,23 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Autocomplete, Box, Button, Dialog, DialogActions, DialogContent,
-  DialogTitle, Stack, TextField, Typography,
+  Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent,
+  DialogTitle, IconButton, MenuItem, Paper, Stack, Tab, Tabs,
+  TextField, Tooltip, Typography,
 } from '@mui/material';
 import EventIcon from '@mui/icons-material/Event';
-import { useFilesystem } from '../../modules/filesystem';
+import SettingsIcon from '@mui/icons-material/Settings';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
+import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
+import { useAuth } from '../../modules/auth';
+import EventTemplateManager from './EventTemplateManager';
+import type { EventTemplate, ResolvedEvent } from './eventTemplates';
+import {
+  applyTemplate, dateToInputValue, inputValueToDate, loadTemplates,
+  makeTemplateId, offsetLabel, parseDateFromPath,
+} from './eventTemplates';
+import { useTaskOptions, type TaskOption } from './useTaskOptions';
 
 export interface EventBlockAttrs {
   eventName: string;
@@ -41,19 +53,16 @@ export interface EventDialogResult {
 export interface EventDialogProps {
   open: boolean;
   onClose: () => void;
+  /** Called once per inserted event — also fires once per item when bulk
+   *  inserting from a template, so the host can append each as a separate
+   *  EventBlock node. */
   onInsert: (result: EventDialogResult) => void;
   /** Pre-fill form fields — used when editing an existing EventBlock. */
   initial?: Partial<EventBlockAttrs>;
-}
-
-interface TaskOption {
-  id: string;
-  name: string;
-  projectId?: string;
-  /** Optional cached project label — used when the picker is preloaded
-   *  with a synthetic option for an already-saved event. */
-  projectName?: string;
-  description?: string;
+  /** Current document path (e.g. `Calendar/2026/06/05.md`). Used to derive
+   *  the base date in template mode — falls back to today when not provided
+   *  or the path doesn't follow the `yyyy/mm/dd` convention. */
+  filePath?: string;
 }
 
 /** Local datetime → ISO-ish for display (`2026-06-10 14:00`). */
@@ -73,45 +82,62 @@ function defaultStart(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const EventDialog: React.FC<EventDialogProps> = ({ open, onClose, onInsert, initial }) => {
-  const { dataSource } = useFilesystem();
+const EventDialog: React.FC<EventDialogProps> = ({
+  open, onClose, onInsert, initial, filePath,
+}) => {
+  const { tasks, projectName } = useTaskOptions(open);
+  const { currentUser } = useAuth();
+  const userName = currentUser?.name ?? '';
 
-  // Materialise task list from the DataSource each time the dialog opens —
-  // wraps node objects in plain serialisable shape for the picker.
-  const tasks: TaskOption[] = useMemo(() => {
-    if (!open) return [];
-    try {
-      const ts = dataSource.tasks ?? [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return ts.map((t: any) => ({
-        id: String(t.id ?? t.model?.id ?? ''),
-        name: String(t.name ?? t.model?.name ?? '(unnamed)'),
-        projectId: t.projectId ?? t.model?.projectId,
-        description: t.description ?? t.model?.description,
-      })).filter(t => t.id);
-    } catch {
-      return [];
-    }
-  }, [open, dataSource]);
+  // Editing-mode (initial set) skips the template tab — it doesn't make sense
+  // to "bulk-insert from template" when the user wanted to tweak a single
+  // existing event card. Plain insert mode shows both tabs.
+  const isEditMode = Boolean(initial);
+  const [mode, setMode] = useState<'single' | 'template'>('single');
 
-  // Cross-reference project ids → names so the inserted markdown can say
-  // "Projekt X" instead of an opaque uuid.
-  const projectName: (id?: string) => string | undefined = useMemo(() => {
-    if (!open) return () => undefined;
+  // Template tab state ----------------------------------------------------
+  const [templates, setTemplates] = useState<EventTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [baseDateInput, setBaseDateInput] = useState(''); // YYYY-MM-DD
+  const [managerOpen, setManagerOpen] = useState(false);
+  // Seed for "save current single event as new template" — populated only
+  // when the user clicks that button, then handed off to the manager.
+  const [managerSeed, setManagerSeed] = useState<EventTemplate | undefined>(undefined);
+
+  // Try to derive the base date from the document path; fall back to today
+  // when the path doesn't follow the `yyyy/mm/dd` daily-journal convention.
+  useEffect(() => {
+    if (!open) return;
+    const fromPath = parseDateFromPath(filePath);
+    setBaseDateInput(dateToInputValue(fromPath ?? new Date()));
+  }, [open, filePath]);
+
+  const refreshTemplates = async () => {
+    if (!userName) { setTemplates([]); return; }
+    setTemplatesLoading(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const projects: any[] = dataSource.projects ?? [];
-      const byId = new Map<string, string>();
-      for (const p of projects) {
-        const id = String(p.id ?? p.model?.id ?? '');
-        const name = String(p.name ?? p.model?.name ?? '');
-        if (id) byId.set(id, name);
-      }
-      return (id?: string) => id ? byId.get(id) : undefined;
-    } catch {
-      return () => undefined;
+      const list = await loadTemplates(userName);
+      setTemplates(list);
+      // Auto-select the first template if nothing's chosen yet.
+      setSelectedTemplateId(prev => prev || list[0]?.id || '');
+    } catch (err) {
+      console.warn('[EventDialog] template load failed:', err);
+    } finally {
+      setTemplatesLoading(false);
     }
-  }, [open, dataSource]);
+  };
+
+  // Lazy-load templates only when the user actually opens the template tab —
+  // saves a VFS round-trip for users who only insert single events.
+  useEffect(() => {
+    if (open && mode === 'template' && templates.length === 0 && !templatesLoading) {
+      void refreshTemplates();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, mode]);
+
+  // ------------------------------------------------------------------------
 
   // Form state — `task` may be null (no task chosen, manual event).
   const [task, setTask] = useState<TaskOption | null>(null);
@@ -181,12 +207,218 @@ const EventDialog: React.FC<EventDialogProps> = ({ open, onClose, onInsert, init
     onClose();
   };
 
+  // Computed list of resolved events for the currently-selected template,
+  // applied against the picked base date. Memoised because applyTemplate
+  // does a small loop per render and EventDialog rerenders on every keystroke
+  // in the single-event tab too.
+  const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
+  const resolvedEvents: ResolvedEvent[] = useMemo(() => {
+    if (!selectedTemplate) return [];
+    const baseDate = inputValueToDate(baseDateInput) ?? new Date();
+    return applyTemplate(selectedTemplate, baseDate);
+  }, [selectedTemplate, baseDateInput]);
+
+  /** Bulk-insert every resolved event by calling `onInsert` once per item.
+   *  The host (MdEditor) appends each as a separate EventBlock node, so the
+   *  result is a vertical stack of cards in the document. */
+  const handleInsertTemplate = () => {
+    if (!selectedTemplate || resolvedEvents.length === 0) return;
+    for (const ev of resolvedEvents) {
+      const attrs: EventBlockAttrs = {
+        eventName: ev.name,
+        start: ev.start,
+        end: ev.end,
+        description: ev.description,
+        taskId: ev.taskId,
+        taskName: ev.taskName,
+        projectName: ev.projectName,
+      };
+      const dateLine = ev.end
+        ? `📅 **${fmtDate(ev.start)} — ${fmtDate(ev.end)}** · ${ev.name || '(bez nazwy)'}`
+        : `📅 **${fmtDate(ev.start)}** · ${ev.name || '(bez nazwy)'}`;
+      const lines: string[] = [`> ${dateLine}`];
+      if (ev.taskName) {
+        const projSuffix = ev.projectName ? ` (${ev.projectName})` : '';
+        lines.push(`> 🔗 Zadanie: **${ev.taskName}**${projSuffix}`);
+      }
+      if (ev.description.trim()) {
+        for (const ln of ev.description.trim().split('\n')) lines.push(`> ${ln}`);
+      }
+      const markdown = lines.join('\n') + '\n\n';
+      onInsert({ markdown, attrs });
+    }
+    onClose();
+  };
+
+  /** Hand the currently-edited single event off to the template manager as
+   *  a seed for a new template — saves the user from re-typing when they
+   *  want to "save this for next time". */
+  const handleSaveAsTemplate = () => {
+    if (!name && !description) {
+      // eslint-disable-next-line no-alert
+      alert('Wypełnij najpierw nazwę lub opis eventu.');
+      return;
+    }
+    const baseDate = inputValueToDate(baseDateInput) ?? new Date();
+    // Convert the absolute datetime back to a relative offset by diffing the
+    // calendar days between start and baseDate. Time-of-day is taken straight
+    // from the start string.
+    const startDate = start ? new Date(start) : new Date(baseDate);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const startMidnight = new Date(startDate); startMidnight.setHours(0, 0, 0, 0);
+    const baseMidnight = new Date(baseDate);   baseMidnight.setHours(0, 0, 0, 0);
+    const dayOffset = Math.round((startMidnight.getTime() - baseMidnight.getTime()) / dayMs);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const time = `${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
+    let durationMinutes = 60;
+    if (end) {
+      const endDate = new Date(end);
+      durationMinutes = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+    }
+    const seedProjName = task ? projectName(task.projectId) ?? task.projectName ?? '' : '';
+    const seed: EventTemplate = {
+      id: makeTemplateId(),
+      name: name || 'Nowy szablon',
+      description: '',
+      items: [{
+        name: name || '(bez nazwy)',
+        dayOffset,
+        time,
+        durationMinutes,
+        description,
+        taskId: task?.id,
+        taskName: task?.name,
+        projectName: seedProjName,
+      }],
+    };
+    setManagerSeed(seed);
+    setManagerOpen(true);
+  };
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <EventIcon /> Wstaw event
+        <EventIcon /> {isEditMode ? 'Edytuj event' : 'Wstaw event'}
       </DialogTitle>
+
+      {/* Tabs let the user switch between "single event" (existing flow) and
+          "bulk from template" (new). Hidden in edit mode — bulk doesn't make
+          sense when there's a specific event to modify. */}
+      {!isEditMode && (
+        <Tabs
+          value={mode}
+          onChange={(_, v) => setMode(v)}
+          sx={{ px: 2, borderBottom: 1, borderColor: 'divider' }}
+        >
+          <Tab value="single" label="Pojedynczy event" />
+          <Tab value="template" label="Z szablonu" />
+        </Tabs>
+      )}
+
       <DialogContent>
+        {mode === 'template' ? (
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {/* Base date — auto-derived from filePath when it matches
+                `…/yyyy/mm/dd.md`, otherwise today. Manual override always
+                possible because users sometimes work on tomorrow's schedule
+                from today's note. */}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+              <TextField
+                label="Bazowa data"
+                type="date"
+                value={baseDateInput}
+                onChange={(e) => setBaseDateInput(e.target.value)}
+                size="small"
+                sx={{ width: { xs: '100%', sm: 200 } }}
+                slotProps={{ inputLabel: { shrink: true } }}
+                helperText={parseDateFromPath(filePath)
+                  ? 'Auto z nazwy pliku'
+                  : 'Plik nie ma daty w nazwie — domyślnie dziś'}
+              />
+              <Box sx={{ flex: 1 }} />
+              <Tooltip title="Odśwież listę szablonów">
+                <IconButton size="small" onClick={() => void refreshTemplates()}>
+                  <RefreshIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Button
+                size="small"
+                startIcon={<SettingsIcon />}
+                onClick={() => { setManagerSeed(undefined); setManagerOpen(true); }}
+              >
+                Zarządzaj
+              </Button>
+            </Stack>
+
+            {/* Template picker — disabled when there's nothing to pick. */}
+            <TextField
+              select
+              label="Szablon"
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              size="small"
+              disabled={templates.length === 0}
+              helperText={templates.length === 0
+                ? (templatesLoading ? 'Ładowanie…' : 'Brak szablonów — utwórz przez Zarządzaj')
+                : `${selectedTemplate?.items.length ?? 0} eventów`}
+            >
+              {templates.map(t => (
+                <MenuItem key={t.id} value={t.id}>
+                  {t.name} ({t.items.length})
+                </MenuItem>
+              ))}
+            </TextField>
+
+            {selectedTemplate?.description && (
+              <Typography variant="caption" color="text.secondary">
+                {selectedTemplate.description}
+              </Typography>
+            )}
+
+            {/* Preview — concrete dates after applying baseDate. Empty state
+                guides the user when no template is selected yet. */}
+            {selectedTemplate && resolvedEvents.length > 0 && (
+              <Paper variant="outlined" sx={{ p: 1.5, maxHeight: 280, overflow: 'auto' }}>
+                <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 1 }}>
+                  Podgląd ({resolvedEvents.length} {resolvedEvents.length === 1 ? 'event' : 'eventów'})
+                </Typography>
+                <Stack spacing={0.75}>
+                  {resolvedEvents.map((ev, i) => {
+                    const item = selectedTemplate.items[i];
+                    return (
+                      <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                        <Chip
+                          label={offsetLabel(item.dayOffset)}
+                          size="small"
+                          variant="outlined"
+                          sx={{ minWidth: 78, fontSize: 11 }}
+                        />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                            {ev.name || '(bez nazwy)'}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            📅 {fmtDate(ev.start)}{ev.end && ` — ${fmtDate(ev.end)}`}
+                          </Typography>
+                          {ev.taskName && (
+                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                              🔗 {ev.taskName}{ev.projectName && ` (${ev.projectName})`}
+                            </Typography>
+                          )}
+                          {ev.description && (
+                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
+                              {ev.description}
+                            </Typography>
+                          )}
+                        </Box>
+                      </Box>
+                    );
+                  })}
+                </Stack>
+              </Paper>
+            )}
+          </Stack>
+        ) : (
         <Stack spacing={2} sx={{ mt: 1 }}>
           {/* Task picker — freeSolo so the user can still build an event
               without referencing a task, or when DataSource is empty
@@ -265,13 +497,61 @@ const EventDialog: React.FC<EventDialogProps> = ({ open, onClose, onInsert, init
             </Box>
           </Alert>
         </Stack>
+        )}
       </DialogContent>
-      <DialogActions>
+      <DialogActions sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+        {/* "Save as template" is a single-mode helper — it doesn't insert
+            anything, just hands the current form state to the manager as a
+            seed for a new template. Hidden in edit mode (the event already
+            exists in the document — saving it as a template separately would
+            be unusual flow). */}
+        {mode === 'single' && !isEditMode && (
+          <Tooltip title="Zapisz aktualny event jako nowy szablon">
+            <span>
+              <Button
+                size="small"
+                startIcon={<BookmarkAddIcon />}
+                onClick={handleSaveAsTemplate}
+                disabled={!start || !name}
+              >
+                Zapisz jako szablon
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+        <Box sx={{ flex: 1 }} />
         <Button onClick={onClose}>Anuluj</Button>
-        <Button variant="contained" onClick={handleInsert} disabled={!start}>
-          Wstaw event
-        </Button>
+        {mode === 'single' ? (
+          <Button variant="contained" onClick={handleInsert} disabled={!start}>
+            Wstaw event
+          </Button>
+        ) : (
+          <Button
+            variant="contained"
+            onClick={handleInsertTemplate}
+            startIcon={<LibraryAddIcon />}
+            disabled={!selectedTemplate || resolvedEvents.length === 0}
+          >
+            Wstaw {resolvedEvents.length || ''} eventów
+          </Button>
+        )}
       </DialogActions>
+
+      {/* Sub-dialog: full CRUD for templates. Reusing the manager component
+          keeps the schema in one place — both the "Zarządzaj" button and
+          the "Save as template" path mount this. */}
+      <EventTemplateManager
+        open={managerOpen}
+        onClose={() => { setManagerOpen(false); setManagerSeed(undefined); }}
+        userName={userName}
+        seedTemplate={managerSeed}
+        onSaved={(list) => {
+          setTemplates(list);
+          // After saving a fresh seed, select it so the preview pops up.
+          if (managerSeed) setSelectedTemplateId(managerSeed.id);
+          setMode('template');
+        }}
+      />
     </Dialog>
   );
 };
