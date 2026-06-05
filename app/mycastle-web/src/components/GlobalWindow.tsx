@@ -99,6 +99,18 @@ export function GlobalWindow({
     setZIndex(nextZIndex());
   }, []);
 
+  // Restore from taskbar → bring this window to the top. Without this, a
+  // window restored while another (maximised) window has a higher z-index
+  // pops back open but is buried — the user clicks the chip and "nothing
+  // happens" visually.
+  const wasMinimizedRef = useRef(minimized);
+  useEffect(() => {
+    if (open && wasMinimizedRef.current && !minimized) {
+      bringToFront();
+    }
+    wasMinimizedRef.current = minimized;
+  }, [open, minimized, bringToFront]);
+
   const isFullscreen = maximized || isMobile;
 
   const handleTitleMouseDown = useCallback(

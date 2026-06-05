@@ -20,7 +20,7 @@ import {
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import BarChartIcon from '@mui/icons-material/BarChart';
-import { useFilesystem } from '../../modules/filesystem';
+import { readUserJson, writeUserJson } from '../../services/userJson';
 import MemoryTestTab from './MemoryTestTab';
 import MemoryStatsTab from './MemoryStatsTab';
 import MemoryDesignTab from './MemoryDesignTab';
@@ -34,7 +34,6 @@ export default function MemoryPage(): React.JSX.Element {
   const params = useParams<{ userName: string }>();
   const { currentUser } = useAuth();
   const userName = params.userName || currentUser?.name || '';
-  const { readFile, writeFile, isDataLoaded } = useFilesystem();
 
   const [tab, setTab] = useState(0);
   const [data, setData] = useState<MemoryData>(EMPTY_MEMORY);
@@ -45,61 +44,56 @@ export default function MemoryPage(): React.JSX.Element {
   // Avoid stomping the file on first auto-save before the initial read completes.
   const hasLoadedRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const writeFileRef = useRef(writeFile);
   const latestDataRef = useRef<MemoryData>(EMPTY_MEMORY);
-  useEffect(() => { writeFileRef.current = writeFile; }, [writeFile]);
   useEffect(() => { latestDataRef.current = data; }, [data]);
 
-  // Load
+  // Load — directly via REST VFS so we don't depend on MQTT/loadAllData
+  // (which would block this page forever on a slow or unauthenticated
+  // socket — e.g. right after the Android app's data was cleared).
   useEffect(() => {
-    if (!isDataLoaded || hasLoadedRef.current) return;
-    readFile(MEMORY_PATH).then((file) => {
-      if (file) {
-        try {
-          const parsed = JSON.parse(file.toString()) as MemoryData;
-          if (parsed && parsed.type === 'memory_data') {
-            setData({
-              ...EMPTY_MEMORY,
-              ...parsed,
-              categories: parsed.categories ?? [],
-              questions: parsed.questions ?? [],
-              sessions: parsed.sessions ?? [],
-            });
-          }
-        } catch (err) {
-          console.error('[Memory] parse error:', err);
-          setSnackbar({ open: true, msg: 'Failed to parse memory.json — starting empty', severity: 'error' });
+    if (hasLoadedRef.current || !userName) return;
+    let cancelled = false;
+    readUserJson<MemoryData>(userName, MEMORY_PATH)
+      .then((parsed) => {
+        if (cancelled) return;
+        if (parsed && parsed.type === 'memory_data') {
+          setData({
+            ...EMPTY_MEMORY,
+            ...parsed,
+            categories: parsed.categories ?? [],
+            questions: parsed.questions ?? [],
+            sessions: parsed.sessions ?? [],
+          });
         }
-      }
-      hasLoadedRef.current = true;
-      setLoading(false);
-    }).catch((err) => {
-      console.error('[Memory] readFile failed:', err);
-      hasLoadedRef.current = true;
-      setLoading(false);
-    });
-  }, [isDataLoaded, readFile]);
+      })
+      .catch((err) => {
+        console.error('[Memory] readUserJson failed:', err);
+        setSnackbar({ open: true, msg: `Failed to load: ${(err as Error).message}`, severity: 'error' });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        hasLoadedRef.current = true;
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [userName]);
 
   // Debounced save — reads latestDataRef so closures never go stale
   const scheduleSave = useCallback(() => {
-    if (!hasLoadedRef.current) return;
+    if (!hasLoadedRef.current || !userName) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       setSaving(true);
       try {
-        const result = await writeFileRef.current(
-          MEMORY_PATH,
-          JSON.stringify(latestDataRef.current, null, 2),
-        );
-        if (result === null) setSnackbar({ open: true, msg: 'Save failed — check connection', severity: 'error' });
+        await writeUserJson(userName, MEMORY_PATH, latestDataRef.current);
       } catch (err) {
-        console.error('[Memory] writeFile failed:', err);
+        console.error('[Memory] writeUserJson failed:', err);
         setSnackbar({ open: true, msg: (err as Error).message, severity: 'error' });
       } finally {
         setSaving(false);
       }
     }, 800);
-  }, []);
+  }, [userName]);
 
   // Flush pending save on unmount / page hide (same pattern as Health)
   useEffect(() => {
@@ -107,7 +101,8 @@ export default function MemoryPage(): React.JSX.Element {
       if (!saveTimerRef.current) return;
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
-      writeFileRef.current(MEMORY_PATH, JSON.stringify(latestDataRef.current, null, 2))
+      if (!userName) return;
+      writeUserJson(userName, MEMORY_PATH, latestDataRef.current)
         .catch((err) => console.error('[Memory] flush failed:', err));
     };
     window.addEventListener('pagehide', flush);
@@ -117,7 +112,7 @@ export default function MemoryPage(): React.JSX.Element {
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('beforeunload', flush);
     };
-  }, []);
+  }, [userName]);
 
   // Single state-updater shared by every tab
   const handleUpdate = useCallback((next: MemoryData) => {

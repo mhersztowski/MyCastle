@@ -25,7 +25,9 @@ import SkipNextIcon from '@mui/icons-material/SkipNext';
 import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
 import PlayCircleFilledIcon from '@mui/icons-material/PlayCircleFilled';
 import { v4 as uuidv4 } from 'uuid';
-import { useFilesystem } from '../../modules/filesystem';
+import { useParams } from 'react-router-dom';
+import { useAuth } from '../../modules/auth';
+import { readUserJson, writeUserJson } from '../../services/userJson';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -968,62 +970,58 @@ const LiveSessionPlayer: React.FC<LiveSessionPlayerProps> = ({ program, onClose,
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const HealthPage: React.FC = () => {
-  const { readFile, writeFile, isDataLoaded } = useFilesystem();
+  // Direct REST VFS — independent of MQTT / useFilesystem. The previous
+  // implementation gated everything on `useFilesystem.isDataLoaded`, which
+  // is fed by an MQTT-driven `loadAllData()`. If MQTT is slow to connect,
+  // unauthenticated (just cleared Android app data!), or `loadAllData`
+  // errors out on a broken VFS state, the page spun forever. REST VFS
+  // works as soon as the HTTP backend is reachable with a valid JWT.
+  const params = useParams<{ userName: string }>();
+  const { currentUser } = useAuth();
+  const userName = params.userName || currentUser?.name || '';
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [tab, setTab] = useState(0);
 
   // Gate that prevents auto-save from overwriting on-disk data before the
-  // initial read has completed. Set to true only after readFile finishes.
+  // initial read has completed.
   const hasLoadedRef = useRef(false);
 
   // Debounced save — reads latest data from ref so closures never go stale
   const saveDataRef = useRef<{ programs: TrainingProgram[]; sessions: WorkoutSession[] }>({ programs: [], sessions: [] });
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const writeFileRef = useRef(writeFile);
-  useEffect(() => { writeFileRef.current = writeFile; }, [writeFile]);
 
   const scheduleSave = useCallback((programs: TrainingProgram[], sessions: WorkoutSession[]) => {
-    if (!hasLoadedRef.current) return;
+    if (!hasLoadedRef.current || !userName) return;
     saveDataRef.current = { programs, sessions };
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       setSaving(true);
-      console.log('[Health] saving to', HEALTH_PATH, { programs: saveDataRef.current.programs.length, sessions: saveDataRef.current.sessions.length });
       try {
-        const result = await writeFileRef.current(
-          HEALTH_PATH,
-          JSON.stringify({ type: 'health_data', ...saveDataRef.current } satisfies HealthData, null, 2),
-        );
-        console.log('[Health] writeFile result:', result);
-        if (result !== null) {
-          setSavedAt(new Date());
-        } else {
-          setSnackbar({ open: true, message: 'Save failed — check connection', severity: 'error' });
-        }
+        await writeUserJson(userName, HEALTH_PATH, { type: 'health_data', ...saveDataRef.current } satisfies HealthData);
+        setSavedAt(new Date());
       } catch (err) {
-        console.error('[Health] writeFile threw:', err);
-        setSnackbar({ open: true, message: 'Save failed', severity: 'error' });
+        console.error('[Health] writeUserJson failed:', err);
+        setSnackbar({ open: true, message: `Save failed: ${(err as Error).message}`, severity: 'error' });
       } finally {
         setSaving(false);
       }
     }, 800);
-  }, []);
+  }, [userName]);
 
   // Flush a pending debounced save when the page hides or the component unmounts.
   // Without this, closing the tab / WebView within 800 ms of an edit drops the
-  // change before it is shipped to the backend — exactly what was happening
-  // when clearing the Android app data lost recent edits.
+  // change before it is shipped to the backend.
   useEffect(() => {
     const flush = () => {
       if (!saveTimerRef.current) return;
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
-      writeFileRef.current(
-        HEALTH_PATH,
-        JSON.stringify({ type: 'health_data', ...saveDataRef.current } satisfies HealthData, null, 2),
-      ).catch(err => console.error('[Health] flush write failed:', err));
+      if (!userName) return;
+      writeUserJson(userName, HEALTH_PATH, { type: 'health_data', ...saveDataRef.current } satisfies HealthData)
+        .catch(err => console.error('[Health] flush write failed:', err));
     };
     window.addEventListener('pagehide', flush);
     window.addEventListener('beforeunload', flush);
@@ -1032,7 +1030,7 @@ const HealthPage: React.FC = () => {
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('beforeunload', flush);
     };
-  }, []);
+  }, [userName]);
 
   const [programs, setPrograms] = useState<TrainingProgram[]>([]);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
@@ -1050,23 +1048,28 @@ const HealthPage: React.FC = () => {
   // readFile returns null even when the file exists on disk, and the first
   // auto-save would clobber it with an empty/partial state.
   useEffect(() => {
-    if (!isDataLoaded || hasLoadedRef.current) return;
-    readFile(HEALTH_PATH).then(file => {
-      if (file) {
-        try {
-          const data: HealthData = JSON.parse(file.toString());
-          // Migrate legacy exercises (exercise-level unit + parallel arrays) to sets[].
-          setPrograms((data.programs ?? []).map(p => ({
-            ...p, exercises: (p.exercises ?? []).map(normalizeExercise),
-          })));
-          setSessions(data.sessions ?? []);
-        } catch { /* fresh */ }
-      }
-    }).finally(() => {
-      hasLoadedRef.current = true;
-      setLoading(false);
-    });
-  }, [readFile, isDataLoaded]);
+    if (hasLoadedRef.current || !userName) return;
+    let cancelled = false;
+    readUserJson<HealthData>(userName, HEALTH_PATH)
+      .then((data) => {
+        if (cancelled || !data) return;
+        // Migrate legacy exercises (exercise-level unit + parallel arrays) to sets[].
+        setPrograms((data.programs ?? []).map(p => ({
+          ...p, exercises: (p.exercises ?? []).map(normalizeExercise),
+        })));
+        setSessions(data.sessions ?? []);
+      })
+      .catch((err) => {
+        console.error('[Health] readUserJson failed:', err);
+        setSnackbar({ open: true, message: `Load failed: ${(err as Error).message}`, severity: 'error' });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        hasLoadedRef.current = true;
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [userName]);
 
 
   // Program CRUD
