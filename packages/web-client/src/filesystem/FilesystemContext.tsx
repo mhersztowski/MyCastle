@@ -69,17 +69,45 @@ export const FilesystemProvider: React.FC<FilesystemProviderProps> = ({ children
     setIsLoading(true);
     setIsDataLoaded(false);
     setError(null);
+
+    // Race against a hard timeout — if MQTT-driven loadAllData takes longer
+    // than 10s (broken backend, dropped websocket, network on a phone in a
+    // basement), give up so the rest of the app can still render. Pages
+    // checking isDataLoaded should never spin forever; an empty DataSource
+    // is a strictly better failure mode than an infinite CircularProgress.
+    const TIMEOUT_MS = 10_000;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`loadAllData timed out after ${TIMEOUT_MS}ms`)),
+        TIMEOUT_MS,
+      );
+    });
+
     try {
-      const dir = await filesystemService.loadAllData();
+      const dir = await Promise.race([filesystemService.loadAllData(), timeoutPromise]);
       setRootDir(dir);
       setCalendar(filesystemService.getCalendar());
       setDataSource(filesystemService.getDataSource());
-      setIsDataLoaded(true);
       console.log('FilesystemContext: All data loaded successfully');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load all data');
       console.error('FilesystemContext: Failed to load all data:', err);
+      // Try to surface any partial state already collected by the service so
+      // pages reading dataSource/calendar see whatever did load before the
+      // failure (better than empty).
+      try {
+        setCalendar(filesystemService.getCalendar());
+        setDataSource(filesystemService.getDataSource());
+      } catch { /* ignore — service may not expose partial state */ }
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      // Always flip the gate so pages depending on `isDataLoaded` render
+      // something — either the loaded data, partial state, or "empty".
+      // Without this, a single MQTT/load error froze the whole app's PIM
+      // surface (Calendar/ToDo/Shopping/Persons/Projects all checked the
+      // same gate and spun forever).
+      setIsDataLoaded(true);
       setIsLoading(false);
       loadingRef.current = false;
     }
