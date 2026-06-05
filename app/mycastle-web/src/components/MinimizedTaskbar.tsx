@@ -19,7 +19,10 @@ export function MinimizedTaskbar() {
         gap: 0.5,
         px: 1,
         pb: 0,
-        zIndex: 1250,
+        // 1295 sits above GlobalWindow's 1200..1289 range so a maximised
+        // window can never bury the taskbar — but still below MUI's
+        // popper/modal at 1300 so dropdowns inside windows render on top.
+        zIndex: 1295,
         pointerEvents: 'none',
       }}
     >

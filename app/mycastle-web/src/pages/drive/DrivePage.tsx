@@ -12,6 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useAuth } from '../../modules/auth';
 import {
   Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, IconButton, LinearProgress, Link, ListItemIcon,
@@ -306,7 +307,12 @@ function formatDate(ms?: number): string {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function DrivePage(): React.JSX.Element {
-  const { userName = '' } = useParams<{ userName: string }>();
+  // Prefer the URL param (legacy route `/user/:userName/pim/drive`) but fall
+  // back to the logged-in user so this component also works as a Global window
+  // mounted outside any route — there `useParams` returns no userName.
+  const params = useParams<{ userName: string }>();
+  const { currentUser } = useAuth();
+  const userName = params.userName || currentUser?.name || '';
   const [cwd, setCwd] = useState('');                       // relative under /drive/
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(true);

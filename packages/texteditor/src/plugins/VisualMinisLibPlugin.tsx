@@ -8,7 +8,7 @@
  *   Changing a value patches the source code in the Monaco editor.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import * as monaco from 'monaco-editor';
 import Box from '@mui/material/Box';
@@ -16,6 +16,7 @@ import Typography from '@mui/material/Typography';
 import Tooltip from '@mui/material/Tooltip';
 import IconButton from '@mui/material/IconButton';
 import Button from '@mui/material/Button';
+import Stack from '@mui/material/Stack';
 import Chip from '@mui/material/Chip';
 import TextField from '@mui/material/TextField';
 import Divider from '@mui/material/Divider';
@@ -71,9 +72,12 @@ import {
 import '@xyflow/react/dist/style.css';
 import { defineEditorPlugin, globalEventBus, globalPluginRegistry } from '../monaco';
 import * as Blockly from 'blockly';
+// Side-effect import: registers Blockly's built-in block types
+// (controls_if, math_number, lists_*, text_*, variables_*, procedures_*, …).
+// Without this the toolbox tries to instantiate them and the flyout blanks
+// out the moment the user clicks any standard category (Lists, Math, …).
+import 'blockly/blocks';
 import { javascriptGenerator, Order } from 'blockly/javascript';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
 /* ── Types ────────────────────────────────────────────────────────────────────*/
 
@@ -90,7 +94,17 @@ type EntityKind =
   | 'logger';
 
 interface SignalPort { name: string; type: string }
-interface SlotPort   { name: string }
+// SlotPort — parsed slot method. `paramType` and `body` are populated only
+// when we walked a class definition (not for prototype/external entity kinds).
+// They feed the "edit existing slot" flow; older code paths that only need
+// `name` keep working because all extra fields are optional.
+//   `state`: when the body carries a `// @blockly-state: <base64-json>` marker
+//   we parse it back into the original Blockly workspace JSON so Edit Slot can
+//   rehydrate the blocks the user built last time, instead of starting empty.
+interface SlotPort   { name: string; paramType?: string; body?: string; state?: object | null }
+// VarPort — plain class field `name: T = value;` (NOT wrapped in MProperty).
+// Feeds the panel listing + Blockly get/set/call dropdowns inside slot editors.
+interface VarPort    { name: string; type: string }
 
 /** Schema for a single constructor parameter or class-level config field. */
 interface ParamDef {
@@ -156,6 +170,8 @@ interface MinisEntity {
   kind: EntityKind;
   signals: SignalPort[];
   slots: SlotPort[];
+  /** Plain (non-MProperty) class fields. Empty for non-class entity kinds. */
+  variables?: VarPort[];
   /** Raw string constructor arguments as found in source, e.g. ["1000", "this"] */
   constructorArgs: string[];
   /** Parameter schema for this entity type. */
@@ -304,15 +320,161 @@ function parseSignalPorts(body: string): SignalPort[] {
   return ports;
 }
 
+// TS control-flow keywords that look like `name(args) { … }` but are NOT
+// class methods. Without this guard, `if (x) { … }` in a slot body would
+// be parsed as a new slot named "if", and after an Update Slot the parser
+// would render the body's control-flow statements as fake sibling slots.
+const TS_BLOCK_KEYWORDS = new Set([
+  'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+  'return', 'throw', 'try', 'catch', 'finally', 'with', 'yield', 'await',
+  'break', 'continue', 'function',
+]);
+
+// Markers we embed in slot bodies to preserve the original Blockly workspace
+// JSON across save/load cycles. The state is base64-encoded JSON living inside
+// a single-line `//` comment — invisible to the running program, but lets us
+// rehydrate the visual block layout exactly when the user re-opens Edit Slot.
+const BLOCKLY_STATE_MARKER = '@blockly-state:';
+const BLOCKLY_STATE_RE = /\/\/\s*@blockly-state:\s*([A-Za-z0-9+/=]+)\s*\n?/;
+
+function encodeBlocklyState(state: object): string {
+  // UTF-8 safe base64: TextEncoder → byte string → btoa
+  const bytes = new TextEncoder().encode(JSON.stringify(state));
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function decodeBlocklyState(b64: string): object | null {
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const json = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === 'object' ? parsed as object : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractBlocklyState(slotBody: string): { state: object | null; bodyWithoutMarker: string } {
+  const m = BLOCKLY_STATE_RE.exec(slotBody);
+  if (!m) return { state: null, bodyWithoutMarker: slotBody };
+  const state = decodeBlocklyState(m[1]);
+  const bodyWithoutMarker = slotBody.replace(BLOCKLY_STATE_RE, '').replace(/^\n/, '').replace(/\n\s*$/, '');
+  return { state, bodyWithoutMarker };
+}
+
+/**
+ * Plain class fields — `name: T = value;` — that are NOT wrapped in
+ * MProperty/Signal/Timer. These are the "variable" members the user can read,
+ * write and call methods on from inside slot Blockly editors.
+ *
+ * The regex deliberately requires a `:` between name and type so we don't
+ * pick up generic assignments inside method bodies. It also requires that
+ * the right-hand side does not start with `new MProperty` / `new Signal`
+ * (those declarations get their own ports).
+ */
+function parseVariablePorts(body: string): VarPort[] {
+  const vars: VarPort[] = [];
+  // Walk the class body character-by-character tracking brace depth so we
+  // only consider declarations at depth 0 (direct class members). A previous
+  // implementation used a global regex and also matched `let x: number = 0`
+  // inside method bodies, polluting the dropdown.
+  const re = /(?:readonly\s+|public\s+|private\s+|protected\s+)?(\w+)\s*:\s*([\w<>[\]|,&.{}() ]+?)\s*=\s*([^;\n]+);/g;
+  // Words that look like an identifier but are actually JS keywords for a
+  // local declaration — skip the regex anchor when one of these immediately
+  // precedes the match (the regex captures the next word).
+  const localKeywords = new Set(['let', 'const', 'var', 'return', 'yield', 'await', 'throw', 'new', 'typeof', 'in', 'of', 'instanceof', 'delete']);
+  const memberKeywords = new Set(['constructor', 'get', 'set', 'static', 'async', 'override']);
+  const seen = new Set<string>();
+  let depth = 0;
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === '{') { depth++; i++; continue; }
+    if (c === '}') { depth--; i++; continue; }
+    if (depth !== 0) { i++; continue; }
+    // At top level — try to anchor a member declaration here.
+    re.lastIndex = i;
+    const m = re.exec(body);
+    if (!m || m.index !== i) { i++; continue; }
+    const name = m[1];
+    const type = m[2].trim();
+    const init = m[3].trim();
+    // Skip Signal/MProperty/Timer — they have their own dedicated ports.
+    const skipInit = /^new\s+(MProperty|Signal|MTimer|MEventBus|MStateMachine|MCommand|MListModel|MLogger)\b/.test(init);
+    // Look one word back to catch local-declaration forms (`let foo:`).
+    // Inside a class body at depth 0, those should not appear — but better
+    // safe than sorry if the source has nested top-level functions.
+    const isLocalDecl = localKeywords.has(name) || memberKeywords.has(name);
+    if (!skipInit && !isLocalDecl && !seen.has(name)) {
+      seen.add(name);
+      vars.push({ name, type });
+    }
+    i = re.lastIndex;
+  }
+  return vars;
+}
+
 function parseSlotPorts(body: string, signalNames: Set<string>): SlotPort[] {
   const slots: SlotPort[] = [];
-  const re = /\b(public\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*(?:void|Promise<[^>]*>|\w[\w<>]*))?\s*\{/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(body)) !== null) {
-    const name = m[2];
-    if (name === 'constructor' || name === 'get' || name === 'set') continue;
-    if (name.startsWith('_') || signalNames.has(name)) continue;
-    slots.push({ name });
+  // Walk through `body` at the top level (depth 0). When we see a token that
+  // looks like `name(args) { … }` *and* we're directly inside the class block
+  // (not nested inside another method's `{ … }`), treat it as a slot method.
+  // Nested matches (control-flow inside method bodies) are skipped — that's
+  // the whole point of the depth check.
+  const re = /(?:public\s+)?(\w+)\s*\(([^)]*)\)\s*(?::\s*(?:void|Promise<[^>]*>|\w[\w<>]*))?\s*\{/g;
+  let i = 0;
+  let depth = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === '{') { depth++; i++; continue; }
+    if (c === '}') { depth--; i++; continue; }
+
+    // Try to anchor a method match only at the top level.
+    if (depth === 0) {
+      re.lastIndex = i;
+      const m = re.exec(body);
+      if (m && m.index === i) {
+        const name = m[1];
+        const ok =
+          !TS_BLOCK_KEYWORDS.has(name) &&
+          name !== 'constructor' && name !== 'get' && name !== 'set' &&
+          !name.startsWith('_') && !signalNames.has(name);
+        // Whether we accept it or not, jump past the opening `{` so the next
+        // iteration walks the method body at depth 1 (and exits cleanly).
+        const openIdx = m.index + m[0].length - 1;
+        if (ok) {
+          // Brace-count the body so we capture nested control flow correctly.
+          let bd = 1;
+          let j = openIdx + 1;
+          while (j < body.length && bd > 0) {
+            const k = body[j];
+            if (k === '{') bd++;
+            else if (k === '}') bd--;
+            j++;
+          }
+          const argMatch = /^\s*\w+\s*:\s*([\w<>[\]|,&. ]+)\s*$/.exec(m[2]);
+          const paramType = argMatch ? argMatch[1].trim() : 'unknown';
+          const rawBody = body.slice(openIdx + 1, j - 1).replace(/^\n/, '').replace(/\n\s*$/, '');
+          // Strip the Blockly state marker out of `body` so the visible
+          // "previous body" panel shows real code, not the base64 blob. Keep
+          // it separately in `state` to feed back into Edit Slot.
+          const { state, bodyWithoutMarker } = extractBlocklyState(rawBody);
+          slots.push({ name, paramType, body: bodyWithoutMarker, state });
+          i = j;            // already past the closing brace
+          continue;
+        }
+        // Rejected name (`if`, `for`, …) — just step into its block so its
+        // body is treated as nested code, not a method.
+        i = openIdx + 1;
+        depth = 1;
+        continue;
+      }
+    }
+    i++;
   }
   return slots;
 }
@@ -359,6 +521,7 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
     const signals = [...builtinSigs, ...parseSignalPorts(body)];
     const signalNameSet = new Set(signals.map((s) => s.name.split('.')[0]));
     const slots = parseSlotPorts(body, signalNameSet);
+    const variables = parseVariablePorts(body);
 
     // Parse constructor params as ParamDefs from constructor signature
     const ctorMatch = /constructor\s*\(([^)]*)\)/.exec(body);
@@ -382,7 +545,7 @@ function parseMinisEntities(code: string, externalDefs: Map<string, ExternalClas
     const localProps = parseLocalProperties(body);
     entities.push({
       id: nextId(), varName: className, label: className, kind: 'class',
-      signals, slots, constructorArgs: [], paramDefs,
+      signals, slots, variables, constructorArgs: [], paramDefs,
       properties: localProps, propertyValues: {},
     });
   }
@@ -979,6 +1142,51 @@ function insertMemberIntoClass(memberCode: string, className: string, targetUri:
   return true;
 }
 
+/**
+ * Find the slot method `oldName` inside class `className` and replace its entire
+ * `name(...): void { ... }` block with `newMemberCode`. Brace counting walks
+ * through nested blocks (if/for/etc.) so we cover the full body.
+ * Returns false when class or slot can't be located.
+ */
+function replaceSlotInClass(oldName: string, newMemberCode: string, className: string, targetUri: string): boolean {
+  const model = findModel(targetUri);
+  if (!model) return false;
+  const code = model.getValue();
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Locate the class block first so we don't accidentally edit an unrelated
+  // method with the same name elsewhere.
+  const classRe = new RegExp(`class\\s+${esc(className)}\\b[^{]*\\{`);
+  const classMatch = classRe.exec(code);
+  if (!classMatch) return false;
+  const classStart = classMatch.index + classMatch[0].length;
+
+  // Now find the slot method declaration inside the class body.
+  const slotRe = new RegExp(`(\\n\\s*)(?:public\\s+)?${esc(oldName)}\\s*\\(([^)]*)\\)\\s*(?::\\s*(?:void|Promise<[^>]*>|\\w[\\w<>]*))?\\s*\\{`, 'g');
+  slotRe.lastIndex = classStart;
+  const slotMatch = slotRe.exec(code);
+  if (!slotMatch) return false;
+
+  // Walk braces from the opening { to find the matching close.
+  const openIdx = slotMatch.index + slotMatch[0].length - 1;
+  let depth = 1;
+  let i = openIdx + 1;
+  while (i < code.length && depth > 0) {
+    const c = code[i];
+    if (c === '{') depth++;
+    else if (c === '}') depth--;
+    i++;
+  }
+  if (depth !== 0) return false; // unbalanced — bail out, don't corrupt source
+
+  // Slot method spans [methodStart .. i). Preserve the leading whitespace
+  // (slotMatch[1]) so the indentation stays consistent.
+  const methodStart = slotMatch.index + slotMatch[1].length;
+  const methodEnd = i;
+  replaceModelContent(model, code.slice(0, methodStart) + newMemberCode + code.slice(methodEnd));
+  return true;
+}
+
 /** Adds `name` to an existing named import from `pkg`, or inserts a new import line. */
 function ensureNamedImport(name: string, pkg: string, targetUri: string): void {
   const model = findModel(targetUri);
@@ -1125,30 +1333,83 @@ function MinisObjectNode({ data, selected }: NodeProps) {
         {hasParams && (
           <span title="Has properties" style={{ fontSize: 9, color: '#585b70', marginLeft: 2 }}>⚙</span>
         )}
-        {selected && (
+        {/* Delete × — always visible (previously: only when selected, which
+            was hard to discover). Slightly larger + clearer hover so it reads
+            as a clickable button rather than punctuation. */}
+        {(
           <span
-            title="Delete (Del)"
+            title="Delete entity (Del)"
             onClick={(e) => {
               e.stopPropagation();
               globalEventBus.emit('minislib:deleteEntity', { varName: entity.varName });
             }}
+            // pointer down stop too — ReactFlow drags on pointer; without this,
+            // clicking × on an unselected node would start a drag instead.
+            onPointerDown={(e) => e.stopPropagation()}
             style={{
-              fontSize: 13, lineHeight: 1, color: '#f38ba8', cursor: 'pointer',
-              padding: '0 2px', borderRadius: 3,
-              transition: 'background 0.1s',
+              fontSize: 16, lineHeight: 1, color: selected ? '#f38ba8' : '#6c7086',
+              cursor: 'pointer',
+              padding: '2px 5px', borderRadius: 3, marginLeft: 2,
+              fontWeight: 700,
+              transition: 'background 0.1s, color 0.1s',
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#3e1e1e'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            onMouseEnter={(e) => {
+              const el = e.currentTarget as HTMLElement;
+              el.style.background = '#3e1e1e';
+              el.style.color = '#f38ba8';
+            }}
+            onMouseLeave={(e) => {
+              const el = e.currentTarget as HTMLElement;
+              el.style.background = 'transparent';
+              el.style.color = selected ? '#f38ba8' : '#6c7086';
+            }}
           >×</span>
         )}
       </div>
 
       <div style={{ position: 'relative', height: bodyH }}>
-        {entity.slots.map((slot, i) => (
-          <div key={slot.name} style={{ position: 'absolute', top: BODY_PAD + i * ROW_H, left: 14, height: ROW_H, lineHeight: `${ROW_H}px`, fontSize: 10, color: '#a6adc8', whiteSpace: 'nowrap' }}>
-            {slot.name}
-          </div>
-        ))}
+        {entity.slots.map((slot, i) => {
+          // Edit affordance only for slots we actually parsed from this file's
+          // class body. Prototype/external slots (MTimer.singleShot etc.) lack
+          // `body` — there's nothing to load into Blockly.
+          const editable = entity.kind === 'class' && slot.body !== undefined;
+          return (
+            <div
+              key={slot.name}
+              title={editable ? `Edit slot ${slot.name}(...)` : slot.name}
+              onClick={(e) => {
+                if (!editable) return;
+                e.stopPropagation();
+                globalEventBus.emit('minislib:editSlot', { varName: entity.varName, slotName: slot.name });
+              }}
+              onPointerDown={(e) => { if (editable) e.stopPropagation(); }}
+              style={{
+                position: 'absolute', top: BODY_PAD + i * ROW_H, left: 14,
+                height: ROW_H, lineHeight: `${ROW_H}px`, fontSize: 10,
+                color: '#a6adc8', whiteSpace: 'nowrap',
+                cursor: editable ? 'pointer' : 'default',
+                padding: '0 4px', marginLeft: -4, borderRadius: 3,
+                textDecoration: editable ? 'underline dotted' : 'none',
+                textDecorationColor: '#585b70',
+                textUnderlineOffset: 2,
+              }}
+              onMouseEnter={(e) => {
+                if (!editable) return;
+                const el = e.currentTarget as HTMLElement;
+                el.style.background = '#313244';
+                el.style.color = '#cdd6f4';
+              }}
+              onMouseLeave={(e) => {
+                if (!editable) return;
+                const el = e.currentTarget as HTMLElement;
+                el.style.background = 'transparent';
+                el.style.color = '#a6adc8';
+              }}
+            >
+              {slot.name}
+            </div>
+          );
+        })}
         {entity.signals.map((sig, i) => (
           <div key={sig.name} style={{ position: 'absolute', top: BODY_PAD + i * ROW_H, right: 14, height: ROW_H, lineHeight: `${ROW_H}px`, fontSize: 10, color: '#cba6f7', textAlign: 'right', whiteSpace: 'nowrap' }}>
             {sig.name}
@@ -1872,6 +2133,330 @@ function ExportManifestButton({ uri, entities }: { uri: string; entities: MinisE
   );
 }
 
+/* ── Path Builder type system ────────────────────────────────────────────────
+ *
+ * Powers the IntelliSense-style picker that drives `minis_var_*` blocks: given
+ * a starting type (e.g. `User`, `Array<Item>`, `MProperty<number>`,
+ * `{ id: number; name: string }`), enumerate its members so the user can
+ * click through `name → field/method → sub-member` without typing TS by hand.
+ *
+ * Members come from five sources, tried in order:
+ *   1. Inline object literals `{ a: T; b: T }` — parsed from the type string
+ *   2. Array shape (`T[]`, `Array<T>`)                    → array methods + [0]: T
+ *   3. Map/Set generics (`Map<K, V>`, `Set<T>`)           → corresponding methods
+ *   4. Class entity in the current file (state.entities)  → signals + slots + vars + props
+ *   5. External manifest                                  → signals + slots + props
+ *   6. Interface / type alias in the current source       → parsed regex
+ *   7. Builtin TS scalars (Date, String, Number)          → hardcoded shortlist
+ *
+ * No TypeScript compiler API in scope — everything regex-based. Accepts that
+ * exotic shapes (conditional types, mapped types, complex unions) won't
+ * resolve and fall back to an empty member list; in that case the dialog
+ * still lets the user type the path manually as a fallback.
+ */
+
+export interface PathMember {
+  name: string;
+  /** field / method / signal / slot / index access */
+  kind: 'field' | 'method' | 'signal' | 'slot' | 'index';
+  /** Result type after dotting into this member — feeds the next picker step. */
+  resultType?: string;
+  /** Pretty-print signature for methods — e.g. "(x: number): void" */
+  signature?: string;
+  /** Source label, for tooltips ("from @mhersztowski/minislib", "interface User") */
+  source?: string;
+}
+
+/** Strip union with null/undefined and outer optionality markers. */
+function normalizeType(t: string): string {
+  let s = t.trim();
+  // Drop trailing comments
+  s = s.replace(/\s*\/\/.*$/, '').trim();
+  // | null | undefined removal
+  s = s.replace(/\s*\|\s*null\b/g, '').replace(/\s*\|\s*undefined\b/g, '').trim();
+  // Outer parens
+  while (s.startsWith('(') && s.endsWith(')')) s = s.slice(1, -1).trim();
+  return s;
+}
+
+/** Detect `T[]` / `Array<T>` / `ReadonlyArray<T>`. Returns element type or null. */
+function arrayElementType(t: string): string | null {
+  const n = normalizeType(t);
+  let m = /^(.+)\[\]$/.exec(n);
+  if (m) return normalizeType(m[1]);
+  m = /^(?:Readonly)?Array<(.+)>$/.exec(n);
+  if (m) return normalizeType(m[1]);
+  return null;
+}
+
+/** Detect `Map<K, V>` — returns [K, V] or null. */
+function mapTypeArgs(t: string): [string, string] | null {
+  const n = normalizeType(t);
+  const m = /^Map<\s*(.+?)\s*,\s*(.+)\s*>$/.exec(n);
+  if (!m) return null;
+  return [normalizeType(m[1]), normalizeType(m[2])];
+}
+
+/** Detect `Set<T>` — returns element type or null. */
+function setElementType(t: string): string | null {
+  const n = normalizeType(t);
+  const m = /^Set<(.+)>$/.exec(n);
+  return m ? normalizeType(m[1]) : null;
+}
+
+/** Detect generic with single argument like `MProperty<T>`, `Signal<T>`. */
+function singleGenericArg(t: string): { wrapper: string; arg: string } | null {
+  const n = normalizeType(t);
+  const m = /^(\w+)<(.+)>$/.exec(n);
+  return m ? { wrapper: m[1], arg: normalizeType(m[2]) } : null;
+}
+
+/** Inline object literal `{ a: T; b: T }` → list of members. */
+function parseInlineObject(t: string): PathMember[] | null {
+  const n = normalizeType(t);
+  if (!n.startsWith('{') || !n.endsWith('}')) return null;
+  const body = n.slice(1, -1);
+  const members: PathMember[] = [];
+  // Split on `;` or `,` at depth-0 only — handles `{ a: number; nested: { x: 1 } }`.
+  const parts: string[] = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '{' || c === '<' || c === '(' || c === '[') depth++;
+    else if (c === '}' || c === '>' || c === ')' || c === ']') depth--;
+    else if (depth === 0 && (c === ';' || c === ',')) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  for (const part of parts) {
+    const m = /^\s*(\w+)\??\s*:\s*(.+?)\s*$/.exec(part);
+    if (m) members.push({ name: m[1], kind: 'field', resultType: m[2].trim() });
+  }
+  return members.length ? members : null;
+}
+
+/** Parse an interface or type alias body from raw source. */
+function parseInterfaceFromSource(code: string, typeName: string): PathMember[] | null {
+  const esc = typeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // interface Foo { … }
+  let body: string | null = null;
+  const ifaceRe = new RegExp(`interface\\s+${esc}\\b[^{]*\\{`);
+  const ifaceMatch = ifaceRe.exec(code);
+  if (ifaceMatch) {
+    body = extractClassBody(code, ifaceMatch.index + ifaceMatch[0].length - 1);
+  } else {
+    // type Foo = { … }
+    const typeRe = new RegExp(`type\\s+${esc}\\b[^=]*=\\s*\\{`);
+    const typeMatch = typeRe.exec(code);
+    if (typeMatch) {
+      body = extractClassBody(code, typeMatch.index + typeMatch[0].length - 1);
+    } else {
+      return null;
+    }
+  }
+  return parseInlineObject(`{${body}}`);
+}
+
+/** Hardcoded shortlist of common builtin TS types — fallback intellisense. */
+const BUILTIN_TYPE_MEMBERS: Record<string, PathMember[]> = {
+  Date: [
+    { name: 'getTime', kind: 'method', signature: '(): number', resultType: 'number' },
+    { name: 'toISOString', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'toLocaleString', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'toLocaleDateString', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'toLocaleTimeString', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'getFullYear', kind: 'method', signature: '(): number', resultType: 'number' },
+    { name: 'getMonth', kind: 'method', signature: '(): number', resultType: 'number' },
+    { name: 'getDate', kind: 'method', signature: '(): number', resultType: 'number' },
+    { name: 'getHours', kind: 'method', signature: '(): number', resultType: 'number' },
+    { name: 'getMinutes', kind: 'method', signature: '(): number', resultType: 'number' },
+    { name: 'getSeconds', kind: 'method', signature: '(): number', resultType: 'number' },
+  ],
+  String: [
+    { name: 'length', kind: 'field', resultType: 'number' },
+    { name: 'toLowerCase', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'toUpperCase', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'trim', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'split', kind: 'method', signature: '(sep: string): string[]', resultType: 'string[]' },
+    { name: 'startsWith', kind: 'method', signature: '(s: string): boolean', resultType: 'boolean' },
+    { name: 'endsWith', kind: 'method', signature: '(s: string): boolean', resultType: 'boolean' },
+    { name: 'includes', kind: 'method', signature: '(s: string): boolean', resultType: 'boolean' },
+    { name: 'indexOf', kind: 'method', signature: '(s: string): number', resultType: 'number' },
+    { name: 'replace', kind: 'method', signature: '(a: string, b: string): string', resultType: 'string' },
+    { name: 'slice', kind: 'method', signature: '(from?: number, to?: number): string', resultType: 'string' },
+    { name: 'charAt', kind: 'method', signature: '(i: number): string', resultType: 'string' },
+    { name: 'concat', kind: 'method', signature: '(...s: string[]): string', resultType: 'string' },
+  ],
+  Number: [
+    { name: 'toString', kind: 'method', signature: '(): string', resultType: 'string' },
+    { name: 'toFixed', kind: 'method', signature: '(n: number): string', resultType: 'string' },
+    { name: 'toPrecision', kind: 'method', signature: '(n: number): string', resultType: 'string' },
+  ],
+};
+const ARRAY_MEMBERS = (elem: string): PathMember[] => [
+  { name: 'length', kind: 'field', resultType: 'number' },
+  { name: '[0]', kind: 'index', signature: `[i: number]: ${elem}`, resultType: elem },
+  { name: 'push', kind: 'method', signature: `(item: ${elem}): number`, resultType: 'number' },
+  { name: 'pop', kind: 'method', signature: `(): ${elem} | undefined`, resultType: `${elem} | undefined` },
+  { name: 'shift', kind: 'method', signature: `(): ${elem} | undefined`, resultType: `${elem} | undefined` },
+  { name: 'unshift', kind: 'method', signature: `(item: ${elem}): number`, resultType: 'number' },
+  { name: 'find', kind: 'method', signature: `(fn): ${elem} | undefined`, resultType: `${elem} | undefined` },
+  { name: 'filter', kind: 'method', signature: `(fn): ${elem}[]`, resultType: `${elem}[]` },
+  { name: 'map', kind: 'method', signature: '(fn): unknown[]', resultType: 'unknown[]' },
+  { name: 'forEach', kind: 'method', signature: '(fn): void', resultType: 'void' },
+  { name: 'slice', kind: 'method', signature: `(from?, to?): ${elem}[]`, resultType: `${elem}[]` },
+  { name: 'join', kind: 'method', signature: '(sep?: string): string', resultType: 'string' },
+  { name: 'indexOf', kind: 'method', signature: `(item: ${elem}): number`, resultType: 'number' },
+  { name: 'includes', kind: 'method', signature: `(item: ${elem}): boolean`, resultType: 'boolean' },
+  { name: 'reverse', kind: 'method', signature: `(): ${elem}[]`, resultType: `${elem}[]` },
+  { name: 'sort', kind: 'method', signature: `(): ${elem}[]`, resultType: `${elem}[]` },
+];
+const MAP_MEMBERS = (k: string, v: string): PathMember[] => [
+  { name: 'size', kind: 'field', resultType: 'number' },
+  { name: 'get', kind: 'method', signature: `(key: ${k}): ${v} | undefined`, resultType: `${v} | undefined` },
+  { name: 'set', kind: 'method', signature: `(key: ${k}, value: ${v}): Map<${k}, ${v}>`, resultType: `Map<${k}, ${v}>` },
+  { name: 'has', kind: 'method', signature: `(key: ${k}): boolean`, resultType: 'boolean' },
+  { name: 'delete', kind: 'method', signature: `(key: ${k}): boolean`, resultType: 'boolean' },
+  { name: 'clear', kind: 'method', signature: '(): void', resultType: 'void' },
+  { name: 'keys', kind: 'method', signature: `(): IterableIterator<${k}>`, resultType: `IterableIterator<${k}>` },
+  { name: 'values', kind: 'method', signature: `(): IterableIterator<${v}>`, resultType: `IterableIterator<${v}>` },
+];
+const SET_MEMBERS = (t: string): PathMember[] => [
+  { name: 'size', kind: 'field', resultType: 'number' },
+  { name: 'add', kind: 'method', signature: `(item: ${t}): Set<${t}>`, resultType: `Set<${t}>` },
+  { name: 'has', kind: 'method', signature: `(item: ${t}): boolean`, resultType: 'boolean' },
+  { name: 'delete', kind: 'method', signature: `(item: ${t}): boolean`, resultType: 'boolean' },
+  { name: 'clear', kind: 'method', signature: '(): void', resultType: 'void' },
+];
+
+/** Members of an entity (class in current file). */
+function classEntityMembers(entity: MinisEntity): PathMember[] {
+  const out: PathMember[] = [];
+  for (const v of entity.variables ?? []) out.push({ name: v.name, kind: 'field', resultType: v.type, source: `class ${entity.varName}` });
+  for (const p of entity.properties ?? []) out.push({ name: p.name, kind: 'field', resultType: `MProperty<${p.type ?? 'unknown'}>`, source: `class ${entity.varName}` });
+  for (const s of entity.signals) {
+    if (s.name.includes('.')) continue;  // skip "<prop>.changed" pseudo-signals
+    out.push({ name: s.name, kind: 'signal', resultType: `Signal<[${s.type || ''}]>`, source: `class ${entity.varName}` });
+  }
+  for (const s of entity.slots) {
+    out.push({ name: s.name, kind: 'slot', signature: `(v: ${s.paramType ?? 'unknown'}): void`, resultType: 'void', source: `class ${entity.varName}` });
+  }
+  return out;
+}
+
+/** Members of an external class manifest entry. */
+function externalClassMembers(entry: ExternalClassEntry): PathMember[] {
+  const out: PathMember[] = [];
+  for (const p of entry.def.properties ?? []) out.push({ name: p.name, kind: 'field', resultType: `MProperty<${p.type ?? 'unknown'}>`, source: entry.packageName });
+  for (const s of entry.def.signals) out.push({ name: s.name, kind: 'signal', resultType: `Signal<[${s.type || ''}]>`, source: entry.packageName });
+  for (const s of entry.def.slots) out.push({ name: s.name, kind: 'slot', signature: '(v): void', resultType: 'void', source: entry.packageName });
+  return out;
+}
+
+/**
+ * Top-level resolver — given a type string and the plugin's current state,
+ * return the list of clickable members. Empty array means "no introspection
+ * available — fall back to free-text path entry".
+ */
+function resolveTypeMembers(typeStr: string, state: PluginState): PathMember[] {
+  if (!typeStr) return [];
+  const norm = normalizeType(typeStr);
+
+  // 1. Inline object — `{ a: T; b: T }`
+  const inline = parseInlineObject(norm);
+  if (inline) return inline;
+
+  // 2. Array
+  const elem = arrayElementType(norm);
+  if (elem) return ARRAY_MEMBERS(elem);
+
+  // 3. Map
+  const map = mapTypeArgs(norm);
+  if (map) return MAP_MEMBERS(map[0], map[1]);
+
+  // 4. Set
+  const set = setElementType(norm);
+  if (set) return SET_MEMBERS(set);
+
+  // 5. Single-arg generic — `MProperty<T>` reveals `.value: T` and `.changed`
+  const gen = singleGenericArg(norm);
+  if (gen) {
+    if (gen.wrapper === 'MProperty') {
+      return [
+        { name: 'value', kind: 'field', resultType: gen.arg, source: '@mhersztowski/minislib' },
+        { name: 'changed', kind: 'signal', resultType: `Signal<[${gen.arg}]>`, source: '@mhersztowski/minislib' },
+      ];
+    }
+    if (gen.wrapper === 'Signal') {
+      return [
+        { name: 'emit', kind: 'method', signature: `(v: ${gen.arg}): void`, resultType: 'void', source: '@mhersztowski/minislib' },
+        { name: 'connect', kind: 'method', signature: `(fn: (v: ${gen.arg}) => void): void`, resultType: 'void', source: '@mhersztowski/minislib' },
+        { name: 'disconnect', kind: 'method', signature: '(fn): void', resultType: 'void', source: '@mhersztowski/minislib' },
+      ];
+    }
+    // Unknown generic — try its base name as a plain identifier (line below).
+  }
+
+  // 6. Plain identifier — file class, external class, interface, builtin
+  const fileClass = state.entities.find(e => e.varName === norm && e.kind === 'class');
+  if (fileClass) return classEntityMembers(fileClass);
+
+  const ext = state.externalClassDefs.find(e => e.className === norm);
+  if (ext) return externalClassMembers(ext);
+
+  const iface = parseInterfaceFromSource(state.currentCode, norm);
+  if (iface) return iface;
+
+  if (BUILTIN_TYPE_MEMBERS[norm]) return BUILTIN_TYPE_MEMBERS[norm];
+
+  return [];
+}
+
+/** Convert a `PathMember` into the code suffix it inserts. */
+function memberToPathSegment(m: PathMember): string {
+  if (m.kind === 'index') return '[0]';
+  if (m.kind === 'method' || m.kind === 'slot') return `.${m.name}()`;
+  return `.${m.name}`;
+}
+
+/** Argument list parsed from a method/slot signature, e.g. `(a: number, b: string): void`.
+ *  Returns `[]` when the signature has no args or can't be parsed. Used by the
+ *  PathBuilderDialog to detect "trailing method call needs N value inputs". */
+export interface PathArg { name: string; type: string }
+function parseMethodArgs(signature: string | undefined): PathArg[] {
+  if (!signature) return [];
+  const m = /^\(([^)]*)\)/.exec(signature.trim());
+  if (!m) return [];
+  const inside = m[1].trim();
+  if (!inside) return [];
+  // Split on depth-0 commas so we don't bisect e.g. `Record<string, number>`.
+  const parts: string[] = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < inside.length; i++) {
+    const c = inside[i];
+    if (c === '<' || c === '(' || c === '[' || c === '{') depth++;
+    else if (c === '>' || c === ')' || c === ']' || c === '}') depth--;
+    else if (depth === 0 && c === ',') {
+      parts.push(inside.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(inside.slice(start));
+  const out: PathArg[] = [];
+  for (const part of parts) {
+    const am = /^\s*(\.\.\.)?(\w+)\??\s*:\s*(.+?)\s*$/.exec(part);
+    if (am) {
+      out.push({ name: (am[1] ?? '') + am[2], type: am[3].trim() });
+      continue;
+    }
+    const nm = /^\s*(\.\.\.)?(\w+)\??\s*$/.exec(part);
+    if (nm) out.push({ name: (nm[1] ?? '') + nm[2], type: 'unknown' });
+  }
+  return out;
+}
+
 /* ── Type selector helpers ───────────────────────────────────────────────────*/
 
 interface TypeOpt { label: string; group: string }
@@ -1932,16 +2517,51 @@ const COMBO_INPUT_SX = {
   },
 };
 
-function TypeComboBox({ value, onChange, placeholder, onCommit, onCancel }: {
+function TypeComboBox({ value, onChange, placeholder, onCommit, onCancel, fullWidth }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   onCommit?: () => void;
   onCancel?: () => void;
+  /** Stretch the input to fill its parent (used inside flex rows). */
+  fullWidth?: boolean;
 }) {
-  const classOpts: TypeOpt[] = _state.entities
-    .filter((e) => e.kind === 'class')
-    .map((e) => ({ label: e.varName, group: 'File classes' }));
+  // Subscribe to plugin state so the class-options list updates live as the
+  // file parser discovers new classes. Reading `_state` once at render time
+  // (the previous behaviour) meant the dropdown opened with whatever entities
+  // existed at mount — typically empty for the first time the panel appeared
+  // — and only refreshed on the next typed change.
+  const state = usePluginState();
+  // Three sources, in priority order: classes declared in this file, classes
+  // imported from other project files, and classes exported by external
+  // packages (minislib's MObject/Signal/MProperty/MTimer/..., user manifests).
+  // Each external class lives under its package name so the user sees where it
+  // came from. De-dupe by label so the same class doesn't appear twice when
+  // it's both imported and exposed via manifest.
+  const seen = new Set<string>();
+  const classOpts: TypeOpt[] = [];
+  const push = (label: string, group: string) => {
+    if (seen.has(label)) return;
+    seen.add(label);
+    classOpts.push({ label, group });
+  };
+  for (const e of state.entities) {
+    if (e.kind === 'class') push(e.varName, 'File classes');
+  }
+  for (const c of state.importedClasses) {
+    push(c.className, 'Imported');
+  }
+  for (const e of state.externalClassDefs) {
+    push(e.className, e.packageName);
+    // Convenience: common generic instantiations for parameterised classes
+    // (MProperty<T>, Signal<T>). User can still freely type any other variant
+    // — Autocomplete is `freeSolo`.
+    if (e.className === 'MProperty' || e.className === 'Signal') {
+      push(`${e.className}<number>`, e.packageName);
+      push(`${e.className}<string>`, e.packageName);
+      push(`${e.className}<boolean>`, e.packageName);
+    }
+  }
   const opts = [...BUILTIN_TYPE_OPTS, ...classOpts];
 
   return (
@@ -1955,7 +2575,9 @@ function TypeComboBox({ value, onChange, placeholder, onCommit, onCancel }: {
       onInputChange={(_, v) => onChange(v)}
       onChange={(_, v) => onChange(typeof v === 'string' ? v : v.label)}
       size="small"
-      sx={COMBO_INPUT_SX}
+      // When fullWidth: occupy parent's width with a sensible minimum so the
+      // dropdown popper still has somewhere to anchor on very narrow rows.
+      sx={fullWidth ? { ...COMBO_INPUT_SX, width: '100%', minWidth: 80 } : COMBO_INPUT_SX}
       slotProps={{ paper: { sx: COMBO_PAPER_SX }, popper: { placement: 'top-start' } }}
       renderInput={(params) => (
         <TextField {...params} placeholder={placeholder ?? 'type'}
@@ -2069,19 +2691,44 @@ function genStmt(s: SlotStmt, d = 2): string {
 }
 function genStmts(ss: SlotStmt[], d = 2): string { return ss.map(s => genStmt(s, d)).join('\n') || `${'  '.repeat(d)}// empty`; }
 
-interface SlotCtx { props: string[]; signals: string[]; slots: string[]; exprOpts: string[]; condOpts: string[] }
+interface SlotCtx { props: string[]; signals: string[]; slots: string[]; vars: string[]; exprOpts: string[]; condOpts: string[] }
 
 function buildSlotCtx(entity: MinisEntity): SlotCtx {
   const code = _state.currentCode;
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const clsMatch = new RegExp(`class\\s+${esc(entity.varName)}\\b[^{]*\\{`).exec(code);
+  // Match the class header WITHOUT the opening brace, then let
+  // extractClassBody find the real `{` from there. The previous regex
+  // included the `{` in `m[0]`, so `m.index + m[0].length` pointed PAST it
+  // — extractClassBody would then scan to the next inner `{` (a method
+  // body) and return that instead of the class body, so MProperty
+  // declarations declared as class fields were never found.
+  const clsMatch = new RegExp(`class\\s+${esc(entity.varName)}\\b`).exec(code);
   const body = clsMatch ? extractClassBody(code, clsMatch.index + clsMatch[0].length) : '';
   const props: string[] = [];
   let m: RegExpExecArray | null;
-  const propRe = /readonly\s+(\w+)\s*=\s*new\s+MProperty/g;
-  while ((m = propRe.exec(body)) !== null) props.push(m[1]);
+  // Match every common shape:
+  //   readonly foo = new MProperty<T>(...)
+  //   public foo = new MProperty<T>(...)
+  //   private foo: MProperty<T> = new MProperty(...)
+  //   foo = new MProperty<T>(...)
+  // The old regex required `readonly`, which silently hid any property
+  // declared differently — making the get/set property dropdowns empty.
+  const propRe = /(?:readonly\s+|public\s+|private\s+|protected\s+)?(\w+)\s*(?:!?\s*:\s*MProperty<[^>]*>\s*)?=\s*new\s+MProperty\b/g;
+  // Common reserved/dangerous identifiers that the regex above could pick up
+  // on the right side of an `=` (e.g. `const foo = new MProperty(...)` inside
+  // a method body). Skip them to keep the dropdown clean.
+  const skip = new Set(['const', 'let', 'var', 'return', 'this', 'new']);
+  while ((m = propRe.exec(body)) !== null) {
+    const name = m[1];
+    if (skip.has(name)) continue;
+    if (!props.includes(name)) props.push(name);
+  }
   const signals = entity.signals.map(s => s.name).filter(n => !['changed', 'emit', 'timeout'].includes(n));
   const slots   = entity.slots.map(s => s.name);
+  // Plain class fields (this.foo = …, NOT MProperty) — exposed to the
+  // var get/set/call blocks. Deduplicated across the entity parser and the
+  // current code in case they drift.
+  const vars    = entity.variables?.map(v => v.name) ?? [];
   const exprOpts = [
     'v',
     ...props.map(p => `this.${p}.value`),
@@ -2104,7 +2751,7 @@ function buildSlotCtx(entity: MinisEntity): SlotCtx {
     ...props.map(p => `v !== this.${p}.value`),
     'true', 'false',
   ];
-  return { props, signals, slots, exprOpts, condOpts };
+  return { props, signals, slots, vars, exprOpts, condOpts };
 }
 
 const STMT_COLOR: Record<StmtKind, string> = {
@@ -2251,8 +2898,12 @@ function StmtList({ stmts, ctx, onChange, depth = 0 }: { stmts: SlotStmt[]; ctx:
 
 /* ── Blockly-based slot editor ────────────────────────────────────────────────*/
 
-let _blkRegistered = false;
-let _blkSlotCtx: SlotCtx = { props: [], signals: [], slots: [], exprOpts: [], condOpts: [] };
+// Was a one-shot flag — removed because it prevented new blocks added in
+// later builds from registering after HMR (the function would early-return
+// based on a stale `true`). All block registrations are idempotent simple
+// assignments to `Blockly.Blocks[…]` / `javascriptGenerator.forBlock[…]`,
+// so re-running on every mount is cheap and safe.
+let _blkSlotCtx: SlotCtx = { props: [], signals: [], slots: [], vars: [], exprOpts: [], condOpts: [] };
 
 // Dynamic dropdown generators — read _blkSlotCtx at call time so they
 // reflect the current entity without re-registering blocks.
@@ -2261,10 +2912,11 @@ type BMenuOpt = [string, string];
 const propOpts   = (): BMenuOpt[] => { const o = _blkSlotCtx.props.map(p => [p, p] as BMenuOpt);    return o.length ? o : [['(no props)', '']]; };
 const signalOpts = (): BMenuOpt[] => { const o = _blkSlotCtx.signals.map(s => [s, s] as BMenuOpt); return o.length ? o : [['(no signals)', '']]; };
 const slotOpts   = (): BMenuOpt[] => { const o = _blkSlotCtx.slots.map(s => [s, s] as BMenuOpt);    return o.length ? o : [['(no slots)', '']]; };
+const varOpts    = (): BMenuOpt[] => { const o = _blkSlotCtx.vars.map(v => [v, v] as BMenuOpt);     return o.length ? o : [['(no vars)', '']]; };
 
 function ensureMinisBlocksRegistered(): void {
-  if (_blkRegistered) return;
-  _blkRegistered = true;
+  // No early-return — re-registering on every mount keeps newly added blocks
+  // alive across HMR reloads (Blockly.Blocks/javascriptGenerator just rebind).
 
   /* ── minis_get_param ─ returns v ─────────────────────────────────────────── */
   Blockly.Blocks['minis_get_param'] = {
@@ -2360,6 +3012,231 @@ function ensureMinisBlocksRegistered(): void {
   javascriptGenerator.forBlock['minis_log'] = (block, gen) => {
     const val = gen.valueToCode(block, 'VALUE', Order.NONE) || "''";
     return `console.log(${val});\n`;
+  };
+
+  // ── Variable blocks ───────────────────────────────────────────────────────
+  // Get/set/call a plain class field — `this.varName` plus an optional PATH
+  // suffix. The PATH is a read-only label rendered on the block; clicking
+  // the "•••" button opens the React PathBuilderDialog which knows how to
+  // enumerate members of the variable's type (file classes, interfaces,
+  // external manifests, Array/Map/Set generics, MProperty/Signal, plus
+  // common builtins). The dialog emits an event the block listens for and
+  // updates its PATH field.
+
+  /** Find the user-declared TS type of the var currently picked in this block. */
+  const lookupVarType = (varName: string): string => {
+    if (!varName) return '';
+    const cls = _state.entities.find(e =>
+      e.kind === 'class' && e.variables?.some(v => v.name === varName));
+    return cls?.variables?.find(v => v.name === varName)?.type ?? '';
+  };
+
+  /** Fire `pathBuilderOpen` for a specific block — picked up by the React dialog. */
+  const openPathBuilder = (block: Blockly.Block) => {
+    const varName = block.getFieldValue('NAME') || '';
+    const path    = block.getFieldValue('PATH') || '';
+    globalEventBus.emit(PATH_BUILDER_OPEN, {
+      blockId: block.id,
+      varName,
+      varType: lookupVarType(varName),
+      path,
+    });
+  };
+
+  /** Apply listener used by every var block — picks the matching block by id.
+   *  When `tailMethod`+`args` are present, the block reshapes itself with one
+   *  value input per argument (and the generator emits `path.method(args…)`). */
+  const applyToBlock = (block: Blockly.Block, path: string, tailMethod: string | null, args: PathArg[]) => {
+    block.setFieldValue(path, 'PATH');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = block as any;
+    b.minisTail_ = tailMethod || null;
+    b.minisArgs_ = args ?? [];
+    if (typeof b.rebuildArgInputs_ === 'function') b.rebuildArgInputs_();
+  };
+
+  // Helper: build a clickable image field that opens the dialog. SVG is an
+  // inline 16×16 "•••" pictogram styled to match the var block colour.
+  const PATH_PICK_ICON =
+    'data:image/svg+xml;utf8,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">' +
+        '<circle cx="3" cy="8" r="1.5" fill="#13131e"/>' +
+        '<circle cx="8" cy="8" r="1.5" fill="#13131e"/>' +
+        '<circle cx="13" cy="8" r="1.5" fill="#13131e"/>' +
+      '</svg>',
+    );
+
+  // We need to register a per-block apply listener that survives across
+  // dialog opens. Using a single global handler keyed by block id keeps
+  // the wiring simple. Block also disposes its listener on destroy.
+  const wireApplyListener = (block: Blockly.Block) => {
+    const off = globalEventBus.on<{ blockId: string; path: string; tailMethod?: string | null; args?: PathArg[] }>(
+      PATH_BUILDER_APPLY,
+      (p) => { if (p.blockId === block.id) applyToBlock(block, p.path, p.tailMethod ?? null, p.args ?? []); },
+    );
+    // Blockly's `dispose` is overridable — chain to our cleanup.
+    const origDispose = (block as Blockly.Block & { dispose: (...args: unknown[]) => unknown }).dispose;
+    (block as Blockly.Block & { dispose: (...args: unknown[]) => unknown }).dispose = function (...args: unknown[]) {
+      off();
+      return origDispose.apply(this, args);
+    };
+  };
+
+  /** Build the `(arg: value, ...)` portion of a variable-call statement.
+   *  Reads each ARG_n input through the JS generator and joins with `, `. */
+  const collectArgCode = (
+    block: Blockly.Block,
+    gen: typeof javascriptGenerator,
+    args: PathArg[],
+  ): string => args.map((_, i) =>
+    gen.valueToCode(block, `ARG${i}`, Order.NONE) || 'undefined',
+  ).join(', ');
+
+  /**
+   * Tear down + recreate input rows for a var block. Used both at init time
+   * and whenever the path builder sends back a new `args` list. Lives as a
+   * method on the block (rebuildArgInputs_) so the apply handler can call it.
+   *
+   * Shape:
+   *   - Top dummy: `this.NAME PATH [•••]`  (always)
+   *   - When `tail`+args: an inline `.tail(` label, then a value input per arg
+   *     labelled with the arg name, then a closing `)` dummy.
+   *   - When `tail` without args (no-arg method): we just keep `()` in PATH
+   *     (existing behaviour) — no tail state needed.
+   *   - For var_set, after the path/args section, the VALUE input appears.
+   */
+  const buildBlockShape = (
+    block: Blockly.Block,
+    variant: 'get' | 'set' | 'call',
+    openHandler: () => void,
+  ): void => {
+    // Remove every existing input — we'll rebuild from scratch. Iterate via a
+    // snapshot since removeInput mutates inputList.
+    for (const inp of block.inputList.slice()) {
+      if (inp.name) block.removeInput(inp.name);
+    }
+
+    const header = block.appendDummyInput('HEADER')
+      .appendField('this.')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .appendField(new Blockly.FieldDropdown(varOpts as any), 'NAME')
+      .appendField(new Blockly.FieldLabelSerializable(''), 'PATH')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .appendField(new Blockly.FieldImage(PATH_PICK_ICON, 16, 16, 'pick path', openHandler) as any);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = block as any;
+    const tail: string | null = b.minisTail_ ?? null;
+    const args: PathArg[] = b.minisArgs_ ?? [];
+
+    if (tail && args.length > 0) {
+      // `.tail(` label sits right after the path picker.
+      header.appendField(`.${tail}(`);
+      args.forEach((a, i) => {
+        block.appendValueInput(`ARG${i}`)
+          .setAlign(Blockly.inputs.Align.RIGHT)
+          .appendField(`${a.name}:`);
+      });
+      block.appendDummyInput('CLOSE_PAREN').appendField(')');
+      block.setInputsInline(false);
+    } else {
+      block.setInputsInline(true);
+    }
+
+    if (variant === 'set') {
+      // VALUE input lands at the end so set's `= …` reads naturally.
+      block.appendValueInput('VALUE')
+        .setAlign(Blockly.inputs.Align.RIGHT)
+        .appendField('=');
+    }
+
+    if (variant === 'get') {
+      block.setOutput(true, null);
+    } else {
+      block.setPreviousStatement(true, null);
+      block.setNextStatement(true, null);
+    }
+    block.setColour('#f9e2af');
+  };
+
+  /** Common factory: install the mutator/serializer plumbing + tooltip per variant. */
+  const installVarBlock = (block: Blockly.Block, variant: 'get' | 'set' | 'call', tooltip: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = block as any;
+    b.minisTail_ = b.minisTail_ ?? null;
+    b.minisArgs_ = b.minisArgs_ ?? [];
+    b.rebuildArgInputs_ = () => buildBlockShape(block, variant, () => openPathBuilder(block));
+    // Blockly's modern serialization API — keep tail+args across save/load.
+    b.saveExtraState = () => ({ tail: b.minisTail_, args: b.minisArgs_ });
+    b.loadExtraState = (state: { tail?: string | null; args?: PathArg[] }) => {
+      b.minisTail_ = state?.tail ?? null;
+      b.minisArgs_ = state?.args ?? [];
+      b.rebuildArgInputs_();
+    };
+    buildBlockShape(block, variant, () => openPathBuilder(block));
+    block.setTooltip(tooltip);
+    wireApplyListener(block);
+  };
+
+  /* ── minis_var_get ─ this.{var}{path}[.tail(args…)] ─────────────────── */
+  Blockly.Blocks['minis_var_get'] = {
+    init() {
+      installVarBlock(this as Blockly.Block, 'get',
+        'Read a class variable. Click ••• to navigate nested members or pick a method call.');
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_get'] = (block, gen) => {
+    const name = block.getFieldValue('NAME') || '';
+    const path = block.getFieldValue('PATH') || '';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tail = (block as any).minisTail_ as string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const args = (block as any).minisArgs_ as PathArg[] | undefined;
+    if (!name) return ['undefined', Order.ATOMIC];
+    if (tail && args && args.length) {
+      const argCode = collectArgCode(block, gen, args);
+      return [`this.${name}${path}.${tail}(${argCode})`, Order.FUNCTION_CALL];
+    }
+    return [`this.${name}${path}`, Order.MEMBER];
+  };
+
+  /* ── minis_var_set ─ this.{var}{path} = expr ─────────────────────────── */
+  // Note: var_set with a `tail` method makes no semantic sense (you can't
+  // assign to a method call), so the dialog should never emit one. If it
+  // does — we ignore tail and just emit the plain field assignment.
+  Blockly.Blocks['minis_var_set'] = {
+    init() {
+      installVarBlock(this as Blockly.Block, 'set',
+        'Assign a class variable. Click ••• to navigate nested members.');
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_set'] = (block, gen) => {
+    const name = block.getFieldValue('NAME') || '';
+    const path = block.getFieldValue('PATH') || '';
+    const val  = gen.valueToCode(block, 'VALUE', Order.ASSIGNMENT) || 'undefined';
+    return name ? `this.${name}${path} = ${val};\n` : '';
+  };
+
+  /* ── minis_var_call ─ this.{var}{path}[.tail(args…)] ── (as statement) ─ */
+  Blockly.Blocks['minis_var_call'] = {
+    init() {
+      installVarBlock(this as Blockly.Block, 'call',
+        'Invoke a method on a class variable. Click ••• to pick the call; methods with arguments grow value-input rows.');
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_call'] = (block, gen) => {
+    const name = block.getFieldValue('NAME') || '';
+    const path = block.getFieldValue('PATH') || '';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tail = (block as any).minisTail_ as string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const args = (block as any).minisArgs_ as PathArg[] | undefined;
+    if (!name) return '';
+    if (tail && args && args.length) {
+      const argCode = collectArgCode(block, gen, args);
+      return `this.${name}${path}.${tail}(${argCode});\n`;
+    }
+    return `this.${name}${path};\n`;
   };
 
   // ── Tuple blocks (JS arrays with fixed semantics) ────────────────────────
@@ -2572,16 +3449,20 @@ const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
         { kind: 'block', type: 'minis_get_param' },
         { kind: 'block', type: 'minis_get_prop' },
         { kind: 'block', type: 'minis_set_prop' },
+        // Variable blocks — read/write/invoke plain class fields, with PATH
+        // text field for drilling into nested members of object-shaped types.
+        { kind: 'block', type: 'minis_var_get' },
+        { kind: 'block', type: 'minis_var_set' },
+        { kind: 'block', type: 'minis_var_call' },
         { kind: 'block', type: 'minis_emit' },
         { kind: 'block', type: 'minis_call' },
         { kind: 'block', type: 'minis_log' },
       ],
     },
     { kind: 'sep' },
-    // ── Language ────────────────────────────────────────────────────────────
-    {
-      kind: 'category', name: 'Language', colour: '210', expanded: true,
-      contents: [
+    // ── Language categories (flat — Blockly's toolbox does NOT properly
+    //    render nested categories; clicking a sub-category inside an
+    //    `expanded: true` parent would blank the flyout.) ────────────────
         {
           kind: 'category', name: 'Logic', categorystyle: 'logic_category',
           contents: [
@@ -2648,31 +3529,27 @@ const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
         },
         {
           kind: 'category', name: 'Text', categorystyle: 'text_category',
+          // Trimmed to the subset that works without surprises in Blockly v12.
+          // The dropped blocks (text_indexOf, text_charAt, text_getSubstring,
+          // text_trim, text_print) carry mutators/extensions that crashed the
+          // flyout in our bundle — other plugins (upython, ardublockly2) use
+          // the same reduced set successfully.
           contents: [
             { kind: 'block', type: 'text' },
             { kind: 'block', type: 'text_join' },
             { kind: 'block', type: 'text_append', inputs: { TEXT: { shadow: { type: 'text' } } } },
             { kind: 'block', type: 'text_length' },
             { kind: 'block', type: 'text_isEmpty' },
-            {
-              kind: 'block', type: 'text_indexOf',
-              inputs: { VALUE: { shadow: { type: 'text', fields: { TEXT: 'abc' } } } },
-            },
-            {
-              kind: 'block', type: 'text_charAt',
-              inputs: { VALUE: { shadow: { type: 'math_number', fields: { NUM: 1 } } } },
-            },
-            { kind: 'block', type: 'text_getSubstring' },
             { kind: 'block', type: 'text_changeCase' },
-            {
-              kind: 'block', type: 'text_trim',
-              inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: '  hello  ' } } } },
-            },
-            { kind: 'block', type: 'text_print' },
           ],
         },
         {
           kind: 'category', name: 'Lists', colour: '#5ba5a5',
+          // Trimmed to the subset that works in Blockly v12 without surprises.
+          // The dropped blocks (`lists_indexOf`, `lists_getIndex`,
+          // `lists_setIndex`, `lists_getSublist`, `lists_split`, `lists_sort`)
+          // depend on mutators/extensions that the toolbox flyout failed to
+          // instantiate in our bundle — same pattern as the Text trim.
           contents: [
             { kind: 'block', type: 'lists_create_with' },
             {
@@ -2682,30 +3559,22 @@ const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
                 NUM: { shadow: { type: 'math_number', fields: { NUM: 5 } } },
               },
             },
-            { kind: 'sep' },
             { kind: 'block', type: 'lists_length' },
             { kind: 'block', type: 'lists_isEmpty' },
-            {
-              kind: 'block', type: 'lists_indexOf',
-              inputs: { VALUE: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
-            },
-            { kind: 'sep' },
-            { kind: 'block', type: 'lists_getIndex' },
-            { kind: 'block', type: 'lists_setIndex' },
-            { kind: 'block', type: 'lists_getSublist' },
-            { kind: 'sep' },
-            {
-              kind: 'block', type: 'lists_split',
-              inputs: { DELIM: { shadow: { type: 'text', fields: { TEXT: ',' } } } },
-            },
-            { kind: 'block', type: 'lists_sort' },
+            { kind: 'block', type: 'lists_reverse' },
           ],
         },
         {
           kind: 'category', name: 'Tuples', colour: '#9b5ba5',
           contents: [
-            { kind: 'block', type: 'minis_tuple_create' },
-            { kind: 'sep' },
+            {
+              kind: 'block', type: 'minis_tuple_create',
+              inputs: {
+                A: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+                B: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+                C: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              },
+            },
             {
               kind: 'block', type: 'minis_tuple_get',
               inputs: { IDX: { shadow: { type: 'math_number', fields: { NUM: 0 } } } },
@@ -2727,7 +3596,6 @@ const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
                 VAL: { shadow: { type: 'text', fields: { TEXT: 'value' } } },
               },
             },
-            { kind: 'sep' },
             {
               kind: 'block', type: 'minis_map_get',
               inputs: { KEY: { shadow: { type: 'text', fields: { TEXT: 'key' } } } },
@@ -2768,15 +3636,310 @@ const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
           kind: 'category', name: 'Functions', categorystyle: 'procedure_category',
           custom: 'PROCEDURE',
         },
-      ],
-    },
   ],
 };
 
-function SlotBlocklyEditor({ ctx, onCodeChange }: { ctx: SlotCtx; onCodeChange: (code: string) => void }) {
+/* ── Path Builder dialog ─────────────────────────────────────────────────────
+ * IntelliSense-style picker for variable access paths. Opened from
+ * `minis_var_get/set/call` blocks via a small "•••" button. Built as a stack
+ * of segments — each segment shows the current type and a member picker.
+ * Clicking a member appends to the path; clicking the breadcrumb pops back.
+ */
+
+interface PathBuilderState {
+  open: boolean;
+  blockId: string | null;
+  varName: string;
+  varType: string;
+  path: string;
+}
+
+const PATH_BUILDER_OPEN  = 'minislib:pathBuilderOpen';
+const PATH_BUILDER_APPLY = 'minislib:pathBuilderApply';
+
+function PathBuilderDialog() {
+  const state = usePluginState();
+  const [open, setOpen] = useState(false);
+  const [blockId, setBlockId] = useState<string | null>(null);
+  const [varName, setVarName] = useState('');
+  const [baseType, setBaseType] = useState('');
+  // Segments are kept as objects so we know each step's display name,
+  // accumulated code suffix, and the type it produced.
+  interface PathSeg { display: string; code: string; resultType: string }
+  const [segs, setSegs] = useState<PathSeg[]>([]);
+  const [filter, setFilter] = useState('');
+
+  // Listen for open requests dispatched by the Blockly "•••" button.
+  useEffect(() => {
+    const unsub = globalEventBus.on<PathBuilderState>(PATH_BUILDER_OPEN, (p) => {
+      setBlockId(p.blockId);
+      setVarName(p.varName);
+      setBaseType(p.varType);
+      // Try to reconstruct existing segments from the incoming path string.
+      // Best-effort — anything we can't recognise stays as the initial raw
+      // text so the user doesn't lose work.
+      const seeded: PathSeg[] = [];
+      let typeCursor = p.varType;
+      let remaining = p.path;
+      while (remaining) {
+        const members = resolveTypeMembers(typeCursor, state);
+        // Match `.name` or `.name(…)` or `[idx]`
+        const dotMatch = /^\.(\w+)(\(\))?/.exec(remaining);
+        const idxMatch = /^\[[^\]]*\]/.exec(remaining);
+        if (dotMatch) {
+          const name = dotMatch[1];
+          const isCall = !!dotMatch[2];
+          const member = members.find(mm => mm.name === name && ((isCall && (mm.kind === 'method' || mm.kind === 'slot')) || (!isCall && mm.kind === 'field')));
+          if (!member) break;
+          seeded.push({ display: name + (isCall ? '()' : ''), code: dotMatch[0], resultType: member.resultType ?? 'unknown' });
+          typeCursor = member.resultType ?? 'unknown';
+          remaining = remaining.slice(dotMatch[0].length);
+        } else if (idxMatch) {
+          const indexMember = members.find(mm => mm.kind === 'index');
+          if (!indexMember) break;
+          seeded.push({ display: idxMatch[0], code: idxMatch[0], resultType: indexMember.resultType ?? 'unknown' });
+          typeCursor = indexMember.resultType ?? 'unknown';
+          remaining = remaining.slice(idxMatch[0].length);
+        } else break;
+      }
+      setSegs(seeded);
+      setFilter('');
+      setOpen(true);
+    });
+    return unsub;
+  }, [state]);
+
+  const currentType = segs.length ? segs[segs.length - 1].resultType : baseType;
+  const members = useMemo(() => resolveTypeMembers(currentType, state), [currentType, state]);
+  const filteredMembers = useMemo(
+    () => filter ? members.filter(m => m.name.toLowerCase().includes(filter.toLowerCase())) : members,
+    [members, filter],
+  );
+
+  const fullPath = segs.map(s => s.code).join('');
+
+  const handlePickMember = (m: PathMember) => {
+    // For methods/slots with arguments: don't bake `()` into the path string.
+    // Instead, end navigation here and apply the path + a "tail method call"
+    // descriptor — the block then sprouts value inputs (one per argument).
+    if ((m.kind === 'method' || m.kind === 'slot')) {
+      const args = parseMethodArgs(m.signature);
+      if (args.length > 0) {
+        const pathWithoutTail = segs.map(s => s.code).join('');
+        if (blockId) {
+          globalEventBus.emit(PATH_BUILDER_APPLY, {
+            blockId,
+            path: pathWithoutTail,
+            tailMethod: m.name,
+            args,
+          });
+        }
+        setOpen(false);
+        return;
+      }
+    }
+    setSegs(prev => [...prev, {
+      display: m.kind === 'method' || m.kind === 'slot' ? `${m.name}()` : (m.kind === 'index' ? '[0]' : m.name),
+      code: memberToPathSegment(m),
+      resultType: m.resultType ?? 'unknown',
+    }]);
+    setFilter('');
+  };
+
+  const handleBackTo = (idx: number) => {
+    setSegs(prev => prev.slice(0, idx));
+    setFilter('');
+  };
+
+  // Plain apply — no method args trail. Clears any previously-stored tail
+  // call on the block so we don't leak stale ARG inputs from a prior path.
+  const handleApply = () => {
+    if (blockId) globalEventBus.emit(PATH_BUILDER_APPLY, { blockId, path: fullPath, tailMethod: null, args: [] });
+    setOpen(false);
+  };
+  const handleCancel = () => setOpen(false);
+  const handleClearAll = () => { setSegs([]); setFilter(''); };
+
+  // Color/icon per kind for visual scan.
+  const kindStyles: Record<PathMember['kind'], { icon: string; bg: string; fg: string }> = {
+    field:  { icon: '◆', bg: '#1e2e3e', fg: '#89dceb' },
+    method: { icon: 'ƒ', bg: '#2a1e3e', fg: '#cba6f7' },
+    signal: { icon: '⚡', bg: '#2e1e2e', fg: '#f5c2e7' },
+    slot:   { icon: '↩', bg: '#1e2e2a', fg: '#94e2d5' },
+    index:  { icon: '[]', bg: '#2a2e1e', fg: '#f9e2af' },
+  };
+
+  return (
+    <Dialog open={open} onClose={handleCancel} maxWidth="md" fullWidth
+      slotProps={{ paper: { sx: { background: '#13131e', color: '#cdd6f4' } } }}>
+      <DialogTitle sx={{ borderBottom: '1px solid #313244', background: '#181825', py: 1.25 }}>
+        <Stack direction="row" alignItems="center" gap={1}>
+          <Box sx={{ fontSize: 18, color: '#89dceb' }}>↳</Box>
+          <Box sx={{ fontSize: 14, color: '#cdd6f4' }}>Build path access</Box>
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Reset path">
+            <IconButton size="small" onClick={handleClearAll} sx={{ color: '#6c7086' }}>
+              <CloseIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+        {/* Breadcrumb */}
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 0.25, flexWrap: 'wrap',
+                   fontFamily: 'monospace', fontSize: 13 }}>
+          <Box component="span" sx={{ color: '#89dceb', cursor: 'pointer' }}
+               onClick={() => handleBackTo(0)} title={`Reset to: this.${varName} (${baseType})`}>
+            this.{varName}
+          </Box>
+          {segs.map((s, i) => (
+            <React.Fragment key={i}>
+              <Box component="span"
+                   sx={{ color: i === segs.length - 1 ? '#a6e3a1' : '#cdd6f4',
+                         cursor: i < segs.length - 1 ? 'pointer' : 'default',
+                         px: 0.25, borderRadius: 0.5,
+                         '&:hover': i < segs.length - 1 ? { background: '#313244' } : undefined }}
+                   onClick={() => i < segs.length - 1 && handleBackTo(i + 1)}>
+                {s.code}
+              </Box>
+            </React.Fragment>
+          ))}
+        </Box>
+        <Box sx={{ mt: 0.5, fontSize: 10, color: '#6c7086', fontFamily: 'monospace' }}>
+          type: {currentType || '—'}
+        </Box>
+      </DialogTitle>
+      <DialogContent sx={{ p: 0 }}>
+        {/* Filter */}
+        <Box sx={{ p: 1.25, borderBottom: '1px solid #313244' }}>
+          <TextField
+            fullWidth size="small" autoFocus
+            placeholder={`Filter members of ${currentType}…`}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                background: '#1e1e2e', color: '#cdd6f4',
+                '& fieldset': { borderColor: '#313244' },
+                '&:hover fieldset': { borderColor: '#585b70' },
+                '&.Mui-focused fieldset': { borderColor: '#89dceb' },
+              },
+              '& input::placeholder': { color: '#6c7086' },
+            }}
+            inputProps={{ style: { fontFamily: 'monospace', fontSize: 13 } }}
+          />
+        </Box>
+        {/* Member grid */}
+        <Box sx={{ maxHeight: '50vh', overflow: 'auto', p: 1 }}>
+          {filteredMembers.length === 0 ? (
+            <Box sx={{ p: 3, textAlign: 'center', color: '#6c7086', fontSize: 12 }}>
+              {members.length === 0
+                ? `No introspection for type "${currentType}". Click "Type custom suffix" to enter the rest manually.`
+                : `No members matching "${filter}".`}
+            </Box>
+          ) : (
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 0.75 }}>
+              {filteredMembers.map((m, i) => {
+                const style = kindStyles[m.kind];
+                return (
+                  <Box key={`${m.name}-${i}`} onClick={() => handlePickMember(m)}
+                       sx={{ p: 1, borderRadius: 1, cursor: 'pointer',
+                             background: style.bg, border: '1px solid #313244',
+                             '&:hover': { borderColor: style.fg, background: '#1e1e3e' } }}>
+                    <Stack direction="row" alignItems="center" gap={0.75}>
+                      <Box sx={{ width: 18, textAlign: 'center', color: style.fg, fontWeight: 700 }}>
+                        {style.icon}
+                      </Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Box sx={{ fontFamily: 'monospace', fontSize: 13, color: style.fg, fontWeight: 600,
+                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {m.name}{m.signature ?? (m.resultType ? `: ${m.resultType}` : '')}
+                        </Box>
+                        {m.source && (
+                          <Box sx={{ fontSize: 9, color: '#6c7086', mt: 0.1,
+                                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.source}
+                          </Box>
+                        )}
+                      </Box>
+                    </Stack>
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+        </Box>
+        {/* Manual fallback */}
+        <Box sx={{ borderTop: '1px solid #313244', p: 1.25, background: '#181825' }}>
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Box sx={{ fontSize: 10, color: '#6c7086', whiteSpace: 'nowrap' }}>Or type:</Box>
+            <TextField
+              size="small" fullWidth placeholder=".customField  or  .foo(1, 2)"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const val = (e.target as HTMLInputElement).value.trim();
+                  if (val) {
+                    setSegs(prev => [...prev, { display: val, code: val, resultType: 'unknown' }]);
+                    (e.target as HTMLInputElement).value = '';
+                  }
+                }
+              }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  background: '#13131e', color: '#cdd6f4',
+                  '& fieldset': { borderColor: '#313244' },
+                },
+              }}
+              inputProps={{ style: { fontFamily: 'monospace', fontSize: 12, padding: '4px 6px' } }}
+            />
+          </Stack>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ borderTop: '1px solid #313244', background: '#181825' }}>
+        <Box sx={{ flex: 1, fontFamily: 'monospace', fontSize: 11, color: '#6c7086', px: 1,
+                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          result: this.{varName}{fullPath || '  (no path)'}
+        </Box>
+        <Button onClick={handleCancel}
+          sx={{ fontSize: 11, color: '#cdd6f4', textTransform: 'none',
+                border: '1px solid #45475a', bgcolor: '#1e1e2e',
+                '&:hover': { bgcolor: '#313244' } }}>
+          Cancel
+        </Button>
+        <Button onClick={handleApply} variant="contained"
+          sx={{ fontSize: 11, fontWeight: 600, bgcolor: '#a6e3a1', color: '#13131e',
+                textTransform: 'none', '&:hover': { bgcolor: '#94d18f' } }}>
+          Apply
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function SlotBlocklyEditor({ ctx, onCodeChange, onStateChange, initialState }: {
+  ctx: SlotCtx;
+  onCodeChange: (code: string) => void;
+  /** Fires alongside onCodeChange with the workspace's full block JSON.
+   *  Persist this so Edit Slot can re-hydrate the same blocks next time. */
+  onStateChange?: (state: object | null) => void;
+  /** When provided, load this state into the workspace on mount — used by
+   *  Edit Slot to bring back the user's blocks instead of starting empty. */
+  initialState?: object | null;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cbRef = useRef(onCodeChange);
   cbRef.current = onCodeChange;
+  const stateCbRef = useRef(onStateChange);
+  stateCbRef.current = onStateChange;
+  // Snapshot the initial state so the effect's empty-deps invariant holds
+  // even if a parent re-renders with a different value (we never reload).
+  const initialStateRef = useRef(initialState);
+
+  // Keep the global `_blkSlotCtx` (consumed lazily by FieldDropdown generator
+  // functions) in sync with the latest ctx from the parent. Without this, the
+  // mount-time snapshot would be the only thing the dropdowns ever see, so
+  // properties/signals added or renamed mid-session never appear.
+  useEffect(() => {
+    _blkSlotCtx = ctx;
+  }, [ctx]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2789,11 +3952,31 @@ function SlotBlocklyEditor({ ctx, onCodeChange }: { ctx: SlotCtx; onCodeChange: 
       trashcan: true,
       zoom: { controls: true, startScale: 0.85, maxScale: 2, minScale: 0.4 },
     });
+    // Rehydrate from saved state if Edit Slot supplied one. Wrapped in try/catch
+    // because a corrupt state should not break the editor entirely — fall back
+    // to an empty workspace + warning in console.
+    if (initialStateRef.current) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (Blockly as any).serialization.workspaces.load(initialStateRef.current, workspace);
+      } catch (err) {
+        console.warn('[MinisLib] failed to restore Blockly workspace state:', err);
+      }
+    }
     // Resize after first paint so Blockly measures the real container dimensions
     requestAnimationFrame(() => Blockly.svgResize(workspace));
     setTimeout(() => Blockly.svgResize(workspace), 200);
     const listener = () => {
       cbRef.current(javascriptGenerator.workspaceToCode(workspace));
+      if (stateCbRef.current) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const state = (Blockly as any).serialization.workspaces.save(workspace);
+          // Empty workspace serialises to `{}` — normalise to null so the
+          // parent can tell "no blocks" from "didn't save yet".
+          stateCbRef.current(state && Object.keys(state).length ? state : null);
+        } catch { /* ignore serialisation errors */ }
+      }
     };
     workspace.addChangeListener(listener);
     const ro = new ResizeObserver(() => Blockly.svgResize(workspace));
@@ -2819,12 +4002,40 @@ function indentBody(raw: string): string {
 /** Context carrying the plugin root element so portals can anchor to it. */
 const MinisContainerCtx = createContext<React.RefObject<HTMLDivElement | null> | null>(null);
 
-/** Renders SlotBlocklyEditor as an absolute overlay inside the plugin container. */
-function SlotBlkOverlay({ slotName, paramType, blkCode, ctx, onCodeChange, onBack, onCommit }: {
-  slotName: string; paramType: string; blkCode: string; ctx: SlotCtx;
+/**
+ * Slot editor — Blockly only, rendered as a full-canvas overlay portal.
+ *
+ * Visual mode was removed: it duplicated functionality already covered by
+ * Blockly and the toggle between them made the Blockly workspace remount on
+ * every switch, losing all blocks. This single-editor variant keeps the
+ * workspace alive for the entire lifetime of the slot builder.
+ *
+ * All slot metadata (name, parameter type, code) is edited inside this overlay
+ * — there's no separate parent panel competing for the same data.
+ */
+function SlotBlkOverlay({
+  slotName, onSlotNameChange,
+  paramType, onParamTypeChange,
+  blkCode, ctx, onCodeChange, onStateChange, initialState,
+  onCancel, onCommit,
+  isEdit, existingBody,
+}: {
+  slotName: string; onSlotNameChange: (v: string) => void;
+  paramType: string; onParamTypeChange: (v: string) => void;
+  blkCode: string; ctx: SlotCtx;
   onCodeChange: (code: string) => void;
-  onBack: () => void;
+  /** Workspace JSON for round-tripping Edit Slot. */
+  onStateChange?: (state: object | null) => void;
+  initialState?: object | null;
+  onCancel: () => void;
   onCommit: () => void;
+  /** When true, the form is editing an existing slot — button label changes
+   *  to "Update Slot" and a hint shows the previous body for reference. */
+  isEdit?: boolean;
+  /** Previous TS body shown as a read-only reference during edit. Falls back
+   *  to a "rebuild from scratch" panel only when no Blockly state was saved
+   *  with the slot. */
+  existingBody?: string;
 }) {
   const ctxRef = useContext(MinisContainerCtx);
   // Capture the DOM element once — never let it change so the portal is stable
@@ -2842,141 +4053,171 @@ function SlotBlkOverlay({ slotName, paramType, blkCode, ctx, onCodeChange, onBac
       onMouseUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Header: back + signature + add */}
-      <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', flexShrink: 0 }}>
-        <Tooltip title="Back to Visual editor">
-          <IconButton size="small" onClick={onBack} sx={{ color: '#6c7086', p: 0.25, '&:hover': { color: '#cdd6f4' } }}>
-            <CloseIcon sx={{ fontSize: 14 }} />
-          </IconButton>
-        </Tooltip>
-        <Typography sx={{ fontSize: 11, color: '#89dceb', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {slotName || '_'}(v: {paramType}): void
+      {/* Header: title + Cancel + Add/Update Slot */}
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.25, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', flexShrink: 0, background: '#181825' }}>
+        <Typography sx={{ fontSize: 11, color: '#89dceb', fontWeight: 600 }}>
+          {isEdit ? `Edit Slot — ${slotName || '_'}` : 'New Slot'}
         </Typography>
+        <Box sx={{ flex: 1 }} />
+        <Button size="small" onClick={onCancel}
+          sx={{
+            fontSize: 11, color: '#cdd6f4', textTransform: 'none',
+            py: 0.4, px: 1, minWidth: 0,
+            border: '1px solid #45475a', bgcolor: '#1e1e2e',
+            '&:hover': { bgcolor: '#313244', borderColor: '#6c7086' },
+          }}>Cancel</Button>
         <Button size="small" onClick={onCommit} disabled={!slotName.trim()}
-          sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144', flexShrink: 0 }}>
-          Add Slot
+          variant="contained"
+          sx={{
+            fontSize: 11, fontWeight: 600,
+            bgcolor: '#a6e3a1', color: '#13131e',
+            textTransform: 'none',
+            py: 0.4, px: 1.25, minWidth: 0, flexShrink: 0,
+            boxShadow: 'none',
+            '&:hover': { bgcolor: '#94d18f', boxShadow: 'none' },
+            '&.Mui-disabled': { bgcolor: '#2a3a2a', color: '#6c7086' },
+          }}>
+          {isEdit ? 'Update Slot' : 'Add Slot'}
         </Button>
       </Box>
-      {/* Code preview */}
-      <Box sx={{ px: 1, py: 0.4, background: '#0d0d1a', borderBottom: '1px solid #313244', flexShrink: 0 }}>
+
+      {/* Signature row — slot name + parameter type, editable inline.
+          name = fixed 130px (slot names are short); type = flex (can hold
+          long generic types like `MProperty<string>` or class names from the
+          file), capped so it doesn't push the closing ): void off-screen. */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.25, py: 0.5, borderBottom: '1px solid #313244', flexShrink: 0, minWidth: 0 }}>
+        <TextField autoFocus size="small" placeholder="name" value={slotName}
+          onChange={(e) => { const v = e.target.value; onSlotNameChange(v ? v[0].toLowerCase() + v.slice(1) : v); }}
+          inputProps={{ style: { fontSize: 11, padding: '2px 6px', fontFamily: 'monospace', color: '#cdd6f4' } }}
+          sx={{ width: 130, flexShrink: 0, '& .MuiOutlinedInput-root': { background: '#1e1e2e', '& fieldset': { borderColor: '#313244' } } }} />
+        <Typography sx={{ fontSize: 11, color: '#45475a', flexShrink: 0 }}>(v:</Typography>
+        <Box sx={{ flex: 1, minWidth: 80, maxWidth: 280, display: 'flex' }}>
+          <TypeComboBox value={paramType} onChange={onParamTypeChange} placeholder="type" fullWidth />
+        </Box>
+        <Typography sx={{ fontSize: 11, color: '#45475a', flexShrink: 0 }}>): void</Typography>
+      </Box>
+
+      {/* Code preview (read-only) */}
+      <Box sx={{ px: 1, py: 0.4, background: '#0d0d1a', borderBottom: '1px solid #313244', flexShrink: 0, maxHeight: 72, overflowY: 'auto' }}>
         <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.4 }}>{preview}</Typography>
       </Box>
-      {/* Blockly workspace */}
-      <SlotBlocklyEditor ctx={ctx} onCodeChange={onCodeChange} />
+
+      {/* When editing without saved Blockly state, the old TS body is the
+          only thing the user has. Show it so they can rebuild manually.
+          When state IS available the workspace rehydrates automatically, so
+          this banner is hidden — no need for the warning. */}
+      {isEdit && existingBody && !initialState && (
+        <Box sx={{ px: 1, py: 0.4, background: '#181825', borderBottom: '1px solid #313244', flexShrink: 0, maxHeight: 100, overflowY: 'auto' }}>
+          <Typography sx={{ fontSize: 9, color: '#f9e2af', fontWeight: 600, mb: 0.25 }}>
+            ⚠ Previous body (no saved Blockly state — rebuild required)
+          </Typography>
+          <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#a6adc8', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.4 }}>{existingBody}</Typography>
+        </Box>
+      )}
+
+      {/* Blockly workspace — fills the rest of the overlay */}
+      <SlotBlocklyEditor
+        ctx={ctx}
+        onCodeChange={onCodeChange}
+        onStateChange={onStateChange}
+        initialState={initialState}
+      />
+
+      {/* Path builder dialog — single instance per slot overlay; listens to
+          globalEventBus so any variable block can pop it open. */}
+      <PathBuilderDialog />
     </Box>,
     el,
   );
 }
 
-function SlotBuilder({ entity, onCancel, onCommit }: { entity: MinisEntity; onCancel: () => void; onCommit: (name: string, type: string, body: string) => void }) {
-  const [slotName, setSlotName] = useState('');
-  const [paramType, setParamType] = useState('unknown');
-  const [stmts, setStmts] = useState<SlotStmt[]>([]);
-  const [editorMode, setEditorMode] = useState<'visual' | 'blockly'>('visual');
+/**
+ * Thin state shell for the slot builder. All UI lives in SlotBlkOverlay so the
+ * Blockly workspace stays mounted as long as the slot builder is open — no
+ * mode toggle, no remount.
+ */
+function SlotBuilder({ entity, onCancel, onCommit, editSlot }: {
+  entity: MinisEntity;
+  onCancel: () => void;
+  onCommit: (name: string, type: string, body: string, state: object | null, originalName: string | null) => void;
+  /** If set, the builder opens in edit mode with these initial values and
+   *  emits the original name on commit so the caller can replace the slot
+   *  in the source instead of inserting a new one. `state` is the Blockly
+   *  workspace JSON pulled from the saved `@blockly-state` marker. */
+  editSlot?: { name: string; paramType: string; body: string; state?: object | null };
+}) {
+  const [slotName, setSlotName] = useState(editSlot?.name ?? '');
+  const [paramType, setParamType] = useState(editSlot?.paramType ?? 'unknown');
   const [blkCode, setBlkCode] = useState('');
-  const ctx = useMemo(() => buildSlotCtx(entity), [entity.varName]); // eslint-disable-line react-hooks/exhaustive-deps
-  const currentBody = editorMode === 'blockly' ? indentBody(blkCode) : genStmts(stmts, 2);
-  const preview = `${slotName||'_'}(v: ${paramType}): void {\n${currentBody}\n  }`;
+  // Latest Blockly workspace JSON. `null` means user emptied the workspace;
+  // distinct from `undefined` (no state yet — fresh mount).
+  const [blkState, setBlkState] = useState<object | null>(editSlot?.state ?? null);
+  // Depend on the whole entity (not just varName) so that adding a new property
+  // or signal while the slot editor is open re-runs buildSlotCtx — otherwise
+  // the dropdowns inside Blockly keep an outdated list.
+  const ctx = useMemo(() => buildSlotCtx(entity), [entity]);
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid #313244', background: '#13131e', maxHeight: editorMode === 'visual' ? 420 : undefined, minHeight: editorMode === 'visual' ? 280 : undefined }}>
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5, gap: 0.75, borderBottom: '1px solid #313244', flexShrink: 0 }}>
-        <Typography sx={{ fontSize: 11, color: '#89dceb', fontWeight: 600 }}>New Slot</Typography>
-        <ToggleButtonGroup
-          size="small" exclusive
-          value={editorMode}
-          onChange={(_, v) => { if (v) setEditorMode(v as 'visual' | 'blockly'); }}
-          sx={{ ml: 0.5, '& .MuiToggleButton-root': { fontSize: 9, py: 0.1, px: 0.75, color: '#6c7086', border: '1px solid #31324466', '&.Mui-selected': { color: '#89dceb', background: '#1e1e3e', borderColor: '#89dceb44' } } }}
-        >
-          <ToggleButton value="visual">Visual</ToggleButton>
-          <ToggleButton value="blockly">Blockly</ToggleButton>
-        </ToggleButtonGroup>
-        <Box sx={{ flex: 1 }} />
-        <Button size="small" onClick={onCancel} sx={{ fontSize: 10, color: '#6c7086', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0 }}>Cancel</Button>
-        <Button size="small" onClick={() => onCommit(slotName, paramType, currentBody)} disabled={!slotName.trim()}
-          sx={{ fontSize: 10, color: '#a6e3a1', textTransform: 'none', py: 0.15, px: 0.75, minWidth: 0, border: '1px solid #a6e3a144' }}>Add</Button>
-      </Box>
-      {/* Signature */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.5, borderBottom: '1px solid #313244', flexShrink: 0 }}>
-        <TextField autoFocus size="small" placeholder="name" value={slotName}
-          onChange={(e) => { const v = e.target.value; setSlotName(v ? v[0].toLowerCase()+v.slice(1) : v); }}
-          inputProps={{ style: { fontSize: 11, padding: '2px 6px', fontFamily: 'monospace', color: '#cdd6f4' } }}
-          sx={{ width: 110, '& .MuiOutlinedInput-root': { background: '#1e1e2e', '& fieldset': { borderColor: '#313244' } } }} />
-        <Typography sx={{ fontSize: 11, color: '#45475a' }}>(v:</Typography>
-        <TypeComboBox value={paramType} onChange={setParamType} placeholder="type" />
-        <Typography sx={{ fontSize: 11, color: '#45475a' }}>)</Typography>
-      </Box>
-      {/* Body: visual or Blockly */}
-      {editorMode === 'visual' ? (
-        <Box sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
-          {/* Palette */}
-          <Box sx={{ width: 76, borderRight: '1px solid #313244', overflowY: 'auto', p: 0.5, flexShrink: 0 }}>
-            {PALETTE_GROUPS.map(g => (
-              <Box key={g.label} sx={{ mb: 0.75 }}>
-                <Typography sx={{ fontSize: 8, color: '#45475a', textTransform: 'uppercase', letterSpacing: 0.8, px: 0.25, mb: 0.25 }}>{g.label}</Typography>
-                {g.items.map(k => (
-                  <Box key={k} onClick={() => setStmts(prev => [...prev, mkStmt(k)])}
-                    sx={{ px: 0.75, py: 0.2, mb: 0.2, fontSize: 10, fontWeight: 700, borderRadius: 0.5, cursor: 'pointer', color: STMT_COLOR[k], background: STMT_COLOR[k]+'22', border: `1px solid ${STMT_COLOR[k]}44`, '&:hover': { background: STMT_COLOR[k]+'44' } }}>
-                    {STMT_LABEL[k]}
-                  </Box>
-                ))}
-              </Box>
-            ))}
-          </Box>
-          {/* Statement list + preview */}
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-            <Box sx={{ flex: 1, overflowY: 'auto', p: 0.75 }}>
-              <StmtList stmts={stmts} ctx={ctx} onChange={setStmts} />
-              {stmts.length === 0 && <Typography sx={{ fontSize: 10, color: '#45475a', textAlign: 'center', pt: 2 }}>← click to add blocks</Typography>}
-            </Box>
-            {/* Code preview */}
-            <Box sx={{ borderTop: '1px solid #313244', px: 1, py: 0.5, background: '#0d0d1a', flexShrink: 0, maxHeight: 72, overflowY: 'auto' }}>
-              <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{preview}</Typography>
-            </Box>
-          </Box>
-        </Box>
-      ) : (
-        <>
-          <Box sx={{ px: 1.5, py: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            <Typography sx={{ fontSize: 10, color: '#45475a' }}>
-              Blockly editor is shown in the canvas area above.
-            </Typography>
-            <Box sx={{ borderTop: '1px solid #313244', px: 0, py: 0.5, background: '#0d0d1a', mt: 0.5, borderRadius: 0.5, overflowY: 'auto', maxHeight: 52 }}>
-              <Typography component="pre" sx={{ m: 0, fontSize: 9, color: '#6c7086', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', px: 1 }}>{preview}</Typography>
-            </Box>
-          </Box>
-          <SlotBlkOverlay
-            slotName={slotName}
-            paramType={paramType}
-            blkCode={blkCode}
-            ctx={ctx}
-            onCodeChange={setBlkCode}
-            onBack={() => setEditorMode('visual')}
-            onCommit={() => onCommit(slotName, paramType, indentBody(blkCode))}
-          />
-        </>
-      )}
-    </Box>
+    <SlotBlkOverlay
+      slotName={slotName} onSlotNameChange={setSlotName}
+      paramType={paramType} onParamTypeChange={setParamType}
+      blkCode={blkCode} ctx={ctx}
+      onCodeChange={setBlkCode}
+      onStateChange={setBlkState}
+      initialState={editSlot?.state ?? null}
+      onCancel={onCancel}
+      onCommit={() => onCommit(slotName, paramType, indentBody(blkCode), blkState, editSlot?.name ?? null)}
+      isEdit={!!editSlot}
+      existingBody={editSlot?.body}
+    />
   );
 }
 
 /* ── Class builder panel (shown when a class entity is selected) ─────────────*/
 
-type ClassMemberMode = 'signal' | 'property' | 'slot';
+// `variable` is a plain TypeScript class field — `name: T = default;`.
+// Distinct from `property` (which wraps the value in `MProperty<T>` for
+// observability). Use this when the value doesn't need a `.changed` signal.
+type ClassMemberMode = 'signal' | 'property' | 'variable' | 'slot';
 
-function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: () => void }) {
+function ClassBuilderPanel({ entity, onClose, pendingEditSlotName, onPendingConsumed }: {
+  entity: MinisEntity;
+  onClose: () => void;
+  /** Set by the parent when a `minislib:editSlot` event matches this class.
+   *  We open Edit Slot for that slot then call onPendingConsumed to clear. */
+  pendingEditSlotName?: string;
+  onPendingConsumed?: () => void;
+}) {
   const color = KIND_COLOR['class'];
   const [mode, setMode] = useState<ClassMemberMode | null>(null);
   const [name, setName] = useState('');
   const [type, setType] = useState('');
   const [defaultVal, setDefaultVal] = useState('');
+  // When set, SlotBuilder opens in edit mode pre-populated with these values.
+  // Distinct from `null` (closed) and `undefined` (new slot, fresh state).
+  const [editSlot, setEditSlot] = useState<{ name: string; paramType: string; body: string; state?: object | null } | null>(null);
 
-  const reset = () => { setMode(null); setName(''); setType(''); setDefaultVal(''); };
+  const reset = () => { setMode(null); setName(''); setType(''); setDefaultVal(''); setEditSlot(null); };
+
+  // React to pending Edit Slot requests from the parent. Pulling the slot
+  // freshly from `entity.slots` each time means we always have the up-to-date
+  // body/paramType even after a re-parse swapped the entity object identity.
+  useEffect(() => {
+    if (!pendingEditSlotName) return;
+    const slot = entity.slots.find((s) => s.name === pendingEditSlotName);
+    if (!slot) return;  // entity may have just been re-parsed without this slot yet — wait
+    if (slot.paramType === undefined || slot.body === undefined) {
+      onPendingConsumed?.();
+      return;
+    }
+    setEditSlot({ name: slot.name, paramType: slot.paramType, body: slot.body, state: slot.state ?? null });
+    setMode('slot');
+    onPendingConsumed?.();
+  }, [pendingEditSlotName, entity, onPendingConsumed]);
 
   // When type changes, auto-populate defaultVal with first suggestion (if still empty / was auto-set)
   const handleTypeChange = useCallback((newType: string) => {
     setType(newType);
-    if (mode === 'property') {
+    if (mode === 'property' || mode === 'variable') {
       const suggestions = defaultsForType(newType);
       if (suggestions.length > 0) setDefaultVal(suggestions[0]);
     }
@@ -2990,6 +4231,7 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
     let memberCode = '';
     if (mode === 'signal')        memberCode = `readonly ${n} = new Signal<[${t}]>();`;
     else if (mode === 'property') memberCode = `readonly ${n} = new MProperty<${t}>(${defaultVal.trim() || 'undefined'});`;
+    else if (mode === 'variable') memberCode = `${n}: ${t} = ${defaultVal.trim() || 'undefined'};`;
     else if (mode === 'slot')     memberCode = `${n}(v: ${t}): void {}`;
     if (memberCode) insertMemberIntoClass(memberCode, entity.varName, uri);
     reset();
@@ -3010,11 +4252,16 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
       </Box>
       <Divider sx={{ borderColor: '#313244' }} />
 
-      {(entity.signals.length > 0 || entity.slots.length > 0) && (
+      {(entity.signals.length > 0 || entity.slots.length > 0 || (entity.variables?.length ?? 0) > 0) && (
         <Box sx={{ px: 1.5, py: 0.5 }}>
           {entity.signals.length > 0 && (
             <Typography sx={{ fontSize: 10, color: '#cba6f7', lineHeight: 1.8 }}>
               ⚡ {entity.signals.map((s) => s.name).join('  ·  ')}
+            </Typography>
+          )}
+          {(entity.variables?.length ?? 0) > 0 && (
+            <Typography sx={{ fontSize: 10, color: '#f9e2af', lineHeight: 1.8 }}>
+              🔸 {entity.variables!.map((v) => `${v.name}: ${v.type}`).join('  ·  ')}
             </Typography>
           )}
           {entity.slots.length > 0 && (
@@ -3029,8 +4276,15 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
 
       {!mode ? (
         <Box sx={{ px: 1.5, py: 0.75, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-          {(['signal', 'property', 'slot'] as ClassMemberMode[]).map((m) => {
-            const c = m === 'signal' ? '#cba6f7' : m === 'property' ? '#ce93d8' : '#89dceb';
+          {(['signal', 'property', 'variable', 'slot'] as ClassMemberMode[]).map((m) => {
+            // Variable = warm yellow to set it apart from `property` (lavender)
+            // — both edit a stored value, but `property` is observable and
+            // `variable` isn't.
+            const c =
+              m === 'signal'   ? '#cba6f7' :
+              m === 'property' ? '#ce93d8' :
+              m === 'variable' ? '#f9e2af' :
+                                  '#89dceb';
             return (
               <Button key={m} size="small" onClick={() => setMode(m)}
                 sx={{ fontSize: 10, textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0, color: c, border: `1px solid ${c}44` }}>
@@ -3043,11 +4297,27 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
         <SlotBuilder
           entity={entity}
           onCancel={reset}
-          onCommit={(slotName, paramType, body) => {
+          editSlot={editSlot ?? undefined}
+          onCommit={(slotName, paramType, body, state, originalName) => {
             const { uri } = _state;
             if (!uri || !slotName.trim()) return;
-            const memberCode = `${slotName}(v: ${paramType || 'unknown'}): void {\n${body}\n  }`;
-            insertMemberIntoClass(memberCode, entity.varName, uri);
+            // Prepend the @blockly-state marker so Edit Slot can rehydrate
+            // the same blocks next time. Marker lives in a regular `//`
+            // comment — invisible to the runtime, ignored by TypeScript.
+            const stateLine = state
+              ? `    // ${BLOCKLY_STATE_MARKER} ${encodeBlocklyState(state)}\n`
+              : '';
+            const memberCode = `${slotName}(v: ${paramType || 'unknown'}): void {\n${stateLine}${body}\n  }`;
+            if (originalName) {
+              // Edit existing slot — replace its definition in the source
+              if (!replaceSlotInClass(originalName, memberCode, entity.varName, uri)) {
+                // Fallback: original slot couldn't be located (file was modified
+                // outside the graph). Insert as new so user's work isn't lost.
+                insertMemberIntoClass(memberCode, entity.varName, uri);
+              }
+            } else {
+              insertMemberIntoClass(memberCode, entity.varName, uri);
+            }
             reset();
           }}
         />
@@ -3068,8 +4338,9 @@ function ClassBuilderPanel({ entity, onClose }: { entity: MinisEntity; onClose: 
             onCommit={commit}
             onCancel={reset}
           />
-          {/* default value — combobox with type-aware suggestions (property only) */}
-          {mode === 'property' && (
+          {/* default value — shown for property AND variable (both store a value).
+              Signal has no default; slot uses BlocklySlotBuilder, not this form. */}
+          {(mode === 'property' || mode === 'variable') && (
             <DefaultComboBox
               typeVal={type}
               value={defaultVal}
@@ -3382,27 +4653,15 @@ function SaveSourceButton({ uri }: { uri: string }) {
     return () => { u1(); u2(); };
   }, [uri]);
 
-  const handleSave = useCallback(async () => {
-    // The virtual tab may be active while no Monaco editor has this file as its current model.
-    // Find the model directly by URI and write its content straight to VFS.
+  const handleSave = useCallback(() => {
+    // Delegate to MonacoMultiEditor's saver — it owns the provider, knows
+    // which tab is open and clears the modified flag synchronously. Going
+    // straight to VFS the old way left the tab dot stuck because
+    // MonacoMultiEditor's state didn't see the change.
     const model = findModel(uri);
     if (!model) return;
-    const vfsPath = model.uri.path; // e.g. /home/marcin/Minis/Users/.../scene.ts
-    const content = model.getValue();
-    // UTF-8 → base64 without spread (avoids stack overflow for large files)
-    const bytes = new TextEncoder().encode(content);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    try {
-      const resp = await fetch(vfsApiUrl(vfsPath, 'writeFile'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...vfsAuthHeader() },
-        body: JSON.stringify({ data: btoa(binary) }),
-      });
-      if (resp.ok) globalEventBus.emit('system:editor:didSave', { uri });
-    } catch (e) {
-      console.error('[MinisLib] save error', e);
-    }
+    const vfsPath = model.uri.path;
+    globalEventBus.emit('system:editor:requestSave', { path: vfsPath, uri });
   }, [uri]);
 
   const color = saved ? '#a6e3a1' : dirty ? '#f9e2af' : '#585b70';
@@ -3505,6 +4764,35 @@ function getEntityClassName(entity: MinisEntity): string {
 
 /** Remove a variable declaration (const/let/var x = ...) from source code. */
 function deleteEntityFromCode(code: string, varName: string): string {
+  const entity = _state.entities.find(e => e.varName === varName);
+
+  // Classes: brace-counted block removal (the variable regex below only handles
+  // `const foo = ...` style declarations, so without this user couldn't delete
+  // a class from the graph — × button would do nothing).
+  if (entity?.kind === 'class') {
+    const esc = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?:export\\s+)?(?:abstract\\s+)?class\\s+${esc}\\b[^{]*\\{`);
+    const m = re.exec(code);
+    if (m) {
+      const openIdx = m.index + m[0].length - 1;
+      let depth = 1;
+      let i = openIdx + 1;
+      while (i < code.length && depth > 0) {
+        const c = code[i];
+        if (c === '{') depth++;
+        else if (c === '}') depth--;
+        i++;
+      }
+      if (depth === 0) {
+        // Eat one trailing newline so we don't leave a blank line behind.
+        const endIdx = code[i] === '\n' ? i + 1 : i;
+        return code.slice(0, m.index) + code.slice(endIdx);
+      }
+    }
+    // Regex failed to find the class — fall through to the variable-style
+    // removal below so we at least try; better than silent no-op.
+  }
+
   const esc = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Match full declaration line including trailing newline
   return code.replace(
@@ -4781,8 +6069,30 @@ function NodeTreePanel({
 function VisualMinisLibPanel() {
   const { entities, connections, uri, isMinisFile, savedPositions, externalClassDefs, importedClasses, currentCode } = usePluginState();
   const snippets = useSnippets();
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  // Track selection by varName (stable across re-parses) rather than entity.id
+  // (auto-numbered e0/e1/… → reshuffled every time the file is parsed). Without
+  // this, switching to a source tab and back would silently drop the selection,
+  // unmount ClassBuilderPanel, and break the "edit slot" listener.
+  const [selectedVarName, setSelectedVarName] = useState<string | null>(null);
   const pendingSelectName = useRef<string | null>(null);
+
+  // Resolve current entity + its (parser-assigned) id from the stable varName.
+  // ReactFlow node ids still come from entity.id, so we map back here.
+  const selectedEntity = selectedVarName ? entities.find((e) => e.varName === selectedVarName) ?? null : null;
+  const selectedEntityId = selectedEntity?.id ?? null;
+
+  // Setter wrapper that mirrors React's `setState` signature — accepts either
+  // a value or a `(prev) => next` updater, both keyed by entity.id (what
+  // ReactFlow's selection callbacks emit). We translate id ↔ varName so the
+  // underlying state stays stable across re-parses.
+  const setSelectedEntityId = useCallback((idOrUpdater: string | null | ((prev: string | null) => string | null)) => {
+    setSelectedVarName((prevVarName) => {
+      const prevId = prevVarName ? entities.find((e) => e.varName === prevVarName)?.id ?? null : null;
+      const nextId = typeof idOrUpdater === 'function' ? idOrUpdater(prevId) : idOrUpdater;
+      if (!nextId) return null;
+      return entities.find((e) => e.id === nextId)?.varName ?? null;
+    });
+  }, [entities]);
 
   const [nodes, setNodes] = useNodesState<Node>([]);
   const [edges, setEdges] = useEdgesState<Edge>([]);
@@ -4805,15 +6115,13 @@ function VisualMinisLibPanel() {
     // Auto-select newly created class (from "+Class" button)
     if (pendingSelectName.current) {
       const match = entities.find((e) => e.varName === pendingSelectName.current && e.kind === 'class');
-      if (match) { setSelectedEntityId(match.id); pendingSelectName.current = null; }
+      if (match) { setSelectedVarName(match.varName); pendingSelectName.current = null; }
     }
   }, [entities, connections, savedPositions, setNodes, setEdges]);
 
-  // When parser refreshes, keep selected entity only if still present
-  useEffect(() => {
-    if (selectedEntityId && !entities.find((e) => e.id === selectedEntityId))
-      setSelectedEntityId(null);
-  }, [entities, selectedEntityId]);
+  // No reset effect needed any more — selectedEntity is derived from varName,
+  // so it automatically resolves to null when the class disappears from the
+  // parsed entities (deleted, file replaced, etc.).
 
   // Save node positions to file as metadata comment after every drag
   const handleNodeDragStop = useCallback((_: React.MouseEvent, draggedNode: Node) => {
@@ -4875,7 +6183,34 @@ function VisualMinisLibPanel() {
     return unsub;
   }, [handleDeleteEntity]);
 
-  const selectedEntity = selectedEntityId ? entities.find((e) => e.id === selectedEntityId) ?? null : null;
+  // Click on a slot row → open Edit Slot. Listening at the panel level (not
+  // inside ClassBuilderPanel) keeps the wiring alive across tab switches —
+  // ClassBuilderPanel only mounts when a class is selected, but this panel
+  // is mounted whenever the user sees the graph at all.
+  //
+  // We keep the pending request in proper React state (not mutated onto the
+  // entity object) because the parser produces a fresh entities array on
+  // every re-parse — a marker on the old object would silently disappear
+  // before ClassBuilderPanel could read it.
+  const [pendingEditSlot, setPendingEditSlot] = useState<{ varName: string; slotName: string } | null>(null);
+
+  useEffect(() => {
+    const unsub = globalEventBus.on<{ varName: string; slotName: string }>('minislib:editSlot', ({ varName, slotName }) => {
+      const target = entities.find((e) => e.varName === varName && e.kind === 'class');
+      if (!target) return;
+      const slot = target.slots.find((s) => s.name === slotName);
+      if (!slot || slot.body === undefined || slot.paramType === undefined) return;
+      setPendingEditSlot({ varName, slotName });
+      setSelectedVarName(varName);
+    });
+    return unsub;
+  }, [entities]);
+
+  // Clear callback handed down — ClassBuilderPanel calls it after consuming
+  // the pending edit so a second click on the same slot still works.
+  const clearPendingEditSlot = useCallback(() => setPendingEditSlot(null), []);
+
+  // (selectedEntity is derived earlier from selectedVarName.)
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -4978,7 +6313,12 @@ function VisualMinisLibPanel() {
             {/* Properties / class builder — shown when a node is selected */}
             {selectedEntity && (
               selectedEntity.kind === 'class'
-                ? <ClassBuilderPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
+                ? <ClassBuilderPanel
+                    entity={selectedEntity}
+                    onClose={() => setSelectedEntityId(null)}
+                    pendingEditSlotName={pendingEditSlot?.varName === selectedEntity.varName ? pendingEditSlot.slotName : undefined}
+                    onPendingConsumed={clearPendingEditSlot}
+                  />
                 : <PropertiesPanel entity={selectedEntity} onClose={() => setSelectedEntityId(null)} />
             )}
 

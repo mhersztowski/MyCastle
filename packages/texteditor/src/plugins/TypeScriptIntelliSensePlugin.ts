@@ -182,6 +182,45 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
     },
 
     activate(api) {
+      // ── Compiler options ────────────────────────────────────────────────────
+      // Monaco's TypeScript defaults to `moduleResolution: classic`, which
+      // does NOT walk into node_modules — bare imports like
+      // `import x from 'some-pkg'` therefore resolve to `any` even when we
+      // register the package's .d.ts files. We must explicitly switch to
+      // NodeJs resolution so the type registry actually feeds completions.
+      // Other options match a modern ESM TS 5.x project so the worker
+      // happily reads our generated .d.ts (private fields with `#`, etc.).
+      try {
+        monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+          target: monaco.languages.typescript.ScriptTarget.ES2020,
+          module: monaco.languages.typescript.ModuleKind.ESNext,
+          moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+          allowSyntheticDefaultImports: true,
+          esModuleInterop: true,
+          allowJs: true,
+          strict: false,            // user code drives this; we don't want to gate completions on strict
+          skipLibCheck: true,        // tolerate slight d.ts mismatches between packages
+          jsx: monaco.languages.typescript.JsxEmit.React,
+          lib: ['es2020', 'dom'],
+          noEmit: true,
+          isolatedModules: true,
+        });
+      } catch (err) {
+        console.warn('[TSPlugin] setCompilerOptions failed:', err);
+      }
+
+      // Disable Monaco's "tagged template strings" + similar diagnostics that
+      // fire for purely cosmetic stuff in d.ts files registered on the fly.
+      try {
+        monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+          noSemanticValidation: false,
+          noSyntaxValidation: false,
+          // Cannot find module errors are noisy when packages resolve through
+          // our model registry rather than the worker's own resolver.
+          diagnosticCodesToIgnore: [2307, 2792, 7016],
+        });
+      } catch { /* older Monaco — ignore */ }
+
       // ── State ────────────────────────────────────────────────────────────────
       const resolvedPkgs = new Set<string>();   // packages already resolved (VFS or CDN)
       const processedFiles = new Set<string>(); // VFS files already processed (VFS paths)

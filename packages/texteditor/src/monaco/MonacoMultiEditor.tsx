@@ -1912,6 +1912,32 @@ export function MonacoMultiEditor({
     return unsub;
   }, []);
 
+  // Complement of markDirty — plugins that persist a file directly to VFS
+  // (e.g. MinisLib graph's Save Source button) emit this to tell us their tab
+  // should drop its dirty dot. Without it the dot stayed on even after a
+  // successful save because the plugin bypassed our normal save() path.
+  // Match the path loosely (==, endsWith, or contained-in) since plugins may
+  // emit `uri` or `path` with slightly different leading slashes / file://
+  // prefixes than the tab's stored `path`.
+  useEffect(() => {
+    const unsub = globalEventBus.on<{ uri?: string; path?: string }>('system:editor:didSave', (payload) => {
+      const target = payload?.path ?? payload?.uri;
+      if (!target) return;
+      setGroups(prev => prev.map(g => ({
+        ...g,
+        tabs: g.tabs.map(t => {
+          const match =
+            t.path === target ||
+            t.path.endsWith(target) ||
+            target.endsWith(t.path) ||
+            (t.uri && (t.uri === target || t.uri.endsWith(target) || target.endsWith(t.uri)));
+          return match ? { ...t, modified: false } : t;
+        }),
+      })));
+    });
+    return unsub;
+  }, []);
+
   // Listen for plugin requests to open a virtual editor tab
   useEffect(() => {
     const unsub = globalEventBus.on<{
@@ -2143,6 +2169,45 @@ export function MonacoMultiEditor({
     groupEditorsRef.current.set(groupId, editor);
     editor.onDidDispose(() => { groupEditorsRef.current.delete(groupId); });
   }, []);
+
+  // Save a specific tab by path — used by plugins that own a virtual tab and
+  // need to persist the underlying model. Goes through the same provider /
+  // setGroups path as the regular toolbar Save, so modified flag clears
+  // synchronously (no fuzzy event match needed).
+  const handleSaveByPath = useCallback(async (path: string) => {
+    let tabInfo: TabInfo | undefined;
+    for (const g of groups) {
+      const t = g.tabs.find(x => x.path === path || x.uri === path || x.path.endsWith(path) || path.endsWith(x.path));
+      if (t) { tabInfo = t; break; }
+    }
+    if (!tabInfo) return;
+    const mm = modelManagerRef.current;
+    const model = mm?.getModel(tabInfo.uri);
+    if (!model) return;
+    const content = model.getValue();
+    const encoded = encodeText(content);
+    if (onFileSave) {
+      await onFileSave(tabInfo.path, encoded);
+    } else if (provider.writeFile) {
+      await provider.writeFile(tabInfo.path, encoded, { overwrite: true, create: true });
+    }
+    setGroups(prev => prev.map(g => ({
+      ...g,
+      tabs: g.tabs.map(t => t.path === tabInfo!.path ? { ...t, modified: false } : t),
+    })));
+    globalEventBus.emit('system:editor:didSave', { uri: tabInfo.path });
+  }, [groups, onFileSave, provider]);
+
+  // Listen for plugin save requests (MinisLib graph etc). Delegates to the
+  // same path-based saver so plugins don't have to know provider details or
+  // sync the modified flag themselves.
+  useEffect(() => {
+    const unsub = globalEventBus.on<{ uri?: string; path?: string }>('system:editor:requestSave', (payload) => {
+      const p = payload?.path ?? payload?.uri;
+      if (p) void handleSaveByPath(p);
+    });
+    return unsub;
+  }, [handleSaveByPath]);
 
   // Save in a group
   const handleGroupSave = useCallback(async (groupId: string) => {

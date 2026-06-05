@@ -3,10 +3,13 @@ import { Box, IconButton, Paper, Typography, useMediaQuery, useTheme } from '@mu
 import { Close, CropSquare, FilterNone, Minimize } from '@mui/icons-material';
 import { useGlobalWindows, type WindowName } from './GlobalWindowsContext';
 
-// Base z-index below MUI's popper/modal (1300) so autocomplete dropdowns render above windows
+// Windows occupy 1200..1289. MUI's popper/modal still wins at 1300 so
+// autocomplete dropdowns render above us, and the MinimizedTaskbar lives
+// at 1295 — that way a maximised window can never cover its own restore
+// chip in the taskbar.
 let zIndexCounter = 0;
 function nextZIndex() {
-  return 1200 + (++zIndexCounter % 100);
+  return 1200 + (++zIndexCounter % 90);
 }
 
 interface GlobalWindowProps {

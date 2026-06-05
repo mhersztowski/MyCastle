@@ -9,11 +9,13 @@ import {
   DataObject as DataObjectIcon,
   DeleteSweep as DeleteSweepIcon,
   Description as DescriptionIcon,
+  DriveFolderUpload as DriveIcon,
   Folder as FolderIcon,
   FileDownload as FileDownloadIcon,
   FileUpload as FileUploadIcon,
   Logout as LogoutIcon,
   PlayArrow as RpcIcon,
+  Psychology as MemoryIcon,
   Schema as SchemaIcon,
   Sensors as MqttIcon,
   SwapHoriz as SwapHorizIcon,
@@ -170,6 +172,15 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
         <MenuItem onClick={() => { closeAll(); toggle('mjdDataEditor'); }}>
           <ListItemIcon><DataObjectIcon fontSize="small" /></ListItemIcon>
           <ListItemText>MJD Data Editor</ListItemText>
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => { closeAll(); toggle('drive'); }}>
+          <ListItemIcon><DriveIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>Drive</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeAll(); toggle('memory'); }}>
+          <ListItemIcon><MemoryIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>Memory</ListItemText>
         </MenuItem>
         {isAdmin && (
           <MenuItem onClick={() => { closeAll(); toggle('terminal'); }}>

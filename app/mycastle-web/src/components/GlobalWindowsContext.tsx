@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { useLocation } from 'react-router-dom';
 import type { FileSystemProvider } from '@mhersztowski/core';
 
-export type WindowName = 'apiDocs' | 'rpcExplorer' | 'mqttExplorer' | 'mjdDefEditor' | 'mjdDataEditor' | 'terminal' | 'vfs';
+export type WindowName = 'apiDocs' | 'rpcExplorer' | 'mqttExplorer' | 'mjdDefEditor' | 'mjdDataEditor' | 'terminal' | 'vfs' | 'drive' | 'memory';
 type WindowState = 'open' | 'minimized';
 
 export interface MjdDefEditorParams {

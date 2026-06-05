@@ -12,7 +12,14 @@ import {
   Menu,
   ListItemIcon,
   ListItemText,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Typography,
 } from '@mui/material';
+import { markdownToHtml } from './utils/markdownConverter';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
 import FormatItalicIcon from '@mui/icons-material/FormatItalic';
 import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
@@ -30,6 +37,9 @@ import HighlightIcon from '@mui/icons-material/Highlight';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import SaveIcon from '@mui/icons-material/Save';
+import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import DictationDialog from './DictationDialog';
 import FunctionsIcon from '@mui/icons-material/Functions';
 import AddIcon from '@mui/icons-material/Add';
 import PersonIcon from '@mui/icons-material/Person';
@@ -52,6 +62,58 @@ interface MdEditorToolbarProps {
 const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveDisabled }) => {
   const [insertMenuAnchor, setInsertMenuAnchor] = useState<null | HTMLElement>(null);
   const insertMenuOpen = Boolean(insertMenuAnchor);
+
+  // "Paste Markdown" dialog — fallback when navigator.clipboard.readText() is
+  // unavailable (mobile browsers, HTTP, denied permission). When `text` is set
+  // the dialog is open; user pastes manually then confirms.
+  const [pasteDialog, setPasteDialog] = useState<{ text: string } | null>(null);
+
+  // "Dictate" dialog — TTS the selection (or whole doc when nothing selected)
+  // with real-time word highlighting + a writing canvas for practice.
+  const [dictateDialog, setDictateDialog] = useState<{ text: string } | null>(null);
+
+  const openDictateDialog = useCallback(() => {
+    const { from, to, empty } = editor.state.selection;
+    // Whole document when no selection — TipTap separator '\n\n' for block
+    // boundaries makes the spoken text readable without merging paragraphs.
+    const text = empty
+      ? editor.getText({ blockSeparator: '\n\n' })
+      : editor.state.doc.textBetween(from, to, '\n\n', ' ');
+    if (!text.trim()) return;
+    setDictateDialog({ text });
+  }, [editor]);
+
+  // Convert markdown to TipTap-compatible HTML and insert at the cursor.
+  // Replaces any current selection. Distinct from the default Ctrl+V which
+  // pastes raw text — this one parses the markdown syntax first.
+  const insertMarkdown = useCallback((markdown: string) => {
+    if (!markdown) return;
+    const html = markdownToHtml(markdown);
+    editor.chain().focus().insertContent(html).run();
+  }, [editor]);
+
+  const pasteMarkdownFromClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) {
+        // Empty clipboard → open manual dialog (better than silent no-op).
+        setPasteDialog({ text: '' });
+        return;
+      }
+      insertMarkdown(text);
+    } catch {
+      // Clipboard API blocked (mobile, HTTP, denied permission).
+      // Open the dialog with empty content + autofocus so user can paste
+      // manually with the native OS keyboard.
+      setPasteDialog({ text: '' });
+    }
+  }, [insertMarkdown]);
+
+  const confirmPasteDialog = useCallback(() => {
+    if (!pasteDialog) return;
+    insertMarkdown(pasteDialog.text);
+    setPasteDialog(null);
+  }, [pasteDialog, insertMarkdown]);
 
   const handleInsertMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setInsertMenuAnchor(event.currentTarget);
@@ -398,20 +460,87 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveD
         </MenuItem>
       </Menu>
 
+      {/* Spacer pushes the trailing buttons to the right edge. Placed even
+          when there's no Save button so "Paste Markdown" still right-aligns. */}
+      <Box sx={{ flexGrow: 1 }} />
+
+      {/* Paste Markdown — parses clipboard contents as markdown before
+          inserting, unlike the default Ctrl+V which pastes raw text. */}
+      <Tooltip title="Wklej Markdown ze schowka (parsuje składnię)">
+        <IconButton size="small" onClick={pasteMarkdownFromClipboard}>
+          <ContentPasteGoIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+
+      {/* Dyktuj — TTS zaznaczonego tekstu z real-time podświetlaniem słów
+          i obszarem do pisania odręcznego (pen/touch + pinch zoom/pan). */}
+      <Tooltip title="Dyktuj zaznaczony tekst (cały dokument gdy nic nie zaznaczone)">
+        <IconButton size="small" onClick={openDictateDialog}>
+          <RecordVoiceOverIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+
       {/* Save button */}
       {onSave && (
-        <>
-          <Box sx={{ flexGrow: 1 }} />
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<SaveIcon />}
-            onClick={onSave}
-            disabled={saveDisabled}
-          >
-            Save
-          </Button>
-        </>
+        <Button
+          variant="contained"
+          size="small"
+          startIcon={<SaveIcon />}
+          onClick={onSave}
+          disabled={saveDisabled}
+        >
+          Save
+        </Button>
+      )}
+
+      {/* Dictation dialog — full screen, mounted lazily on first open */}
+      {dictateDialog && (
+        <DictationDialog
+          open
+          text={dictateDialog.text}
+          onClose={() => setDictateDialog(null)}
+        />
+      )}
+
+      {/* Manual paste fallback (mobile / HTTP / blocked clipboard) */}
+      {pasteDialog && (
+        <Dialog open onClose={() => setPasteDialog(null)} maxWidth="md" fullWidth>
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ContentPasteGoIcon /> Wklej Markdown
+          </DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Twoja przeglądarka nie pozwoliła odczytać schowka automatycznie.
+              Wklej zawartość poniżej (<code>⌘V</code>/<code>Ctrl+V</code> na desktopie,
+              przytrzymaj pole → <strong>Wklej</strong> na mobile), a po kliknięciu
+              <strong> Wstaw</strong> zostanie sparsowana jako Markdown.
+            </Typography>
+            <TextField
+              autoFocus
+              fullWidth
+              multiline
+              rows={12}
+              value={pasteDialog.text}
+              onChange={(e) => setPasteDialog({ text: e.target.value })}
+              onKeyDown={(e) => {
+                // Ctrl/Cmd+Enter → quick-confirm without reaching for the button
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  confirmPasteDialog();
+                }
+              }}
+              placeholder="# Nagłówek&#10;&#10;**pogrubiony** tekst, _kursywa_, [link](https://…)"
+              slotProps={{ htmlInput: { style: { fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: 13 } } }}
+              helperText={`${pasteDialog.text.length} znaków · Ctrl+Enter wstawia`}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setPasteDialog(null)}>Anuluj</Button>
+            <Button variant="contained" disabled={!pasteDialog.text.trim()} onClick={confirmPasteDialog}>
+              Wstaw
+            </Button>
+          </DialogActions>
+        </Dialog>
       )}
     </Box>
   );

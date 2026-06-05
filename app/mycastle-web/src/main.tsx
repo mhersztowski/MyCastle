@@ -30,6 +30,8 @@ import { GlobalMjdDefEditor } from './components/GlobalMjdDefEditor';
 import { GlobalMjdDataEditor } from './components/GlobalMjdDataEditor';
 import { GlobalTerminal } from './components/GlobalTerminal';
 import { GlobalVfs } from './components/GlobalVfs';
+import { GlobalDrive } from './components/GlobalDrive';
+import { GlobalMemory } from './components/GlobalMemory';
 import { MinimizedTaskbar } from './components/MinimizedTaskbar';
 import { PluginProvider } from './modules/web-plugins';
 import { DisplayProvider } from './components/DisplayContext';
@@ -87,6 +89,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                     <GlobalMjdDataEditor />
                     <GlobalTerminal />
                     <GlobalVfs />
+                    <GlobalDrive />
+                    <GlobalMemory />
                     <MinimizedTaskbar />
                   </GlobalWindowsProvider>
                 </MinisDataSourceProvider>

@@ -13,6 +13,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useAuth } from '../../modules/auth';
 import {
   Alert, Box, CircularProgress, Snackbar, Tab, Tabs, Typography,
 } from '@mui/material';
@@ -28,7 +29,11 @@ import { EMPTY_MEMORY, type MemoryData } from './types';
 const MEMORY_PATH = 'data/memory.json';
 
 export default function MemoryPage(): React.JSX.Element {
-  const { userName = '' } = useParams<{ userName: string }>();
+  // Fall back to the logged-in user so this component also works as a Global
+  // window mounted outside any user-scoped route.
+  const params = useParams<{ userName: string }>();
+  const { currentUser } = useAuth();
+  const userName = params.userName || currentUser?.name || '';
   const { readFile, writeFile, isDataLoaded } = useFilesystem();
 
   const [tab, setTab] = useState(0);

@@ -364,6 +364,21 @@ function GizmoControls({
     return () => controls.removeEventListener('mouseUp', callback);
   }, [handleDragEnd, addLog]);
 
+  // Imperatively keep Three.js TransformControls in sync with the React mode prop.
+  // Drei renders <primitive object={controls} mode={mode} /> which only assigns
+  // the property — but Three.js needs `setMode(...)` to re-render the gizmo
+  // (translate arrows ↔ rotate rings ↔ scale boxes). Without this the gizmo
+  // stays stuck on whatever mode it had at mount time even though the prop changes.
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    if (typeof controls.setMode === 'function') {
+      controls.setMode(transformMode);
+    } else {
+      controls.mode = transformMode;
+    }
+  }, [transformMode]);
+
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
