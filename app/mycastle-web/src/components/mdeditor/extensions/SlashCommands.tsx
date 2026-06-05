@@ -42,6 +42,7 @@ import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import LinkIcon from '@mui/icons-material/Link';
 import ExtensionIcon from '@mui/icons-material/Extension';
+import EventIcon from '@mui/icons-material/Event';
 import { pluginRegistry } from '../../../modules/web-plugins';
 
 interface CommandItem {
@@ -54,6 +55,10 @@ interface CommandItem {
 export interface SlashCommandsOptions {
   suggestion: Omit<SuggestionOptions, 'editor'>;
   createPageRef?: { current: ((path: string) => Promise<void>) | undefined };
+  /** Called by the `/event` command — host opens its EventDialog with this
+   *  range so the resulting blockquote replaces the slash trigger text. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  insertEventRef?: { current: ((editor: any, range: any) => void) | undefined };
 }
 
 const commands: CommandItem[] = [
@@ -550,7 +555,9 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
 CommandList.displayName = 'CommandList';
 
 function buildSuggestionConfig(
-  createPageRef?: { current: ((path: string) => Promise<void>) | undefined }
+  createPageRef?: { current: ((path: string) => Promise<void>) | undefined },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  insertEventRef?: { current: ((editor: any, range: any) => void) | undefined },
 ): Omit<SuggestionOptions, 'editor'> {
   const pageCommand: CommandItem = {
     title: 'Page',
@@ -581,7 +588,25 @@ function buildSuggestionConfig(
       props.command({ editor, range });
     },
     items: ({ query }) => {
-      const all = [pageCommand, ...commands, ...buildPluginTemplateCommands()];
+      // Event-from-task — defers to the host (MdEditor) which renders a
+      // proper picker dialog. Falls back to a no-op if the host didn't
+      // wire `insertEventRef` (older host = command quietly disabled).
+      // Important: delete the slash trigger *before* opening the dialog so
+      // ProseMirror's Suggestion plugin sees the query disappear and closes
+      // the floating palette — otherwise the dialog overlays it.
+      const eventCommand: CommandItem = {
+        title: 'Event',
+        description: 'Wstaw event (datę/czas) powiązany z zadaniem z PIM/Projects',
+        icon: <EventIcon color="primary" />,
+        command: ({ editor, range }) => {
+          const from = range.from;
+          editor.chain().focus().deleteRange(range).run();
+          // Pass a collapsed range pointing at the deletion site so the
+          // dialog inserts exactly where the `/event` trigger used to be.
+          insertEventRef?.current?.(editor, { from, to: from });
+        },
+      };
+      const all = [pageCommand, eventCommand, ...commands, ...buildPluginTemplateCommands()];
       return all.filter((item) =>
         item.title.toLowerCase().startsWith(query.toLowerCase())
       );
@@ -767,6 +792,7 @@ const SlashCommands = Extension.create<SlashCommandsOptions>({
     return {
       suggestion: buildSuggestionConfig(),
       createPageRef: undefined,
+      insertEventRef: undefined,
     };
   },
 
@@ -774,7 +800,7 @@ const SlashCommands = Extension.create<SlashCommandsOptions>({
     return [
       Suggestion({
         editor: this.editor,
-        ...buildSuggestionConfig(this.options.createPageRef),
+        ...buildSuggestionConfig(this.options.createPageRef, this.options.insertEventRef),
       }),
     ];
   },

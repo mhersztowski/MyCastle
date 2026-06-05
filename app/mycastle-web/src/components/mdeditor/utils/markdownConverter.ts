@@ -100,6 +100,64 @@ function restoreAutomateFlowsFromHtml(html: string, automateFlows: { id: string;
   return result;
 }
 
+// ─── EventBlock fence ────────────────────────────────────────────────────────
+// Pulls ```event …``` fences out of the markdown before showdown runs, then
+// re-injects them as <div data-type="event-block" data-…="…"> HTML so the
+// TipTap EventBlock node can parse them back into structured attrs.
+
+interface EventBlockEscaped {
+  eventName: string;
+  start: string;
+  end: string;
+  description: string;
+  taskId: string;
+  taskName: string;
+  projectName: string;
+}
+
+function escapeEventBlocksForHtml(content: string): { result: string; events: EventBlockEscaped[] } {
+  const events: EventBlockEscaped[] = [];
+  const result = content.replace(/```event\s*\n([\s\S]*?)```/g, (_, json: string) => {
+    let parsed: Partial<EventBlockEscaped> = {};
+    try { parsed = JSON.parse(json.trim()) as Partial<EventBlockEscaped>; }
+    catch { /* malformed JSON — store empty event so the placeholder still
+                 round-trips instead of bleeding into surrounding markdown. */ }
+    events.push({
+      eventName:   String(parsed.eventName   ?? ''),
+      start:       String(parsed.start       ?? ''),
+      end:         String(parsed.end         ?? ''),
+      description: String(parsed.description ?? ''),
+      taskId:      String(parsed.taskId      ?? ''),
+      taskName:    String(parsed.taskName    ?? ''),
+      projectName: String(parsed.projectName ?? ''),
+    });
+    return `%%EVENTBLOCK_${events.length - 1}%%`;
+  });
+  return { result, events };
+}
+
+function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): string {
+  let result = html;
+  events.forEach((ev, index) => {
+    const attrs: string[] = ['data-type="event-block"'];
+    const push = (key: string, val: string) => {
+      if (val) attrs.push(`${key}="${encodeURIComponent(val)}"`);
+    };
+    push('data-event-name',  ev.eventName);
+    push('data-start',       ev.start);
+    push('data-end',         ev.end);
+    push('data-description', ev.description);
+    push('data-task-id',     ev.taskId);
+    push('data-task-name',   ev.taskName);
+    push('data-project-name', ev.projectName);
+    const htmlTag = `<div ${attrs.join(' ')}></div>`;
+    const placeholder = `%%EVENTBLOCK_${index}%%`;
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    result = result.split(placeholder).join(htmlTag);
+  });
+  return result;
+}
+
 // Helper to restore automate script blocks after showdown conversion
 function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean }[]): string {
   let result = html;
@@ -830,6 +888,43 @@ turndownService.addRule('automateFlowEmbed', {
 
 // Automate script block rule - converts back to ```automate code fence
 // Format: ```automate, ```automate:blockId, ```automate::autorun, ```automate:blockId:autorun
+// Round-trip the EventBlock TipTap node back to a `event` code fence with
+// JSON attrs so the markdown file on disk stays the single source of truth.
+// Mirrors automateScriptBlock — handles both bare <div data-type="event-block">
+// and TipTap's NodeViewWrapper-wrapped form.
+turndownService.addRule('eventBlock', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    if (element.getAttribute && element.getAttribute('data-type') === 'event-block') return true;
+    if (element.getAttribute && element.getAttribute('data-node-view-wrapper') !== null) {
+      const inner = element.querySelector('[data-type="event-block"]');
+      if (inner) return true;
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    const source: HTMLElement = element.getAttribute('data-type') === 'event-block'
+      ? element
+      : (element.querySelector('[data-type="event-block"]') as HTMLElement | null) ?? element;
+    const dec = (name: string) => {
+      const raw = source.getAttribute(name);
+      if (!raw) return '';
+      try { return decodeURIComponent(raw); } catch { return raw; }
+    };
+    const attrs = {
+      eventName:   dec('data-event-name'),
+      start:       dec('data-start'),
+      end:         dec('data-end'),
+      description: dec('data-description'),
+      taskId:      dec('data-task-id'),
+      taskName:    dec('data-task-name'),
+      projectName: dec('data-project-name'),
+    };
+    return `\n\`\`\`event\n${JSON.stringify(attrs, null, 2)}\n\`\`\`\n`;
+  },
+});
+
 turndownService.addRule('automateScriptBlock', {
   filter: (node) => {
     const element = node as HTMLElement;
@@ -985,8 +1080,14 @@ export function markdownToHtml(markdown: string): string {
   const pluginScriptDataStr = escapePluginScriptsForHtml(markdownWithBlockIds);
   const { result: markdownWithoutPluginScripts, scripts: pluginScripts } = JSON.parse(pluginScriptDataStr);
 
+  // Protect event blocks (```event {…json…}``` code fences) from showdown
+  // — same pattern as automate scripts: replace with `%%EVENTBLOCK_N%%`
+  // marker, then re-emit as <div data-type="event-block" data-…> after html.
+  const { result: markdownWithoutEvents, events: eventBlocks } =
+    escapeEventBlocksForHtml(markdownWithoutPluginScripts);
+
   // Protect automate script blocks (code fences) from showdown processing
-  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithoutPluginScripts);
+  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithoutEvents);
   const { result: markdownWithoutScripts, automateScripts } = JSON.parse(automateScriptDataStr);
 
   // Protect automate flow embeds from showdown processing
@@ -1038,6 +1139,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore automate script blocks
   html = restoreAutomateScriptsFromHtml(html, automateScripts);
+
+  // Restore event blocks (insert <div data-type="event-block" data-…>)
+  html = restoreEventBlocksFromHtml(html, eventBlocks);
 
   // Restore plugin script blocks
   html = restorePluginScriptsFromHtml(html, pluginScripts);

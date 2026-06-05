@@ -32,6 +32,7 @@ import { GlobalTerminal } from './components/GlobalTerminal';
 import { GlobalVfs } from './components/GlobalVfs';
 import { GlobalDrive } from './components/GlobalDrive';
 import { GlobalMemory } from './components/GlobalMemory';
+import { GlobalEditor } from './components/GlobalEditor';
 import { MinimizedTaskbar } from './components/MinimizedTaskbar';
 import { PluginProvider } from './modules/web-plugins';
 import { DisplayProvider } from './components/DisplayContext';
@@ -91,6 +92,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                     <GlobalVfs />
                     <GlobalDrive />
                     <GlobalMemory />
+                    <GlobalEditor />
                     <MinimizedTaskbar />
                   </GlobalWindowsProvider>
                 </MinisDataSourceProvider>

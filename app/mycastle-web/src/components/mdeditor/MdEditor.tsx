@@ -28,6 +28,8 @@ import HighlightIcon from '@mui/icons-material/Highlight';
 
 import MdEditorToolbar from './MdEditorToolbar';
 import SlashCommands from './extensions/SlashCommands';
+import EventDialog from './EventDialog';
+import { EventBlock } from './extensions/EventBlockExtension';
 import { InlineMath, MathBlock } from './extensions/MathExtension';
 import { EditableImage } from './extensions/ImageExtension';
 import { AudioEmbed } from './extensions/AudioExtension';
@@ -77,6 +79,14 @@ const MdEditor: React.FC<MdEditorProps> = ({
   const isInitializedRef = useRef(false);
   const autoFocusRef = useRef(autoFocus);
   const onCreatePageRef = useRef(onCreatePage);
+  // `/event` slash command opens this dialog; the editor + range captured
+  // here let us drop the resulting markdown exactly where the slash was.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [eventDialog, setEventDialog] = useState<{ editor: any; range: any } | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insertEventRef = useRef<((editor: any, range: any) => void) | undefined>(
+    (editor, range) => setEventDialog({ editor, range }),
+  );
 
   // Block action menu — one button per block
   const [blockPositions, setBlockPositions] = useState<Array<{ el: HTMLElement; top: number; left: number }>>([]);
@@ -86,7 +96,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
   const [bubbleMenuAnchor, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
 
-  // Toolbar visibility for mobile
+  // Toolbar visibility — hidden while scrolling down (gains content space),
+  // shown again on scroll up or when the user reaches the top. Applies on
+  // every breakpoint, not just mobile. Starts visible on desktop, hidden on
+  // mobile (where screen height is the scarce resource).
   const [toolbarVisible, setToolbarVisible] = useState(!isMobile);
   const lastScrollTop = useRef(0);
 
@@ -151,7 +164,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
       TextAlign.configure({
         types: ['heading', 'paragraph', 'tableCell', 'tableHeader'],
       }),
-      SlashCommands.configure({ createPageRef: onCreatePageRef }),
+      SlashCommands.configure({ createPageRef: onCreatePageRef, insertEventRef }),
+      EventBlock,
       InlineMath,
       MathBlock,
       ComponentEmbed,
@@ -334,17 +348,53 @@ const MdEditor: React.FC<MdEditorProps> = ({
     };
   }, [editor, autoSaveDelay]);
 
-  // Update block positions on editor changes, scroll, and resize
+  // Update block positions on editor changes, scroll, resize, and ancestor
+  // layout shifts. Without all of these the floating ⋯ menu icons would
+  // sit at stale coords whenever:
+  //   - the global window holding the editor was resized (ResizeObserver)
+  //   - the page scrolled in a parent (capture-phase scroll)
+  //   - the window resized (window resize)
+  //   - the toolbar collapsed/expanded (handled separately below — sampled
+  //     during animation since CSS transition shifts the content gradually)
   useEffect(() => {
     if (!editor || !editable) return;
     updateBlockPositions();
     editor.on('update', updateBlockPositions);
     editor.on('transaction', updateBlockPositions);
+
+    const onWinResize = () => updateBlockPositions();
+    // capture:true so scrolls in ANY ancestor (split view, global window
+    // chrome, document body) re-measure too — getBoundingClientRect is
+    // viewport-relative, so any scroll movement changes our top.
+    const onAnyScroll = () => updateBlockPositions();
+    window.addEventListener('resize', onWinResize);
+    window.addEventListener('scroll', onAnyScroll, true);
+
+    let ro: ResizeObserver | null = null;
+    if (contentWrapperRef.current) {
+      ro = new ResizeObserver(updateBlockPositions);
+      ro.observe(contentWrapperRef.current);
+    }
+
     return () => {
       editor.off('update', updateBlockPositions);
       editor.off('transaction', updateBlockPositions);
+      window.removeEventListener('resize', onWinResize);
+      window.removeEventListener('scroll', onAnyScroll, true);
+      ro?.disconnect();
     };
   }, [editor, editable, updateBlockPositions]);
+
+  // Toolbar Collapse animates with a 200ms transition — content slides
+  // gradually. Sample the block positions several times along the way
+  // so the ⋯ icons follow the moving content instead of jumping at the
+  // end (or, worse, sitting at their pre-animation coords).
+  useEffect(() => {
+    if (!editor || !editable) return;
+    updateBlockPositions();
+    const ticks = [40, 100, 160, 220].map(d => setTimeout(updateBlockPositions, d));
+    return () => ticks.forEach(clearTimeout);
+  }, [toolbarVisible, editor, editable, updateBlockPositions]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -573,15 +623,21 @@ const MdEditor: React.FC<MdEditorProps> = ({
   }, []);
 
 
-  // Handle scroll to auto-hide toolbar on mobile
+  // Smart auto-hide on scroll — covers every breakpoint, not just mobile.
+  // Going down past ~10px reclaims toolbar space for content; reverting
+  // direction or hitting the top brings it back. Threshold of 10px filters
+  // out the jitter you get from inertial scroll / trackpad flicks.
   const handleScroll = useCallback(() => {
-    if (!isMobile || !contentWrapperRef.current) return;
+    if (!contentWrapperRef.current) return;
 
     const scrollTop = contentWrapperRef.current.scrollTop;
     const scrollDelta = scrollTop - lastScrollTop.current;
 
-    // Hide toolbar when scrolling down, show when scrolling up
-    if (scrollDelta > 10 && toolbarVisible) {
+    if (scrollTop <= 4) {
+      // Always show the toolbar near the top — feels weird to have it
+      // missing when the doc isn't actually scrolled.
+      if (!toolbarVisible) setToolbarVisible(true);
+    } else if (scrollDelta > 10 && toolbarVisible) {
       setToolbarVisible(false);
     } else if (scrollDelta < -10 && !toolbarVisible) {
       setToolbarVisible(true);
@@ -589,7 +645,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
     lastScrollTop.current = scrollTop;
     updateBlockPositions();
-  }, [isMobile, toolbarVisible, updateBlockPositions]);
+  }, [toolbarVisible, updateBlockPositions]);
 
   // Update toolbar visibility when switching between mobile/desktop
   useEffect(() => {
@@ -869,6 +925,30 @@ const MdEditor: React.FC<MdEditorProps> = ({
         ))}
       </>,
       document.body,
+    )}
+
+    {/* Event-from-task dialog — opened by the `/event` slash command.
+        Inserts the resulting markdown blockquote at the captured range,
+        replacing the slash trigger. */}
+    {eventDialog && (
+      <EventDialog
+        open
+        onClose={() => setEventDialog(null)}
+        onInsert={({ attrs }) => {
+          // Insert the structured EventBlock node — renders as a card via
+          // ReactNodeViewRenderer, persists to markdown through the
+          // converter's escapeEvents/restoreEvents pair so the JSON attrs
+          // round-trip on save/load without lossy text serialisation.
+          eventDialog.editor
+            .chain()
+            .focus()
+            .insertContentAt(eventDialog.range.from, {
+              type: 'eventBlock',
+              attrs,
+            })
+            .run();
+        }}
+      />
     )}
     </>
   );

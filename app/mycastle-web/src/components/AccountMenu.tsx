@@ -8,9 +8,9 @@ import {
   ChevronRight as ChevronRightIcon,
   DataObject as DataObjectIcon,
   DeleteSweep as DeleteSweepIcon,
+  Code as EditorIcon,
   Description as DescriptionIcon,
   DriveFolderUpload as DriveIcon,
-  Folder as FolderIcon,
   FileDownload as FileDownloadIcon,
   FileUpload as FileUploadIcon,
   Logout as LogoutIcon,
@@ -19,7 +19,6 @@ import {
   Schema as SchemaIcon,
   Sensors as MqttIcon,
   SwapHoriz as SwapHorizIcon,
-  Terminal as TerminalIcon,
   Tune as TuneIcon,
   Visibility as VisibilityIcon,
   WebAsset as WebAssetIcon,
@@ -182,18 +181,10 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
           <ListItemIcon><MemoryIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Memory</ListItemText>
         </MenuItem>
-        {isAdmin && (
-          <MenuItem onClick={() => { closeAll(); toggle('terminal'); }}>
-            <ListItemIcon><TerminalIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Terminal</ListItemText>
-          </MenuItem>
-        )}
-        {isAdmin && (
-          <MenuItem onClick={() => { closeAll(); toggle('vfs'); }}>
-            <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>VFS Explorer</ListItemText>
-          </MenuItem>
-        )}
+        <MenuItem onClick={() => { closeAll(); toggle('editor'); }}>
+          <ListItemIcon><EditorIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>Editor</ListItemText>
+        </MenuItem>
       </Menu>
 
       {/* Display submenu */}

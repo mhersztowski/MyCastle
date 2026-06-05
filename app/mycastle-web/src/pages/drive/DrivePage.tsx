@@ -13,8 +13,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
+import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
-  Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Dialog, DialogActions,
+  Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, IconButton, LinearProgress, Link, ListItemIcon,
   ListItemText, Menu, MenuItem, Paper, Snackbar, Stack, Table, TableBody,
   TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
@@ -45,6 +46,10 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import TodayIcon from '@mui/icons-material/Today';
@@ -402,6 +407,18 @@ export default function DrivePage(): React.JSX.Element {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Favorites — per-user list of file paths (relative to /drive/). Stored
+  // in VFS as `drive/.favorites.json` so it syncs across devices. The
+  // collapse state is per-device though, so it lives in localStorage —
+  // someone might want favorites hidden on phone but visible on desktop.
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [favLoaded, setFavLoaded] = useState(false);
+  const [favoritesOpen, setFavoritesOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('drive_favs_open') !== '0'; }
+    catch { return true; }
+  });
+  const FAV_PATH = 'drive/.favorites.json';
+
   // Preview-navigation derived state — only file entries (directories are
   // navigated by double-click into them, not previewed).
   const fileEntries = useMemo(() => entries.filter((e) => e.type === FILE_TYPE), [entries]);
@@ -444,6 +461,98 @@ export default function DrivePage(): React.JSX.Element {
   }, [userName, cwd, toast]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // Load favorites on mount — fire-and-forget. 404 just means no favorites
+  // yet (fresh user), so we silently fall back to an empty set.
+  useEffect(() => {
+    if (!userName || favLoaded) return;
+    let cancelled = false;
+    readUserJson<{ favorites?: string[] }>(userName, FAV_PATH)
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.favorites && Array.isArray(data.favorites)) {
+          setFavorites(new Set(data.favorites.filter(p => typeof p === 'string')));
+        }
+      })
+      .catch((err) => console.warn('[Drive] favorites load failed:', err))
+      .finally(() => { if (!cancelled) setFavLoaded(true); });
+    return () => { cancelled = true; };
+  }, [userName, favLoaded]);
+
+  // Persist favorites — debounced 300ms so rapid toggle (e.g. star-spam)
+  // doesn't trigger one VFS POST per click. Only runs after initial load
+  // (favLoaded) to avoid overwriting on-disk data with empty set on mount.
+  useEffect(() => {
+    if (!favLoaded || !userName) return;
+    const t = setTimeout(() => {
+      writeUserJson(userName, FAV_PATH, { favorites: Array.from(favorites).sort() })
+        .catch((err) => console.warn('[Drive] favorites save failed:', err));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [favorites, favLoaded, userName]);
+
+  // Persist collapsed state per-device.
+  useEffect(() => {
+    try { localStorage.setItem('drive_favs_open', favoritesOpen ? '1' : '0'); } catch { /* private mode */ }
+  }, [favoritesOpen]);
+
+  const isFavorite = useCallback((rel: string) => favorites.has(rel), [favorites]);
+
+  const toggleFavorite = useCallback((entry: VfsEntry) => {
+    const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(rel)) {
+        next.delete(rel);
+        toast(`Usunięto z ulubionych: ${entry.name}`, 'info');
+      } else {
+        next.add(rel);
+        toast(`Dodano do ulubionych: ${entry.name}`);
+      }
+      return next;
+    });
+  }, [cwd, toast]);
+
+  // Forward-declared ref for opening files in MdEditor — set below once
+  // `openInMdEditor` is in scope. Avoids the TDZ cycle that would otherwise
+  // happen because `goToFavorite` is wired into render before openInMdEditor
+  // is declared.
+  const openInMdEditorRef = useRef<(entry: VfsEntry, relOverride?: string) => Promise<void>>(
+    async () => {},
+  );
+
+  // Navigate to a favorite — splits the saved path into folder + filename,
+  // sets cwd to the folder, then opens the file (MdEditor for .md/.txt,
+  // preview for everything else). Skips already-deleted favorites with
+  // a friendly toast instead of a hard error.
+  const goToFavorite = useCallback(async (rel: string) => {
+    const lastSlash = rel.lastIndexOf('/');
+    const folder = lastSlash >= 0 ? rel.slice(0, lastSlash) : '';
+    const fileName = lastSlash >= 0 ? rel.slice(lastSlash + 1) : rel;
+    const exists = await vfsStat(userName, rel);
+    if (!exists) {
+      toast(`Ulubiony plik już nie istnieje: ${rel} — usuń z listy`, 'error');
+      return;
+    }
+    setCwd(folder);
+    const entry: VfsEntry = { name: fileName, type: FILE_TYPE };
+    if (isMdEditable(fileName)) {
+      await openInMdEditorRef.current(entry, rel);
+    } else {
+      // Inline read → setViewing (same as double-click on a file row).
+      try {
+        const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+        if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+        const json = await r.json() as { data?: string };
+        const mime = guessMime(fileName);
+        const data = json.data ?? '';
+        const textContent = isTextMime(mime) ? base64ToText(data) : undefined;
+        setViewing({ entry, mime, dataB64: data, textContent });
+      } catch (err) {
+        toast((err as Error).message, 'error');
+      }
+    }
+  }, [userName, toast]);
 
   // When the right panel closes (file deselected, MdEditor closed) drop the
   // fullscreen toggle — otherwise next time it opens it stays expanded with
@@ -659,6 +768,12 @@ export default function DrivePage(): React.JSX.Element {
       toast((err as Error).message, 'error');
     }
   }, [userName, cwd, isWide, toast]);
+
+  // Wire the forward-declared ref now that openInMdEditor exists — goToFavorite
+  // (declared earlier) calls through the ref to bypass TDZ ordering.
+  useEffect(() => {
+    openInMdEditorRef.current = openInMdEditor;
+  }, [openInMdEditor]);
 
   // Auto-save callback from MdEditor. Fires on debounce (2s) and on the
   // toolbar's manual save button. Idempotent — writes the whole document each time.
@@ -1215,6 +1330,63 @@ export default function DrivePage(): React.JSX.Element {
         </Dialog>
       )}
 
+      {/* Favorites — compact card above the file list. Rendered only when
+          there's at least one favorite; collapsing-when-empty would make the
+          UI flicker as the user un-stars the last item. */}
+      {favorites.size > 0 && (
+        <Paper variant="outlined" sx={{ mb: 1, p: 1 }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1}
+            sx={{ cursor: 'pointer', userSelect: 'none' }}
+            onClick={() => setFavoritesOpen((v) => !v)}
+          >
+            <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Ulubione ({favorites.size})
+            </Typography>
+            <Box sx={{ flex: 1 }} />
+            <IconButton size="small" sx={{ p: 0.25 }}>
+              {favoritesOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            </IconButton>
+          </Stack>
+          <Collapse in={favoritesOpen} unmountOnExit>
+            <Stack
+              direction="row"
+              flexWrap="wrap"
+              useFlexGap
+              spacing={0.75}
+              sx={{ mt: 1 }}
+            >
+              {Array.from(favorites).sort().map((rel) => {
+                const lastSlash = rel.lastIndexOf('/');
+                const fileName = lastSlash >= 0 ? rel.slice(lastSlash + 1) : rel;
+                const folder = lastSlash >= 0 ? rel.slice(0, lastSlash) : '';
+                return (
+                  <Chip
+                    key={rel}
+                    size="small"
+                    icon={<InsertDriveFileIcon fontSize="small" />}
+                    label={fileName}
+                    title={folder ? `${folder}/${fileName}` : fileName}
+                    onClick={() => { void goToFavorite(rel); }}
+                    onDelete={() => {
+                      setFavorites((prev) => {
+                        const next = new Set(prev);
+                        next.delete(rel);
+                        return next;
+                      });
+                    }}
+                    sx={{ maxWidth: 260 }}
+                  />
+                );
+              })}
+            </Stack>
+          </Collapse>
+        </Paper>
+      )}
+
       {/* File list with drag-and-drop overlay */}
       <Paper
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -1272,6 +1444,22 @@ export default function DrivePage(): React.JSX.Element {
                     </TableCell>
                     <TableCell onClick={() => e.type === DIR_TYPE && onOpen(e)}>
                       <Stack direction="row" spacing={1} alignItems="center">
+                        {/* Star toggle only for files — folders aren't favoritable for now
+                            (would complicate "open" semantics). stopPropagation so the
+                            click doesn't bubble up to the row's open-on-click handler. */}
+                        {e.type === FILE_TYPE && (
+                          <Tooltip title={isFavorite(rel) ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}>
+                            <IconButton
+                              size="small"
+                              sx={{ p: 0.25 }}
+                              onClick={(ev) => { ev.stopPropagation(); toggleFavorite(e); }}
+                            >
+                              {isFavorite(rel)
+                                ? <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
+                                : <StarBorderIcon fontSize="small" sx={{ color: 'text.disabled' }} />}
+                            </IconButton>
+                          </Tooltip>
+                        )}
                         <span>{e.name}</span>
                         {pub && <Tooltip title="Publiczny — dostępny przez HTTP bez logowania"><PublicIcon fontSize="small" color="success" /></Tooltip>}
                       </Stack>
@@ -1427,6 +1615,20 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText>Podgląd</ListItemText>
           </MenuItem>
         )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && (() => {
+          const rel = cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name;
+          const isFav = isFavorite(rel);
+          return (
+            <MenuItem onClick={() => { toggleFavorite(menuFor.entry); setMenuFor(null); }}>
+              <ListItemIcon>
+                {isFav
+                  ? <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
+                  : <StarBorderIcon fontSize="small" />}
+              </ListItemIcon>
+              <ListItemText>{isFav ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}</ListItemText>
+            </MenuItem>
+          );
+        })()}
         {menuFor && menuFor.entry.type === FILE_TYPE && isMdEditable(menuFor.entry.name) && (
           <MenuItem onClick={() => { openInMdEditor(menuFor.entry); setMenuFor(null); }}>
             <ListItemIcon><EditNoteIcon fontSize="small" /></ListItemIcon>
