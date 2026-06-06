@@ -53,6 +53,7 @@ COPY packages/texteditor/ packages/texteditor/
 COPY packages/web-client/ packages/web-client/
 COPY app/mycastle-backend/ app/mycastle-backend/
 COPY app/mycastle-web/ app/mycastle-web/
+COPY docs/ docs/
 RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
