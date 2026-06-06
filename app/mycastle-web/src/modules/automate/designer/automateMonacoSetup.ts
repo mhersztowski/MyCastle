@@ -631,27 +631,162 @@ declare const input: Record<string, any>;
 declare const variables: Record<string, any>;
 `;
 
-let registered = false;
-
-/** Rejestruje typy API w Monaco (wywoływane raz w beforeMount) */
-export function setupAutomateMonaco(monaco: Monaco): void {
-  if (registered) return;
-  registered = true;
-
-  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-    noSemanticValidation: false,
-    noSyntaxValidation: false,
-  });
-
-  monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
-    target: monaco.languages.typescript.ScriptTarget.ESNext,
-    allowNonTsExtensions: true,
-    allowJs: true,
-    checkJs: false,
-  });
-
-  monaco.languages.typescript.javascriptDefaults.addExtraLib(
-    AUTOMATE_API_TYPES,
-    'automate-api.d.ts',
-  );
+/**
+ * Register a `.d.ts` ambient declaration with Monaco's TypeScript service.
+ *
+ * Uses `monaco.editor.createModel()` instead of `setExtraLibs`/`addExtraLib`
+ * — same pattern as `TypeScriptIntelliSensePlugin` from packages/texteditor.
+ *
+ * The reason is critical for completions to actually work:
+ *
+ *   - `setExtraLibs` (and `addExtraLib` in some Monaco builds) RESTART the
+ *     TypeScript web worker on every call. Each restart leaves the worker
+ *     spinning up — busy reading typelibs and initialising. While that's in
+ *     progress, completion queries time out silently and the user sees no
+ *     IntelliSense. Repeated calls (e.g. on every Monaco dialog open) keep
+ *     the worker perpetually catching up and IntelliSense never settles.
+ *
+ *   - `monaco.editor.createModel()` registers the file *incrementally* via
+ *     the existing model-sync channel. No worker restart. The TypeScript
+ *     service's module resolver also probes `monaco.editor.getModel(uri)`
+ *     during file lookup, so a model at e.g. `file:///automate-api.d.ts`
+ *     is exactly what TS picks up as an ambient global file.
+ *
+ * Idempotent: identical content is a no-op; changed content does an
+ * in-place `setValue()` instead of replacing the model.
+ */
+function registerDtsModel(monaco: Monaco, uri: string, content: string): void {
+  const u = monaco.Uri.parse(uri);
+  const existing = monaco.editor.getModel(u);
+  if (existing) {
+    if (existing.getValue() !== content) {
+      existing.setValue(content);
+    }
+    return;
+  }
+  // Language MUST be 'typescript' — JS worker doesn't honour ambient `.d.ts`
+  // declarations the same way (Monaco's JS service is a thin wrapper around
+  // the TS service and global ambients are only resolved through the latter's
+  // model graph).
+  monaco.editor.createModel(content, 'typescript', u);
 }
+
+/**
+ * Register multiple `.d.ts` files at once. Kept under the historic
+ * `mergeExtraLibs` name so call sites don't have to change, but the body is
+ * the new createModel-based path described above.
+ *
+ * @param monaco   Monaco namespace from `@monaco-editor/react beforeMount`
+ * @param newLibs  Libraries to register (filePath → content)
+ */
+function mergeExtraLibs(monaco: Monaco, newLibs: Map<string, string>): void {
+  // Diagnostic — surfaces the active compiler options so we can verify
+  // monacoWorkers.ts actually ran (it sets target=ES2020, allowJs, etc.).
+  // Without those defaults, the TS service often falls back to ES3-ish
+  // behaviour where completions silently no-op for modern code.
+  try {
+    const jsDefaults = monaco.languages.typescript.javascriptDefaults;
+    const tsDefaults = monaco.languages.typescript.typescriptDefaults;
+    // eslint-disable-next-line no-console
+    console.log('[AutomateMonaco] compiler options — js:', jsDefaults.getCompilerOptions(),
+      '| ts:', tsDefaults.getCompilerOptions());
+  } catch (err) {
+    console.warn('[AutomateMonaco] compiler options probe failed:', err);
+  }
+
+  for (const [filePath, content] of newLibs) {
+    registerDtsModel(monaco, filePath, content);
+    // eslint-disable-next-line no-console
+    console.log(`[AutomateMonaco] createModel: ${filePath} (${content.length} bytes)`);
+  }
+}
+
+/**
+ * Register Automate API types in Monaco. Idempotent — safe to call from every
+ * `beforeMount`; the underlying merge sees identical state and is cheap.
+ *
+ * Importantly this DOES NOT call `setCompilerOptions` or `setDiagnosticsOptions`
+ * any more. monacoWorkers.ts already configures both `javascriptDefaults` and
+ * `typescriptDefaults` with the full ES2020/NodeJs/allowJs/esModuleInterop
+ * setup and turns on every mode feature (completionItems, hovers, signatureHelp,
+ * …). Overwriting from here would strip those fields back to the minimal
+ * `{target, allowNonTsExtensions, allowJs, checkJs}` set the previous code
+ * wrote — which is exactly what was killing IntelliSense (the TS worker came
+ * up without `moduleResolution`, completion provider couldn't initialise).
+ *
+ * If for some reason `monacoWorkers.ts` hasn't run yet (e.g. someone reuses
+ * this in a page without that import), we defensively re-apply the mode
+ * configuration so completions are always on.
+ */
+/**
+ * Apply the common Monaco defaults that every in-Markdown script editor
+ * (Automate Script, Plugin Script) needs:
+ *   - Full mode configuration (completions, hovers, signature help, …) on
+ *     both JS and TS defaults — defensive in case nothing else set them.
+ *   - A tuned `diagnosticCodesToIgnore` list so we get genuine errors
+ *     (typos in `api.*` etc.) but not TS-strict squiggles that fire on
+ *     perfectly valid JS bodies (Cannot find name 'foo', implicit any, …).
+ *
+ * Exported so PluginScriptExtension can reuse the exact same setup without
+ * having to duplicate the list of ignored diagnostic codes.
+ */
+export function applyScriptDefaults(monaco: Monaco): void {
+  const fullModeCfg = {
+    completionItems: true,
+    hovers: true,
+    documentSymbols: true,
+    definitions: true,
+    references: true,
+    documentHighlights: true,
+    rename: true,
+    diagnostics: true,
+    onTypeFormattingEdits: true,
+    signatureHelp: true,
+    codeActions: true,
+    inlayHints: true,
+  };
+  try {
+    monaco.languages.typescript.javascriptDefaults.setModeConfiguration(fullModeCfg);
+    monaco.languages.typescript.typescriptDefaults.setModeConfiguration(fullModeCfg);
+  } catch (err) {
+    console.warn('[ScriptMonaco] setModeConfiguration failed:', err);
+  }
+
+  // The script editor uses `defaultLanguage="typescript"` so ambient `.d.ts`
+  // declarations are visible. The script body is plain JS though, so we
+  // silently ignore the most common TS-only errors that would otherwise
+  // squiggle perfectly valid code:
+  //   2304 — Cannot find name (user-defined globals not in our .d.ts)
+  //   2552 — Cannot find name. Did you mean…
+  //   7006 — Parameter implicitly has 'any' type
+  //   7044 — Parameter implicitly has 'any' type from usage
+  //   2580 — Cannot find name 'require'
+  //   1108 — A 'return' statement can only be used within a function body
+  //   1378 — Top-level 'await' (we don't actually use it but Monaco's strict
+  //          target check trips here when the script is short)
+  // We keep semantic+syntax validation ON for everything else so genuine bugs
+  // (typos in `api.*` / `auth.*` etc.) still get flagged.
+  try {
+    monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [2304, 2552, 7006, 7044, 2580, 1108, 1378],
+    });
+  } catch (err) {
+    console.warn('[ScriptMonaco] setDiagnosticsOptions failed:', err);
+  }
+}
+
+export function setupAutomateMonaco(monaco: Monaco): void {
+  applyScriptDefaults(monaco);
+
+  // file:// prefix is the conventional virtual URI for Monaco extra libs —
+  // matches what TypeScriptIntelliSensePlugin uses, so the TS worker treats
+  // them identically.
+  mergeExtraLibs(monaco, new Map([
+    ['file:///automate-api.d.ts', AUTOMATE_API_TYPES],
+  ]));
+}
+
+/** Allow other setups (e.g. PluginScriptExtension) to share the merge logic. */
+export { mergeExtraLibs };

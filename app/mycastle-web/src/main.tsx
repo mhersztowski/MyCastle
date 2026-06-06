@@ -1,20 +1,14 @@
+// MUST be first — wires our bundled Monaco into @monaco-editor/loader before
+// ANY other module in the import tree has a chance to call loader.init() and
+// fall through to the CDN. See `monacoEarlyConfig.ts` for the full reasoning.
+// This single import replaces what used to live inline in main.tsx (the
+// `loader.config({ monaco })` + `loader.init()` calls); putting them in their
+// own module is what gives them an early enough evaluation slot.
+import './monacoEarlyConfig';
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-// Configure @monaco-editor/react to use the bundled Monaco instead of loading from CDN.
-// Without this, @monaco-editor/react fetches Monaco 0.55.x from cdn.jsdelivr.net, which:
-//  - Creates a second Monaco runtime alongside our bundled 0.52.x
-//  - Overwrites window.MonacoEnvironment with CDN worker URLs
-//  - Causes the bundled JSON worker to never receive languageSettings → "Cannot read
-//    properties of undefined (reading 'schemas')" crash in json.worker.js
-import { loader } from '@monaco-editor/react';
-import * as monacoEditor from 'monaco-editor';
-loader.config({ monaco: monacoEditor });
-// Force early initialization so isInitialized=true is set with OUR Monaco before any
-// component's useEffect can race and trigger CDN loading (loader.init() marks the loader
-// as initialized on first call; subsequent calls from Editor components just resolve the
-// already-resolved wrapperPromise instead of falling through to CDN script injection).
-void loader.init();
 import { App } from './App';
 import AppRoot from './AppRoot';
 import { MqttProvider } from './modules/mqttclient/MqttContext';

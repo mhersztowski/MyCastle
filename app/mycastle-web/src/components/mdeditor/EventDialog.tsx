@@ -53,10 +53,17 @@ export interface EventDialogResult {
 export interface EventDialogProps {
   open: boolean;
   onClose: () => void;
-  /** Called once per inserted event — also fires once per item when bulk
-   *  inserting from a template, so the host can append each as a separate
-   *  EventBlock node. */
+  /** Called once per inserted event. In single-event mode this fires exactly
+   *  once; in template mode it falls back to firing N times only when no
+   *  `onInsertMany` is provided. */
   onInsert: (result: EventDialogResult) => void;
+  /** Optional batch insert — when provided, template-mode bulk uses this in
+   *  place of looping `onInsert`. Necessary because consecutive `insertContent`
+   *  calls into an atom-node-typed editor (TipTap with EventBlock atom) can
+   *  leave the cursor *on* the just-inserted node; the next call then replaces
+   *  rather than appends, swallowing all but the first event. Inserting all
+   *  nodes in a single `chain()` sidesteps the issue. */
+  onInsertMany?: (results: EventDialogResult[]) => void;
   /** Pre-fill form fields — used when editing an existing EventBlock. */
   initial?: Partial<EventBlockAttrs>;
   /** Current document path (e.g. `Calendar/2026/06/05.md`). Used to derive
@@ -83,7 +90,7 @@ function defaultStart(): string {
 }
 
 const EventDialog: React.FC<EventDialogProps> = ({
-  open, onClose, onInsert, initial, filePath,
+  open, onClose, onInsert, onInsertMany, initial, filePath,
 }) => {
   const { tasks, projectName } = useTaskOptions(open);
   const { currentUser } = useAuth();
@@ -223,7 +230,10 @@ const EventDialog: React.FC<EventDialogProps> = ({
    *  result is a vertical stack of cards in the document. */
   const handleInsertTemplate = () => {
     if (!selectedTemplate || resolvedEvents.length === 0) return;
-    for (const ev of resolvedEvents) {
+    // Build all results first, then dispatch in one shot — atomicity matters
+    // when the host uses onInsertMany (single TipTap chain) so all blocks
+    // share one transaction and end up as siblings in the doc.
+    const results: EventDialogResult[] = resolvedEvents.map((ev) => {
       const attrs: EventBlockAttrs = {
         eventName: ev.name,
         start: ev.start,
@@ -245,7 +255,15 @@ const EventDialog: React.FC<EventDialogProps> = ({
         for (const ln of ev.description.trim().split('\n')) lines.push(`> ${ln}`);
       }
       const markdown = lines.join('\n') + '\n\n';
-      onInsert({ markdown, attrs });
+      return { markdown, attrs };
+    });
+    if (onInsertMany) {
+      onInsertMany(results);
+    } else {
+      // Legacy fallback — hosts that don't pass onInsertMany take the loop.
+      // Documented to have the "only first block inserted" failure mode for
+      // atom-node hosts, but kept for backward compat with non-atom hosts.
+      for (const r of results) onInsert(r);
     }
     onClose();
   };

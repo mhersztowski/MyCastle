@@ -50,17 +50,22 @@ function escapeComponentEmbedsForHtml(content: string): string {
 // Helper to escape automate script blocks (```automate code fences) to protect from showdown
 // Format: ```automate, ```automate:blockId, ```automate::autorun, ```automate:blockId:autorun
 function escapeAutomateScriptsForHtml(content: string): string {
-  const automateScripts: { code: string; blockId: string; autorun: boolean }[] = [];
+  // viewMode added so a block saved as 'html' (renders return value as HTML)
+  // survives the markdown round-trip. Persisted as an extra `:html` segment
+  // in the fence params alongside the existing `:autorun` flag.
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html' }[] = [];
 
-  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun code fences
+  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html code fences
   const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
     const parts = (params?.trim() || '').split(':');
     const blockId = parts[0] || '';
     const autorun = parts.includes('autorun');
+    const viewMode: 'code' | 'html' = parts.includes('html') ? 'html' : 'code';
     automateScripts.push({
       code: code.trimEnd(),
       blockId,
       autorun,
+      viewMode,
     });
     return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
   });
@@ -159,13 +164,14 @@ function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): 
 }
 
 // Helper to restore automate script blocks after showdown conversion
-function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean }[]): string {
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html' }[]): string {
   let result = html;
 
   automateScripts.forEach((script, index) => {
     const blockIdAttr = script.blockId ? ` data-block-id="${script.blockId}"` : '';
     const autorunAttr = ` data-autorun="${script.autorun ? 'true' : 'false'}"`;
-    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    const viewModeAttr = ` data-view-mode="${script.viewMode === 'html' ? 'html' : 'code'}"`;
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
     const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -940,6 +946,7 @@ turndownService.addRule('automateScriptBlock', {
     let code = '';
     let blockId = '';
     let autorun = element.getAttribute('data-autorun') === 'true';
+    let viewMode = element.getAttribute('data-view-mode') === 'html' ? 'html' : 'code';
 
     const encodedCode = element.getAttribute('data-code');
     if (encodedCode) {
@@ -954,17 +961,21 @@ turndownService.addRule('automateScriptBlock', {
         code = innerCode ? decodeURIComponent(innerCode) : '';
         blockId = inner.getAttribute('data-block-id') || '';
         autorun = inner.getAttribute('data-autorun') === 'true';
+        viewMode = inner.getAttribute('data-view-mode') === 'html' ? 'html' : 'code';
       }
     }
 
-    // Build lang tag: automate, automate:blockId, automate::autorun, automate:blockId:autorun
-    let langTag = 'automate';
-    if (blockId) {
-      langTag = `automate:${blockId}`;
-    }
-    if (autorun) {
-      langTag = blockId ? `automate:${blockId}:autorun` : 'automate::autorun';
-    }
+    // Build lang tag — collect optional flags into an array and join. Order
+    // is stable so a script saved as `automate:id:autorun:html` parses back
+    // identically (the parser uses `parts.includes(flag)` so order is in
+    // fact irrelevant, but stability keeps diffs clean).
+    const parts: string[] = ['automate'];
+    parts.push(blockId);            // may be empty — becomes `automate::…`
+    if (autorun) parts.push('autorun');
+    if (viewMode === 'html') parts.push('html');
+    // Trim trailing empties so `automate::` (no flags, no id) stays plain `automate`.
+    while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+    const langTag = parts.join(':');
 
     return `\n\`\`\`${langTag}\n${code}\n\`\`\`\n`;
   },

@@ -10,7 +10,7 @@
  * (`/api/users/{u}/vfs/*`). No new backend endpoints needed.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
 import { readUserJson, writeUserJson } from '../../services/userJson';
@@ -21,6 +21,21 @@ import {
   TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
 } from '@mui/material';
 import { MdEditor } from '@/components/mdeditor';
+import Editor from '@monaco-editor/react';
+import type { editor as MonacoEditorTypes } from 'monaco-editor';
+// Side-effect: ensures Monaco workers + compiler options + completionItems
+// configuration is in place BEFORE any <Editor> in this page mounts.
+// MdEditor pulls it in transitively too, but the in-page text editor is
+// reachable on Drive even without MdEditor on screen (preview a .json file),
+// so we make the dependency explicit here.
+import '../../modules/editor/monacoWorkers';
+import { setupDriveEditorMonaco } from './driveMonacoSetup';
+
+// Lazy: the include-file picker is borrowed wholesale from the Automate
+// Script editor — same `drive/mdscript` + `drive/treejs` roots, same tree
+// UI, same content-into-cursor flow. We only fetch its chunk when the user
+// actually clicks the attach icon.
+const AutomateIncludeFileDialog = React.lazy(() => import('../../components/mdeditor/extensions/AutomateIncludeFileDialog'));
 import CloseIcon from '@mui/icons-material/Close';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -52,6 +67,9 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import SaveIcon from '@mui/icons-material/Save';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import CodeIcon from '@mui/icons-material/Code';
 import TodayIcon from '@mui/icons-material/Today';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
@@ -216,6 +234,59 @@ const isPdfMime = (m: string) => m === 'application/pdf';
 const isAudioMime = (m: string) => m.startsWith('audio/');
 const isVideoMime = (m: string) => m.startsWith('video/');
 
+/**
+ * Map a filename to a Monaco language id. Covers the common config / source
+ * formats we want syntax-highlighted in the right panel; falls back to
+ * 'plaintext' for unknown extensions (so the editor still works — just no
+ * highlighting). MdEditor handles `.md` so we never route those here.
+ */
+function fileToMonacoLanguage(name: string): string {
+  const ext = (name.toLowerCase().split('.').pop() ?? '');
+  const map: Record<string, string> = {
+    json: 'json', jsonc: 'json', json5: 'json', map: 'json',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+    py: 'python', pyi: 'python',
+    md: 'markdown', markdown: 'markdown',
+    xml: 'xml', svg: 'xml', xsd: 'xml', xsl: 'xml',
+    html: 'html', htm: 'html',
+    css: 'css', scss: 'scss', less: 'less',
+    yaml: 'yaml', yml: 'yaml',
+    sh: 'shell', bash: 'shell', zsh: 'shell',
+    sql: 'sql',
+    c: 'c', h: 'c',
+    cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp', hxx: 'cpp',
+    java: 'java', kt: 'kotlin',
+    rs: 'rust', go: 'go', rb: 'ruby', php: 'php',
+    cs: 'csharp', fs: 'fsharp',
+    swift: 'swift', dart: 'dart',
+    lua: 'lua', r: 'r',
+    pl: 'perl',
+    ini: 'ini', cfg: 'ini', toml: 'ini', env: 'ini', conf: 'ini',
+    dockerfile: 'dockerfile',
+    gitignore: 'plaintext', gitattributes: 'plaintext',
+  };
+  return map[ext] ?? 'plaintext';
+}
+
+/**
+ * Anything that benefits from a real code editor (syntax highlight, brackets,
+ * indent) versus the static `<pre>` viewer. Includes the obvious text/JSON/XML
+ * MIME types (so the existing detection still wins) plus a long list of
+ * source-code extensions whose MIME the backend often reports as
+ * application/octet-stream.
+ */
+function isEditableTextFile(name: string, mime: string): boolean {
+  if (isTextMime(mime)) return true;
+  // MdEditor handles markdown — we don't want to route .md to Monaco.
+  if (isMdEditable(name)) return false;
+  const ext = (name.toLowerCase().split('.').pop() ?? '');
+  // Same set of recognised extensions we'd highlight, minus the markdown
+  // variants. Kept inline rather than via a Set so the literal stays a
+  // single grep target.
+  return /^(json|jsonc|json5|map|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyi|xml|svg|xsd|xsl|html|htm|css|scss|less|yaml|yml|sh|bash|zsh|sql|c|h|cpp|cc|cxx|hpp|hh|hxx|java|kt|rs|go|rb|php|cs|fs|swift|dart|lua|r|pl|ini|cfg|toml|env|conf|dockerfile|gitignore|gitattributes)$/.test(ext);
+}
+
 function base64ToText(b64: string): string {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -374,8 +445,19 @@ export default function DrivePage(): React.JSX.Element {
   // Clipboard for cut/copy/paste. `mode` decides whether paste moves (cut) or duplicates (copy).
   const [clipboard, setClipboard] = useState<{ entry: VfsEntry; sourceDir: string; mode: 'copy' | 'cut' } | null>(null);
   // View dialog state. textContent is set only when the MIME maps to a text-like format
-  // (so the dialog can render <pre> with selectable, copyable contents).
+  // OR the filename matches a recognised code-file extension — the Monaco editor
+  // in the right panel uses textContent as its initial value.
   const [viewing, setViewing] = useState<{ entry: VfsEntry; mime: string; dataB64: string; textContent?: string } | null>(null);
+  // Monaco-edited text state. Tracks the buffer (so dirty/save logic works
+  // without polling the editor), the dirty flag, and the in-flight save.
+  const [editedText, setEditedText] = useState<string | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const monacoEditorRef = useRef<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
+  // "Dołącz plik" picker — shared with Automate Script. Multi-root tree over
+  // drive/mdscript + drive/treejs; insertion goes through executeEdits so
+  // it lands in Monaco's undo stack like a manual type.
+  const [includeOpen, setIncludeOpen] = useState(false);
   // "New empty file" dialog. Just a name field — content is empty bytes.
   const [newFileDialog, setNewFileDialog] = useState<{ name: string } | null>(null);
   // "Create from clipboard" dialog. `kind` distinguishes between system clipboard text
@@ -546,7 +628,9 @@ export default function DrivePage(): React.JSX.Element {
         const json = await r.json() as { data?: string };
         const mime = guessMime(fileName);
         const data = json.data ?? '';
-        const textContent = isTextMime(mime) ? base64ToText(data) : undefined;
+        // Source code / config files (.json, .ts, .py, …) are routed to the
+        // Monaco editor, so we decode them as text too — not just text/* MIMEs.
+        const textContent = isEditableTextFile(fileName, mime) ? base64ToText(data) : undefined;
         setViewing({ entry, mime, dataB64: data, textContent });
       } catch (err) {
         toast((err as Error).message, 'error');
@@ -558,6 +642,15 @@ export default function DrivePage(): React.JSX.Element {
   // fullscreen toggle — otherwise next time it opens it stays expanded with
   // no obvious way back without a re-click.
   useEffect(() => { if (!panelOpen) setPanelFullscreen(false); }, [panelOpen]);
+
+  // Whenever the previewed file changes (or the panel closes), reset the
+  // Monaco buffer to the freshly-fetched text. Without this the editor would
+  // keep showing the previous file's content until it's clicked.
+  useEffect(() => {
+    setEditedText(viewing?.textContent ?? null);
+    setEditorDirty(false);
+    setEditorSaving(false);
+  }, [viewing?.entry.name, viewing?.textContent]);
 
   // Going narrower than `md` while the inline panel is open: collapse the embed
   // because the sidebar would otherwise vanish completely without a way out
@@ -589,24 +682,38 @@ export default function DrivePage(): React.JSX.Element {
   const onOpen = useCallback((entry: VfsEntry) => {
     if (entry.type === DIR_TYPE) {
       setCwd((p) => (p ? `${p}/${entry.name}` : entry.name));
-    } else {
-      // Double-click on a file → preview (matches OS file managers more closely
-      // than auto-download; user can still hit "Pobierz" from menu or dialog).
-      void (async () => {
-        try {
-          const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
-          const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
-          if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
-          const json = await r.json() as { data?: string };
-          const mime = guessMime(entry.name);
-          const data = json.data ?? '';
-          const textContent = isTextMime(mime) ? base64ToText(data) : undefined;
-          setViewing({ entry, mime, dataB64: data, textContent });
-        } catch (e) {
-          toast((e as Error).message, 'error');
-        }
-      })();
+      return;
     }
+
+    // Markdown files open straight in MdEditor — matches what users want from
+    // a "notes & docs" surface. The viewer + Monaco fallback is still reachable
+    // from MdEditor's toolbar ("Edytuj kod źródłowy"). `openInMdEditorRef` is
+    // populated later in the file; calling through the ref avoids the TDZ
+    // cycle that would happen if we tried to depend on `openInMdEditor`
+    // directly here.
+    if (isMdEditable(entry.name)) {
+      void openInMdEditorRef.current(entry);
+      return;
+    }
+
+    // Other files → preview / Monaco editor (matches OS file managers more
+    // closely than auto-download; user can still hit "Pobierz" from the menu).
+    void (async () => {
+      try {
+        const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+        const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+        if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+        const json = await r.json() as { data?: string };
+        const mime = guessMime(entry.name);
+        const data = json.data ?? '';
+        // See goToFavorite — same routing rule (code-like extensions get
+        // decoded so the Monaco editor can highlight them).
+        const textContent = isEditableTextFile(entry.name, mime) ? base64ToText(data) : undefined;
+        setViewing({ entry, mime, dataB64: data, textContent });
+      } catch (e) {
+        toast((e as Error).message, 'error');
+      }
+    })();
   }, [userName, cwd, toast]);
 
   const onDownload = useCallback(async (entry: VfsEntry) => {
@@ -730,9 +837,10 @@ export default function DrivePage(): React.JSX.Element {
       const json = await r.json() as { data?: string };
       const mime = guessMime(entry.name);
       const data = json.data ?? '';
-      // Decode UTF-8 only for text-like MIMEs; for binary we keep the base64
-      // string and render via data: URLs (img / iframe / audio / video).
-      const textContent = isTextMime(mime) ? base64ToText(data) : undefined;
+      // Decode UTF-8 for both proper text MIMEs and recognised code-file
+      // extensions (Monaco gets to highlight either way). Binary content
+      // stays as base64 — we render via data: URLs (img/iframe/audio/video).
+      const textContent = isEditableTextFile(entry.name, mime) ? base64ToText(data) : undefined;
       setViewing({ entry, mime, dataB64: data, textContent });
     } catch (err) {
       toast((err as Error).message, 'error');
@@ -768,6 +876,34 @@ export default function DrivePage(): React.JSX.Element {
       toast((err as Error).message, 'error');
     }
   }, [userName, cwd, isWide, toast]);
+
+  /** Switch the right panel from MdEditor (WYSIWYG) to Monaco showing the
+   *  raw markdown source. Lets users tweak code-fence params, edit tables
+   *  byte-exact, or paste markdown that the WYSIWYG layer would otherwise
+   *  re-format on round-trip.
+   *
+   *  We re-fetch the file rather than reusing `mdEditing.initialContent`
+   *  because MdEditor may have auto-saved unsynced edits — the on-disk view
+   *  is the source of truth the user wants to see when they ask for "kod
+   *  źródłowy". */
+  const openMdAsRawSource = useCallback(async (entry: VfsEntry) => {
+    try {
+      const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+      const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+      if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+      const json = await r.json() as { data?: string };
+      const data = json.data ?? '';
+      const mime = guessMime(entry.name) || 'text/markdown';
+      // Force-decode as text — the standard `isEditableTextFile` check would
+      // refuse markdown to keep MdEditor as the default; we're explicitly
+      // overriding that here.
+      const textContent = base64ToText(data);
+      setMdEditing(null);
+      setViewing({ entry, mime, dataB64: data, textContent });
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }, [userName, cwd, toast]);
 
   // Wire the forward-declared ref now that openInMdEditor exists — goToFavorite
   // (declared earlier) calls through the ref to bypass TDZ ordering.
@@ -985,6 +1121,56 @@ export default function DrivePage(): React.JSX.Element {
     }
   }, [viewing, toast]);
 
+  /** Insert text at the Monaco cursor (or replace current selection). Same
+   *  flow as the Automate Script fullscreen editor — `executeEdits` keeps
+   *  the change inside the editor's undo stack so Ctrl+Z reverts it cleanly.
+   *  Falls back to appending to the buffer if the editor ref is somehow
+   *  missing (e.g. picker triggered between mount and ref assignment). */
+  const handleIncludeInsert = useCallback((content: string) => {
+    const editor = monacoEditorRef.current;
+    if (!editor) {
+      setEditedText(prev => (prev ?? viewing?.textContent ?? '') + content);
+      setEditorDirty(true);
+      return;
+    }
+    const sel = editor.getSelection();
+    const model = editor.getModel();
+    if (!sel || !model) return;
+    editor.executeEdits('drive-include', [{
+      range: sel,
+      text: content,
+      forceMoveMarkers: true,
+    }]);
+    editor.focus();
+    // Sync our React mirror so the dirty flag + save button reflect the new
+    // buffer without waiting for the next onChange callback.
+    const next = model.getValue();
+    setEditedText(next);
+    setEditorDirty(next !== (viewing?.textContent ?? ''));
+  }, [viewing]);
+
+  /** Persist Monaco's current buffer to the backing VFS file. Idempotent —
+   *  no-op when nothing's dirty or there's no file open. After a successful
+   *  write we mirror the new value into `viewing.textContent` so the editor's
+   *  initial value matches reality on reload, and clear the dirty flag. */
+  const saveEditedText = useCallback(async () => {
+    if (!viewing || editedText === null) return;
+    const rel = cwd ? `${cwd}/${viewing.entry.name}` : viewing.entry.name;
+    setEditorSaving(true);
+    try {
+      await vfsWriteFile(userName, rel, textToBase64(editedText));
+      // Sync our snapshot of the on-disk content; without this the very next
+      // refresh would re-fire the reset useEffect with the OLD textContent.
+      setViewing(prev => prev ? { ...prev, textContent: editedText } : prev);
+      setEditorDirty(false);
+      toast(`Zapisano "${viewing.entry.name}"`, 'success');
+    } catch (err) {
+      toast(`Nie zapisano: ${(err as Error).message}`, 'error');
+    } finally {
+      setEditorSaving(false);
+    }
+  }, [viewing, editedText, cwd, userName, toast]);
+
   // ── Upload (file input + drag-and-drop) ─────────────────────────────────
   const upload = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -1085,21 +1271,68 @@ export default function DrivePage(): React.JSX.Element {
   // ── Breadcrumbs ─────────────────────────────────────────────────────────
   const segments = useMemo(() => cwd ? cwd.split('/').filter(Boolean) : [], [cwd]);
 
-  const currentIsPublic = isPublic(cwd) || cwd === '';   // root counts as not-public
 
   // ── Right panel content (View or MdEditor) ──────────────────────────────
   // Rendered both as embedded panel (desktop) and as Dialog content (mobile).
   const viewerBody = viewing && (
     viewing.textContent !== undefined ? (
-      <Box component="pre" sx={{
-        m: 0, p: 1.5, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-        fontSize: 13, lineHeight: 1.5,
-        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-        userSelect: 'text', cursor: 'text',
-        overflow: 'auto', height: '100%',
-        bgcolor: 'action.hover', borderRadius: 0,
-      }}>
-        {viewing.textContent}
+      // Monaco editor with syntax highlighting for the file's detected language.
+      // Ctrl+S saves through `saveEditedText`; the dirty flag and save spinner
+      // are surfaced in the right-panel toolbar (next to the close button).
+      <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
+        <Editor
+          height="100%"
+          path={`drive://${viewing.entry.name}`}
+          language={fileToMonacoLanguage(viewing.entry.name)}
+          value={editedText ?? viewing.textContent}
+          beforeMount={setupDriveEditorMonaco}
+          onChange={(v) => {
+            const next = v ?? '';
+            setEditedText(next);
+            // Only flip dirty when content actually diverged from the
+            // on-disk snapshot, to avoid spurious "unsaved" chips after a
+            // fresh load.
+            setEditorDirty(next !== (viewing.textContent ?? ''));
+          }}
+          onMount={(editor, monaco) => {
+            monacoEditorRef.current = editor;
+            // Ctrl+S / Cmd+S → save. Goes through `saveEditedText` which
+            // already short-circuits when nothing is dirty.
+            editor.addCommand(
+              monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+              () => { void saveEditedText(); },
+            );
+          }}
+          theme="vs-dark"
+          options={{
+            fontSize: 13,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            tabSize: 2,
+            automaticLayout: true,
+            // Without this, Monaco's suggest / hover / parameter-hints widgets
+            // anchor inside the editor's overflow container. In the Drive
+            // right-panel layout the editor lives inside several scrollable
+            // ancestors (Allotment pane → flex column → Paper). The widget
+            // then renders at the editor's TOP-LEFT in viewport space because
+            // our `position: fixed` CSS rule (`.suggest-widget` in
+            // monacoWorkers.ts) takes over without knowing the parent scroll
+            // offsets — that's the "weird place" you saw.
+            //
+            // `fixedOverflowWidgets: true` tells Monaco to render those
+            // widgets as fixed-positioned children of an overflow node it
+            // manages itself, aligned to the caret position regardless of
+            // ancestor scrolling. With the CSS rule already in place,
+            // z-index stays high enough to clear MUI stacking contexts.
+            fixedOverflowWidgets: true,
+            // Match the read-only feel of the old <pre> for files the user
+            // probably doesn't want to nuke by accident (none currently —
+            // every textContent path is editable), but keep the door open
+            // for a future read-only mode.
+            readOnly: false,
+          }}
+        />
       </Box>
     ) : isImageMime(viewing.mime) ? (
       <Box sx={{ textAlign: 'center', p: 2, height: '100%', overflow: 'auto' }}>
@@ -1444,23 +1677,17 @@ export default function DrivePage(): React.JSX.Element {
                     </TableCell>
                     <TableCell onClick={() => e.type === DIR_TYPE && onOpen(e)}>
                       <Stack direction="row" spacing={1} alignItems="center">
-                        {/* Star toggle only for files — folders aren't favoritable for now
-                            (would complicate "open" semantics). stopPropagation so the
-                            click doesn't bubble up to the row's open-on-click handler. */}
-                        {e.type === FILE_TYPE && (
-                          <Tooltip title={isFavorite(rel) ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}>
-                            <IconButton
-                              size="small"
-                              sx={{ p: 0.25 }}
-                              onClick={(ev) => { ev.stopPropagation(); toggleFavorite(e); }}
-                            >
-                              {isFavorite(rel)
-                                ? <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
-                                : <StarBorderIcon fontSize="small" sx={{ color: 'text.disabled' }} />}
-                            </IconButton>
+                        <span>{e.name}</span>
+                        {/* Passive favorite indicator — small filled star next to
+                            the name when the file is in favorites. The toggle
+                            itself lives in the row's context menu (`⋯`); having
+                            both a clickable toggle here and the same item in
+                            the menu was redundant. */}
+                        {e.type === FILE_TYPE && isFavorite(rel) && (
+                          <Tooltip title="Ulubiony — zarządzaj przez menu (⋯)">
+                            <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
                           </Tooltip>
                         )}
-                        <span>{e.name}</span>
                         {pub && <Tooltip title="Publiczny — dostępny przez HTTP bez logowania"><PublicIcon fontSize="small" color="success" /></Tooltip>}
                       </Stack>
                     </TableCell>
@@ -1483,19 +1710,7 @@ export default function DrivePage(): React.JSX.Element {
         )}
       </Paper>
 
-      {/* Tip for public folder usage */}
-      {!currentIsPublic && entries.some((e) => e.type === FILE_TYPE) && (
-        <Alert severity="info" icon={<PublicIcon />} sx={{ mt: 1 }}>
-          Aby udostępnić plik publicznie (link bez logowania) — w menu kontekstowym wybierz <strong>"Make public"</strong>.
-        </Alert>
-      )}
 
-      {/* Filesystem location hint */}
-      <Alert severity="info" sx={{ mt: 1 }}>
-        Te same pliki widoczne pod <code>/home/drive/{cwd}</code> w workspace editorach
-        (MdEditor, Monaco). Drive UI i workspace VFS czytają/piszą do tego samego katalogu na dysku
-        (<code>data/Minis/Users/{userName}/drive/</code>) — bez synchronizacji, bez duplikatów.
-      </Alert>
       </Box>
       )}
       {showRightPanel && (
@@ -1551,10 +1766,65 @@ export default function DrivePage(): React.JSX.Element {
                 </IconButton>
               </Tooltip>
             )}
+            {/* "Dołącz plik" — multi-root picker (drive/mdscript + drive/treejs)
+                inserts the file's body at the cursor. Available for any text
+                file open in the editor, not just script-y ones — useful for
+                building up config files from templated chunks too. */}
+            {viewing && viewing.textContent !== undefined && (
+              <Tooltip title="Dołącz plik z drive/mdscript lub drive/treejs">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => setIncludeOpen(true)}
+                    disabled={!userName}
+                  >
+                    <AttachFileIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+            {/* Code-editor save button — only when there's a text buffer.
+                Disabled when nothing's dirty so accidental clicks don't
+                rewrite the file with identical content. */}
+            {viewing && viewing.textContent !== undefined && (
+              <Tooltip title="Zapisz (Ctrl+S)">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => void saveEditedText()}
+                    disabled={!editorDirty || editorSaving}
+                    color={editorDirty ? 'primary' : 'default'}
+                  >
+                    {editorSaving
+                      ? <CircularProgress size={14} />
+                      : <SaveIcon fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+            {viewing && viewing.textContent !== undefined && editorDirty && (
+              <Chip
+                size="small"
+                variant="outlined"
+                color="warning"
+                label="Niezapisane"
+                sx={{ height: 22 }}
+              />
+            )}
             {viewing && !isCompact && isMdEditable(viewing.entry.name) && (
               <Tooltip title="Edytuj w MdEditor">
                 <IconButton size="small" onClick={() => void openInMdEditor(viewing.entry)}>
                   <EditNoteIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {/* When MdEditor is open, surface the "raw source" escape hatch —
+                opens the same file in Monaco with markdown syntax highlighting.
+                Symmetrical to the WYSIWYG-from-viewer button above. */}
+            {mdEditing && !isCompact && (
+              <Tooltip title="Edytuj kod źródłowy (Markdown w Monaco)">
+                <IconButton size="small" onClick={() => void openMdAsRawSource(mdEditing.entry)}>
+                  <CodeIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
@@ -2027,6 +2297,21 @@ export default function DrivePage(): React.JSX.Element {
       <Snackbar open={snack.open} autoHideDuration={3500} onClose={() => setSnack({ ...snack, open: false })}>
         <Alert severity={snack.severity}>{snack.msg}</Alert>
       </Snackbar>
+
+      {/* "Dołącz plik" — same picker the Automate Script editor uses; chunk
+          is lazy so users who never open it don't pay for the import. The
+          `{includeOpen && …}` guard makes sure the dialog doesn't mount
+          until the user actually clicks the attach icon. */}
+      <Suspense fallback={null}>
+        {includeOpen && (
+          <AutomateIncludeFileDialog
+            open={includeOpen}
+            onClose={() => setIncludeOpen(false)}
+            userName={userName}
+            onInsert={handleIncludeInsert}
+          />
+        )}
+      </Suspense>
     </Box>
   );
 }

@@ -1,3 +1,13 @@
+// Side-effect import: configures Monaco's TypeScript service (compiler options,
+// mode configuration, web workers, completionItems on…) BEFORE any Monaco
+// Editor instance mounts. The Plugin Script and Automate Script blocks inside
+// MdEditor use Monaco for their fullscreen code dialogs, and without these
+// patches IntelliSense never lights up (workers stay unconfigured, mode config
+// defaults to "off" for completionItems). UserDataEditorPage et al. import this
+// directly; for Markdown editing surfaces we keep it next to MdEditor so the
+// monaco workers chunk only loads when an MdEditor instance is on screen.
+import '../../modules/editor/monacoWorkers';
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -941,16 +951,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
         onClose={() => setEventDialog(null)}
         filePath={filePath}
         onInsert={({ attrs }) => {
-          // Insert the structured EventBlock node — renders as a card via
-          // ReactNodeViewRenderer, persists to markdown through the
-          // converter's escapeEvents/restoreEvents pair so the JSON attrs
-          // round-trip on save/load without lossy text serialisation.
-          //
-          // In template mode the dialog calls this once per resolved event,
-          // so each becomes a separate node. We can't pre-compute insertion
-          // positions (each insert shifts following ones), so we always use
-          // the *editor's current selection end* — the cards just stack
-          // sequentially from where the slash was triggered.
+          // Single-event path. Inserts the structured EventBlock node —
+          // renders as a card via ReactNodeViewRenderer, persists to markdown
+          // through the converter's escapeEvents/restoreEvents pair so the
+          // JSON attrs round-trip on save/load without lossy text serialisation.
           eventDialog.editor
             .chain()
             .focus()
@@ -958,6 +962,19 @@ const MdEditor: React.FC<MdEditorProps> = ({
               type: 'eventBlock',
               attrs,
             })
+            .run();
+        }}
+        onInsertMany={(results) => {
+          // Bulk template path. We pass *all* nodes to one `insertContent`
+          // call so they're inserted as a single transaction — sequential
+          // `insertContent`s leave the cursor on the just-inserted atom
+          // (EventBlock is `selectable: true, atom: true`), which causes the
+          // next call to overwrite the selection instead of appending. The
+          // array form sidesteps that entirely.
+          eventDialog.editor
+            .chain()
+            .focus()
+            .insertContent(results.map(r => ({ type: 'eventBlock', attrs: r.attrs })))
             .run();
         }}
       />

@@ -10,8 +10,15 @@ import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
 
 // Typy danych wyjsciowych display
+//
+// 'html' carries a raw HTML string (rendered via dangerouslySetInnerHTML in
+//   the 'html' view mode of the script block).
+// 'dom' carries a *live* HTMLElement that the renderer mounts via appendChild.
+//   This is what makes Three.js work — the renderer's canvas needs to stay
+//   in the DOM so its animation loop keeps painting; a string-serialised
+//   snapshot would freeze on the first frame.
 export interface DisplayItem {
-  type: 'text' | 'table' | 'list' | 'json';
+  type: 'text' | 'table' | 'list' | 'json' | 'html' | 'dom';
   data: unknown;
   timestamp: number;
 }
@@ -21,6 +28,12 @@ export interface DisplayApi {
   table: (data: Record<string, unknown>[] | unknown[][]) => void;
   list: (items: unknown[]) => void;
   json: (obj: unknown) => void;
+  /** Emit a raw HTML string — rendered as-is in the 'html' view mode. */
+  html: (markup: string) => void;
+  /** Emit a live DOM element (e.g. Three.js `renderer.domElement`). The
+   *  renderer mounts it via `appendChild`, so animations and event listeners
+   *  attached to it keep working. */
+  dom: (element: HTMLElement) => void;
 }
 
 export interface ScriptBlockState {
@@ -146,6 +159,8 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       table: (data: Record<string, unknown>[] | unknown[][]) => pushOutput({ type: 'table', data, timestamp: Date.now() }),
       list: (items: unknown[]) => pushOutput({ type: 'list', data: items, timestamp: Date.now() }),
       json: (obj: unknown) => pushOutput({ type: 'json', data: obj, timestamp: Date.now() }),
+      html: (markup: string) => pushOutput({ type: 'html', data: String(markup), timestamp: Date.now() }),
+      dom: (element: HTMLElement) => pushOutput({ type: 'dom', data: element, timestamp: Date.now() }),
     };
   }, []);
 

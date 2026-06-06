@@ -9,6 +9,8 @@ import React, {
   useEffect,
   useCallback,
   useRef,
+  Suspense,
+  lazy,
 } from 'react';
 import { Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
@@ -36,7 +38,12 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import Editor from '@monaco-editor/react';
+
+// Lazy — the docs string is bundled into MdScriptHelpDialog's chunk, so users
+// who never click the (?) icon don't pay for it.
+const MdScriptHelpDialog = lazy(() => import('./MdScriptHelpDialog'));
 
 import { useAuth } from '../../../modules/auth/AuthContext';
 import { usePlugins } from '../../../modules/web-plugins';
@@ -48,7 +55,34 @@ import {
   DisplayItem,
   ScriptOutput,
   ReactiveValue,
+  PLUGIN_SCRIPT_GLOBALS_DTS,
 } from '../../../modules/script-runtime';
+
+// ─── Monaco IntelliSense bootstrap ────────────────────────────────────────────
+//
+// Registers the Plugin Script globals (`auth`, `http`, `md`, `table`,
+// `reactive`, `display`, …) so Monaco offers autocomplete + hover docs
+// inside the script editor.
+//
+// Shares the same setup helpers as AutomateScriptExtension (`applyScriptDefaults`
+// + `mergeExtraLibs`). `mergeExtraLibs` uses `monaco.editor.createModel()`
+// under the hood, NOT `addExtraLib` — same reason as Automate: createModel
+// doesn't restart the TS worker, while every addExtraLib/setExtraLibs cycle
+// does, and a restarting worker can't answer completion queries.
+//
+// Together with `defaultLanguage="typescript"` below this gets ambient
+// `declare const auth/http/md/table/reactive/display` actually visible to
+// the editor model — JS and TS service treat each other's models as separate
+// compilation contexts, so a .ts ambient is invisible from a .js model.
+import { applyScriptDefaults, mergeExtraLibs } from '../../../modules/automate/designer/automateMonacoSetup';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ensureScriptGlobals(monaco: any): void {
+  applyScriptDefaults(monaco);
+  mergeExtraLibs(monaco, new Map([
+    ['file:///plugin-script-globals.d.ts', PLUGIN_SCRIPT_GLOBALS_DTS],
+  ]));
+}
 
 // ─── Display API (imperative output, compatible with automate block) ──────────
 
@@ -145,6 +179,7 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
   const [labelDraft, setLabelDraft] = useState<string>(node.attrs.label as string || 'Script');
   const [monacoOpen, setMonacoOpen] = useState(false);
   const [monacoCode, setMonacoCode] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const mode = node.attrs.mode as 'auto' | 'manual';
   const label = node.attrs.label as string || 'Script';
@@ -335,6 +370,13 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
             </IconButton>
           </Tooltip>
 
+          <Tooltip title="Dokumentacja Plugin Script">
+            <IconButton size="small" onClick={() => setHelpOpen(true)}
+              sx={{ color: '#c7bbff', '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' } }}>
+              <HelpOutlineIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+
           <Tooltip title="Edit label">
             <IconButton size="small" onClick={() => { setLabelDraft(label); setLabelEditing(true); }}
               sx={{ color: '#c7bbff', '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' } }}>
@@ -397,15 +439,27 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
       <Dialog open={monacoOpen} onClose={() => setMonacoOpen(false)} maxWidth="lg" fullWidth PaperProps={{ sx: { height: '80vh' } }}>
         <DialogTitle sx={{ py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
           <ExtensionIcon sx={{ color: accentColor }} />
-          <Typography variant="subtitle1" fontWeight={600}>{label}</Typography>
+          <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>{label}</Typography>
+          <Tooltip title="Dokumentacja Plugin Script">
+            <IconButton size="small" onClick={() => setHelpOpen(true)}>
+              <HelpOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </DialogTitle>
         <DialogContent dividers sx={{ p: 0 }}>
           <Editor
             height="100%"
-            defaultLanguage="javascript"
+            // TypeScript so the ambient `declare const auth/http/md/table/
+            // reactive/display` declarations from `scriptGlobals.ts` (registered
+            // as a TS model via createModel) are visible to the editor. JS and
+            // TS service maintain separate compilation contexts; a .ts ambient
+            // is invisible from a .js model, which is why completions for
+            // user-defined locals worked but `auth.*` / `http.*` etc. didn't.
+            defaultLanguage="typescript"
             value={monacoCode}
             onChange={v => setMonacoCode(v || '')}
             theme="vs-dark"
+            beforeMount={ensureScriptGlobals}
             options={{ minimap: { enabled: true }, fontSize: 14, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true }}
           />
         </DialogContent>
@@ -414,6 +468,14 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
           <Button onClick={saveMonaco} variant="contained">Save</Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Help dialog ── */}
+      {/* Suspense fallback is null because the chunk is small enough that the
+          flash would be jarring; the dialog opens with a beat of delay on
+          first click and then is cached. */}
+      <Suspense fallback={null}>
+        {helpOpen && <MdScriptHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />}
+      </Suspense>
 
       <style>{`
         @keyframes pulse {
