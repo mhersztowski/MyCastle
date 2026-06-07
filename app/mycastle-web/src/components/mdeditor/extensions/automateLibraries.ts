@@ -32,6 +32,16 @@ export interface LibraryEntry {
    *  TypeScript worker doesn't restart between blocks (same trick as the
    *  Automate API stubs). */
   typesDtsContent: string;
+  /**
+   * How to load the library at runtime:
+   *   - `'script-global'` (default) — inject a `<script>` tag and wait for the
+   *     library to populate `window[globalName]`. Works for UMD bundles like
+   *     Three.js's `three.min.js`.
+   *   - `'esm-module'` — `await import(url)` and attach the resulting module
+   *     namespace to `window[globalName]`. Required for ESM-only libraries
+   *     like Lit, whose CDNs (`+esm` builds) don't ship UMD.
+   */
+  loadStrategy?: 'script-global' | 'esm-module';
 }
 
 // ─── Three.js — minimal but useful ambient ──────────────────────────────────
@@ -232,6 +242,98 @@ declare namespace THREE {
 declare const THREE: typeof THREE;
 `;
 
+// ─── Lit — minimal ambient for web-components authoring ──────────────────────
+//
+// Lit ships ESM-only on CDN (no UMD), so we load it via `await import(url)`
+// and stash the whole module namespace on `window.Lit`. The ambient below
+// mirrors that — `Lit.html`, `Lit.css`, `Lit.LitElement`, plus the decorator
+// helpers from `lit/decorators.js`. Covers maybe 80% of what people write
+// when prototyping a custom element; the runtime has the full surface area
+// because we re-export everything from the import.
+const LIT_DTS = `
+declare namespace Lit {
+  /** Marker for the result of an html\`…\` template literal. */
+  interface TemplateResult { readonly _$litType$: 1; }
+  /** Marker for the result of a css\`…\` template literal. */
+  interface CSSResult { cssText: string; styleSheet?: CSSStyleSheet; }
+
+  /**
+   * Tagged template literal returning a TemplateResult. Render it from
+   * a LitElement.render() method or pass to render(template, container).
+   */
+  function html(strings: TemplateStringsArray, ...values: unknown[]): TemplateResult;
+
+  /** Tagged template literal returning a CSSResult — assign to static styles. */
+  function css(strings: TemplateStringsArray, ...values: unknown[]): CSSResult;
+
+  /**
+   * Wrap a raw CSS string as a CSSResult so it can be interpolated inside
+   * \`css\\\`…\\\`\`. Lit normally rejects plain strings as an XSS guard —
+   * \`unsafeCSS\` is your way of saying "I trust this string". Use sparingly:
+   * the value should never come from user input.
+   */
+  function unsafeCSS(value: string | number): CSSResult;
+
+  /**
+   * Render a TemplateResult into a DOM container (re-render is incremental).
+   * @param template result of html\`…\`
+   * @param container target HTMLElement
+   */
+  function render(template: TemplateResult, container: HTMLElement | DocumentFragment): void;
+
+  /** When unset, the element renders into its open shadow root. */
+  type RenderOptions = { renderBefore?: Node; host?: HTMLElement };
+
+  /**
+   * Lit's reactive controller-aware base class. Extend it, set static styles +
+   * static properties, implement render(), and \`customElements.define()\` it.
+   */
+  class LitElement extends HTMLElement {
+    static styles?: CSSResult | CSSResult[];
+    static properties?: Record<string, {
+      type?: unknown;
+      attribute?: string | boolean;
+      reflect?: boolean;
+      state?: boolean;
+      converter?: unknown;
+    }>;
+
+    /** Override to produce the element's template. */
+    render(): TemplateResult | unknown;
+
+    /** Schedule a re-render. Property changes do this automatically. */
+    requestUpdate(name?: string, oldValue?: unknown): void;
+    /** Promise resolving once the next render completes. */
+    readonly updateComplete: Promise<boolean>;
+
+    connectedCallback(): void;
+    disconnectedCallback(): void;
+    updated(changedProperties: Map<string, unknown>): void;
+    firstUpdated(changedProperties: Map<string, unknown>): void;
+    willUpdate(changedProperties: Map<string, unknown>): void;
+  }
+
+  // Decorators (from lit/decorators.js) — Lit re-exports them on the main
+  // module too, so this namespace is the right place even though they live
+  // in a sub-module in the npm package.
+  function customElement(tagName: string): (cls: typeof LitElement) => void;
+  function property(options?: { type?: unknown; attribute?: string | boolean; reflect?: boolean }): (proto: object, name: string) => void;
+  function state(): (proto: object, name: string) => void;
+  function query(selector: string): (proto: object, name: string) => void;
+  function queryAll(selector: string): (proto: object, name: string) => void;
+  function eventOptions(options: AddEventListenerOptions): (proto: object, name: string) => void;
+
+  // Directives (subset — full list at lit.dev/docs/templates/directives/).
+  function repeat<T>(items: Iterable<T>, keyFn: (item: T, i: number) => unknown, template: (item: T, i: number) => unknown): unknown;
+  function when<T>(condition: T, truthy: (v: NonNullable<T>) => unknown, falsy?: () => unknown): unknown;
+  function classMap(classes: Record<string, boolean>): unknown;
+  function styleMap(styles: Record<string, string | number>): unknown;
+  function ifDefined<T>(value: T): T | undefined;
+}
+
+declare const Lit: typeof Lit;
+`;
+
 export const LIBRARIES: Record<string, LibraryEntry> = {
   three: {
     id: 'three',
@@ -244,6 +346,19 @@ export const LIBRARIES: Record<string, LibraryEntry> = {
     cdnUrl: 'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js',
     typesDtsPath: 'file:///lib-three.d.ts',
     typesDtsContent: THREE_DTS,
+    loadStrategy: 'script-global',
+  },
+  lit: {
+    id: 'lit',
+    label: 'Lit',
+    description: 'Web Components — LitElement, reaktywne properties, html`…` template.',
+    globalName: 'Lit',
+    // ESM-only — `+esm` build serves the bundled module from jsDelivr. We
+    // import() it at runtime and stash the namespace on window.Lit.
+    cdnUrl: 'https://cdn.jsdelivr.net/npm/lit@3/+esm',
+    typesDtsPath: 'file:///lib-lit.d.ts',
+    typesDtsContent: LIT_DTS,
+    loadStrategy: 'esm-module',
   },
 };
 
@@ -304,28 +419,104 @@ export async function loadLibrary(libraryId: string): Promise<void> {
 
   // Already loaded — common path for re-runs after the first script execution.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if ((window as any)[entry.globalName]) return;
+  if ((window as any)[entry.globalName]) {
+    // eslint-disable-next-line no-console
+    console.log(`[AutomateScript] loadLibrary(${libraryId}): already on window.${entry.globalName}, skip`);
+    return;
+  }
 
   const cached = loadingPromises.get(libraryId);
-  if (cached) return cached;
+  if (cached) {
+    // eslint-disable-next-line no-console
+    console.log(`[AutomateScript] loadLibrary(${libraryId}): in-flight, awaiting cached promise`);
+    return cached;
+  }
 
-  const promise = new Promise<void>((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = entry.cdnUrl;
-    script.crossOrigin = 'anonymous';
-    script.onload = () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((window as any)[entry.globalName]) {
-        resolve();
-      } else {
-        reject(new Error(
-          `Library ${libraryId} loaded but global ${entry.globalName} not found — version mismatch?`,
-        ));
+  const strategy = entry.loadStrategy ?? 'script-global';
+  // eslint-disable-next-line no-console
+  console.log(`[AutomateScript] loadLibrary(${libraryId}): strategy='${strategy}' url=${entry.cdnUrl}`);
+  let promise: Promise<void>;
+
+  if (strategy === 'esm-module') {
+    // ESM path — `await import(url)` and stash the namespace on
+    // `window[globalName]`. The CDN bundles (e.g. jsDelivr's `+esm` build)
+    // serve a proper module, so the resulting object exposes every named
+    // export the package ships. We attach it as a whole rather than picking
+    // named exports to leave the global API as close to the real package as
+    // possible — `Lit.html` works without us having to enumerate every helper.
+    //
+    // The `/* @vite-ignore */` is necessary because Vite tries to resolve
+    // static-string `import()` URLs at build time. We're handing it a runtime
+    // URL it shouldn't touch.
+    promise = (async () => {
+      try {
+        const t0 = performance.now();
+        const main = await import(/* @vite-ignore */ entry.cdnUrl);
+
+        // Lit ships decorators and directives in *separate* submodules — the
+        // main `lit` bundle only has `LitElement` / `html` / `css` / `render`.
+        // For the catalog to match the TS stub we publish (which advertises
+        // `Lit.repeat`, `Lit.classMap`, `Lit.customElement`, …), we eagerly
+        // fetch the most common submodules and merge them into the namespace.
+        // The same `+esm` build serves them.
+        let assembled: Record<string, unknown> = { ...main };
+        if (libraryId === 'lit') {
+          const base = 'https://cdn.jsdelivr.net/npm/lit@3';
+          const submodules = await Promise.all([
+            import(/* @vite-ignore */ `${base}/decorators.js/+esm`),
+            import(/* @vite-ignore */ `${base}/directives/repeat.js/+esm`),
+            import(/* @vite-ignore */ `${base}/directives/when.js/+esm`),
+            import(/* @vite-ignore */ `${base}/directives/class-map.js/+esm`),
+            import(/* @vite-ignore */ `${base}/directives/style-map.js/+esm`),
+            import(/* @vite-ignore */ `${base}/directives/if-defined.js/+esm`),
+          ]);
+          for (const mod of submodules) {
+            assembled = { ...assembled, ...mod };
+          }
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any)[entry.globalName] = assembled;
+        const dt = (performance.now() - t0).toFixed(1);
+        // eslint-disable-next-line no-console
+        console.log(`[AutomateScript] loadLibrary(${libraryId}): ESM import done in ${dt}ms — window.${entry.globalName} keys:`,
+          Object.keys(assembled));
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[AutomateScript] loadLibrary(${libraryId}): ESM import FAILED`, err);
+        throw new Error(`Failed to load library ${libraryId} from ${entry.cdnUrl}: ${(err as Error).message}`);
       }
-    };
-    script.onerror = () => reject(new Error(`Failed to load library: ${libraryId} from ${entry.cdnUrl}`));
-    document.head.appendChild(script);
-  });
+    })();
+  } else {
+    // Classic UMD path — inject <script> and wait for the global to appear.
+    promise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = entry.cdnUrl;
+      script.crossOrigin = 'anonymous';
+      const t0 = performance.now();
+      script.onload = () => {
+        const dt = (performance.now() - t0).toFixed(1);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((window as any)[entry.globalName]) {
+          // eslint-disable-next-line no-console
+          console.log(`[AutomateScript] loadLibrary(${libraryId}): <script> loaded in ${dt}ms — window.${entry.globalName} ready`);
+          resolve();
+        } else {
+          // eslint-disable-next-line no-console
+          console.error(`[AutomateScript] loadLibrary(${libraryId}): <script> loaded but window.${entry.globalName} missing`);
+          reject(new Error(
+            `Library ${libraryId} loaded but global ${entry.globalName} not found — version mismatch?`,
+          ));
+        }
+      };
+      script.onerror = () => {
+        // eslint-disable-next-line no-console
+        console.error(`[AutomateScript] loadLibrary(${libraryId}): <script> failed to load from ${entry.cdnUrl}`);
+        reject(new Error(`Failed to load library: ${libraryId} from ${entry.cdnUrl}`));
+      };
+      document.head.appendChild(script);
+    });
+  }
 
   loadingPromises.set(libraryId, promise);
   // On failure, drop from the cache so a manual reload can retry.
@@ -338,7 +529,13 @@ export async function loadLibrary(libraryId: string): Promise<void> {
  *  a library depends on another, which we don't currently support. */
 export async function preloadLibrariesForCode(code: string): Promise<void> {
   const libs = parseLibrariesFromCode(code);
+  // eslint-disable-next-line no-console
+  console.log(`[AutomateScript] preloadLibrariesForCode: parsed markers →`, libs);
   for (const lib of libs) {
     await loadLibrary(lib);
+  }
+  if (libs.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[AutomateScript] preloadLibrariesForCode: all ${libs.length} libraries ready`);
   }
 }

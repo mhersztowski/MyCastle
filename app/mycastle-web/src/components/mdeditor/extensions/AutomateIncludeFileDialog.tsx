@@ -37,7 +37,68 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 const ROOTS: ReadonlyArray<{ label: string; dir: string }> = [
   { label: 'mdscript', dir: 'drive/mdscript' },
   { label: 'treejs',   dir: 'drive/treejs'   },
+  // Public — pliki tu są też dostępne przez HTTP (/public/drive/users/{u}/...),
+  // więc obok "Wstaw treść" pojawia się drugi przycisk "Wstaw jako import".
+  { label: 'public',   dir: 'drive/public'   },
 ];
+
+/** Helper — sprawdza czy ścieżka znajduje się pod `drive/public/`. Określa to
+ *  czy backend wystawia plik przez HTTP i czy `await import(...)` z brwsera
+ *  zadziała. Tylko wtedy aktywujemy przycisk "Wstaw jako import". */
+function isImportable(rel: string): boolean {
+  return rel.startsWith('drive/public/');
+}
+
+/** Buduje URL pod którym backend serwuje plik z `drive/public/`. */
+function publicHttpUrl(userName: string, rel: string): string {
+  // selected = 'drive/public/lit/components/clock.module.js'
+  //         → strip leading 'drive/public/'
+  //         → /public/drive/users/{user}/lit/components/clock.module.js
+  const sub = rel.replace(/^drive\/public\//, '');
+  return `/public/drive/users/${encodeURIComponent(userName)}/${sub}`;
+}
+
+/**
+ * Best-effort extraction of named ES module exports from a source string.
+ * The picker uses this to generate the `const { … } = mod;` line that pairs
+ * with the `await import(url)` snippet — without it, the author has to copy
+ * names by hand and it's easy to typo.
+ *
+ * Covered forms:
+ *   - `export const X = …`
+ *   - `export let X = …` / `export var X = …`
+ *   - `export class X { … }`
+ *   - `export function X(…)` / `export async function X(…)`
+ *   - `export { A, B as C, D }`
+ *
+ * NOT covered:
+ *   - `export default …` (anonymous; would need a different snippet)
+ *   - re-exports through `export * from …`
+ *   - exports inside conditional blocks
+ *
+ * Good enough for our convention (one `export class` + one `export const TAG`
+ * per file). Anything missed by the parser just doesn't end up in the
+ * destructure — the author can add by hand.
+ */
+function parseNamedExports(code: string): string[] {
+  const names = new Set<string>();
+  // Direct declarations.
+  const directRe = /(^|\n)\s*export\s+(?:async\s+)?(?:const|let|var|class|function)\s+([A-Za-z_$][\w$]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = directRe.exec(code)) !== null) {
+    names.add(m[2]);
+  }
+  // export { A, B as C, D }
+  const listRe = /(^|\n)\s*export\s+\{([^}]+)\}/g;
+  while ((m = listRe.exec(code)) !== null) {
+    for (const part of m[2].split(',')) {
+      const aliased = part.trim().split(/\s+as\s+/i);
+      const exported = (aliased[aliased.length - 1] ?? '').trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(exported)) names.add(exported);
+    }
+  }
+  return Array.from(names);
+}
 const DIR_TYPE = 2;
 
 interface VfsEntry { name: string; type: 1 | 2; size?: number; mtime?: number }
@@ -87,10 +148,22 @@ export interface AutomateIncludeFileDialogProps {
   userName: string;
   /** Called with the file's *contents* — caller inserts at cursor. */
   onInsert: (content: string, filename: string) => void;
+  /** Called with an HTTP URL pointing at the file under `/public/drive/...`.
+   *  Only fires when the user clicks "Wstaw jako import" for a file in
+   *  `drive/public/`. Caller inserts an `await import('url')` snippet at
+   *  the cursor. Optional — hosts without this callback just hide the
+   *  second button.
+   *
+   *  `exports` is the list of named exports the picker detected by parsing
+   *  the preview — host should use them to generate the destructure line
+   *  alongside the import. Empty when the file has no parseable exports
+   *  (anonymous default export, dynamic `Object.defineProperty`, …); host
+   *  falls back to a comment hint in that case. */
+  onInsertImport?: (url: string, filename: string, exports: string[]) => void;
 }
 
 const AutomateIncludeFileDialog: React.FC<AutomateIncludeFileDialogProps> = ({
-  open, onClose, userName, onInsert,
+  open, onClose, userName, onInsert, onInsertImport,
 }) => {
   // Lazy tree state. Key = directory path RELATIVE to the user's home (e.g.
   // 'drive/mdscript', 'drive/treejs/sub'). Value = entries that dir contained
@@ -242,6 +315,18 @@ const AutomateIncludeFileDialog: React.FC<AutomateIncludeFileDialogProps> = ({
     // same basename exist under different roots.
     const wrapped = `\n// ─── included: ${selected} ───\n${preview.trim()}\n// ----- ${selected}\n`;
     onInsert(wrapped, selected);
+    onClose();
+  };
+
+  /** Insert as a one-liner `await import(url)` — only for files in
+   *  drive/public/ where the backend serves them with the right MIME.
+   *  Parses the preview to detect named exports so the host can generate
+   *  the destructure line automatically. */
+  const handleInsertImport = () => {
+    if (!selected || !isImportable(selected) || !onInsertImport) return;
+    const url = publicHttpUrl(userName, selected);
+    const exports = preview ? parseNamedExports(preview) : [];
+    onInsertImport(url, selected, exports);
     onClose();
   };
 
@@ -404,6 +489,15 @@ const AutomateIncludeFileDialog: React.FC<AutomateIncludeFileDialogProps> = ({
             <>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
                 <Chip label={selected} size="small" sx={{ fontFamily: 'monospace' }} />
+                {isImportable(selected) && (
+                  <Chip
+                    label="publiczny"
+                    size="small"
+                    color="success"
+                    title="Dostępny przez HTTP — można zaimportować jako moduł"
+                    sx={{ height: 20 }}
+                  />
+                )}
                 {previewLoading && <CircularProgress size={14} />}
               </Stack>
               <Box
@@ -435,20 +529,47 @@ const AutomateIncludeFileDialog: React.FC<AutomateIncludeFileDialogProps> = ({
         </Box>
       </DialogContent>
 
-      <DialogActions>
-        <Box sx={{ flex: 1, pl: 1 }}>
+      <DialogActions sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+        <Box sx={{ flex: 1, pl: 1, minWidth: 200 }}>
           <Typography variant="caption" color="text.secondary">
-            Wstawia <strong>zawartość pliku</strong> w miejscu kursora (nie import jako moduł).
+            <strong>Wstaw treść</strong> = inline kopia kodu w miejscu kursora.<br />
+            <strong>Wstaw jako import</strong> = jednolinijkowe <code>await import(...)</code>
+            (tylko pliki z <code>drive/public/</code>).
           </Typography>
         </Box>
         <Button onClick={onClose}>Anuluj</Button>
+        {/* Second action — `await import(...)` snippet. Disabled when the
+            picker host doesn't support it (`!onInsertImport`) or when the
+            selected file isn't under drive/public/ (backend won't serve it
+            with the right MIME for module loading). */}
+        <Tooltip
+          title={
+            !onInsertImport
+              ? 'Host edytora nie obsługuje import — użyj "Wstaw treść"'
+              : !selected
+                ? 'Wybierz plik z listy'
+                : !isImportable(selected)
+                  ? 'Plik musi być w drive/public/ — przenieś go tam aby zaimportować'
+                  : 'Wstaw jednolinijkowe await import(...) wskazujące na publiczny URL'
+          }
+        >
+          <span>
+            <Button
+              variant="outlined"
+              onClick={handleInsertImport}
+              disabled={!selected || !preview || !onInsertImport || !isImportable(selected)}
+            >
+              Wstaw jako import
+            </Button>
+          </span>
+        </Tooltip>
         <Button
           variant="contained"
           onClick={handleInsert}
           disabled={!selected || previewLoading || !preview}
           sx={{ bgcolor: '#4caf50', '&:hover': { bgcolor: '#3a8a3d' } }}
         >
-          Wstaw do skryptu
+          Wstaw treść
         </Button>
       </DialogActions>
     </Dialog>

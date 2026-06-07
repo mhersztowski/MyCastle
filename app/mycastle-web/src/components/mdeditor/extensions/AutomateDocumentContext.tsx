@@ -166,7 +166,11 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
 
   const runBlock = useCallback(async (id: string) => {
     const block = blocks.get(id);
-    if (!block || block.status === 'running') return;
+    if (!block || block.status === 'running') {
+      // eslint-disable-next-line no-console
+      console.log(`[AutomateScript] runBlock(${id}): skip — block ${block ? 'is running' : 'not found'}`);
+      return;
+    }
 
     const code = block.code;
     const api = getOrCreateApi();
@@ -183,6 +187,11 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     });
 
     const displayApi = createDisplayApi(id);
+    // eslint-disable-next-line no-console
+    console.groupCollapsed(`[AutomateScript] runBlock(${id}) — ${code.length} chars`);
+    // eslint-disable-next-line no-console
+    console.log('Code:\n' + code);
+    const tStart = performance.now();
 
     try {
       const wrappedScript = `const display = input.__display;\n${code}`;
@@ -192,6 +201,10 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         { __display: displayApi },
         variablesRef.current,
       );
+      // eslint-disable-next-line no-console
+      console.log(`Result (${(performance.now() - tStart).toFixed(1)}ms):`, result);
+      // eslint-disable-next-line no-console
+      console.groupEnd();
 
       // Collect new logs
       const newLogs = api.logs.slice(prevLogsLength);
@@ -212,6 +225,14 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      // Surface the full error object including stack — wrapped Function calls
+      // squash the stack into the body of the generated function, but Chrome
+      // DevTools still resolves source mapping for the wrapper if we log the
+      // raw Error. Useful for diagnosing scripts that fail deep in a library.
+      // eslint-disable-next-line no-console
+      console.error(`Error (${(performance.now() - tStart).toFixed(1)}ms):`, err);
+      // eslint-disable-next-line no-console
+      console.groupEnd();
       const newLogs = api.logs.slice(prevLogsLength);
 
       // Process notifications even on error

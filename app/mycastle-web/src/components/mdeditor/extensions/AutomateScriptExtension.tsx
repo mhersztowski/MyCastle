@@ -502,6 +502,36 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     setDialogCode(model.getValue());
   }, []);
 
+  /** Insert a `await import(url)` snippet at the cursor. Picker passes the
+   *  HTTP URL (already pointing at `/public/drive/users/{u}/...`), the
+   *  source filename for the marker comment, and the list of named exports
+   *  it detected by parsing the file. We generate a module-variable name
+   *  (filename → camelCase) plus a destructure line listing every export —
+   *  the author doesn't have to copy names by hand. */
+  const handleIncludeImport = useCallback((url: string, sourcePath: string, exports: string[]) => {
+    // 'drive/public/lit/components/clock.module.js' → 'clockModule'
+    const basename = sourcePath.split('/').pop() ?? 'mod';
+    const stem = basename.replace(/\.(module\.)?(m?js|ts)$/i, '').replace(/\.module$/, '');
+    const varName = stem
+      .replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase())
+      .replace(/[^a-zA-Z0-9]/g, '')
+      + 'Module';
+
+    // If the picker found named exports, generate the destructure line so
+    // identifiers like CLOCK_TAG are immediately in scope. Otherwise leave a
+    // hint comment — the author can add by hand once they know the shape.
+    const destructure = exports.length > 0
+      ? `const { ${exports.join(', ')} } = ${varName};\n`
+      : `// dostęp: ${varName}.<nazwa eksportu> — destrukturyzuj wg potrzeb\n`;
+
+    const snippet =
+      `\n// ─── import: ${sourcePath} ───\n` +
+      `const ${varName} = await import('${url}');\n` +
+      destructure +
+      `// ----- import ${sourcePath}\n`;
+    handleIncludeInsert(snippet);
+  }, [handleIncludeInsert]);
+
   // When a run produces logs but no visible output, auto-switch to the Logs
   // tab so users don't think the script silently did nothing. Only triggers
   // on transitions (new logs since last status change), not while the user
@@ -825,16 +855,25 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                   '| lang=', model.getLanguageId());
                 void (async () => {
                   try {
-                    const getWorker = await monaco.languages.typescript.getJavaScriptWorker();
+                    // Probe the worker matching the model's actual language.
+                    // The editor now defaults to TypeScript (so ambient .d.ts
+                    // declarations are visible), and calling getJavaScriptWorker
+                    // for a TS model returns undefined → the old probe always
+                    // failed with `(err as Error).message === undefined`, even
+                    // though IntelliSense was fine.
+                    const lang = model.getLanguageId();
+                    const getWorker = lang === 'typescript'
+                      ? await monaco.languages.typescript.getTypeScriptWorker()
+                      : await monaco.languages.typescript.getJavaScriptWorker();
                     const proxy = await Promise.race([
                       getWorker(model.uri),
                       new Promise<never>((_, reject) =>
                         setTimeout(() => reject(new Error('worker getProxy timeout')), 5000)),
                     ]);
                     // eslint-disable-next-line no-console
-                    console.log('[AutomateMonaco] JS worker responsive:', typeof proxy);
+                    console.log(`[AutomateMonaco] ${lang} worker responsive:`, typeof proxy);
                   } catch (err) {
-                    console.warn('[AutomateMonaco] JS worker probe FAILED:', (err as Error).message);
+                    console.warn('[AutomateMonaco] worker probe FAILED:', (err as Error).message);
                   }
                 })();
               }}
@@ -1010,6 +1049,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             onClose={() => setIncludeOpen(false)}
             userName={userName}
             onInsert={(content) => handleIncludeInsert(content)}
+            onInsertImport={(url, sourcePath, exports) => handleIncludeImport(url, sourcePath, exports)}
           />
         )}
       </Suspense>
