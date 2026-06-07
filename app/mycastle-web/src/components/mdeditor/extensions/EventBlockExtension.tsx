@@ -48,7 +48,15 @@ function EventBlockNodeView({ node, updateAttributes, deleteNode }: NodeViewProp
   const [editing, setEditing] = useState(false);
 
   return (
-    <NodeViewWrapper data-event-block>
+    // `data-start` / `data-end` are mirrored onto the runtime wrapper so the
+    // "now marker" overlay (TodayNowMarker.tsx) can scan the document for
+    // event blocks and position itself relative to them — without it the
+    // marker would have to peek into TipTap state, which it doesn't see.
+    <NodeViewWrapper
+      data-event-block
+      data-start={attrs.start || undefined}
+      data-end={attrs.end || undefined}
+    >
       <Paper
         variant="outlined"
         sx={{

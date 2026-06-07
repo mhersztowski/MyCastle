@@ -1172,25 +1172,52 @@ export default function DrivePage(): React.JSX.Element {
   }, [viewing, editedText, cwd, userName, toast]);
 
   // ── Upload (file input + drag-and-drop) ─────────────────────────────────
-  const upload = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files);
+  const upload = useCallback(async (files: ReadonlyArray<File | { file: File; relPath: string }>) => {
+    // Accept either a plain File[] (from <input type=file>) or a list with
+    // pre-computed relative paths (from a folder drag-and-drop). Normalise
+    // both into the same `{file, relPath}` shape so the upload loop below
+    // doesn't need to branch.
+    const arr = Array.from(files).map(item =>
+      item instanceof File ? { file: item, relPath: item.name } : item,
+    );
     if (arr.length === 0) return;
     // Base64 encoding inflates ~33%. The backend's JSON body cap is 200 MB,
     // so anything past ~140 MB raw will be rejected before we even POST.
     // Pre-flight check gives a useful error instead of a vague 500.
     const HARD_LIMIT_BYTES = 140 * 1024 * 1024;
     setUploading({ done: 0, total: arr.length, currentName: null, currentPct: 0, failed: 0 });
+    // mkdir is idempotent at this layer (we ignore errors), but doing it once
+    // per directory saves a round-trip per file in deep tree uploads.
+    const createdDirs = new Set<string>();
     let done = 0;
     let failed = 0;
-    for (const file of arr) {
+    for (const { file, relPath } of arr) {
       // Show file name + reset per-file progress before each file starts.
-      setUploading({ done, total: arr.length, currentName: file.name, currentPct: 0, failed });
+      // Use relPath in the display so folder uploads show 'sub/foo.js' not just 'foo.js'.
+      setUploading({ done, total: arr.length, currentName: relPath, currentPct: 0, failed });
       try {
         if (file.size > HARD_LIMIT_BYTES) {
           throw new Error(`Plik za duży (${(file.size / 1024 / 1024).toFixed(1)} MB; limit ${(HARD_LIMIT_BYTES / 1024 / 1024).toFixed(0)} MB)`);
         }
         const b64 = await fileToBase64(file);
-        const rel = cwd ? `${cwd}/${file.name}` : file.name;
+        const rel = cwd ? `${cwd}/${relPath}` : relPath;
+        // For files inside subdirectories, ensure every parent dir exists
+        // (Node's writeFile would error on a missing parent). We walk the
+        // path and mkdir each segment in order — quietly ignoring "already
+        // exists" responses since the backend doesn't surface them
+        // specifically.
+        const lastSlash = rel.lastIndexOf('/');
+        if (lastSlash > 0) {
+          const segments = rel.slice(0, lastSlash).split('/');
+          let acc = '';
+          for (const seg of segments) {
+            acc = acc ? `${acc}/${seg}` : seg;
+            if (!createdDirs.has(acc)) {
+              await vfsMkdir(userName, acc).catch(() => { /* already exists or race */ });
+              createdDirs.add(acc);
+            }
+          }
+        }
         // Live byte progress via the XHR variant of vfsWriteFile.
         await vfsWriteFile(userName, rel, b64, (pct) => {
           setUploading((prev) => prev ? { ...prev, currentPct: pct } : prev);
@@ -1203,7 +1230,7 @@ export default function DrivePage(): React.JSX.Element {
         const friendly = /413|too large/i.test(msg)
           ? `Plik za duży dla serwera (${(file.size / 1024 / 1024).toFixed(1)} MB) — zwiększ limit lub podziel`
           : msg;
-        toast(`Błąd uploadu "${file.name}": ${friendly}`, 'error');
+        toast(`Błąd uploadu "${relPath}": ${friendly}`, 'error');
       }
       done++;
       setUploading((prev) => prev ? { ...prev, done, currentPct: 100, failed } : prev);
@@ -1214,18 +1241,96 @@ export default function DrivePage(): React.JSX.Element {
     await refresh();
   }, [userName, cwd, refresh, toast]);
 
+  /**
+   * Walk a DataTransferItemList from a drop event, recursively expanding any
+   * directories. Returns a flat list of files with their relative paths
+   * preserved (`sub/foo.js`).
+   *
+   * Uses `webkitGetAsEntry()` — the only Web API that actually exposes
+   * dropped directory structure. Note that the entries become stale ~100ms
+   * after the drop event, so we collect everything synchronously into
+   * promises first and only await afterwards. Otherwise Chrome throws
+   * `NotFoundError: A requested file or directory could not be found at
+   * the time an operation was processed.` — that's the exact error from
+   * the report.
+   */
+  const collectDroppedFiles = useCallback(async (
+    items: DataTransferItemList,
+  ): Promise<{ file: File; relPath: string }[]> => {
+    const results: { file: File; relPath: string }[] = [];
+
+    const readDirEntries = (reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> => {
+      // readEntries returns at most ~100 entries per call; iterate until empty.
+      return new Promise((resolve, reject) => {
+        const all: FileSystemEntry[] = [];
+        const step = () => reader.readEntries((batch) => {
+          if (batch.length === 0) resolve(all);
+          else { all.push(...batch); step(); }
+        }, reject);
+        step();
+      });
+    };
+
+    const entryToFile = (entry: FileSystemFileEntry): Promise<File> =>
+      new Promise((resolve, reject) => entry.file(resolve, reject));
+
+    const walk = async (entry: FileSystemEntry, prefix: string): Promise<void> => {
+      if (entry.isFile) {
+        const file = await entryToFile(entry as FileSystemFileEntry);
+        results.push({ file, relPath: prefix ? `${prefix}/${file.name}` : file.name });
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const children = await readDirEntries(reader);
+        for (const child of children) {
+          await walk(child, prefix ? `${prefix}/${entry.name}` : entry.name);
+        }
+      }
+    };
+
+    // Materialise entries synchronously — they become invalid if we wait.
+    const entries: FileSystemEntry[] = [];
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue;
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) entries.push(entry);
+    }
+    // Now walk asynchronously — at this point we hold real entry references,
+    // not items from the original event.
+    for (const entry of entries) await walk(entry, '');
+    return results;
+  }, []);
+
   const onFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) void upload(e.target.files);
+    if (e.target.files) void upload(Array.from(e.target.files));
     e.target.value = '';
   }, [upload]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      void upload(e.dataTransfer.files);
+    // Use the items list (with webkitGetAsEntry) when the browser exposes
+    // it — that's the only way to detect dropped folders and recursively
+    // upload their contents. Falls back to plain files when items aren't
+    // available (very old browsers, or items.kind!=='file' for everything).
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      void (async () => {
+        try {
+          const entries = await collectDroppedFiles(e.dataTransfer.items);
+          if (entries.length > 0) {
+            await upload(entries);
+          } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            // Some browsers (Safari < 13) populate `files` but not entry-aware
+            // `items`. Fall back to flat upload in that case.
+            await upload(Array.from(e.dataTransfer.files));
+          }
+        } catch (err) {
+          toast(`Nie udało się odczytać upuszczonych plików: ${(err as Error).message}`, 'error');
+        }
+      })();
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      void upload(Array.from(e.dataTransfer.files));
     }
-  }, [upload]);
+  }, [upload, collectDroppedFiles, toast]);
 
   // ── Upload dialog: staging area for files before commit ────────────────
 

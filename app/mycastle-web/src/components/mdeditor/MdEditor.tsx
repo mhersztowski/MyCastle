@@ -8,7 +8,7 @@
 // monaco workers chunk only loads when an MdEditor instance is on screen.
 import '../../modules/editor/monacoWorkers';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -40,6 +40,8 @@ import MdEditorToolbar from './MdEditorToolbar';
 import SlashCommands from './extensions/SlashCommands';
 import EventDialog from './EventDialog';
 import { EventBlock } from './extensions/EventBlockExtension';
+import TodayNowMarker from './TodayNowMarker';
+import { parseDateFromPath } from './eventTemplates';
 import { InlineMath, MathBlock } from './extensions/MathExtension';
 import { EditableImage } from './extensions/ImageExtension';
 import { AudioEmbed } from './extensions/AudioExtension';
@@ -108,6 +110,24 @@ const MdEditor: React.FC<MdEditorProps> = ({
   const blockMenuOpenRef = useRef(false);
   useEffect(() => { onCreatePageRef.current = onCreatePage; }, [onCreatePage]);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
+
+  // ── "Today" detection — drives the "now" marker overlay ──────────────
+  // Only rendered when filePath points at today's daily journal in any
+  // `…/{yyyy}/{mm}/{dd}.md` layout (Calendar/yyyy/… is the canonical one
+  // but the parser is forgiving). Compared against the user's local midnight
+  // since `parseDateFromPath` returns a Date at local 00:00.
+  const isTodayJournal = useMemo(() => {
+    const fileDate = parseDateFromPath(filePath);
+    if (!fileDate) return false;
+    const today = new Date();
+    return fileDate.getFullYear() === today.getFullYear()
+      && fileDate.getMonth() === today.getMonth()
+      && fileDate.getDate() === today.getDate();
+  }, [filePath]);
+  // Ticker bumped on every editor 'update' — the NowMarker re-measures event
+  // block positions when this changes (typing inserts/removes nodes which
+  // shift everything below).
+  const [contentTick, setContentTick] = useState(0);
   const [bubbleMenuAnchor, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
 
@@ -374,7 +394,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
   useEffect(() => {
     if (!editor || !editable) return;
     updateBlockPositions();
+    const bumpTick = () => setContentTick(t => t + 1);
     editor.on('update', updateBlockPositions);
+    editor.on('update', bumpTick);
     editor.on('transaction', updateBlockPositions);
 
     const onWinResize = () => updateBlockPositions();
@@ -393,6 +415,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
     return () => {
       editor.off('update', updateBlockPositions);
+      editor.off('update', bumpTick);
       editor.off('transaction', updateBlockPositions);
       window.removeEventListener('resize', onWinResize);
       window.removeEventListener('scroll', onAnyScroll, true);
@@ -924,6 +947,15 @@ const MdEditor: React.FC<MdEditorProps> = ({
         }}
       >
         <EditorContent editor={editor} className="md-editor-content" />
+        {/* "Now" timeline marker — only when this is today's daily journal.
+            Pulls event positions from data-start/data-end attrs in the DOM
+            and floats a horizontal bar at the current time slot. */}
+        {isTodayJournal && (
+          <TodayNowMarker
+            containerRef={contentWrapperRef}
+            layoutTick={contentTick}
+          />
+        )}
       </Box>
     </Box>
     </AutomateDocumentProvider>
