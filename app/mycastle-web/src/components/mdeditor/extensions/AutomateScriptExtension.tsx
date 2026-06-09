@@ -27,8 +27,6 @@ import {
   DialogContent,
   DialogActions,
   Button,
-  FormControlLabel,
-  Switch,
   Tab,
   Tabs,
   Badge,
@@ -39,9 +37,8 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
-import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
-import CodeIcon from '@mui/icons-material/Code';
-import HtmlIcon from '@mui/icons-material/Html';
+import SettingsIcon from '@mui/icons-material/Settings';
+import LabelIcon from '@mui/icons-material/Label';
 import Editor from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import type { editor as MonacoEditorTypes } from 'monaco-editor';
@@ -62,6 +59,10 @@ import { LIBRARIES, parseLibrariesFromCode, preloadLibrariesForCode } from './au
 
 // Lazy — picker only loads when the user clicks "Użyj biblioteki".
 const AutomateLibraryPickerDialog = lazy(() => import('./AutomateLibraryPickerDialog'));
+// Settings dialog is small but only ever opens on user click — lazy-load to
+// keep the initial document parse cheap (every script block in the doc would
+// otherwise pull this code).
+const AutomateScriptSettingsDialog = lazy(() => import('./AutomateScriptSettingsDialog'));
 import { useAutomateDocument, DisplayItem } from './AutomateDocumentContext';
 
 const DISPLAY_API_TYPES = `
@@ -311,7 +312,6 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
 const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
   const blockId = useRef(node.attrs.blockId || crypto.randomUUID?.() || Math.random().toString(36).substr(2, 9));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const autorunTriggeredRef = useRef(false);
 
   const {
     registerBlock,
@@ -320,6 +320,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     runBlock,
     getBlockState,
     clearBlockOutput,
+    blocks,
   } = useAutomateDocument();
 
   const [code, setCode] = useState(node.attrs.code as string || '');
@@ -327,6 +328,12 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const [helpOpen, setHelpOpen] = useState(false);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
+  // Consolidated settings dialog (Auto / view mode / library / tags) opened
+  // from a single ⚙ button — both in the in-doc header and the fullscreen
+  // editor title bar. Previously those settings were scattered across the
+  // header bar; that worked but discoverability was poor and tags had no
+  // home at all. One button, one dialog.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // viewMode controls how the block renders inside the markdown document.
   // 'code' = current full UI (header + textarea + output panel).
   // 'html' = compact view that only shows the script's result rendered as HTML
@@ -348,7 +355,79 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   // return value, 'logs' shows api.log.*. Default to output because that's
   // where most scripts surface visible results.
   const [dialogTab, setDialogTab] = useState<'output' | 'logs'>('output');
+  // Output panel height — persisted across dialog opens. Initialised once
+  // from localStorage; the actual clamp (min 80 / max 80% of viewport) is
+  // applied during drag, so a previously-saved-then-shrunken-viewport value
+  // can't lock the user out of the editor.
+  const OUTPUT_PANEL_KEY = 'automate-output-panel-height';
+  const [outputPanelHeight, setOutputPanelHeight] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(OUTPUT_PANEL_KEY);
+      const n = saved ? parseInt(saved, 10) : NaN;
+      return Number.isFinite(n) && n > 0 ? n : 300;
+    } catch { return 300; }
+  });
+  // Persist after the drag settles, not on every move — avoids hammering
+  // localStorage during fast drags.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { localStorage.setItem(OUTPUT_PANEL_KEY, String(outputPanelHeight)); } catch { /* full storage */ }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [outputPanelHeight]);
+  // Refs for the drag — kept out of state so move events don't re-render.
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const onDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startHeight: outputPanelHeight };
+    // Document-level cursor + select disable so the experience matches
+    // VSCode's split bars (cursor doesn't flicker when sliding over the
+    // editor or empty areas).
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  }, [outputPanelHeight]);
+
+  // Mouse/Touch move + up handlers — installed on window so a drag started
+  // on the divider keeps tracking even if the cursor leaves it. Cleanup
+  // restores cursor/select when the user releases.
+  useEffect(() => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const y = 'touches' in e ? e.touches[0]?.clientY ?? d.startY : e.clientY;
+      const delta = d.startY - y;   // dragging up grows the panel
+      const max = Math.max(160, window.innerHeight * 0.8);
+      const next = Math.max(80, Math.min(max, d.startHeight + delta));
+      setOutputPanelHeight(next);
+    };
+    const onUp = () => {
+      if (!dragRef.current) return;
+      dragRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchend',  onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend',  onUp);
+    };
+  }, []);
   const autorun = node.attrs.autorun as boolean;
+  // Tags — empty array fallback (older saved blocks won't have the attr).
+  // The settings dialog edits this array via updateAttributes({ tags: … })
+  // and the markdown converter round-trips it as `t=a,b,c` in the fence
+  // params.
+  const tags: string[] = Array.isArray(node.attrs.tags) ? (node.attrs.tags as string[]) : [];
+  // Optional fixed height — null means "auto" (current behaviour). When a
+  // number, applied as `height` on Paper, and the content slots flex inside.
+  const windowHeight: number | null = typeof node.attrs.windowHeight === 'number'
+    ? node.attrs.windowHeight : null;
 
   // Assign blockId if not set
   useEffect(() => {
@@ -369,18 +448,34 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     updateBlockCode(blockId.current, code);
   }, [code, updateBlockCode]);
 
-  // Autorun effect - run script automatically when loaded if autorun is enabled
+  // Autorun — run script automatically once on document load.
+  //
+  // History of bugs this is designed to avoid:
+  //   1. `triggeredRef` based gating fired before registerBlock's setBlocks
+  //      committed, so runBlock saw "not found" and the ref then permanently
+  //      blocked subsequent attempts. Autorun never ran.
+  //   2. getBlockState-gated retry race'd against blocksRef sync (useEffect
+  //      runs after render), so runBlock read undefined from the ref even
+  //      though React state already had the block.
+  //
+  // Current design:
+  //   - Depend directly on `blocks` Map (not a derived selector). Every
+  //     setBlocks downstream re-fires this effect.
+  //   - Read block from `blocks` (state, not ref) so we see the committed
+  //     entry as soon as React renders it.
+  //   - `runBlock` now ALSO accepts a missing-from-ref block as long as
+  //     codeOverride is provided (see AutomateDocumentContext) — so even
+  //     if blocksRef hasn't sync'd yet, autorun will execute against the
+  //     code we pass.
+  //   - Gate by `status !== 'idle'` — once runBlock flips status, this
+  //     effect short-circuits (idempotent).
   useEffect(() => {
-    if (autorun && code && !autorunTriggeredRef.current) {
-      autorunTriggeredRef.current = true;
-      runBlock(blockId.current);
-    }
-  }, [autorun, code, runBlock]);
-
-  // Reset autorun trigger when blockId changes
-  useEffect(() => {
-    autorunTriggeredRef.current = false;
-  }, [node.attrs.blockId]);
+    if (!autorun || !code) return;
+    const block = blocks.get(blockId.current);
+    if (!block) return;                  // registerBlock setBlocks not committed yet
+    if (block.status !== 'idle') return; // already ran (running / completed / error)
+    runBlock(blockId.current, code);
+  }, [autorun, code, blocks, runBlock]);
 
   const blockState = getBlockState(blockId.current);
   const status = blockState?.status || 'idle';
@@ -393,14 +488,22 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     const newCode = e.target.value;
     setCode(newCode);
     updateAttributes({ code: newCode });
-  }, [updateAttributes]);
+    // Push directly into the document context too — same reasoning as
+    // handleEditorDialogRun: the `[code]` useEffect that normally syncs
+    // this fires AFTER render, so a Ctrl+Enter immediately after a
+    // keystroke would execute the previous buffer otherwise.
+    updateBlockCode(blockId.current, newCode);
+  }, [updateAttributes, updateBlockCode]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Ctrl+Enter - run script
+    // Ctrl+Enter - run script. Pass `code` as override to skip the
+    // useEffect→updateBlockCode commit cycle (would otherwise run the
+    // last-saved version when the user hits Ctrl+Enter on freshly-typed
+    // input that hasn't been synced to the context map yet).
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      runBlock(blockId.current);
+      runBlock(blockId.current, code);
       return;
     }
 
@@ -414,6 +517,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
       const newCode = code.substring(0, start) + '  ' + code.substring(end);
       setCode(newCode);
       updateAttributes({ code: newCode });
+      updateBlockCode(blockId.current, newCode);
       // Restore cursor position
       requestAnimationFrame(() => {
         textarea.selectionStart = textarea.selectionEnd = start + 2;
@@ -423,12 +527,13 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
 
     // Prevent Tiptap from capturing keys while typing
     e.stopPropagation();
-  }, [code, updateAttributes, runBlock]);
+  }, [code, updateAttributes, updateBlockCode, runBlock]);
 
   const handleRun = useCallback(() => {
-    // Preload CDN libraries declared via `// @library:` markers before
-    // running — same mechanism as the fullscreen dialog Run button.
-    void preloadLibrariesForCode(code).finally(() => runBlock(blockId.current));
+    // Library preload is handled INSIDE runBlock now (see runBlock in
+    // AutomateDocumentContext), so CDN/CORS failures surface as a block
+    // error rather than getting swallowed by a `.finally` chain here.
+    void runBlock(blockId.current, code);
   }, [code, runBlock]);
 
   const handleClear = useCallback(() => {
@@ -443,25 +548,22 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const handleEditorDialogSave = useCallback(() => {
     setCode(dialogCode);
     updateAttributes({ code: dialogCode });
+    updateBlockCode(blockId.current, dialogCode);
     setEditorDialogOpen(false);
-  }, [dialogCode, updateAttributes]);
+  }, [dialogCode, updateAttributes, updateBlockCode]);
 
   /** Save + run inside the fullscreen dialog — keeps the dialog open so the
    *  user sees the output panel below the editor without losing context. */
   const handleEditorDialogRun = useCallback(() => {
     setCode(dialogCode);
     updateAttributes({ code: dialogCode });
-    // useAutomateDocument's runBlock reads the block's persisted code, so the
-    // updateAttributes above must land before runBlock fires. updateAttributes
-    // is synchronous in TipTap (mutates state immediately), so we can call
-    // runBlock in the same tick.
-    //
-    // Preload any `// @library: foo` libraries first — they're CDN-injected
-    // script tags that need to land before AsyncFunction body executes. We
-    // fire-and-forget the run; if the preload throws, runBlock would still
-    // attempt to execute and surface the error in the standard error path.
-    void preloadLibrariesForCode(dialogCode).finally(() => runBlock(blockId.current));
-  }, [dialogCode, updateAttributes, runBlock]);
+    updateBlockCode(blockId.current, dialogCode);
+    // Pass dialogCode as override so runBlock uses the freshly-edited body
+    // regardless of whether the context's block.code has committed yet —
+    // closes the race where Run-after-Insert executed the stale buffer.
+    // Library preload happens inside runBlock now (uniform error path).
+    void runBlock(blockId.current, dialogCode);
+  }, [dialogCode, updateAttributes, updateBlockCode, runBlock]);
 
   /** Library picker callback — receives a fresh code body with `// @library:`
    *  marker(s) inserted. Mirror the change into both the local `dialogCode`
@@ -471,11 +573,12 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     setDialogCode(newCode);
     setCode(newCode);
     updateAttributes({ code: newCode });
+    updateBlockCode(blockId.current, newCode);
     // Best-effort: also kick off a CDN preload so the runtime is ready by
     // the time the user clicks Run. Ignored on failure — the actual run
     // path retries and surfaces errors properly.
     void preloadLibrariesForCode(newCode);
-  }, [updateAttributes]);
+  }, [updateAttributes, updateBlockCode]);
 
   /** Insert the picker's chosen file contents at the cursor (or replace
    *  current selection). Goes through `executeEdits` so it lands in Monaco's
@@ -556,6 +659,16 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           borderColor: selected ? 'success.main' : 'grey.300',
           overflow: 'hidden',
           my: 1,
+          // Fixed-height mode: convert Paper into a flex column so children
+          // (header / editor / output) divvy up the explicit height. The
+          // header has natural size; the editor slot gets flex:1; the
+          // output panel keeps its intrinsic size at the bottom. When
+          // windowHeight is null we leave everything as auto-sizing.
+          ...(windowHeight ? {
+            height: windowHeight,
+            display: 'flex',
+            flexDirection: 'column',
+          } : {}),
         }}
         className="automate-script-wrapper"
       >
@@ -569,24 +682,41 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           color: '#d4d4d4',
         }}>
           <SmartToyIcon sx={{ fontSize: 16, mr: 0.5, color: '#4caf50' }} />
-          <Typography variant="caption" sx={{ flex: 1, color: '#d4d4d4' }}>
+          <Typography variant="caption" sx={{ color: '#d4d4d4' }}>
             Skrypt automatyzacji
           </Typography>
-          <FormControlLabel
-            control={
-              <Switch
-                size="small"
-                checked={autorun}
-                onChange={(e) => updateAttributes({ autorun: e.target.checked })}
-                sx={{
-                  '& .MuiSwitch-thumb': { bgcolor: autorun ? '#4caf50' : '#757575' },
-                  '& .MuiSwitch-track': { bgcolor: autorun ? 'rgba(76,175,80,0.5)' : 'rgba(255,255,255,0.2)' },
-                }}
-              />
-            }
-            label={<Typography variant="caption" sx={{ color: '#d4d4d4', fontSize: '0.65rem' }}>Auto</Typography>}
-            sx={{ mr: 0.5, ml: 0 }}
-          />
+          {/* Inline status chips — make it visible at a glance whether
+              autorun is on, the block is in HTML view mode, and what tags
+              it has, without having to open the settings dialog. */}
+          {autorun && (
+            <Box sx={{
+              ml: 1, px: 0.75, py: 0.1, borderRadius: 0.5,
+              bgcolor: 'rgba(76,175,80,0.18)', color: '#4caf50',
+              fontSize: '0.6rem', fontWeight: 600, letterSpacing: 0.3,
+            }}>
+              AUTO
+            </Box>
+          )}
+          {viewMode === 'html' && (
+            <Box sx={{
+              ml: 0.5, px: 0.75, py: 0.1, borderRadius: 0.5,
+              bgcolor: 'rgba(255,193,7,0.18)', color: '#ffb300',
+              fontSize: '0.6rem', fontWeight: 600, letterSpacing: 0.3,
+            }}>
+              HTML
+            </Box>
+          )}
+          {tags.length > 0 && (
+            <Box sx={{
+              ml: 0.5, display: 'flex', alignItems: 'center', gap: 0.25,
+              color: '#9e9e9e', fontSize: '0.6rem',
+            }}>
+              <LabelIcon sx={{ fontSize: 12 }} />
+              {tags.slice(0, 3).join(', ')}
+              {tags.length > 3 && ` +${tags.length - 3}`}
+            </Box>
+          )}
+          <Box sx={{ flex: 1 }} />
           <Tooltip title="Uruchom (Ctrl+Enter)">
             <span>
               <IconButton
@@ -612,17 +742,17 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               <OpenInFullIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Tooltip>
-          {/* View-mode toggle: 'code' (full editor surface) ↔ 'html' (only
-              the rendered output, treated as HTML). Switching is a single
-              attribute flip; we keep the script body untouched so the user
-              can swap back to edit. */}
-          <Tooltip title={viewMode === 'code' ? 'Widok: HTML (renderuj wynik)' : 'Widok: Kod (edycja)'}>
+          {/* Consolidated settings — Auto / view mode / library / tags.
+              Replaces the previous header-mounted Auto switch and the
+              standalone HTML/Code toggle. The chips above keep status
+              visible without forcing the dialog open. */}
+          <Tooltip title="Ustawienia skryptu">
             <IconButton
               size="small"
-              onClick={() => updateAttributes({ viewMode: viewMode === 'code' ? 'html' : 'code' })}
+              onClick={() => setSettingsOpen(true)}
               sx={{ color: '#d4d4d4', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}
             >
-              {viewMode === 'code' ? <HtmlIcon sx={{ fontSize: 16 }} /> : <CodeIcon sx={{ fontSize: 16 }} />}
+              <SettingsIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Tooltip>
           <Tooltip title="Dokumentacja Automate Script">
@@ -652,10 +782,33 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           </Tooltip>
         </Box>
 
-        {/* Code editor — only rendered in 'code' view mode. The 'html' mode
-            hides the editor surface entirely (the user re-enters editing by
-            toggling back or via the fullscreen editor dialog). */}
-        {viewMode === 'code' && (
+        {/* ── Surface decision matrix ──────────────────────────────────────
+              The component has three possible content surfaces below the
+              header and they're mutually exclusive in the layout but the
+              triggers overlap, so we compute them up front:
+
+                showCodeEditor      — textarea with source. Only in auto-
+                                      height + code view mode. Fixed-height
+                                      hides the editor entirely because a
+                                      cramped textarea isn't actually
+                                      useful — author edits in fullscreen
+                                      anyway.
+                showOutputCanvas    — the "rendering" surface: display.dom /
+                                      display.html items + result fallback +
+                                      error. Used by HTML view mode AND by
+                                      fixed-height code mode (the latter is
+                                      the "I want a Three.js canvas in my
+                                      doc" case).
+                showFooterOutputPanel — the bottom output footer (used for
+                                      auto-height code mode when the script
+                                      has produced anything, since the
+                                      textarea takes the main surface).
+
+              Designing this as three booleans rather than nested ternaries
+              makes the layout easier to follow and dramatically reduces
+              the chance that two surfaces render simultaneously and double
+              up the displayed output.                                       */}
+        {viewMode === 'code' && !windowHeight && (
           <Box sx={{ position: 'relative' }}>
             <textarea
               ref={textareaRef}
@@ -675,45 +828,46 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                 color: '#d4d4d4',
                 border: 'none',
                 outline: 'none',
-                resize: 'vertical',
                 tabSize: 2,
                 boxSizing: 'border-box',
                 display: 'block',
+                resize: 'vertical',
               }}
             />
           </Box>
         )}
 
-        {/* HTML view — surfaces only the visual output, no code or logs. Three
-            sources, in priority order:
-              1. `display.dom(...)` / `display.html(...)` items, mounted as-is
-                 (this is the live-canvas path — Three.js works here because we
-                 appendChild the renderer's domElement and never serialise it).
-              2. `result` returned from the script — if a string, treated as
-                 HTML; otherwise JSON-pretty-printed as a debugging fallback.
-              3. Empty-state hint.
-            `dangerouslySetInnerHTML` is acceptable because the rendered HTML
-            is user-authored in this same document — there's no cross-origin
-            / untrusted input.
-        */}
-        {viewMode === 'html' && (
-          <Box sx={{ p: 1.5, minHeight: 60, bgcolor: 'background.paper' }}>
+        {/* Output canvas — HTML view OR fixed-height code view.
+            Priority of content sources:
+              1. `display.dom(...)` / `display.html(...)` items (live-mount
+                 path — Three.js canvases land here).
+              2. `result` (string → HTML, anything else → JSON pretty).
+              3. Error banner.
+              4. Empty-state hint.
+            `dangerouslySetInnerHTML` is fine — input is user-authored in
+            the same document, no cross-origin / untrusted content. */}
+        {(viewMode === 'html' || (viewMode === 'code' && !!windowHeight)) && (
+          <Box sx={{
+            p: 1.5,
+            minHeight: 60,
+            bgcolor: 'background.paper',
+            // Fixed-height: fill remaining flex slot and scroll inside —
+            // critical for canvases that should respect the user-set viewport.
+            ...(windowHeight ? { flex: 1, minHeight: 0, overflow: 'auto' } : {}),
+          }}>
             {error ? (
               <Alert severity="error" sx={{ fontSize: '0.85em' }}>{error}</Alert>
             ) : output.length > 0 ? (
-              // display.* items take priority because that's the only path
-              // that supports live DOM mounting. Re-use DisplayOutput so the
-              // 'dom'/'html' renderers above are the single source of truth.
               <DisplayOutput items={output} />
             ) : result === undefined || result === null ? (
               <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>
-                Brak wyniku. Uruchom skrypt (▶) — w trybie HTML widoczne są elementy z display.html / display.dom oraz zwrócona wartość.
+                Brak wyniku. Uruchom skrypt (▶) — w tym widoku pokazują się
+                elementy z display.html / display.dom oraz zwrócona wartość.
+                Edycja kodu źródłowego w pełnoekranowym edytorze (⛶).
               </Typography>
             ) : typeof result === 'string' ? (
               <div dangerouslySetInnerHTML={{ __html: result }} />
             ) : (
-              // Non-string return — pretty-print as JSON inside a <pre> so the
-              // user still sees something useful instead of "[object Object]".
               <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.78em', m: 0, whiteSpace: 'pre-wrap' }}>
                 {JSON.stringify(result, null, 2)}
               </Box>
@@ -721,9 +875,16 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           </Box>
         )}
 
-        {/* Output panel */}
-        {hasOutput && (
-          <Box sx={{ borderTop: '1px solid', borderColor: 'divider', maxHeight: 300, overflow: 'auto' }}>
+        {/* Footer output panel — only for auto-height code mode. In HTML
+            view OR fixed-height code mode the canvas above already shows
+            output, so a second panel would double up the rendering. */}
+        {hasOutput && viewMode === 'code' && !windowHeight && (
+          <Box sx={{
+            borderTop: '1px solid',
+            borderColor: 'divider',
+            maxHeight: 300,
+            overflow: 'auto',
+          }}>
             {error && (
               <Alert severity="error" sx={{ borderRadius: 0, py: 0.25 }}>
                 {error}
@@ -785,12 +946,13 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               </IconButton>
             </span>
           </Tooltip>
-          {/* "Use library" button — opens the catalog picker (Three.js etc.).
-              Selecting a library inserts a `// @library:` marker that the
-              runtime preloader + IntelliSense both react to. */}
-          <Tooltip title="Użyj biblioteki (Three.js, …)">
-            <IconButton size="small" onClick={() => setLibraryPickerOpen(true)}>
-              <LibraryAddIcon fontSize="small" />
+          {/* Settings — same dialog as the in-doc header button. The
+              dedicated Library button used to live here; it moved into
+              the settings dialog so all per-block knobs are reachable
+              from a single ⚙. */}
+          <Tooltip title="Ustawienia skryptu">
+            <IconButton size="small" onClick={() => setSettingsOpen(true)}>
+              <SettingsIcon fontSize="small" />
             </IconButton>
           </Tooltip>
           <Tooltip title="Dokumentacja Automate Script">
@@ -890,62 +1052,115 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             />
           </Box>
 
+          {/* Resizer — 5px draggable bar. Cursor turns into ns-resize on
+              hover so the affordance is obvious. The actual height update
+              lives in the global mousemove handler (state useEffect above). */}
+          <Box
+            onMouseDown={onDividerMouseDown}
+            onTouchStart={(e) => {
+              const t = e.touches[0];
+              if (!t) return;
+              dragRef.current = { startY: t.clientY, startHeight: outputPanelHeight };
+            }}
+            sx={{
+              flex: '0 0 auto',
+              height: 5,
+              cursor: 'ns-resize',
+              bgcolor: 'divider',
+              opacity: 0.5,
+              transition: 'opacity 0.15s, background 0.15s',
+              '&:hover, &:active': { opacity: 1, bgcolor: 'primary.main' },
+              // A small invisible hit area on each side makes the grab feel
+              // bigger than the visible bar — easier to land on with a mouse.
+              position: 'relative',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                inset: '-4px 0',
+              },
+            }}
+          />
+
           {/* Bottom panel — tabbed Output / Logs. Always visible inside the
               fullscreen dialog (even when empty) so the user has a stable
-              "this is where results land" anchor instead of UI jumping around
-              when the first run produces output. Capped at 40% of dialog
-              height so the editor stays usable for long output. */}
+              "this is where results land" anchor. Height is user-resizable
+              via the divider above; minHeight protects from collapse, the
+              hard min in onMove makes sure of it too. */}
           <Box
             sx={{
               flex: '0 0 auto',
-              maxHeight: '40%',
-              minHeight: 160,
+              height: outputPanelHeight,
+              minHeight: 80,
               overflow: 'hidden',
-              borderTop: '1px solid',
-              borderColor: 'divider',
               bgcolor: 'background.paper',
               display: 'flex',
               flexDirection: 'column',
             }}
           >
-            <Tabs
-              value={dialogTab}
-              onChange={(_, v) => setDialogTab(v)}
-              variant="standard"
+            {/* Tabs header with "Wyczyść" action on the right. The Tabs no
+                longer own the bottom border — the parent row does — so the
+                clear button shares the same baseline without a visible seam. */}
+            <Box
               sx={{
-                minHeight: 36,
+                display: 'flex',
+                alignItems: 'center',
                 borderBottom: 1,
                 borderColor: 'divider',
-                '& .MuiTab-root': { minHeight: 36, py: 0.5, textTransform: 'none' },
               }}
             >
-              {/* Badge shows count of "interesting" items so the user can see
-                  at a glance whether there's anything in the inactive tab. */}
-              <Tab
-                value="output"
-                label={
-                  <Badge
-                    color="primary"
-                    badgeContent={output.length + (result !== undefined ? 1 : 0) + (error ? 1 : 0)}
-                    sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
+              <Tabs
+                value={dialogTab}
+                onChange={(_, v) => setDialogTab(v)}
+                variant="standard"
+                sx={{
+                  minHeight: 36,
+                  flex: 1,
+                  '& .MuiTab-root': { minHeight: 36, py: 0.5, textTransform: 'none' },
+                }}
+              >
+                {/* Badge shows count of "interesting" items so the user can see
+                    at a glance whether there's anything in the inactive tab. */}
+                <Tab
+                  value="output"
+                  label={
+                    <Badge
+                      color="primary"
+                      badgeContent={output.length + (result !== undefined ? 1 : 0) + (error ? 1 : 0)}
+                      sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
+                    >
+                      Output
+                    </Badge>
+                  }
+                />
+                <Tab
+                  value="logs"
+                  label={
+                    <Badge
+                      color="secondary"
+                      badgeContent={logs.length}
+                      sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
+                    >
+                      Logi
+                    </Badge>
+                  }
+                />
+              </Tabs>
+              {/* Clear — wipes BOTH tabs at once (display items, logs, result,
+                  error). Disabled when there's nothing to clear so accidental
+                  clicks while writing a script don't fire. */}
+              <Tooltip title="Wyczyść output i logi">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={handleClear}
+                    disabled={!hasOutput && logs.length === 0}
+                    sx={{ mx: 1 }}
                   >
-                    Output
-                  </Badge>
-                }
-              />
-              <Tab
-                value="logs"
-                label={
-                  <Badge
-                    color="secondary"
-                    badgeContent={logs.length}
-                    sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
-                  >
-                    Logi
-                  </Badge>
-                }
-              />
-            </Tabs>
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
 
             {/* Output tab — display.* items, return value, error alert. */}
             {dialogTab === 'output' && (
@@ -1065,6 +1280,32 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           />
         )}
       </Suspense>
+
+      {/* ── Settings dialog ── */}
+      {/* Opens from both the in-doc header ⚙ and the fullscreen editor
+          title bar ⚙. Owns no persistence — every change is forwarded
+          straight to updateAttributes so it round-trips through Markdown.
+          The library picker is launched FROM here (button inside the
+          dialog), which means it stacks on top of the settings dialog —
+          that's fine, Library picker is modal on its own and closing it
+          drops us back here. */}
+      <Suspense fallback={null}>
+        {settingsOpen && (
+          <AutomateScriptSettingsDialog
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+            autorun={autorun}
+            viewMode={viewMode}
+            tags={tags}
+            windowHeight={windowHeight}
+            onAutorunChange={(v) => updateAttributes({ autorun: v })}
+            onViewModeChange={(v) => updateAttributes({ viewMode: v })}
+            onTagsChange={(next) => updateAttributes({ tags: next })}
+            onWindowHeightChange={(next) => updateAttributes({ windowHeight: next })}
+            onOpenLibraryPicker={() => setLibraryPickerOpen(true)}
+          />
+        )}
+      </Suspense>
     </NodeViewWrapper>
   );
 };
@@ -1086,6 +1327,17 @@ export const AutomateScriptBlock = Node.create({
       // 'html' renders only the script's return value as HTML — for visual
       // blocks (Three.js etc.) where the code is plumbing.
       viewMode: { default: 'code' },
+      // Free-form labels for grouping / filtering scripts (no UI semantics
+      // yet — the settings dialog edits them, the Markdown serializer
+      // round-trips them as `t=a,b,c` in the fence params, and downstream
+      // tooling can index on them).
+      tags: { default: [] as string[] },
+      // Optional fixed height (in px) for the in-doc component. `null` =
+      // auto-size (current default behaviour: textarea grows up to 400px
+      // and the output panel sits below). When set, the whole Paper becomes
+      // a flex column of that exact height — useful for embedded canvases
+      // (Three.js viewports, dashboards) where you want a stable layout.
+      windowHeight: { default: null as number | null },
     };
   },
 
@@ -1097,6 +1349,18 @@ export const AutomateScriptBlock = Node.create({
           if (typeof node === 'string') return false;
           const element = node as HTMLElement;
           const vm = element.getAttribute('data-view-mode');
+          // Tags arrive as `data-tags="a,b,c"` (URL-encoded comma-separated).
+          // Decode here so callers see a real array; skip empties so we don't
+          // surface phantom `['']` from a leading/trailing comma.
+          const tagsRaw = element.getAttribute('data-tags') || '';
+          const tags = tagsRaw
+            ? tagsRaw.split(',').map(t => decodeURIComponent(t.trim())).filter(Boolean)
+            : [];
+          // windowHeight: parse number or null. Bad/garbage values fall back
+          // to null so the block doesn't render at a broken height.
+          const whRaw = element.getAttribute('data-window-height');
+          const whNum = whRaw ? Number(whRaw) : NaN;
+          const windowHeight = Number.isFinite(whNum) && whNum > 0 ? whNum : null;
           return {
             blockId: element.getAttribute('data-block-id') || '',
             code: element.getAttribute('data-code')
@@ -1104,6 +1368,8 @@ export const AutomateScriptBlock = Node.create({
               : '',
             autorun: element.getAttribute('data-autorun') === 'true',
             viewMode: vm === 'html' ? 'html' : 'code',
+            tags,
+            windowHeight,
           };
         },
       },
@@ -1122,6 +1388,17 @@ export const AutomateScriptBlock = Node.create({
     }
     if (node.attrs.code) {
       attrs['data-code'] = encodeURIComponent(node.attrs.code);
+    }
+    // Persist tags into the DOM attr so turndown / markdownConverter can
+    // pick them up. Each tag is URL-encoded individually so commas inside
+    // a tag couldn't ever survive (they shouldn't — settings dialog
+    // normalises them — but defensive cheap encoding doesn't hurt).
+    const tagsArr: string[] = Array.isArray(node.attrs.tags) ? node.attrs.tags : [];
+    if (tagsArr.length > 0) {
+      attrs['data-tags'] = tagsArr.map(t => encodeURIComponent(t)).join(',');
+    }
+    if (typeof node.attrs.windowHeight === 'number' && node.attrs.windowHeight > 0) {
+      attrs['data-window-height'] = String(node.attrs.windowHeight);
     }
 
     return ['div', attrs];

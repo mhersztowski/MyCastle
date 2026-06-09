@@ -21,6 +21,7 @@ import {
 } from '@mui/material';
 import { markdownToHtml } from './utils/markdownConverter';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import FormatItalicIcon from '@mui/icons-material/FormatItalic';
 import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
 import CodeIcon from '@mui/icons-material/Code';
@@ -57,9 +58,13 @@ interface MdEditorToolbarProps {
   editor: Editor;
   onSave?: () => void;
   saveDisabled?: boolean;
+  /** Optional — wired by MdEditor so the "Info" toolbar button can pop the
+   *  InfoMark insertion dialog. Left optional so toolbars used in contexts
+   *  without the InfoMark extension (rare) still render. */
+  onInsertInfoMark?: () => void;
 }
 
-const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveDisabled }) => {
+const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveDisabled, onInsertInfoMark }) => {
   const [insertMenuAnchor, setInsertMenuAnchor] = useState<null | HTMLElement>(null);
   const insertMenuOpen = Boolean(insertMenuAnchor);
 
@@ -348,6 +353,13 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveD
           <ImageIcon fontSize="small" />
         </IconButton>
       </Tooltip>
+      {onInsertInfoMark && (
+        <Tooltip title="Wyróżnienie z popupem (info-mark)">
+          <IconButton size="small" onClick={onInsertInfoMark}>
+            <InfoOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       <Tooltip title="Audio">
         <IconButton size="small" onClick={addAudio} color="secondary">
           <AudiotrackIcon fontSize="small" />

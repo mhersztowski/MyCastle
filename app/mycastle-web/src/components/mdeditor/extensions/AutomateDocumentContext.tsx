@@ -3,9 +3,10 @@
  * dla blokow skryptowych w dokumencie Markdown
  */
 
-import React, { createContext, useContext, useRef, useState, useCallback } from 'react';
+import React, { createContext, useContext, useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import { AutomateSystemApi, LogEntry } from '../../../modules/automate/engine/AutomateSystemApi';
 import { AutomateSandbox } from '../../../modules/automate/engine/AutomateSandbox';
+import { preloadLibrariesForCode } from './automateLibraries';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
 
@@ -54,7 +55,7 @@ export interface AutomateDocumentContextValue {
   unregisterBlock: (id: string) => void;
   updateBlockCode: (id: string, code: string) => void;
 
-  runBlock: (id: string) => Promise<void>;
+  runBlock: (id: string, codeOverride?: string) => Promise<void>;
   runAllBlocks: () => Promise<void>;
   isRunningAll: boolean;
 
@@ -74,9 +75,13 @@ export const useAutomateDocument = (): AutomateDocumentContextValue => {
 
 interface AutomateDocumentProviderProps {
   children: React.ReactNode;
+  /** Filesystem path of the markdown file currently shown in MdEditor.
+   *  Threaded to `AutomateSystemApi.scripts.runIn{Parents,Childs}ByTag` so
+   *  those calls know what "here" means without having to ask the caller. */
+  documentPath?: string;
 }
 
-export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> = ({ children }) => {
+export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> = ({ children, documentPath }) => {
   const { dataSource } = useFilesystem();
   const { notify } = useNotification();
   const variablesRef = useRef<Record<string, unknown>>({});
@@ -84,10 +89,20 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
   const blockOrderRef = useRef<string[]>([]);
   const [isRunningAll, setIsRunningAll] = useState(false);
   const apiRef = useRef<AutomateSystemApi | null>(null);
+  // Document path is held in a ref so the api singleton sees the latest
+  // value without us having to recreate it whenever the user opens a
+  // different file. The api reads via a getter closure, so changes here
+  // propagate transparently.
+  const documentPathRef = useRef<string | undefined>(documentPath);
+  useEffect(() => { documentPathRef.current = documentPath; }, [documentPath]);
 
   const getOrCreateApi = useCallback(() => {
     if (!apiRef.current) {
-      apiRef.current = new AutomateSystemApi(dataSource, variablesRef.current);
+      apiRef.current = new AutomateSystemApi(
+        dataSource,
+        variablesRef.current,
+        () => documentPathRef.current,
+      );
     }
     return apiRef.current;
   }, [dataSource]);
@@ -164,27 +179,50 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     };
   }, []);
 
-  const runBlock = useCallback(async (id: string) => {
-    const block = blocks.get(id);
-    if (!block || block.status === 'running') {
+  // blocksRef tracks the latest `blocks` so runBlock can read it without
+  // having `blocks` as a useCallback dep — that dep would re-create runBlock
+  // on every state change and re-trigger every useEffect that lists runBlock
+  // (e.g. autorun on mount), causing infinite re-runs.
+  // blocksRef is synced via useLayoutEffect (NOT useEffect) so writes from
+  // setBlocks commits land in the ref BEFORE any downstream effect (autorun
+  // etc.) reads from it. Plain useEffect would run after the layout-effect
+  // chain and race against the autorun useEffect in NodeView — autorun would
+  // see block in state but `runBlock` would read undefined from blocksRef.
+  const blocksRef = useRef(blocks);
+  useLayoutEffect(() => { blocksRef.current = blocks; }, [blocks]);
+
+  const runBlock = useCallback(async (id: string, codeOverride?: string) => {
+    const block = blocksRef.current.get(id);
+
+    // Already-running guard: only valid signal we get from blocksRef. Block
+    // missing in ref is NOT a "skip" — caller may have just registered the
+    // block in the same tick (autorun race), and as long as we have code
+    // (either from override or — if available — from the block) we can run.
+    // All status writes below are guarded with `if (current)` so missing
+    // entries are safe; the final block landing in state will reflect
+    // whatever registerBlock pushes.
+    if (block && block.status === 'running') {
       // eslint-disable-next-line no-console
-      console.log(`[AutomateScript] runBlock(${id}): skip — block ${block ? 'is running' : 'not found'}`);
+      console.log(`[AutomateScript] runBlock(${id}): skip — already running`);
       return;
     }
 
-    const code = block.code;
+    // codeOverride sidesteps two races at once:
+    //   1. updateBlockCode (sync caller) not committed before runBlock —
+    //      `block.code` here would be the stale, pre-edit body.
+    //   2. registerBlock setBlocks not yet in blocksRef — block is undefined.
+    // No override + no block = nothing to run.
+    const code = codeOverride ?? block?.code ?? '';
+    if (!code) {
+      // eslint-disable-next-line no-console
+      console.log(`[AutomateScript] runBlock(${id}): skip — empty code (block ${block ? 'idle but empty' : 'not registered'})`);
+      return;
+    }
     const api = getOrCreateApi();
 
     // Track previous lengths for logs and notifications
     const prevLogsLength = api.logs.length;
     const prevNotificationsLength = api.notifications.length;
-
-    // Set running
-    setBlocks(prev => {
-      const next = new Map(prev);
-      next.set(id, { ...block, status: 'running', output: [], logs: [], error: undefined, result: undefined });
-      return next;
-    });
 
     const displayApi = createDisplayApi(id);
     // eslint-disable-next-line no-console
@@ -194,6 +232,22 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     const tStart = performance.now();
 
     try {
+      // Preload any `// @library: foo` markers BEFORE executing the body —
+      // moved here from the call sites so CDN/CORS errors land in the same
+      // try/catch as runtime errors. Previously this lived in a `.finally`
+      // chain at the caller, which silently swallowed preload failures
+      // and the user just saw a cryptic "THREE is not defined" runtime
+      // error instead of the actual root cause.
+      try {
+        await preloadLibrariesForCode(code);
+      } catch (preloadErr) {
+        const msg = preloadErr instanceof Error ? preloadErr.message : String(preloadErr);
+        // Re-throw with a clearer prefix so the user sees "Library preload
+        // failed: …" rather than the generic loader message wrapped in
+        // whatever AsyncFunction errors with later.
+        throw new Error(`Library preload failed: ${msg}`);
+      }
+
       const wrappedScript = `const display = input.__display;\n${code}`;
       const result = await AutomateSandbox.execute(
         wrappedScript,
@@ -250,7 +304,11 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         return next;
       });
     }
-  }, [blocks, getOrCreateApi, createDisplayApi, notify]);
+    // `blocks` removed from deps because we now read state via the functional
+    // blocks read via blocksRef.current (latest), writes via functional
+    // setBlocks updaters — so a stable identity for runBlock is correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getOrCreateApi, createDisplayApi, notify]);
 
   const runAllBlocks = useCallback(async () => {
     setIsRunningAll(true);

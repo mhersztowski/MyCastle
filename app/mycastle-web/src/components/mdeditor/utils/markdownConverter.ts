@@ -53,19 +53,40 @@ function escapeAutomateScriptsForHtml(content: string): string {
   // viewMode added so a block saved as 'html' (renders return value as HTML)
   // survives the markdown round-trip. Persisted as an extra `:html` segment
   // in the fence params alongside the existing `:autorun` flag.
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html' }[] = [];
+  // tags persist via an extra `:t=a,b,c` token (prefix `t=`) so they don't
+  // clash with existing flag tokens (`autorun`, `html`) and so unknown
+  // future tokens are easy to skip.
+  // windowHeight persists as `:h=NNN` token — same prefix pattern as tags,
+  // so the parser can find them in any order.
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null }[] = [];
 
-  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html code fences
+  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html:t=a,b:h=360 code fences
   const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
     const parts = (params?.trim() || '').split(':');
     const blockId = parts[0] || '';
     const autorun = parts.includes('autorun');
     const viewMode: 'code' | 'html' = parts.includes('html') ? 'html' : 'code';
+    // Find the `t=…` token if present. URL-decode each individual tag so
+    // that values with special characters (spaces, accents, …) survive.
+    const tagsToken = parts.find((p: string) => p.startsWith('t='));
+    const tags: string[] = tagsToken
+      ? tagsToken.slice(2).split(',').map((t: string) => {
+          try { return decodeURIComponent(t.trim()); }
+          catch { return t.trim(); }
+        }).filter(Boolean)
+      : [];
+    // `h=NNN` token for windowHeight. Garbage / negative values are
+    // dropped silently — the block falls back to auto-size.
+    const hToken = parts.find((p: string) => p.startsWith('h='));
+    const hNum = hToken ? Number(hToken.slice(2)) : NaN;
+    const windowHeight: number | null = Number.isFinite(hNum) && hNum > 0 ? hNum : null;
     automateScripts.push({
       code: code.trimEnd(),
       blockId,
       autorun,
       viewMode,
+      tags,
+      windowHeight,
     });
     return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
   });
@@ -164,14 +185,23 @@ function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): 
 }
 
 // Helper to restore automate script blocks after showdown conversion
-function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html' }[]): string {
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null }[]): string {
   let result = html;
 
   automateScripts.forEach((script, index) => {
     const blockIdAttr = script.blockId ? ` data-block-id="${script.blockId}"` : '';
     const autorunAttr = ` data-autorun="${script.autorun ? 'true' : 'false'}"`;
     const viewModeAttr = ` data-view-mode="${script.viewMode === 'html' ? 'html' : 'code'}"`;
-    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    // Tags re-encoded per-element so commas inside a tag (defensively, even
+    // though the dialog rejects them) can't break the round-trip back into
+    // attr parsing.
+    const tagsAttr = (script.tags && script.tags.length > 0)
+      ? ` data-tags="${script.tags.map(t => encodeURIComponent(t)).join(',')}"`
+      : '';
+    const whAttr = (typeof script.windowHeight === 'number' && script.windowHeight > 0)
+      ? ` data-window-height="${script.windowHeight}"`
+      : '';
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
     const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -242,6 +272,60 @@ function restoreCadViewEmbedsFromHtml(html: string, cadViews: { mode: string; ur
     const tag = `<div data-type="cad-view-embed" data-mode="${v.mode}" data-url="${v.url}"></div>`;
     const ph = `%%CADVIEW_${i}%%`;
     result = result.replace(`<p>${ph}</p>`, tag);
+    result = result.split(ph).join(tag);
+  });
+  return result;
+}
+
+// ─── InfoMark inline embed ──────────────────────────────────────────────────
+// Format: @[info:{encodedText}:{encodedTitle}:{encodedBody}:{encodedBodyPath}]
+// — four URL-encoded segments joined by ':'. Older 3-segment infomarks
+// (without bodyPath) parse correctly too (4th segment defaults to '').
+// Encoding each segment individually means colons, brackets, newlines and
+// slashes (paths!) in any segment don't break the bracket-paired syntax.
+function escapeInfoMarksForHtml(content: string): string {
+  const infoMarks: { text: string; title: string; body: string; bodyPath: string }[] = [];
+  const result = content.replace(/@\[info:([^\]]+)\]/g, (_, params: string) => {
+    const parts = params.split(':');
+    const dec = (s: string | undefined) => {
+      if (!s) return '';
+      try { return decodeURIComponent(s); } catch { return s; }
+    };
+    infoMarks.push({
+      text:     dec(parts[0]),
+      title:    dec(parts[1]),
+      body:     dec(parts[2]),
+      bodyPath: dec(parts[3]),
+    });
+    return `%%INFOMARK_${infoMarks.length - 1}%%`;
+  });
+  return JSON.stringify({ result, infoMarks });
+}
+
+function restoreInfoMarksFromHtml(
+  html: string,
+  infoMarks: { text: string; title: string; body: string; bodyPath: string }[],
+): string {
+  let result = html;
+  infoMarks.forEach((m, i) => {
+    // Both data-text AND inner text so a non-TipTap renderer (raw markdown
+    // preview, search) still shows the visible label. data-text is canonical.
+    const tag = `<span data-type="info-mark"`
+      + ` data-text="${encodeURIComponent(m.text)}"`
+      + ` data-title="${encodeURIComponent(m.title)}"`
+      + ` data-body="${encodeURIComponent(m.body)}"`
+      + ` data-body-path="${encodeURIComponent(m.bodyPath)}">`
+      // Escape HTML-significant chars in the visible text so a "<" in a
+      // user-typed marker doesn't get interpreted as a tag during the
+      // showdown → TipTap reparse.
+      + m.text
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+      + `</span>`;
+    const ph = `%%INFOMARK_${i}%%`;
+    // InfoMark is INLINE — no `<p>${ph}</p>` wrapping cleanup needed; just
+    // splice the raw placeholder wherever showdown left it inside <p>/<li>.
     result = result.split(ph).join(tag);
   });
   return result;
@@ -771,6 +855,29 @@ turndownService.addRule('inlineMath', {
   },
 });
 
+// InfoMark inline span — covers the cases where the pre-processor regex
+// missed (e.g. extra attributes inside the tag perturbed the placeholder
+// swap). Defensive: emits the same @[info:...] syntax the placeholder
+// pipeline would have, so the round-trip works either way.
+turndownService.addRule('infoMark', {
+  filter: (node) => {
+    const el = node as HTMLElement;
+    return el.tagName === 'SPAN' && el.getAttribute('data-type') === 'info-mark';
+  },
+  replacement: (_content, node) => {
+    const el = node as HTMLElement;
+    const dec = (s: string | null) => {
+      if (!s) return '';
+      try { return decodeURIComponent(s); } catch { return s; }
+    };
+    const text     = dec(el.getAttribute('data-text'))  || el.textContent || '';
+    const title    = dec(el.getAttribute('data-title'));
+    const body     = dec(el.getAttribute('data-body'));
+    const bodyPath = dec(el.getAttribute('data-body-path'));
+    return `@[info:${encodeURIComponent(text)}:${encodeURIComponent(title)}:${encodeURIComponent(body)}:${encodeURIComponent(bodyPath)}]`;
+  },
+});
+
 // Component embed rule - converts back to @[type:id] syntax
 turndownService.addRule('componentEmbed', {
   filter: (node) => {
@@ -947,6 +1054,8 @@ turndownService.addRule('automateScriptBlock', {
     let blockId = '';
     let autorun = element.getAttribute('data-autorun') === 'true';
     let viewMode = element.getAttribute('data-view-mode') === 'html' ? 'html' : 'code';
+    let tagsRaw = element.getAttribute('data-tags') || '';
+    let windowHeightRaw = element.getAttribute('data-window-height') || '';
 
     const encodedCode = element.getAttribute('data-code');
     if (encodedCode) {
@@ -962,17 +1071,32 @@ turndownService.addRule('automateScriptBlock', {
         blockId = inner.getAttribute('data-block-id') || '';
         autorun = inner.getAttribute('data-autorun') === 'true';
         viewMode = inner.getAttribute('data-view-mode') === 'html' ? 'html' : 'code';
+        tagsRaw = inner.getAttribute('data-tags') || tagsRaw;
+        windowHeightRaw = inner.getAttribute('data-window-height') || windowHeightRaw;
       }
     }
 
     // Build lang tag — collect optional flags into an array and join. Order
-    // is stable so a script saved as `automate:id:autorun:html` parses back
-    // identically (the parser uses `parts.includes(flag)` so order is in
-    // fact irrelevant, but stability keeps diffs clean).
+    // is stable so a script saved as `automate:id:autorun:html:t=…` parses
+    // back identically (the parser uses `parts.includes(flag)` so order is
+    // in fact irrelevant, but stability keeps diffs clean).
     const parts: string[] = ['automate'];
     parts.push(blockId);            // may be empty — becomes `automate::…`
     if (autorun) parts.push('autorun');
     if (viewMode === 'html') parts.push('html');
+    // Tags get their own `t=` prefix so the escape parser can find them
+    // without ambiguity vs `autorun` / `html` flag tokens. Empty tag list
+    // skips the token entirely so unchanged docs don't accumulate `:t=`.
+    if (tagsRaw) {
+      // tagsRaw is already comma-joined URL-encoded values from renderHTML;
+      // pass it through unchanged so we don't double-encode.
+      parts.push(`t=${tagsRaw}`);
+    }
+    if (windowHeightRaw) {
+      // windowHeightRaw is a plain integer string from data-window-height —
+      // pass through verbatim; the parser validates on the way back in.
+      parts.push(`h=${windowHeightRaw}`);
+    }
     // Trim trailing empties so `automate::` (no flags, no id) stays plain `automate`.
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
     const langTag = parts.join(':');
@@ -1117,8 +1241,15 @@ export function markdownToHtml(markdown: string): string {
   const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutCadViews);
   const { result: markdownWithoutFormEngine, formEmbeds } = JSON.parse(formEngineDataStr);
 
+  // Protect InfoMark inline embeds from showdown processing
+  const infoMarkDataStr = escapeInfoMarksForHtml(markdownWithoutFormEngine);
+  const { result: markdownWithoutInfoMarks, infoMarks } = JSON.parse(infoMarkDataStr) as {
+    result: string;
+    infoMarks: { text: string; title: string; body: string; bodyPath: string }[];
+  };
+
   // Then, protect component embeds from showdown processing
-  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutFormEngine);
+  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutInfoMarks);
   const { result: markdownWithoutComponents, componentEmbeds } = JSON.parse(componentDataStr);
 
   // Then, protect math content from showdown processing
@@ -1144,6 +1275,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore form-engine embeds
   html = restoreFormEngineEmbedsFromHtml(html, formEmbeds);
+
+  // Restore InfoMark inline embeds
+  html = restoreInfoMarksFromHtml(html, infoMarks);
 
   // Restore automate flow embeds
   html = restoreAutomateFlowsFromHtml(html, automateFlows);
@@ -1259,6 +1393,32 @@ export function htmlToMarkdown(html: string): string {
     },
   );
 
+  // Pre-process: Replace InfoMark inline spans with placeholders before
+  // Turndown — span is inline so the regex matches without consuming a
+  // surrounding paragraph; placeholder gets swapped back to @[info:…]
+  // post-Turndown.
+  const infoMarks: { text: string; title: string; body: string; bodyPath: string }[] = [];
+  processedHtml = processedHtml.replace(
+    /<span[^>]*data-type="info-mark"[^>]*>[\s\S]*?<\/span>/gi,
+    (match) => {
+      const dec = (s: string | undefined) => {
+        if (!s) return '';
+        try { return decodeURIComponent(s); } catch { return s; }
+      };
+      const textM  = match.match(/data-text="([^"]*)"/);
+      const titleM = match.match(/data-title="([^"]*)"/);
+      const bodyM  = match.match(/data-body="([^"]*)"/);
+      const pathM  = match.match(/data-body-path="([^"]*)"/);
+      infoMarks.push({
+        text:     dec(textM?.[1]),
+        title:    dec(titleM?.[1]),
+        body:     dec(bodyM?.[1]),
+        bodyPath: dec(pathM?.[1]),
+      });
+      return `##INFOMARK${infoMarks.length - 1}##`;
+    },
+  );
+
   // Pre-process: Replace automate flow embeds with placeholders before Turndown
   const automateFlows: { id: string; autorun: boolean }[] = [];
 
@@ -1292,7 +1452,7 @@ export function htmlToMarkdown(html: string): string {
   );
 
   // Pre-process: Replace automate script blocks with placeholders before Turndown
-  const automateScripts: { code: string; blockId: string; autorun: boolean }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string }[] = [];
 
   processedHtml = processedHtml.replace(
     /<div[^>]*data-type="automate-script-block"[^>]*?(?:data-block-id="([^"]*)")?[^>]*?(?:data-code="([^"]*)")?[^>]*>[\s\S]*?<\/div>/gi,
@@ -1300,10 +1460,18 @@ export function htmlToMarkdown(html: string): string {
       const codeMatch = match.match(/data-code="([^"]*)"/);
       const blockIdMatch = match.match(/data-block-id="([^"]*)"/);
       const autorunMatch = match.match(/data-autorun="([^"]*)"/);
+      const viewModeMatch = match.match(/data-view-mode="([^"]*)"/);
+      const tagsMatch = match.match(/data-tags="([^"]*)"/);
+      const whMatch = match.match(/data-window-height="([^"]*)"/);
       automateScripts.push({
         code: codeMatch ? decodeURIComponent(codeMatch[1]) : '',
         blockId: blockIdMatch ? blockIdMatch[1] : '',
         autorun: autorunMatch ? autorunMatch[1] === 'true' : false,
+        viewMode: (viewModeMatch && viewModeMatch[1] === 'html') ? 'html' : 'code',
+        // tagsRaw is the already-encoded `a,b,c` string; we keep it raw so
+        // it can be plugged into the `t=` token without double-encoding.
+        tagsRaw: tagsMatch ? tagsMatch[1] : '',
+        windowHeightRaw: whMatch ? whMatch[1] : '',
       });
       return `##AUTOMATESCRIPT${automateScripts.length - 1}##`;
     }
@@ -1381,6 +1549,16 @@ export function htmlToMarkdown(html: string): string {
     markdown = markdown.split(placeholder).join(replacement);
   });
 
+  // Post-process: Restore InfoMark inline embeds as
+  // @[info:text:title:body:bodyPath], each segment URL-encoded so colons /
+  // brackets / newlines / slashes don't collide with the @[…] bracket parser.
+  infoMarks.forEach((m, index) => {
+    const placeholder = `##INFOMARK${index}##`;
+    const enc = (s: string) => encodeURIComponent(s);
+    const replacement = `@[info:${enc(m.text)}:${enc(m.title)}:${enc(m.body)}:${enc(m.bodyPath)}]`;
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
   // Post-process: Restore plugin script blocks as ```pscript code fences
   pluginScriptsHtml.forEach((s, index) => {
     const placeholder = `##PLUGINSCRIPT${index}##`;
@@ -1390,16 +1568,18 @@ export function htmlToMarkdown(html: string): string {
   });
 
   // Post-process: Restore automate script blocks as ```automate code fences
-  // Format: automate, automate:blockId, automate::autorun, automate:blockId:autorun
+  // Format: automate[:blockId][:autorun][:html][:t=a,b]
+  // Tokens are order-stable so diffs stay clean; the parser tolerates any
+  // order via `parts.includes(...)`.
   automateScripts.forEach((script, index) => {
     const placeholder = `##AUTOMATESCRIPT${index}##`;
-    let langTag = 'automate';
-    if (script.blockId) {
-      langTag = `automate:${script.blockId}`;
-    }
-    if (script.autorun) {
-      langTag = script.blockId ? `automate:${script.blockId}:autorun` : 'automate::autorun';
-    }
+    const parts: string[] = ['automate', script.blockId || ''];
+    if (script.autorun) parts.push('autorun');
+    if (script.viewMode === 'html') parts.push('html');
+    if (script.tagsRaw) parts.push(`t=${script.tagsRaw}`);
+    if (script.windowHeightRaw) parts.push(`h=${script.windowHeightRaw}`);
+    while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+    const langTag = parts.join(':');
     const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });

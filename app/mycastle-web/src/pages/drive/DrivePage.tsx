@@ -54,7 +54,10 @@ import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import HomeIcon from '@mui/icons-material/Home';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import LabelIcon from '@mui/icons-material/Label';
+import AddIcon from '@mui/icons-material/Add';
 import LinkIcon from '@mui/icons-material/Link';
 import LaunchIcon from '@mui/icons-material/Launch';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -72,6 +75,10 @@ import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CodeIcon from '@mui/icons-material/Code';
 import TodayIcon from '@mui/icons-material/Today';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import SearchIcon from '@mui/icons-material/Search';
+
+import DriveSearchDialog from './DriveSearchDialog';
+import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearchTypes';
 
 // ─── VFS helpers ─────────────────────────────────────────────────────────────
 
@@ -196,6 +203,203 @@ async function vfsStat(userName: string, relPath: string): Promise<{ type: numbe
   const r = await fetch(apiUrl(userName, 'stat', relPath), { headers: authHeaders() });
   if (!r.ok) return null;
   return r.json();
+}
+
+// ─── File properties (sidecar JSON in drive root) ───────────────────────────
+// All per-file metadata that isn't part of the file body itself lives in a
+// single sidecar JSON at `drive/.fileproperties.json` — keeps the directory
+// clean (no `.tags` siblings everywhere) and lets us cache the whole index
+// once on mount instead of doing N reads per listing render.
+//
+// Keyed by relPath (same `cwd/name` convention used elsewhere in this file)
+// so a rename or move would orphan a tag entry — acceptable cost for the
+// simplicity. Future revision can migrate to a content-hash key.
+
+const FILE_PROPS_PATH = '.fileproperties.json';
+
+interface FileProperties {
+  /** relPath → list of tags. Missing key === no tags. */
+  tags: Record<string, string[]>;
+}
+
+const EMPTY_FILE_PROPS: FileProperties = { tags: {} };
+
+async function loadFileProperties(userName: string): Promise<FileProperties> {
+  try {
+    const r = await fetch(apiUrl(userName, 'readFile', FILE_PROPS_PATH), { headers: authHeaders() });
+    if (!r.ok) return EMPTY_FILE_PROPS;
+    const j: { data?: string } = await r.json();
+    if (!j.data) return EMPTY_FILE_PROPS;
+    const text = atob(j.data);
+    const parsed = JSON.parse(text) as Partial<FileProperties>;
+    return {
+      tags: (parsed.tags && typeof parsed.tags === 'object') ? parsed.tags : {},
+    };
+  } catch { return EMPTY_FILE_PROPS; }
+}
+
+async function saveFileProperties(userName: string, props: FileProperties): Promise<void> {
+  const text = JSON.stringify(props, null, 2);
+  // UTF-8-safe base64: encodeURIComponent + escape handles non-ASCII (Polish
+  // accents in tag names, file paths).
+  const b64 = btoa(unescape(encodeURIComponent(text)));
+  await vfsWriteFile(userName, FILE_PROPS_PATH, b64);
+}
+
+// ─── Full-text search (drive scan) ──────────────────────────────────────────
+//
+// Whitelist of file extensions we will read + grep. Anything not in this set
+// is skipped silently. Better-safe-than-sorry: better miss a match in a
+// non-listed extension than try to grep a 10MB binary and run the browser
+// out of memory.
+const TEXT_FILE_EXTS = new Set([
+  // docs / config / data
+  'md', 'mdx', 'txt', 'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'conf', 'cfg',
+  'properties', 'env', 'log', 'csv', 'tsv',
+  // web / scripts
+  'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'css', 'scss', 'sass', 'less',
+  'html', 'htm', 'svg', 'vue', 'svelte',
+  // backend / system
+  'py', 'rb', 'php', 'go', 'rs', 'java', 'kt', 'scala', 'swift', 'dart',
+  'c', 'cpp', 'cc', 'h', 'hpp', 'cs', 'sh', 'bash', 'zsh', 'fish',
+  'sql', 'lua', 'r', 'pl',
+]);
+
+/** Files with no extension that are conventionally text. Compared
+ *  case-insensitive against the basename. */
+const TEXT_FILE_NAMES_NO_EXT = new Set([
+  'dockerfile', 'makefile', 'readme', 'license', 'changelog',
+  'authors', 'contributors', 'notice',
+]);
+
+function isTextFile(name: string): boolean {
+  if (name.startsWith('.')) return false;   // skip hidden / sidecar files
+  const i = name.lastIndexOf('.');
+  if (i < 0) return TEXT_FILE_NAMES_NO_EXT.has(name.toLowerCase());
+  const ext = name.slice(i + 1).toLowerCase();
+  return TEXT_FILE_EXTS.has(ext);
+}
+
+
+/** Walk a directory tree (DFS) collecting text-file paths. Skips hidden
+ *  files / dirs. Bounded by `maxFiles` so a runaway recursion can't melt
+ *  the browser. */
+async function collectTextFiles(
+  userName: string,
+  baseRel: string,
+  signal: AbortSignal | undefined,
+  maxFiles: number,
+): Promise<string[]> {
+  const results: string[] = [];
+  // BFS — shorter queue than DFS for wide trees + we get partial results
+  // sooner if we ever want to surface them mid-walk.
+  const queue: string[] = [baseRel];
+  while (queue.length > 0 && results.length < maxFiles) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const dir = queue.shift()!;
+    let entries: VfsEntry[] = [];
+    try { entries = await vfsListDir(userName, dir); }
+    catch { continue; } // unreadable dir — skip silently
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      const rel = dir ? `${dir}/${e.name}` : e.name;
+      if (e.type === DIR_TYPE) {
+        queue.push(rel);
+      } else if (isTextFile(e.name)) {
+        results.push(rel);
+        if (results.length >= maxFiles) break;
+      }
+    }
+  }
+  return results;
+}
+
+/** Build a per-line matcher from the user query. Returns null if the
+ *  regex source is invalid (caller surfaces the error in UI). */
+function buildSearchRegex(
+  query: string,
+  caseSensitive: boolean,
+  isRegex: boolean,
+): RegExp | null {
+  try {
+    const source = isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(source, caseSensitive ? 'g' : 'gi');
+  } catch { return null; }
+}
+
+/** Fetch a file's content as UTF-8 text via the REST VFS API. */
+async function readFileAsText(userName: string, rel: string): Promise<string> {
+  const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+  if (!r.ok) throw new Error(`readFile ${rel}: ${r.status}`);
+  const j: { data?: string } = await r.json();
+  if (!j.data) return '';
+  try { return decodeURIComponent(escape(atob(j.data))); }
+  catch { return atob(j.data); } // fallback when input wasn't UTF-8
+}
+
+const SEARCH_MAX_FILES = 5000;          // hard cap on scan size
+const SEARCH_MAX_MATCHES_PER_FILE = 50; // stop collecting after this many
+const SEARCH_MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB — skip larger files
+
+/** Drive-wide text search. Resolves with per-file results. Throws on
+ *  abort (DOMException 'AbortError'); other per-file errors are swallowed
+ *  so one unreadable file doesn't sink the whole search. */
+async function searchInFiles(
+  userName: string,
+  baseRel: string,
+  query: string,
+  options: { caseSensitive: boolean; isRegex: boolean },
+  signal: AbortSignal | undefined,
+  onProgress: (p: SearchProgress) => void,
+): Promise<SearchFileResult[]> {
+  if (!query) return [];
+  const re = buildSearchRegex(query, options.caseSensitive, options.isRegex);
+  if (!re) throw new Error('Niepoprawne wyrażenie regularne');
+
+  onProgress({ scanned: 0, total: 0 });
+  const files = await collectTextFiles(userName, baseRel, signal, SEARCH_MAX_FILES);
+  onProgress({ scanned: 0, total: files.length });
+
+  const results: SearchFileResult[] = [];
+  for (let i = 0; i < files.length; i++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const path = files[i];
+    onProgress({ scanned: i, total: files.length, current: path });
+
+    let text: string;
+    try { text = await readFileAsText(userName, path); }
+    catch { continue; }
+    if (text.length > SEARCH_MAX_FILE_BYTES) continue;
+
+    // Line-by-line scan — the regex is global, so `exec`-loop on each line
+    // gives us all per-line occurrences with byte offsets we can show in UI.
+    const lines = text.split('\n');
+    const matches: SearchMatch[] = [];
+    let truncated = false;
+    outer: for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const lineText = lines[lineIdx];
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(lineText)) !== null) {
+        matches.push({
+          lineNumber: lineIdx + 1,
+          lineText,
+          matchStart: m.index,
+          matchEnd: m.index + m[0].length,
+        });
+        // Zero-width match guard — without this `re.lastIndex` doesn't
+        // advance and we'd loop forever on patterns like `(?=)`.
+        if (m.index === re.lastIndex) re.lastIndex++;
+        if (matches.length >= SEARCH_MAX_MATCHES_PER_FILE) {
+          truncated = true;
+          break outer;
+        }
+      }
+    }
+    if (matches.length > 0) results.push({ path, matches, truncated });
+  }
+  onProgress({ scanned: files.length, total: files.length });
+  return results;
 }
 
 // ─── MIME + encoding helpers ─────────────────────────────────────────────────
@@ -501,6 +705,24 @@ export default function DrivePage(): React.JSX.Element {
   });
   const FAV_PATH = 'drive/.favorites.json';
 
+  // ── File properties (tags + future per-file metadata) ───────────────
+  // Single source of truth for the whole drive; persisted as
+  // `.fileproperties.json` in drive root. State is the IN-MEMORY mirror —
+  // saved on every Properties-dialog "Zapisz".
+  const [fileProperties, setFileProperties] = useState<FileProperties>(EMPTY_FILE_PROPS);
+  const [fpLoaded, setFpLoaded] = useState(false);
+  // Active Properties dialog (null = closed). `rel` is captured at open so a
+  // background refresh / cwd change doesn't affect the dialog target.
+  // `tags` is the draft list — committed only on Save.
+  const [propsDialog, setPropsDialog] = useState<{ entry: VfsEntry; rel: string } | null>(null);
+  const [propsDraftTags, setPropsDraftTags] = useState<string[]>([]);
+  const [propsDraftTagInput, setPropsDraftTagInput] = useState('');
+
+  // Full-text search dialog — closed by default; opened from the
+  // "Search" button in the header. Reset on close happens inside the
+  // dialog component itself.
+  const [searchOpen, setSearchOpen] = useState(false);
+
   // Preview-navigation derived state — only file entries (directories are
   // navigated by double-click into them, not previewed).
   const fileEntries = useMemo(() => entries.filter((e) => e.type === FILE_TYPE), [entries]);
@@ -573,6 +795,20 @@ export default function DrivePage(): React.JSX.Element {
     return () => clearTimeout(t);
   }, [favorites, favLoaded, userName]);
 
+  // File properties (tags + future metadata) — same pattern as favorites:
+  // load once on mount, then save explicitly in the dialog Save handler.
+  // We don't auto-save on every change since editing happens in a modal
+  // dialog with explicit Save.
+  useEffect(() => {
+    if (!userName || fpLoaded) return;
+    let cancelled = false;
+    loadFileProperties(userName)
+      .then((props) => { if (!cancelled) setFileProperties(props); })
+      .catch((err) => console.warn('[Drive] fileProperties load failed:', err))
+      .finally(() => { if (!cancelled) setFpLoaded(true); });
+    return () => { cancelled = true; };
+  }, [userName, fpLoaded]);
+
   // Persist collapsed state per-device.
   useEffect(() => {
     try { localStorage.setItem('drive_favs_open', favoritesOpen ? '1' : '0'); } catch { /* private mode */ }
@@ -594,6 +830,48 @@ export default function DrivePage(): React.JSX.Element {
       return next;
     });
   }, [cwd, toast]);
+
+  // ── Properties dialog ────────────────────────────────────────────────
+  // Open: snapshot the current tag list for this file into the dialog draft.
+  // Tag input is cleared so the user sees a clean field.
+  const openPropertiesDialog = useCallback((entry: VfsEntry) => {
+    const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+    setPropsDialog({ entry, rel });
+    setPropsDraftTags(fileProperties.tags[rel] ?? []);
+    setPropsDraftTagInput('');
+  }, [cwd, fileProperties.tags]);
+
+  // Add the in-progress text input as a chip (Enter or "+" button). Rejects
+  // empties and duplicates silently. Commas would split a tag on the next
+  // serialization round-trip, so they're normalised to '-'.
+  const commitDraftTag = useCallback(() => {
+    const trimmed = propsDraftTagInput.trim();
+    if (!trimmed) return;
+    const safe = trimmed.replace(/,/g, '-');
+    setPropsDraftTags(prev => prev.includes(safe) ? prev : [...prev, safe]);
+    setPropsDraftTagInput('');
+  }, [propsDraftTagInput]);
+
+  // Save handler — atomic update of the on-disk index. Empty tag list is
+  // stored as "key removed" so the JSON stays clean instead of accumulating
+  // empty arrays for every file the user ever opened the dialog on.
+  const saveProperties = useCallback(async () => {
+    if (!propsDialog) return;
+    const next: FileProperties = { ...fileProperties, tags: { ...fileProperties.tags } };
+    if (propsDraftTags.length === 0) {
+      delete next.tags[propsDialog.rel];
+    } else {
+      next.tags[propsDialog.rel] = [...propsDraftTags];
+    }
+    setFileProperties(next);
+    try {
+      await saveFileProperties(userName, next);
+      toast(`Zapisano właściwości: ${propsDialog.entry.name}`);
+      setPropsDialog(null);
+    } catch (err) {
+      toast(`Nie udało się zapisać właściwości: ${(err as Error).message}`, 'error');
+    }
+  }, [propsDialog, propsDraftTags, fileProperties, userName, toast]);
 
   // Forward-declared ref for opening files in MdEditor — set below once
   // `openInMdEditor` is in scope. Avoids the TDZ cycle that would otherwise
@@ -1516,6 +1794,15 @@ export default function DrivePage(): React.JSX.Element {
             Today
           </Button>
         </Tooltip>
+        <Tooltip title="Szukaj tekstu w plikach (bieżący katalog lub cały drive)">
+          <Button
+            variant="outlined"
+            startIcon={<SearchIcon />}
+            onClick={() => setSearchOpen(true)}
+          >
+            Search
+          </Button>
+        </Tooltip>
         <Button
           variant="contained"
           endIcon={<KeyboardArrowDownIcon />}
@@ -1569,6 +1856,13 @@ export default function DrivePage(): React.JSX.Element {
           <ListItemText
             primary="Otwórz w workspace"
             secondary="Monaco editor — kod, JSON, terminal, agent"
+          />
+        </MenuItem>
+        <MenuItem onClick={() => { setSearchOpen(true); setActionsMenu(null); }}>
+          <ListItemIcon><SearchIcon fontSize="small" /></ListItemIcon>
+          <ListItemText
+            primary="Szukaj w plikach…"
+            secondary="Bieżący katalog lub cały drive"
           />
         </MenuItem>
         <MenuItem onClick={() => { void refresh(); setActionsMenu(null); }}>
@@ -1781,7 +2075,7 @@ export default function DrivePage(): React.JSX.Element {
                         : <InsertDriveFileIcon sx={{ color: pub ? 'success.main' : 'text.secondary' }} />}
                     </TableCell>
                     <TableCell onClick={() => e.type === DIR_TYPE && onOpen(e)}>
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                         <span>{e.name}</span>
                         {/* Passive favorite indicator — small filled star next to
                             the name when the file is in favorites. The toggle
@@ -1794,6 +2088,19 @@ export default function DrivePage(): React.JSX.Element {
                           </Tooltip>
                         )}
                         {pub && <Tooltip title="Publiczny — dostępny przez HTTP bez logowania"><PublicIcon fontSize="small" color="success" /></Tooltip>}
+                        {/* File-property tags — chips inline next to the
+                            name. Read from the in-memory fileProperties
+                            mirror (loaded once on mount), so rendering
+                            stays fast even with hundreds of entries. */}
+                        {(fileProperties.tags[rel] ?? []).map((tag) => (
+                          <Chip
+                            key={`tag-${tag}`}
+                            label={tag}
+                            size="small"
+                            variant="outlined"
+                            sx={{ height: 18, fontSize: '0.65rem', '& .MuiChip-label': { px: 0.75 } }}
+                          />
+                        ))}
                       </Stack>
                     </TableCell>
                     <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
@@ -1974,7 +2281,7 @@ export default function DrivePage(): React.JSX.Element {
                   initialContent={mdEditing.initialContent}
                   onSave={saveMdContent}
                   autoSaveDelay={2000}              /* faster than the default 30s */
-                  filePath={mdEditing.rel}          /* drives template-tab base date */
+                  filePath={`drive/${mdEditing.rel}`}  /* prefixed so api.file (userBase-relative) and api.scripts.runInParentsByTag find the same file */
                 />
               </Box>
             )}
@@ -2041,11 +2348,130 @@ export default function DrivePage(): React.JSX.Element {
           <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Zmień nazwę</ListItemText>
         </MenuItem>
+        <MenuItem onClick={() => { openPropertiesDialog(menuFor!.entry); setMenuFor(null); }}>
+          <ListItemIcon><InfoOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>Właściwości…</ListItemText>
+        </MenuItem>
         <MenuItem onClick={() => { void onDelete(menuFor!.entry); setMenuFor(null); }} sx={{ color: 'error.main' }}>
           <ListItemIcon><DeleteIcon fontSize="small" color="error" /></ListItemIcon>
           <ListItemText>Usuń</ListItemText>
         </MenuItem>
       </Menu>
+
+      {/* ── Full-text search dialog ───────────────────────────────────── */}
+      {/* `runSearch` is the actual top-level helper bound to the current
+          user. The dialog owns query state, results, abort control —
+          DrivePage just supplies "where to search" and "what to do when
+          a result is clicked". */}
+      <DriveSearchDialog
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        cwd={cwd}
+        runSearch={({ baseRel, query, caseSensitive, isRegex, signal, onProgress }) =>
+          searchInFiles(userName, baseRel, query, { caseSensitive, isRegex }, signal, onProgress)
+        }
+        onOpenFile={(rel) => {
+          // Reuse Drive's existing "open" semantics — viewFile / openInMdEditor
+          // route based on extension. Build a synthetic VfsEntry from the
+          // path so existing helpers don't need a new code path.
+          //
+          // We jump cwd to the file's directory so breadcrumbs / sidebar
+          // reflect where the file lives — clicking a search result from a
+          // deep folder shouldn't leave the listing pointing at the old cwd.
+          const name = rel.split('/').pop() || rel;
+          const synthetic: VfsEntry = { name, type: FILE_TYPE };
+          const targetDir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+          if (targetDir !== cwd) setCwd(targetDir);
+          if (isMdEditable(name)) {
+            // Pass `rel` as override so openInMdEditor doesn't re-derive it
+            // from `cwd + name` — cwd may not have committed yet from the
+            // setCwd call above (React schedules state updates).
+            void openInMdEditor(synthetic, rel);
+          } else {
+            void viewFile(synthetic);
+          }
+          setSearchOpen(false);
+        }}
+      />
+
+      {/* ── Properties dialog (tags + future per-file metadata) ───────── */}
+      <Dialog open={!!propsDialog} onClose={() => setPropsDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <InfoOutlinedIcon fontSize="small" />
+          Właściwości: {propsDialog?.entry.name}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+            Ścieżka: {propsDialog?.rel}
+          </Typography>
+
+          {/* Tags section — mirror of the AutomateScript settings dialog
+              tags UX so the user gets the same chip-input across the app. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <LabelIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+            <Typography variant="body2" fontWeight={600}>Tagi pliku</Typography>
+          </Box>
+          <Box sx={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 0.5,
+            mb: 1,
+            minHeight: 32,
+            p: 0.5,
+            borderRadius: 1,
+            bgcolor: 'action.hover',
+          }}>
+            {propsDraftTags.length === 0 ? (
+              <Typography variant="caption" color="text.secondary" sx={{ p: 0.5 }}>
+                Brak tagów — dodaj poniżej.
+              </Typography>
+            ) : propsDraftTags.map(tag => (
+              <Chip
+                key={tag}
+                label={tag}
+                size="small"
+                onDelete={() => setPropsDraftTags(prev => prev.filter(t => t !== tag))}
+              />
+            ))}
+          </Box>
+          <Stack direction="row" spacing={1}>
+            <TextField
+              value={propsDraftTagInput}
+              onChange={e => setPropsDraftTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitDraftTag();
+                } else if (e.key === 'Backspace' && !propsDraftTagInput && propsDraftTags.length > 0) {
+                  // Empty-input backspace deletes the last chip — same UX as
+                  // Gmail/Slack recipient fields.
+                  e.preventDefault();
+                  setPropsDraftTags(prev => prev.slice(0, -1));
+                }
+              }}
+              placeholder="np. daily, projekt-A, notatki"
+              size="small"
+              fullWidth
+            />
+            <IconButton
+              size="small"
+              onClick={commitDraftTag}
+              disabled={!propsDraftTagInput.trim()}
+              sx={{ border: 1, borderColor: 'divider' }}
+            >
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+            Tagi są zapisywane w <code>drive/.fileproperties.json</code>. Przydaje się do filtrowania /
+            grupowania plików w przyszłych narzędziach.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPropsDialog(null)}>Anuluj</Button>
+          <Button onClick={saveProperties} variant="contained">Zapisz</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* New folder dialog */}
       <Dialog open={newFolderDialog} onClose={() => setNewFolderDialog(false)} maxWidth="xs" fullWidth>

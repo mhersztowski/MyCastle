@@ -56,18 +56,137 @@ Dodatkowe pola w `input` (zależnie od typu noda):
 
 ### api.file
 
-Operacje na plikach w filesystem.
+Operacje na plikach w filesystem. **Wszystkie ścieżki są relatywne do root
+directory** systemu i obowiązują dla użytkownika z aktywnej sesji MQTT.
+
+#### Read / write
 
 ```javascript
-// Odczyt pliku
+// Odczyt pliku tekstowego
 const content = await api.file.read('data/persons.json');
 
-// Zapis pliku
+// Zapis pliku tekstowego (tworzy parent dirs jeśli trzeba)
 await api.file.write('data/output.json', JSON.stringify({ result: 'ok' }));
+```
 
-// Lista plików w katalogu
-const files = await api.file.list('data/');
-// Zwraca: ['persons.json', 'tasks.json', ...]
+#### Listing
+
+```javascript
+// Same nazwy (mieszanka plików i katalogów)
+const names = await api.file.list('data/');
+// → ['persons.json', 'tasks.json', 'subdir', ...]
+
+// Z informacją o typie
+const entries = await api.file.listDetailed('data/');
+for (const e of entries) {
+  api.log.info(`${e.isDirectory ? '📁' : '📄'} ${e.name}`);
+}
+// FileEntry: { name, path, isFile, isDirectory }
+
+// Rekurencyjny walk po drzewie — callback dla każdego pliku i katalogu
+await api.file.walk('data/', (entry) => {
+  if (entry.isFile && entry.name.endsWith('.json')) {
+    api.log.info(`JSON: ${entry.path}`);
+  }
+});
+
+// Glob (`*` = w obrębie segmentu, `**` = przez segmenty)
+const jsons = await api.file.glob('data/', '**/*.json');
+const reports = await api.file.glob('data/reports/', 'report-*.csv');
+```
+
+#### Info
+
+```javascript
+// Pełne metadane
+const s = await api.file.stat('data/cache.json');
+// FileStat: { path, name, size, modified: Date, isFile, isDirectory }
+api.log.info(`${s.name}: ${s.size} B, zmieniono ${s.modified.toISOString()}`);
+
+// Czy istnieje (nie rzuca, zwraca boolean)
+if (!(await api.file.exists('data/cache.json'))) {
+  await api.file.write('data/cache.json', '{}');
+}
+
+await api.file.isFile('data/x.txt');       // true/false
+await api.file.isDirectory('data/sub');    // true/false
+
+// Skróty do stat
+const bytes  = await api.file.size('data/log.txt');
+const when   = await api.file.modified('data/log.txt');
+```
+
+#### Manipulacja
+
+```javascript
+// Usuń plik (dla katalogu użyj rmdir)
+await api.file.delete('data/old.json');
+
+// Skopiuj
+await api.file.copy('data/template.json', 'data/instance-1.json');
+
+// Zmień nazwę / przenieś (copy + delete pod spodem — NIE atomic)
+await api.file.rename('data/draft.md', 'data/published.md');
+await api.file.move('data/x.txt', 'archive/x.txt');   // alias do rename
+```
+
+#### Katalogi
+
+```javascript
+// Utwórz katalog (i rodzicielskie). Idempotent.
+await api.file.mkdir('data/2026/06/07');
+
+// Usuń katalog (domyślnie tylko pusty)
+await api.file.rmdir('data/empty-folder');
+
+// Rekurencyjnie (jak rm -rf)
+await api.file.rmdir('data/old-backups', true);
+```
+
+#### Wzorce użycia
+
+**Przyrostowy backup** — co N minut zrzucaj snapshot:
+
+```javascript
+const now = api.utils.dayjs().format('YYYY-MM-DDTHH-mm');
+const dir = `data/backups/${now.slice(0, 10)}`;
+await api.file.mkdir(dir);
+const data = api.data.getTasks();
+await api.file.write(`${dir}/tasks-${now}.json`, JSON.stringify(data, null, 2));
+api.notify(`Backup: ${data.length} zadań`, 'success');
+```
+
+**Rotacja starych plików** — usuń wszystko starsze niż 30 dni:
+
+```javascript
+const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+let removed = 0;
+const files = await api.file.glob('data/logs/', '**/*.log');
+for (const path of files) {
+  const m = await api.file.modified(path);
+  if (m.getTime() < cutoff) {
+    await api.file.delete(path);
+    removed++;
+  }
+}
+api.log.info(`Usunięto ${removed} starych logów`);
+```
+
+**Drzewo statystyk** — rozmiar i liczba plików per katalog:
+
+```javascript
+const stats = new Map();
+await api.file.walk('data/', async (e) => {
+  if (!e.isFile) return;
+  const dir = e.path.split('/').slice(0, -1).join('/') || '/';
+  const cur = stats.get(dir) ?? { files: 0, bytes: 0 };
+  cur.files++;
+  cur.bytes += await api.file.size(e.path);
+  stats.set(dir, cur);
+});
+for (const [dir, s] of stats) {
+  api.log.info(`${dir}: ${s.files} plików, ${(s.bytes/1024).toFixed(1)} KB`);
+}
 ```
 
 ### api.data

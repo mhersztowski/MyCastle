@@ -34,14 +34,24 @@ export interface LibraryEntry {
   typesDtsContent: string;
   /**
    * How to load the library at runtime:
-   *   - `'script-global'` (default) — inject a `<script>` tag and wait for the
-   *     library to populate `window[globalName]`. Works for UMD bundles like
-   *     Three.js's `three.min.js`.
-   *   - `'esm-module'` — `await import(url)` and attach the resulting module
-   *     namespace to `window[globalName]`. Required for ESM-only libraries
-   *     like Lit, whose CDNs (`+esm` builds) don't ship UMD.
+   *   - `'local'` — bundle from `node_modules` via `localLoader()`. ZERO
+   *     network traffic, ZERO CDN risk, single shared instance across all
+   *     script blocks in the document. Preferred for any library we can
+   *     afford to ship with the app. The first run pays a Vite chunk-fetch
+   *     cost; subsequent runs are instant.
+   *   - `'script-global'` (legacy) — inject a `<script>` tag and wait for
+   *     the library to populate `window[globalName]`. Works for UMD bundles
+   *     but pulls the network on every fresh page load.
+   *   - `'esm-module'` (legacy) — `await import(cdnUrl)` and attach the
+   *     namespace to `window[globalName]`. For ESM-only libraries whose
+   *     CDNs (`+esm` builds) don't ship UMD.
    */
-  loadStrategy?: 'script-global' | 'esm-module';
+  loadStrategy?: 'local' | 'script-global' | 'esm-module';
+  /** Required when `loadStrategy === 'local'`. Returns the module namespace
+   *  (or the object that should land on `window[globalName]`). Kept as a
+   *  function rather than a static `import` so Vite generates a real lazy
+   *  chunk — Three.js + Lit don't sit in the main mycastle-web bundle. */
+  localLoader?: () => Promise<Record<string, unknown>>;
 }
 
 // ─── Three.js — minimal but useful ambient ──────────────────────────────────
@@ -338,27 +348,60 @@ export const LIBRARIES: Record<string, LibraryEntry> = {
   three: {
     id: 'three',
     label: 'Three.js',
-    description: 'Biblioteka 3D — Scene, kamery, geometrie, materiały, renderer WebGL.',
+    description: 'Biblioteka 3D — Scene, kamery, geometrie, materiały, renderer WebGL. Bundlowana lokalnie.',
     globalName: 'THREE',
-    // Pinned version so we don't get breakage on a major bump; the global API
-    // we declare is stable across 0.16x → 0.17x at the level of completions
-    // we expose.
-    cdnUrl: 'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js',
+    // cdnUrl jest zachowane jako fallback i jako etykieta w UI library
+    // picker'a, ale runtime loadera używa lokalnej paczki npm — eliminuje
+    // ruch sieciowy per skrypt i CDN/CORS failures, które wcześniej
+    // przejawiały się jako "THREE is not defined".
+    cdnUrl: 'three (npm — lokalnie z node_modules)',
     typesDtsPath: 'file:///lib-three.d.ts',
     typesDtsContent: THREE_DTS,
-    loadStrategy: 'script-global',
+    loadStrategy: 'local',
+    // `await import('three')` jest naturalnie cache'owane przez Vite — ten
+    // sam chunk obsłuży wszystkie bloki skryptów w dokumencie. Dependency
+    // jest deklarowane w mycastle-web/package.json.
+    localLoader: async () => {
+      const mod = await import('three');
+      // Three.js ESM eksportuje wszystkie klasy jako named exports.
+      // `THREE` namespace na window potrzebuje obiektu, więc spread modułu.
+      return { ...mod };
+    },
   },
   lit: {
     id: 'lit',
     label: 'Lit',
-    description: 'Web Components — LitElement, reaktywne properties, html`…` template.',
+    description: 'Web Components — LitElement, reaktywne properties, html`…` template. Bundlowana lokalnie.',
     globalName: 'Lit',
-    // ESM-only — `+esm` build serves the bundled module from jsDelivr. We
-    // import() it at runtime and stash the namespace on window.Lit.
-    cdnUrl: 'https://cdn.jsdelivr.net/npm/lit@3/+esm',
+    cdnUrl: 'lit (npm — lokalnie z node_modules)',
     typesDtsPath: 'file:///lib-lit.d.ts',
     typesDtsContent: LIT_DTS,
-    loadStrategy: 'esm-module',
+    loadStrategy: 'local',
+    // Lit ships LitElement / html / css / render z 'lit', a decoratory +
+    // directywy z osobnych podmodułów. Zbiera wszystko w jeden namespace
+    // tak żeby stub IntelliSense (Lit.repeat, Lit.classMap, …) zgadzał
+    // się z runtime'em. Vite generuje jeden chunk per submodule, ale i
+    // tak to lokalnie + cache na cały czas życia strony.
+    localLoader: async () => {
+      const [main, decorators, repeat, whenMod, classMap, styleMap, ifDefined] = await Promise.all([
+        import('lit'),
+        import('lit/decorators.js'),
+        import('lit/directives/repeat.js'),
+        import('lit/directives/when.js'),
+        import('lit/directives/class-map.js'),
+        import('lit/directives/style-map.js'),
+        import('lit/directives/if-defined.js'),
+      ]);
+      return {
+        ...main,
+        ...decorators,
+        ...repeat,
+        ...whenMod,
+        ...classMap,
+        ...styleMap,
+        ...ifDefined,
+      };
+    },
   },
 };
 
@@ -434,10 +477,33 @@ export async function loadLibrary(libraryId: string): Promise<void> {
 
   const strategy = entry.loadStrategy ?? 'script-global';
   // eslint-disable-next-line no-console
-  console.log(`[AutomateScript] loadLibrary(${libraryId}): strategy='${strategy}' url=${entry.cdnUrl}`);
+  console.log(`[AutomateScript] loadLibrary(${libraryId}): strategy='${strategy}' source=${entry.cdnUrl}`);
   let promise: Promise<void>;
 
-  if (strategy === 'esm-module') {
+  if (strategy === 'local') {
+    // Lokalna paczka npm — Vite generuje dynamiczny chunk z tej `import()`.
+    // Pierwszy run pobiera chunk z dev/prod server'a, reszta runów dostaje
+    // namespace natychmiast z cache modułowego.
+    if (!entry.localLoader) {
+      throw new Error(`Library ${libraryId} declared loadStrategy='local' but no localLoader provided`);
+    }
+    promise = (async () => {
+      try {
+        const t0 = performance.now();
+        const assembled = await entry.localLoader!();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any)[entry.globalName] = assembled;
+        const dt = (performance.now() - t0).toFixed(1);
+        // eslint-disable-next-line no-console
+        console.log(`[AutomateScript] loadLibrary(${libraryId}): LOCAL import done in ${dt}ms — window.${entry.globalName} keys:`,
+          Object.keys(assembled));
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[AutomateScript] loadLibrary(${libraryId}): LOCAL import FAILED`, err);
+        throw new Error(`Failed to load local library ${libraryId}: ${(err as Error).message}`);
+      }
+    })();
+  } else if (strategy === 'esm-module') {
     // ESM path — `await import(url)` and stash the namespace on
     // `window[globalName]`. The CDN bundles (e.g. jsDelivr's `+esm` build)
     // serve a proper module, so the resulting object exposes every named

@@ -258,14 +258,159 @@ interface FileApi {
   write(path: string, content: string): Promise<void>;
 
   /**
-   * Lista plików i katalogów w podanym katalogu.
+   * Lista nazw plików i katalogów w podanym katalogu.
    * @param path - Ścieżka do katalogu, np. \`"data/"\`
-   * @returns Tablica nazw plików i katalogów
+   * @returns Tablica nazw plików i katalogów (bez typu — użyj \`listDetailed\` żeby odróżnić)
    * @example
    * const files = await api.file.list('data/');
-   * // ["persons.json", "tasks.json", ...]
+   * // ["persons.json", "tasks.json", "subdir", ...]
    */
   list(path: string): Promise<string[]>;
+
+  /**
+   * Lista wpisów z informacją o typie (plik vs katalog).
+   * @example
+   * const entries = await api.file.listDetailed('data/');
+   * for (const e of entries) {
+   *   api.log.info(\`\${e.isDirectory ? '📁' : '📄'} \${e.name}\`);
+   * }
+   */
+  listDetailed(path: string): Promise<FileEntry[]>;
+
+  /**
+   * Rekurencyjny walk po drzewie. Callback dostaje każdy plik i katalog raz.
+   * @param path - Korzeń od którego zacząć
+   * @param callback - Funkcja wywoływana dla każdego wpisu. Może być async.
+   * @example
+   * let total = 0;
+   * await api.file.walk('data/', (entry) => {
+   *   if (entry.isFile) total++;
+   * });
+   * api.log.info(\`Plików łącznie: \${total}\`);
+   */
+  walk(path: string, callback: (entry: FileEntry) => void | Promise<void>): Promise<void>;
+
+  /**
+   * Filtruj rekurencyjnie po wzorcu glob.
+   * Wzorzec: \`*\` = w obrębie segmentu (nie matchuje \`/\`);
+   *          dwie gwiazdki = przez segmenty (rekurencyjnie).
+   * @param rootPath - Katalog startowy
+   * @param pattern - Wzorzec globa (zobacz wyżej)
+   * @returns Pełne ścieżki dopasowanych PLIKÓW (katalogi pomijane)
+   * @example
+   * const jsons = await api.file.glob('data/', '*.json');
+   * const reports = await api.file.glob('reports/', 'report-*.csv');
+   */
+  glob(rootPath: string, pattern: string): Promise<string[]>;
+
+  /**
+   * Metadane pliku/katalogu — rozmiar, data modyfikacji, typ.
+   * @throws gdy ścieżka nie istnieje
+   * @example
+   * const s = await api.file.stat('data/persons.json');
+   * api.log.info(\`\${s.name}: \${s.size} B, \${s.modified.toISOString()}\`);
+   */
+  stat(path: string): Promise<FileStat>;
+
+  /**
+   * Czy ścieżka istnieje (plik lub katalog). Nie rzuca błędu.
+   * @example
+   * if (!(await api.file.exists('data/cache.json'))) {
+   *   await api.file.write('data/cache.json', '{}');
+   * }
+   */
+  exists(path: string): Promise<boolean>;
+
+  /** Czy to istniejący PLIK (false dla katalogu lub braku). */
+  isFile(path: string): Promise<boolean>;
+
+  /** Czy to istniejący KATALOG. */
+  isDirectory(path: string): Promise<boolean>;
+
+  /**
+   * Rozmiar pliku w bajtach (skrót do \`stat().size\`). 0 dla katalogu.
+   * @example
+   * const totalBytes = await api.file.size('data/backup.json');
+   * api.log.info(\`\${(totalBytes / 1024).toFixed(1)} KB\`);
+   */
+  size(path: string): Promise<number>;
+
+  /**
+   * Data ostatniej modyfikacji (skrót do \`stat().modified\`).
+   * @example
+   * const m = await api.file.modified('data/log.txt');
+   * const ageMs = Date.now() - m.getTime();
+   */
+  modified(path: string): Promise<Date>;
+
+  /**
+   * Usuń plik. Dla katalogu użyj \`rmdir\`.
+   * @example
+   * await api.file.delete('data/old-cache.json');
+   */
+  delete(path: string): Promise<void>;
+
+  /**
+   * Skopiuj plik. Nadpisuje cel jeśli istnieje.
+   * @example
+   * await api.file.copy('data/template.json', 'data/instance-1.json');
+   */
+  copy(from: string, to: string): Promise<void>;
+
+  /**
+   * Przenieś / zmień nazwę. Nie atomic dla wszystkich backendów
+   * (failure mode: copy OK + delete FAIL → dwa pliki zamiast utraty danych).
+   * @example
+   * await api.file.rename('data/draft.md', 'data/published.md');
+   */
+  rename(from: string, to: string): Promise<void>;
+
+  /** Alias do \`rename\`. */
+  move(from: string, to: string): Promise<void>;
+
+  /**
+   * Utwórz katalog (rekurencyjnie). Idempotent. Wewnętrznie wstawia
+   * \`.keep\` sentinel żeby pusty katalog był widoczny w \`list\`.
+   * @example
+   * await api.file.mkdir('data/2026/06/07');
+   */
+  mkdir(path: string): Promise<void>;
+
+  /**
+   * Usuń katalog. Domyślnie tylko jeśli pusty.
+   * @param recursive - true = usuń zawartość przed katalogiem (jak \`rm -rf\`)
+   * @example
+   * await api.file.rmdir('data/old-backups', true);
+   */
+  rmdir(path: string, recursive?: boolean): Promise<void>;
+}
+
+/** Wpis zwracany przez \`listDetailed\` / \`walk\` / \`glob\`. */
+interface FileEntry {
+  /** Sama nazwa (ostatni segment ścieżki). */
+  name: string;
+  /** Pełna ścieżka. */
+  path: string;
+  /** Czy to plik. */
+  isFile: boolean;
+  /** Czy to katalog. */
+  isDirectory: boolean;
+}
+
+/** Metadata pojedynczej pozycji w filesystemie. */
+interface FileStat {
+  /** Pełna ścieżka. */
+  path: string;
+  /** Sama nazwa. */
+  name: string;
+  /** Rozmiar w bajtach. Dla katalogu zawsze 0. */
+  size: number;
+  /** Data ostatniej modyfikacji. */
+  modified: Date;
+  /** Czy to plik. */
+  isFile: boolean;
+  /** Czy to katalog. */
+  isDirectory: boolean;
 }
 
 /**
@@ -554,6 +699,170 @@ interface SystemApi {
 
   /** API do syntezy i rozpoznawania mowy (TTS/STT) */
   speech: SpeechApi;
+
+  /** Wyszukiwanie i uruchamianie INNYCH skryptów automatyzacji osadzonych
+   *  w plikach .md w drive użytkownika — adresowane przez tagi (Ustawienia
+   *  skryptu → Tagi). */
+  scripts: ScriptsApi;
+}
+
+/**
+ * Pojedynczy skrypt znaleziony przez findByTag — metadane + treść,
+ * gotowa do uruchomienia ręcznego lub przez \`runByTag\`.
+ */
+interface DiscoveredScript {
+  /** Ścieżka VFS do pliku .md, w którym jest skrypt. */
+  path: string;
+  /** TipTap block id (może być pusty dla starszych bloków). */
+  blockId: string;
+  /** Treść skryptu — dokładnie taka jak w fence. */
+  code: string;
+  /** Tagi z fence'a. */
+  tags: string[];
+  /** Czy blok jest oznaczony autorun. (runByTag ignoruje tę flagę.) */
+  autorun: boolean;
+  /** Zapamiętany widok (code vs html). */
+  viewMode: 'code' | 'html';
+  /** Wysokość okna w px lub null dla auto. */
+  windowHeight: number | null;
+}
+
+/** Wynik uruchomienia pojedynczego skryptu w batchu runByTag. */
+interface ScriptRunResult {
+  path: string;
+  blockId: string;
+  tags: string[];
+  /** True iff skrypt zakończył się bez wyjątku. */
+  ok: boolean;
+  /** Zwrócona wartość (gdy ok). */
+  result?: unknown;
+  /** Treść błędu (gdy !ok). */
+  error?: string;
+  /** Czas wykonania w ms. */
+  durationMs: number;
+}
+
+/**
+ * API do wyszukiwania i uruchamiania innych skryptów automatyzacji w drive.
+ *
+ * Każdy blok kodu (fence) automate w plikach .md może mieć tagi (Ustawienia
+ * skryptu → "Tagi skryptu"). To API pozwala znajdować skrypty po tagach i
+ * uruchamiać je seryjnie. Trzy scope'y skanowania:
+ *
+ * - **byTag** — cały drive (od \`options.root\`, domyślnie \`'data'\`).
+ *   Globalny workflow ("daily runner").
+ * - **InParents** — TYLKO katalogi NADRZĘDNE wobec pliku .md, w którym
+ *   znajduje się skrypt wywołujący. Per-katalog skan jest non-recursive
+ *   (liczą się pliki bezpośrednio w katalogu-przodku). Dla scenariusza
+ *   konfiguracji dziedziczonej z góry.
+ * - **InChilds** — katalog hostujący skrypt + WSZYSTKIE jego podkatalogi,
+ *   rekursywnie. Dla scenariusza "wszystko poniżej tego folderu".
+ *
+ * Plik .md zawierający skrypt wywołujący jest ZAWSZE wykluczany z wyników
+ * — żeby self-tag nie wywołał nieskończonej rekurencji.
+ *
+ * \`InParents\` / \`InChilds\` wymagają znajomości ścieżki pliku hostującego —
+ * dostarczanej przez MdEditor. Wywołanie spoza MdEditora (np. z flow
+ * designera) rzuci błąd; użyj wtedy \`runByTag\`.
+ */
+interface ScriptsApi {
+  /**
+   * Znajdź wszystkie skrypty z danym tagiem w całym drive (read-only).
+   *
+   * @param tag - Etykieta do dopasowania (case-sensitive, exact match).
+   * @param options - Konfiguracja skanowania.
+   * @returns Tablica metadanych skryptów (pusta gdy żaden nie pasuje).
+   *
+   * @example
+   * const found = await api.scripts.findByTag('backup');
+   * for (const s of found) {
+   *   api.log.info(s.path + ': ' + s.code.length + ' znakow');
+   * }
+   */
+  findByTag(tag: string, options?: {
+    /** Katalog startowy skanowania. Domyślnie \`'data'\` (cały VFS). */
+    root?: string;
+  }): Promise<DiscoveredScript[]>;
+
+  /**
+   * Znajdź skrypty z tagiem w katalogach NADRZĘDNYCH wobec hostującego .md.
+   *
+   * Walker idzie od katalogu pliku-hosta w górę aż do \`options.root\`. Każdy
+   * katalog-przodek skanowany jest non-recursive (tylko pliki .md bezpośrednio
+   * w nim). Najpierw najbliższy rodzic, potem dziadek, …
+   *
+   * @example
+   * // Skrypty "config" w katalogu bieżącym wzwyż — pozwala dziedziczyć
+   * // wartości / konfigurację z plików leżących wyżej w drzewie.
+   * const configs = await api.scripts.findInParentsByTag('config');
+   */
+  findInParentsByTag(tag: string, options?: {
+    /** Górna granica wspinaczki. Domyślnie \`'data'\`. */
+    root?: string;
+  }): Promise<DiscoveredScript[]>;
+
+  /**
+   * Znajdź skrypty z tagiem POD katalogiem hostującego .md (rekursywnie).
+   *
+   * @example
+   * // Wszystkie "task" pod bieżącym folderem.
+   * const subtasks = await api.scripts.findInChildsByTag('task');
+   */
+  findInChildsByTag(tag: string): Promise<DiscoveredScript[]>;
+
+  /**
+   * Znajdź i uruchom seryjnie skrypty z tagiem — cały drive.
+   *
+   * Każdy skrypt-dziecko jest wykonywany w świeżej AsyncFunction z tym samym
+   * obiektem \`api\` co skrypt wywołujący — zapisy do filesystemu, zmienne i
+   * powiadomienia są wspólne. \`display.*\` w dzieciach jest stubowane do no-op.
+   *
+   * Domyślnie kontynuuje po błędach (jeden uszkodzony skrypt nie zatrzymuje
+   * batcha). \`stopOnError: true\` daje fail-fast.
+   *
+   * @example
+   * const results = await api.scripts.runByTag('daily');
+   * const failed = results.filter(r => !r.ok);
+   * if (failed.length) {
+   *   api.notify(failed.length + ' skryptow sie wywalilo', 'warning');
+   * }
+   */
+  runByTag(tag: string, options?: {
+    /** Katalog startowy. Domyślnie \`'data'\`. */
+    root?: string;
+    /** Przerwij batch po pierwszym błędzie. Domyślnie false. */
+    stopOnError?: boolean;
+  }): Promise<ScriptRunResult[]>;
+
+  /**
+   * Znajdź + uruchom skrypty z tagiem w katalogach NADRZĘDNYCH hosta.
+   *
+   * Identyczne semantyki wykonania jak \`runByTag\` (sekwencyjnie, wspólny api).
+   * Scope ograniczony do katalogów-przodków — przydatne dla setup'u
+   * propagowanego z wyższych poziomów drzewa.
+   *
+   * @example
+   * // Odpal wszystkie skrypty "init" w katalogach nad bieżącym plikiem.
+   * await api.scripts.runInParentsByTag('init');
+   */
+  runInParentsByTag(tag: string, options?: {
+    /** Górna granica wspinaczki. Domyślnie \`'data'\`. */
+    root?: string;
+    /** Przerwij batch po pierwszym błędzie. Domyślnie false. */
+    stopOnError?: boolean;
+  }): Promise<ScriptRunResult[]>;
+
+  /**
+   * Znajdź + uruchom skrypty z tagiem w katalogu hosta i jego podkatalogach.
+   *
+   * @example
+   * // Subtaski — wszystkie skrypty "task" pod bieżącym katalogiem projektu.
+   * const results = await api.scripts.runInChildsByTag('task');
+   */
+  runInChildsByTag(tag: string, options?: {
+    /** Przerwij batch po pierwszym błędzie. Domyślnie false. */
+    stopOnError?: boolean;
+  }): Promise<ScriptRunResult[]>;
 }
 
 /**

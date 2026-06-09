@@ -53,6 +53,8 @@ import { FormEngineEmbed } from './extensions/FormEngineExtension';
 import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
 import { CadViewEmbed } from './extensions/CadViewExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
+import { InfoMark, INFO_MARK_EDIT_EVENT, type InfoMarkEditEventDetail } from './extensions/InfoMarkExtension';
+import InfoMarkDialog from './extensions/InfoMarkDialog';
 import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
 import { PluginScriptBlock } from './extensions/PluginScriptExtension';
 import { BlockActionMenu } from './BlockActionMenu';
@@ -100,6 +102,43 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // here let us drop the resulting markdown exactly where the slash was.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [eventDialog, setEventDialog] = useState<{ editor: any; range: any } | null>(null);
+  // InfoMark dialog — open=null when closed. When `editPos` is null we're
+  // inserting at the current selection; when a number, updating the node at
+  // that ProseMirror position (target of a double-click on an existing mark).
+  const [infoMarkDialog, setInfoMarkDialog] = useState<
+    | { mode: 'insert'; initial: { text: string; title: string; body: string; bodyPath: string }; editPos: null }
+    | { mode: 'edit';   initial: { text: string; title: string; body: string; bodyPath: string }; editPos: number }
+    | null
+  >(null);
+  // Open the dialog in edit-mode whenever an InfoMark NodeView dispatches
+  // the edit event (double-click). Window-level subscription because the
+  // NodeView lives inside ProseMirror's render tree and a React ref chain
+  // would be brittle.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<InfoMarkEditEventDetail>).detail;
+      if (!detail) return;
+      setInfoMarkDialog({
+        mode: 'edit',
+        initial: {
+          text: detail.text,
+          title: detail.title,
+          body: detail.body,
+          bodyPath: detail.bodyPath,
+        },
+        editPos: detail.pos,
+      });
+    };
+    window.addEventListener(INFO_MARK_EDIT_EVENT, handler as EventListener);
+    return () => window.removeEventListener(INFO_MARK_EDIT_EVENT, handler as EventListener);
+  }, []);
+  const openInsertInfoMarkDialog = useCallback(() => {
+    setInfoMarkDialog({
+      mode: 'insert',
+      initial: { text: '', title: '', body: '', bodyPath: '' },
+      editPos: null,
+    });
+  }, []);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const insertEventRef = useRef<((editor: any, range: any) => void) | undefined>(
     (editor, range) => setEventDialog({ editor, range }),
@@ -214,6 +253,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       CadViewEmbed,
       AutomateScriptBlock,
       PluginScriptBlock,
+      InfoMark,
       BlockIdExtension,
     ],
     content: '',
@@ -720,11 +760,16 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   return (
     <>
-    <AutomateDocumentProvider>
+    <AutomateDocumentProvider documentPath={filePath}>
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Collapsible toolbar for mobile */}
       <Collapse in={toolbarVisible} timeout={200}>
-        <MdEditorToolbar editor={editor} onSave={handleSave} saveDisabled={saveStatus === 'saved'} />
+        <MdEditorToolbar
+          editor={editor}
+          onSave={handleSave}
+          saveDisabled={saveStatus === 'saved'}
+          onInsertInfoMark={openInsertInfoMarkDialog}
+        />
       </Collapse>
 
       {/* FAB to show toolbar when hidden on mobile */}
@@ -972,6 +1017,26 @@ const MdEditor: React.FC<MdEditorProps> = ({
         ))}
       </>,
       document.body,
+    )}
+
+    {/* InfoMark dialog — opened from the toolbar (Insert) or from a
+        double-click on an existing mark (Edit). On submit we either
+        insertInfoMark at the current selection or updateInfoMark at the
+        captured pos. */}
+    {infoMarkDialog && editor && (
+      <InfoMarkDialog
+        open
+        mode={infoMarkDialog.mode}
+        initial={infoMarkDialog.initial}
+        onClose={() => setInfoMarkDialog(null)}
+        onSubmit={(values) => {
+          if (infoMarkDialog.mode === 'edit') {
+            editor.chain().focus().updateInfoMark(infoMarkDialog.editPos, values).run();
+          } else {
+            editor.chain().focus().insertInfoMark(values).run();
+          }
+        }}
+      />
     )}
 
     {/* Event-from-task dialog — opened by the `/event` slash command.
