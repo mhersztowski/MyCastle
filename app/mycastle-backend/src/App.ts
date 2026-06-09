@@ -1,5 +1,8 @@
 import { MqttServer, FileSystem, JwtService, PasswordService, ApiKeyService, DataSource } from '@mhersztowski/core-backend';
 import * as cron from 'node-cron';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { OcrService } from './modules/ocr/OcrService';
 import { AutomateService } from './modules/automate';
@@ -274,6 +277,17 @@ export class App {
     cron.schedule('0 3 * * *', () => { void this.runOrphanProjectsCleanup(); });
     console.log('Scheduled nightly orphan-projects cleanup at 03:00 UTC');
 
+    // Nightly snapshot of user data — safety net against accidental
+    // overwrites (e.g. sync:push:force from a stale local). Tarball goes
+    // to a SIBLING directory of the data dir so a rogue `rm -rf data/`
+    // doesn't take the backups with it.
+    cron.schedule('30 3 * * *', () => { void this.runUsersBackup(); });
+    console.log('Scheduled nightly users backup at 03:30 UTC');
+    // Run one immediately on startup too — gives us a baseline snapshot
+    // before any code path (including the cleanup above, plugins, etc.)
+    // gets a chance to touch user data. Cheap (gzip on tens of MB).
+    void this.runUsersBackup();
+
     // Graceful shutdown on signals
     const shutdownHandler = async () => {
       await this.shutdown();
@@ -327,6 +341,82 @@ export class App {
     } catch (err) {
       console.warn('Nightly cleanup failed:', err instanceof Error ? err.message : err);
     }
+  }
+
+  /**
+   * Snapshot `Minis/Users/` to a tarball under `BACKUP_DIR` (defaults to
+   * `<rootDir>/../backups`). Sibling of the data dir so a rogue `rm -rf`
+   * on data/ doesn't take the backups with it.
+   *
+   * Strategy is intentionally process-shell `tar -czf`:
+   *   - one binary, well-tested, doesn't pull node-tar / archiver into bundle
+   *   - native streaming → minimal memory footprint even on 1GB user trees
+   *   - timestamps in archive name → trivial retention sort
+   *
+   * Retention: keep last BACKUP_KEEP (default 14) archives. Older are
+   * removed after a successful new backup — never before, so a failed
+   * backup can't shrink the safety net.
+   *
+   * Added after the 2026-06 incident where a stale `sync:push:force`
+   * deleted server-side drive content. Even without backup mounting,
+   * `/data/../backups/` is still bind-mounted on the host (sibling of
+   * `/opt/mycastle-data`), so the operator can recover via `tar -xzf`.
+   */
+  private async runUsersBackup(): Promise<void> {
+    const rootDir = this.config.rootDir;
+    if (!rootDir) return;
+    const usersDir = path.resolve(rootDir, 'Minis', 'Users');
+    // Skip silently if there's nothing to back up yet (fresh install).
+    try { await fs.promises.access(usersDir); } catch { return; }
+
+    const backupDir = process.env.BACKUP_DIR
+      || path.resolve(rootDir, '..', 'backups');
+    try { await fs.promises.mkdir(backupDir, { recursive: true }); }
+    catch (err) {
+      console.warn('backup: cannot create backup dir', backupDir, err);
+      return;
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const archive = path.join(backupDir, `users-${stamp}.tar.gz`);
+
+    await new Promise<void>((resolve, reject) => {
+      // tar -czf <out> -C <parent> Users  → archive contains "Users/…"
+      // relative paths, so an `tar -xzf` outside the original tree works.
+      const proc = spawn('tar', ['-czf', archive, '-C', path.dirname(usersDir), path.basename(usersDir)]);
+      let stderr = '';
+      proc.stderr.on('data', (d) => { stderr += d.toString(); });
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`tar exited ${code}: ${stderr.trim()}`));
+      });
+      proc.on('error', reject);
+    }).then(async () => {
+      const stat = await fs.promises.stat(archive);
+      const sizeMB = (stat.size / (1024 * 1024)).toFixed(1);
+      console.log(`backup: snapshot OK → ${archive} (${sizeMB} MB)`);
+      // Retention sweep — keep last N. Sort lexicographically (timestamps
+      // are ISO so lexical order === chronological order).
+      const keep = parseInt(process.env.BACKUP_KEEP || '14', 10);
+      try {
+        const all = (await fs.promises.readdir(backupDir))
+          .filter(n => n.startsWith('users-') && n.endsWith('.tar.gz'))
+          .sort();
+        const remove = all.slice(0, Math.max(0, all.length - keep));
+        for (const n of remove) {
+          await fs.promises.unlink(path.join(backupDir, n));
+        }
+        if (remove.length > 0) {
+          console.log(`backup: retention removed ${remove.length} old archive(s); keeping last ${keep}`);
+        }
+      } catch (err) {
+        console.warn('backup: retention sweep failed:', err);
+      }
+    }).catch((err) => {
+      // Non-fatal — the app keeps running even if backup fails. Just shout
+      // loudly so the operator notices in logs.
+      console.error('backup: snapshot FAILED:', err);
+    });
   }
 
   async shutdown(): Promise<void> {

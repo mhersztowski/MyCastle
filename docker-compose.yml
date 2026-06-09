@@ -8,6 +8,13 @@ services:
       - ROOT_DIR=/data
       - STATIC_DIR=/app/app/mycastle-web/build
       - HOST_DATA_DIR=/opt/mycastle-data
+      # Backup destination. SIBLING of /data inside the container so a
+      # `rm -rf /data` can't take backups out with it. Bind-mounted from
+      # /opt/mycastle-backups on the host below.
+      - BACKUP_DIR=/backups
+      # Retention: how many nightly snapshots to keep. Each is ~tens of MB
+      # gzipped — 14 days = comfortable rollback window.
+      - BACKUP_KEEP=14
       - ARDUINO_CLI_DOCKER_IMAGE=mycastle-arduino:local
       - PYGAME_DOCKER_IMAGE=mycastle-pygame:local
       - UPYTHON_DOCKER_IMAGE=mycastle-pico:local
@@ -15,6 +22,7 @@ services:
       - "1894:1894"
     volumes:
       - /opt/mycastle-data:/data
+      - /opt/mycastle-backups:/backups
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     healthcheck:
