@@ -13,6 +13,7 @@ import type { IotService } from './modules/iot/IotService.js';
 import type { TerminalService } from './modules/terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
 import type { ArduinoService } from './modules/arduino/index.js';
+import { ArduinoWasmBuilder } from './modules/arduino/index.js';
 import type { MinisConfig } from './modules/arduino/ArduinoCli.js';
 import type { MicroPythonService } from './modules/upython/index.js';
 import type { PygameService } from './modules/pygame/index.js';
@@ -86,6 +87,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private upythonService: MicroPythonService | null;
   private pygameService: PygameService | null;
   private picoSdkService: PicoSdkService | null = null;
+  private arduinoWasmBuilder: ArduinoWasmBuilder | null = null;
   private pluginService: PluginService | null = null;
   private backendPluginService: BackendPluginService | null = null;
   private secretsService: SecretsService | null = null;
@@ -106,7 +108,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService, arduinoWasmBuilder?: ArduinoWasmBuilder | null) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -115,6 +117,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.upythonService = upythonService ?? null;
     this.pygameService = pygameService ?? null;
     this.picoSdkService = picoSdkService ?? null;
+    this.arduinoWasmBuilder = arduinoWasmBuilder ?? null;
     this.pluginService = pluginService ?? null;
     this.backendPluginService = backendPluginService ?? null;
     this.secretsService = secretsService ?? null;
@@ -1308,6 +1311,26 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Arduino: build WASM (POST or GET/SSE /api/users/{userName}/project-arduino/{projectName}/build-wasm)
+    const wasmBuildMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/build-wasm$/);
+    if (wasmBuildMatch && (method === 'POST' || method === 'GET')) {
+      const userName = decodeURIComponent(wasmBuildMatch[1]);
+      const projectName = decodeURIComponent(wasmBuildMatch[2]);
+      await this.handleArduinoBuildWasm(req, res, userName, projectName);
+      return;
+    }
+
+    // Arduino: serve WASM output files (GET /api/users/{userName}/project-arduino/{projectName}/wasm/{sketchName}/{file})
+    const wasmFileMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/wasm\/([^/]+)\/(sketch\.js|sketch\.wasm)$/);
+    if (wasmFileMatch && method === 'GET') {
+      const userName = decodeURIComponent(wasmFileMatch[1]);
+      const projectName = decodeURIComponent(wasmFileMatch[2]);
+      const sketchName = decodeURIComponent(wasmFileMatch[3]);
+      const file = wasmFileMatch[4] as 'sketch.js' | 'sketch.wasm';
+      await this.handleArduinoWasmFile(req, res, userName, projectName, sketchName, file);
+      return;
+    }
+
     // Arduino: list output files (GET /api/users/{userName}/project-arduino/{projectName}/output)
     const outputMatch = apiPath.match(/^\/users\/([^/]+)\/project-arduino\/([^/]+)\/output(?:\/([^/]+))?$/);
     if (outputMatch) {
@@ -1315,6 +1338,108 @@ export class MycastleHttpServer extends HttpUploadServer {
       const projectName = decodeURIComponent(outputMatch[2]);
       const fileName = outputMatch[3] ? decodeURIComponent(outputMatch[3]) : undefined;
       await this.handleArduinoOutput(req, res, method, userName, projectName, fileName);
+      return;
+    }
+
+    // C++: list/create projects (GET|POST /api/users/{u}/cpp-projects)
+    const cppProjectsMatch = apiPath.match(/^\/users\/([^/]+)\/cpp-projects$/);
+    if (cppProjectsMatch) {
+      const cpUserName = decodeURIComponent(cppProjectsMatch[1]);
+      await this.handleCppProjects(req, res, method, cpUserName);
+      return;
+    }
+
+    // C++: delete project (DELETE /api/users/{u}/cpp-projects/{name})
+    const cppProjectDeleteMatch = apiPath.match(/^\/users\/([^/]+)\/cpp-projects\/([^/]+)$/);
+    if (cppProjectDeleteMatch && method === 'DELETE') {
+      const cpUserName = decodeURIComponent(cppProjectDeleteMatch[1]);
+      const cpProjectName = decodeURIComponent(cppProjectDeleteMatch[2]);
+      await this.handleCppProjectDelete(req, res, cpUserName, cpProjectName);
+      return;
+    }
+
+    // C++: build WASM (GET|POST /api/users/{u}/project-cpp/{name}/build-wasm)
+    const cppWasmBuildMatch = apiPath.match(/^\/users\/([^/]+)\/project-cpp\/([^/]+)\/build-wasm$/);
+    if (cppWasmBuildMatch && (method === 'POST' || method === 'GET')) {
+      const cpUserName = decodeURIComponent(cppWasmBuildMatch[1]);
+      const cpProjectName = decodeURIComponent(cppWasmBuildMatch[2]);
+      await this.handleCppBuildWasm(req, res, cpUserName, cpProjectName);
+      return;
+    }
+
+    // C++: serve WASM output files (GET /api/users/{u}/project-cpp/{name}/wasm/{sketch}/{file})
+    const cppWasmFileMatch = apiPath.match(/^\/users\/([^/]+)\/project-cpp\/([^/]+)\/wasm\/([^/]+)\/(sketch\.js|sketch\.wasm)$/);
+    if (cppWasmFileMatch && method === 'GET') {
+      const cpUserName = decodeURIComponent(cppWasmFileMatch[1]);
+      const cpProjectName = decodeURIComponent(cppWasmFileMatch[2]);
+      const cpSketchName = decodeURIComponent(cppWasmFileMatch[3]);
+      const cpFile = cppWasmFileMatch[4] as 'sketch.js' | 'sketch.wasm';
+      await this.handleCppWasmFile(req, res, cpUserName, cpProjectName, cpSketchName, cpFile);
+      return;
+    }
+
+    // C++: list all sketch directories (GET /api/users/{u}/project-cpp/{name}/sketches)
+    const cppSketchListMatch = apiPath.match(/^\/users\/([^/]+)\/project-cpp\/([^/]+)\/sketches$/);
+    if (cppSketchListMatch && method === 'GET') {
+      const cpUserName = decodeURIComponent(cppSketchListMatch[1]);
+      const cpProjectName = decodeURIComponent(cppSketchListMatch[2]);
+      const sketchesDir = path.resolve(this.rootDir!, 'Minis', 'Users', cpUserName, 'Projects', `cpp/${cpProjectName}`, 'sketches');
+      try {
+        const entries = await fs.promises.readdir(sketchesDir, { withFileTypes: true });
+        this.sendJsonResponse(res, 200, { items: entries.filter(e => e.isDirectory()).map(e => e.name).sort() });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    // C++: list sketch files (GET /api/users/{u}/project-cpp/{name}/sketches/{sketchName})
+    const cppSketchFilesMatch = apiPath.match(/^\/users\/([^/]+)\/project-cpp\/([^/]+)\/sketches\/([^/]+)$/);
+    if (cppSketchFilesMatch && method === 'GET') {
+      const cpUserName = decodeURIComponent(cppSketchFilesMatch[1]);
+      const cpProjectName = decodeURIComponent(cppSketchFilesMatch[2]);
+      const cpSketchName = decodeURIComponent(cppSketchFilesMatch[3]);
+      const projectId = `cpp/${cpProjectName}`;
+      const dir = path.resolve(this.rootDir!, 'Minis', 'Users', cpUserName, 'Projects', projectId, 'sketches', cpSketchName);
+      try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        this.sendJsonResponse(res, 200, { items: entries.filter(e => e.isFile()).map(e => e.name).sort() });
+      } catch {
+        this.sendJsonResponse(res, 200, { items: [] });
+      }
+      return;
+    }
+
+    // C++: sketch file read/write/delete (GET|PUT|DELETE /api/users/{u}/project-cpp/{name}/sketches/{sketchName}/{file})
+    const cppSketchFileMatch = apiPath.match(/^\/users\/([^/]+)\/project-cpp\/([^/]+)\/sketches\/([^/]+)\/([^/]+)$/);
+    if (cppSketchFileMatch && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
+      const cpUserName = decodeURIComponent(cppSketchFileMatch[1]);
+      const cpProjectName = decodeURIComponent(cppSketchFileMatch[2]);
+      const cpSketchName = decodeURIComponent(cppSketchFileMatch[3]);
+      const cpFileName = decodeURIComponent(cppSketchFileMatch[4]);
+      const cpProjectId = `cpp/${cpProjectName}`;
+      const filePath = path.resolve(this.rootDir!, 'Minis', 'Users', cpUserName, 'Projects', cpProjectId, 'sketches', cpSketchName, cpFileName);
+      if (method === 'GET') {
+        try {
+          const content = await fs.promises.readFile(filePath, 'utf-8');
+          this.sendJsonResponse(res, 200, { content });
+        } catch {
+          this.sendJsonResponse(res, 404, { error: 'File not found' });
+        }
+      } else if (method === 'PUT') {
+        const body = await this.parseRequestBody(req) as { content?: string };
+        if (typeof body.content !== 'string') { this.sendJsonResponse(res, 400, { error: 'content required' }); return; }
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.promises.writeFile(filePath, body.content, 'utf-8');
+        this.sendJsonResponse(res, 200, { ok: true });
+      } else {
+        try {
+          await fs.promises.unlink(filePath);
+          this.sendJsonResponse(res, 200, { ok: true });
+        } catch {
+          this.sendJsonResponse(res, 404, { error: 'File not found' });
+        }
+      }
       return;
     }
 
@@ -2063,6 +2188,207 @@ export class MycastleHttpServer extends HttpUploadServer {
       res.end(data);
     } catch {
       this.sendJsonResponse(res, 404, { error: 'File not found' });
+    }
+  }
+
+  // --- C++ projects (filesystem-based, no DataSource) ---
+
+  private async handleCppProjects(req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+    if (!this.rootDir) { this.sendJsonResponse(res, 503, { error: 'rootDir not configured' }); return; }
+    const cppDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', 'cpp');
+
+    if (method === 'GET') {
+      try {
+        const entries = await fs.promises.readdir(cppDir, { withFileTypes: true });
+        const projects = entries.filter(e => e.isDirectory()).map(e => ({ name: e.name }));
+        this.sendJsonResponse(res, 200, { projects });
+      } catch {
+        this.sendJsonResponse(res, 200, { projects: [] });
+      }
+      return;
+    }
+
+    if (method === 'POST') {
+      const body = await this.parseRequestBody(req) as { name?: string };
+      const name = body.name?.trim();
+      if (!name || !/^[\w\-. ]+$/.test(name)) {
+        this.sendJsonResponse(res, 400, { error: 'Invalid project name' });
+        return;
+      }
+      const projectDir = path.resolve(cppDir, name, 'sketches', name);
+      await fs.promises.mkdir(projectDir, { recursive: true });
+      const mainFile = path.join(projectDir, `${name}.cpp`);
+      const exists = await fs.promises.access(mainFile).then(() => true).catch(() => false);
+      if (!exists) {
+        await fs.promises.writeFile(mainFile, [
+          '#include <stdio.h>',
+          '',
+          'int main() {',
+          `    printf("Hello from ${name}!\\n");`,
+          '    return 0;',
+          '}',
+        ].join('\n'), 'utf-8');
+      }
+      this.sendJsonResponse(res, 201, { name });
+      return;
+    }
+
+    this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+  }
+
+  private async handleCppProjectDelete(_req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.rootDir) { this.sendJsonResponse(res, 503, { error: 'rootDir not configured' }); return; }
+    const projectDir = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', 'cpp', projectName);
+    try {
+      await fs.promises.rm(projectDir, { recursive: true, force: true });
+      this.sendJsonResponse(res, 200, { ok: true });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'Delete failed' });
+    }
+  }
+
+  private async handleCppBuildWasm(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.arduinoWasmBuilder) {
+      this.sendJsonResponse(res, 503, { error: 'WASM builder not configured (set ARDUINO_WASM_DOCKER_IMAGE)' });
+      return;
+    }
+
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    let sketchName: string | undefined;
+    if (req.method === 'GET') {
+      sketchName = url.searchParams.get('sketchName') ?? undefined;
+    } else {
+      const body = await this.parseRequestBody(req) as { sketchName?: string };
+      sketchName = body.sketchName;
+    }
+    if (!sketchName) { this.sendJsonResponse(res, 400, { error: 'sketchName is required' }); return; }
+
+    const projectId = `cpp/${projectName}`;
+    const isSSE = req.headers.accept?.includes('text/event-stream');
+    if (isSSE) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+      const sendEvent = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      try {
+        const result = await this.arduinoWasmBuilder.build(userName, projectId, sketchName, (chunk) => sendEvent('output', { chunk }));
+        sendEvent('done', { success: result.success, exitCode: result.exitCode });
+      } catch (err) {
+        sendEvent('done', { success: false, exitCode: 1, error: err instanceof Error ? err.message : 'WASM build failed' });
+      }
+      res.end();
+    } else {
+      try {
+        const result = await this.arduinoWasmBuilder.build(userName, projectId, sketchName, () => {});
+        this.sendJsonResponse(res, 200, result);
+      } catch (err) {
+        this.sendJsonResponse(res, 200, { success: false, output: err instanceof Error ? err.message : 'WASM build failed', exitCode: 1 });
+      }
+    }
+  }
+
+  private async handleCppWasmFile(_req: IncomingMessage, res: ServerResponse, userName: string, projectName: string, sketchName: string, file: 'sketch.js' | 'sketch.wasm'): Promise<void> {
+    if (!this.arduinoWasmBuilder) { this.sendJsonResponse(res, 503, { error: 'WASM builder not configured' }); return; }
+    const projectId = `cpp/${projectName}`;
+    const outputDir = this.arduinoWasmBuilder.wasmOutputDir(userName, projectId, sketchName);
+    const filePath = path.join(outputDir, file);
+    try {
+      const data = await fs.promises.readFile(filePath);
+      const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
+      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
+      this.setCorsHeaders(res);
+      res.end(data);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `${file} not found — build the project first` });
+    }
+  }
+
+  // --- Arduino WASM build ---
+
+  private async handleArduinoBuildWasm(req: IncomingMessage, res: ServerResponse, userName: string, projectName: string): Promise<void> {
+    if (!this.arduinoWasmBuilder) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino WASM builder not configured (set ARDUINO_WASM_DOCKER_IMAGE)' });
+      return;
+    }
+
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    let sketchName: string | undefined;
+
+    if (req.method === 'GET') {
+      sketchName = url.searchParams.get('sketchName') ?? undefined;
+    } else {
+      const body = await this.parseRequestBody(req) as { sketchName?: string };
+      sketchName = body.sketchName;
+    }
+
+    if (!sketchName) {
+      this.sendJsonResponse(res, 400, { error: 'sketchName is required' });
+      return;
+    }
+
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+
+    const isSSE = req.headers.accept?.includes('text/event-stream');
+    if (isSSE) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+
+      const sendEvent = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      const onOutput = (chunk: string) => sendEvent('output', { chunk });
+
+      try {
+        const result = await this.arduinoWasmBuilder.build(userName, projectId, sketchName, onOutput);
+        sendEvent('done', { success: result.success, exitCode: result.exitCode });
+      } catch (err) {
+        sendEvent('done', { success: false, exitCode: 1, error: err instanceof Error ? err.message : 'WASM build failed' });
+      }
+      res.end();
+    } else {
+      try {
+        const result = await this.arduinoWasmBuilder.build(userName, projectId, sketchName, () => {});
+        this.sendJsonResponse(res, 200, result);
+      } catch (err) {
+        this.sendJsonResponse(res, 200, { success: false, output: err instanceof Error ? err.message : 'WASM build failed', exitCode: 1 });
+      }
+    }
+  }
+
+  private async handleArduinoWasmFile(_req: IncomingMessage, res: ServerResponse, userName: string, projectName: string, sketchName: string, file: 'sketch.js' | 'sketch.wasm'): Promise<void> {
+    if (!this.arduinoWasmBuilder) {
+      this.sendJsonResponse(res, 503, { error: 'Arduino WASM builder not configured' });
+      return;
+    }
+
+    const projectId = await this.resolveProjectId(userName, projectName);
+    if (!projectId) {
+      this.sendJsonResponse(res, 404, { error: 'Project not found' });
+      return;
+    }
+
+    const outputDir = this.arduinoWasmBuilder.wasmOutputDir(userName, projectId, sketchName);
+    const filePath = path.join(outputDir, file);
+
+    try {
+      const data = await fs.promises.readFile(filePath);
+      const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Content-Length': data.length,
+        'Cache-Control': 'no-cache',
+      });
+      this.setCorsHeaders(res);
+      res.end(data);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `${file} not found — build the project first` });
     }
   }
 

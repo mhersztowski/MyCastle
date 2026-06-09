@@ -43,6 +43,7 @@ import {
   FlashOn,
   FolderOpen,
   InsertDriveFile,
+  Memory,
   OpenInFull,
   Refresh,
   Save,
@@ -62,6 +63,7 @@ import { minisApi } from '../../services/MinisApiService';
 import { useAuth } from '../../modules/auth';
 import { AccountMenu } from '../../components/AccountMenu';
 import { BuildOutputPanel } from '../../components/BuildOutputPanel';
+import { ArduinoWasmRuntime } from '../../components/ArduinoWasmRuntime';
 import type { MinisDeviceModel, MinisProjectLibrary } from '@mhersztowski/core';
 
 type ViewMode = 'blockly' | 'split' | 'code';
@@ -106,6 +108,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   const [configOpen, setConfigOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [flashOpen, setFlashOpen] = useState(false);
+  const [wasmOpen, setWasmOpen] = useState(false);
   const [sketches, setSketches] = useState<string[]>([]);
   const [currentSketch, setCurrentSketch] = useState<string | null>(null);
   const [sketchesOpen, setSketchesOpen] = useState(() =>
@@ -1192,6 +1195,18 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               </IconButton>
             </span>
           </Tooltip>
+          <Tooltip title={!currentSketch ? 'Select a sketch first' : 'Simulate in browser (WebAssembly)'}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={!currentSketch}
+                onClick={() => setWasmOpen(true)}
+                color={wasmOpen ? 'primary' : 'default'}
+              >
+                <Memory fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
           <Box sx={{ flexGrow: 1 }} />
           <Typography variant="caption" color="text.secondary">
             {board ? (boardProfiles[board]?.name ?? board) : '—'}
@@ -1201,6 +1216,17 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
 
       {/* Serial Terminal panel */}
       <WebSerialTerminal open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+
+      {/* WASM simulator */}
+      {wasmOpen && userName && projectId && currentSketch && (
+        <ArduinoWasmRuntime
+          open={wasmOpen}
+          onClose={() => setWasmOpen(false)}
+          userName={userName}
+          projectName={projectId}
+          sketchName={currentSketch}
+        />
+      )}
 
       {/* Flash Firmware dialog */}
       <FlashDialog

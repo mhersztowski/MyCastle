@@ -362,7 +362,9 @@ export const LIBRARIES: Record<string, LibraryEntry> = {
     // sam chunk obsłuży wszystkie bloki skryptów w dokumencie. Dependency
     // jest deklarowane w mycastle-web/package.json.
     localLoader: async () => {
-      const mod = await import('three');
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore — three is a runtime dep declared in package.json; installed but not symlinked by pnpm
+      const mod = await import(/* @vite-ignore */ 'three');
       // Three.js ESM eksportuje wszystkie klasy jako named exports.
       // `THREE` namespace na window potrzebuje obiektu, więc spread modułu.
       return { ...mod };
@@ -383,14 +385,23 @@ export const LIBRARIES: Record<string, LibraryEntry> = {
     // się z runtime'em. Vite generuje jeden chunk per submodule, ale i
     // tak to lokalnie + cache na cały czas życia strony.
     localLoader: async () => {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore — lit is a runtime dep declared in package.json; installed but not symlinked by pnpm
       const [main, decorators, repeat, whenMod, classMap, styleMap, ifDefined] = await Promise.all([
-        import('lit'),
-        import('lit/decorators.js'),
-        import('lit/directives/repeat.js'),
-        import('lit/directives/when.js'),
-        import('lit/directives/class-map.js'),
-        import('lit/directives/style-map.js'),
-        import('lit/directives/if-defined.js'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit/decorators.js'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit/directives/repeat.js'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit/directives/when.js'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit/directives/class-map.js'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit/directives/style-map.js'),
+        // @ts-ignore
+        import(/* @vite-ignore */ 'lit/directives/if-defined.js'),
       ]);
       return {
         ...main,

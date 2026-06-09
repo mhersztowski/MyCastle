@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [
     react(),
   ],
+  optimizeDeps: {
+    exclude: ['@mhersztowski/web-cpp'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -48,5 +51,21 @@ export default defineConfig({
     // import.meta.url, which breaks Vite's ?worker URL construction and prevents
     // Monaco language workers (JSON, TS, CSS) from starting.
     target: 'esnext',
+    rollupOptions: {
+      onwarn(warning, warn) {
+        // three and lit are optional runtime deps in automateLibraries.ts localLoaders.
+        // They may not be installed in all environments; suppress the build error so the
+        // app compiles — the loader will throw at runtime only if the user actually
+        // activates a Plugin Script that uses them without running pnpm install first.
+        if (
+          warning.code === 'UNRESOLVED_IMPORT' &&
+          typeof warning.exporter === 'string' &&
+          (warning.exporter === 'three' || warning.exporter.startsWith('lit'))
+        ) {
+          return;
+        }
+        warn(warning);
+      },
+    },
   },
 });

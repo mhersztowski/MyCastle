@@ -22,11 +22,13 @@ import {
 import {
   Add,
   ArrowBack,
+  Build,
   ChevronRight,
   Delete as DeleteIcon,
   Folder,
   FolderOpen,
   InsertDriveFile,
+  Memory,
   Save,
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -36,6 +38,8 @@ import { minisApi } from '../../services/MinisApiService';
 import { useAuth } from '../../modules/auth';
 import { AccountMenu } from '../../components/AccountMenu';
 import { CppIntelliSense } from '@mhersztowski/texteditor';
+import { BuildOutputPanel } from '../../components/BuildOutputPanel';
+import { CppWasmRuntime } from '@mhersztowski/web-cpp';
 
 // ── Language map ──────────────────────────────────────────────────────────────
 
@@ -207,18 +211,26 @@ function CppProjectPage() {
   const [newFileName, setNewFileName] = useState('');
   const [deleteFileConfirm, setDeleteFileConfirm] = useState<string | null>(null);
 
+  // Build state
+  const [building, setBuilding] = useState(false);
+  const [buildOutput, setBuildOutput] = useState('');
+  const [buildSuccess, setBuildSuccess] = useState<boolean | null>(null);
+  const [buildPanelOpen, setBuildPanelOpen] = useState(false);
+
+  // WASM simulator
+  const [wasmOpen, setWasmOpen] = useState(false);
+
   // Keep ref in sync with state for use in callbacks
   useEffect(() => { currentSketchRef.current = currentSketch; }, [currentSketch]);
 
   // ── Build IntelliSense readIncludeFile callback ───────────────────────────
-  // Reads a header file relative to the current sketch from the REST API.
   const readIncludeFile = useCallback(async (relativePath: string): Promise<string | null> => {
     if (!userName || !projectId || !currentSketchRef.current) return null;
     const cacheKey = `${currentSketchRef.current}/${relativePath}`;
     const cached = contentCacheRef.current.get(cacheKey);
     if (cached !== undefined) return cached;
     try {
-      const content = await minisApi.readUpythonSketchFile(userName, projectId, currentSketchRef.current, relativePath);
+      const content = await minisApi.readCppSketchFile(userName, projectId, currentSketchRef.current, relativePath);
       contentCacheRef.current.set(cacheKey, content);
       return content;
     } catch {
@@ -239,12 +251,10 @@ function CppProjectPage() {
     editorRef.current = editor;
     editor.on('contentChanged', () => {
       setIsDirty(true);
-      // Debounced IntelliSense refresh on content change
       const content = editor.getContent();
       intellisenseRef.current?.onFileOpened(content);
     });
 
-    // Create and activate IntelliSense
     const intellisense = new CppIntelliSense(readIncludeFile);
     intellisense.activate();
     intellisenseRef.current = intellisense;
@@ -261,7 +271,7 @@ function CppProjectPage() {
   const loadSketches = useCallback(async () => {
     if (!userName || !projectId) return;
     try {
-      const list = await minisApi.listUpythonSketches(userName, projectId);
+      const list = await minisApi.listCppSketches(userName, projectId);
       setSketches(list);
       if (list.length > 0 && !currentSketchRef.current) setCurrentSketch(list[0]);
     } catch (err) {
@@ -278,7 +288,7 @@ function CppProjectPage() {
     let content = contentCacheRef.current.get(cacheKey);
     if (content === undefined) {
       try {
-        content = await minisApi.readUpythonSketchFile(userName, projectId, sketch, fileName);
+        content = await minisApi.readCppSketchFile(userName, projectId, sketch, fileName);
         contentCacheRef.current.set(cacheKey, content);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to read file');
@@ -292,7 +302,6 @@ function CppProjectPage() {
     editorRef.current?.setContent(content);
     editorRef.current?.setLanguage(langForFile(fileName));
 
-    // Trigger immediate IntelliSense parse for C/C++ files
     if (isCppFile(fileName)) {
       intellisenseRef.current?.onFileOpenedImmediate(content);
     }
@@ -303,7 +312,7 @@ function CppProjectPage() {
     contentCacheRef.current.clear();
     setCurrentFile(null);
     currentFileRef.current = null;
-    minisApi.listUpythonSketchFiles(userName, projectId, currentSketch)
+    minisApi.listCppSketchFiles(userName, projectId, currentSketch)
       .then((files) => {
         setSketchFiles(files);
         const dirs = new Set<string>();
@@ -324,7 +333,7 @@ function CppProjectPage() {
     setSaving(true);
     try {
       const fileName = currentFileRef.current.split('/').slice(1).join('/');
-      await minisApi.writeUpythonSketchFile(userName, projectId, currentSketchRef.current, fileName, content);
+      await minisApi.writeCppSketchFile(userName, projectId, currentSketchRef.current, fileName, content);
       contentCacheRef.current.set(currentFileRef.current, content);
       setIsDirty(false);
     } catch (err) {
@@ -336,28 +345,77 @@ function CppProjectPage() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); handleSave(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); void handleSave(); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [handleSave]);
+
+  // ── Build (SSE streaming) ─────────────────────────────────────────────────
+  const handleBuild = async () => {
+    if (!userName || !projectId || !currentSketch) return;
+    setBuilding(true);
+    setBuildOutput('');
+    setBuildSuccess(null);
+    setBuildPanelOpen(true);
+
+    const sseUrl = minisApi.getCppWasmBuildSseUrl(userName, projectId, currentSketch);
+    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+    try {
+      const resp = await fetch(sseUrl, {
+        headers: { Accept: 'text/event-stream', ...authHeader },
+      });
+      if (!resp.ok || !resp.body) {
+        setBuildOutput(`HTTP ${resp.status}`);
+        setBuildSuccess(false);
+        return;
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const block of parts) {
+          const eventLine = block.split('\n').find(l => l.startsWith('event:'));
+          const dataLine = block.split('\n').find(l => l.startsWith('data:'));
+          if (!dataLine) continue;
+          const data = JSON.parse(dataLine.slice(5)) as Record<string, unknown>;
+          const eventType = eventLine ? eventLine.slice(7).trim() : 'output';
+          if (eventType === 'output') {
+            setBuildOutput(prev => prev + (data.chunk as string));
+          } else if (eventType === 'done') {
+            setBuildSuccess(data.success as boolean);
+          }
+        }
+      }
+    } catch (err) {
+      setBuildOutput(err instanceof Error ? err.message : 'Build failed');
+      setBuildSuccess(false);
+    } finally {
+      setBuilding(false);
+    }
+  };
 
   // ── New sketch ────────────────────────────────────────────────────────────
   const handleNewSketch = async () => {
     if (!userName || !projectId || !newSketchName.trim()) return;
     const name = newSketchName.trim();
     const starterContent = [
-      '#include <iostream>',
-      '#include "utils.h"',
+      '#include <stdio.h>',
       '',
       'int main() {',
-      '    std::cout << "Hello, World!" << std::endl;',
+      `    printf("Hello from ${name}!\\n");`,
       '    return 0;',
       '}',
       '',
     ].join('\n');
     try {
-      await minisApi.writeUpythonSketchFile(userName, projectId, name, 'main.cpp', starterContent);
+      await minisApi.writeCppSketchFile(userName, projectId, name, `${name}.cpp`, starterContent);
       setNewSketchDialog(false);
       setNewSketchName('');
       setSketches((prev) => [...prev, name]);
@@ -372,7 +430,7 @@ function CppProjectPage() {
     if (!userName || !projectId || !currentSketch || !newFileName.trim()) return;
     const name = newFileName.trim();
     try {
-      await minisApi.writeUpythonSketchFile(userName, projectId, currentSketch, name, '');
+      await minisApi.writeCppSketchFile(userName, projectId, currentSketch, name, '');
       setNewFileDialog(false);
       setNewFileName('');
       setSketchFiles((prev) => [...prev, name]);
@@ -386,7 +444,7 @@ function CppProjectPage() {
   const handleDeleteFile = async (fileName: string) => {
     if (!userName || !projectId || !currentSketch) return;
     try {
-      await minisApi.deleteUpythonSketchFile(userName, projectId, currentSketch, fileName);
+      await minisApi.deleteCppSketchFile(userName, projectId, currentSketch, fileName);
       setDeleteFileConfirm(null);
       setSketchFiles((prev) => prev.filter((f) => f !== fileName));
       if (currentFile === fileName) {
@@ -400,7 +458,12 @@ function CppProjectPage() {
     }
   };
 
-  const _token = token; // used only to satisfy auth context dependency
+  const wasmBuildSseUrl = userName && projectId && currentSketch
+    ? minisApi.getCppWasmBuildSseUrl(userName, projectId, currentSketch)
+    : '';
+  const wasmJsUrl = userName && projectId && currentSketch
+    ? minisApi.getCppWasmJsUrl(userName, projectId, currentSketch)
+    : '';
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: 'background.default' }}>
@@ -439,9 +502,36 @@ function CppProjectPage() {
 
           <Box sx={{ flexGrow: 1 }} />
 
+          {/* Build button */}
+          <Button
+            size="small"
+            color={buildSuccess === false ? 'error' : buildSuccess === true ? 'success' : 'inherit'}
+            variant="outlined"
+            startIcon={building ? <CircularProgress size={14} color="inherit" /> : <Build />}
+            onClick={() => void handleBuild()}
+            disabled={building || !currentSketch}
+            sx={{ textTransform: 'none', borderColor: 'rgba(255,255,255,0.4)', color: 'inherit' }}
+          >
+            Build WASM
+          </Button>
+
+          {/* Run in browser button */}
+          <Tooltip title={buildSuccess ? 'Run in browser (WASM)' : 'Build first to run in browser'}>
+            <span>
+              <IconButton
+                color={buildSuccess ? 'success' : 'inherit'}
+                size="small"
+                onClick={() => setWasmOpen(true)}
+                disabled={!buildSuccess}
+              >
+                <Memory />
+              </IconButton>
+            </span>
+          </Tooltip>
+
           <Tooltip title="Save (Ctrl+S)">
             <span>
-              <IconButton color="inherit" size="small" onClick={handleSave} disabled={!isDirty || saving}>
+              <IconButton color="inherit" size="small" onClick={() => void handleSave()} disabled={!isDirty || saving}>
                 {saving ? <CircularProgress size={18} color="inherit" /> : <Save />}
               </IconButton>
             </span>
@@ -504,6 +594,27 @@ function CppProjectPage() {
         <Box ref={editorContainerRef} sx={{ flexGrow: 1, overflow: 'hidden' }} />
       </Box>
 
+      {/* Build output panel */}
+      <BuildOutputPanel
+        open={buildPanelOpen}
+        onClose={() => setBuildPanelOpen(false)}
+        output={buildOutput}
+        compiling={building}
+        success={buildSuccess}
+      />
+
+      {/* WASM simulator */}
+      {wasmOpen && (
+        <CppWasmRuntime
+          open={wasmOpen}
+          onClose={() => setWasmOpen(false)}
+          title={`WASM Simulator — ${currentSketch ?? projectId}`}
+          buildSseUrl={wasmBuildSseUrl}
+          wasmJsUrl={wasmJsUrl}
+          token={token}
+        />
+      )}
+
       {/* New sketch dialog */}
       <Dialog open={newSketchDialog} onClose={() => setNewSketchDialog(false)} maxWidth="xs" fullWidth>
         <DialogTitle>New Sketch</DialogTitle>
@@ -511,12 +622,12 @@ function CppProjectPage() {
           <TextField
             autoFocus fullWidth label="Sketch Name" value={newSketchName}
             onChange={(e) => setNewSketchName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleNewSketch(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleNewSketch(); }}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setNewSketchDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleNewSketch} disabled={!newSketchName.trim()}>Create</Button>
+          <Button variant="contained" onClick={() => void handleNewSketch()} disabled={!newSketchName.trim()}>Create</Button>
         </DialogActions>
       </Dialog>
 
@@ -527,12 +638,12 @@ function CppProjectPage() {
           <TextField
             autoFocus fullWidth label="File name (e.g. utils.h, math.cpp)"
             value={newFileName} onChange={(e) => setNewFileName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleNewFile(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleNewFile(); }}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setNewFileDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleNewFile} disabled={!newFileName.trim()}>Create</Button>
+          <Button variant="contained" onClick={() => void handleNewFile()} disabled={!newFileName.trim()}>Create</Button>
         </DialogActions>
       </Dialog>
 
@@ -544,12 +655,9 @@ function CppProjectPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteFileConfirm(null)}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={() => deleteFileConfirm && handleDeleteFile(deleteFileConfirm)}>Delete</Button>
+          <Button color="error" variant="contained" onClick={() => deleteFileConfirm && void handleDeleteFile(deleteFileConfirm)}>Delete</Button>
         </DialogActions>
       </Dialog>
-
-      {/* Suppress unused variable warning */}
-      {_token && null}
     </Box>
   );
 }

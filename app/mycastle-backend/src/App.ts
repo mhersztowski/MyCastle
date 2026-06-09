@@ -10,7 +10,7 @@ import { SchedulerService } from './modules/scheduler';
 import { MycastleHttpServer } from './MycastleHttpServer.js';
 import { IotService } from './modules/iot/IotService.js';
 import { TerminalService } from './modules/terminal/TerminalService.js';
-import { ArduinoService } from './modules/arduino/index.js';
+import { ArduinoService, ArduinoWasmBuilder } from './modules/arduino/index.js';
 import { MicroPythonService } from './modules/upython/index.js';
 import { PygameService } from './modules/pygame/index.js';
 import { PicoSdkService } from './modules/picosdk/index.js';
@@ -52,6 +52,7 @@ export class App {
   readonly httpServer: MycastleHttpServer;
   readonly iotService: IotService;
   readonly arduinoService: ArduinoService;
+  readonly arduinoWasmBuilder: ArduinoWasmBuilder | null;
   readonly upythonService: MicroPythonService;
   readonly pygameService: PygameService;
   readonly picoSdkService: PicoSdkService | null;
@@ -115,6 +116,13 @@ export class App {
       : null;
     if (!picoSdkDockerImage) console.log('PicoSdk service: not configured (set PICOSDK_DOCKER_IMAGE)');
 
+    const arduinoWasmDockerImage = process.env.ARDUINO_WASM_DOCKER_IMAGE;
+    const hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : path.resolve(config.rootDir);
+    this.arduinoWasmBuilder = arduinoWasmDockerImage
+      ? new ArduinoWasmBuilder(arduinoWasmDockerImage, hostDataDir, path.resolve(config.rootDir))
+      : null;
+    if (!arduinoWasmDockerImage) console.log('Arduino WASM builder: not configured (set ARDUINO_WASM_DOCKER_IMAGE)');
+
     this.pluginService = new PluginService(config.rootDir);
     this.backendPluginService = new BackendPluginService(config.rootDir);
     this.secretsService = new SecretsService(config.rootDir);
@@ -134,6 +142,7 @@ export class App {
       this.pluginService,
       this.backendPluginService,
       this.secretsService,
+      this.arduinoWasmBuilder,
     );
   }
 

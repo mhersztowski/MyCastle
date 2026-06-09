@@ -451,6 +451,64 @@ class MinisApiService {
     });
   }
 
+  /** Returns the URL to the compiled WASM JS loader (serves sketch.js from the backend). */
+  getArduinoWasmJsUrl(userName: string, projectName: string, sketchName: string): string {
+    return `${getHttpUrl()}/api/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/wasm/${encodeURIComponent(sketchName)}/sketch.js`;
+  }
+
+  /** SSE URL for WASM build streaming — returns the full URL (used with EventSource + Auth header via fetch). */
+  getArduinoWasmBuildSseUrl(userName: string, projectName: string, sketchName: string): string {
+    return `/api/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/build-wasm?sketchName=${encodeURIComponent(sketchName)}`;
+  }
+
+  // C++ projects (filesystem-based, not in Project.json)
+
+  async listCppProjects(userName: string): Promise<Array<{ name: string }>> {
+    const res = await this.request<{ projects: Array<{ name: string }> }>('GET', `/users/${encodeURIComponent(userName)}/cpp-projects`);
+    return res.projects;
+  }
+
+  async createCppProject(userName: string, name: string): Promise<{ name: string }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/cpp-projects`, { name });
+  }
+
+  async deleteCppProject(userName: string, name: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/cpp-projects/${encodeURIComponent(name)}`);
+  }
+
+  getCppWasmJsUrl(userName: string, projectName: string, sketchName: string): string {
+    return `${getHttpUrl()}/api/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/wasm/${encodeURIComponent(sketchName)}/sketch.js`;
+  }
+
+  getCppWasmBuildSseUrl(userName: string, projectName: string, sketchName: string): string {
+    return `/api/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/build-wasm?sketchName=${encodeURIComponent(sketchName)}`;
+  }
+
+  // C++ sketch files
+
+  async listCppSketches(userName: string, projectName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/sketches`);
+    return data.items;
+  }
+
+  async listCppSketchFiles(userName: string, projectName: string, sketchName: string): Promise<string[]> {
+    const data = await this.request<{ items: string[] }>('GET', `/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}`);
+    return data.items;
+  }
+
+  async readCppSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<string> {
+    const data = await this.request<{ content: string }>('GET', `/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+    return data.content;
+  }
+
+  async writeCppSketchFile(userName: string, projectName: string, sketchName: string, fileName: string, content: string): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`, { content });
+  }
+
+  async deleteCppSketchFile(userName: string, projectName: string, sketchName: string, fileName: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/project-cpp/${encodeURIComponent(projectName)}/sketches/${encodeURIComponent(sketchName)}/${encodeURIComponent(fileName)}`);
+  }
+
   async uploadFirmware(userName: string, projectName: string, sketchName: string, fqbn: string, port: string): Promise<{
     success: boolean; output: string; exitCode: number;
   }> {

@@ -18,6 +18,7 @@
     "@mhersztowski/core": "workspace:*",
     "@mhersztowski/texteditor": "workspace:*",
     "@mhersztowski/web-client": "workspace:*",
+    "@mhersztowski/web-cpp": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@mui/icons-material": "^6.1.0",
     "@mui/material": "^6.1.0",

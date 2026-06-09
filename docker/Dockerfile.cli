@@ -93,6 +93,32 @@ RUN git clone --depth=1 --branch ${PICO_SDK_TAG} \
 ENV PICO_SDK_PATH=/opt/pico-sdk
 
 
+# ─── Arduino → WebAssembly (Emscripten) ──────────────────────────────────────
+FROM ubuntu:22.04 AS arduino-wasm
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip git xz-utils ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install emsdk from source — supports both linux/amd64 and linux/arm64 natively
+RUN git clone --depth 1 https://github.com/emscripten-core/emsdk.git /emsdk \
+    && cd /emsdk \
+    && ./emsdk install 3.1.74 \
+    && ./emsdk activate 3.1.74
+
+ENV EMSDK=/emsdk
+ENV PATH="/emsdk/upstream/emscripten:/emsdk/upstream/bin:${PATH}"
+
+WORKDIR /workspace
+
+# Copy Arduino mock headers into the image so every build can reference them
+COPY docker/arduino-mock/ /arduino-mock/
+
+CMD ["tail", "-f", "/dev/null"]
+
+
 # ─── Pygame / pygbag web builder ─────────────────────────────────────────────
 FROM base AS pygame
 

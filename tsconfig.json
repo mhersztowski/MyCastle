@@ -14,6 +14,7 @@
     { "path": "./packages/core-cad" },
     { "path": "./packages/minislib" },
     { "path": "./packages/minisc" },
+    { "path": "./packages/web-cpp" },
     { "path": "./app/cad-app" }
   ]
 }

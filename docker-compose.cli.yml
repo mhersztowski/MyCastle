@@ -4,6 +4,7 @@
 #
 # Backend env vars (set in .env):
 #   ARDUINO_CLI_DOCKER_IMAGE=mycastle-arduino:local
+#   ARDUINO_WASM_DOCKER_IMAGE=mycastle-arduino-wasm:local
 #   PYGAME_DOCKER_IMAGE=mycastle-pygame:local
 #   UPYTHON_DOCKER_IMAGE=mycastle-pico:local
 #
@@ -19,6 +20,13 @@ services:
       target: arduino
       args:
         ARDUINO_ARCH: Linux_ARM64
+
+  arduino-wasm:
+    image: mycastle-arduino-wasm:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cli
+      target: arduino-wasm
 
   pico:
     image: mycastle-pico:local
