@@ -29,6 +29,9 @@ npm-debug.log*
 # Data directory (only top-level)
 /data/
 
+# Backups created by the backend (App.ts scheduleBackup)
+/backups/
+
 # Test coverage & artifacts
 coverage/
 playwright-report/
