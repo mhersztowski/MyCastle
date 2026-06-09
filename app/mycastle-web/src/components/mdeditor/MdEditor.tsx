@@ -259,6 +259,91 @@ const MdEditor: React.FC<MdEditorProps> = ({
     content: '',
     editable,
     autofocus: autoFocus ? 'start' : false,
+    editorProps: {
+      // Clean up garbage HTML that copy-from-browser (Office, web pages,
+      // Notion, Confluence, …) pastes in. Without this, the editor adopts
+      // foreign fonts, colours, inline backgrounds, classnames — and the
+      // user sees their carefully-styled doc suddenly turn rainbow.
+      //
+      // Strategy: parse the pasted HTML into a DOM tree, walk it, strip
+      // style/class/font/color/bgcolor attrs + <style>/<meta>/<script>
+      // tags + Office's `<o:p>` / `<w:*>` namespaced tags, then serialise
+      // back. We keep the structural tags (h1-6, p, ul/ol/li, table/tr/td,
+      // a, img, code, pre, strong, em, …) so legitimate markdown-relevant
+      // formatting survives.
+      //
+      // We deliberately do NOT block <span> outright — Tiptap's mark
+      // extensions (Highlight, Code, etc.) sometimes serialise to span+class
+      // and we don't want to lose those. We just strip the noisy attrs.
+      transformPastedHTML(html) {
+        try {
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+
+          // Drop tags whose only purpose is styling / metadata.
+          const banned = ['style', 'meta', 'script', 'link', 'colgroup', 'col'];
+          banned.forEach(t => doc.querySelectorAll(t).forEach(n => n.remove()));
+
+          // MS Office tag namespaces — `<o:p>`, `<w:WordDocument>`, …
+          // Walk via NodeIterator because tagName for namespaced tags
+          // shows as the full `o:p` string and querySelector chokes on `:`.
+          const all = doc.body.querySelectorAll('*');
+          all.forEach((el) => {
+            const tag = el.tagName.toLowerCase();
+            if (tag.includes(':') || tag.startsWith('o:') || tag.startsWith('w:') || tag.startsWith('v:')) {
+              // Replace with its children rather than dropping content.
+              while (el.firstChild) el.parentNode?.insertBefore(el.firstChild, el);
+              el.remove();
+              return;
+            }
+
+            // Strip style / class / colour-y attrs that travel from
+            // Google Docs / Word / web pages. data-* and aria-* are
+            // kept because some Tiptap extensions round-trip through them.
+            const stripAttrs = [
+              'style', 'class', 'color', 'bgcolor', 'background',
+              'face', 'size', 'align', 'valign',
+              'lang', 'xml:lang',
+            ];
+            stripAttrs.forEach(a => el.removeAttribute(a));
+          });
+
+          // Unwrap <font> — purely presentational, never useful in
+          // markdown. Inner content stays in place.
+          doc.querySelectorAll('font').forEach(font => {
+            while (font.firstChild) font.parentNode?.insertBefore(font.firstChild, font);
+            font.remove();
+          });
+
+          return doc.body.innerHTML;
+        } catch {
+          // Parser failure — fall back to original HTML. Tiptap will at
+          // worst paste it as-is (which is the same as without this hook).
+          return html;
+        }
+      },
+
+      // Mod+Shift+V paste-as-plain-text. Tiptap's StarterKit doesn't ship
+      // this by default; without it the only escape hatch for messy
+      // formatting is opening Notepad and round-tripping through it.
+      handleKeyDown(view, event) {
+        const isMod = event.ctrlKey || event.metaKey;
+        if (isMod && event.shiftKey && (event.key === 'v' || event.key === 'V')) {
+          // Read text via the async clipboard API. We don't preventDefault
+          // synchronously because returning true takes care of that.
+          navigator.clipboard.readText().then((text) => {
+            if (!text) return;
+            const { state, dispatch } = view;
+            dispatch(state.tr.insertText(text));
+          }).catch(() => {
+            // Permission denied / not in secure context — let the default
+            // paste handler run. The user just got rich-paste in that case
+            // which is still fine because transformPastedHTML above cleans it.
+          });
+          return true;
+        }
+        return false;
+      },
+    },
     onSelectionUpdate: ({ editor }) => {
       const { from, to } = editor.state.selection;
       const hasSelection = from !== to;
