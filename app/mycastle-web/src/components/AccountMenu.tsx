@@ -18,6 +18,7 @@ import {
   Psychology as MemoryIcon,
   Schema as SchemaIcon,
   Sensors as MqttIcon,
+  Settings as SettingsIcon,
   SwapHoriz as SwapHorizIcon,
   Tune as TuneIcon,
   Visibility as VisibilityIcon,
@@ -27,6 +28,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@modules/auth';
 import { useGlobalWindows } from './GlobalWindowsContext';
 import { useDisplay } from './DisplayContext';
+import { SettingsDialog } from './SettingsDialog';
 
 interface AccountMenuProps {
   isAdminView?: boolean;
@@ -36,6 +38,7 @@ interface AccountMenuProps {
 export function AccountMenu({ isAdminView = false, userName: userNameProp }: AccountMenuProps) {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [subMenu, setSubMenu] = useState<'view' | 'window' | 'display' | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const subMenuAnchorRef = useRef<HTMLLIElement | null>(null);
   const { themeMode, size, setThemeMode, setSize } = useDisplay();
   const navigate = useNavigate();
@@ -115,6 +118,11 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
           <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Display</ListItemText>
           <ChevronRightIcon fontSize="small" sx={{ ml: 1, color: 'text.secondary' }} />
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => { closeAll(); setSettingsOpen(true); }}>
+          <ListItemIcon><SettingsIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>Settings</ListItemText>
         </MenuItem>
         <MenuItem onClick={handleLogout}>
           <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
@@ -223,6 +231,8 @@ export function AccountMenu({ isAdminView = false, userName: userNameProp }: Acc
           </MenuItem>
         ))}
       </Menu>
+
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} userName={userName} />
     </>
   );
 }

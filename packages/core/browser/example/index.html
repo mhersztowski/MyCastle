@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>core/browser — przykłady API</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; background: #1a1a1a; color: #ddd; margin: 0; padding: 24px; }
+    h1 { font-size: 18px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+    input { background: #2b2b2b; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 6px 8px; min-width: 220px; }
+    button { background: #0a84ff; color: #fff; border: 0; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+    button.secondary { background: #3a3a3a; }
+    button:hover { filter: brightness(1.1); }
+    pre { background: #0d0d0d; border: 1px solid #333; border-radius: 6px; padding: 12px; min-height: 200px; max-height: 50vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+    .hint { color: #888; font-size: 12px; margin: 4px 0 12px; }
+    .err { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <h1>core/browser — przykłady operacji na API serwera</h1>
+  <p class="hint">
+    Wymaga zalogowania w MyCastle (token JWT). userName + token są wczytywane z
+    <code>localStorage["minis_current_user"]</code>, ale można je nadpisać poniżej.
+    <code>baseUrl</code> zostaw pusty dla tego samego origin (produkcja); dla cross-origin podaj np.
+    <code>https://mycastle.hersztowski.org</code>.
+    <br /><strong>Uwaga:</strong> przykłady tworzą i USUWAJĄ rekordy testowe na Twoim koncie.
+  </p>
+
+  <div class="row">
+    <label>baseUrl<input id="baseUrl" placeholder="(pusty = same-origin)" /></label>
+    <label>userName<input id="userName" placeholder="marcin" /></label>
+    <label>token (JWT)<input id="token" placeholder="Bearer token…" /></label>
+  </div>
+
+  <div class="row">
+    <button data-ex="persons">Persons</button>
+    <button data-ex="projects-tasks">Projects &amp; Tasks</button>
+    <button data-ex="events">Events</button>
+    <button data-ex="full">Full flow</button>
+    <button class="secondary" id="clear">Wyczyść log</button>
+  </div>
+
+  <pre id="out">Gotowe. Wybierz przykład…</pre>
+
+  <script type="module">
+    import { ApiClient } from '../api/ApiClient.js';
+    import { runPersonsExample } from './persons.example.js';
+    import { runProjectsTasksExample } from './projects-tasks.example.js';
+    import { runEventsExample } from './events.example.js';
+    import { runFullFlowExample } from './full-flow.example.js';
+
+    const out = document.getElementById('out');
+    const $ = (id) => document.getElementById(id);
+
+    // Pre-fill z localStorage (tak token zapisuje aplikacja MyCastle).
+    try {
+      const cu = JSON.parse(localStorage.getItem('minis_current_user') || '{}');
+      if (cu.token) $('token').value = cu.token;
+      if (cu.name) $('userName').value = cu.name;
+    } catch { /* ignore */ }
+
+    const log = (...args) => {
+      out.textContent += '\n' + args.map((a) =>
+        typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+      out.scrollTop = out.scrollHeight;
+    };
+
+    function makeClient() {
+      const userName = $('userName').value.trim();
+      const token = $('token').value.trim();
+      if (!userName || !token) throw new Error('Podaj userName i token.');
+      return new ApiClient({ baseUrl: $('baseUrl').value.trim(), userName, token });
+    }
+
+    const runners = {
+      persons: runPersonsExample,
+      'projects-tasks': runProjectsTasksExample,
+      events: runEventsExample,
+      full: runFullFlowExample,
+    };
+
+    document.querySelectorAll('button[data-ex]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        out.textContent = `▶ ${btn.dataset.ex}`;
+        try {
+          await runners[btn.dataset.ex](makeClient(), log);
+          log('✓ done');
+        } catch (e) {
+          out.innerHTML += `\n<span class="err">✗ ${e.message}</span>`;
+        }
+      });
+    });
+    $('clear').addEventListener('click', () => { out.textContent = ''; });
+  </script>
+</body>
+</html>
