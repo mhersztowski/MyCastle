@@ -34,6 +34,7 @@ COPY packages/core-cad/package.json packages/core-cad/
 COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
 COPY packages/minislib/package.json packages/minislib/
 COPY packages/minisc/package.json packages/minisc/
+COPY packages/web-cpp/package.json packages/web-cpp/
 COPY app/mycastle-backend/package.json app/mycastle-backend/
 COPY app/mycastle-web/package.json app/mycastle-web/
 COPY app/cad-backend/package.json app/cad-backend/
@@ -51,6 +52,7 @@ COPY packages/core/ packages/core/
 COPY packages/core-backend/ packages/core-backend/
 COPY packages/texteditor/ packages/texteditor/
 COPY packages/web-client/ packages/web-client/
+COPY packages/web-cpp/ packages/web-cpp/
 COPY app/mycastle-backend/ app/mycastle-backend/
 COPY app/mycastle-web/ app/mycastle-web/
 COPY docs/ docs/
@@ -58,6 +60,7 @@ RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
+RUN pnpm --filter @mhersztowski/web-cpp build --silent
 RUN pnpm --filter mycastle-backend build --silent
 RUN pnpm --filter mycastle-web build
 

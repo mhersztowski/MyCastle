@@ -2710,7 +2710,9 @@ export class MycastleHttpServer extends HttpUploadServer {
     const userHomePrefix = `/data/Minis/Users/${userName}`;
 
     const assertPath = (p: string) => {
-      const normalized = p === '/' ? userHomePrefix : p;
+      // Normalize first so that paths like /data/Minis/Users/x/../y/.. can't
+      // bypass the prefix guard via path traversal.
+      const normalized = path.posix.normalize(p === '/' ? userHomePrefix : p);
       if (normalized !== userHomePrefix && !normalized.startsWith(userHomePrefix + '/')) {
         throw new VfsError('NoPermissions' as any, `Access denied: path outside user home`, p);
       }

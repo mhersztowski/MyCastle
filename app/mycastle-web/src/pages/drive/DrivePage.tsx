@@ -1245,7 +1245,10 @@ export default function DrivePage(): React.JSX.Element {
   /** Drive-relative → backend full path (`/data/Minis/Users/{u}/drive/...`).
    *  RemoteFS wants the absolute form; the URL bar shows the relative one. */
   const driveToFullPath = useCallback((rel: string) => {
-    return `/data/Minis/Users/${userName}/drive/${rel}`;
+    const cleaned = rel.replace(/^\/+|\/+$/g, '');
+    return cleaned
+      ? `/data/Minis/Users/${userName}/drive/${cleaned}`
+      : `/data/Minis/Users/${userName}/drive`;
   }, [userName]);
 
   /** Open a .mjd / .data.json file in the right-side MJD editor panel.
@@ -1614,6 +1617,10 @@ export default function DrivePage(): React.JSX.Element {
       item instanceof File ? { file: item, relPath: item.name } : item,
     );
     if (arr.length === 0) return;
+    // Snapshot the current directory NOW — before any await — so that if the
+    // user navigates to a different folder mid-upload, all files in this batch
+    // still land in the directory that was active when the upload started.
+    const uploadCwd = cwd;
     // Base64 encoding inflates ~33%. The backend's JSON body cap is 200 MB,
     // so anything past ~140 MB raw will be rejected before we even POST.
     // Pre-flight check gives a useful error instead of a vague 500.
@@ -1633,7 +1640,7 @@ export default function DrivePage(): React.JSX.Element {
           throw new Error(`Plik za duży (${(file.size / 1024 / 1024).toFixed(1)} MB; limit ${(HARD_LIMIT_BYTES / 1024 / 1024).toFixed(0)} MB)`);
         }
         const b64 = await fileToBase64(file);
-        const rel = cwd ? `${cwd}/${relPath}` : relPath;
+        const rel = uploadCwd ? `${uploadCwd}/${relPath}` : relPath;
         // For files inside subdirectories, ensure every parent dir exists
         // (Node's writeFile would error on a missing parent). We walk the
         // path and mkdir each segment in order — quietly ignoring "already

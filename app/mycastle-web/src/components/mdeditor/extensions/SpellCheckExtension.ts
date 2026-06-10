@@ -57,7 +57,6 @@ export const SpellCheckExtension = Extension.create<SpellCheckExtensionOptions>(
     // transactions (which the plugin state's apply() recreates).
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let latestRequestId = 0;
-    let lastMatches: SpellMatch[] = [];
 
     return [
       new Plugin({
@@ -92,7 +91,6 @@ export const SpellCheckExtension = Extension.create<SpellCheckExtensionOptions>(
               editorView.dispatch(
                 editorView.state.tr.setMeta(spellCheckKey, { decorations: DecorationSet.empty }),
               );
-              lastMatches = [];
               options.onMatchesChange?.([]);
               return;
             }
@@ -126,7 +124,6 @@ export const SpellCheckExtension = Extension.create<SpellCheckExtensionOptions>(
                 decorations: DecorationSet.create(editorView.state.doc, decorations),
               }),
             );
-            lastMatches = matches;
             options.onMatchesChange?.(matches);
           };
 
@@ -146,7 +143,6 @@ export const SpellCheckExtension = Extension.create<SpellCheckExtensionOptions>(
             },
             destroy: () => {
               if (debounceTimer) clearTimeout(debounceTimer);
-              lastMatches = [];
             },
           };
         },
