@@ -30,6 +30,7 @@ import type { editor as MonacoEditorTypes } from 'monaco-editor';
 // so we make the dependency explicit here.
 import '../../modules/editor/monacoWorkers';
 import { setupDriveEditorMonaco } from './driveMonacoSetup';
+import { MonacoSelectionHandles } from './MonacoSelectionHandles';
 
 // Lazy: the include-file picker is borrowed wholesale from the Automate
 // Script editor — same `drive/mdscript` + `drive/treejs` roots, same tree
@@ -721,6 +722,8 @@ export default function DrivePage(): React.JSX.Element {
   const [editorDirty, setEditorDirty] = useState(false);
   const [editorSaving, setEditorSaving] = useState(false);
   const monacoEditorRef = useRef<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
+  // Separate state so MonacoSelectionHandles re-renders when the editor mounts.
+  const [monacoEditorInstance, setMonacoEditorInstance] = useState<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
   // "Dołącz plik" picker — shared with Automate Script. Multi-root tree over
   // drive/mdscript + drive/treejs; insertion goes through executeEdits so
   // it lands in Monaco's undo stack like a manual type.
@@ -1841,6 +1844,7 @@ export default function DrivePage(): React.JSX.Element {
           }}
           onMount={(editor, monaco) => {
             monacoEditorRef.current = editor;
+            setMonacoEditorInstance(editor);
             // Ctrl+S / Cmd+S → save. Goes through `saveEditedText` which
             // already short-circuits when nothing is dirty.
             editor.addCommand(
@@ -1878,6 +1882,7 @@ export default function DrivePage(): React.JSX.Element {
             readOnly: false,
           }}
         />
+        <MonacoSelectionHandles editor={monacoEditorInstance} />
       </Box>
     ) : isImageMime(viewing.mime) ? (
       <Box sx={{ textAlign: 'center', p: 2, height: '100%', overflow: 'auto' }}>

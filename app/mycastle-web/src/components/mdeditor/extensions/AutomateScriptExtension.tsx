@@ -3,7 +3,7 @@
  * Format markdown: ```automate:blockId\ncode\n```
  */
 
-import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
 import { Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
 import {
@@ -22,6 +22,7 @@ import {
   List,
   ListItem,
   ListItemText,
+  ListItemIcon,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -39,6 +40,9 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LabelIcon from '@mui/icons-material/Label';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import CodeIcon from '@mui/icons-material/Code';
 import Editor from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import type { editor as MonacoEditorTypes } from 'monaco-editor';
@@ -168,6 +172,78 @@ function registerLibraryTypes(monaco: Monaco, code: string): void {
     if (entry) map.set(entry.typesDtsPath, entry.typesDtsContent);
   }
   if (map.size > 0) mergeExtraLibs(monaco, map);
+}
+
+// ── Embedded-file helpers ──────────────────────────────────────────────────
+// Parses blocks delimited by the markers that AutomateIncludeFileDialog and
+// handleIncludeImport insert, so the "Included" tab can list them and let the
+// author remove specific blocks in one click.
+//
+// Inline include markers (inserted by AutomateIncludeFileDialog):
+//   // ─── included: PATH ───
+//   <file content>
+//   // ----- PATH
+//
+// Module import markers (inserted by handleIncludeImport):
+//   // ─── import: PATH ───
+//   const xModule = await import('url');
+//   const { … } = xModule;
+//   // ----- import PATH
+
+interface EmbeddedFile {
+  path: string;
+  type: 'included' | 'import';
+  startLine: number;   // index of the opening marker line
+  endLine: number;     // index of the closing marker line
+}
+
+function parseEmbeddedFiles(code: string): EmbeddedFile[] {
+  if (!code) return [];
+  const lines = code.split('\n');
+  const result: EmbeddedFile[] = [];
+  const BOX = '─'; // ─ (U+2500 BOX DRAWINGS LIGHT HORIZONTAL)
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Inline include start: // ─── included: PATH ───
+    const incMatch = line.match(new RegExp(`^// ${BOX}{3} included: (.+?) ${BOX}{3}\\s*$`));
+    if (incMatch) {
+      const path = incMatch[1];
+      const endMarker = `// ----- ${path}`;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trimEnd() === endMarker) {
+          result.push({ path, type: 'included', startLine: i, endLine: j });
+          break;
+        }
+      }
+      continue;
+    }
+
+    // Module import start: // ─── import: PATH ───
+    const impMatch = line.match(new RegExp(`^// ${BOX}{3} import: (.+?) ${BOX}{3}\\s*$`));
+    if (impMatch) {
+      const path = impMatch[1];
+      const endMarker = `// ----- import ${path}`;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trimEnd() === endMarker) {
+          result.push({ path, type: 'import', startLine: i, endLine: j });
+          break;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+// Remove the lines from startLine to endLine inclusive, plus any empty line
+// immediately preceding the block (the snippet is inserted with a leading \n).
+function removeEmbeddedBlock(code: string, file: EmbeddedFile): string {
+  const lines = code.split('\n');
+  let from = file.startLine;
+  if (from > 0 && lines[from - 1].trim() === '') from--;
+  return [...lines.slice(0, from), ...lines.slice(file.endLine + 1)].join('\n');
 }
 
 // Komponent renderujacy wyniki display
@@ -354,7 +430,9 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   // Active tab in the dialog's bottom panel — 'output' shows display.* /
   // return value, 'logs' shows api.log.*. Default to output because that's
   // where most scripts surface visible results.
-  const [dialogTab, setDialogTab] = useState<'output' | 'logs'>('output');
+  const [dialogTab, setDialogTab] = useState<'output' | 'logs' | 'included'>('output');
+  // Whether the output/logs panel is visible in fullscreen dialog.
+  const [outputPanelVisible, setOutputPanelVisible] = useState(true);
   // Output panel height — persisted across dialog opens. Initialised once
   // from localStorage; the actual clamp (min 80 / max 80% of viewport) is
   // applied during drag, so a previously-saved-then-shrunken-viewport value
@@ -649,6 +727,10 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   }, [editorDialogOpen, status, logs.length, output.length, result]);
 
   const hasOutput = output.length > 0 || logs.length > 0 || !!error || result !== undefined;
+
+  // Parse embedded file blocks from the live editor code so the Included tab
+  // stays in sync with edits without requiring a separate "scan" action.
+  const embeddedFiles = useMemo(() => parseEmbeddedFiles(dialogCode), [dialogCode]);
 
   return (
     <NodeViewWrapper data-block-id={node.attrs.blockId || undefined}>
@@ -1052,45 +1134,41 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             />
           </Box>
 
-          {/* Resizer — 5px draggable bar. Cursor turns into ns-resize on
-              hover so the affordance is obvious. The actual height update
-              lives in the global mousemove handler (state useEffect above). */}
-          <Box
-            onMouseDown={onDividerMouseDown}
-            onTouchStart={(e) => {
-              const t = e.touches[0];
-              if (!t) return;
-              dragRef.current = { startY: t.clientY, startHeight: outputPanelHeight };
-            }}
-            sx={{
-              flex: '0 0 auto',
-              height: 5,
-              cursor: 'ns-resize',
-              bgcolor: 'divider',
-              opacity: 0.5,
-              transition: 'opacity 0.15s, background 0.15s',
-              '&:hover, &:active': { opacity: 1, bgcolor: 'primary.main' },
-              // A small invisible hit area on each side makes the grab feel
-              // bigger than the visible bar — easier to land on with a mouse.
-              position: 'relative',
-              '&::before': {
-                content: '""',
-                position: 'absolute',
-                inset: '-4px 0',
-              },
-            }}
-          />
+          {/* Resizer — only visible when the output panel is open. */}
+          {outputPanelVisible && (
+            <Box
+              onMouseDown={onDividerMouseDown}
+              onTouchStart={(e) => {
+                const t = e.touches[0];
+                if (!t) return;
+                dragRef.current = { startY: t.clientY, startHeight: outputPanelHeight };
+              }}
+              sx={{
+                flex: '0 0 auto',
+                height: 5,
+                cursor: 'ns-resize',
+                bgcolor: 'divider',
+                opacity: 0.5,
+                transition: 'opacity 0.15s, background 0.15s',
+                '&:hover, &:active': { opacity: 1, bgcolor: 'primary.main' },
+                position: 'relative',
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  inset: '-4px 0',
+                },
+              }}
+            />
+          )}
 
-          {/* Bottom panel — tabbed Output / Logs. Always visible inside the
-              fullscreen dialog (even when empty) so the user has a stable
-              "this is where results land" anchor. Height is user-resizable
-              via the divider above; minHeight protects from collapse, the
-              hard min in onMove makes sure of it too. */}
+          {/* Bottom panel — tabbed Output / Logs. Collapsible via the
+              ExpandMore/ExpandLess toggle in the tabs header. Height is
+              user-resizable via the divider above. */}
           <Box
             sx={{
               flex: '0 0 auto',
-              height: outputPanelHeight,
-              minHeight: 80,
+              height: outputPanelVisible ? outputPanelHeight : 'auto',
+              minHeight: outputPanelVisible ? 80 : 0,
               overflow: 'hidden',
               bgcolor: 'background.paper',
               display: 'flex',
@@ -1144,6 +1222,18 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                     </Badge>
                   }
                 />
+                <Tab
+                  value="included"
+                  label={
+                    <Badge
+                      color="success"
+                      badgeContent={embeddedFiles.length || undefined}
+                      sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
+                    >
+                      Included
+                    </Badge>
+                  }
+                />
               </Tabs>
               {/* Clear — wipes BOTH tabs at once (display items, logs, result,
                   error). Disabled when there's nothing to clear so accidental
@@ -1154,16 +1244,25 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                     size="small"
                     onClick={handleClear}
                     disabled={!hasOutput && logs.length === 0}
-                    sx={{ mx: 1 }}
+                    sx={{ mx: 0.5 }}
                   >
                     <DeleteOutlineIcon fontSize="small" />
                   </IconButton>
                 </span>
               </Tooltip>
+              <Tooltip title={outputPanelVisible ? 'Hide output panel' : 'Show output panel'}>
+                <IconButton
+                  size="small"
+                  onClick={() => setOutputPanelVisible(v => !v)}
+                  sx={{ mr: 1 }}
+                >
+                  {outputPanelVisible ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
             </Box>
 
             {/* Output tab — display.* items, return value, error alert. */}
-            {dialogTab === 'output' && (
+            {outputPanelVisible && dialogTab === 'output' && (
               <Box sx={{ flex: 1, overflow: 'auto' }}>
                 {!hasOutput && (
                   <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
@@ -1187,7 +1286,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             )}
 
             {/* Logs tab — api.log.* output, colour-coded per level. */}
-            {dialogTab === 'logs' && (
+            {outputPanelVisible && dialogTab === 'logs' && (
               <Box sx={{ flex: 1, overflow: 'auto', bgcolor: '#fafafa' }}>
                 {logs.length === 0 ? (
                   <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
@@ -1217,6 +1316,52 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                       </Typography>
                     ))}
                   </Box>
+                )}
+              </Box>
+            )}
+
+            {/* Included tab — lists every embedded file block with a Remove button.
+                Removing a block deletes the marker lines from dialogCode; the Monaco
+                editor re-syncs automatically because it's controlled (value={dialogCode}). */}
+            {outputPanelVisible && dialogTab === 'included' && (
+              <Box sx={{ flex: 1, overflow: 'auto' }}>
+                {embeddedFiles.length === 0 ? (
+                  <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
+                    No embedded files. Use the attach button (📎) to include files from drive/mdscript/.
+                  </Typography>
+                ) : (
+                  <List dense disablePadding>
+                    {embeddedFiles.map((file, idx) => (
+                      <ListItem
+                        key={idx}
+                        secondaryAction={
+                          <Tooltip title="Remove embedded block from code">
+                            <IconButton
+                              edge="end"
+                              size="small"
+                              onClick={() => setDialogCode(prev => removeEmbeddedBlock(prev, file))}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        }
+                        sx={{ borderBottom: '1px solid', borderColor: 'divider' }}
+                      >
+                        <ListItemIcon sx={{ minWidth: 32 }}>
+                          {file.type === 'import'
+                            ? <CodeIcon sx={{ fontSize: 16, color: '#4fc3f7' }} />
+                            : <AttachFileIcon sx={{ fontSize: 16, color: '#81c784' }} />
+                          }
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={file.path}
+                          secondary={file.type === 'import' ? 'module import' : 'inline include'}
+                          primaryTypographyProps={{ variant: 'body2', fontFamily: 'monospace', fontSize: '0.78rem', noWrap: true }}
+                          secondaryTypographyProps={{ variant: 'caption' }}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
                 )}
               </Box>
             )}

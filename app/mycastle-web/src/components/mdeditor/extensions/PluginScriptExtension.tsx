@@ -39,6 +39,7 @@ import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import OutputIcon from '@mui/icons-material/OutputOutlined';
 import Editor from '@monaco-editor/react';
 
 // Lazy — the docs string is bundled into MdScriptHelpDialog's chunk, so users
@@ -175,6 +176,8 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
   const [displayItems, setDisplayItems] = useState<DisplayItem[]>([]);
   const [isLive, setIsLive] = useState(false);
 
+  const [outputVisible, setOutputVisible] = useState(true);
+
   const [labelEditing, setLabelEditing] = useState(false);
   const [labelDraft, setLabelDraft] = useState<string>(node.attrs.label as string || 'Script');
   const [monacoOpen, setMonacoOpen] = useState(false);
@@ -201,6 +204,10 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
     setRichOutput(undefined);
     setDisplayItems([]);
     setIsLive(false);
+    setOutputVisible(true);
+    // Yield to React so the clears above render before the script starts
+    // producing new output via display.* calls.
+    await Promise.resolve();
 
     const ctx = buildScriptContext({
       currentUser: (currentUser as { name?: string } | null)?.name ?? null,
@@ -393,6 +400,23 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
             </span>
           </Tooltip>
 
+          <Tooltip title={outputVisible ? 'Hide output' : `Show output${hasOutput ? ' (has content)' : ''}`}>
+            <span>
+              <IconButton size="small" onClick={() => setOutputVisible(v => !v)}
+                sx={{
+                  color: hasOutput ? (outputVisible ? accentColor : '#c7bbff') : '#444',
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
+                  position: 'relative',
+                }}>
+                <OutputIcon sx={{ fontSize: 14 }} />
+                {/* dot indicator: output exists but panel is hidden */}
+                {hasOutput && !outputVisible && (
+                  <Box sx={{ position: 'absolute', top: 3, right: 3, width: 5, height: 5, borderRadius: '50%', bgcolor: accentColor }} />
+                )}
+              </IconButton>
+            </span>
+          </Tooltip>
+
           <Tooltip title={collapsed ? 'Show code' : 'Hide code'}>
             <IconButton size="small" onClick={() => updateAttributes({ collapsed: !collapsed })}
               sx={{ color: '#c7bbff', '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' } }}>
@@ -422,7 +446,7 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
         )}
 
         {/* ── Output ── */}
-        {hasOutput && (
+        {hasOutput && outputVisible && (
           <Box sx={{ borderTop: '1px solid rgba(124,77,255,0.25)', maxHeight: 400, overflow: 'auto', bgcolor: 'background.paper' }}>
             {error && (
               <Alert severity="error" sx={{ borderRadius: 0, py: 0.25, fontSize: '0.8rem' }}>{error}</Alert>

@@ -52,6 +52,8 @@ import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft';
 import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
 import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
 import FormatAlignJustifyIcon from '@mui/icons-material/FormatAlignJustify';
+import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
+import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
 import TableSizePicker from './components/TableSizePicker';
 import ColumnPicker from './components/ColumnPicker';
 import EmojiPicker from './components/EmojiPicker';
@@ -238,6 +240,21 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
   const insertEmoji = useCallback((char: string) => {
     editor.chain().focus().insertContent(char).run();
   }, [editor]);
+
+  // Indent/outdent for bullet, ordered and task list items.
+  // taskList uses a different node type ('taskItem') from the other two.
+  const getListItemType = () => editor.isActive('taskList') ? 'taskItem' : 'listItem';
+  const handleIndent = useCallback(() => {
+    editor.chain().focus().sinkListItem(getListItemType()).run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
+  const handleOutdent = useCallback(() => {
+    editor.chain().focus().liftListItem(getListItemType()).run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
+  const inList = editor.isActive('bulletList') || editor.isActive('orderedList') || editor.isActive('taskList');
+  const canIndent  = inList && editor.can().sinkListItem(getListItemType());
+  const canOutdent = inList && editor.can().liftListItem(getListItemType());
 
   const getHeadingLevel = (): string => {
     if (editor.isActive('heading', { level: 1 })) return '1';
@@ -611,6 +628,20 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
         >
           <ChecklistIcon fontSize="small" />
         </IconButton>
+      </Tooltip>
+      <Tooltip title="Outdent (decrease indent)">
+        <span>
+          <IconButton size="small" onClick={handleOutdent} disabled={!canOutdent}>
+            <FormatIndentDecreaseIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Indent (increase indent)">
+        <span>
+          <IconButton size="small" onClick={handleIndent} disabled={!canIndent}>
+            <FormatIndentIncreaseIcon fontSize="small" />
+          </IconButton>
+        </span>
       </Tooltip>
 
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />

@@ -218,6 +218,17 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       console.log(`[AutomateScript] runBlock(${id}): skip — empty code (block ${block ? 'idle but empty' : 'not registered'})`);
       return;
     }
+    // Clear previous output before running so only the latest result is shown
+    setBlocks(prev => {
+      const next = new Map(prev);
+      const current = next.get(id);
+      if (current) {
+        next.set(id, { ...current, status: 'running', output: [], logs: [], error: undefined, result: undefined });
+      }
+      return next;
+    });
+    await Promise.resolve(); // yield so React renders cleared state before new output
+
     const api = getOrCreateApi();
 
     // Track previous lengths for logs and notifications

@@ -11,6 +11,7 @@ import '../../modules/editor/monacoWorkers';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
+import { EditorState as PmEditorState } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
@@ -35,8 +36,10 @@ import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
 import CodeIcon from '@mui/icons-material/Code';
 import LinkIcon from '@mui/icons-material/Link';
 import HighlightIcon from '@mui/icons-material/Highlight';
+import FormatClearIcon from '@mui/icons-material/FormatClear';
 
 import MdEditorToolbar from './MdEditorToolbar';
+import { MobileMdToolbar, MOBILE_TOOLBAR_HEIGHT } from './MobileMdToolbar';
 import SlashCommands from './extensions/SlashCommands';
 import EventDialog from './EventDialog';
 import { EventBlock } from './extensions/EventBlockExtension';
@@ -93,7 +96,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
   filePath,
 }) => {
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  // 'md' (< 900px) covers phones in all orientations and small tablets —
+  // wider than 'sm' (600px) because the mobile toolbar is useful on any
+  // touch screen, not just narrow portrait phones.
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   const initialContentRef = useRef(initialContent);
   const isInitializedRef = useRef(false);
@@ -318,7 +324,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       // effect on the next debounce cycle without remounting the editor.
       SpellCheckExtension.configure({
         getLanguage: () => spellOptionsRef.current.language,
-        getEnabled: () => spellOptionsRef.current.enabled,
+        getEnabled: () => false,
         debounceMs: 1500,
       }),
       BlockIdExtension,
@@ -422,38 +428,15 @@ const MdEditor: React.FC<MdEditorProps> = ({
     },
     onSelectionUpdate: ({ editor }) => {
       const { from, to } = editor.state.selection;
-      const hasSelection = from !== to;
-
-      if (hasSelection) {
-        // Get selection coordinates
-        const { view } = editor;
-        const start = view.coordsAtPos(from);
-        const end = view.coordsAtPos(to);
-
-        // Mobile-keyboard branch: park the anchor right at the top edge of
-        // the keyboard (with a small gap). Popper.placement='top' then
-        // floats the menu directly ABOVE that — visible and reachable
-        // even while the keyboard is up. Anchor x = horizontal center of
-        // the viewport so the menu stays put while the user thumbs around.
-        // We read the LATEST visual viewport here (not the cached
-        // `keyboardVisible` state) — selection updates can fire before the
-        // visualViewport.resize listener has, so a re-check is essential
-        // for the first selection after the keyboard opens.
+      if (from !== to) {
         const vv = window.visualViewport;
-        const liveKeyboardOffset = vv
-          ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
-          : 0;
-        if (liveKeyboardOffset > 100 && vv) {
-          setBubbleMenuAnchor({
-            x: vv.offsetLeft + vv.width / 2,
-            // 8px breathing room above the keyboard's top edge
-            y: vv.offsetTop + vv.height - 8,
-          });
+        const liveKbOffset = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+        if (liveKbOffset > 100 && vv) {
+          setBubbleMenuAnchor({ x: vv.offsetLeft + vv.width / 2, y: vv.offsetTop + vv.height - 8 });
         } else {
-          setBubbleMenuAnchor({
-            x: (start.left + end.left) / 2,
-            y: start.top - 10,
-          });
+          const start = editor.view.coordsAtPos(from);
+          const end   = editor.view.coordsAtPos(to);
+          setBubbleMenuAnchor({ x: (start.left + end.left) / 2, y: start.top - 10 });
         }
         setShowBubbleMenu(true);
         setShowLinkPopup(false);
@@ -462,7 +445,6 @@ const MdEditor: React.FC<MdEditorProps> = ({
       }
     },
     onBlur: () => {
-      // Delay hiding to allow clicking on bubble menu or link popup
       setTimeout(() => {
         if (!document.activeElement?.closest('.md-editor-bubble-menu') &&
             !document.activeElement?.closest('.md-editor-link-popup')) {
@@ -478,6 +460,20 @@ const MdEditor: React.FC<MdEditorProps> = ({
     if (editor && !isInitializedRef.current && initialContentRef.current) {
       const html = markdownToHtml(initialContentRef.current);
       editor.commands.setContent(html);
+      // Clear history so the loaded content is the baseline — prevents undo
+      // from going back past the loaded state to the empty initial document.
+      // EditorState.create re-inits all plugin states (including history) to
+      // their initial values, giving us an empty undo stack with the current doc.
+      {
+        const { view } = editor;
+        const s = view.state;
+        view.updateState(PmEditorState.create({
+          doc: s.doc,
+          schema: s.doc.type.schema,
+          plugins: s.plugins,
+          selection: s.selection,
+        }));
+      }
       // Set cursor to the beginning and scroll to top after DOM update.
       // Only focus if autoFocus is set — focusing on mobile triggers the virtual keyboard
       // and causes iOS Safari to reflow the viewport (looks like a "page reset").
@@ -499,10 +495,27 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // contenteditable so taps on a `.md-spell-error` decoration open the
   // suggestions popover. ProseMirror doesn't route DOM clicks to React
   // handlers on decorations, hence the native listener.
+  //
+  // Key insight: by the time `click` fires, ProseMirror has already moved
+  // the cursor and collapsed the selection. We must sample the selection
+  // state at `mousedown` — before ProseMirror processes it — and carry that
+  // flag into the `click` handler. If there was a selection when the user
+  // pressed down, they were navigating/selecting, not trying to fix a typo.
   useEffect(() => {
     if (!editor) return;
     const dom = editor.view.dom as HTMLElement;
+
+    let hadSelectionOnDown = false;
+    const onMouseDown = () => {
+      const { from, to } = editor.state.selection;
+      hadSelectionOnDown = from !== to;
+    };
+
     const handler = (e: MouseEvent) => {
+      // User had text selected when they pressed down → they were clicking to
+      // reposition the cursor or extend the selection; let the bubble menu handle it.
+      if (hadSelectionOnDown) return;
+
       const target = e.target as HTMLElement | null;
       if (!target?.closest) return;
       const span = target.closest('.md-spell-error') as HTMLElement | null;
@@ -529,8 +542,13 @@ const MdEditor: React.FC<MdEditorProps> = ({
         to: offset + length + 1,
       });
     };
+
+    dom.addEventListener('mousedown', onMouseDown);
     dom.addEventListener('click', handler);
-    return () => dom.removeEventListener('click', handler);
+    return () => {
+      dom.removeEventListener('mousedown', onMouseDown);
+      dom.removeEventListener('click', handler);
+    };
   }, [editor]);
 
   // Sync spellcheck settings to the contenteditable. We mutate BOTH the
@@ -567,33 +585,6 @@ const MdEditor: React.FC<MdEditorProps> = ({
     );
   }, [editor, spellLanguage, spellEnabled]);
 
-  // Re-anchor the bubble menu when the on-screen keyboard opens/closes.
-  // onSelectionUpdate only fires on selection changes, so without this
-  // a user who selected text first and then tapped to open the keyboard
-  // would see the menu stuck in the old (now keyboard-covered) spot.
-  useEffect(() => {
-    if (!editor || !showBubbleMenu) return;
-    const { from, to } = editor.state.selection;
-    if (from === to) return;
-    const vv = window.visualViewport;
-    const liveKeyboardOffset = vv
-      ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
-      : 0;
-    if (liveKeyboardOffset > 100 && vv) {
-      setBubbleMenuAnchor({
-        x: vv.offsetLeft + vv.width / 2,
-        y: vv.offsetTop + vv.height - 8,
-      });
-    } else {
-      // Keyboard just closed — return the anchor to the live selection.
-      const start = editor.view.coordsAtPos(from);
-      const end = editor.view.coordsAtPos(to);
-      setBubbleMenuAnchor({
-        x: (start.left + end.left) / 2,
-        y: start.top - 10,
-      });
-    }
-  }, [keyboardOffset, editor, showBubbleMenu]);
 
   // Update initial content ref when prop changes (for external reloads)
   useEffect(() => {
@@ -602,6 +593,19 @@ const MdEditor: React.FC<MdEditorProps> = ({
       if (editor && initialContent) {
         const html = markdownToHtml(initialContent);
         editor.commands.setContent(html);
+        // Clear history after external reload too — the new file's content
+        // becomes the new baseline; prior undo stack from a different file
+        // should not be accessible.
+        {
+          const { view } = editor;
+          const s = view.state;
+          view.updateState(PmEditorState.create({
+            doc: s.doc,
+            schema: s.doc.type.schema,
+            plugins: s.plugins,
+            selection: s.selection,
+          }));
+        }
         setTimeout(() => {
           if (autoFocusRef.current) {
             editor.commands.focus('start');
@@ -756,6 +760,22 @@ const MdEditor: React.FC<MdEditorProps> = ({
     return () => ticks.forEach(clearTimeout);
   }, [toolbarVisible, editor, editable, updateBlockPositions]);
 
+  // Re-anchor bubble menu when keyboard opens/closes (selection may already exist).
+  useEffect(() => {
+    if (!editor || !showBubbleMenu) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const vv = window.visualViewport;
+    const liveKbOffset = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    if (liveKbOffset > 100 && vv) {
+      setBubbleMenuAnchor({ x: vv.offsetLeft + vv.width / 2, y: vv.offsetTop + vv.height - 8 });
+    } else {
+      const start = editor.view.coordsAtPos(from);
+      const end   = editor.view.coordsAtPos(to);
+      setBubbleMenuAnchor({ x: (start.left + end.left) / 2, y: start.top - 10 });
+    }
+  }, [keyboardOffset, editor, showBubbleMenu]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -771,14 +791,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
     if (!editor) return;
     const previousUrl = editor.getAttributes('link').href;
     const url = window.prompt('URL', previousUrl);
-
     if (url === null) return;
-
-    if (url === '') {
-      editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      return;
-    }
-
+    if (url === '') { editor.chain().focus().extendMarkRange('link').unsetLink().run(); return; }
     editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
   }, [editor]);
 
@@ -1094,85 +1108,65 @@ const MdEditor: React.FC<MdEditorProps> = ({
         </IconButton>
       )}
 
-      {/* Bubble Menu - appears on text selection */}
+      {/* Always-visible formatting toolbar — bottom of viewport */}
+      {editable && (
+        <MobileMdToolbar editor={editor} keyboardOffset={keyboardOffset} />
+      )}
+
+      {/* Bubble menu — floats above selected text on all screen sizes.
+          When the on-screen keyboard is open (mobile) it fixes itself above
+          the keyboard top edge instead of the selection coordinates. */}
       <Popper
-        open={showBubbleMenu && bubbleMenuAnchor !== null}
+        open={showBubbleMenu && bubbleMenuAnchor !== null && keyboardOffset <= 100}
         anchorEl={
           bubbleMenuAnchor
             ? {
                 getBoundingClientRect: () => ({
-                  top: bubbleMenuAnchor.y,
-                  left: bubbleMenuAnchor.x,
-                  bottom: bubbleMenuAnchor.y,
-                  right: bubbleMenuAnchor.x,
-                  width: 0,
-                  height: 0,
-                  x: bubbleMenuAnchor.x,
-                  y: bubbleMenuAnchor.y,
+                  top: bubbleMenuAnchor.y, left: bubbleMenuAnchor.x,
+                  bottom: bubbleMenuAnchor.y, right: bubbleMenuAnchor.x,
+                  width: 0, height: 0,
+                  x: bubbleMenuAnchor.x, y: bubbleMenuAnchor.y,
                   toJSON: () => ({}),
                 }),
               }
             : null
         }
         placement="top"
-        sx={{ zIndex: 1300 }}
+        sx={{ zIndex: 1350 }}
       >
-        <Paper
-          elevation={4}
-          className="md-editor-bubble-menu"
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            p: 0.5,
-            borderRadius: 1,
-            gap: 0.25,
-          }}
-        >
-          <IconButton
-            size="small"
-            onClick={() => editor.chain().focus().toggleBold().run()}
-            color={editor.isActive('bold') ? 'primary' : 'default'}
-          >
-            <FormatBoldIcon fontSize="small" />
-          </IconButton>
-          <IconButton
-            size="small"
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-            color={editor.isActive('italic') ? 'primary' : 'default'}
-          >
-            <FormatItalicIcon fontSize="small" />
-          </IconButton>
-          <IconButton
-            size="small"
-            onClick={() => editor.chain().focus().toggleStrike().run()}
-            color={editor.isActive('strike') ? 'primary' : 'default'}
-          >
-            <StrikethroughSIcon fontSize="small" />
-          </IconButton>
-          <IconButton
-            size="small"
-            onClick={() => editor.chain().focus().toggleCode().run()}
-            color={editor.isActive('code') ? 'primary' : 'default'}
-          >
-            <CodeIcon fontSize="small" />
-          </IconButton>
+        <Paper elevation={4} className="md-editor-bubble-menu"
+          sx={{ display: 'flex', alignItems: 'center', p: 0.5, borderRadius: 1, gap: 0.25 }}>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleBold().run()} color={editor.isActive('bold') ? 'primary' : 'default'}><FormatBoldIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleItalic().run()} color={editor.isActive('italic') ? 'primary' : 'default'}><FormatItalicIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleStrike().run()} color={editor.isActive('strike') ? 'primary' : 'default'}><StrikethroughSIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleCode().run()} color={editor.isActive('code') ? 'primary' : 'default'}><CodeIcon fontSize="small" /></IconButton>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
-          <IconButton
-            size="small"
-            onClick={setLink}
-            color={editor.isActive('link') ? 'primary' : 'default'}
-          >
-            <LinkIcon fontSize="small" />
-          </IconButton>
-          <IconButton
-            size="small"
-            onClick={() => editor.chain().focus().toggleHighlight().run()}
-            color={editor.isActive('highlight') ? 'primary' : 'default'}
-          >
-            <HighlightIcon fontSize="small" />
-          </IconButton>
+          <IconButton size="small" onClick={setLink} color={editor.isActive('link') ? 'primary' : 'default'}><LinkIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleHighlight().run()} color={editor.isActive('highlight') ? 'primary' : 'default'}><HighlightIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().unsetAllMarks().run()}><FormatClearIcon fontSize="small" /></IconButton>
         </Paper>
       </Popper>
+
+      {/* Bubble menu — above keyboard on mobile when keyboard is open */}
+      {showBubbleMenu && keyboardOffset > 100 && ReactDOM.createPortal(
+        <Paper elevation={6} className="md-editor-bubble-menu"
+          sx={{
+            position: 'fixed', bottom: keyboardOffset + 4, left: '50%',
+            transform: 'translateX(-50%)', zIndex: 1350,
+            display: 'flex', alignItems: 'center', p: 0.5, borderRadius: 2, gap: 0.25,
+          }}
+        >
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleBold().run()} color={editor.isActive('bold') ? 'primary' : 'default'}><FormatBoldIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleItalic().run()} color={editor.isActive('italic') ? 'primary' : 'default'}><FormatItalicIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleStrike().run()} color={editor.isActive('strike') ? 'primary' : 'default'}><StrikethroughSIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleCode().run()} color={editor.isActive('code') ? 'primary' : 'default'}><CodeIcon fontSize="small" /></IconButton>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+          <IconButton size="small" onClick={setLink} color={editor.isActive('link') ? 'primary' : 'default'}><LinkIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleHighlight().run()} color={editor.isActive('highlight') ? 'primary' : 'default'}><HighlightIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().unsetAllMarks().run()}><FormatClearIcon fontSize="small" /></IconButton>
+        </Paper>,
+        document.body,
+      )}
 
       {/* Link Edit Popup - appears when cursor is on a link */}
       <Popper
@@ -1268,7 +1262,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
           overflow: 'auto',
           position: 'relative',
           pt: 2,
-          pb: 2,
+          pb: editable
+            ? `calc(${MOBILE_TOOLBAR_HEIGHT + 8}px + env(safe-area-inset-bottom, 0px))`
+            : 2,
           pr: 2,
           pl: editable ? 4 : 2,
           '& .ProseMirror': {
@@ -1303,6 +1299,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         PaperProps={{ sx: { maxWidth: 360, minWidth: 220 } }}
+        sx={{ zIndex: 1400 }}
       >
         <Box sx={{ p: 1.5, pb: 0.5 }}>
           <Typography variant="caption" sx={{
