@@ -25,7 +25,7 @@ import { Table, TableRow } from '@tiptap/extension-table';
 import { CustomTableCell } from './extensions/CustomTableCell';
 import { CustomTableHeader } from './extensions/CustomTableHeader';
 import { common, createLowlight } from 'lowlight';
-import { Box, IconButton, Paper, Divider, Popper, Popover, TextField, Tooltip, Fab, Collapse, List, ListItemButton, ListItemText, Typography, useMediaQuery, useTheme } from '@mui/material';
+import { Box, IconButton, Paper, Divider, Popper, Popover, TextField, Tooltip, Fab, Collapse, List, ListItemButton, ListItemText, ListItemIcon, Menu, MenuItem, Typography, useMediaQuery, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import EditIcon from '@mui/icons-material/Edit';
@@ -37,9 +37,48 @@ import CodeIcon from '@mui/icons-material/Code';
 import LinkIcon from '@mui/icons-material/Link';
 import HighlightIcon from '@mui/icons-material/Highlight';
 import FormatClearIcon from '@mui/icons-material/FormatClear';
+// Text alignment + extras for the bubble menu.
+import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft';
+import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
+import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
+import FormatAlignJustifyIcon from '@mui/icons-material/FormatAlignJustify';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions';
+import EmojiPicker from './components/EmojiPicker';
+// Mobile bubble-menu extras: Save + a kebab "Extra" submenu with Insert
+// component / Paste markdown / Dictate selection.
+import SaveIcon from '@mui/icons-material/Save';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import AddIcon from '@mui/icons-material/Add';
+import PersonIcon from '@mui/icons-material/Person';
+import TaskIcon from '@mui/icons-material/Task';
+import FolderIcon from '@mui/icons-material/Folder';
+import DictationDialog from './DictationDialog';
 
 import MdEditorToolbar from './MdEditorToolbar';
-import { MobileMdToolbar, MOBILE_TOOLBAR_HEIGHT } from './MobileMdToolbar';
+// MobileMdToolbar itself is no longer rendered — but we still pull the
+// height constant (used to size the editor's bottom padding so the bubble
+// menu doesn't cover content) and all of its panel/helper exports so the
+// new unified bubble menu is the single source of truth for the toolbar.
+import {
+  MOBILE_TOOLBAR_HEIGHT,
+  FormatPanel, ColorPanel, TurnIntoPanel, InsertPanel,
+  moveBlock, deleteBlock, getListItemType,
+} from './MobileMdToolbar';
+// Icons for the expanded bubble menu — mirror the toolbar hierarchy.
+import FormatSizeIcon from '@mui/icons-material/FormatSize';
+import PaletteIcon from '@mui/icons-material/Palette';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import UndoIcon from '@mui/icons-material/Undo';
+import RedoIcon from '@mui/icons-material/Redo';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
+import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import TerminalIcon from '@mui/icons-material/Terminal';
 import SlashCommands from './extensions/SlashCommands';
 import EventDialog from './EventDialog';
 import { EventBlock } from './extensions/EventBlockExtension';
@@ -139,6 +178,28 @@ const MdEditor: React.FC<MdEditorProps> = ({
     window.addEventListener(INFO_MARK_EDIT_EVENT, handler as EventListener);
     return () => window.removeEventListener(INFO_MARK_EDIT_EVENT, handler as EventListener);
   }, []);
+  // Emoji picker — anchored to whichever bubble menu the user clicks from.
+  // Stored as an element ref so both Popper and Portal bubble menus can
+  // share the same picker without duplicating state.
+  const [emojiAnchor, setEmojiAnchor] = useState<HTMLElement | null>(null);
+
+  // Mobile-bubble "Extra" submenu (kebab) + nested "Insert component"
+  // sub-submenu. Both anchored to the kebab IconButton.
+  const [extraMenuAnchor, setExtraMenuAnchor] = useState<HTMLElement | null>(null);
+  const [componentSubMenuAnchor, setComponentSubMenuAnchor] = useState<HTMLElement | null>(null);
+  // Four toolbar-mirror submenu Popover anchors. Same hierarchy as
+  // MobileMdToolbar (Format / Color / Turn into / Insert), but stacked
+  // into the bubble menu so all formatting lives in ONE bar instead of
+  // two competing strips.
+  const [formatPanelAnchor, setFormatPanelAnchor] = useState<HTMLElement | null>(null);
+  const [colorPanelAnchor, setColorPanelAnchor] = useState<HTMLElement | null>(null);
+  const [turnIntoPanelAnchor, setTurnIntoPanelAnchor] = useState<HTMLElement | null>(null);
+  const [insertPanelAnchor, setInsertPanelAnchor] = useState<HTMLElement | null>(null);
+  // Dictate-selected-text dialog — same pattern as MdEditorToolbar's
+  // RecordVoiceOver button. text is captured from the current selection
+  // (or whole doc when nothing's selected).
+  const [dictateDialog, setDictateDialog] = useState<{ text: string } | null>(null);
+
   const openInsertInfoMarkDialog = useCallback(() => {
     setInfoMarkDialog({
       mode: 'insert',
@@ -174,7 +235,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // block positions when this changes (typing inserts/removes nodes which
   // shift everything below).
   const [contentTick, setContentTick] = useState(0);
-  const [bubbleMenuAnchor, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  // Anchor coords retained so legacy Popper-anchored components (link
+  // popup) keep the same data, even though the bubble menu itself is now
+  // bottom-pinned and doesn't read from it. setBubbleMenuAnchor is kept
+  // because onSelectionUpdate populates it for potential future overlays.
+  const [, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
   // Spellcheck — relies on the browser's native dictionary (the same one
   // OS-level system uses), driven by the contenteditable's `spellcheck`
@@ -454,6 +519,50 @@ const MdEditor: React.FC<MdEditorProps> = ({
       }, 150);
     },
   });
+
+  // ── Bubble-menu Extra actions (Save handled separately) ───────────────
+  /** Read the OS clipboard and insert it as markdown — parses the text
+   *  through markdownToHtml first so headings / lists / links materialise.
+   *  Mobile keyboards have no separate "paste markdown" gesture so this
+   *  is the only path on touch devices. Silent failure (clipboard blocked /
+   *  permission denied) intentionally — the user just sees no insert. */
+  const handlePasteMarkdownFromClipboard = useCallback(async () => {
+    if (!editor) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) return;
+      editor.chain().focus().insertContent(markdownToHtml(text)).run();
+    } catch {
+      /* swallow — most likely permission denied */
+    }
+  }, [editor]);
+
+  /** Open the Dictation dialog with whatever the user has selected — or
+   *  the whole document when nothing's selected. Same heuristic as the
+   *  toolbar version. The dialog handles TTS + writing canvas internally. */
+  const openDictateForSelection = useCallback(() => {
+    if (!editor) return;
+    const { from, to, empty } = editor.state.selection;
+    const text = empty
+      ? editor.getText({ blockSeparator: '\n\n' })
+      : editor.state.doc.textBetween(from, to, '\n\n', ' ');
+    if (!text.trim()) return;
+    setDictateDialog({ text });
+  }, [editor]);
+
+  /** Wrap insertComponentEmbed so the Extra menu can call it without
+   *  reaching into editor.chain() inline (and so we can close the menus
+   *  in one place). */
+  const insertComponent = useCallback((type: 'person' | 'task' | 'project') => {
+    if (!editor) return;
+    // The chain command is added by ComponentEmbedExtension; cast inline
+    // because the type-augmented Commands signature isn't visible from
+    // here without pulling the extension's module declaration.
+    (editor.chain().focus() as unknown as { insertComponentEmbed: (t: string, id: string) => { run: () => void } })
+      .insertComponentEmbed(type, '').run();
+    setComponentSubMenuAnchor(null);
+    setExtraMenuAnchor(null);
+  }, [editor]);
 
   // Load initial content only once when editor is ready
   useEffect(() => {
@@ -1108,65 +1217,273 @@ const MdEditor: React.FC<MdEditorProps> = ({
         </IconButton>
       )}
 
-      {/* Always-visible formatting toolbar — bottom of viewport */}
-      {editable && (
-        <MobileMdToolbar editor={editor} keyboardOffset={keyboardOffset} />
-      )}
+      {/* MobileMdToolbar removed — its entire hierarchy (Format / Color /
+          Turn into / Insert submenus + Move/Indent/Delete/Undo/Redo
+          direct buttons) is now lifted into the bottom bubble menu below.
+          One bar, identical hierarchy, single source of truth via the
+          exported FormatPanel / ColorPanel / TurnIntoPanel / InsertPanel. */}
 
-      {/* Bubble menu — floats above selected text on all screen sizes.
-          When the on-screen keyboard is open (mobile) it fixes itself above
-          the keyboard top edge instead of the selection coordinates. */}
-      <Popper
-        open={showBubbleMenu && bubbleMenuAnchor !== null && keyboardOffset <= 100}
-        anchorEl={
-          bubbleMenuAnchor
-            ? {
-                getBoundingClientRect: () => ({
-                  top: bubbleMenuAnchor.y, left: bubbleMenuAnchor.x,
-                  bottom: bubbleMenuAnchor.y, right: bubbleMenuAnchor.x,
-                  width: 0, height: 0,
-                  x: bubbleMenuAnchor.x, y: bubbleMenuAnchor.y,
-                  toJSON: () => ({}),
-                }),
-              }
-            : null
-        }
-        placement="top"
-        sx={{ zIndex: 1350 }}
-      >
-        <Paper elevation={4} className="md-editor-bubble-menu"
-          sx={{ display: 'flex', alignItems: 'center', p: 0.5, borderRadius: 1, gap: 0.25 }}>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleBold().run()} color={editor.isActive('bold') ? 'primary' : 'default'}><FormatBoldIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleItalic().run()} color={editor.isActive('italic') ? 'primary' : 'default'}><FormatItalicIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleStrike().run()} color={editor.isActive('strike') ? 'primary' : 'default'}><StrikethroughSIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleCode().run()} color={editor.isActive('code') ? 'primary' : 'default'}><CodeIcon fontSize="small" /></IconButton>
-          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
-          <IconButton size="small" onClick={setLink} color={editor.isActive('link') ? 'primary' : 'default'}><LinkIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleHighlight().run()} color={editor.isActive('highlight') ? 'primary' : 'default'}><HighlightIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().unsetAllMarks().run()}><FormatClearIcon fontSize="small" /></IconButton>
-        </Paper>
-      </Popper>
-
-      {/* Bubble menu — above keyboard on mobile when keyboard is open */}
-      {showBubbleMenu && keyboardOffset > 100 && ReactDOM.createPortal(
+      {/* Single bubble menu — fixed to the bottom of the viewport on EVERY
+          screen size, carries the COMPLETE formatting toolbar hierarchy.
+          With the on-screen keyboard up it climbs above the keyboard via
+          keyboardOffset; otherwise it sits flush with the safe-area inset. */}
+      {showBubbleMenu && ReactDOM.createPortal(
         <Paper elevation={6} className="md-editor-bubble-menu"
           sx={{
-            position: 'fixed', bottom: keyboardOffset + 4, left: '50%',
+            position: 'fixed',
+            // Pin flush to the bottom of the viewport (the old MobileMd-
+            // Toolbar is gone — everything lives in this bubble now). On
+            // mobile with the keyboard up we float just above it; on
+            // desktop / closed keyboard we respect the safe-area inset
+            // (iPhone home indicator, Android gesture handle).
+            bottom: keyboardOffset > 0
+              ? `${keyboardOffset + 4}px`
+              : `calc(env(safe-area-inset-bottom, 0px) + 4px)`,
+            left: '50%',
             transform: 'translateX(-50%)', zIndex: 1350,
-            display: 'flex', alignItems: 'center', p: 0.5, borderRadius: 2, gap: 0.25,
+            display: 'flex', alignItems: 'center', p: 0.5, borderRadius: 2, gap: 0.25, flexWrap: 'wrap',
+            maxWidth: 'calc(100vw - 16px)',
           }}
         >
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleBold().run()} color={editor.isActive('bold') ? 'primary' : 'default'}><FormatBoldIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleItalic().run()} color={editor.isActive('italic') ? 'primary' : 'default'}><FormatItalicIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleStrike().run()} color={editor.isActive('strike') ? 'primary' : 'default'}><StrikethroughSIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleCode().run()} color={editor.isActive('code') ? 'primary' : 'default'}><CodeIcon fontSize="small" /></IconButton>
+          {/* Quick marks — always one tap away. */}
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleBold().run()} color={editor.isActive('bold') ? 'primary' : 'default'} title="Pogrubienie"><FormatBoldIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleItalic().run()} color={editor.isActive('italic') ? 'primary' : 'default'} title="Kursywa"><FormatItalicIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleStrike().run()} color={editor.isActive('strike') ? 'primary' : 'default'} title="Przekreślenie"><StrikethroughSIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleCode().run()} color={editor.isActive('code') ? 'primary' : 'default'} title="Kod inline"><CodeIcon fontSize="small" /></IconButton>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
-          <IconButton size="small" onClick={setLink} color={editor.isActive('link') ? 'primary' : 'default'}><LinkIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().toggleHighlight().run()} color={editor.isActive('highlight') ? 'primary' : 'default'}><HighlightIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={() => editor.chain().focus().unsetAllMarks().run()}><FormatClearIcon fontSize="small" /></IconButton>
+          {/* Alignment — also accessible from FormatPanel but exposed at
+              top level because it's per-character / per-block frequent. */}
+          <IconButton size="small" onClick={() => editor.chain().focus().setTextAlign('left').run()} color={editor.isActive({ textAlign: 'left' }) ? 'primary' : 'default'} title="Wyrównaj do lewej"><FormatAlignLeftIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().setTextAlign('center').run()} color={editor.isActive({ textAlign: 'center' }) ? 'primary' : 'default'} title="Wyśrodkuj"><FormatAlignCenterIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().setTextAlign('right').run()} color={editor.isActive({ textAlign: 'right' }) ? 'primary' : 'default'} title="Wyrównaj do prawej"><FormatAlignRightIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().setTextAlign('justify').run()} color={editor.isActive({ textAlign: 'justify' }) ? 'primary' : 'default'} title="Wyjustuj"><FormatAlignJustifyIcon fontSize="small" /></IconButton>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+          {/* Inline annotations. */}
+          <IconButton size="small" onClick={setLink} color={editor.isActive('link') ? 'primary' : 'default'} title="Link (Ctrl+K)"><LinkIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().toggleHighlight().run()} color={editor.isActive('highlight') ? 'primary' : 'default'} title="Zaznaczenie"><HighlightIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={openInsertInfoMarkDialog} title="Wyróżnienie z opisem"><InfoOutlinedIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={(e) => setEmojiAnchor(e.currentTarget)} title="Wstaw emoji / znak specjalny"><EmojiEmotionsIcon fontSize="small" /></IconButton>
+          <IconButton size="small" onClick={() => editor.chain().focus().unsetAllMarks().run()} title="Wyczyść formatowanie"><FormatClearIcon fontSize="small" /></IconButton>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+          {/* Submenu buttons — identical hierarchy as the (removed)
+              MobileMdToolbar. Each opens a Popover with the corresponding
+              exported panel from MobileMdToolbar.tsx. */}
+          <Tooltip title="Format (nagłówki, listy, cytat…)">
+            <IconButton size="small" onClick={(e) => setFormatPanelAnchor(e.currentTarget)}>
+              <FormatSizeIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Kolor i podświetlenie">
+            <IconButton size="small" onClick={(e) => setColorPanelAnchor(e.currentTarget)}>
+              <PaletteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Zamień blok na…">
+            <IconButton size="small" onClick={(e) => setTurnIntoPanelAnchor(e.currentTarget)}>
+              <SwapHorizIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Wstaw blok (tabela, obraz, pozioma linia…)">
+            <IconButton size="small" onClick={(e) => setInsertPanelAnchor(e.currentTarget)}>
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+          {/* Block-level direct actions — promoted out of MobileMdToolbar's
+              row 2. The user wanted everything within reach without the
+              second bar so we surface these at the top level. */}
+          <Tooltip title="Przesuń blok w górę">
+            <IconButton size="small" onClick={() => moveBlock(editor, 'up')}>
+              <ArrowUpwardIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Przesuń blok w dół">
+            <IconButton size="small" onClick={() => moveBlock(editor, 'down')}>
+              <ArrowDownwardIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Zmniejsz wcięcie">
+            <IconButton size="small" onClick={() => {
+              const li = getListItemType(editor);
+              editor.chain().focus().liftListItem(li).run();
+            }}>
+              <FormatIndentDecreaseIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Zwiększ wcięcie">
+            <IconButton size="small" onClick={() => {
+              const li = getListItemType(editor);
+              editor.chain().focus().sinkListItem(li).run();
+            }}>
+              <FormatIndentIncreaseIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Usuń blok">
+            <IconButton size="small" onClick={() => deleteBlock(editor)}>
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+          {/* History + command palette. */}
+          <Tooltip title="Cofnij (Ctrl+Z)">
+            <IconButton size="small" onClick={() => editor.chain().focus().undo().run()} disabled={!editor.can().undo()}>
+              <UndoIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Ponów (Ctrl+Y)">
+            <IconButton size="small" onClick={() => editor.chain().focus().redo().run()} disabled={!editor.can().redo()}>
+              <RedoIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Paleta komend (/)">
+            <IconButton size="small" onClick={() => {
+              editor.chain().focus().insertContent('/').run();
+            }}>
+              <TerminalIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+          {/* Save + Extra (content injection) — kept at the right edge as
+              the persistent home for cross-cutting actions. */}
+          <Tooltip title="Zapisz (Ctrl+S)">
+            <span>
+              <IconButton size="small" onClick={handleSave} color="primary">
+                <SaveIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Więcej (Insert component / Wklej Markdown / Dyktuj)">
+            <IconButton size="small" onClick={(e) => setExtraMenuAnchor(e.currentTarget)}>
+              <MoreHorizIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Paper>,
         document.body,
       )}
+
+      {/* ── Submenu Popovers (mirror MobileMdToolbar panels) ─────────────
+          Each Popover hosts the exact same panel component the old
+          MobileMdToolbar used, so any change to a panel's items
+          propagates here automatically. */}
+      <Popover
+        open={formatPanelAnchor !== null}
+        anchorEl={formatPanelAnchor}
+        onClose={() => setFormatPanelAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {editor && (
+          <FormatPanel editor={editor} onClose={() => setFormatPanelAnchor(null)} />
+        )}
+      </Popover>
+      <Popover
+        open={colorPanelAnchor !== null}
+        anchorEl={colorPanelAnchor}
+        onClose={() => setColorPanelAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {editor && (
+          <ColorPanel editor={editor} onClose={() => setColorPanelAnchor(null)} />
+        )}
+      </Popover>
+      <Popover
+        open={turnIntoPanelAnchor !== null}
+        anchorEl={turnIntoPanelAnchor}
+        onClose={() => setTurnIntoPanelAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {editor && (
+          <TurnIntoPanel editor={editor} onClose={() => setTurnIntoPanelAnchor(null)} />
+        )}
+      </Popover>
+      <Popover
+        open={insertPanelAnchor !== null}
+        anchorEl={insertPanelAnchor}
+        onClose={() => setInsertPanelAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {editor && (
+          <InsertPanel editor={editor} onClose={() => setInsertPanelAnchor(null)} />
+        )}
+      </Popover>
+
+      {/* Extra submenu — anchored to the kebab in the mobile bubble menu.
+          Three actions, each leaving the bubble menu visible so the user
+          can keep typing afterwards. */}
+      <Menu
+        anchorEl={extraMenuAnchor}
+        open={extraMenuAnchor !== null}
+        onClose={() => { setExtraMenuAnchor(null); setComponentSubMenuAnchor(null); }}
+        sx={{ zIndex: 1400 }}
+      >
+        <MenuItem onClick={(e) => setComponentSubMenuAnchor(e.currentTarget)}>
+          <ListItemIcon><AddIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Wstaw component…" secondary="Person · Task · Project" />
+        </MenuItem>
+        <MenuItem onClick={() => { setExtraMenuAnchor(null); void handlePasteMarkdownFromClipboard(); }}>
+          <ListItemIcon><ContentPasteGoIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Wklej Markdown ze schowka" />
+        </MenuItem>
+        <MenuItem onClick={() => { setExtraMenuAnchor(null); openDictateForSelection(); }}>
+          <ListItemIcon><RecordVoiceOverIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Dyktuj zaznaczony tekst" secondary="Lub cały dokument gdy nic nie zaznaczone" />
+        </MenuItem>
+      </Menu>
+
+      {/* Component-type picker submenu — three component-embed types, same
+          shape as MdEditorToolbar's Insert menu. Choosing one fires
+          insertComponent which closes both menus. */}
+      <Menu
+        anchorEl={componentSubMenuAnchor}
+        open={componentSubMenuAnchor !== null}
+        onClose={() => setComponentSubMenuAnchor(null)}
+        sx={{ zIndex: 1500 }}
+      >
+        <MenuItem onClick={() => insertComponent('person')}>
+          <ListItemIcon><PersonIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Person" />
+        </MenuItem>
+        <MenuItem onClick={() => insertComponent('task')}>
+          <ListItemIcon><TaskIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Task" />
+        </MenuItem>
+        <MenuItem onClick={() => insertComponent('project')}>
+          <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Project" />
+        </MenuItem>
+      </Menu>
+
+      {/* Dictation dialog — speaks the captured text, highlights words
+          as they're spoken, and provides a writing canvas. State driven by
+          openDictateForSelection (from the Extra menu). */}
+      {dictateDialog && (
+        <DictationDialog
+          open
+          onClose={() => setDictateDialog(null)}
+          text={dictateDialog.text}
+        />
+      )}
+
+      {/* Emoji / special-char picker popover. Triggered from either bubble
+          menu via setEmojiAnchor. EmojiPicker handles category tabs +
+          search internally; we just need to inject the picked char. */}
+      <Popover
+        open={emojiAnchor !== null}
+        anchorEl={emojiAnchor}
+        onClose={() => setEmojiAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        sx={{ zIndex: 1400 }}
+      >
+        <EmojiPicker onSelect={(char) => {
+          editor.chain().focus().insertContent(char).run();
+          // Leave the popover open so the user can pick multiple emojis
+          // in a row without re-opening. Close on Esc (Popover default).
+        }} />
+      </Popover>
 
       {/* Link Edit Popup - appears when cursor is on a link */}
       <Popper

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import IconButton from '@mui/material/IconButton';
@@ -43,7 +43,16 @@ interface AgentPanelProps {
   onFileWritten?: (paths: string[]) => void;
 }
 
-export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersion, webFetchUrl, authToken, injectedClaudeMd, onFileWritten }: AgentPanelProps) {
+/** Imperative handle exposed via ref — lets a host drive the panel programmatically. */
+export interface AgentPanelHandle {
+  /** Submit `text` to the agent as if the user typed and sent it. */
+  sendPrompt: (text: string) => void;
+}
+
+export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function AgentPanel(
+  { provider, defaultConfig, onFileOpen, providerVersion, webFetchUrl, authToken, injectedClaudeMd, onFileWritten },
+  ref,
+) {
   const [config, setConfig] = useState<AgentConfig>(() => loadAgentConfig(defaultConfig));
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -130,6 +139,10 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
       setProcessing(false);
     }
   }, [config]);
+
+  useImperativeHandle(ref, () => ({
+    sendPrompt: (text: string) => { void handleSend(text, []); },
+  }), [handleSend]);
 
   const handleStop = useCallback(() => {
     engineRef.current?.abort();
@@ -310,4 +323,4 @@ export function AgentPanel({ provider, defaultConfig, onFileOpen, providerVersio
       </Dialog>
     </Box>
   );
-}
+});

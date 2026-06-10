@@ -77,6 +77,9 @@ import CodeIcon from '@mui/icons-material/Code';
 import TodayIcon from '@mui/icons-material/Today';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import SearchIcon from '@mui/icons-material/Search';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import DescriptionIcon from '@mui/icons-material/Description';
 
 import DriveSearchDialog from './DriveSearchDialog';
 import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearchTypes';
@@ -84,8 +87,11 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
 // until the user actually opens a .mjd / .data.json file. RemoteFS is the
 // VFS adapter MjdVfsLoader expects.
-import { MjdVfsLoader } from '@mhersztowski/texteditor';
-import { RemoteFS } from '@mhersztowski/core';
+import { MjdVfsLoader, AgentPanel, SubpathFS, DEFAULT_AGENT_CONFIG } from '@mhersztowski/texteditor';
+import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
+import { RemoteFS, CompositeFS } from '@mhersztowski/core';
+import type { FileSystemProvider } from '@mhersztowski/core';
+import { minisApi } from '../../services/MinisApiService';
 
 // ─── VFS helpers ─────────────────────────────────────────────────────────────
 
@@ -761,6 +767,130 @@ export default function DrivePage(): React.JSX.Element {
     [],
   );
   useEffect(() => { mjdFs.setToken(token ?? undefined); }, [token, mjdFs]);
+
+  // Defined early (before the AI agent / prompt-library blocks reference it).
+  const toast = useCallback((msg: string, severity: 'success'|'error'|'info' = 'success') => {
+    setSnack({ open: true, msg, severity });
+  }, []);
+
+  // ── AI Agent panel ──────────────────────────────────────────────────────
+  // Opens on the right with an AgentEngine scoped to the user's Drive. The
+  // agent sees the Drive root mounted at `/home/` (same convention as the
+  // workspace editor) so its session save (`/home/chats`) and file tools work.
+  const [agentOpen, setAgentOpen] = useState(false);
+  // Once the agent has been opened, keep the panel MOUNTED (just hidden via CSS
+  // when closed) so its conversation, engine and config survive a close/reopen.
+  const [agentMounted, setAgentMounted] = useState(false);
+  useEffect(() => { if (agentOpen) setAgentMounted(true); }, [agentOpen]);
+  const [agentDefaultConfig, setAgentDefaultConfig] = useState<Partial<AgentConfig> | undefined>(undefined);
+  // Fetch the server-provisioned Anthropic key once — pre-fills the agent
+  // config so the user does not have to paste a key (defaults win over any
+  // stale localStorage key, see loadAgentConfig).
+  useEffect(() => {
+    minisApi.getAnthropicKey().then(apiKey => {
+      setAgentDefaultConfig({
+        providerType: 'anthropic',
+        providers: {
+          ...DEFAULT_AGENT_CONFIG.providers,
+          anthropic: { ...DEFAULT_AGENT_CONFIG.providers.anthropic, apiKey },
+        },
+      });
+    }).catch(() => {});
+  }, []);
+  // RemoteFS held in a ref so token refreshes propagate without recreating the
+  // provider (which would reset the agent's mounted view).
+  const agentRemoteRef = useRef<RemoteFS | null>(null);
+  const agentFs = useMemo<FileSystemProvider | null>(() => {
+    if (!userName) return null;
+    const remote = new RemoteFS({ baseUrl: `/api/users/${encodeURIComponent(userName)}/vfs`, token: token ?? undefined });
+    agentRemoteRef.current = remote;
+    const cfs = new CompositeFS();
+    cfs.mount('/home', new SubpathFS(remote, `/data/Minis/Users/${userName}/drive`));
+    return cfs as FileSystemProvider;
+    // token intentionally omitted — synced via the effect below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userName]);
+  useEffect(() => { agentRemoteRef.current?.setToken(token ?? undefined); }, [token]);
+  // Workspace guide injected into the agent system prompt: explains that
+  // `/home/` is the Drive root so the model uses the right absolute paths.
+  const agentClaudeMd = useMemo(() => [
+    '# Drive AI Agent',
+    '',
+    `You are an assistant embedded in the **Drive** of user **${userName}**.`,
+    '',
+    '## File system',
+    '- `/home/` is the root of the user\'s Drive directory' +
+      ` (\`data/Minis/Users/${userName}/drive/\` on the server).`,
+    '- Everything the user sees in the Drive UI lives under `/home/`.',
+    '- Files under `/home/public/` are also served publicly over plain HTTP.',
+    '',
+    '## Rules',
+    '- Always use absolute paths starting with `/home/`.',
+    '- Never create files outside `/home/`.',
+  ].join('\n'), [userName]);
+
+  // ── Prompt library ──────────────────────────────────────────────────────
+  // A "Prompts" button in the agent header lists reusable prompt files declared
+  // in the index JSON (an array of public URLs). The index AND each prompt file
+  // are ALWAYS fetched from the production server — never the local backend —
+  // so prompts are shared/centralised regardless of where the app runs.
+  // (The public Drive endpoint serves these with permissive CORS.)
+  const agentRef = useRef<AgentPanelHandle>(null);
+  const [promptsMenu, setPromptsMenu] = useState<HTMLElement | null>(null);
+  const [promptItems, setPromptItems] = useState<{ label: string; url: string }[] | null>(null);
+  const [promptsLoading, setPromptsLoading] = useState(false);
+  const PROMPTS_SERVER = 'https://mycastle.hersztowski.org';
+  const promptsIndexUrl = useMemo(
+    () => `${PROMPTS_SERVER}/public/drive/users/${encodeURIComponent(userName)}/ai_prompt/ai_prompts.json`,
+    [userName],
+  );
+  const openPromptsMenu = useCallback(async (anchor: HTMLElement) => {
+    setPromptsMenu(anchor);
+    setPromptsLoading(true);
+    try {
+      const r = await fetch(promptsIndexUrl, { cache: 'no-store' });
+      if (!r.ok) throw new Error(String(r.status));
+      const parsed = (await r.json()) as unknown;
+      const urls = Array.isArray(parsed)
+        ? parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+        : [];
+      const seen = new Set<string>();
+      const items = urls
+        .map(url => ({ url, label: decodeURIComponent(url.split('/').pop() || url) }))
+        .filter(it => { if (seen.has(it.url)) return false; seen.add(it.url); return true; });
+      setPromptItems(items);
+    } catch {
+      setPromptItems([]);
+      toast('Nie udało się wczytać listy promptów', 'error');
+    }
+    setPromptsLoading(false);
+  }, [promptsIndexUrl, toast]);
+  const loadPrompt = useCallback(async (item: { label: string; url: string }) => {
+    setPromptsMenu(null);
+    try {
+      const r = await fetch(item.url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(String(r.status));
+      const content = await r.text();
+      if (!agentOpen) setAgentOpen(true);
+      // Wrap the prompt so the agent only INTERNALISES it as context/instructions
+      // and does not start writing or saving files just because it was loaded.
+      // It should wait for a concrete follow-up request before taking action.
+      const wrapped = [
+        `The following reusable prompt "${item.label}" has been loaded into your context.`,
+        'Read and internalise it as guidance for the rest of this conversation.',
+        'Do NOT create, write, edit, or save any files, and do NOT run any tools, just because this prompt was loaded.',
+        'Simply acknowledge in one short sentence that you have read it, then wait for my next instruction before doing anything.',
+        '',
+        '----- PROMPT BEGIN -----',
+        content,
+        '----- PROMPT END -----',
+      ].join('\n');
+      agentRef.current?.sendPrompt(wrapped);
+    } catch {
+      toast(`Nie udało się wczytać promptu: ${item.label}`, 'error');
+    }
+  }, [agentOpen, toast]);
+
   // True → right panel takes the full canvas, sidebar (file list) is hidden.
   // Auto-resets to false whenever the right panel closes.
   const [panelFullscreen, setPanelFullscreen] = useState(false);
@@ -825,10 +955,7 @@ export default function DrivePage(): React.JSX.Element {
   const panelOpen = !!(viewing || mdEditing || mjdEditing);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
-
-  const toast = useCallback((msg: string, severity: 'success'|'error'|'info' = 'success') => {
-    setSnack({ open: true, msg, severity });
-  }, []);
+  const showAgent = isWide && agentOpen;
 
   // ── Initial mkdir + refresh ─────────────────────────────────────────────
   const refresh = useCallback(async () => {
@@ -1935,9 +2062,11 @@ export default function DrivePage(): React.JSX.Element {
         // 280-620px sidebar: low end fits tablet portrait (~600px viewport)
         // with ~320px left for the right panel; high end caps on ultrawides
         // so the editor gets the dominant share.
+        // When a file preview is open the sidebar is a clamped column. When only
+        // the agent is open they split the canvas 50/50 (both flex:1).
         flex: showRightPanel ? `0 0 clamp(280px, 36%, 620px)` : 1,
         minWidth: 0, overflow: 'hidden',
-        borderRight: showRightPanel ? '1px solid' : 'none',
+        borderRight: (showRightPanel || showAgent) ? '1px solid' : 'none',
         borderColor: 'divider',
       }}>
       {/* Header — single "Actions" dropdown gathers every directory-level
@@ -2028,6 +2157,13 @@ export default function DrivePage(): React.JSX.Element {
           <ListItemText
             primary="Otwórz w workspace"
             secondary="Monaco editor — kod, JSON, terminal, agent"
+          />
+        </MenuItem>
+        <MenuItem onClick={() => { setAgentOpen(true); setActionsMenu(null); }}>
+          <ListItemIcon><SmartToyIcon fontSize="small" /></ListItemIcon>
+          <ListItemText
+            primary="AI Agent"
+            secondary="Asystent AI z dostępem do plików Drive"
           />
         </MenuItem>
         <MenuItem onClick={() => { setSearchOpen(true); setActionsMenu(null); }}>
@@ -2485,6 +2621,73 @@ export default function DrivePage(): React.JSX.Element {
                 />
               </Box>
             )}
+          </Box>
+        </Box>
+      )}
+      {agentMounted && agentFs && (
+        <Box sx={{
+          flex: '1 1 0', minWidth: 320,
+          display: showAgent ? 'flex' : 'none', flexDirection: 'column',
+          overflow: 'hidden',
+          borderLeft: '1px solid', borderColor: 'divider',
+        }}>
+          {/* Thin header — AgentPanel renders its own "AI Agent" title row but
+              has no close control (the workspace editor wraps it), so we add one. */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
+            bgcolor: '#252526', borderBottom: '1px solid #3c3c3c',
+          }}>
+            <SmartToyIcon fontSize="small" sx={{ color: '#bbb' }} />
+            <Typography sx={{ flex: 1, fontSize: 12, color: '#bbb', fontWeight: 600 }}>
+              Asystent
+            </Typography>
+            <Button
+              size="small"
+              startIcon={<AutoAwesomeIcon sx={{ fontSize: 14 }} />}
+              onClick={(e) => void openPromptsMenu(e.currentTarget)}
+              sx={{ color: '#bbb', textTransform: 'none', fontSize: 12, minWidth: 0, '&:hover': { color: '#fff', bgcolor: '#3c3c3c' } }}
+            >
+              Prompts
+            </Button>
+            <Tooltip title="Zamknij agenta">
+              <IconButton size="small" onClick={() => setAgentOpen(false)} sx={{ color: '#888' }}>
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <Menu
+            anchorEl={promptsMenu}
+            open={promptsMenu !== null}
+            onClose={() => setPromptsMenu(null)}
+            slotProps={{ paper: { sx: { minWidth: 240, maxHeight: 360 } } }}
+          >
+            {promptsLoading && (!promptItems || promptItems.length === 0) && (
+              <MenuItem disabled>
+                <ListItemIcon><CircularProgress size={16} /></ListItemIcon>
+                <ListItemText primary="Ładowanie…" />
+              </MenuItem>
+            )}
+            {!promptsLoading && promptItems && promptItems.length === 0 && (
+              <MenuItem disabled>
+                <ListItemText primary="Brak promptów" secondary="Sprawdź drive/public/ai_prompt/ai_prompts.json" />
+              </MenuItem>
+            )}
+            {promptItems?.map(item => (
+              <MenuItem key={item.url} onClick={() => void loadPrompt(item)}>
+                <ListItemIcon><DescriptionIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary={item.label} />
+              </MenuItem>
+            ))}
+          </Menu>
+          <Box sx={{ flex: 1, minHeight: 0 }}>
+            <AgentPanel
+              ref={agentRef}
+              provider={agentFs}
+              defaultConfig={agentDefaultConfig}
+              authToken={token ?? undefined}
+              injectedClaudeMd={agentClaudeMd}
+              onFileWritten={() => { void refresh(); }}
+            />
           </Box>
         </Box>
       )}

@@ -199,6 +199,11 @@ export class MycastleHttpServer extends HttpUploadServer {
   }
 
   private async handleDrivePublic(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Public, read-only files — allow cross-origin reads (e.g. the Drive AI
+    // agent fetching shared prompts from this server while running on a
+    // different origin in dev). GET with no custom headers is a CORS "simple
+    // request", so the response ACAO header alone is sufficient.
+    res.setHeader('Access-Control-Allow-Origin', '*');
     try {
       const urlObj = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
       const m = urlObj.pathname.match(/^\/public\/drive\/users\/([^/]+)\/(.+)$/);

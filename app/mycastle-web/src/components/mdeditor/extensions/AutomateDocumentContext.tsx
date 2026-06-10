@@ -289,7 +289,46 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         return next;
       });
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      // Pinpoint where the failure happened in the USER'S code (not the
+      // sandbox wrapper). The wrapper from AutomateSandbox.execute prefixes:
+      //   line 1: "use strict";
+      //   line 2:    return (async () => {
+      //   line 3:      const inp = input;
+      //   line 4:      const vars = variables;
+      //   line 5:      const display = input.__display;   ← from runBlock
+      //   line 6+:     <user code>
+      // → wrapper offset = 5 lines. We pull the location from either the
+      //   Firefox-style `err.lineNumber/columnNumber` properties or by
+      //   regex'ing the Chromium stack trace's `<anonymous>:L:C` token.
+      //   Whichever fires first wins.
+      const WRAPPER_LINE_OFFSET = 5;
+      const locFromError = (err && typeof err === 'object'
+        && typeof (err as { lineNumber?: number }).lineNumber === 'number')
+        ? {
+            line:   ((err as { lineNumber: number }).lineNumber) - WRAPPER_LINE_OFFSET,
+            column: ((err as { columnNumber?: number }).columnNumber) ?? 0,
+          }
+        : null;
+      const locFromStack = (() => {
+        const stack = err instanceof Error ? err.stack : '';
+        if (!stack) return null;
+        // Find the FIRST `<anonymous>:L:C` (or `eval:L:C`) — that's the
+        // generated Function frame, which contains the line in the
+        // wrapped source. Later frames are infrastructure (AutomateSandbox
+        // / Promise.race) and don't help the user.
+        const m = stack.match(/<anonymous>:(\d+):(\d+)/);
+        if (!m) return null;
+        const line = parseInt(m[1], 10) - WRAPPER_LINE_OFFSET;
+        const column = parseInt(m[2], 10);
+        return Number.isFinite(line) && line >= 1
+          ? { line, column }
+          : null;
+      })();
+      const loc = locFromError && locFromError.line >= 1 ? locFromError : locFromStack;
+      const errorMsg = loc
+        ? `${rawMsg}  (linia ${loc.line}${loc.column > 0 ? `, kolumna ${loc.column}` : ''})`
+        : rawMsg;
       // Surface the full error object including stack — wrapped Function calls
       // squash the stack into the body of the generated function, but Chrome
       // DevTools still resolves source mapping for the wrapper if we log the

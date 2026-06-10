@@ -11,6 +11,7 @@ import {
   Paper,
   IconButton,
   Tooltip,
+  Divider,
   Typography,
   CircularProgress,
   Alert,
@@ -26,7 +27,6 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
   Button,
   Tab,
   Tabs,
@@ -387,7 +387,9 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
 // Node View Component
 const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
   const blockId = useRef(node.attrs.blockId || crypto.randomUUID?.() || Math.random().toString(36).substr(2, 9));
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // textareaRef removed — the inline code surface is now Monaco. Cursor /
+  // focus tracking handled internally by Monaco; no React ref needed
+  // beyond what `onMount` captures for the fullscreen path.
 
   const {
     registerBlock,
@@ -562,50 +564,10 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const error = blockState?.error;
   const result = blockState?.result;
 
-  const handleCodeChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newCode = e.target.value;
-    setCode(newCode);
-    updateAttributes({ code: newCode });
-    // Push directly into the document context too — same reasoning as
-    // handleEditorDialogRun: the `[code]` useEffect that normally syncs
-    // this fires AFTER render, so a Ctrl+Enter immediately after a
-    // keystroke would execute the previous buffer otherwise.
-    updateBlockCode(blockId.current, newCode);
-  }, [updateAttributes, updateBlockCode]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Ctrl+Enter - run script. Pass `code` as override to skip the
-    // useEffect→updateBlockCode commit cycle (would otherwise run the
-    // last-saved version when the user hits Ctrl+Enter on freshly-typed
-    // input that hasn't been synced to the context map yet).
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      runBlock(blockId.current, code);
-      return;
-    }
-
-    // Tab - insert 2 spaces
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      e.stopPropagation();
-      const textarea = e.currentTarget;
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      const newCode = code.substring(0, start) + '  ' + code.substring(end);
-      setCode(newCode);
-      updateAttributes({ code: newCode });
-      updateBlockCode(blockId.current, newCode);
-      // Restore cursor position
-      requestAnimationFrame(() => {
-        textarea.selectionStart = textarea.selectionEnd = start + 2;
-      });
-      return;
-    }
-
-    // Prevent Tiptap from capturing keys while typing
-    e.stopPropagation();
-  }, [code, updateAttributes, updateBlockCode, runBlock]);
+  // handleCodeChange / handleKeyDown removed — they were textarea-only.
+  // Monaco handles change events through its `onChange` prop (inline call
+  // sets code + persists), Ctrl+Enter through `editor.addCommand` in
+  // onMount (see render below), and Tab insertion is native to Monaco.
 
   const handleRun = useCallback(() => {
     // Library preload is handled INSIDE runBlock now (see runBlock in
@@ -623,11 +585,20 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     setEditorDialogOpen(true);
   }, [code]);
 
+  // Dirty = there are unsaved changes. `code` is the last-persisted version
+  // (the source of truth in TipTap attrs); `dialogCode` is the in-flight
+  // edit buffer in the fullscreen dialog. They diverge as soon as the user
+  // types and converge again when Save (or Save+Run) lands.
+  const isDirty = editorDialogOpen && dialogCode !== code;
+
   const handleEditorDialogSave = useCallback(() => {
+    // Save WITHOUT closing — user explicitly asked to keep the dialog open
+    // so they can hit Run / continue editing right after persisting. Exit
+    // is a separate button now. `setCode` syncs local state with the
+    // freshly-saved value so isDirty flips back to false next render.
     setCode(dialogCode);
     updateAttributes({ code: dialogCode });
     updateBlockCode(blockId.current, dialogCode);
-    setEditorDialogOpen(false);
   }, [dialogCode, updateAttributes, updateBlockCode]);
 
   /** Save + run inside the fullscreen dialog — keeps the dialog open so the
@@ -758,21 +729,29 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
         <Box sx={{
           display: 'flex',
           alignItems: 'center',
+          // Roomier gap between header items — the previous default of 0
+          // packed icons shoulder-to-shoulder, hard to tap on mobile and
+          // visually noisy on desktop. 0.75 (~6px) keeps the bar compact
+          // while making each control feel like a distinct hit target.
+          gap: 0.75,
           px: 1,
           py: 0.5,
           bgcolor: '#1e1e1e',
           color: '#d4d4d4',
         }}>
-          <SmartToyIcon sx={{ fontSize: 16, mr: 0.5, color: '#4caf50' }} />
+          <SmartToyIcon sx={{ fontSize: 16, color: '#4caf50' }} />
           <Typography variant="caption" sx={{ color: '#d4d4d4' }}>
             Skrypt automatyzacji
           </Typography>
           {/* Inline status chips — make it visible at a glance whether
               autorun is on, the block is in HTML view mode, and what tags
-              it has, without having to open the settings dialog. */}
+              it has, without having to open the settings dialog.
+              Per-chip `ml` was removed: the parent `gap: 0.75` on the
+              header Box is now the single source of spacing so the dist
+              between every element is consistent. */}
           {autorun && (
             <Box sx={{
-              ml: 1, px: 0.75, py: 0.1, borderRadius: 0.5,
+              px: 0.75, py: 0.1, borderRadius: 0.5,
               bgcolor: 'rgba(76,175,80,0.18)', color: '#4caf50',
               fontSize: '0.6rem', fontWeight: 600, letterSpacing: 0.3,
             }}>
@@ -781,7 +760,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           )}
           {viewMode === 'html' && (
             <Box sx={{
-              ml: 0.5, px: 0.75, py: 0.1, borderRadius: 0.5,
+              px: 0.75, py: 0.1, borderRadius: 0.5,
               bgcolor: 'rgba(255,193,7,0.18)', color: '#ffb300',
               fontSize: '0.6rem', fontWeight: 600, letterSpacing: 0.3,
             }}>
@@ -790,7 +769,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           )}
           {tags.length > 0 && (
             <Box sx={{
-              ml: 0.5, display: 'flex', alignItems: 'center', gap: 0.25,
+              display: 'flex', alignItems: 'center', gap: 0.25,
               color: '#9e9e9e', fontSize: '0.6rem',
             }}>
               <LabelIcon sx={{ fontSize: 12 }} />
@@ -837,31 +816,11 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               <SettingsIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Dokumentacja Automate Script">
-            <IconButton
-              size="small"
-              onClick={() => setHelpOpen(true)}
-              sx={{ color: '#d4d4d4', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}
-            >
-              <HelpOutlineIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Wyczysc wyjscie">
-            <span>
-              <IconButton
-                size="small"
-                onClick={handleClear}
-                disabled={!hasOutput}
-                sx={{
-                  color: hasOutput ? '#d4d4d4' : '#555555',
-                  '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
-                  '&.Mui-disabled': { color: '#555555' },
-                }}
-              >
-                <DeleteOutlineIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+          {/* Help + Clear used to live here. Removed per user request —
+              docs are still available from the fullscreen editor's (?) icon
+              and the output footer panel has its own clear control next to
+              the Tabs. The inline header was getting cramped; trimming to
+              Run / Edit / Settings keeps it scannable. */}
         </Box>
 
         {/* ── Surface decision matrix ──────────────────────────────────────
@@ -891,31 +850,75 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               the chance that two surfaces render simultaneously and double
               up the displayed output.                                       */}
         {viewMode === 'code' && !windowHeight && (
-          <Box sx={{ position: 'relative' }}>
-            <textarea
-              ref={textareaRef}
-              value={code}
-              onChange={handleCodeChange}
-              onKeyDown={handleKeyDown}
-              spellCheck={false}
-              style={{
-                width: '100%',
-                minHeight: 80,
-                maxHeight: 400,
-                padding: '12px',
-                fontFamily: "'Fira Code', 'Monaco', 'Consolas', 'Courier New', monospace",
-                fontSize: '0.875em',
-                lineHeight: 1.6,
-                backgroundColor: '#1e1e1e',
-                color: '#d4d4d4',
-                border: 'none',
-                outline: 'none',
-                tabSize: 2,
-                boxSizing: 'border-box',
-                display: 'block',
-                resize: 'vertical',
-              }}
-            />
+          // Monaco editor in the inline NodeView — same syntax highlighting,
+          // IntelliSense and TypeScript language service as the fullscreen
+          // dialog (and the Electronics/Editor surface). Previously this
+          // slot was a plain <textarea> with hand-tuned font/colour —
+          // identical visually but no markers, no completions, no go-to-
+          // definition. Reusing setupAutomateMonacoWithDisplay means the
+          // ambient `api.*` / `display.*` types light up here too.
+          //
+          // Height is computed from line count so the editor auto-grows
+          // up to ~20 lines, then internal scroll takes over. That matches
+          // the textarea behaviour (resize handle replaced by smart sizing).
+          <Box sx={{ position: 'relative', borderTop: '1px solid', borderColor: 'divider' }}>
+            {(() => {
+              const LINE_HEIGHT = 19;
+              const PAD_V = 16;
+              const lines = code.split('\n').length;
+              const visibleLines = Math.min(20, Math.max(4, lines + 1));
+              const editorHeight = visibleLines * LINE_HEIGHT + PAD_V;
+              return (
+                <Editor
+                  height={editorHeight}
+                  defaultLanguage="typescript"
+                  value={code}
+                  theme="vs-dark"
+                  beforeMount={setupAutomateMonacoWithDisplay}
+                  onMount={(monacoEditor, monaco) => {
+                    // Re-register .d.ts stubs for any `// @library:` markers
+                    // already in this block so completions are live from
+                    // first keystroke (same as fullscreen mount).
+                    registerLibraryTypes(monaco, code);
+                    // Ctrl+Enter → Run, matching the convention from the
+                    // fullscreen editor and every other code surface in
+                    // the app. Editor has command priority so the parent
+                    // TipTap document doesn't steal the keypress.
+                    monacoEditor.addCommand(
+                      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+                      () => { handleRun(); },
+                    );
+                  }}
+                  onChange={(value) => {
+                    const v = value ?? '';
+                    setCode(v);
+                    updateAttributes({ code: v });
+                    updateBlockCode(blockId.current, v);
+                  }}
+                  options={{
+                    // Compact inline view: kill the chrome that's only
+                    // useful in a full IDE surface. Folding stays on for
+                    // long blocks; word wrap so the editor doesn't get a
+                    // horizontal scrollbar inside markdown narrow column.
+                    minimap:         { enabled: false },
+                    lineNumbers:     'off',
+                    glyphMargin:     false,
+                    folding:         true,
+                    wordWrap:        'on',
+                    scrollBeyondLastLine: false,
+                    overviewRulerLanes: 0,
+                    renderLineHighlight:  'gutter',
+                    fontFamily:      "'Fira Code', 'Monaco', 'Consolas', 'Courier New', monospace",
+                    fontSize:        13,
+                    lineHeight:      LINE_HEIGHT,
+                    tabSize:         2,
+                    automaticLayout: true,
+                    padding:         { top: 8, bottom: 8 },
+                    fixedOverflowWidgets: true,
+                  }}
+                />
+              );
+            })()}
           </Box>
         )}
 
@@ -1042,6 +1045,44 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               <HelpOutlineIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {/* Primary actions moved up here from the bottom DialogActions —
+              users on long scripts no longer need to scroll past code +
+              output to hit Run/Save. Divider gives them visual weight so
+              they don't blend with the icon-only utilities to the left. */}
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 1 }} />
+          <Tooltip title="Uruchom (Ctrl+Enter)">
+            <span>
+              <Button
+                onClick={handleEditorDialogRun}
+                disabled={status === 'running'}
+                startIcon={status === 'running'
+                  ? <CircularProgress size={14} sx={{ color: '#4caf50' }} />
+                  : <PlayArrowIcon />}
+                size="small"
+                sx={{ color: '#4caf50' }}
+              >
+                {status === 'running' ? 'Uruchamiam…' : 'Uruchom'}
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title={isDirty ? 'Zapisz zmiany (dialog pozostanie otwarty)' : 'Brak niezapisanych zmian'}>
+            <span>
+              <Button
+                onClick={handleEditorDialogSave}
+                variant="contained"
+                size="small"
+                disabled={!isDirty}
+              >
+                Zapisz
+              </Button>
+            </span>
+          </Tooltip>
+          <Button
+            onClick={() => setEditorDialogOpen(false)}
+            size="small"
+          >
+            Wyjdź
+          </Button>
         </DialogTitle>
         <DialogContent dividers sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Box wrapper ensures the Editor expands to fill remaining flex space
@@ -1367,28 +1408,9 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             )}
           </Box>
         </DialogContent>
-        <DialogActions>
-          {/* Run lives next to Save because it's the dialog's primary action
-              once a user has finished typing. Disabled while a run is in
-              flight to avoid stacked overlapping executions. */}
-          <Tooltip title="Uruchom (Ctrl+Enter)">
-            <span>
-              <Button
-                onClick={handleEditorDialogRun}
-                disabled={status === 'running'}
-                startIcon={status === 'running'
-                  ? <CircularProgress size={14} sx={{ color: '#4caf50' }} />
-                  : <PlayArrowIcon />}
-                sx={{ color: '#4caf50' }}
-              >
-                {status === 'running' ? 'Uruchamiam…' : 'Uruchom'}
-              </Button>
-            </span>
-          </Tooltip>
-          <Box sx={{ flex: 1 }} />
-          <Button onClick={() => setEditorDialogOpen(false)}>Anuluj</Button>
-          <Button onClick={handleEditorDialogSave} variant="contained">Save</Button>
-        </DialogActions>
+        {/* DialogActions removed — primary actions (Uruchom / Zapisz / Wyjdź)
+            now live in the DialogTitle row at the top of the dialog so the
+            user doesn't have to scroll past long output to reach them. */}
       </Dialog>
 
       {/* ── Help dialog ── */}

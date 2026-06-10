@@ -69,12 +69,12 @@ const HIGHLIGHT_COLORS = [
 
 // ── Block-level helpers ───────────────────────────────────────────────────────
 
-function getListItemType(editor: Editor): 'listItem' | 'taskItem' {
+export function getListItemType(editor: Editor): 'listItem' | 'taskItem' {
   return editor.isActive('taskList') ? 'taskItem' : 'listItem';
 }
 
 /** Swap the top-level block containing the cursor with its neighbour. */
-function moveBlock(editor: Editor, dir: 'up' | 'down'): void {
+export function moveBlock(editor: Editor, dir: 'up' | 'down'): void {
   const { state } = editor.view;
   const { $from } = state.selection;
   if ($from.depth < 1) return;
@@ -109,7 +109,7 @@ function moveBlock(editor: Editor, dir: 'up' | 'down'): void {
 }
 
 /** Delete the innermost list item under the cursor, or the top-level block. */
-function deleteBlock(editor: Editor): void {
+export function deleteBlock(editor: Editor): void {
   const { state } = editor.view;
   const { $from } = state.selection;
   for (let d = $from.depth; d >= 1; d--) {
@@ -126,7 +126,10 @@ function deleteBlock(editor: Editor): void {
 
 // ── Sub-panel: text formatting ────────────────────────────────────────────────
 
-const FormatPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => {
+// Panels + helpers are exported so the bottom bubble menu in MdEditor can
+// reuse the exact same hierarchy (Format / Color / Turn into / Insert)
+// inside its own Popovers — single source of truth for the toolbar UX.
+export const FormatPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => {
   const run = (fn: () => void) => { fn(); };
   const setLink = () => {
     const prev = editor.getAttributes('link').href || '';
@@ -191,7 +194,7 @@ const FormatPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor
 
 // ── Sub-panel: highlight colours ──────────────────────────────────────────────
 
-const ColorPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => (
+export const ColorPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => (
   <Box sx={{ p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
     {HIGHLIGHT_COLORS.map(({ label, value }) => (
       <Box
@@ -249,7 +252,7 @@ const TURN_INTO: TurnIntoOption[] = [
   { title: 'Code block',    label: '</>',  icon: DataObjectIcon,         action: e => e.chain().focus().toggleCodeBlock().run(),                  isActive: e => e.isActive('codeBlock') },
 ];
 
-const TurnIntoPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => (
+export const TurnIntoPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => (
   <Box sx={{ p: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
     {TURN_INTO.map(({ title, icon: Icon, action, isActive }) => (
       <Tooltip key={title} title={title}>
@@ -268,7 +271,7 @@ const TurnIntoPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ edit
 
 // ── Sub-panel: insert ─────────────────────────────────────────────────────────
 
-const InsertPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => (
+export const InsertPanel: React.FC<{ editor: Editor; onClose: () => void }> = ({ editor, onClose }) => (
   <Box sx={{ p: 1, display: 'flex', gap: 0.5 }}>
     <Tooltip title="Image">
       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
