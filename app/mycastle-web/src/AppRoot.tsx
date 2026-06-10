@@ -211,6 +211,23 @@ function AppRoot() {
           }
         />
         <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><UserDataEditorPage /></Suspense></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        {/* Drive is a full-page file manager — same `Layout fullBleed`
+            shape as Electronics Configuration / TestVfs so the inner
+            flex column gets the exact remaining viewport height (no
+            padding, no `Container maxWidth`). Was previously mounted
+            under the default Layout which wrapped it in `Container`
+            with 24px padding, so DrivePage's `calc(100vh - 64px)`
+            overshot the viewport by ~48px on macOS. */}
+        <Route
+          path="/user/:userName/pim/drive"
+          element={
+            <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+              <Layout fullBleed>
+                <DrivePage />
+              </Layout>
+            </Box>
+          }
+        />
 
         {/* All layout routes — single Layout handles nav based on path */}
         <Route
@@ -264,7 +281,9 @@ function AppRoot() {
                   <Route path="/user/:userName/pim/shopping" element={<ShoppingPage />} />
                   <Route path="/user/:userName/pim/health" element={<HealthPage />} />
                   <Route path="/user/:userName/pim/memory" element={<MemoryPage />} />
-                  <Route path="/user/:userName/pim/drive" element={<DrivePage />} />
+                  {/* /pim/drive is handled by a dedicated `Layout fullBleed`
+                      route above — kept out of this block so it doesn't get
+                      wrapped in <Container maxWidth="lg"> + 24px padding. */}
                   <Route path="/user/:userName/pim/automate" element={<AutomateListPage />} />
                   <Route path="/user/:userName/pim/objectviewer" element={<ObjectViewerPage />} />
                   <Route path="/user/:userName/pim/components" element={<ComponentsPage />} />

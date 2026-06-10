@@ -24,7 +24,7 @@ import { Table, TableRow } from '@tiptap/extension-table';
 import { CustomTableCell } from './extensions/CustomTableCell';
 import { CustomTableHeader } from './extensions/CustomTableHeader';
 import { common, createLowlight } from 'lowlight';
-import { Box, IconButton, Paper, Divider, Popper, TextField, Tooltip, Fab, Collapse, useMediaQuery, useTheme } from '@mui/material';
+import { Box, IconButton, Paper, Divider, Popper, Popover, TextField, Tooltip, Fab, Collapse, List, ListItemButton, ListItemText, Typography, useMediaQuery, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import EditIcon from '@mui/icons-material/Edit';
@@ -55,6 +55,7 @@ import { CadViewEmbed } from './extensions/CadViewExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
 import { InfoMark, INFO_MARK_EDIT_EVENT, type InfoMarkEditEventDetail } from './extensions/InfoMarkExtension';
 import InfoMarkDialog from './extensions/InfoMarkDialog';
+import { SpellCheckExtension, type SpellMatch } from './extensions/SpellCheckExtension';
 import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
 import { PluginScriptBlock } from './extensions/PluginScriptExtension';
 import { BlockActionMenu } from './BlockActionMenu';
@@ -169,6 +170,61 @@ const MdEditor: React.FC<MdEditorProps> = ({
   const [contentTick, setContentTick] = useState(0);
   const [bubbleMenuAnchor, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
+  // Spellcheck — relies on the browser's native dictionary (the same one
+  // OS-level system uses), driven by the contenteditable's `spellcheck`
+  // + `lang` attributes. We persist the choice in localStorage so the
+  // user's selection survives reloads. Default = Polish.
+  const [spellLanguage, setSpellLanguage] = useState<string>(() => {
+    try { return localStorage.getItem('mdeditor_spell_lang') || 'pl'; }
+    catch { return 'pl'; }
+  });
+  const [spellEnabled, setSpellEnabled] = useState<boolean>(() => {
+    try { return localStorage.getItem('mdeditor_spell_enabled') !== '0'; }
+    catch { return true; }
+  });
+  // Ref mirror of the React state — read by SpellCheckExtension's getter
+  // callbacks (which are captured in closures at editor-mount time and
+  // need a live channel to current state).
+  const spellOptionsRef = useRef({ language: spellLanguage, enabled: spellEnabled });
+  useEffect(() => {
+    spellOptionsRef.current = { language: spellLanguage, enabled: spellEnabled };
+  }, [spellLanguage, spellEnabled]);
+  // Popover state for click-on-underlined-word UX. anchor + match are
+  // captured when the user clicks a `.md-spell-error` span (see global
+  // click handler below). null = closed.
+  const [spellPopover, setSpellPopover] = useState<
+    | { anchor: HTMLElement; match: SpellMatch; from: number; to: number }
+    | null
+  >(null);
+  useEffect(() => {
+    try { localStorage.setItem('mdeditor_spell_lang', spellLanguage); } catch { /* full storage */ }
+  }, [spellLanguage]);
+  useEffect(() => {
+    try { localStorage.setItem('mdeditor_spell_enabled', spellEnabled ? '1' : '0'); } catch { /* full storage */ }
+  }, [spellEnabled]);
+  // Tracks the visual viewport offset so we can park the bubble menu
+  // directly above the on-screen keyboard on mobile. Without this the
+  // menu floats above the selection — which the keyboard then covers,
+  // leaving the user blind to their formatting controls. Tracks both
+  // resize (keyboard open/close) and scroll (keyboard panning).
+  const [keyboardOffset, setKeyboardOffset] = useState<number>(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      // Pixels between visual viewport bottom and layout viewport bottom.
+      // > 0 when an on-screen keyboard is taking up space.
+      const dy = window.innerHeight - vv.height - vv.offsetTop;
+      setKeyboardOffset(Math.max(0, dy));
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
 
   // Toolbar visibility — hidden while scrolling down (gains content space),
   // shown again on scroll up or when the user reaches the top. Applies on
@@ -254,12 +310,32 @@ const MdEditor: React.FC<MdEditorProps> = ({
       AutomateScriptBlock,
       PluginScriptBlock,
       InfoMark,
+      // LanguageTool-driven spellcheck. Decorations only — the popover
+      // with suggestions lives below in the JSX (mounted on click via
+      // a window-level listener on .md-spell-error spans).
+      // Getter callbacks read from refs (synced from React state in the
+      // useEffect below) so a language switch / on-off toggle takes
+      // effect on the next debounce cycle without remounting the editor.
+      SpellCheckExtension.configure({
+        getLanguage: () => spellOptionsRef.current.language,
+        getEnabled: () => spellOptionsRef.current.enabled,
+        debounceMs: 1500,
+      }),
       BlockIdExtension,
     ],
     content: '',
     editable,
     autofocus: autoFocus ? 'start' : false,
     editorProps: {
+      // Initial spellcheck attributes — TipTap merges these onto the
+      // contenteditable div on mount. The useEffect below keeps them in
+      // sync if the user changes language afterwards. We seed both here
+      // and there because some Chrome versions ignore late-setter on the
+      // IDL property if the attribute wasn't present at first paint.
+      attributes: {
+        spellcheck: 'true',
+        lang: 'pl',
+      },
       // Clean up garbage HTML that copy-from-browser (Office, web pages,
       // Notion, Confluence, …) pastes in. Without this, the editor adopts
       // foreign fonts, colours, inline backgrounds, classnames — and the
@@ -354,10 +430,31 @@ const MdEditor: React.FC<MdEditorProps> = ({
         const start = view.coordsAtPos(from);
         const end = view.coordsAtPos(to);
 
-        setBubbleMenuAnchor({
-          x: (start.left + end.left) / 2,
-          y: start.top - 10,
-        });
+        // Mobile-keyboard branch: park the anchor right at the top edge of
+        // the keyboard (with a small gap). Popper.placement='top' then
+        // floats the menu directly ABOVE that — visible and reachable
+        // even while the keyboard is up. Anchor x = horizontal center of
+        // the viewport so the menu stays put while the user thumbs around.
+        // We read the LATEST visual viewport here (not the cached
+        // `keyboardVisible` state) — selection updates can fire before the
+        // visualViewport.resize listener has, so a re-check is essential
+        // for the first selection after the keyboard opens.
+        const vv = window.visualViewport;
+        const liveKeyboardOffset = vv
+          ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+          : 0;
+        if (liveKeyboardOffset > 100 && vv) {
+          setBubbleMenuAnchor({
+            x: vv.offsetLeft + vv.width / 2,
+            // 8px breathing room above the keyboard's top edge
+            y: vv.offsetTop + vv.height - 8,
+          });
+        } else {
+          setBubbleMenuAnchor({
+            x: (start.left + end.left) / 2,
+            y: start.top - 10,
+          });
+        }
         setShowBubbleMenu(true);
         setShowLinkPopup(false);
       } else {
@@ -397,6 +494,106 @@ const MdEditor: React.FC<MdEditorProps> = ({
       isInitializedRef.current = true;
     }
   }, [editor]);
+
+  // Click handler for spellcheck error spans. We bind on the editor's
+  // contenteditable so taps on a `.md-spell-error` decoration open the
+  // suggestions popover. ProseMirror doesn't route DOM clicks to React
+  // handlers on decorations, hence the native listener.
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom as HTMLElement;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest) return;
+      const span = target.closest('.md-spell-error') as HTMLElement | null;
+      if (!span) return;
+      // Hydrate the SpellMatch back from the data-* attrs.
+      const offset = Number(span.dataset.matchOffset);
+      const length = Number(span.dataset.matchLength);
+      if (!Number.isFinite(offset) || !Number.isFinite(length)) return;
+      let replacements: string[] = [];
+      try { replacements = JSON.parse(span.dataset.matchReplacements || '[]'); }
+      catch { replacements = []; }
+      const match: SpellMatch = {
+        offset,
+        length,
+        message: span.dataset.matchMessage || '',
+        category: span.dataset.matchCategory || 'TYPOS',
+        ruleId: span.dataset.matchRule || '',
+        replacements,
+      };
+      setSpellPopover({
+        anchor: span,
+        match,
+        from: offset + 1,
+        to: offset + length + 1,
+      });
+    };
+    dom.addEventListener('click', handler);
+    return () => dom.removeEventListener('click', handler);
+  }, [editor]);
+
+  // Sync spellcheck settings to the contenteditable. We mutate BOTH the
+  // IDL property and the content attribute — Chrome reads the attribute
+  // when deciding whether to enable spellcheck on initial render, but
+  // only re-checks via the property afterwards. Setting just one is
+  // enough on most engines; setting both is harmless and Chrome-safe.
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom as HTMLElement;
+    dom.spellcheck = spellEnabled;
+    dom.setAttribute('spellcheck', spellEnabled ? 'true' : 'false');
+    if (spellEnabled) {
+      dom.lang = spellLanguage;
+      dom.setAttribute('lang', spellLanguage);
+    } else {
+      dom.removeAttribute('lang');
+    }
+    // Diagnostic log — spread fields as individual args so they're all
+    // visible without expanding an Object pill in DevTools. If this shows
+    // spellcheck=true lang='pl' and there's STILL no underline, the
+    // dictionary either isn't installed (Chrome basic mode is selective
+    // about which languages it ships) or Chrome silently treats this
+    // editor as a "non-input" surface. The next debug below tries both.
+    // eslint-disable-next-line no-console
+    console.log(
+      '[MdEditor.spellcheck] applied:',
+      'spellcheck=', dom.spellcheck,
+      'lang=', JSON.stringify(dom.lang),
+      'attrSpellcheck=', JSON.stringify(dom.getAttribute('spellcheck')),
+      'attrLang=', JSON.stringify(dom.getAttribute('lang')),
+      'contenteditable=', JSON.stringify(dom.getAttribute('contenteditable')),
+      'tagName=', dom.tagName,
+    );
+  }, [editor, spellLanguage, spellEnabled]);
+
+  // Re-anchor the bubble menu when the on-screen keyboard opens/closes.
+  // onSelectionUpdate only fires on selection changes, so without this
+  // a user who selected text first and then tapped to open the keyboard
+  // would see the menu stuck in the old (now keyboard-covered) spot.
+  useEffect(() => {
+    if (!editor || !showBubbleMenu) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const vv = window.visualViewport;
+    const liveKeyboardOffset = vv
+      ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+      : 0;
+    if (liveKeyboardOffset > 100 && vv) {
+      setBubbleMenuAnchor({
+        x: vv.offsetLeft + vv.width / 2,
+        y: vv.offsetTop + vv.height - 8,
+      });
+    } else {
+      // Keyboard just closed — return the anchor to the live selection.
+      const start = editor.view.coordsAtPos(from);
+      const end = editor.view.coordsAtPos(to);
+      setBubbleMenuAnchor({
+        x: (start.left + end.left) / 2,
+        y: start.top - 10,
+      });
+    }
+  }, [keyboardOffset, editor, showBubbleMenu]);
 
   // Update initial content ref when prop changes (for external reloads)
   useEffect(() => {
@@ -854,6 +1051,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
           onSave={handleSave}
           saveDisabled={saveStatus === 'saved'}
           onInsertInfoMark={openInsertInfoMarkDialog}
+          spellLanguage={spellLanguage}
+          spellEnabled={spellEnabled}
+          onSpellLanguageChange={setSpellLanguage}
+          onSpellEnabledChange={setSpellEnabled}
         />
       </Collapse>
 
@@ -1089,6 +1290,64 @@ const MdEditor: React.FC<MdEditorProps> = ({
       </Box>
     </Box>
     </AutomateDocumentProvider>
+
+    {/* ── Spellcheck suggestions popover ─────────────────────────────────
+        Mounted at the top level so it can render outside the
+        AutomateDocumentProvider tree (nothing inside the editor scope
+        needs it). Anchor is the .md-spell-error span the user clicked. */}
+    {spellPopover && editor && (
+      <Popover
+        open
+        anchorEl={spellPopover.anchor}
+        onClose={() => setSpellPopover(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        PaperProps={{ sx: { maxWidth: 360, minWidth: 220 } }}
+      >
+        <Box sx={{ p: 1.5, pb: 0.5 }}>
+          <Typography variant="caption" sx={{
+            color: 'error.main', fontWeight: 600, letterSpacing: 0.5,
+            display: 'block', mb: 0.5,
+          }}>
+            {spellPopover.match.category === 'TYPOS' ? 'BŁĄD PISOWNI' :
+             spellPopover.match.category === 'GRAMMAR' ? 'GRAMATYKA' :
+             spellPopover.match.category === 'PUNCTUATION' ? 'INTERPUNKCJA' :
+             spellPopover.match.category}
+          </Typography>
+          <Typography variant="body2">{spellPopover.match.message}</Typography>
+        </Box>
+        {spellPopover.match.replacements.length > 0 && (
+          <List dense sx={{ borderTop: 1, borderColor: 'divider', maxHeight: 200, overflow: 'auto' }}>
+            {spellPopover.match.replacements.slice(0, 8).map((replacement) => (
+              <ListItemButton
+                key={replacement}
+                onClick={() => {
+                  // Replace the offending range with the chosen suggestion.
+                  editor.chain().focus().insertContentAt(
+                    { from: spellPopover.from, to: spellPopover.to },
+                    replacement,
+                  ).run();
+                  setSpellPopover(null);
+                }}
+              >
+                <ListItemText
+                  primary={replacement}
+                  primaryTypographyProps={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
+                />
+              </ListItemButton>
+            ))}
+          </List>
+        )}
+        {spellPopover.match.replacements.length === 0 && (
+          <Box sx={{ px: 1.5, pb: 1.5 }}>
+            <Typography variant="caption" color="text.secondary" fontStyle="italic">
+              Brak sugestii.
+            </Typography>
+          </Box>
+        )}
+      </Popover>
+    )}
+
     {editable && blockPositions.length > 0 && ReactDOM.createPortal(
       <>
         {blockPositions.map(({ el, top, left }, i) => (

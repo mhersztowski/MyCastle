@@ -16,6 +16,7 @@ services:
       # gzipped — 14 days = comfortable rollback window.
       - BACKUP_KEEP=14
       - ARDUINO_CLI_DOCKER_IMAGE=mycastle-arduino:local
+      - ARDUINO_WASM_DOCKER_IMAGE=mycastle-arduino-wasm:local
       - PYGAME_DOCKER_IMAGE=mycastle-pygame:local
       - UPYTHON_DOCKER_IMAGE=mycastle-pico:local
     ports:

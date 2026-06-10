@@ -220,10 +220,40 @@ export function CppWasmRuntime({
 
       const wasmUrl = wasmJsUrl.replace(/sketch\.js(\?.*)?$/, 'sketch.wasm');
 
+      // Pre-fetch the .wasm with auth headers — Emscripten's built-in
+      // `locateFile`-driven fetch can't carry our Bearer token, so the
+      // backend's auth middleware would return 401 and the module would
+      // refuse to instantiate (= silent runtime, empty serial monitor).
+      // We bypass Emscripten's own fetch by handing it the compiled bytes
+      // through the `instantiateWasm` hook below.
+      const wasmBytes = await fetch(wasmUrl, { headers: authHeader }).then(r => {
+        if (!r.ok) throw new Error(`Failed to fetch sketch.wasm: HTTP ${r.status}`);
+        return r.arrayBuffer();
+      });
+
       startTimeRef.current = performance.now();
 
       const mod = await factory({
+        // Kept as a fallback for any code path that doesn't go through
+        // instantiateWasm (rare with MODULARIZE=1 but documented in
+        // Emscripten as belt-and-suspenders).
         locateFile: (f: string) => f === 'sketch.wasm' ? wasmUrl : f,
+
+        // Authoritative wasm loader — Emscripten calls this, hands us the
+        // imports table, and expects the callback fired once we have the
+        // module instance. We feed in our pre-fetched bytes (which DID
+        // travel with the Bearer token). Returning `{}` (non-null) tells
+        // Emscripten "I'm taking care of compilation, skip your own fetch".
+        instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance, mod: WebAssembly.Module) => void) => {
+          WebAssembly.instantiate(wasmBytes, imports).then((result) => {
+            successCallback(result.instance, result.module);
+          }).catch((err) => {
+            // Surface WASM compile errors as serial output — these are
+            // otherwise swallowed silently by Emscripten's startup path.
+            appendSerial(`[FATAL] WASM instantiate failed: ${err instanceof Error ? err.message : String(err)}\n`);
+          });
+          return {};
+        },
 
         print: (text: string) => appendSerial(text + '\n'),
         printErr: (text: string) => appendSerial('[ERR] ' + text + '\n'),

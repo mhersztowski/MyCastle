@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, type ReactNode } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -17,6 +18,7 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import type { MjdDocument, MjdFieldDef, MjdFieldType, MjdViewDef } from '@mhersztowski/core';
@@ -25,6 +27,13 @@ import { createMjdField, createMjdView, generateJsonSchema } from '@mhersztowski
 export interface MjdDefEditorProps {
   value: MjdDocument;
   onChange: (doc: MjdDocument) => void;
+  /** Optional — when provided, a "Generate data file" button appears in
+   *  the Generate section. The host (typically MjdVfsLoader) decides where
+   *  the sibling .data.json lands; this component just signals intent. */
+  onGenerateData?: () => void | Promise<void>;
+  /** When true, the Generate Data button is disabled (data file already
+   *  exists). The host typically toggles this based on a VFS check. */
+  dataFileExists?: boolean;
 }
 
 const FIELD_TYPES: MjdFieldType[] = ['string', 'number', 'boolean', 'date', 'enum', 'array'];
@@ -92,6 +101,20 @@ function FieldRow({
     onUpdate(index, { ...field, ...partial });
   };
 
+  /** Enter blurs the active TextField — gives the user an explicit
+   *  "I'm done editing this field" gesture. Without it the input stays
+   *  focused as long as the user is interacting with the row, which
+   *  feels confusing now that the row no longer collapses-on-keystroke
+   *  (that "collapse" was the focus-loss bug we just fixed). Esc behaves
+   *  the same way for symmetry. Shift+Enter is left untouched so multi-
+   *  line text fields can still insert newlines. */
+  const handleCommitOnEnter = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Escape') {
+      e.preventDefault();
+      (e.target as HTMLElement).blur();
+    }
+  };
+
   const handleTypeChange = (type: MjdFieldType) => {
     const updated: Partial<MjdFieldDef> = { type };
     if (type === 'enum' && !field.options) updated.options = [];
@@ -144,6 +167,7 @@ function FieldRow({
                   size="small"
                   value={field.name}
                   onChange={(e) => update({ name: e.target.value })}
+                  onKeyDown={handleCommitOnEnter}
                   sx={{ flex: 1 }}
                 />
                 <TextField
@@ -151,6 +175,7 @@ function FieldRow({
                   size="small"
                   value={field.label ?? ''}
                   onChange={(e) => update({ label: e.target.value || undefined })}
+                  onKeyDown={handleCommitOnEnter}
                   sx={{ flex: 1 }}
                 />
                 <FormControl size="small" sx={{ minWidth: 120 }}>
@@ -170,6 +195,8 @@ function FieldRow({
                 size="small"
                 value={field.description ?? ''}
                 onChange={(e) => update({ description: e.target.value || undefined })}
+                onKeyDown={handleCommitOnEnter}
+                helperText="Enter — zakończ edycję pola · Shift+Enter — nowa linia (gdy włączony multiline)"
                 fullWidth
               />
 
@@ -270,6 +297,15 @@ function ViewRow({
             value={view.name}
             onChange={(e) => onUpdate(index, { ...view, name: e.target.value })}
             onBlur={() => setEditing(false)}
+            // Enter / Escape exit edit mode (collapse back to plain text).
+            // ViewRow opens edit-on-click, so the symmetric "Enter to commit"
+            // matches the implicit contract.
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault();
+                (e.target as HTMLElement).blur();
+              }
+            }}
             autoFocus
           />
         ) : (
@@ -300,7 +336,7 @@ function ViewRow({
 
 // --- Main Component ---
 
-export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
+export function MjdDefEditor({ value, onChange, onGenerateData, dataFileExists }: MjdDefEditorProps) {
   const [output, setOutput] = useState<{ type: 'mjd' | 'schema'; content: string } | null>(null);
 
   const updateField = useCallback((index: number, field: MjdFieldDef) => {
@@ -354,6 +390,14 @@ export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
           size="small"
           value={value.version}
           onChange={(e) => onChange({ ...value, version: e.target.value })}
+          // Symmetric with FieldRow / ViewRow inputs — Enter / Esc blur the
+          // field so user has an explicit "I'm done editing" gesture.
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === 'Escape') {
+              e.preventDefault();
+              (e.target as HTMLElement).blur();
+            }
+          }}
           sx={{ width: 120 }}
         />
       </Section>
@@ -377,7 +421,14 @@ export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
           <TableBody>
             {value.fields.map((field, i) => (
               <FieldRow
-                key={`${field.name}-${i}`}
+                // Index-only key. The previous `${field.name}-${i}` composite
+                // changed on every keystroke in the Name TextField (`name`
+                // goes from '' → 'n' → 'na' …), which made React unmount the
+                // whole row + mount a fresh one — the inner input lost focus
+                // after every single character typed. Index is stable for the
+                // lifetime of a field; reordering isn't supported in this UI
+                // so the "swap drops focus" caveat of index keys doesn't apply.
+                key={i}
                 field={field}
                 index={i}
                 allTags={value.tags}
@@ -397,7 +448,28 @@ export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
       </Section>
 
       {/* Views */}
-      <Section title="Views" action={<Button size="small" onClick={addView} disabled={value.tags.length === 0}>+ Add View</Button>}>
+      {/* The "+ Add View" button is disabled until the schema has at least
+          one tag, because every view is bound to a tag (it's how views
+          filter fields). Without the tooltip wrapper the disabled state
+          looked broken — clicking did nothing, no feedback. Now hovering
+          tells the user exactly what they need to do. */}
+      <Section
+        title="Views"
+        action={
+          <Tooltip title={value.tags.length === 0 ? 'Dodaj co najmniej jeden tag w sekcji "Tags" aby utworzyć view (każdy view musi być powiązany z tagiem)' : ''}>
+            {/* span wrapper required by MUI Tooltip on disabled children */}
+            <span>
+              <Button size="small" onClick={addView} disabled={value.tags.length === 0}>+ Add View</Button>
+            </span>
+          </Tooltip>
+        }
+      >
+        {value.tags.length === 0 && (
+          <Alert severity="info" sx={{ mb: 1 }}>
+            Aby dodać view, najpierw zdefiniuj co najmniej jeden tag w sekcji <strong>Tags</strong> powyżej.
+            Każdy view filtruje pola po tagu — bez tagów nie ma czego pokazać.
+          </Alert>
+        )}
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -410,7 +482,10 @@ export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
           <TableBody>
             {value.views.map((view, i) => (
               <ViewRow
-                key={`${view.name}-${i}`}
+                // Same fix as FieldRow above — composite key on `view.name`
+                // remounted the row after every typed character in the name
+                // field, killing focus. Index is stable per row in this UI.
+                key={i}
                 view={view}
                 index={i}
                 allTags={value.tags}
@@ -421,7 +496,11 @@ export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
             {value.views.length === 0 && (
               <TableRow>
                 <TableCell colSpan={4}>
-                  <Typography variant="body2" color="text.secondary">No views defined</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {value.tags.length === 0
+                      ? 'Brak views — najpierw dodaj tag.'
+                      : 'Brak views. Kliknij "+ Add View" powyżej.'}
+                  </Typography>
                 </TableCell>
               </TableRow>
             )}
@@ -431,9 +510,35 @@ export function MjdDefEditor({ value, onChange }: MjdDefEditorProps) {
 
       {/* Actions */}
       <Section title="Generate">
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button variant="outlined" size="small" onClick={handleGenerateMjd}>Generate .mjd</Button>
           <Button variant="outlined" size="small" onClick={handleGenerateSchema}>Generate JSON Schema</Button>
+          {/* Data-file generator — host wires this up (typically
+              MjdVfsLoader) to write a sibling `.data.json` populated with
+              `buildDefaults(definition)`. We only show the button when the
+              host has connected the callback. */}
+          {onGenerateData && (
+            // Always enabled. The button used to disable itself when a
+            // sibling `.data.json` existed, but that prevented the obvious
+            // "I want a SECOND data file for this same schema with a
+            // different name" workflow. Now we just hint via tooltip that
+            // a sibling already exists and the dialog will propose a
+            // numbered fallback name (places-2.data.json, places-3.data.json…).
+            <Tooltip title={
+              dataFileExists
+                ? 'Sibling .data.json już istnieje — okno zaproponuje inną nazwę. Zawsze możesz wpisać własną.'
+                : 'Utwórz plik .data.json z domyślnymi wartościami; możesz wybrać dowolną nazwę i lokalizację.'
+            }>
+              <Button
+                variant="contained"
+                size="small"
+                color="primary"
+                onClick={() => void onGenerateData()}
+              >
+                Utwórz plik danych (.data.json)
+              </Button>
+            </Tooltip>
+          )}
         </Box>
       </Section>
 

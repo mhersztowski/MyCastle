@@ -1424,6 +1424,29 @@ export class MycastleHttpServer extends HttpUploadServer {
           const content = await fs.promises.readFile(filePath, 'utf-8');
           this.sendJsonResponse(res, 200, { content });
         } catch {
+          // Fallback for Arduino mock headers — when the sketch references
+          // `#include "Arduino.h"`, Monaco's C++ IntelliSense fetches that
+          // path from this endpoint. The file doesn't live in the user's
+          // sketch directory (mocks are baked into the WASM Docker image
+          // under `/arduino-mock/`), so a vanilla 404 would surface in the
+          // browser console + leave the editor with red squiggles on every
+          // `Arduino.*` symbol. We serve the host-side mock copy instead —
+          // read-only for the user (PUT/DELETE still target the real
+          // sketch dir, which fails for these names, which is correct —
+          // we don't want the user editing mocks).
+          const ARDUINO_MOCK_NAMES = new Set([
+            'Arduino.h', 'HardwareSerial.h', 'SPI.h', 'Wire.h', 'WString.h',
+          ]);
+          if (ARDUINO_MOCK_NAMES.has(cpFileName)) {
+            try {
+              // Mocks live at <repo>/docker/arduino-mock/ — backend cwd is
+              // app/mycastle-backend during dev, so we climb two levels.
+              const mockPath = path.resolve(process.cwd(), '..', '..', 'docker', 'arduino-mock', cpFileName);
+              const content = await fs.promises.readFile(mockPath, 'utf-8');
+              this.sendJsonResponse(res, 200, { content });
+              return;
+            } catch { /* fall through to 404 */ }
+          }
           this.sendJsonResponse(res, 404, { error: 'File not found' });
         }
       } else if (method === 'PUT') {
@@ -2294,15 +2317,22 @@ export class MycastleHttpServer extends HttpUploadServer {
     const projectId = `cpp/${projectName}`;
     const outputDir = this.arduinoWasmBuilder.wasmOutputDir(userName, projectId, sketchName);
     const filePath = path.join(outputDir, file);
+    // Scope the try to readFile ONLY. Previously the writeHead/end calls
+    // were inside, so a client disconnect mid-stream landed in catch and
+    // sendJsonResponse(404) tried to set headers on an already-flushed
+    // response — ERR_HTTP_HEADERS_SENT. The 404 path is for "file doesn't
+    // exist", not for "client gave up".
+    let data: Buffer;
     try {
-      const data = await fs.promises.readFile(filePath);
-      const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
-      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
-      this.setCorsHeaders(res);
-      res.end(data);
+      data = await fs.promises.readFile(filePath);
     } catch {
       this.sendJsonResponse(res, 404, { error: `${file} not found — build the project first` });
+      return;
     }
+    const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
+    res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
+    this.setCorsHeaders(res);
+    res.end(data);
   }
 
   // --- Arduino WASM build ---
@@ -2377,19 +2407,24 @@ export class MycastleHttpServer extends HttpUploadServer {
     const outputDir = this.arduinoWasmBuilder.wasmOutputDir(userName, projectId, sketchName);
     const filePath = path.join(outputDir, file);
 
+    // Same split as handleCppWasmFile — catch only the readFile (= file
+    // truly missing). A write-time failure (client disconnect, broken
+    // pipe) should NOT try to write headers on top of a flushed response.
+    let data: Buffer;
     try {
-      const data = await fs.promises.readFile(filePath);
-      const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        'Content-Length': data.length,
-        'Cache-Control': 'no-cache',
-      });
-      this.setCorsHeaders(res);
-      res.end(data);
+      data = await fs.promises.readFile(filePath);
     } catch {
       this.sendJsonResponse(res, 404, { error: `${file} not found — build the project first` });
+      return;
     }
+    const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': data.length,
+      'Cache-Control': 'no-cache',
+    });
+    this.setCorsHeaders(res);
+    res.end(data);
   }
 
   // --- README ---

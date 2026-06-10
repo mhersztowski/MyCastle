@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -131,6 +131,28 @@ function ArrayFieldControl({
   const items = value ?? [];
   const itemType = field.itemType ?? 'string';
   const label = field.label ?? field.name;
+  // Container ref + pending-focus index drive the "Enter to next item"
+  // UX. We can't use auto-focus on the new item because <FieldControl>
+  // doesn't expose a ref; instead, after the parent state update lands
+  // we querySelector the inputs in document order and focus the requested
+  // one. Same pattern Slack / GitHub use for tag-token inputs.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [focusIndexAfterRender, setFocusIndexAfterRender] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (focusIndexAfterRender === null) return;
+    const root = containerRef.current;
+    if (!root) return;
+    const inputs = root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+    const target = inputs[focusIndexAfterRender];
+    if (target) {
+      target.focus();
+      // Select existing content on focus so re-entering an already-filled
+      // item lets the user type-to-replace without manual select-all.
+      if ('select' in target && typeof target.select === 'function') target.select();
+    }
+    setFocusIndexAfterRender(null);
+  }, [focusIndexAfterRender, items.length]);
 
   const updateItem = (index: number, val: unknown) => {
     const next = [...items];
@@ -146,14 +168,40 @@ function ArrayFieldControl({
     onChange([...items, getDefaultForType(itemType)]);
   };
 
+  /** Enter in the item's input: commit (already saved via onChange) +
+   *  jump to next. If we're on the last item, append a fresh one with
+   *  the type's default and focus it. Shift+Enter is left untouched so
+   *  multi-line text item types can still produce newlines. Checkboxes
+   *  / radios are excluded so Enter keeps its native "toggle" semantics.
+   */
+  const handleItemKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, idx: number) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const target = e.target as HTMLElement;
+    if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') return;
+    const inputType = (target as HTMLInputElement).type ?? '';
+    if (inputType === 'checkbox' || inputType === 'radio' || inputType === 'button') return;
+    e.preventDefault();
+    if (idx === items.length - 1) {
+      // Append + focus new (which lands at index = items.length AFTER add).
+      onChange([...items, getDefaultForType(itemType)]);
+      setFocusIndexAfterRender(items.length);
+    } else {
+      setFocusIndexAfterRender(idx + 1);
+    }
+  };
+
   return (
-    <Box>
+    <Box ref={containerRef}>
       <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>{label}</Typography>
       {field.description && (
         <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>{field.description}</Typography>
       )}
       {items.map((item, i) => (
-        <Box key={i} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+        <Box
+          key={i}
+          sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}
+          onKeyDown={(e) => handleItemKeyDown(e, i)}
+        >
           <Box sx={{ flex: 1 }}>
             <FieldControl
               field={{ ...field, name: `${field.name}[${i}]`, type: itemType, label: `#${i + 1}`, description: undefined, tags: [] }}
@@ -167,6 +215,11 @@ function ArrayFieldControl({
         </Box>
       ))}
       <Button size="small" onClick={addItem}>+ Add item</Button>
+      {items.length > 0 && (
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1, display: 'block' }}>
+          Enter \u2014 zako\u0144cz edycj\u0119 bie\u017c\u0105cego itemu i przejd\u017a do nast\u0119pnego (lub utw\u00f3rz nowy gdy jeste\u015b na ostatnim).
+        </Typography>
+      )}
     </Box>
   );
 }

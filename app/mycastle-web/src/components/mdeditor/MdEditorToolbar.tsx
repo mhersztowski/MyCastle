@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Editor } from '@tiptap/react';
 import {
   Box,
@@ -18,10 +18,12 @@ import {
   DialogActions,
   TextField,
   Typography,
+  Switch,
 } from '@mui/material';
 import { markdownToHtml } from './utils/markdownConverter';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import SpellcheckIcon from '@mui/icons-material/Spellcheck';
 import FormatItalicIcon from '@mui/icons-material/FormatItalic';
 import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
 import CodeIcon from '@mui/icons-material/Code';
@@ -62,9 +64,63 @@ interface MdEditorToolbarProps {
    *  InfoMark insertion dialog. Left optional so toolbars used in contexts
    *  without the InfoMark extension (rare) still render. */
   onInsertInfoMark?: () => void;
+  /** Spellcheck language code (ISO 639-1, e.g. 'pl', 'en'). Used as the
+   *  `lang` attribute on the contenteditable, which switches the browser's
+   *  native spelling dictionary. */
+  spellLanguage?: string;
+  /** Master on/off for native spellcheck. */
+  spellEnabled?: boolean;
+  onSpellLanguageChange?: (lang: string) => void;
+  onSpellEnabledChange?: (enabled: boolean) => void;
 }
 
-const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveDisabled, onInsertInfoMark }) => {
+/** Languages exposed in the toolbar picker. List intentionally small —
+ *  covers the most common dictionaries shipped with macOS / Windows / most
+ *  Linux distros. User's OS controls actual dictionary availability; we
+ *  just hint with the `lang` attribute. */
+const SPELL_LANGUAGES: Array<{ code: string; label: string }> = [
+  { code: 'pl',    label: 'Polski' },
+  { code: 'en-US', label: 'English (US)' },
+  { code: 'en-GB', label: 'English (UK)' },
+  { code: 'de',    label: 'Deutsch' },
+  { code: 'fr',    label: 'Français' },
+  { code: 'es',    label: 'Español' },
+  { code: 'it',    label: 'Italiano' },
+  { code: 'pt',    label: 'Português' },
+  { code: 'ru',    label: 'Русский' },
+  { code: 'uk',    label: 'Українська' },
+  { code: 'cs',    label: 'Čeština' },
+];
+
+/** Rough browser detection — used to surface the right setup hint when
+ *  the OS dictionary isn't available. We accept that this is a heuristic
+ *  (UA string can lie); a wrong guess only changes the help text, not
+ *  the spellcheck itself.
+ *
+ *  Important context:
+ *  - Chrome on every OS uses its OWN Hunspell-based dictionaries. They're
+ *    auto-downloaded but ONLY for languages on the user's `chrome://
+ *    settings/languages` preferred list. macOS's system Polish dictionary
+ *    is invisible to Chrome — the user has to add Polish there explicitly.
+ *  - Safari + Firefox both delegate to the OS dictionary; on macOS that
+ *    means System Settings → Keyboard → Text → Spelling.
+ *  - Edge inherits Chromium behaviour. */
+function detectBrowser(): 'chrome' | 'safari' | 'firefox' | 'edge' | 'other' {
+  const ua = navigator.userAgent;
+  if (/Edg\//.test(ua))     return 'edge';
+  if (/Firefox\//.test(ua)) return 'firefox';
+  if (/Chrome\//.test(ua))  return 'chrome';
+  if (/Safari\//.test(ua))  return 'safari';
+  return 'other';
+}
+
+const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
+  editor, onSave, saveDisabled, onInsertInfoMark,
+  spellLanguage, spellEnabled, onSpellLanguageChange, onSpellEnabledChange,
+}) => {
+  const [spellMenuAnchor, setSpellMenuAnchor] = useState<null | HTMLElement>(null);
+  const [spellHelpOpen, setSpellHelpOpen] = useState(false);
+  const browser = useMemo(() => detectBrowser(), []);
   const [insertMenuAnchor, setInsertMenuAnchor] = useState<null | HTMLElement>(null);
   const insertMenuOpen = Boolean(insertMenuAnchor);
 
@@ -359,6 +415,161 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({ editor, onSave, saveD
             <InfoOutlinedIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+      )}
+      {/* Spellcheck control — only rendered when the host (MdEditor) has
+          wired the callbacks, so other toolbar uses don't show a control
+          they can't act on. Icon button opens a small menu with the
+          on/off Switch + a language list. The button is colored primary
+          when active so the user can tell the state at a glance. */}
+      {onSpellEnabledChange && onSpellLanguageChange && (
+        <>
+          <Tooltip title={
+            spellEnabled
+              ? `Sprawdzanie pisowni: ${SPELL_LANGUAGES.find(l => l.code === spellLanguage)?.label ?? spellLanguage}`
+              : 'Sprawdzanie pisowni wyłączone'
+          }>
+            <IconButton
+              size="small"
+              onClick={(e) => setSpellMenuAnchor(e.currentTarget)}
+              color={spellEnabled ? 'primary' : 'default'}
+            >
+              <SpellcheckIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={spellMenuAnchor}
+            open={spellMenuAnchor !== null}
+            onClose={() => setSpellMenuAnchor(null)}
+          >
+            {/* Master switch — leaves the language selection intact so
+                turning it back on lands on the same dictionary. */}
+            <MenuItem onClick={() => onSpellEnabledChange(!spellEnabled)}>
+              <ListItemIcon>
+                <Switch size="small" checked={!!spellEnabled} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Sprawdzaj pisownię"
+                secondary="Słownik systemowy przeglądarki / OS"
+              />
+            </MenuItem>
+            <Divider />
+            {SPELL_LANGUAGES.map(({ code, label }) => (
+              <MenuItem
+                key={code}
+                selected={spellLanguage === code}
+                disabled={!spellEnabled}
+                onClick={() => {
+                  onSpellLanguageChange(code);
+                  setSpellMenuAnchor(null);
+                }}
+              >
+                <ListItemText primary={label} secondary={code} />
+              </MenuItem>
+            ))}
+            <Divider />
+            <MenuItem onClick={() => { setSpellHelpOpen(true); setSpellMenuAnchor(null); }}>
+              <ListItemIcon><InfoOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText
+                primary="Słownik nie działa? Włącz go w przeglądarce →"
+                secondary="Krótka instrukcja dla Chrome / Safari / Firefox / Edge"
+                primaryTypographyProps={{ fontSize: '0.85rem' }}
+                secondaryTypographyProps={{ fontSize: '0.72rem' }}
+              />
+            </MenuItem>
+          </Menu>
+
+          {/* Per-browser setup instructions — shown when the user reports
+              spellcheck isn't doing anything. Each browser has its own
+              quirk: Chrome wants the language on its preferred list, Safari
+              + Firefox lean on OS settings, etc. */}
+          <Dialog open={spellHelpOpen} onClose={() => setSpellHelpOpen(false)} maxWidth="sm" fullWidth>
+            <DialogTitle>Włączenie sprawdzania pisowni</DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="body2" sx={{ mb: 2 }}>
+                Edytor ustawia tylko atrybuty <code>spellcheck</code> i <code>lang="{spellLanguage}"</code>
+                — faktyczne podświetlanie błędów wykonuje <strong>przeglądarka</strong>, korzystając ze
+                swojego słownika. Jeśli nic nie podświetla się dla wybranego języka, najczęściej trzeba
+                go ręcznie aktywować.
+              </Typography>
+
+              {(browser === 'chrome' || browser === 'edge') && (
+                <>
+                  <Typography variant="subtitle2" sx={{ mt: 1 }}>
+                    {browser === 'chrome' ? 'Google Chrome' : 'Microsoft Edge'} (wykryto twoje przeglądarka)
+                  </Typography>
+                  <Typography variant="body2" component="div" sx={{ mt: 1 }}>
+                    <ol style={{ marginTop: 0, paddingLeft: '1.25rem' }}>
+                      <li>Otwórz <code>{browser === 'chrome' ? 'chrome://settings/languages' : 'edge://settings/languages'}</code> w nowej karcie
+                        (skopiuj — link do <code>chrome://</code> nie zadziała z poziomu strony).</li>
+                      <li>W sekcji <em>Preferred languages</em> kliknij <em>Add languages</em> i dodaj <strong>{
+                        SPELL_LANGUAGES.find(l => l.code === spellLanguage)?.label ?? spellLanguage
+                      }</strong>.</li>
+                      <li>Pod listą języków znajdź sekcję <em>Spell check</em>. Włącz <em>Enhanced spell check</em>
+                        (lub przynajmniej <em>Basic</em>) — bez tego Chrome ignoruje słownik.</li>
+                      <li>Upewnij się że wybrany język ma checkbox <em>Use this language for spell checking</em>.</li>
+                      <li>Wróć do MyCastle i odśwież stronę.</li>
+                    </ol>
+                  </Typography>
+                  <Button
+                    variant="outlined" size="small" sx={{ mt: 1 }}
+                    onClick={() => navigator.clipboard?.writeText(browser === 'chrome' ? 'chrome://settings/languages' : 'edge://settings/languages')}
+                  >
+                    Skopiuj URL ustawień
+                  </Button>
+                </>
+              )}
+
+              {browser === 'safari' && (
+                <>
+                  <Typography variant="subtitle2" sx={{ mt: 1 }}>Safari (macOS)</Typography>
+                  <Typography variant="body2" component="div" sx={{ mt: 1 }}>
+                    <ol style={{ marginTop: 0, paddingLeft: '1.25rem' }}>
+                      <li>System Settings → <em>Keyboard</em> → <em>Text Input</em> → <em>Edit</em>.</li>
+                      <li>W polu <em>Spelling</em> wybierz <strong>{
+                        SPELL_LANGUAGES.find(l => l.code === spellLanguage)?.label ?? spellLanguage
+                      }</strong> lub <em>Automatic by Language</em>.</li>
+                      <li>Jeśli słownik nie jest zainstalowany, kliknij <em>Set Up…</em> obok — macOS pobierze go automatycznie.</li>
+                      <li>Wróć do MyCastle i odśwież stronę.</li>
+                    </ol>
+                  </Typography>
+                </>
+              )}
+
+              {browser === 'firefox' && (
+                <>
+                  <Typography variant="subtitle2" sx={{ mt: 1 }}>Mozilla Firefox</Typography>
+                  <Typography variant="body2" component="div" sx={{ mt: 1 }}>
+                    <ol style={{ marginTop: 0, paddingLeft: '1.25rem' }}>
+                      <li>Prawym przyciskiem klikinij w polu edytora → <em>Languages</em> → <em>Add Dictionaries…</em></li>
+                      <li>Wybierz słownik dla języka <strong>{
+                        SPELL_LANGUAGES.find(l => l.code === spellLanguage)?.label ?? spellLanguage
+                      }</strong> i zainstaluj.</li>
+                      <li>Po instalacji ponownie prawy przycisk → <em>Languages</em> → wybierz zainstalowany słownik.</li>
+                    </ol>
+                  </Typography>
+                </>
+              )}
+
+              {browser === 'other' && (
+                <Typography variant="body2">
+                  Nie udało się wykryć twojej przeglądarki. Sprawdź w ustawieniach przeglądarki sekcję
+                  "Languages" lub "Spell check" i upewnij się że
+                  <strong> {SPELL_LANGUAGES.find(l => l.code === spellLanguage)?.label ?? spellLanguage} </strong>
+                  jest aktywnym słownikiem.
+                </Typography>
+              )}
+
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="caption" color="text.secondary">
+                Edytor nie dystrybuuje słowników — to celowe, bo systemowe / wbudowane są zoptymalizowane,
+                aktualizowane przez producenta przeglądarki i działają również w innych aplikacjach.
+              </Typography>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setSpellHelpOpen(false)}>Zamknij</Button>
+            </DialogActions>
+          </Dialog>
+        </>
       )}
       <Tooltip title="Audio">
         <IconButton size="small" onClick={addAudio} color="secondary">

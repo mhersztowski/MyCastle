@@ -701,3 +701,17 @@
 .md-editor-content .ProseMirror .automate-script-wrapper textarea::placeholder {
   color: #666;
 }
+
+/* ── LanguageTool spellcheck decorations ──────────────────────────────────────
+ * Red wavy underline at character ranges flagged by LanguageTool. Override
+ * `text-decoration-color` per category later if we want to colour-code
+ * grammar vs spelling vs style. */
+.md-editor-content .ProseMirror .md-spell-error {
+  text-decoration: underline wavy var(--md-spell-error-color, #dc3545);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.md-editor-content .ProseMirror .md-spell-error:hover {
+  background-color: rgba(220, 53, 69, 0.08);
+}

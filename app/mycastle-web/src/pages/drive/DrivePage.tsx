@@ -16,9 +16,9 @@ import { useAuth } from '../../modules/auth';
 import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
   Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, IconButton, LinearProgress, Link, ListItemIcon,
-  ListItemText, Menu, MenuItem, Paper, Snackbar, Stack, Table, TableBody,
-  TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
+  DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, LinearProgress,
+  Link, ListItemIcon, ListItemText, Menu, MenuItem, Paper, Select, Snackbar, Stack, Table,
+  TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
 } from '@mui/material';
 import { MdEditor } from '@/components/mdeditor';
 import Editor from '@monaco-editor/react';
@@ -79,6 +79,12 @@ import SearchIcon from '@mui/icons-material/Search';
 
 import DriveSearchDialog from './DriveSearchDialog';
 import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearchTypes';
+
+// MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
+// until the user actually opens a .mjd / .data.json file. RemoteFS is the
+// VFS adapter MjdVfsLoader expects.
+import { MjdVfsLoader } from '@mhersztowski/texteditor';
+import { RemoteFS } from '@mhersztowski/core';
 
 // ─── VFS helpers ─────────────────────────────────────────────────────────────
 
@@ -433,6 +439,63 @@ const isMdEditable = (name: string) => {
   const n = name.toLowerCase();
   return n.endsWith('.md') || n.endsWith('.txt') || n.endsWith('.markdown');
 };
+
+// ── MJD editor association ──────────────────────────────────────────────────
+// `.mjd`           → opens MjdDefEditor (schema editor)
+// `.data.json`     → opens MjdDataEditor (form for the sibling .mjd)
+// Both render in the right-side preview panel via MjdVfsLoader, same UX as
+// Markdown editing.
+type MjdMode = 'def' | 'data';
+
+const getMjdMode = (name: string): MjdMode | null => {
+  const n = name.toLowerCase();
+  if (n.endsWith('.mjd')) return 'def';
+  if (n.endsWith('.data.json')) return 'data';
+  return null;
+};
+const isMjdEditable = (name: string) => getMjdMode(name) !== null;
+
+// ── New-file dialog presets ─────────────────────────────────────────────────
+// Each preset advertises a default filename + an extension. When the user
+// switches preset in the dialog, the name auto-suggests the preset default
+// (only when the user hasn't typed something custom yet). At create-time
+// `applyExtension` ensures the saved name actually ends with the preset's
+// extension — typing "config" with the YAML preset selected becomes
+// "config.yaml".
+interface FilePreset {
+  key: string;
+  label: string;
+  defaultName: string;
+  extension: string;
+}
+
+const FILE_PRESETS: FilePreset[] = [
+  { key: 'md',        label: 'Markdown (.md)',                  defaultName: 'notatka.md',         extension: '.md' },
+  { key: 'json',      label: 'JSON (.json)',                    defaultName: 'data.json',          extension: '.json' },
+  { key: 'mjd-def',   label: 'MJD definition (.mjd)',           defaultName: 'schema.mjd',         extension: '.mjd' },
+  { key: 'mjd-data',  label: 'MJD data (.data.json)',           defaultName: 'dane.data.json',     extension: '.data.json' },
+  { key: 'yaml',      label: 'YAML — konfiguracja (.yaml)',     defaultName: 'config.yaml',        extension: '.yaml' },
+  { key: 'toml',      label: 'TOML — konfiguracja (.toml)',     defaultName: 'config.toml',        extension: '.toml' },
+  { key: 'ini',       label: 'INI — konfiguracja (.ini)',       defaultName: 'config.ini',         extension: '.ini' },
+  { key: 'env',       label: '.env — zmienne środowiskowe',     defaultName: '.env',               extension: '.env' },
+  { key: 'ts',        label: 'TypeScript (.ts)',                defaultName: 'index.ts',           extension: '.ts' },
+  { key: 'tsx',       label: 'TypeScript React (.tsx)',         defaultName: 'Component.tsx',      extension: '.tsx' },
+  { key: 'js',        label: 'JavaScript (.js)',                defaultName: 'index.js',           extension: '.js' },
+  { key: 'py',        label: 'Python (.py)',                    defaultName: 'main.py',            extension: '.py' },
+  { key: 'cpp',       label: 'C++ (.cpp)',                      defaultName: 'main.cpp',           extension: '.cpp' },
+  { key: 'css',       label: 'CSS (.css)',                      defaultName: 'styles.css',         extension: '.css' },
+  { key: 'html',      label: 'HTML (.html)',                    defaultName: 'index.html',         extension: '.html' },
+  { key: 'sh',        label: 'Shell script (.sh)',              defaultName: 'script.sh',          extension: '.sh' },
+  { key: 'custom',    label: 'Inny (bez wymuszania rozszerzenia)', defaultName: 'untitled.txt',    extension: '' },
+];
+
+/** Append `ext` to `name` if not already present. Special-case the empty
+ *  ext (custom preset): leave the name untouched. Case-insensitive check so
+ *  "DATA.JSON" with the JSON preset doesn't become "DATA.JSON.json". */
+function applyExtension(name: string, ext: string): string {
+  if (!ext) return name;
+  return name.toLowerCase().endsWith(ext.toLowerCase()) ? name : name + ext;
+}
 const isImageMime = (m: string) => m.startsWith('image/') && m !== 'image/svg+xml';
 const isPdfMime = (m: string) => m === 'application/pdf';
 const isAudioMime = (m: string) => m.startsWith('audio/');
@@ -623,7 +686,7 @@ export default function DrivePage(): React.JSX.Element {
   // back to the logged-in user so this component also works as a Global window
   // mounted outside any route — there `useParams` returns no userName.
   const params = useParams<{ userName: string }>();
-  const { currentUser } = useAuth();
+  const { currentUser, token } = useAuth();
   const userName = params.userName || currentUser?.name || '';
   const [cwd, setCwd] = useState('');                       // relative under /drive/
   const [entries, setEntries] = useState<VfsEntry[]>([]);
@@ -663,7 +726,7 @@ export default function DrivePage(): React.JSX.Element {
   // it lands in Monaco's undo stack like a manual type.
   const [includeOpen, setIncludeOpen] = useState(false);
   // "New empty file" dialog. Just a name field — content is empty bytes.
-  const [newFileDialog, setNewFileDialog] = useState<{ name: string } | null>(null);
+  const [newFileDialog, setNewFileDialog] = useState<{ name: string; presetKey: string } | null>(null);
   // "Create from clipboard" dialog. `kind` distinguishes between system clipboard text
   // (editable in a textarea) and an image blob (rendered as a preview, name editable).
   const [clipboardCreateDialog, setClipboardCreateDialog] = useState<{
@@ -678,6 +741,23 @@ export default function DrivePage(): React.JSX.Element {
   const [mdEditing, setMdEditing] = useState<{
     entry: VfsEntry; rel: string; initialContent: string; saving: boolean;
   } | null>(null);
+  // MJD editor — opens in the same right-side preview slot as MdEditor.
+  //   mode='def'  → MjdVfsLoader edits the .mjd schema (data path omitted)
+  //   mode='data' → MjdVfsLoader edits sibling .data.json against the .mjd
+  // mjdPath / dataPath are FULL backend paths (`/data/Minis/Users/{u}/drive/...`)
+  // — that's what RemoteFS expects. `rel` keeps the drive-relative form for UI.
+  const [mjdEditing, setMjdEditing] = useState<{
+    entry: VfsEntry; rel: string; mjdPath: string; dataPath?: string; mode: MjdMode;
+  } | null>(null);
+  // Singleton RemoteFS — MjdVfsLoader expects a FileSystemProvider. Token
+  // updates propagate via setToken below so logout/login doesn't strand
+  // the editor on a stale credential.
+  const mjdFs = useMemo(
+    () => new RemoteFS({ baseUrl: '/api/vfs', token: token ?? undefined }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  useEffect(() => { mjdFs.setToken(token ?? undefined); }, [token, mjdFs]);
   // True → right panel takes the full canvas, sidebar (file list) is hidden.
   // Auto-resets to false whenever the right panel closes.
   const [panelFullscreen, setPanelFullscreen] = useState(false);
@@ -739,7 +819,7 @@ export default function DrivePage(): React.JSX.Element {
   // to hold every action button — collapse copy/edit/download into a kebab menu.
   const isCompact = useMediaQuery(theme.breakpoints.down('md'));
   const [viewActionsMenu, setViewActionsMenu] = useState<HTMLElement | null>(null);
-  const panelOpen = !!(viewing || mdEditing);
+  const panelOpen = !!(viewing || mdEditing || mjdEditing);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
 
@@ -896,7 +976,9 @@ export default function DrivePage(): React.JSX.Element {
     }
     setCwd(folder);
     const entry: VfsEntry = { name: fileName, type: FILE_TYPE };
-    if (isMdEditable(fileName)) {
+    if (isMjdEditable(fileName)) {
+      openInMjdEditor(entry, rel);
+    } else if (isMdEditable(fileName)) {
       await openInMdEditorRef.current(entry, rel);
     } else {
       // Inline read → setViewing (same as double-click on a file row).
@@ -969,6 +1051,10 @@ export default function DrivePage(): React.JSX.Element {
     // populated later in the file; calling through the ref avoids the TDZ
     // cycle that would happen if we tried to depend on `openInMdEditor`
     // directly here.
+    if (isMjdEditable(entry.name)) {
+      openInMjdEditor(entry);
+      return;
+    }
     if (isMdEditable(entry.name)) {
       void openInMdEditorRef.current(entry);
       return;
@@ -1149,11 +1235,75 @@ export default function DrivePage(): React.JSX.Element {
       const json = await r.json() as { data?: string };
       const content = base64ToText(json.data ?? '');
       setViewing(null);          // swap from preview → editor
+      setMjdEditing(null);       // mutually exclusive with MJD editor
       setMdEditing({ entry, rel, initialContent: content, saving: false });
     } catch (err) {
       toast((err as Error).message, 'error');
     }
   }, [userName, cwd, isWide, toast]);
+
+  /** Drive-relative → backend full path (`/data/Minis/Users/{u}/drive/...`).
+   *  RemoteFS wants the absolute form; the URL bar shows the relative one. */
+  const driveToFullPath = useCallback((rel: string) => {
+    return `/data/Minis/Users/${userName}/drive/${rel}`;
+  }, [userName]);
+
+  /** Open a .mjd / .data.json file in the right-side MJD editor panel.
+   *  - `.mjd`        → mode='def', dataPath is the sibling (`.data.json`).
+   *  - `.data.json`  → mode='data'. If the file starts with `{"$mjd": "..."}`
+   *                    we use THAT path as the schema (lets a data file
+   *                    point at a `.mjd` with a completely different name
+   *                    in any directory). Otherwise fall back to the
+   *                    same-name sibling for backward compat. */
+  const openInMjdEditor = useCallback(async (entry: VfsEntry, relOverride?: string) => {
+    const rel = relOverride ?? (cwd ? `${cwd}/${entry.name}` : entry.name);
+    const mode = getMjdMode(entry.name);
+    if (!mode) return;
+    const fullPath = driveToFullPath(rel);
+    let mjdPath: string;
+    let dataPath: string | undefined;
+    if (mode === 'def') {
+      mjdPath  = fullPath;
+      // Convention: data file is sibling with .data.json suffix replacing .mjd
+      dataPath = fullPath.replace(/\.mjd$/i, '.data.json');
+    } else {
+      // .data.json — probe `$mjd` envelope. We do this before mounting the
+      // editor so MjdVfsLoader receives the right schema path on first
+      // render (no flicker / no fallback-and-swap).
+      dataPath = fullPath;
+      let linkedMjd: string | null = null;
+      try {
+        const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+        if (!r.ok) {
+          // eslint-disable-next-line no-console
+          console.warn(`[Drive.openInMjdEditor] readFile ${rel} → HTTP ${r.status}; falling back to sibling .mjd`);
+        } else {
+          const j: { data?: string } = await r.json();
+          // UTF-8-safe decode — plain atob() on bytes that happen to be
+          // multi-byte UTF-8 produces latin1 garbage. The values we care
+          // about ($mjd path) are ASCII, but $data content can carry
+          // accents and we don't want to crash JSON.parse on garbage.
+          const text = j.data ? base64ToText(j.data) : '';
+          if (text) {
+            const parsed = JSON.parse(text) as { $mjd?: unknown };
+            if (typeof parsed.$mjd === 'string' && parsed.$mjd) {
+              linkedMjd = parsed.$mjd;
+            } else {
+              // eslint-disable-next-line no-console
+              console.warn(`[Drive.openInMjdEditor] ${rel}: no $mjd field in file — using sibling .mjd. Wrap the data in { "$mjd": "...", "$data": {...} } to point at any schema.`);
+            }
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[Drive.openInMjdEditor] failed to probe $mjd in ${rel}:`, err);
+      }
+      mjdPath = linkedMjd ?? fullPath.replace(/\.data\.json$/i, '.mjd');
+    }
+    setViewing(null);
+    setMdEditing(null);
+    setMjdEditing({ entry, rel, mjdPath, dataPath, mode });
+  }, [cwd, driveToFullPath]);
 
   /** Switch the right panel from MdEditor (WYSIWYG) to Monaco showing the
    *  raw markdown source. Lets users tweak code-fence params, edit tables
@@ -1210,6 +1360,7 @@ export default function DrivePage(): React.JSX.Element {
   const closeRightPanel = useCallback(() => {
     setViewing(null);
     setMdEditing(null);
+    setMjdEditing(null);
     setPanelFullscreen(false);
   }, []);
 
@@ -1295,11 +1446,15 @@ export default function DrivePage(): React.JSX.Element {
 
   const doCreateEmpty = useCallback(async () => {
     if (!newFileDialog) return;
-    const name = newFileDialog.name.trim();
-    if (!name || name.includes('/')) {
+    const rawName = newFileDialog.name.trim();
+    if (!rawName || rawName.includes('/')) {
       toast('Nazwa nie może być pusta ani zawierać "/"', 'error');
       return;
     }
+    // Apply the preset's extension if the user didn't already include it —
+    // typing "config" with the YAML preset selected creates "config.yaml".
+    const preset = FILE_PRESETS.find(p => p.key === newFileDialog.presetKey) ?? FILE_PRESETS[0];
+    const name = applyExtension(rawName, preset.extension);
     try {
       const rel = cwd ? `${cwd}/${name}` : name;
       const exists = await vfsStat(userName, rel);
@@ -1754,7 +1909,12 @@ export default function DrivePage(): React.JSX.Element {
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
+    // 100% of the fullBleed Layout main — Layout sets a flex column with
+    // a static AppBar above us, so the remaining flex slot already has the
+    // exact "viewport minus topbar" height. Hard-coding `calc(100vh - 64px)`
+    // previously overshot when the topbar wasn't 64px (macOS dense toolbar,
+    // banner injection, etc.) — page wound up taller than the viewport.
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
       {showSidebar && (
       <Box sx={{
@@ -1825,7 +1985,7 @@ export default function DrivePage(): React.JSX.Element {
           <ListItemIcon><CreateNewFolderIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Nowy katalog" />
         </MenuItem>
-        <MenuItem onClick={() => { setNewFileDialog({ name: 'untitled.md' }); setActionsMenu(null); }}>
+        <MenuItem onClick={() => { setNewFileDialog({ name: 'notatka.md', presetKey: 'md' }); setActionsMenu(null); }}>
           <ListItemIcon><NoteAddIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Nowy pusty plik" secondary="Z rozszerzeniem (np. .md, .json)" />
         </MenuItem>
@@ -2166,7 +2326,12 @@ export default function DrivePage(): React.JSX.Element {
               flex: 1, minWidth: 0,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {viewing?.entry.name ?? mdEditing?.entry.name}
+              {viewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name}
+              {mjdEditing && (
+                <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                  · {mjdEditing.mode === 'def' ? 'schemat MJD' : 'dane MJD'}
+                </Typography>
+              )}
             </Typography>
             {viewing && !isCompact && (
               <Chip size="small" variant="outlined" label={viewing.mime} />
@@ -2223,18 +2388,24 @@ export default function DrivePage(): React.JSX.Element {
                 sx={{ height: 22 }}
               />
             )}
-            {viewing && !isCompact && isMdEditable(viewing.entry.name) && (
-              <Tooltip title="Edytuj w MdEditor">
+            {/* Markdown view toggle — pair of symmetric buttons that swap
+                the panel between WYSIWYG (MdEditor / TipTap) and raw source
+                (Monaco with markdown syntax highlighting). Previously hidden
+                on compact viewports (`!isCompact`), but switching between
+                editors is the most-requested action when authoring on a
+                phone — there's nowhere else to surface it on mobile (no
+                kebab menu entry yet either), so we now keep them visible
+                in both layouts. Same icon size as the rest of the toolbar
+                keeps the row from wrapping on a narrow screen. */}
+            {viewing && isMdEditable(viewing.entry.name) && (
+              <Tooltip title="Otwórz w edytorze Markdown (WYSIWYG)">
                 <IconButton size="small" onClick={() => void openInMdEditor(viewing.entry)}>
                   <EditNoteIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
-            {/* When MdEditor is open, surface the "raw source" escape hatch —
-                opens the same file in Monaco with markdown syntax highlighting.
-                Symmetrical to the WYSIWYG-from-viewer button above. */}
-            {mdEditing && !isCompact && (
-              <Tooltip title="Edytuj kod źródłowy (Markdown w Monaco)">
+            {mdEditing && (
+              <Tooltip title="Otwórz kod źródłowy (Markdown w edytorze tekstu)">
                 <IconButton size="small" onClick={() => void openMdAsRawSource(mdEditing.entry)}>
                   <CodeIcon fontSize="small" />
                 </IconButton>
@@ -2282,6 +2453,23 @@ export default function DrivePage(): React.JSX.Element {
                   onSave={saveMdContent}
                   autoSaveDelay={2000}              /* faster than the default 30s */
                   filePath={`drive/${mdEditing.rel}`}  /* prefixed so api.file (userBase-relative) and api.scripts.runInParentsByTag find the same file */
+                />
+              </Box>
+            )}
+            {mjdEditing && (
+              // ONE scroll, here on the wrapper. Previously we also passed
+              // `height="100%"` down which made MjdVfsLoader install its own
+              // overflow:auto on top — two nested scroll contexts meant the
+              // editor's long content would push past the panel and the page
+              // would scroll instead of the panel. Letting the inner content
+              // size naturally + scrolling the wrapper keeps the editor
+              // contained inside the right-side panel as expected.
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <MjdVfsLoader
+                  key={mjdEditing.rel}
+                  provider={mjdFs}
+                  mjdPath={mjdEditing.mjdPath}
+                  dataPath={mjdEditing.mode === 'data' ? mjdEditing.dataPath : undefined}
                 />
               </Box>
             )}
@@ -2382,7 +2570,9 @@ export default function DrivePage(): React.JSX.Element {
           const synthetic: VfsEntry = { name, type: FILE_TYPE };
           const targetDir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
           if (targetDir !== cwd) setCwd(targetDir);
-          if (isMdEditable(name)) {
+          if (isMjdEditable(name)) {
+            openInMjdEditor(synthetic, rel);
+          } else if (isMdEditable(name)) {
             // Pass `rel` as override so openInMdEditor doesn't re-derive it
             // from `cwd + name` — cwd may not have committed yet from the
             // setCwd call above (React schedules state updates).
@@ -2636,23 +2826,64 @@ export default function DrivePage(): React.JSX.Element {
       )}
 
       {/* New empty file dialog */}
-      {newFileDialog && (
+      {newFileDialog && (() => {
+        const currentPreset = FILE_PRESETS.find(p => p.key === newFileDialog.presetKey) ?? FILE_PRESETS[0];
+        // Live preview of the name that will actually land on disk —
+        // matches what `doCreateEmpty` will produce.
+        const previewName = newFileDialog.name.trim()
+          ? applyExtension(newFileDialog.name.trim(), currentPreset.extension)
+          : '';
+        return (
         <Dialog open onClose={() => setNewFileDialog(null)} maxWidth="xs" fullWidth>
           <DialogTitle>Nowy pusty plik</DialogTitle>
           <DialogContent>
+            <FormControl fullWidth size="small" margin="normal">
+              <InputLabel id="new-file-preset-label">Typ pliku</InputLabel>
+              <Select
+                labelId="new-file-preset-label"
+                label="Typ pliku"
+                value={newFileDialog.presetKey}
+                onChange={(e) => {
+                  const nextKey = e.target.value;
+                  const nextPreset = FILE_PRESETS.find(p => p.key === nextKey) ?? FILE_PRESETS[0];
+                  // Auto-update name to the new preset's default IF the user
+                  // hasn't typed something custom (still on a known default).
+                  // Otherwise keep their text — they'll get auto-extension on save.
+                  const wasDefault = FILE_PRESETS.some(p => p.defaultName === newFileDialog.name);
+                  setNewFileDialog({
+                    presetKey: nextKey,
+                    name: wasDefault ? nextPreset.defaultName : newFileDialog.name,
+                  });
+                }}
+              >
+                {FILE_PRESETS.map(p => (
+                  <MenuItem key={p.key} value={p.key}>{p.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
             <TextField autoFocus fullWidth label="Nazwa pliku" value={newFileDialog.name}
-              onChange={(e) => setNewFileDialog({ name: e.target.value })}
+              onChange={(e) => setNewFileDialog({ ...newFileDialog, name: e.target.value })}
               onKeyDown={(e) => { if (e.key === 'Enter') void doCreateEmpty(); }}
               margin="normal"
-              helperText="Z rozszerzeniem, np. notes.md, todo.txt, data.json"
+              helperText={
+                currentPreset.extension
+                  ? `Rozszerzenie ${currentPreset.extension} zostanie dodane automatycznie jeśli go nie wpiszesz.`
+                  : 'Wpisz pełną nazwę z rozszerzeniem.'
+              }
             />
+            {previewName && previewName !== newFileDialog.name && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                Końcowa nazwa: <code>{previewName}</code>
+              </Typography>
+            )}
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setNewFileDialog(null)}>Anuluj</Button>
             <Button variant="contained" disabled={!newFileDialog.name.trim()} onClick={doCreateEmpty}>Utwórz</Button>
           </DialogActions>
         </Dialog>
-      )}
+        );
+      })()}
 
       {/* Create-from-clipboard dialog */}
       {clipboardCreateDialog && (
