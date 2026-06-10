@@ -158,6 +158,36 @@ declare const auth: ScriptAuth;
 /** Authenticated fetch with auto JSON parsing. See {@link ScriptHttp}. */
 declare const http: ScriptHttp;
 
+/** Pojedynczy credential (metadane, bez wartości). global=publiczny. */
+interface CredentialEntry { key: string; type: string; name: string; global: boolean; updatedAt: number; }
+
+/** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
+interface CredentialsApi {
+  /** Lista WŁASNYCH credentiali (bez wartości). */
+  list(): Promise<CredentialEntry[]>;
+  /**
+   * Odczyt wartości po nazwie. null gdy brak / brak dostępu.
+   * @param type  opcjonalny typ 'password'|'token'|'other'
+   * @param owner opcjonalny właściciel — odczyt CUDZEGO sekretu (tylko gdy globalny;
+   *   dla cudzego owner-a podaj też \`type\`). Domyślnie = zalogowany użytkownik.
+   */
+  get(name: string, type?: string, owner?: string): Promise<string | null>;
+  /** Zapis/aktualizacja. \`global=true\` → publiczny (dostępny dla wszystkich). Domyślny typ 'other'. */
+  set(name: string, value: string, type?: string, global?: boolean): Promise<void>;
+  /** Usunięcie WŁASNEGO. Zwraca true gdy coś usunięto. */
+  delete(name: string, type?: string): Promise<boolean>;
+}
+
+/**
+ * Dostęp do zaszyfrowanych credentiali użytkownika (Settings → Sekrety).
+ * @example
+ *   // własny sekret:
+ *   const apiKey = await secrets.get('GitHub', 'token');
+ *   // globalny sekret innego użytkownika (działa też bez logowania):
+ *   const shared = await secrets.get('WeatherKey', 'token', 'marcin');
+ */
+declare const secrets: CredentialsApi;
+
 /** Imperative output stream. See {@link DisplayApi}. */
 declare const display: DisplayApi;
 

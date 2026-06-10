@@ -1,4 +1,7 @@
 import React from 'react';
+import type { CredentialsApi } from '../../services/credentialsApi';
+
+export type { CredentialsApi, CredentialEntry } from '../../services/credentialsApi';
 
 // ─── Output marker classes ───────────────────────────────────────────────────
 
@@ -73,6 +76,8 @@ export interface ScriptHttp {
 export interface ScriptContext {
   auth: ScriptAuth;
   http: ScriptHttp;
+  /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
+  secrets: CredentialsApi;
   md: typeof md;
   table: typeof table;
   reactive: typeof reactive;

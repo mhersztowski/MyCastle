@@ -432,6 +432,26 @@ class MinisApiService {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/api-keys/${encodeURIComponent(keyId)}`);
   }
 
+  // Secrets / credentials — server-side, encrypted at rest (AES-256-GCM).
+  // Backed by the per-user `plugin-secrets` store, scoped by a namespace.
+  async listSecrets(userName: string, namespace: string): Promise<Array<{ key: string; shared: boolean; updatedAt: number }>> {
+    const data = await this.request<{ items: Array<{ key: string; shared: boolean; updatedAt: number }> }>(
+      'GET', `/users/${encodeURIComponent(userName)}/plugin-secrets/${encodeURIComponent(namespace)}`);
+    return data.items;
+  }
+
+  async getSecret(userName: string, namespace: string, key: string): Promise<{ key: string; value: string; shared: boolean }> {
+    return this.request('GET', `/users/${encodeURIComponent(userName)}/plugin-secrets/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`);
+  }
+
+  async setSecret(userName: string, namespace: string, key: string, value: string, shared = false): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/plugin-secrets/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`, { value, shared });
+  }
+
+  async deleteSecret(userName: string, namespace: string, key: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/plugin-secrets/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`);
+  }
+
   // Arduino
   async getArduinoBoards(): Promise<Array<{ fqbn: string; name: string }>> {
     const data = await this.request<{ items: Array<{ fqbn: string; name: string }> }>('GET', '/arduino/boards');

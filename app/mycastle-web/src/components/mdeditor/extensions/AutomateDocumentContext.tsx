@@ -9,6 +9,7 @@ import { AutomateSandbox } from '../../../modules/automate/engine/AutomateSandbo
 import { preloadLibrariesForCode } from './automateLibraries';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
+import { useAuth } from '../../../modules/auth';
 
 // Typy danych wyjsciowych display
 //
@@ -84,6 +85,10 @@ interface AutomateDocumentProviderProps {
 export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> = ({ children, documentPath }) => {
   const { dataSource } = useFilesystem();
   const { notify } = useNotification();
+  const { currentUser } = useAuth();
+  // userName w refie — api jest tworzone raz, a closure czyta zawsze aktualną wartość.
+  const userNameRef = useRef<string | null>(currentUser?.name ?? null);
+  useEffect(() => { userNameRef.current = currentUser?.name ?? null; }, [currentUser]);
   const variablesRef = useRef<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<Map<string, ScriptBlockState>>(new Map());
   const blockOrderRef = useRef<string[]>([]);
@@ -102,6 +107,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         dataSource,
         variablesRef.current,
         () => documentPathRef.current,
+        () => userNameRef.current,
       );
     }
     return apiRef.current;

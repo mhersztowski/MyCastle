@@ -12,6 +12,7 @@ import dayjs from 'dayjs';
 import { aiService } from '../../ai';
 import type { AiChatMessage, AiChatResponse } from '../../ai';
 import { speechService } from '../../speech';
+import { makeCredentialsApi, type CredentialsApi } from '../../../services/credentialsApi';
 
 // Names match what the IntelliSense stub exposes to script authors as
 // `FileStat` / `FileEntry`. Kept un-exported to avoid colliding with the
@@ -46,6 +47,8 @@ interface FileEntry {
 }
 
 export interface AutomateSystemApiInterface {
+  /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
+  secrets: CredentialsApi;
   file: {
     // ── Read / write ──
     /** Wczytaj plik tekstowy. Rzuca błąd gdy nie istnieje. */
@@ -259,14 +262,19 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
    *  (api lives outside MdEditor — flow/designer surfaces). */
   private _getDocumentPath: () => string | undefined;
 
+  /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
+  secrets: CredentialsApi;
+
   constructor(
     dataSource: DataSource,
     variables: Record<string, unknown>,
     getDocumentPath: () => string | undefined = () => undefined,
+    getUserName: () => string | null = () => null,
   ) {
     this._dataSource = dataSource;
     this._variables = variables;
     this._getDocumentPath = getDocumentPath;
+    this.secrets = makeCredentialsApi(getUserName);
   }
 
   get logs(): LogEntry[] {

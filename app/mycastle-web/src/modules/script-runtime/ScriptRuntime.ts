@@ -8,6 +8,7 @@ import {
   reactive,
 } from './types';
 import { pluginRegistry } from '../web-plugins';
+import { makeCredentialsApi } from '../../services/credentialsApi';
 
 export function buildScriptContext(auth: ScriptAuth): ScriptContext {
   const headers = () => ({
@@ -41,8 +42,10 @@ export function buildScriptContext(auth: ScriptAuth): ScriptContext {
     },
   };
 
+  const secrets = makeCredentialsApi(() => auth.currentUser);
+
   // Spread registered plugin namespaces (iot, map, timeline, flow …) into context
-  return { auth, http, md, table, reactive, ...pluginRegistry.buildContext() };
+  return { auth, http, secrets, md, table, reactive, ...pluginRegistry.buildContext() };
 }
 
 // AsyncFunction constructor — lets scripts use await at top level

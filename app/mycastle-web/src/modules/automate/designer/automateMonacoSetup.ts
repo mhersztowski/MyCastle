@@ -704,6 +704,25 @@ interface SystemApi {
    *  w plikach .md w drive użytkownika — adresowane przez tagi (Ustawienia
    *  skryptu → Tagi). */
   scripts: ScriptsApi;
+
+  /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
+  secrets: SecretsApi;
+}
+
+/** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
+interface SecretsApi {
+  /** Lista WŁASNYCH credentiali (metadane, bez wartości). global=publiczny. */
+  list(): Promise<Array<{ key: string; type: string; name: string; global: boolean; updatedAt: number }>>;
+  /**
+   * Odczyt wartości po nazwie. null gdy brak / brak dostępu.
+   * @param owner opcjonalny właściciel — odczyt CUDZEGO sekretu (tylko gdy globalny;
+   *   dla cudzego owner-a podaj też typ). Domyślnie = zalogowany użytkownik.
+   */
+  get(name: string, type?: string, owner?: string): Promise<string | null>;
+  /** Zapis/aktualizacja. global=true → publiczny (dostępny dla wszystkich). Domyślny typ 'other'. */
+  set(name: string, value: string, type?: string, global?: boolean): Promise<void>;
+  /** Usunięcie WŁASNEGO. Zwraca true gdy coś usunięto. */
+  delete(name: string, type?: string): Promise<boolean>;
 }
 
 /**
