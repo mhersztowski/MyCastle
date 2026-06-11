@@ -38,6 +38,7 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LabelIcon from '@mui/icons-material/Label';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -59,6 +60,8 @@ const MdScriptHelpDialog = lazy(() => import('./MdScriptHelpDialog'));
 const AutomateIncludeFileDialog = lazy(() => import('./AutomateIncludeFileDialog'));
 
 import { setupAutomateMonaco, mergeExtraLibs } from '../../../modules/automate/designer/automateMonacoSetup';
+import { editorOverlay } from '../editorOverlayState';
+import { MonacoSelectionHandles } from '../../../pages/drive/MonacoSelectionHandles';
 import { LIBRARIES, parseLibrariesFromCode, preloadLibrariesForCode } from './automateLibraries';
 
 // Lazy — picker only loads when the user clicks "Użyj biblioteki".
@@ -403,6 +406,12 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
 
   const [code, setCode] = useState(node.attrs.code as string || '');
   const [editorDialogOpen, setEditorDialogOpen] = useState(false);
+  // Suppress the MdEditor bubble menu while the fullscreen script editor is open.
+  useEffect(() => {
+    if (!editorDialogOpen) return;
+    editorOverlay.enter();
+    return () => editorOverlay.exit();
+  }, [editorDialogOpen]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
@@ -422,6 +431,9 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   // insert text at the actual cursor position (rather than blind-appending
   // to `dialogCode`, which would lose cursor context the user just set).
   const monacoEditorRef = useRef<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
+  // Editor instance held in state (not just the ref) so MonacoSelectionHandles
+  // re-renders and mounts its touch pins once the editor is ready.
+  const [monacoEditorInstance, setMonacoEditorInstance] = useState<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
   // The full Monaco namespace — needed to re-register library .d.ts stubs
   // when the user types a `// @library:` marker into the editor by hand
   // (or pastes code that already has one).
@@ -651,6 +663,37 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     editor.focus();
     // Synchronise our React mirror — onChange will fire too, but updating
     // here avoids a one-frame race where dialogCode is stale.
+    setDialogCode(model.getValue());
+  }, []);
+
+  /** Paste from the system clipboard into the editor at the cursor.
+   *  Monaco's built-in paste is unreliable on mobile (Android) — the hidden
+   *  textarea often never receives the clipboard event — so we read the
+   *  clipboard explicitly and insert via executeEdits. Falls back to a prompt
+   *  when the Clipboard API is blocked (no permission / insecure context). */
+  const handlePasteFromClipboard = useCallback(async () => {
+    let text = '';
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      const manual = window.prompt('Schowek niedostępny — wklej tekst ręcznie:', '');
+      if (manual == null) return;
+      text = manual;
+    }
+    if (!text) return;
+    const editor = monacoEditorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) { setDialogCode(prev => prev + text); return; }
+    // Insert at the current selection, or at end-of-document if the user
+    // hasn't placed a cursor yet (common right after opening on mobile).
+    const sel = editor.getSelection();
+    const full = model.getFullModelRange();
+    const range = sel ?? {
+      startLineNumber: full.endLineNumber, startColumn: full.endColumn,
+      endLineNumber: full.endLineNumber, endColumn: full.endColumn,
+    };
+    editor.executeEdits('automate-paste', [{ range, text, forceMoveMarkers: true }]);
+    editor.focus();
     setDialogCode(model.getValue());
   }, []);
 
@@ -1024,6 +1067,11 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           {/* "Include file" button — pulls from drive/mdscript/, inserts at
               cursor. Disabled when we don't yet know the user (rare race
               during initial auth load). */}
+          <Tooltip title="Wklej ze schowka (działa na mobile)">
+            <IconButton size="small" onClick={() => void handlePasteFromClipboard()}>
+              <ContentPasteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Dołącz plik z drive/mdscript/">
             <span>
               <IconButton size="small" onClick={() => setIncludeOpen(true)} disabled={!userName}>
@@ -1115,6 +1163,10 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                 // re-register .d.ts stubs without going through beforeMount.
                 monacoEditorRef.current = editor;
                 monacoRef.current = monaco;
+                // Expose the instance to React so the touch selection handles
+                // (Android-style drag pins) mount. Cleared on dispose.
+                setMonacoEditorInstance(editor);
+                editor.onDidDispose(() => setMonacoEditorInstance(null));
 
                 // Register .d.ts stubs for any `// @library: foo` markers
                 // already in the script so completions on `THREE.…` etc.
@@ -1174,6 +1226,10 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               theme="vs-dark"
             />
           </Box>
+
+          {/* Touch-friendly draggable selection handles (Android-style pins) —
+              the same component used by the Drive Monaco editor. */}
+          <MonacoSelectionHandles editor={monacoEditorInstance} />
 
           {/* Resizer — only visible when the output panel is open. */}
           {outputPanelVisible && (

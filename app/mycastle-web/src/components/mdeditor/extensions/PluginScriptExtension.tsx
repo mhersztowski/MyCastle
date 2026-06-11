@@ -48,6 +48,7 @@ const MdScriptHelpDialog = lazy(() => import('./MdScriptHelpDialog'));
 
 import { useAuth } from '../../../modules/auth/AuthContext';
 import { usePlugins } from '../../../modules/web-plugins';
+import { editorOverlay } from '../editorOverlayState';
 import {
   buildScriptContext,
   executeScript,
@@ -181,6 +182,12 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
   const [labelEditing, setLabelEditing] = useState(false);
   const [labelDraft, setLabelDraft] = useState<string>(node.attrs.label as string || 'Script');
   const [monacoOpen, setMonacoOpen] = useState(false);
+  // Suppress the MdEditor bubble menu while the fullscreen script editor is open.
+  useEffect(() => {
+    if (!monacoOpen) return;
+    editorOverlay.enter();
+    return () => editorOverlay.exit();
+  }, [monacoOpen]);
   const [monacoCode, setMonacoCode] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
 

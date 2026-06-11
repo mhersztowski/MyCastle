@@ -84,6 +84,7 @@ import EventDialog from './EventDialog';
 import { EventBlock } from './extensions/EventBlockExtension';
 import TodayNowMarker from './TodayNowMarker';
 import { parseDateFromPath } from './eventTemplates';
+import { editorOverlay } from './editorOverlayState';
 import { InlineMath, MathBlock } from './extensions/MathExtension';
 import { EditableImage } from './extensions/ImageExtension';
 import { AudioEmbed } from './extensions/AudioExtension';
@@ -241,6 +242,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // because onSelectionUpdate populates it for potential future overlays.
   const [, setBubbleMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showBubbleMenu, setShowBubbleMenu] = useState(false);
+  // True while a block's fullscreen script editor (Automate / Plugin Script)
+  // is open — we suppress the bubble menu so it doesn't float over the dialog.
+  const [overlayActive, setOverlayActive] = useState(editorOverlay.active);
+  useEffect(() => editorOverlay.subscribe(setOverlayActive), []);
   // Spellcheck — relies on the browser's native dictionary (the same one
   // OS-level system uses), driven by the contenteditable's `spellcheck`
   // + `lang` attributes. We persist the choice in localStorage so the
@@ -1227,7 +1232,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
           screen size, carries the COMPLETE formatting toolbar hierarchy.
           With the on-screen keyboard up it climbs above the keyboard via
           keyboardOffset; otherwise it sits flush with the safe-area inset. */}
-      {showBubbleMenu && ReactDOM.createPortal(
+      {showBubbleMenu && !overlayActive && ReactDOM.createPortal(
         <Paper elevation={6} className="md-editor-bubble-menu"
           sx={{
             position: 'fixed',
