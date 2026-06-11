@@ -1358,18 +1358,20 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               </Tooltip>
             </Box>
 
-            {/* Output tab — display.* items, return value, error alert. */}
+            {/* Error banner — ALWAYS shown above the tab content (not gated by
+                the active tab or hasOutput), so a failure is never hidden no
+                matter which tab the author is on. */}
+            {outputPanelVisible && error && (
+              <Alert severity="error" sx={{ borderRadius: 0, py: 0.25 }}>{error}</Alert>
+            )}
+
+            {/* Output tab — display.* items, return value. */}
             {outputPanelVisible && dialogTab === 'output' && (
               <Box sx={{ flex: 1, overflow: 'auto' }}>
                 {!hasOutput && (
                   <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
                     Brak wyników. Uruchom skrypt aby zobaczyć output (display.*, return value).
                   </Typography>
-                )}
-                {error && (
-                  <Alert severity="error" sx={{ borderRadius: 0, py: 0.25 }}>
-                    {error}
-                  </Alert>
                 )}
                 <DisplayOutput items={output} />
                 {result !== undefined && output.length === 0 && !error && (

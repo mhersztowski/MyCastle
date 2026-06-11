@@ -12,6 +12,9 @@
  * Autoryzacja: nagłówek `Authorization: Bearer <JWT>`.
  *
  * Użycie:
+ *   // W zalogowanej aplikacji (np. skrypt w edytorze Markdown) — bez argumentów:
+ *   const client = new ApiClient();           // userName + token z sesji
+ *   // Jawnie:
  *   const client = new ApiClient({ userName: 'marcin', token });
  *   // baseUrl pusty = ten sam origin (np. produkcja). Dla cross-origin:
  *   // new ApiClient({ baseUrl: 'https://mycastle.hersztowski.org', userName, token })
@@ -31,15 +34,35 @@ function fromBase64(b64) {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * Best-effort odczyt sesji zalogowanego użytkownika MyCastle z localStorage.
+ * Pozwala używać `new ApiClient()` bez ręcznego userName/token w aplikacji
+ * (np. w blokach skryptów edytora Markdown). Format: { user: { name }, token }.
+ */
+function resolveSession() {
+  try {
+    const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('minis_current_user') : null;
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    return { userName: s?.user?.name ?? null, token: s?.token ?? null };
+  } catch {
+    return null;
+  }
+}
+
 export class ApiClient {
   /**
    * @param {{ baseUrl?: string, userName: string, token?: string }} opts
    */
   constructor({ baseUrl = '', userName, token } = {}) {
-    if (!userName) throw new Error('ApiClient: userName is required');
+    const session = resolveSession();
     this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.userName = userName;
-    this.token = token;
+    // Brak jawnych wartości → bierz z sesji zalogowanego użytkownika.
+    this.userName = userName ?? session?.userName ?? null;
+    this.token = token ?? session?.token ?? undefined;
+    if (!this.userName) {
+      throw new Error('ApiClient: brak userName — zaloguj się lub podaj { userName, token }');
+    }
   }
 
   setToken(token) { this.token = token; return this; }

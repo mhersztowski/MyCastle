@@ -2739,6 +2739,18 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText>Kopiuj link publiczny</ListItemText>
           </MenuItem>
         )}
+        <MenuItem onClick={() => {
+          // Ścieżka w formacie używanym przez api.file w skryptach automatyzacji
+          // (userBase-relative: `drive/{rel}`), nie backendowa /data/Minis/Users/...
+          const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
+          const apiPath = `drive/${rel}`;
+          navigator.clipboard.writeText(apiPath);
+          toast(`Skopiowano ścieżkę: ${apiPath}`);
+          setMenuFor(null);
+        }}>
+          <ListItemIcon><CodeIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Path" secondary="Ścieżka dla api.file (skrypty)" />
+        </MenuItem>
         <MenuItem onClick={() => { copyToClipboard(menuFor!.entry, 'copy'); setMenuFor(null); }}>
           <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Kopiuj</ListItemText>
