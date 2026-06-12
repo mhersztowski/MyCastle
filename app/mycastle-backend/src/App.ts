@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import type { FileChangeEvent } from '@mhersztowski/core-backend';
 import { OcrService } from './modules/ocr/OcrService';
 import { AutomateService } from './modules/automate';
-import { SchedulerService } from './modules/scheduler';
+import { SchedulerService, DriveScriptScheduler } from './modules/scheduler';
 import { MycastleHttpServer } from './MycastleHttpServer.js';
 import { IotService } from './modules/iot/IotService.js';
 import { TerminalService } from './modules/terminal/TerminalService.js';
@@ -49,6 +49,7 @@ export class App {
   readonly dataSource: DataSource;
   readonly automateService: AutomateService;
   readonly schedulerService: SchedulerService;
+  readonly driveScriptScheduler: DriveScriptScheduler;
   readonly httpServer: MycastleHttpServer;
   readonly iotService: IotService;
   readonly arduinoService: ArduinoService;
@@ -126,6 +127,7 @@ export class App {
     this.pluginService = new PluginService(config.rootDir);
     this.backendPluginService = new BackendPluginService(config.rootDir);
     this.secretsService = new SecretsService(config.rootDir);
+    this.driveScriptScheduler = new DriveScriptScheduler(config.rootDir);
 
     this.httpServer = new MycastleHttpServer(
       config.httpPort,
@@ -143,6 +145,7 @@ export class App {
       this.backendPluginService,
       this.secretsService,
       this.arduinoWasmBuilder,
+      this.driveScriptScheduler,
     );
   }
 
@@ -182,6 +185,11 @@ export class App {
 
     await this.schedulerService.initialize();
     console.log(`SchedulerService initialized: ${this.schedulerService.getActiveJobs().length} active schedules`);
+
+    await this.driveScriptScheduler.loadAllUsers();
+    console.log(`DriveScriptScheduler initialized: ${this.driveScriptScheduler.activeCount()} active cron scripts`);
+    const startupRan = await this.driveScriptScheduler.runStartupAll();
+    if (startupRan > 0) console.log(`DriveScriptScheduler: ran ${startupRan} startup script(s)`);
 
     // OCR initialization is non-blocking
     try {
@@ -432,6 +440,7 @@ export class App {
     console.log('App shutting down...');
 
     this.schedulerService.shutdown();
+    this.driveScriptScheduler.shutdownAll();
 
     try {
       this.terminalService?.shutdown();

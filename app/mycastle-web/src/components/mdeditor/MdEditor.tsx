@@ -95,6 +95,7 @@ import { UIFormEmbed } from './extensions/UIFormExtension';
 import { FormEngineEmbed } from './extensions/FormEngineExtension';
 import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
 import { CadViewEmbed } from './extensions/CadViewExtension';
+import { WebEmbed } from './extensions/WebEmbedExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
 import { InfoMark, INFO_MARK_EDIT_EVENT, type InfoMarkEditEventDetail } from './extensions/InfoMarkExtension';
 import InfoMarkDialog from './extensions/InfoMarkDialog';
@@ -383,6 +384,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       FormEngineEmbed,
       AutomateFlowEmbed,
       CadViewEmbed,
+      WebEmbed,
       AutomateScriptBlock,
       PluginScriptBlock,
       InfoMark,

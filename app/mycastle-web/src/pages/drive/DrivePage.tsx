@@ -19,6 +19,7 @@ import {
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, LinearProgress,
   Link, ListItemIcon, ListItemText, Menu, MenuItem, Paper, Select, Snackbar, Stack, Table,
   TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
+  Switch, FormControlLabel,
 } from '@mui/material';
 import { MdEditor } from '@/components/mdeditor';
 import Editor from '@monaco-editor/react';
@@ -71,6 +72,9 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import SubjectIcon from '@mui/icons-material/Subject';
 import SaveIcon from '@mui/icons-material/Save';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CodeIcon from '@mui/icons-material/Code';
@@ -98,6 +102,31 @@ import { minisApi } from '../../services/MinisApiService';
 interface VfsEntry { name: string; type: 1 | 2; size?: number; mtime?: number }
 const FILE_TYPE = 1;
 const DIR_TYPE = 2;
+
+// navigator.clipboard is undefined outside a secure context (HTTP on a LAN IP,
+// which is how the app is reached on mobile) — so we fall back to the legacy
+// execCommand('copy') path, then to a manual prompt as a last resort.
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
 
 function authHeaders(): Record<string, string> {
   try {
@@ -257,6 +286,33 @@ async function saveFileProperties(userName: string, props: FileProperties): Prom
   // accents in tag names, file paths).
   const b64 = btoa(unescape(encodeURIComponent(text)));
   await vfsWriteFile(userName, FILE_PROPS_PATH, b64);
+}
+
+// ─── Cron schedules for backend JS scripts (Drive → Właściwości) ─────────────
+// Stored in `drive/.schedules.json`, keyed by drive-relative path:
+//   { "server/foo.mjs": { "cron": "0 * * * *", "enabled": true } }
+// The backend DriveScriptScheduler reads this file and runs `node {file}` on cron.
+const SCHEDULES_PATH = '.schedules.json';
+type DriveSchedules = Record<string, { cron: string; enabled: boolean; runAtStartup?: boolean }>;
+
+async function loadSchedules(userName: string): Promise<DriveSchedules> {
+  try {
+    const r = await fetch(apiUrl(userName, 'readFile', SCHEDULES_PATH), { headers: authHeaders() });
+    if (!r.ok) return {};
+    const j: { data?: string } = await r.json();
+    if (!j.data) return {};
+    const parsed = JSON.parse(decodeURIComponent(escape(atob(j.data)))) as DriveSchedules;
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch { return {}; }
+}
+
+async function saveSchedules(userName: string, schedules: DriveSchedules): Promise<void> {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(schedules, null, 2))));
+  await vfsWriteFile(userName, SCHEDULES_PATH, b64);
+  // Ask the backend to re-register this user's cron jobs from the new file.
+  await fetch(`/api/users/${encodeURIComponent(userName)}/drive/schedules/reload`, {
+    method: 'POST', headers: authHeaders(),
+  }).catch(() => {});
 }
 
 // ─── Full-text search (drive scan) ──────────────────────────────────────────
@@ -446,6 +502,10 @@ const isMdEditable = (name: string) => {
   const n = name.toLowerCase();
   return n.endsWith('.md') || n.endsWith('.txt') || n.endsWith('.markdown');
 };
+
+// Files runnable on the backend via `node {file}` (Drive → Run). Typically
+// placed under `drive/server/`, but any JS file may be run.
+const isRunnable = (name: string) => /\.(mjs|cjs|js)$/i.test(name);
 
 // ── MJD editor association ──────────────────────────────────────────────────
 // `.mjd`           → opens MjdDefEditor (schema editor)
@@ -930,6 +990,11 @@ export default function DrivePage(): React.JSX.Element {
   const [propsDialog, setPropsDialog] = useState<{ entry: VfsEntry; rel: string } | null>(null);
   const [propsDraftTags, setPropsDraftTags] = useState<string[]>([]);
   const [propsDraftTagInput, setPropsDraftTagInput] = useState('');
+  // Cron schedules (rel → {cron, enabled}); draft fields edited in Properties.
+  const [schedules, setSchedules] = useState<DriveSchedules>({});
+  const [propsDraftCron, setPropsDraftCron] = useState('');
+  const [propsDraftCronEnabled, setPropsDraftCronEnabled] = useState(false);
+  const [propsDraftStartup, setPropsDraftStartup] = useState(false);
 
   // Full-text search dialog — closed by default; opened from the
   // "Search" button in the header. Reset on close happens inside the
@@ -952,7 +1017,13 @@ export default function DrivePage(): React.JSX.Element {
   // to hold every action button — collapse copy/edit/download into a kebab menu.
   const isCompact = useMediaQuery(theme.breakpoints.down('md'));
   const [viewActionsMenu, setViewActionsMenu] = useState<HTMLElement | null>(null);
-  const panelOpen = !!(viewing || mdEditing || mjdEditing);
+  // Run-on-backend console state (Drive → Run). Declared here so panelOpen below
+  // can include it; the run/stop handlers live near closeRightPanel.
+  const [running, setRunning] = useState<{ rel: string; output: string; status: 'running' | 'done' | 'error'; kind: 'run' | 'install'; target: string } | null>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
+  // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
+  const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
+  const panelOpen = !!(viewing || mdEditing || mjdEditing || running || logsView);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
   const showAgent = isWide && agentOpen;
@@ -1016,6 +1087,9 @@ export default function DrivePage(): React.JSX.Element {
       .then((props) => { if (!cancelled) setFileProperties(props); })
       .catch((err) => console.warn('[Drive] fileProperties load failed:', err))
       .finally(() => { if (!cancelled) setFpLoaded(true); });
+    loadSchedules(userName)
+      .then((s) => { if (!cancelled) setSchedules(s); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [userName, fpLoaded]);
 
@@ -1049,7 +1123,11 @@ export default function DrivePage(): React.JSX.Element {
     setPropsDialog({ entry, rel });
     setPropsDraftTags(fileProperties.tags[rel] ?? []);
     setPropsDraftTagInput('');
-  }, [cwd, fileProperties.tags]);
+    const sched = schedules[rel];
+    setPropsDraftCron(sched?.cron ?? '');
+    setPropsDraftCronEnabled(sched?.enabled ?? false);
+    setPropsDraftStartup(sched?.runAtStartup ?? false);
+  }, [cwd, fileProperties.tags, schedules]);
 
   // Add the in-progress text input as a chip (Enter or "+" button). Rejects
   // empties and duplicates silently. Commas would split a tag on the next
@@ -1076,12 +1154,24 @@ export default function DrivePage(): React.JSX.Element {
     setFileProperties(next);
     try {
       await saveFileProperties(userName, next);
+      // Schedule (only for runnable JS files). Empty cron = remove the entry.
+      if (isRunnable(propsDialog.entry.name)) {
+        const nextSched: DriveSchedules = { ...schedules };
+        const cronStr = propsDraftCron.trim();
+        if (cronStr || propsDraftStartup) {
+          nextSched[propsDialog.rel] = { cron: cronStr, enabled: propsDraftCronEnabled, runAtStartup: propsDraftStartup };
+        } else {
+          delete nextSched[propsDialog.rel];
+        }
+        setSchedules(nextSched);
+        await saveSchedules(userName, nextSched);
+      }
       toast(`Zapisano właściwości: ${propsDialog.entry.name}`);
       setPropsDialog(null);
     } catch (err) {
       toast(`Nie udało się zapisać właściwości: ${(err as Error).message}`, 'error');
     }
-  }, [propsDialog, propsDraftTags, fileProperties, userName, toast]);
+  }, [propsDialog, propsDraftTags, fileProperties, userName, toast, schedules, propsDraftCron, propsDraftCronEnabled, propsDraftStartup]);
 
   // Forward-declared ref for opening files in MdEditor — set below once
   // `openInMdEditor` is in scope. Avoids the TDZ cycle that would otherwise
@@ -1311,13 +1401,9 @@ export default function DrivePage(): React.JSX.Element {
       return;
     }
     const url = publicUrl(userName, rel);
-    try {
-      await navigator.clipboard.writeText(url);
-      toast('Link skopiowany do schowka');
-    } catch {
-      // Some browsers / contexts block clipboard — fall back to prompt
-      prompt('Skopiuj link ręcznie:', url);
-    }
+    const ok = await copyTextToClipboard(url);
+    if (ok) toast('Link skopiowany do schowka');
+    else prompt('Skopiuj link ręcznie:', url); // last resort if even execCommand is blocked
   }, [userName, cwd, toast]);
 
   // ── View / Open / Create ────────────────────────────────────────────────
@@ -1494,8 +1580,99 @@ export default function DrivePage(): React.JSX.Element {
     setViewing(null);
     setMdEditing(null);
     setMjdEditing(null);
+    runAbortRef.current?.abort();
+    setRunning(null);
+    setLogsView(null);
     setPanelFullscreen(false);
   }, []);
+
+  const openLogs = useCallback(async (rel: string) => {
+    setViewing(null); setMdEditing(null); setMjdEditing(null);
+    runAbortRef.current?.abort(); setRunning(null);
+    setLogsView({ rel, content: '…' });
+    try {
+      const r = await fetch(apiUrl(userName, 'readFile', `.logs/${rel}.log`), { headers: authHeaders() });
+      if (r.status === 404) { setLogsView({ rel, content: '(brak logów — uruchom skrypt albo poczekaj na cron)' }); return; }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json() as { data?: string };
+      const content = j.data ? decodeURIComponent(escape(atob(j.data))) : '(pusty log)';
+      setLogsView({ rel, content });
+    } catch (err) {
+      setLogsView({ rel, content: `[błąd odczytu logów] ${(err as Error).message}` });
+    }
+  }, [userName]);
+
+  const clearLogs = useCallback(async (rel: string) => {
+    try {
+      await vfsWriteFile(userName, `.logs/${rel}.log`, ''); // empty file = cleared
+      setLogsView(prev => (prev && prev.rel === rel ? { ...prev, content: '(wyczyszczono)' } : prev));
+      toast('Wyczyszczono logi');
+    } catch (err) {
+      toast(`Nie udało się wyczyścić logów: ${(err as Error).message}`, 'error');
+    }
+  }, [userName, toast]);
+
+  const stopScript = useCallback(() => {
+    runAbortRef.current?.abort();
+    setRunning(prev => (prev && prev.status === 'running' ? { ...prev, status: 'error' } : prev));
+  }, []);
+
+  // Generic SSE → console streamer. Shared by Run (node {file}) and npm install
+  // (both stream the same `output`/`done` SSE events into the right-panel console).
+  const streamConsole = useCallback(async (url: string, meta: { rel: string; kind: 'run' | 'install'; target: string }) => {
+    setViewing(null); setMdEditing(null); setMjdEditing(null); setLogsView(null);
+    runAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    runAbortRef.current = ctrl;
+    setRunning({ ...meta, output: '', status: 'running' });
+    try {
+      const resp = await fetch(url, { headers: { Accept: 'text/event-stream', ...authHeaders() }, signal: ctrl.signal });
+      if (!resp.ok || !resp.body) {
+        const text = await resp.text().catch(() => '');
+        setRunning({ ...meta, output: text || `HTTP ${resp.status}`, status: 'error' });
+        return;
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) {
+          const m = part.match(/^event: (\w+)\ndata: (.+)$/s);
+          if (!m) continue;
+          const [, ev, raw] = m;
+          try {
+            const data = JSON.parse(raw) as { chunk?: string; success?: boolean };
+            if (ev === 'output') {
+              setRunning(prev => (prev ? { ...prev, output: prev.output + (data.chunk ?? '') } : prev));
+            } else if (ev === 'done') {
+              setRunning(prev => (prev ? { ...prev, status: data.success ? 'done' : 'error' } : prev));
+            }
+          } catch { /* ignore malformed SSE */ }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      setRunning(prev => (prev ? { ...prev, output: prev.output + `\n[błąd] ${(err as Error).message}\n`, status: 'error' } : prev));
+    }
+  }, []);
+
+  const runScript = useCallback((rel: string) => streamConsole(
+    `/api/users/${encodeURIComponent(userName)}/drive/run-script?path=${encodeURIComponent(rel)}`,
+    { rel, kind: 'run', target: rel },
+  ), [streamConsole, userName]);
+
+  // Run `npm install` for a drive directory (the one holding package.json).
+  // dirRel is relative to the drive root ('' = drive root). Reuses the existing
+  // nodejs/run endpoint (subpath relative to the user home → `drive/{dirRel}`).
+  const runNpmInstall = useCallback((dirRel: string) => streamConsole(
+    `/api/users/${encodeURIComponent(userName)}/nodejs/run?subpath=${encodeURIComponent(dirRel ? `drive/${dirRel}` : 'drive')}&script=install`,
+    { rel: `npm install · ${dirRel || '(drive)'}`, kind: 'install', target: dirRel },
+  ), [streamConsole, userName]);
 
   /**
    * Open today's journal entry. Path convention: `Calendar/YYYY/MM/DD.md`
@@ -1679,12 +1856,9 @@ export default function DrivePage(): React.JSX.Element {
   // Copy view-dialog text content to the system clipboard.
   const copyViewTextToSystem = useCallback(async () => {
     if (!viewing?.textContent) return;
-    try {
-      await navigator.clipboard.writeText(viewing.textContent);
-      toast('Skopiowano cały tekst do schowka');
-    } catch {
-      toast('Nie udało się skopiować — zaznacz tekst i użyj ⌘C', 'error');
-    }
+    const ok = await copyTextToClipboard(viewing.textContent);
+    if (ok) toast('Skopiowano cały tekst do schowka');
+    else toast('Nie udało się skopiować — zaznacz tekst i użyj ⌘C', 'error');
   }, [viewing, toast]);
 
   /** Insert text at the Monaco cursor (or replace current selection). Same
@@ -2469,12 +2643,12 @@ export default function DrivePage(): React.JSX.Element {
                 <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
               </>
             )}
-            {viewing ? <VisibilityIcon fontSize="small" /> : <EditNoteIcon fontSize="small" />}
+            {running ? <CodeIcon fontSize="small" /> : logsView ? <SubjectIcon fontSize="small" /> : viewing ? <VisibilityIcon fontSize="small" /> : <EditNoteIcon fontSize="small" />}
             <Typography variant="subtitle1" sx={{
               flex: 1, minWidth: 0,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {viewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name}
+              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name}
               {mjdEditing && (
                 <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                   · {mjdEditing.mode === 'def' ? 'schemat MJD' : 'dane MJD'}
@@ -2621,6 +2795,64 @@ export default function DrivePage(): React.JSX.Element {
                 />
               </Box>
             )}
+            {running && (
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                {/* Console toolbar — status + Stop / Re-run */}
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+                  borderBottom: '1px solid', borderColor: 'divider',
+                }}>
+                  <Chip
+                    size="small"
+                    color={running.status === 'running' ? 'info' : running.status === 'done' ? 'success' : 'error'}
+                    label={running.status === 'running' ? 'Uruchomione…' : running.status === 'done' ? 'Zakończono' : 'Błąd'}
+                  />
+                  <Box sx={{ flex: 1 }} />
+                  {running.status === 'running' ? (
+                    <Button size="small" color="error" startIcon={<CloseIcon />} onClick={stopScript}>
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button size="small" startIcon={<RefreshIcon />} onClick={() => void (running.kind === 'install' ? runNpmInstall(running.target) : runScript(running.target))}>
+                      Uruchom ponownie
+                    </Button>
+                  )}
+                </Box>
+                <Box component="pre" sx={{
+                  flex: 1, m: 0, p: 1.5, overflow: 'auto',
+                  fontFamily: 'monospace', fontSize: '0.78rem', lineHeight: 1.45,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  bgcolor: '#1e1e1e', color: '#d4d4d4',
+                }}>
+                  {running.output || (running.status === 'running' ? '…' : '(brak wyjścia)')}
+                </Box>
+              </Box>
+            )}
+            {logsView && (
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+                  borderBottom: '1px solid', borderColor: 'divider',
+                }}>
+                  <Chip size="small" variant="outlined" icon={<SubjectIcon />} label="logi skryptu" />
+                  <Box sx={{ flex: 1 }} />
+                  <Button size="small" startIcon={<RefreshIcon />} onClick={() => void openLogs(logsView.rel)}>
+                    Odśwież
+                  </Button>
+                  <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => void clearLogs(logsView.rel)}>
+                    Wyczyść
+                  </Button>
+                </Box>
+                <Box component="pre" sx={{
+                  flex: 1, m: 0, p: 1.5, overflow: 'auto',
+                  fontFamily: 'monospace', fontSize: '0.78rem', lineHeight: 1.45,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  bgcolor: '#1e1e1e', color: '#d4d4d4',
+                }}>
+                  {logsView.content || '(pusty)'}
+                </Box>
+              </Box>
+            )}
           </Box>
         </Box>
       )}
@@ -2701,6 +2933,32 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText>Podgląd</ListItemText>
           </MenuItem>
         )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (
+          <MenuItem onClick={() => {
+            const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
+            void runScript(rel);
+            setMenuFor(null);
+          }}>
+            <ListItemIcon><PlayArrowIcon fontSize="small" sx={{ color: 'success.main' }} /></ListItemIcon>
+            <ListItemText primary="Run" secondary="Uruchom na backendzie (node)" />
+          </MenuItem>
+        )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (
+          <MenuItem onClick={() => {
+            const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
+            void openLogs(rel);
+            setMenuFor(null);
+          }}>
+            <ListItemIcon><SubjectIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Logs" secondary="Wyjście skryptu (Run + cron)" />
+          </MenuItem>
+        )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && menuFor.entry.name === 'package.json' && (
+          <MenuItem onClick={() => { void runNpmInstall(cwd); setMenuFor(null); }}>
+            <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="npm install" secondary="Zależności dla tego katalogu (node_modules)" />
+          </MenuItem>
+        )}
         {menuFor && menuFor.entry.type === FILE_TYPE && (() => {
           const rel = cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name;
           const isFav = isFavorite(rel);
@@ -2739,14 +2997,15 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText>Kopiuj link publiczny</ListItemText>
           </MenuItem>
         )}
-        <MenuItem onClick={() => {
+        <MenuItem onClick={async () => {
           // Ścieżka w formacie używanym przez api.file w skryptach automatyzacji
           // (userBase-relative: `drive/{rel}`), nie backendowa /data/Minis/Users/...
           const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
           const apiPath = `drive/${rel}`;
-          navigator.clipboard.writeText(apiPath);
-          toast(`Skopiowano ścieżkę: ${apiPath}`);
           setMenuFor(null);
+          const ok = await copyTextToClipboard(apiPath);
+          if (ok) toast(`Skopiowano ścieżkę: ${apiPath}`);
+          else prompt('Skopiuj ścieżkę ręcznie:', apiPath);
         }}>
           <ListItemIcon><CodeIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Path" secondary="Ścieżka dla api.file (skrypty)" />
@@ -2883,6 +3142,56 @@ export default function DrivePage(): React.JSX.Element {
             Tagi są zapisywane w <code>drive/.fileproperties.json</code>. Przydaje się do filtrowania /
             grupowania plików w przyszłych narzędziach.
           </Typography>
+
+          {/* Cron schedule — only for runnable JS scripts (drive/server/*.mjs etc.) */}
+          {propsDialog && isRunnable(propsDialog.entry.name) && (
+            <Box sx={{ mt: 3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <ScheduleIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                <Typography variant="body2" fontWeight={600}>Harmonogram (cron)</Typography>
+              </Box>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <TextField
+                  value={propsDraftCron}
+                  onChange={(e) => setPropsDraftCron(e.target.value)}
+                  placeholder="np. 0 * * * *  (co godzinę)"
+                  size="small"
+                  fullWidth
+                />
+                <FormControlLabel
+                  sx={{ whiteSpace: 'nowrap', mr: 0 }}
+                  control={<Switch size="small" checked={propsDraftCronEnabled} onChange={(e) => setPropsDraftCronEnabled(e.target.checked)} />}
+                  label={<Typography variant="caption">Aktywny</Typography>}
+                />
+              </Stack>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                {[
+                  { l: 'co min', c: '* * * * *' },
+                  { l: 'co 5 min', c: '*/5 * * * *' },
+                  { l: 'co godz.', c: '0 * * * *' },
+                  { l: 'codz. 8:00', c: '0 8 * * *' },
+                  { l: 'pon-pt 9:00', c: '0 9 * * 1-5' },
+                ].map(p => (
+                  <Chip key={p.c} label={p.l} size="small" variant="outlined" onClick={() => setPropsDraftCron(p.c)} />
+                ))}
+              </Box>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                Skrypt uruchamiany na backendzie (<code>node {propsDialog.rel}</code>) wg wyrażenia cron
+                (minuta godzina dzień miesiąc dzień-tygodnia). Puste pole = brak harmonogramu.
+                Zapis do <code>drive/.schedules.json</code>.
+              </Typography>
+
+              <FormControlLabel
+                sx={{ mt: 1 }}
+                control={<Switch size="small" checked={propsDraftStartup} onChange={(e) => setPropsDraftStartup(e.target.checked)} />}
+                label={
+                  <Typography variant="body2">
+                    Uruchom przy starcie serwera
+                  </Typography>
+                }
+              />
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPropsDialog(null)}>Anuluj</Button>

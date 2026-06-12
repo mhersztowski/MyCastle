@@ -26,6 +26,7 @@ import ChecklistIcon from '@mui/icons-material/Checklist';
 import FormatQuoteIcon from '@mui/icons-material/FormatQuote';
 import CodeIcon from '@mui/icons-material/Code';
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
+import LanguageIcon from '@mui/icons-material/Language';
 import TableChartIcon from '@mui/icons-material/TableChart';
 import ImageIcon from '@mui/icons-material/Image';
 import AudiotrackIcon from '@mui/icons-material/Audiotrack';
@@ -365,6 +366,14 @@ const commands: CommandItem[] = [
     icon: <ViewInArIcon color="info" />,
     command: ({ editor, range }) => {
       editor.chain().focus().deleteRange(range).insertCadView('scene3d', '').run();
+    },
+  },
+  {
+    title: 'Osadź stronę www',
+    description: 'iframe z URL albo komponent z drive/public/lit',
+    icon: <LanguageIcon color="info" />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).insertWebEmbed('url', '').run();
     },
   },
   {

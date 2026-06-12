@@ -277,6 +277,31 @@ function restoreCadViewEmbedsFromHtml(html: string, cadViews: { mode: string; ur
   return result;
 }
 
+// Helper to escape Web embeds (@[web:mode:value]) from showdown.
+// Format: @[web:{mode}:{value}] — split only on first colon after mode.
+function escapeWebEmbedsForHtml(content: string): string {
+  const webEmbeds: { mode: string; value: string }[] = [];
+  const result = content.replace(/@\[web:([^\]]+)\]/g, (_, params) => {
+    const firstColon = params.indexOf(':');
+    const mode  = firstColon >= 0 ? params.slice(0, firstColon) : params;
+    const value = firstColon >= 0 ? params.slice(firstColon + 1) : '';
+    webEmbeds.push({ mode: mode || 'url', value });
+    return `%%WEBEMBED_${webEmbeds.length - 1}%%`;
+  });
+  return JSON.stringify({ result, webEmbeds });
+}
+
+function restoreWebEmbedsFromHtml(html: string, webEmbeds: { mode: string; value: string }[]): string {
+  let result = html;
+  webEmbeds.forEach((v, i) => {
+    const tag = `<div data-type="web-embed" data-mode="${v.mode}" data-value="${v.value}"></div>`;
+    const ph = `%%WEBEMBED_${i}%%`;
+    result = result.replace(`<p>${ph}</p>`, tag);
+    result = result.split(ph).join(tag);
+  });
+  return result;
+}
+
 // ─── InfoMark inline embed ──────────────────────────────────────────────────
 // Format: @[info:{encodedText}:{encodedTitle}:{encodedBody}:{encodedBodyPath}]
 // — four URL-encoded segments joined by ':'. Older 3-segment infomarks
@@ -1237,8 +1262,15 @@ export function markdownToHtml(markdown: string): string {
   const cadViewDataStr = escapeCadViewEmbedsForHtml(markdownWithoutUIForms);
   const { result: markdownWithoutCadViews, cadViews } = JSON.parse(cadViewDataStr);
 
+  // Protect Web embeds from showdown processing
+  const webEmbedDataStr = escapeWebEmbedsForHtml(markdownWithoutCadViews);
+  const { result: markdownWithoutWebEmbeds, webEmbeds } = JSON.parse(webEmbedDataStr) as {
+    result: string;
+    webEmbeds: { mode: string; value: string }[];
+  };
+
   // Protect form-engine embeds from showdown processing
-  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutCadViews);
+  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutWebEmbeds);
   const { result: markdownWithoutFormEngine, formEmbeds } = JSON.parse(formEngineDataStr);
 
   // Protect InfoMark inline embeds from showdown processing
@@ -1272,6 +1304,7 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore CAD view embeds
   html = restoreCadViewEmbedsFromHtml(html, cadViews);
+  html = restoreWebEmbedsFromHtml(html, webEmbeds);
 
   // Restore form-engine embeds
   html = restoreFormEngineEmbedsFromHtml(html, formEmbeds);
@@ -1390,6 +1423,18 @@ export function htmlToMarkdown(html: string): string {
       const urlM  = match.match(/data-url="([^"]*)"/);
       cadViews.push({ mode: modeM?.[1] || 'scene3d', url: urlM?.[1] || '' });
       return `##CADVIEW${cadViews.length - 1}##`;
+    },
+  );
+
+  // Pre-process: Replace Web embeds with placeholders before Turndown
+  const webEmbeds: { mode: string; value: string }[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="web-embed"[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const modeM = match.match(/data-mode="([^"]*)"/);
+      const valM  = match.match(/data-value="([^"]*)"/);
+      webEmbeds.push({ mode: modeM?.[1] || 'url', value: valM?.[1] || '' });
+      return `##WEBEMBED${webEmbeds.length - 1}##`;
     },
   );
 
@@ -1546,6 +1591,13 @@ export function htmlToMarkdown(html: string): string {
   cadViews.forEach((v, index) => {
     const placeholder = `##CADVIEW${index}##`;
     const replacement = `@[cad:${v.mode}:${v.url}]`;
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore Web embeds as @[web:mode:value]
+  webEmbeds.forEach((v, index) => {
+    const placeholder = `##WEBEMBED${index}##`;
+    const replacement = `@[web:${v.mode}:${v.value}]`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 

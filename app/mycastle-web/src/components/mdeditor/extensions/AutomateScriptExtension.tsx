@@ -367,7 +367,14 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
             return (
               <Box
                 key={i}
-                sx={{ my: 0.5, display: 'flex', justifyContent: 'center' }}
+                // `min-width: 0` na dziecku flexa jest kluczowe dla komponentów
+                // rysujących na <canvas> (qt-canvas, Three.js): bez tego
+                // min-content flex-itema = intrinsic szerokość backing-bufora
+                // canvasu (w*devicePixelRatio = 2× na Retinie), więc element
+                // rośnie do 2× szerokości panelu → współrzędne myszy w osi X
+                // rozjeżdżają się o połowę. `min-width: 0` pozwala uszanować
+                // width:100% zamiast min-content.
+                sx={{ my: 0.5, display: 'flex', justifyContent: 'center', '& > *': { minWidth: 0, maxWidth: '100%' } }}
                 ref={(host: HTMLDivElement | null) => {
                   if (!host) return;
                   const el = item.data as HTMLElement | null;

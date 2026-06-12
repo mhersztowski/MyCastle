@@ -23,6 +23,7 @@ import type { PluginService } from './modules/plugins/PluginService.js';
 import type { BackendPluginService } from './modules/plugins/BackendPluginService.js';
 import type { PluginRequestContext } from './modules/plugins/backendPluginTypes.js';
 import type { SecretsService } from './modules/secrets/SecretsService.js';
+import type { DriveScriptScheduler } from './modules/scheduler/DriveScriptScheduler.js';
 
 interface CrudConfig {
   filePath: string;
@@ -91,6 +92,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private pluginService: PluginService | null = null;
   private backendPluginService: BackendPluginService | null = null;
   private secretsService: SecretsService | null = null;
+  private driveScriptScheduler: DriveScriptScheduler | null = null;
   private rootDir: string | null;
   private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
@@ -108,7 +110,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService, arduinoWasmBuilder?: ArduinoWasmBuilder | null) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService, arduinoWasmBuilder?: ArduinoWasmBuilder | null, driveScriptScheduler?: DriveScriptScheduler) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -121,6 +123,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.pluginService = pluginService ?? null;
     this.backendPluginService = backendPluginService ?? null;
     this.secretsService = secretsService ?? null;
+    this.driveScriptScheduler = driveScriptScheduler ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.ownStaticDir = staticDir ?? null;
     this.resolveSwaggerUiDir();
@@ -1603,6 +1606,53 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Drive: run a single JS file via node (GET/SSE
+    //   /api/users/{userName}/drive/run-script?path=server/foo.js)
+    const driveRunMatch = apiPath.match(/^\/users\/([^/]+)\/drive\/run-script$/);
+    if (driveRunMatch && method === 'GET') {
+      const userName = decodeURIComponent(driveRunMatch[1]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleDriveRunScript(req, res, userName);
+      return;
+    }
+
+    // Drive: build a browser import map from a directory's node_modules
+    //   (GET /api/users/{userName}/drive/importmap?dir=public/lit/mydir)
+    // Walks up from {dir} to the nearest node_modules and maps each installed
+    // package name → its served public URL, so embedded components can
+    // `import 'pkg'`. Only works when node_modules lives under drive/public.
+    const driveImportMapMatch = apiPath.match(/^\/users\/([^/]+)\/drive\/importmap$/);
+    if (driveImportMapMatch && method === 'GET') {
+      const userName = decodeURIComponent(driveImportMapMatch[1]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleDriveImportMap(req, res, userName);
+      return;
+    }
+
+    // Drive: reload cron schedules for a user after `.schedules.json` was written
+    //   (POST /api/users/{userName}/drive/schedules/reload)
+    const driveSchedReloadMatch = apiPath.match(/^\/users\/([^/]+)\/drive\/schedules\/reload$/);
+    if (driveSchedReloadMatch && method === 'POST') {
+      const userName = decodeURIComponent(driveSchedReloadMatch[1]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!this.driveScriptScheduler) {
+        this.sendJsonResponse(res, 503, { error: 'Scheduler not available' });
+        return;
+      }
+      const active = await this.driveScriptScheduler.reloadUser(userName);
+      this.sendJsonResponse(res, 200, { ok: true, active });
+      return;
+    }
+
     // Memory PIM page — AI proxy endpoints (POST /api/users/{userName}/memory/ai/{op})
     //   /memory/ai/check          → sonnet judges a free-text answer
     //   /memory/ai/generate-one   → opus generates one question + answer
@@ -2335,8 +2385,10 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
     const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
-    res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
+    // CORS headers must be set BEFORE writeHead — setHeader() after writeHead
+    // throws ERR_HTTP_HEADERS_SENT, which skips res.end() and hangs the client.
     this.setCorsHeaders(res);
+    res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
     res.end(data);
   }
 
@@ -2423,12 +2475,14 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
     const contentType = file === 'sketch.wasm' ? 'application/wasm' : 'application/javascript';
+    // CORS headers must be set BEFORE writeHead — setHeader() after writeHead
+    // throws ERR_HTTP_HEADERS_SENT, which skips res.end() and hangs the client.
+    this.setCorsHeaders(res);
     res.writeHead(200, {
       'Content-Type': contentType,
       'Content-Length': data.length,
       'Cache-Control': 'no-cache',
     });
-    this.setCorsHeaders(res);
     res.end(data);
   }
 
@@ -3822,6 +3876,154 @@ const { password, ...safeBody } = body;
     });
 
     req.on('close', () => { proc.kill(); cleanup(); });
+  }
+
+  /**
+   * Run a single JS file from the user's Drive via `node {file}`, streaming
+   * stdout/stderr over SSE. Path is relative to `…/drive/` (e.g. `server/foo.js`);
+   * traversal outside the drive dir is rejected. cwd = the script's directory so
+   * relative requires / fs paths resolve naturally.
+   */
+  private async handleDriveRunScript(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
+    if (!this.rootDir) {
+      this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const rel = (url.searchParams.get('path') ?? '').replace(/^\/+/, '');
+    if (!rel) {
+      this.sendJsonResponse(res, 400, { error: 'Missing path parameter' });
+      return;
+    }
+    if (!/\.(mjs|cjs|js)$/i.test(rel)) {
+      this.sendJsonResponse(res, 400, { error: 'Only .js/.mjs/.cjs files can be run' });
+      return;
+    }
+    const driveRoot = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'drive');
+    const file = path.resolve(driveRoot, rel);
+    if (file !== driveRoot && !file.startsWith(driveRoot + path.sep)) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    try {
+      const stat = await import('fs/promises').then(m => m.stat(file));
+      if (!stat.isFile()) throw new Error('not a file');
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `Script not found: ${rel}` });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    this.setCorsHeaders(res);
+    res.writeHead(200);
+
+    const sendEvent = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Accumulate output so the whole run is appended to the per-script log file
+    // (drive/.logs/{rel}.log) — same file the cron scheduler writes to.
+    let logBuf = `\n===== ${new Date().toISOString()} (manual run) =====\n$ node ${rel}\n`;
+    sendEvent('output', { chunk: `$ node ${rel}\n` });
+    // shell:false — node + the absolute path are passed as argv, no shell injection.
+    const proc = spawn('node', [file], { cwd: path.dirname(file), shell: false });
+
+    proc.stdout.on('data', (chunk: Buffer) => { const s = chunk.toString(); logBuf += s; sendEvent('output', { chunk: s }); });
+    proc.stderr.on('data', (chunk: Buffer) => { const s = chunk.toString(); logBuf += s; sendEvent('output', { chunk: s }); });
+
+    proc.on('close', (code) => {
+      logBuf += `\n[exit ${code}]\n`;
+      void this.driveScriptScheduler?.appendLog(userName, rel, logBuf);
+      sendEvent('done', { success: code === 0, exitCode: code });
+      res.end();
+    });
+    proc.on('error', (err) => {
+      logBuf += `\n[error] ${err.message}\n`;
+      void this.driveScriptScheduler?.appendLog(userName, rel, logBuf);
+      sendEvent('output', { chunk: `Error: ${err.message}\n` });
+      sendEvent('done', { success: false, error: err.message });
+      res.end();
+    });
+    req.on('close', () => { proc.kill(); });
+  }
+
+  /**
+   * Build a browser import map from the nearest `node_modules` at or above
+   * `dir` (a drive-relative directory). Each installed package maps to its
+   * served public URL so embedded components can `import 'pkg'`. node_modules
+   * must live under `drive/public` (else it isn't HTTP-served).
+   */
+  private async handleDriveImportMap(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
+    if (!this.rootDir) { this.sendJsonResponse(res, 503, { error: 'rootDir not configured' }); return; }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const dir = (url.searchParams.get('dir') ?? '').replace(/^\/+|\/+$/g, '');
+    const driveRoot = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'drive');
+    const startDir = path.resolve(driveRoot, dir);
+    if (startDir !== driveRoot && !startDir.startsWith(driveRoot + path.sep)) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden' }); return;
+    }
+
+    const { readdir, readFile, stat } = await import('fs/promises');
+    const isDir = (p: string) => stat(p).then((s) => s.isDirectory()).catch(() => false);
+
+    // Walk up to the nearest node_modules.
+    let baseDir = startDir;
+    let nmDir: string | null = null;
+    for (;;) {
+      const cand = path.join(baseDir, 'node_modules');
+      if (await isDir(cand)) { nmDir = cand; break; }
+      if (baseDir === driveRoot) break;
+      const parent = path.dirname(baseDir);
+      if (parent === baseDir) break;
+      baseDir = parent;
+    }
+
+    const imports: Record<string, string> = {};
+    const publicRoot = path.join(driveRoot, 'public');
+    if (nmDir && (baseDir === publicRoot || baseDir.startsWith(publicRoot + path.sep))) {
+      const relToPublic = path.relative(publicRoot, baseDir).split(path.sep).join('/');
+      const urlBase = `/public/drive/users/${encodeURIComponent(userName)}/${relToPublic ? relToPublic + '/' : ''}node_modules`;
+
+      const esmEntry = (pj: Record<string, unknown>): string => {
+        const exp = pj.exports as unknown;
+        const pick = (v: unknown): string | undefined => {
+          if (typeof v === 'string') return v;
+          if (v && typeof v === 'object') {
+            const o = v as Record<string, unknown>;
+            return pick(o.import) ?? pick(o.module) ?? pick(o.browser) ?? pick(o.default);
+          }
+          return undefined;
+        };
+        const fromExports = exp && typeof exp === 'object' ? pick((exp as Record<string, unknown>)['.']) : pick(exp);
+        return (fromExports || (pj.module as string) || (pj.browser as string) || (pj.main as string) || 'index.js')
+          .replace(/^\.\//, '');
+      };
+      const addPkg = async (pkgDir: string, name: string): Promise<void> => {
+        let entry = 'index.js';
+        try { entry = esmEntry(JSON.parse(await readFile(path.join(pkgDir, 'package.json'), 'utf-8'))); } catch { /* default */ }
+        imports[name] = `${urlBase}/${name}/${entry}`;
+        imports[`${name}/`] = `${urlBase}/${name}/`; // deep imports
+      };
+
+      try {
+        for (const e of await readdir(nmDir, { withFileTypes: true })) {
+          if (!e.isDirectory() || e.name.startsWith('.')) continue;
+          if (e.name.startsWith('@')) {
+            const scopeDir = path.join(nmDir, e.name);
+            for (const s of await readdir(scopeDir, { withFileTypes: true })) {
+              if (s.isDirectory()) await addPkg(path.join(scopeDir, s.name), `${e.name}/${s.name}`);
+            }
+          } else {
+            await addPkg(path.join(nmDir, e.name), e.name);
+          }
+        }
+      } catch { /* ignore scan errors */ }
+    }
+
+    this.setCorsHeaders(res);
+    this.sendJsonResponse(res, 200, { imports });
   }
 
   // --- Python ---
