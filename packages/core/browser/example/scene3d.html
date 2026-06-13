@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>scene3d — wizualne demo geometrii</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; background: #1a1a1a; color: #ddd; margin: 0; padding: 16px; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    .hint { color: #888; font-size: 12px; margin: 0 0 12px; }
+    .wrap { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+    canvas { background: #0d0d0d; border: 1px solid #333; border-radius: 8px; touch-action: none; }
+    .panel { min-width: 240px; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
+    select, button { background: #2b2b2b; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+    button.active { background: #0a84ff; border-color: #0a84ff; color: #fff; }
+    label { font-size: 12px; color: #aaa; }
+    pre { background: #0d0d0d; border: 1px solid #333; border-radius: 6px; padding: 10px; font-size: 12px; white-space: pre-wrap; margin: 8px 0 0; }
+    code { color: #7ec8ff; }
+  </style>
+</head>
+<body>
+  <h1>scene3d — wizualne demo geometrii (czysty canvas 2D, bez bibliotek)</h1>
+  <p class="hint">
+    Każda bryła to <code>Geometry.build(type, params)</code> → bufory pozycje/normalne/indeksy,
+    rysowane własnym mini-rendererem (rzut perspektywiczny + płaskie cieniowanie). Przeciągnij, by obracać.
+  </p>
+
+  <div class="wrap">
+    <canvas id="c" width="560" height="560"></canvas>
+    <div class="panel">
+      <div class="row">
+        <label>Geometria</label>
+        <select id="type"></select>
+      </div>
+      <div class="row" id="modes"></div>
+      <div class="row">
+        <button id="spin" class="active">Auto-obrót</button>
+        <button id="reset">Reset widoku</button>
+      </div>
+      <pre id="info"></pre>
+    </div>
+  </div>
+
+  <script type="module">
+    import { Geometry, MeshBuilder, Box3 } from '../scene3d/index.js';
+
+    const cv = document.getElementById('c');
+    const ctx = cv.getContext('2d');
+    const typeSel = document.getElementById('type');
+    const info = document.getElementById('info');
+    const COLORS = {
+      box: [80, 150, 240], plane: [120, 200, 120], circle: [200, 180, 90],
+      cylinder: [200, 120, 90], cone: [200, 90, 140], sphere: [150, 120, 230], torus: [90, 200, 200],
+    };
+
+    // ── stan widoku ──
+    let type = 'box';
+    let scene = null;          // { positions:Float, indices, center:[x,y,z], scale }
+    let rotX = -0.5, rotY = 0.6, spin = true, dragging = false, lastX = 0, lastY = 0;
+
+    for (const t of Geometry.types()) {
+      const o = document.createElement('option'); o.value = t; o.textContent = t; typeSel.appendChild(o);
+    }
+
+    function rebuild() {
+      const params = Geometry.defaults(type);
+      const mesh = Geometry.build(type, params);
+      // auto-dopasowanie: wyśrodkuj i przeskaluj do ~2.2 jednostek
+      const bb = Box3.fromPositions(mesh.positions);
+      const c = Box3.center(bb), s = Box3.size(bb);
+      const maxDim = Math.max(s.x, s.y, s.z) || 1;
+      scene = { positions: mesh.positions, indices: mesh.indices, center: [c.x, c.y, c.z], scale: 2.2 / maxDim };
+      const counts = MeshBuilder.counts(mesh);
+      info.innerHTML =
+        `typ:        ${type}\n` +
+        `parametry:  ${JSON.stringify(params)}\n` +
+        `objętość:   ${Geometry.volume(type, params).toFixed(4)}\n` +
+        `pole pow.:  ${Geometry.surfaceArea(type, params).toFixed(4)}\n` +
+        `wierzchołki:${counts.vertices}\ntrójkąty:   ${counts.triangles}\n` +
+        `rozmiar:    [${s.x.toFixed(2)}, ${s.y.toFixed(2)}, ${s.z.toFixed(2)}]`;
+    }
+
+    function rotate(x, y, z) {
+      // wokół Y, potem X
+      const cy = Math.cos(rotY), sy = Math.sin(rotY);
+      let x1 = x * cy + z * sy, z1 = -x * sy + z * cy, y1 = y;
+      const cx = Math.cos(rotX), sx = Math.sin(rotX);
+      const y2 = y1 * cx - z1 * sx, z2 = y1 * sx + z1 * cx;
+      return [x1, y2, z2];
+    }
+
+    function render() {
+      const W = cv.width, H = cv.height;
+      ctx.clearRect(0, 0, W, H);
+      if (!scene) return;
+      const { positions, indices, center, scale } = scene;
+      const focal = 3.2, dist = 4.5, screen = H * 0.42;
+      const light = (() => { const l = [0.35, 0.55, -0.75], m = Math.hypot(...l); return l.map((v) => v / m); })();
+      const base = COLORS[type] || [150, 150, 150];
+
+      // projekcja wierzchołków (po rotacji + perspektywie)
+      const n = positions.length / 3;
+      const px = new Float32Array(n), py = new Float32Array(n), vz = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const r = rotate((positions[i * 3] - center[0]) * scale, (positions[i * 3 + 1] - center[1]) * scale, (positions[i * 3 + 2] - center[2]) * scale);
+        const z = r[2] + dist;
+        vz[i] = z;
+        px[i] = W / 2 + (r[0] * focal / z) * screen;
+        py[i] = H / 2 - (r[1] * focal / z) * screen;
+      }
+
+      // trójkąty: sortowanie malejąco po z (painter), cieniowanie i back-face cull
+      const tris = [];
+      for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+        // normalna w przestrzeni widoku (z rotowanych pozycji)
+        const A = [rotate((positions[a*3]-center[0])*scale, (positions[a*3+1]-center[1])*scale, (positions[a*3+2]-center[2])*scale)];
+        const ra = A[0];
+        const rb = rotate((positions[b*3]-center[0])*scale, (positions[b*3+1]-center[1])*scale, (positions[b*3+2]-center[2])*scale);
+        const rc = rotate((positions[c*3]-center[0])*scale, (positions[c*3+1]-center[1])*scale, (positions[c*3+2]-center[2])*scale);
+        const ux = rb[0]-ra[0], uy = rb[1]-ra[1], uz = rb[2]-ra[2];
+        const vx = rc[0]-ra[0], vy = rc[1]-ra[1], vz0 = rc[2]-ra[2];
+        let nx = uy*vz0 - uz*vy, ny = uz*vx - ux*vz0, nz = ux*vy - uy*vx;
+        const nl = Math.hypot(nx, ny, nz) || 1; nx/=nl; ny/=nl; nz/=nl;
+        if (nz > 0.02) continue; // back-face (normalna od kamery)
+        const shade = Math.max(0.12, Math.min(1, nx*light[0] + ny*light[1] + nz*light[2]) * 0.85 + 0.25);
+        const zAvg = (vz[a] + vz[b] + vz[c]) / 3;
+        tris.push({ a, b, c, shade, zAvg });
+      }
+      tris.sort((p, q) => q.zAvg - p.zAvg);
+
+      const wire = modes.wire;
+      for (const t of tris) {
+        ctx.beginPath();
+        ctx.moveTo(px[t.a], py[t.a]); ctx.lineTo(px[t.b], py[t.b]); ctx.lineTo(px[t.c], py[t.c]); ctx.closePath();
+        if (modes.fill) {
+          ctx.fillStyle = `rgb(${base[0]*t.shade|0}, ${base[1]*t.shade|0}, ${base[2]*t.shade|0})`;
+          ctx.fill();
+        }
+        if (wire) { ctx.strokeStyle = modes.fill ? 'rgba(255,255,255,0.18)' : 'rgba(126,200,255,0.85)'; ctx.lineWidth = 1; ctx.stroke(); }
+      }
+    }
+
+    // tryby renderowania
+    const modes = { fill: true, wire: false };
+    const modesEl = document.getElementById('modes');
+    for (const key of ['fill', 'wire']) {
+      const b = document.createElement('button');
+      b.textContent = key === 'fill' ? 'Wypełnienie' : 'Siatka';
+      b.className = modes[key] ? 'active' : '';
+      b.onclick = () => { modes[key] = !modes[key]; b.className = modes[key] ? 'active' : ''; };
+      modesEl.appendChild(b);
+    }
+
+    typeSel.onchange = () => { type = typeSel.value; rebuild(); };
+    document.getElementById('spin').onclick = (e) => { spin = !spin; e.target.className = spin ? 'active' : ''; };
+    document.getElementById('reset').onclick = () => { rotX = -0.5; rotY = 0.6; };
+
+    cv.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener('pointermove', (e) => { if (!dragging) return; rotY += (e.clientX - lastX) * 0.01; rotX += (e.clientY - lastY) * 0.01; lastX = e.clientX; lastY = e.clientY; });
+    cv.addEventListener('pointerup', () => { dragging = false; });
+
+    rebuild();
+    (function loop() {
+      if (spin && !dragging) rotY += 0.008;
+      render();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>

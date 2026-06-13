@@ -1,10 +1,10 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName, SceneSettings, SceneGeometryEntry } from '@mhersztowski/ui-core';
+import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName, SceneSettings, SceneGeometryEntry, GeoPrimitiveField, GeoPrimitiveKind } from '@mhersztowski/ui-core';
 import { useDialog, DEFAULT_SCENE_SETTINGS } from '@mhersztowski/ui-core';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
-import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, AudioNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, FBXImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS, AnimationEngine, PrefabStore } from '@mhersztowski/core-scene3d';
-import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode, AnimationClip, PrefabEntry } from '@mhersztowski/core-scene3d';
+import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, AudioNode, GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode, isGeometryPrimitiveNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, FBXImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS, AnimationEngine, PrefabStore } from '@mhersztowski/core-scene3d';
+import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode, AnimationClip, PrefabEntry, GeometryPrimitiveNode } from '@mhersztowski/core-scene3d';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Menu from '@mui/material/Menu';
@@ -67,6 +67,17 @@ function buildTreeNodes(node: SceneNode): SceneTreeNodeData {
   if (node.type === 'audio') {
     if (!name || name.startsWith('audio-')) {
       name = 'Audio Source';
+    }
+  }
+  const GEO_DEFAULT_NAMES: Record<string, string> = {
+    'geometry-point': 'Point',
+    'geometry-segment': 'Segment',
+    'geometry-line': 'Line',
+    'geometry-angle': 'Angle',
+  };
+  if (node.type in GEO_DEFAULT_NAMES) {
+    if (!name || name.startsWith(`${node.type}-`)) {
+      name = GEO_DEFAULT_NAMES[node.type];
     }
   }
 
@@ -217,6 +228,13 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
           coneOuterGain: audioNode.coneOuterGain,
         }
       : undefined,
+    geoPrimitive: isGeometryPrimitiveNode(node)
+      ? {
+          kind: node.type as GeoPrimitiveKind,
+          fields: (node as GeometryPrimitiveNode).getEditableFields() as GeoPrimitiveField[],
+          metrics: (node as GeometryPrimitiveNode).getMetrics(),
+        }
+      : undefined,
   };
 }
 
@@ -272,6 +290,7 @@ interface RichEditorExtendedProps extends RichEditorProps {
 
 export function RichEditor({ className, style, initialSceneData, initialPrefabs, onSavePrefab, onDeletePrefab, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, propertyChangeRef, getNodeGeometryRef, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog, onBrowseAudioFile, resolveAudioSrc, onEditGeometryNodes, onEditMesh, currentProject, currentFile, otherProjectsPrefabs }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [geoPointEdit, setGeoPointEdit] = useState<{ nodeId: string; fieldKey: string } | null>(null);
   const [version, setVersion] = useState(0);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [showGrid, setShowGrid] = useState(true);
@@ -743,6 +762,26 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     setSelectedNodeId(node.id);
   }, [sceneGraph]);
 
+  const addGeometry = useCallback((kind: GeoPrimitiveKind, parentId?: string) => {
+    let node: SceneNode;
+    switch (kind) {
+      case 'geometry-point':
+        node = new GeometryPointNode({ name: 'Point' });
+        break;
+      case 'geometry-segment':
+        node = new GeometrySegmentNode({ name: 'Segment', start: [0, 0, 0], end: [2, 0, 0] });
+        break;
+      case 'geometry-line':
+        node = new GeometryLineNode({ name: 'Line', origin: [0, 0, 0], direction: [1, 0, 0] });
+        break;
+      case 'geometry-angle':
+        node = new GeometryAngleNode({ name: 'Angle', vertex: [0, 0, 0], p1: [2, 0, 0], p2: [0, 2, 0] });
+        break;
+    }
+    sceneGraph.addNode(node, parentId);
+    setSelectedNodeId(node.id);
+  }, [sceneGraph]);
+
   const handleNodeAdd = useCallback((type: string, parentId?: string) => {
     if (type === 'ambient-light') {
       addLight('ambient', parentId);
@@ -762,6 +801,8 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
       addGroup(parentId);
     } else if (type === 'audio') {
       addAudio(parentId);
+    } else if (type === 'geometry-point' || type === 'geometry-segment' || type === 'geometry-line' || type === 'geometry-angle') {
+      addGeometry(type, parentId);
     } else if (type === 'procedural') {
       addMesh('procedural', parentId);
     } else if (type === 'nodes') {
@@ -769,7 +810,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     } else {
       addMesh(type as 'box' | 'sphere' | 'cylinder' | 'cone' | 'plane' | 'torus', parentId);
     }
-  }, [addMesh, addLight, addCamera, addGroup, addAudio]);
+  }, [addMesh, addLight, addCamera, addGroup, addAudio, addGeometry]);
 
   // ─── Delete / Duplicate ─────────────────────────────────────
 
@@ -824,6 +865,22 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
         coneOuterAngle: an.coneOuterAngle,
         coneOuterGain: an.coneOuterGain,
       });
+    } else if (isGeometryPrimitiveNode(node)) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { id: _id, children: _children, ...rest } = node.toData();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const common: any = {
+        ...rest,
+        name: node.name + ' Copy',
+        position: [node.position[0] + 1.5, node.position[1], node.position[2]],
+      };
+      switch (node.type) {
+        case 'geometry-point': clone = new GeometryPointNode(common); break;
+        case 'geometry-segment': clone = new GeometrySegmentNode(common); break;
+        case 'geometry-line': clone = new GeometryLineNode(common); break;
+        case 'geometry-angle': clone = new GeometryAngleNode(common); break;
+        default: return;
+      }
     } else {
       return;
     }
@@ -961,6 +1018,25 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     }
   }, [sceneGraph]);
 
+  // ── Geometry point gizmo editing (e.g. segment start/end) ────────────────────
+  const handleEditGeoPoint = useCallback((nodeId: string, fieldKey: string) => {
+    setGeoPointEdit((cur) => (cur && cur.nodeId === nodeId && cur.fieldKey === fieldKey ? null : { nodeId, fieldKey }));
+  }, []);
+
+  const handleGeoPointChange = useCallback((nodeId: string, fieldKey: string, value: [number, number, number]) => {
+    handlePropertyChange(nodeId, `geo.${fieldKey}`, value);
+  }, [handlePropertyChange]);
+
+  const handleBindGeoPoint = useCallback((nodeId: string, fieldKey: string, targetId: string | null) => {
+    const prop = `geo.bind${fieldKey.charAt(0).toUpperCase()}${fieldKey.slice(1)}`;
+    handlePropertyChange(nodeId, prop, targetId ?? '');
+  }, [handlePropertyChange]);
+
+  // Cancel point editing when the selection changes or clears.
+  useEffect(() => {
+    setGeoPointEdit((cur) => (cur && cur.nodeId === selectedNodeId ? cur : null));
+  }, [selectedNodeId]);
+
   // Expose handlePropertyChange so external dialogs (e.g. geometry node editor) can write back.
   useEffect(() => {
     if (propertyChangeRef) propertyChangeRef.current = handlePropertyChange;
@@ -986,6 +1062,17 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     [sceneGraph, version],
   );
 
+  // Flat list of all nodes (id/name/type) for the "bind point to node" picker.
+  const allSceneNodes = useMemo(() => {
+    const out: Array<{ id: string; name: string; type: string }> = [];
+    sceneGraph.root.traverse((n) => {
+      if (n === sceneGraph.root) return;
+      out.push({ id: n.id, name: n.name || n.type, type: n.type });
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneGraph, version]);
+
   const handleAssignGeometry = useCallback((targetNodeId: string, sourceNodeId: string) => {
     const target = sceneGraph.findNode(targetNodeId);
     const source = sceneGraph.findNode(sourceNodeId);
@@ -999,8 +1086,55 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
   // ─── Viewport selection ─────────────────────────────────────
 
   const handleViewportSelect = useCallback((nodeId: string | null) => {
+    const node = nodeId ? sceneGraph.findNode(nodeId) : null;
+    // eslint-disable-next-line no-console
+    console.log(`[GEO] RichEditor.onNodeSelect id=${nodeId ? nodeId.slice(0, 8) : 'null'} type=${node?.type ?? '-'} name=${node?.name ?? '-'}`);
     setSelectedNodeId(nodeId);
-  }, []);
+  }, [sceneGraph]);
+
+  // Debug: window.dumpScene() — prints every object (transform + geometry params) and full camera state.
+  useEffect(() => {
+    const round = (a: number[]) => a.map((n) => +n.toFixed(3));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    w.dumpScene = () => {
+      const objects: Record<string, unknown>[] = [];
+      sceneGraph.root.traverse((n) => {
+        if (n === sceneGraph.root) return;
+        const e: Record<string, unknown> = {
+          type: n.type, name: n.name, id: n.id.slice(0, 8), visible: n.visible,
+          pos: round(n.position), rot: round(n.rotation), scale: round(n.scale),
+        };
+        if (n.type.startsWith('geometry-')) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const d = (n as any).toData();
+          ['start', 'end', 'origin', 'direction', 'vertex', 'p1', 'p2', 'color', 'pixelSize', 'arcPixelRadius', 'showLabel', 'showLength', 'label'].forEach((k) => {
+            if (d[k] !== undefined) e[k] = d[k];
+          });
+        }
+        objects.push(e);
+      });
+      const cam = w.__r3f_camera;
+      const controls = w.__r3f_controls;
+      const camera = cam ? {
+        type: cam.type,
+        fov: cam.fov, zoom: cam.zoom,
+        position: round(cam.position.toArray()),
+        rotationEuler: round([cam.rotation.x, cam.rotation.y, cam.rotation.z]),
+        quaternion: cam.quaternion.toArray().map((n: number) => +n.toFixed(4)),
+        target: controls?.target ? round(controls.target.toArray()) : null,
+        near: cam.near, far: cam.far,
+        matrixWorld: cam.matrixWorld.toArray().map((n: number) => +n.toFixed(4)),
+        projectionMatrix: cam.projectionMatrix.toArray().map((n: number) => +n.toFixed(4)),
+        viewport: w.__r3f_size ? { w: w.__r3f_size.width, h: w.__r3f_size.height } : null,
+      } : 'no camera ref (open a Scene 3D viewport first)';
+      const out = { selected: selectedNodeId ? selectedNodeId.slice(0, 8) : null, objectCount: objects.length, objects, camera };
+      // eslint-disable-next-line no-console
+      console.log('[GEO] SCENE DUMP', JSON.parse(JSON.stringify(out)));
+      return out;
+    };
+    return () => { delete w.dumpScene; };
+  }, [sceneGraph, selectedNodeId]);
 
   // ─── Rename ────────────────────────────────────────────────
 
@@ -1384,6 +1518,8 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   debugLog={debugLog}
                   resolveAudioSrc={resolveAudioSrc}
                   onGizmoTransformEnd={handleGizmoTransformEnd}
+                  geoPointEdit={geoPointEdit}
+                  onGeoPointChange={handleGeoPointChange}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1431,6 +1567,10 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                     onEditMesh={onEditMesh}
                     sceneGeometries={sceneGeometries}
                     onAssignGeometry={handleAssignGeometry}
+                    onEditGeoPoint={handleEditGeoPoint}
+                    activeGeoPoint={geoPointEdit}
+                    sceneNodes={allSceneNodes}
+                    onBindGeoPoint={handleBindGeoPoint}
                   />
                 </Allotment.Pane>
                 )}
@@ -1523,6 +1663,8 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   debugLog={debugLog}
                   resolveAudioSrc={resolveAudioSrc}
                   onGizmoTransformEnd={handleGizmoTransformEnd}
+                  geoPointEdit={geoPointEdit}
+                  onGeoPointChange={handleGeoPointChange}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1546,6 +1688,10 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 onEditMesh={onEditMesh}
                 sceneGeometries={sceneGeometries}
                 onAssignGeometry={handleAssignGeometry}
+                onEditGeoPoint={handleEditGeoPoint}
+                activeGeoPoint={geoPointEdit}
+                sceneNodes={allSceneNodes}
+                onBindGeoPoint={handleBindGeoPoint}
               />
             </Allotment.Pane>
             )}

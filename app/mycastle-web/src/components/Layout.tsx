@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, createContext, useContext } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
@@ -58,6 +58,8 @@ import {
   AutoMode as AutoModeIcon,
   Notifications as NotificationsIcon,
   FitnessCenter as FitnessCenterIcon,
+  IntegrationInstructions as IntegrationInstructionsIcon,
+  Schema as SchemaIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -65,9 +67,19 @@ import { AccountMenu } from './AccountMenu';
 
 const drawerWidth = 200;
 
+/**
+ * Lets a `hideChrome` page (e.g. the full-screen UML editor) render the main
+ * navigation trigger inside its own toolbar instead of the global AppBar.
+ */
+interface LayoutChrome { openNav: () => void }
+const LayoutChromeContext = createContext<LayoutChrome>({ openNav: () => {} });
+export const useLayoutChrome = () => useContext(LayoutChromeContext);
+
 interface LayoutProps {
   children: React.ReactNode;
   fullBleed?: boolean;
+  /** Hide the blue AppBar + permanent sidebar; nav becomes a drawer the page opens via useLayoutChrome(). */
+  hideChrome?: boolean;
 }
 
 interface NavItem {
@@ -82,9 +94,10 @@ function extractUserName(pathname: string): string {
   return match ? match[2] : '';
 }
 
-function Layout({ children, fullBleed }: LayoutProps) {
+function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [tabletOpen, setTabletOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false); // hideChrome: page-triggered nav drawer
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
   const location = useLocation();
@@ -111,6 +124,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
     if (isMinisView) {
       return [
         { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
+        { text: 'Drive', icon: <DriveFolderUploadIcon />, path: `/user/${userName}/pim/drive` },
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },
@@ -123,6 +137,11 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'PicoSDK', icon: <CodeIcon />, path: `/user/${userName}/electronics/picosdk` },
             { text: 'C++', icon: <CodeIcon />, path: `/user/${userName}/electronics/cpp` },
             { text: 'Configuration', icon: <HubIcon />, path: `/user/${userName}/electronics/configuration` },
+          ],
+        },
+        {
+          text: 'Programming', icon: <IntegrationInstructionsIcon />, children: [
+            { text: 'UML', icon: <SchemaIcon />, path: `/user/${userName}/programming/uml` },
           ],
         },
         {
@@ -145,7 +164,6 @@ function Layout({ children, fullBleed }: LayoutProps) {
             { text: 'Shopping', icon: <ShoppingCartIcon />, path: `/user/${userName}/pim/shopping` },
             { text: 'Health', icon: <FitnessCenterIcon />, path: `/user/${userName}/pim/health` },
             { text: 'Memory', icon: <PsychologyIcon />, path: `/user/${userName}/pim/memory` },
-            { text: 'Drive', icon: <DriveFolderUploadIcon />, path: `/user/${userName}/pim/drive` },
             { text: 'Persons', icon: <PersonIcon />, path: `/user/${userName}/pim/person` },
             { text: 'Projects', icon: <FolderIcon />, path: `/user/${userName}/pim/project` },
             { text: 'Agent', icon: <SmartToyIcon />, path: `/user/${userName}/pim/agent` },
@@ -214,7 +232,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
                       <ListItemButton
                         sx={{ pl: 4 }}
                         selected={location.pathname === child.path}
-                        onClick={() => { navigate(child.path!); setMobileOpen(false); setTabletOpen(false); }}
+                        onClick={() => { navigate(child.path!); setMobileOpen(false); setTabletOpen(false); setNavOpen(false); }}
                       >
                         <ListItemIcon sx={{ minWidth: 32 }}>{child.icon}</ListItemIcon>
                         <ListItemText primary={child.text} />
@@ -228,7 +246,7 @@ function Layout({ children, fullBleed }: LayoutProps) {
             <ListItem key={item.text} disablePadding>
               <ListItemButton
                 selected={location.pathname === item.path}
-                onClick={() => { navigate(item.path!); setMobileOpen(false); setTabletOpen(false); }}
+                onClick={() => { navigate(item.path!); setMobileOpen(false); setTabletOpen(false); setNavOpen(false); }}
               >
                 <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
                 <ListItemText primary={item.text} />
@@ -243,113 +261,49 @@ function Layout({ children, fullBleed }: LayoutProps) {
   const bannerOffset = impersonating ? '40px' : '0px';
 
   return (
-    <>
+    <LayoutChromeContext.Provider value={{ openNav: () => setNavOpen(true) }}>
       <ImpersonationBanner />
       <Box sx={{ position: 'fixed', top: bannerOffset, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* AppBar — static, part of the flex column, no hardcoded margins needed */}
-        <AppBar
-          position="static"
-          sx={{
-            flexShrink: 0,
-            paddingTop: 'env(safe-area-inset-top)',
-            zIndex: (theme) => theme.zIndex.drawer + 1,
-          }}
-        >
-          <Toolbar>
-            {/* Mobile hamburger — left drawer */}
-            <IconButton
-              color="inherit"
-              edge="start"
-              onClick={() => setMobileOpen(!mobileOpen)}
-              sx={{ mr: 2, display: { xs: 'flex', sm: 'none' } }}
-            >
-              <MenuIcon />
-            </IconButton>
-            {/* Tablet trigger — right drawer */}
-            <IconButton
-              color="inherit"
-              edge="start"
-              onClick={() => setTabletOpen(!tabletOpen)}
-              sx={{ mr: 2, display: { xs: 'none', sm: 'flex', lg: 'none' } }}
-            >
-              <MenuIcon />
-            </IconButton>
-            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-              MyCastle — {sectionLabel}
-              {impersonating && <Chip label={`as ${impersonating.name}`} size="small" color="warning" />}
-            </Typography>
-            <AccountMenu isAdminView={isAdminView} userName={userName} />
-          </Toolbar>
-        </AppBar>
+        {/* AppBar — hidden in hideChrome mode (page renders nav + account in its own toolbar) */}
+        {!hideChrome && (
+          <AppBar position="static" sx={{ flexShrink: 0, paddingTop: 'env(safe-area-inset-top)', zIndex: (theme) => theme.zIndex.drawer + 1 }}>
+            <Toolbar>
+              <IconButton color="inherit" edge="start" onClick={() => setMobileOpen(!mobileOpen)} sx={{ mr: 2, display: { xs: 'flex', sm: 'none' } }}><MenuIcon /></IconButton>
+              <IconButton color="inherit" edge="start" onClick={() => setTabletOpen(!tabletOpen)} sx={{ mr: 2, display: { xs: 'none', sm: 'flex', lg: 'none' } }}><MenuIcon /></IconButton>
+              <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                MyCastle — {sectionLabel}
+                {impersonating && <Chip label={`as ${impersonating.name}`} size="small" color="warning" />}
+              </Typography>
+              <AccountMenu isAdminView={isAdminView} userName={userName} />
+            </Toolbar>
+          </AppBar>
+        )}
 
         {/* Body row: sidebar + content */}
         <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {/* Mobile — temporary left drawer */}
-          <Drawer
-            variant="temporary"
-            open={mobileOpen}
-            onClose={() => setMobileOpen(false)}
-            ModalProps={{ keepMounted: true }}
-            sx={{
-              display: { xs: 'block', sm: 'none' },
-              '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
-            }}
-          >
-            {drawer}
-          </Drawer>
-
-          {/* Tablet — temporary left drawer */}
-          <Drawer
-            variant="temporary"
-            anchor="left"
-            open={tabletOpen}
-            onClose={() => setTabletOpen(false)}
-            ModalProps={{ keepMounted: true }}
-            sx={{
-              display: { xs: 'none', sm: 'block', lg: 'none' },
-              '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
-            }}
-          >
-            {drawer}
-          </Drawer>
-
-          {/* Desktop — permanent left sidebar */}
-          <Box
-            component="nav"
-            sx={{
-              display: { xs: 'none', lg: 'flex' },
-              flexDirection: 'column',
-              width: drawerWidth,
-              flexShrink: 0,
-              borderRight: 1,
-              borderColor: 'divider',
-              overflowY: 'auto',
-              bgcolor: 'background.paper',
-            }}
-          >
-            {drawer}
-          </Box>
+          {hideChrome ? (
+            /* Full-screen page: nav is a drawer the page opens via useLayoutChrome() */
+            <Drawer variant="temporary" open={navOpen} onClose={() => setNavOpen(false)} ModalProps={{ keepMounted: true }} sx={{ '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth } }}>
+              {drawer}
+            </Drawer>
+          ) : (
+            <>
+              {/* Mobile — temporary left drawer */}
+              <Drawer variant="temporary" open={mobileOpen} onClose={() => setMobileOpen(false)} ModalProps={{ keepMounted: true }} sx={{ display: { xs: 'block', sm: 'none' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth } }}>{drawer}</Drawer>
+              {/* Tablet — temporary left drawer */}
+              <Drawer variant="temporary" anchor="left" open={tabletOpen} onClose={() => setTabletOpen(false)} ModalProps={{ keepMounted: true }} sx={{ display: { xs: 'none', sm: 'block', lg: 'none' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth } }}>{drawer}</Drawer>
+              {/* Desktop — permanent left sidebar */}
+              <Box component="nav" sx={{ display: { xs: 'none', lg: 'flex' }, flexDirection: 'column', width: drawerWidth, flexShrink: 0, borderRight: 1, borderColor: 'divider', overflowY: 'auto', bgcolor: 'background.paper' }}>{drawer}</Box>
+            </>
+          )}
 
           {/* Main content */}
-          <Box
-            component="main"
-            sx={{
-              flex: 1,
-              overflow: fullBleed ? 'hidden' : 'auto',
-              p: fullBleed ? 0 : 3,
-              display: fullBleed ? 'flex' : undefined,
-              flexDirection: fullBleed ? 'column' : undefined,
-            }}
-          >
-            {fullBleed ? children : (
-              <Container maxWidth="lg">
-                {children}
-              </Container>
-            )}
+          <Box component="main" sx={{ flex: 1, overflow: fullBleed ? 'hidden' : 'auto', p: fullBleed ? 0 : 3, display: fullBleed ? 'flex' : undefined, flexDirection: fullBleed ? 'column' : undefined }}>
+            {fullBleed ? children : (<Container maxWidth="lg">{children}</Container>)}
           </Box>
         </Box>
       </Box>
-    </>
+    </LayoutChromeContext.Provider>
   );
 }
 

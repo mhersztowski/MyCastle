@@ -24,6 +24,7 @@ import type { BackendPluginService } from './modules/plugins/BackendPluginServic
 import type { PluginRequestContext } from './modules/plugins/backendPluginTypes.js';
 import type { SecretsService } from './modules/secrets/SecretsService.js';
 import type { DriveScriptScheduler } from './modules/scheduler/DriveScriptScheduler.js';
+import { UmlSyncService, type UmlProject } from '@mhersztowski/devtools';
 
 interface CrudConfig {
   filePath: string;
@@ -1819,7 +1820,51 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Generate/update a UML project from source code: POST /api/users/{userName}/uml/sync
+    const umlSyncMatch = apiPath.match(/^\/users\/([^/]+)\/uml\/sync$/);
+    if (umlSyncMatch && method === 'POST') {
+      const umlUser = decodeURIComponent(umlSyncMatch[1]);
+      if (user.userName !== umlUser && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleUmlSync(req, res, umlUser);
+      return;
+    }
+
     this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
+  }
+
+  // --- UML code-sync (devtools: parse source → generate/update UML project) ---
+
+  private async handleUmlSync(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
+    if (!this.rootDir) { this.sendJsonResponse(res, 500, { error: 'Server data dir not configured' }); return; }
+    const body = await this.parseRequestBody(req) as { dir?: string; name?: string; project?: UmlProject };
+    const dir = (body.dir ?? '').replace(/^\/+/, '');
+    if (!dir) { this.sendJsonResponse(res, 400, { error: 'dir is required (user-root-relative path to source code)' }); return; }
+
+    const userRoot = path.resolve(this.rootDir, 'Minis', 'Users', userName);
+    const absDir = path.resolve(userRoot, dir);
+    // Guard against path traversal outside the user's data dir.
+    if (absDir !== userRoot && !absDir.startsWith(userRoot + path.sep)) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid dir' });
+      return;
+    }
+    try { await fs.promises.access(absDir); }
+    catch { this.sendJsonResponse(res, 404, { error: `Directory not found: ${dir}` }); return; }
+
+    const svc = new UmlSyncService();
+    try {
+      if (body.project) {
+        const result = await svc.updateProjectFromDir(body.project, absDir, { relativeTo: userRoot });
+        this.sendJsonResponse(res, 200, result);
+      } else {
+        const project = await svc.generateProjectFromDir(absDir, body.name ?? 'Generated', { relativeTo: userRoot });
+        this.sendJsonResponse(res, 200, { project, changes: [], summary: 'wygenerowano', committed: false });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'UML sync failed' });
+    }
   }
 
   // --- Arduino ---

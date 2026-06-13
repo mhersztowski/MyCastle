@@ -304,6 +304,34 @@ export interface SelectedNodeAudio {
   coneOuterGain: number;
 }
 
+// ─── Geometry annotation primitives (point / segment / line / angle) ──────────
+
+export type GeoPrimitiveKind = 'geometry-point' | 'geometry-segment' | 'geometry-line' | 'geometry-angle';
+export type GeoPrimitiveFieldKind = 'vector3' | 'number' | 'color' | 'boolean' | 'text';
+
+export interface GeoPrimitiveField {
+  /** Property suffix — editor dispatches `geo.<key>` changes. */
+  key: string;
+  label: string;
+  kind: GeoPrimitiveFieldKind;
+  value: number | boolean | string | [number, number, number];
+  step?: number;
+  min?: number;
+  /** vector3 fields that represent a local-space point editable with a viewport gizmo. */
+  gizmoEditable?: boolean;
+  /** vector3 point fields that can be bound to follow another scene node. */
+  bindable?: boolean;
+  /** id of the node this point currently follows, or null/undefined if free. */
+  binding?: string | null;
+}
+
+export interface SelectedNodeGeoPrimitive {
+  kind: GeoPrimitiveKind;
+  fields: GeoPrimitiveField[];
+  /** Read-only computed metrics, e.g. length / angle°. */
+  metrics?: Array<{ label: string; value: string }>;
+}
+
 export interface SelectedNodeData {
   id: string;
   name: string;
@@ -316,6 +344,7 @@ export interface SelectedNodeData {
   light?: SelectedNodeLight;
   camera?: SelectedNodeCamera;
   audio?: SelectedNodeAudio;
+  geoPrimitive?: SelectedNodeGeoPrimitive;
 }
 
 // ─── Scene Settings ───────────────────────────────────────────
@@ -364,6 +393,14 @@ export interface PropertiesPanelProps {
   sceneGeometries?: SceneGeometryEntry[];
   /** Assigns geometry from sourceNodeId to targetNodeId (copies descriptor incl. same id). */
   onAssignGeometry?: (targetNodeId: string, sourceNodeId: string) => void;
+  /** Toggle viewport-gizmo editing for a geometry-primitive local point (e.g. segment start/end). */
+  onEditGeoPoint?: (nodeId: string, fieldKey: string) => void;
+  /** Currently gizmo-edited geometry point, for highlighting the active button. */
+  activeGeoPoint?: { nodeId: string; fieldKey: string } | null;
+  /** All scene nodes (id/name/type) — for the "bind point to node" picker. */
+  sceneNodes?: Array<{ id: string; name: string; type: string }>;
+  /** Bind/unbind a geometry point to follow another node's position. targetId=null clears. */
+  onBindGeoPoint?: (nodeId: string, fieldKey: string, targetId: string | null) => void;
   className?: string;
 }
 

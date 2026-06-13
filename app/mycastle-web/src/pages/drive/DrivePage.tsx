@@ -21,6 +21,9 @@ import {
   TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
   Switch, FormControlLabel,
 } from '@mui/material';
+import MenuIcon from '@mui/icons-material/Menu';
+import { useLayoutChrome } from '../../components/Layout';
+import { AccountMenu } from '../../components/AccountMenu';
 import { MdEditor } from '@/components/mdeditor';
 import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorTypes } from 'monaco-editor';
@@ -755,6 +758,7 @@ export default function DrivePage(): React.JSX.Element {
   const params = useParams<{ userName: string }>();
   const { currentUser, token } = useAuth();
   const userName = params.userName || currentUser?.name || '';
+  const { openNav } = useLayoutChrome();
   const [cwd, setCwd] = useState('');                       // relative under /drive/
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2246,6 +2250,13 @@ export default function DrivePage(): React.JSX.Element {
       {/* Header — single "Actions" dropdown gathers every directory-level
           operation. Per-file ops live in the row's context menu (MoreVertIcon). */}
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, gap: 1 }}>
+        {/* Main nav + account — only as a full route (Global window has no params.userName) */}
+        {params.userName && (
+          <Box sx={{ display: 'flex', alignItems: 'center', bgcolor: 'action.hover', borderRadius: 1.5, px: 0.25, mr: 0.5 }}>
+            <Tooltip title="Menu główne"><IconButton size="small" onClick={openNav}><MenuIcon /></IconButton></Tooltip>
+            <AccountMenu isAdminView={false} userName={userName} />
+          </Box>
+        )}
         <Typography variant="h5" sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
           <DriveFolderUploadIcon /> Drive
           {clipboard && (

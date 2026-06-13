@@ -81,6 +81,8 @@ const MinisUPythonProjectPage = lazy(() => import('./pages/minis-user/UPythonPro
 const MinisPygameProjectPage = lazy(() => import('./pages/minis-user/PygameProjectPage'));
 const MinisPicoSdkProjectPage = lazy(() => import('./pages/minis-user/PicoSdkProjectPage'));
 const MinisCppProjectPage = lazy(() => import('./pages/minis-user/CppProjectPage'));
+// Programming — UML editor (ReactFlow bundle is heavy → lazy load)
+const UmlEditorPage = lazy(() => import('./pages/programming/UmlEditorPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -211,6 +213,18 @@ function AppRoot() {
           }
         />
         <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><UserDataEditorPage /></Suspense></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        <Route
+          path="/user/:userName/programming/uml"
+          element={
+            <RequireAuth>
+              <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+                <Layout fullBleed hideChrome>
+                  <Suspense fallback={null}><UmlEditorPage /></Suspense>
+                </Layout>
+              </Box>
+            </RequireAuth>
+          }
+        />
         {/* Drive is a full-page file manager — same `Layout fullBleed`
             shape as Electronics Configuration / TestVfs so the inner
             flex column gets the exact remaining viewport height (no
@@ -222,7 +236,7 @@ function AppRoot() {
           path="/user/:userName/pim/drive"
           element={
             <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-              <Layout fullBleed>
+              <Layout fullBleed hideChrome>
                 <DrivePage />
               </Layout>
             </Box>

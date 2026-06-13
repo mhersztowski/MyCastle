@@ -25,6 +25,8 @@ import Popover from '@mui/material/Popover';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import PaletteIcon from '@mui/icons-material/Palette';
+import OpenWithIcon from '@mui/icons-material/OpenWith';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
 
 const AXIS_COLORS = { x: '#ef5350', y: '#66bb6a', z: '#42a5f5' };
 
@@ -315,8 +317,13 @@ export function PropertiesPanel({
   onEditMesh,
   sceneGeometries,
   onAssignGeometry,
+  onEditGeoPoint,
+  activeGeoPoint,
+  sceneNodes,
+  onBindGeoPoint,
   className,
 }: PropertiesPanelProps) {
+  const [bindMenu, setBindMenu] = useState<{ el: HTMLElement; fieldKey: string } | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [geoLinkAnchor, setGeoLinkAnchor] = useState<HTMLElement | null>(null);
@@ -531,6 +538,137 @@ export function PropertiesPanel({
               />
             </AccordionDetails>
           </Accordion>
+
+          {node.geoPrimitive && (
+            <Accordion defaultExpanded disableGutters sx={accordionSx}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
+                <Typography sx={sectionTitleSx}>Geometry</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
+                {node.geoPrimitive.metrics && node.geoPrimitive.metrics.length > 0 && (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1 }}>
+                    {node.geoPrimitive.metrics.map((m) => (
+                      <Chip
+                        key={m.label}
+                        size="small"
+                        label={`${m.label}: ${m.value}`}
+                        sx={{ height: 20, fontSize: '0.65rem', '& .MuiChip-label': { px: 0.75 } }}
+                      />
+                    ))}
+                  </Box>
+                )}
+                {node.geoPrimitive.fields.map((field) => {
+                  if (field.kind === 'vector3') {
+                    const v = field.value as [number, number, number];
+                    const gizmoActive = !!(activeGeoPoint && activeGeoPoint.nodeId === node.id && activeGeoPoint.fieldKey === field.key);
+                    const boundName = field.binding ? (sceneNodes?.find((n) => n.id === field.binding)?.name ?? field.binding.slice(0, 8)) : null;
+                    return (
+                      <Box key={field.key} sx={{ position: 'relative' }}>
+                        <Vector3Row
+                          label={field.label}
+                          values={v}
+                          step={field.step ?? 0.1}
+                          onChange={(axis, value) => {
+                            const next: [number, number, number] = [...v];
+                            next[axis] = value;
+                            handleChange(`geo.${field.key}`, next);
+                          }}
+                        />
+                        <Box sx={{ position: 'absolute', top: -3, right: 0, display: 'flex' }}>
+                          {field.bindable && onBindGeoPoint && (
+                            <Tooltip title={boundName ? `Bound to ${boundName} — change/unbind` : 'Bind this point to follow a node'}>
+                              <IconButton
+                                size="small"
+                                onClick={(e) => setBindMenu({ el: e.currentTarget, fieldKey: field.key })}
+                                sx={{ p: 0.25, color: boundName ? 'primary.main' : 'text.disabled', bgcolor: boundName ? 'action.selected' : 'transparent' }}
+                              >
+                                <LinkIcon sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {field.gizmoEditable && onEditGeoPoint && (
+                            <Tooltip title={gizmoActive ? 'Stop dragging this point' : 'Drag this point in the viewport'}>
+                              <IconButton
+                                size="small"
+                                onClick={() => onEditGeoPoint(node.id, field.key)}
+                                sx={{ p: 0.25, color: gizmoActive ? 'primary.main' : 'text.disabled', bgcolor: gizmoActive ? 'action.selected' : 'transparent' }}
+                              >
+                                <OpenWithIcon sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
+                        {boundName && (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25, mb: 0.25 }}>
+                            <Chip
+                              size="small"
+                              icon={<LinkIcon sx={{ fontSize: 12 }} />}
+                              label={`→ ${boundName}`}
+                              onDelete={onBindGeoPoint ? () => onBindGeoPoint(node.id, field.key, null) : undefined}
+                              sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-label': { px: 0.5 }, '& .MuiChip-icon': { ml: 0.25 } }}
+                            />
+                          </Box>
+                        )}
+                      </Box>
+                    );
+                  }
+                  if (field.kind === 'number') {
+                    return (
+                      <PropertyRow key={field.key} label={field.label}>
+                        <AxisInput
+                          value={field.value as number}
+                          step={field.step ?? 1}
+                          onChange={(value) => handleChange(`geo.${field.key}`, Math.max(field.min ?? -Infinity, value))}
+                        />
+                      </PropertyRow>
+                    );
+                  }
+                  if (field.kind === 'color') {
+                    return (
+                      <ColorInput
+                        key={field.key}
+                        label={field.label}
+                        value={field.value as string}
+                        onChange={(v) => handleChange(`geo.${field.key}`, v)}
+                        favColors={favColors}
+                        onFavChange={updateFavColors}
+                      />
+                    );
+                  }
+                  if (field.kind === 'boolean') {
+                    return (
+                      <FormControlLabel
+                        key={field.key}
+                        control={<Checkbox size="small" checked={field.value as boolean} onChange={(e) => handleChange(`geo.${field.key}`, e.target.checked)} sx={{ p: 0.25 }} />}
+                        label={<Typography sx={{ fontSize: '0.7rem' }}>{field.label}</Typography>}
+                        sx={{ ml: 0, mr: 1, display: 'flex' }}
+                      />
+                    );
+                  }
+                  // text
+                  return (
+                    <Box key={field.key} sx={{ mt: 0.5 }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', mb: 0.25, display: 'block' }}>
+                        {field.label}
+                      </Typography>
+                      <TextField
+                        size="small"
+                        fullWidth
+                        value={field.value as string}
+                        placeholder="auto"
+                        onChange={(e) => handleChange(`geo.${field.key}`, e.target.value)}
+                        sx={{
+                          '& .MuiInputBase-root': { height: 22, fontSize: '0.7rem' },
+                          '& .MuiInputBase-input': { py: 0.25, px: 0.5 },
+                          '& .MuiOutlinedInput-notchedOutline': { borderColor: 'divider' },
+                        }}
+                      />
+                    </Box>
+                  );
+                })}
+              </AccordionDetails>
+            </Accordion>
+          )}
 
           <Accordion defaultExpanded disableGutters sx={accordionSx}>
             <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 16 }} />} sx={summarySx}>
@@ -1479,6 +1617,40 @@ export function PropertiesPanel({
           )}
         </Box>
       )}
+
+      {/* Bind-point picker: choose a scene node whose position drives this point */}
+      <Menu
+        open={Boolean(bindMenu)}
+        anchorEl={bindMenu?.el ?? null}
+        onClose={() => setBindMenu(null)}
+        slotProps={{ paper: { sx: { maxHeight: 320, minWidth: 180 } } }}
+      >
+        {node && bindMenu && (() => {
+          const fieldBinding = node.geoPrimitive?.fields.find((f) => f.key === bindMenu.fieldKey)?.binding ?? null;
+          const items: React.ReactNode[] = [];
+          if (fieldBinding) {
+            items.push(
+              <MenuItem key="__unbind" sx={menuItemSx} onClick={() => { onBindGeoPoint?.(node.id, bindMenu.fieldKey, null); setBindMenu(null); }}>
+                <LinkOffIcon sx={{ fontSize: 16, mr: 1, color: 'error.main' }} /> Unbind
+              </MenuItem>,
+            );
+          }
+          (sceneNodes ?? []).filter((n) => n.id !== node.id).forEach((n) => {
+            items.push(
+              <MenuItem
+                key={n.id}
+                selected={n.id === fieldBinding}
+                sx={menuItemSx}
+                onClick={() => { onBindGeoPoint?.(node.id, bindMenu.fieldKey, n.id); setBindMenu(null); }}
+              >
+                {n.name} <Typography component="span" sx={{ ml: 0.75, fontSize: '0.6rem', color: 'text.disabled' }}>{n.type}</Typography>
+              </MenuItem>,
+            );
+          });
+          if (items.length === 0) items.push(<MenuItem key="__none" disabled sx={menuItemSx}>No other nodes</MenuItem>);
+          return items;
+        })()}
+      </Menu>
     </Box>
   );
 }

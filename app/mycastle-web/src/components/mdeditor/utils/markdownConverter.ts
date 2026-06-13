@@ -58,9 +58,11 @@ function escapeAutomateScriptsForHtml(content: string): string {
   // future tokens are easy to skip.
   // windowHeight persists as `:h=NNN` token — same prefix pattern as tags,
   // so the parser can find them in any order.
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null }[] = [];
+  // umlProjects persist via a `:u=a,b,c` token (prefix `u=`) — same pattern as
+  // tags; selected UML projects whose classes become Blockly block categories.
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null; umlProjects: string[] }[] = [];
 
-  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html:t=a,b:h=360 code fences
+  // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html:t=a,b:h=360:u=p.umlproj.json code fences
   const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
     const parts = (params?.trim() || '').split(':');
     const blockId = parts[0] || '';
@@ -80,6 +82,14 @@ function escapeAutomateScriptsForHtml(content: string): string {
     const hToken = parts.find((p: string) => p.startsWith('h='));
     const hNum = hToken ? Number(hToken.slice(2)) : NaN;
     const windowHeight: number | null = Number.isFinite(hNum) && hNum > 0 ? hNum : null;
+    // `u=a,b` token for selected UML projects.
+    const umlToken = parts.find((p: string) => p.startsWith('u='));
+    const umlProjects: string[] = umlToken
+      ? umlToken.slice(2).split(',').map((t: string) => {
+          try { return decodeURIComponent(t.trim()); }
+          catch { return t.trim(); }
+        }).filter(Boolean)
+      : [];
     automateScripts.push({
       code: code.trimEnd(),
       blockId,
@@ -87,6 +97,7 @@ function escapeAutomateScriptsForHtml(content: string): string {
       viewMode,
       tags,
       windowHeight,
+      umlProjects,
     });
     return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
   });
@@ -185,7 +196,7 @@ function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): 
 }
 
 // Helper to restore automate script blocks after showdown conversion
-function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null }[]): string {
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null; umlProjects?: string[] }[]): string {
   let result = html;
 
   automateScripts.forEach((script, index) => {
@@ -201,7 +212,10 @@ function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: s
     const whAttr = (typeof script.windowHeight === 'number' && script.windowHeight > 0)
       ? ` data-window-height="${script.windowHeight}"`
       : '';
-    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    const umlAttr = (script.umlProjects && script.umlProjects.length > 0)
+      ? ` data-uml-projects="${script.umlProjects.map(p => encodeURIComponent(p)).join(',')}"`
+      : '';
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr}${umlAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
     const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -1081,6 +1095,7 @@ turndownService.addRule('automateScriptBlock', {
     let viewMode = element.getAttribute('data-view-mode') === 'html' ? 'html' : 'code';
     let tagsRaw = element.getAttribute('data-tags') || '';
     let windowHeightRaw = element.getAttribute('data-window-height') || '';
+    let umlRaw = element.getAttribute('data-uml-projects') || '';
 
     const encodedCode = element.getAttribute('data-code');
     if (encodedCode) {
@@ -1098,6 +1113,7 @@ turndownService.addRule('automateScriptBlock', {
         viewMode = inner.getAttribute('data-view-mode') === 'html' ? 'html' : 'code';
         tagsRaw = inner.getAttribute('data-tags') || tagsRaw;
         windowHeightRaw = inner.getAttribute('data-window-height') || windowHeightRaw;
+        umlRaw = inner.getAttribute('data-uml-projects') || umlRaw;
       }
     }
 
@@ -1121,6 +1137,10 @@ turndownService.addRule('automateScriptBlock', {
       // windowHeightRaw is a plain integer string from data-window-height —
       // pass through verbatim; the parser validates on the way back in.
       parts.push(`h=${windowHeightRaw}`);
+    }
+    if (umlRaw) {
+      // umlRaw is already comma-joined URL-encoded file names — pass through.
+      parts.push(`u=${umlRaw}`);
     }
     // Trim trailing empties so `automate::` (no flags, no id) stays plain `automate`.
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
@@ -1497,7 +1517,7 @@ export function htmlToMarkdown(html: string): string {
   );
 
   // Pre-process: Replace automate script blocks with placeholders before Turndown
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string; umlRaw: string }[] = [];
 
   processedHtml = processedHtml.replace(
     /<div[^>]*data-type="automate-script-block"[^>]*?(?:data-block-id="([^"]*)")?[^>]*?(?:data-code="([^"]*)")?[^>]*>[\s\S]*?<\/div>/gi,
@@ -1508,6 +1528,7 @@ export function htmlToMarkdown(html: string): string {
       const viewModeMatch = match.match(/data-view-mode="([^"]*)"/);
       const tagsMatch = match.match(/data-tags="([^"]*)"/);
       const whMatch = match.match(/data-window-height="([^"]*)"/);
+      const umlMatch = match.match(/data-uml-projects="([^"]*)"/);
       automateScripts.push({
         code: codeMatch ? decodeURIComponent(codeMatch[1]) : '',
         blockId: blockIdMatch ? blockIdMatch[1] : '',
@@ -1517,6 +1538,8 @@ export function htmlToMarkdown(html: string): string {
         // it can be plugged into the `t=` token without double-encoding.
         tagsRaw: tagsMatch ? tagsMatch[1] : '',
         windowHeightRaw: whMatch ? whMatch[1] : '',
+        // umlRaw: already-encoded comma-joined UML project file names.
+        umlRaw: umlMatch ? umlMatch[1] : '',
       });
       return `##AUTOMATESCRIPT${automateScripts.length - 1}##`;
     }
@@ -1630,6 +1653,7 @@ export function htmlToMarkdown(html: string): string {
     if (script.viewMode === 'html') parts.push('html');
     if (script.tagsRaw) parts.push(`t=${script.tagsRaw}`);
     if (script.windowHeightRaw) parts.push(`h=${script.windowHeightRaw}`);
+    if (script.umlRaw) parts.push(`u=${script.umlRaw}`);
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
     const langTag = parts.join(':');
     const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;

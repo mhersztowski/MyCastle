@@ -418,6 +418,13 @@ class MinisApiService {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/electronics/configuration`, arch);
   }
 
+  // UML — generate/update a UML project from source code (backend uses @mhersztowski/devtools).
+  // `dir` is a user-root-relative path (e.g. `Projects/cpp/HelloWorld` or `drive/...`).
+  // Pass the current project to sync (diff + history commit); omit it to generate fresh.
+  async syncUmlFromCode<P = unknown>(userName: string, dir: string, project?: P, name?: string): Promise<{ project: P; changes: Array<{ kind: string; target: string; symbol?: string; member?: string; from?: string; to?: string }>; summary: string; committed: boolean }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/uml/sync`, { dir, name, project });
+  }
+
   // API Keys
   async getApiKeys(userName: string): Promise<ApiKeyPublic[]> {
     const data = await this.request<{ items: ApiKeyPublic[] }>('GET', `/users/${encodeURIComponent(userName)}/api-keys`);

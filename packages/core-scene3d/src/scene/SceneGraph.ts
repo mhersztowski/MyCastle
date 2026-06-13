@@ -9,6 +9,8 @@ import type { CameraNodeData } from '../nodes/CameraNode';
 import { GroupNode } from '../nodes/GroupNode';
 import { AudioNode } from '../nodes/AudioNode';
 import type { AudioNodeData } from '../nodes/AudioNode';
+import { GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode } from '../nodes/GeometryNodes';
+import type { GeometryPointNodeData, GeometrySegmentNodeData, GeometryLineNodeData, GeometryAngleNodeData } from '../nodes/GeometryNodes';
 import type { AnimationClip } from '../animation/types';
 import type { PrefabEntry } from '../prefabs/types';
 
@@ -163,6 +165,26 @@ export class SceneGraph {
             coneOuterAngle: d.coneOuterAngle,
             coneOuterGain: d.coneOuterGain,
           });
+          break;
+        }
+        case 'geometry-point': {
+          const d = nodeData as GeometryPointNodeData;
+          node = new GeometryPointNode({ ...baseFields(d), color: d.color, pixelSize: d.pixelSize, showLabel: d.showLabel, label: d.label });
+          break;
+        }
+        case 'geometry-segment': {
+          const d = nodeData as GeometrySegmentNodeData;
+          node = new GeometrySegmentNode({ ...baseFields(d), start: d.start, end: d.end, color: d.color, pixelSize: d.pixelSize, showLength: d.showLength, startBinding: d.startBinding, endBinding: d.endBinding });
+          break;
+        }
+        case 'geometry-line': {
+          const d = nodeData as GeometryLineNodeData;
+          node = new GeometryLineNode({ ...baseFields(d), origin: d.origin, direction: d.direction, color: d.color, showLabel: d.showLabel, label: d.label, originBinding: d.originBinding });
+          break;
+        }
+        case 'geometry-angle': {
+          const d = nodeData as GeometryAngleNodeData;
+          node = new GeometryAngleNode({ ...baseFields(d), vertex: d.vertex, p1: d.p1, p2: d.p2, color: d.color, arcPixelRadius: d.arcPixelRadius, showLabel: d.showLabel, vertexBinding: d.vertexBinding, p1Binding: d.p1Binding, p2Binding: d.p2Binding });
           break;
         }
         default:

@@ -31,12 +31,16 @@ import {
   Tab,
   Tabs,
   Badge,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import ExtensionIcon from '@mui/icons-material/Extension';
+import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -51,13 +55,18 @@ import type { editor as MonacoEditorTypes } from 'monaco-editor';
 import { useAuth } from '../../../modules/auth/AuthContext';
 
 // Lazy — the docs string (`docs/MDScript.md`) is in its own chunk so users
-// who never click (?) don't pay for it. We reuse the same dialog wrapper as
-// Plugin Script because the docs file covers in-editor scripting in general
-// (both block types follow the same `display.*` / return-value convention).
-const MdScriptHelpDialog = lazy(() => import('./MdScriptHelpDialog'));
+// who never click help don't pay for it.
+// Help browser (filesystem tree of drive/public/doc + markdown viewer) — lazy
+// so its react-markdown chunk loads only when the user opens the help window.
+const AutomateHelpBrowserDialog = lazy(() => import('./AutomateHelpBrowserDialog'));
 
 // Lazy — file picker only loads when the user clicks "Dołącz plik".
 const AutomateIncludeFileDialog = lazy(() => import('./AutomateIncludeFileDialog'));
+
+// Lazy — Blockly is heavy; only loaded when the user switches to block mode.
+const AutomateBlocklyEditor = lazy(() => import('./AutomateBlocklyEditor'));
+
+import { listUmlProjects, loadUmlClasses, type UmlClassDef } from './umlBlockly';
 
 import { setupAutomateMonaco, mergeExtraLibs } from '../../../modules/automate/designer/automateMonacoSetup';
 import { editorOverlay } from '../editorOverlayState';
@@ -249,6 +258,58 @@ function removeEmbeddedBlock(code: string, file: EmbeddedFile): string {
   return [...lines.slice(0, from), ...lines.slice(file.endLine + 1)].join('\n');
 }
 
+// ── Blockly persistence + runtime combination ────────────────────────────────
+// The Blockly side (block layout + the JS it generates) is stored OUT of the
+// visible script, in a trailing `//@blockly <base64>` comment marker holding
+// `{ s: workspaceState, c: generatedCode }`. The code editor only ever shows
+// the user's *normal* hand-written body — Blockly never overwrites it. At run
+// time the two are combined (`buildRuntimeCode`): the Blockly-generated code is
+// concatenated with the normal body. External libraries (`// @library: …`) live
+// only in the normal body and so appear once in the combined runtime code.
+const BLOCKLY_MARKER_RE = /\n*\/\/@blockly\s+([A-Za-z0-9+/=]+)\s*$/;
+
+interface BlocklySplit { body: string; state: string | null; blocklyCode: string }
+
+/** Splits script text into the normal body and the stored Blockly state + generated code. */
+function splitBlockly(full: string): BlocklySplit {
+  const m = full.match(BLOCKLY_MARKER_RE);
+  if (!m || m.index === undefined) return { body: full, state: null, blocklyCode: '' };
+  let state: string | null = null;
+  let blocklyCode = '';
+  try {
+    const json = decodeURIComponent(escape(atob(m[1])));
+    const obj = JSON.parse(json) as { s?: string | null; c?: string; blocks?: unknown; languageVersion?: unknown };
+    if (obj && (obj.s !== undefined || obj.c !== undefined)) {
+      state = obj.s ?? null;
+      blocklyCode = obj.c ?? '';
+    } else if (obj && (obj.blocks !== undefined || obj.languageVersion !== undefined)) {
+      // Legacy marker: the payload was the raw workspace state (generated code
+      // lived inline in the body back then). Keep the layout editable.
+      state = json;
+    }
+  } catch { /* malformed marker → ignore */ }
+  return { body: full.slice(0, m.index).replace(/\n+$/, ''), state, blocklyCode };
+}
+
+/** Re-attaches the Blockly marker to a normal body (no-op when there's nothing to store). */
+function joinBlockly(body: string, state: string | null, blocklyCode: string): string {
+  if (!state && !blocklyCode) return body;
+  try {
+    const payload = JSON.stringify({ s: state ?? null, c: blocklyCode ?? '' });
+    return `${body}\n//@blockly ${btoa(unescape(encodeURIComponent(payload)))}`;
+  } catch { return body; }
+}
+
+/** The actual script to execute: the normal body first (it usually declares the
+ *  classes/functions/setup), then the Blockly-generated code which uses them.
+ *  Body-first avoids `class`/`const` temporal-dead-zone errors when the blocks
+ *  reference something defined in the normal code. */
+function buildRuntimeCode(full: string): string {
+  const { body, blocklyCode } = splitBlockly(full);
+  if (!blocklyCode) return body;
+  return body ? `${body}\n${blocklyCode}` : blocklyCode;
+}
+
 // Komponent renderujacy wyniki display
 const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
   if (items.length === 0) return null;
@@ -419,7 +480,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     editorOverlay.enter();
     return () => editorOverlay.exit();
   }, [editorDialogOpen]);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpBrowserOpen, setHelpBrowserOpen] = useState(false);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   // Consolidated settings dialog (Auto / view mode / library / tags) opened
@@ -448,6 +509,9 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const { currentUser } = useAuth();
   const userName = (currentUser as { name?: string } | null)?.name ?? '';
   const [dialogCode, setDialogCode] = useState('');
+  // Fullscreen editor view: 'code' = Monaco source editor, 'blockly' = visual
+  // block editor (default JS blocks) that generates the JS into dialogCode.
+  const [dialogEditMode, setDialogEditMode] = useState<'code' | 'blockly' | 'blocklyCode'>('code');
   // Active tab in the dialog's bottom panel — 'output' shows display.* /
   // return value, 'logs' shows api.log.*. Default to output because that's
   // where most scripts surface visible results.
@@ -527,6 +591,28 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   // number, applied as `height` on Paper, and the content slots flex inside.
   const windowHeight: number | null = typeof node.attrs.windowHeight === 'number'
     ? node.attrs.windowHeight : null;
+  // Selected UML projects (Programming/Uml) whose classes become Blockly blocks.
+  const umlProjects: string[] = Array.isArray(node.attrs.umlProjects) ? (node.attrs.umlProjects as string[]) : [];
+  const umlProjectsKey = umlProjects.join(',');
+
+  // Available UML projects (for the settings picker) — loaded when the dialog opens.
+  const [availableUmlProjects, setAvailableUmlProjects] = useState<string[]>([]);
+  // Parsed UML classes from the selected projects — fed to the Blockly editor.
+  const [umlClasses, setUmlClasses] = useState<UmlClassDef[]>([]);
+
+  useEffect(() => {
+    if (!settingsOpen || !userName) return;
+    let alive = true;
+    listUmlProjects(userName).then((files) => { if (alive) setAvailableUmlProjects(files); });
+    return () => { alive = false; };
+  }, [settingsOpen, userName]);
+
+  useEffect(() => {
+    if (!userName || !umlProjectsKey) { setUmlClasses([]); return; }
+    let alive = true;
+    loadUmlClasses(userName, umlProjectsKey.split(',')).then((classes) => { if (alive) setUmlClasses(classes); });
+    return () => { alive = false; };
+  }, [userName, umlProjectsKey]);
 
   // Assign blockId if not set
   useEffect(() => {
@@ -542,9 +628,11 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     return () => unregisterBlock(id);
   }, [registerBlock, unregisterBlock]);
 
-  // Sync code to context when it changes
+  // Sync code to context when it changes. Register the *runtime* code (Blockly
+  // blocks combined with the normal body) so cross-block references and
+  // override-less runs use the combined script.
   useEffect(() => {
-    updateBlockCode(blockId.current, code);
+    updateBlockCode(blockId.current, buildRuntimeCode(code));
   }, [code, updateBlockCode]);
 
   // Autorun — run script automatically once on document load.
@@ -573,7 +661,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     const block = blocks.get(blockId.current);
     if (!block) return;                  // registerBlock setBlocks not committed yet
     if (block.status !== 'idle') return; // already ran (running / completed / error)
-    runBlock(blockId.current, code);
+    runBlock(blockId.current, buildRuntimeCode(code));
   }, [autorun, code, blocks, runBlock]);
 
   const blockState = getBlockState(blockId.current);
@@ -592,7 +680,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     // Library preload is handled INSIDE runBlock now (see runBlock in
     // AutomateDocumentContext), so CDN/CORS failures surface as a block
     // error rather than getting swallowed by a `.finally` chain here.
-    void runBlock(blockId.current, code);
+    void runBlock(blockId.current, buildRuntimeCode(code));
   }, [code, runBlock]);
 
   const handleClear = useCallback(() => {
@@ -617,7 +705,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     // freshly-saved value so isDirty flips back to false next render.
     setCode(dialogCode);
     updateAttributes({ code: dialogCode });
-    updateBlockCode(blockId.current, dialogCode);
+    updateBlockCode(blockId.current, buildRuntimeCode(dialogCode));
   }, [dialogCode, updateAttributes, updateBlockCode]);
 
   /** Save + run inside the fullscreen dialog — keeps the dialog open so the
@@ -625,12 +713,13 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const handleEditorDialogRun = useCallback(() => {
     setCode(dialogCode);
     updateAttributes({ code: dialogCode });
-    updateBlockCode(blockId.current, dialogCode);
-    // Pass dialogCode as override so runBlock uses the freshly-edited body
-    // regardless of whether the context's block.code has committed yet —
-    // closes the race where Run-after-Insert executed the stale buffer.
+    const runtime = buildRuntimeCode(dialogCode);
+    updateBlockCode(blockId.current, runtime);
+    // Pass the combined runtime code (Blockly blocks + normal body) as override
+    // so runBlock executes the freshly-edited buffer regardless of whether the
+    // context's block.code has committed yet.
     // Library preload happens inside runBlock now (uniform error path).
-    void runBlock(blockId.current, dialogCode);
+    void runBlock(blockId.current, runtime);
   }, [dialogCode, updateAttributes, updateBlockCode, runBlock]);
 
   /** Library picker callback — receives a fresh code body with `// @library:`
@@ -641,7 +730,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     setDialogCode(newCode);
     setCode(newCode);
     updateAttributes({ code: newCode });
-    updateBlockCode(blockId.current, newCode);
+    updateBlockCode(blockId.current, buildRuntimeCode(newCode));
     // Best-effort: also kick off a CDN preload so the runtime is ready by
     // the time the user clicks Run. Ignored on failure — the actual run
     // path retries and surfaces errors properly.
@@ -922,7 +1011,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                 <Editor
                   height={editorHeight}
                   defaultLanguage="typescript"
-                  value={code}
+                  // Hide the persisted Blockly state marker from the inline view.
+                  value={splitBlockly(code).body}
                   theme="vs-dark"
                   beforeMount={setupAutomateMonacoWithDisplay}
                   onMount={(monacoEditor, monaco) => {
@@ -940,10 +1030,13 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                     );
                   }}
                   onChange={(value) => {
-                    const v = value ?? '';
+                    // The inline editor edits the normal body; keep the stored
+                    // Blockly state + generated code untouched.
+                    const prev = splitBlockly(code);
+                    const v = joinBlockly(value ?? '', prev.state, prev.blocklyCode);
                     setCode(v);
                     updateAttributes({ code: v });
-                    updateBlockCode(blockId.current, v);
+                    updateBlockCode(blockId.current, buildRuntimeCode(v));
                   }}
                   options={{
                     // Compact inline view: kill the chrome that's only
@@ -1065,12 +1158,40 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
         open={editorDialogOpen}
         onClose={() => setEditorDialogOpen(false)}
         fullScreen
+        // Blockly renders its field editors (text input, variable dropdown,
+        // etc.) in a WidgetDiv/DropDownDiv appended to document.body — OUTSIDE
+        // this dialog. MUI's focus trap would block typing/selecting in them,
+        // so disable it (and auto/restore focus) while the dialog is open.
+        disableEnforceFocus
+        disableAutoFocus
+        disableRestoreFocus
       >
         <DialogTitle sx={{ py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
           <SmartToyIcon sx={{ color: '#4caf50' }} />
           <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
             Edytor skryptu
           </Typography>
+          {/* View toggle (icons only):
+              Code        — normal source editor (the hand-written body)
+              Blockly     — visual block editor
+              Blockly Code— read/edit the JS generated by the blocks */}
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={dialogEditMode}
+            onChange={(_e, v) => { if (v) setDialogEditMode(v); }}
+            sx={{ mr: 0.5, '& .MuiToggleButton-root': { py: 0.25, px: 0.75 } }}
+          >
+            <ToggleButton value="code">
+              <Tooltip title="Kod źródłowy"><CodeIcon fontSize="small" /></Tooltip>
+            </ToggleButton>
+            <ToggleButton value="blockly">
+              <Tooltip title="Blockly (programowanie graficzne)"><ExtensionIcon fontSize="small" /></Tooltip>
+            </ToggleButton>
+            <ToggleButton value="blocklyCode">
+              <Tooltip title="Kod wygenerowany przez Blockly"><IntegrationInstructionsIcon fontSize="small" /></Tooltip>
+            </ToggleButton>
+          </ToggleButtonGroup>
           {/* "Include file" button — pulls from drive/mdscript/, inserts at
               cursor. Disabled when we don't yet know the user (rare race
               during initial auth load). */}
@@ -1095,10 +1216,12 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               <SettingsIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Dokumentacja Automate Script">
-            <IconButton size="small" onClick={() => setHelpOpen(true)}>
-              <HelpOutlineIcon fontSize="small" />
-            </IconButton>
+          <Tooltip title="Pomoc — przeglądarka dokumentacji (drive/public/doc)">
+            <span>
+              <IconButton size="small" onClick={() => setHelpBrowserOpen(true)} disabled={!userName}>
+                <MenuBookIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
           {/* Primary actions moved up here from the bottom DialogActions —
               users on long scripts no longer need to scroll past code +
@@ -1143,7 +1266,28 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           {/* Box wrapper ensures the Editor expands to fill remaining flex space
               regardless of fullScreen dialog's inner padding/border math. */}
           <Box sx={{ flex: 1, minHeight: 0 }}>
+            {dialogEditMode === 'blockly' ? (
+              <Suspense fallback={<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><CircularProgress /></Box>}>
+                <AutomateBlocklyEditor
+                  // Re-mount when the UML selection changes so block defs + toolbox refresh.
+                  key={`uml:${umlProjectsKey}:${umlClasses.length}`}
+                  initialState={splitBlockly(dialogCode).state}
+                  onChange={(js, state) => {
+                    // Blockly never overwrites the normal code — it only stores
+                    // its workspace state + generated code in the marker. The two
+                    // are combined at run time (buildRuntimeCode). External
+                    // libraries stay in the normal body only.
+                    const body = splitBlockly(dialogCode).body;
+                    setDialogCode(joinBlockly(body, state, js));
+                  }}
+                  umlClasses={umlClasses}
+                />
+              </Suspense>
+            ) : (
             <Editor
+              // Remount when switching Code ↔ Blockly Code so Monaco swaps the
+              // shown content cleanly instead of fighting the controlled value.
+              key={dialogEditMode}
               height="100%"
               // Even though the script runs as plain JavaScript at runtime,
               // we use the TypeScript language service here so that ambient
@@ -1154,9 +1298,17 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               // user-defined classes (handled locally) showed completions but
               // `api.*` (resolved through the ambient .d.ts) did not.
               defaultLanguage="typescript"
-              value={dialogCode}
+              // 'code' shows the normal body; 'blocklyCode' shows the JS that
+              // Blockly generated (the marker's `c` payload). Both hide the
+              // persisted marker itself.
+              value={dialogEditMode === 'blocklyCode' ? splitBlockly(dialogCode).blocklyCode : splitBlockly(dialogCode).body}
               onChange={value => {
-                const v = value || '';
+                const prev = splitBlockly(dialogCode);
+                // 'blocklyCode' edits the generated code; 'code' edits the body.
+                // Either way keep the other parts of the marker intact.
+                const v = dialogEditMode === 'blocklyCode'
+                  ? joinBlockly(prev.body, prev.state, value || '')
+                  : joinBlockly(value || '', prev.state, prev.blocklyCode);
                 setDialogCode(v);
                 // Refresh library .d.ts stubs in case the user just typed a
                 // `// @library: foo` marker (or removed one). Cheap because
@@ -1232,6 +1384,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               }}
               theme="vs-dark"
             />
+            )}
           </Box>
 
           {/* Touch-friendly draggable selection handles (Android-style pins) —
@@ -1478,13 +1631,14 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             user doesn't have to scroll past long output to reach them. */}
       </Dialog>
 
-      {/* ── Help dialog ── */}
-      {/* Mounted only when helpOpen flips true so the chunk fetches lazily on
-          first click. `Suspense fallback={null}` because the chunk is small —
-          a brief inline loader would flash and be more annoying than absent. */}
+      {/* ── Help browser (drive/public/doc tree + markdown viewer) ── */}
       <Suspense fallback={null}>
-        {helpOpen && (
-          <MdScriptHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+        {helpBrowserOpen && (
+          <AutomateHelpBrowserDialog
+            open={helpBrowserOpen}
+            onClose={() => setHelpBrowserOpen(false)}
+            userName={userName}
+          />
         )}
       </Suspense>
 
@@ -1535,6 +1689,9 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             onTagsChange={(next) => updateAttributes({ tags: next })}
             onWindowHeightChange={(next) => updateAttributes({ windowHeight: next })}
             onOpenLibraryPicker={() => setLibraryPickerOpen(true)}
+            availableUmlProjects={availableUmlProjects}
+            umlProjects={umlProjects}
+            onUmlProjectsChange={(next) => updateAttributes({ umlProjects: next })}
           />
         )}
       </Suspense>
@@ -1570,6 +1727,9 @@ export const AutomateScriptBlock = Node.create({
       // a flex column of that exact height — useful for embedded canvases
       // (Three.js viewports, dashboards) where you want a stable layout.
       windowHeight: { default: null as number | null },
+      // UML project file names (drive/uml/*.umlproj.json) whose classes are
+      // turned into Blockly block categories in the visual editor.
+      umlProjects: { default: [] as string[] },
     };
   },
 
@@ -1593,6 +1753,10 @@ export const AutomateScriptBlock = Node.create({
           const whRaw = element.getAttribute('data-window-height');
           const whNum = whRaw ? Number(whRaw) : NaN;
           const windowHeight = Number.isFinite(whNum) && whNum > 0 ? whNum : null;
+          const umlRaw = element.getAttribute('data-uml-projects') || '';
+          const umlProjects = umlRaw
+            ? umlRaw.split(',').map(t => decodeURIComponent(t.trim())).filter(Boolean)
+            : [];
           return {
             blockId: element.getAttribute('data-block-id') || '',
             code: element.getAttribute('data-code')
@@ -1602,6 +1766,7 @@ export const AutomateScriptBlock = Node.create({
             viewMode: vm === 'html' ? 'html' : 'code',
             tags,
             windowHeight,
+            umlProjects,
           };
         },
       },
@@ -1631,6 +1796,10 @@ export const AutomateScriptBlock = Node.create({
     }
     if (typeof node.attrs.windowHeight === 'number' && node.attrs.windowHeight > 0) {
       attrs['data-window-height'] = String(node.attrs.windowHeight);
+    }
+    const umlArr: string[] = Array.isArray(node.attrs.umlProjects) ? node.attrs.umlProjects : [];
+    if (umlArr.length > 0) {
+      attrs['data-uml-projects'] = umlArr.map(p => encodeURIComponent(p)).join(',');
     }
 
     return ['div', attrs];

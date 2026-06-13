@@ -70,7 +70,8 @@
       "Bash(mkdir -p data/Minis/Users/marcin/data)",
       "Bash(mkdir -p data/Minis/Users/pawel/data)",
       "Bash(mkdir -p data/public)",
-      "mcp__chrome-devtools__take_screenshot"
+      "mcp__chrome-devtools__take_screenshot",
+      "Bash(ps -eo pid,ppid,stat,etime,command)"
     ]
   }
 }

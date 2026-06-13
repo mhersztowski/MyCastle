@@ -32,6 +32,10 @@ import CodeIcon from '@mui/icons-material/Code';
 import CategoryIcon from '@mui/icons-material/Category';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
+import TimelineIcon from '@mui/icons-material/Timeline';
+import ChangeHistoryIcon from '@mui/icons-material/ChangeHistory';
 import {
   CubeIcon,
   SphereIcon,
@@ -61,6 +65,10 @@ function getNodeIcon(type: string, name?: string) {
   }
   if (type === 'camera') return <CameraIcon size={14} />;
   if (type === 'audio') return <VolumeUpIcon sx={{ fontSize: 14 }} />;
+  if (type === 'geometry-point') return <FiberManualRecordIcon sx={{ fontSize: 14 }} />;
+  if (type === 'geometry-segment') return <HorizontalRuleIcon sx={{ fontSize: 14 }} />;
+  if (type === 'geometry-line') return <TimelineIcon sx={{ fontSize: 14 }} />;
+  if (type === 'geometry-angle') return <ChangeHistoryIcon sx={{ fontSize: 14 }} />;
   return <FolderIcon size={14} />;
 }
 
@@ -86,6 +94,11 @@ const addMenuItems: Array<{ type: string; label?: string; icon?: React.ReactNode
   { type: 'divider3' },
   { type: 'audio', label: 'Audio Source', icon: <VolumeUpIcon sx={{ fontSize: 14 }} /> },
   { type: 'divider4' },
+  { type: 'geometry-point', label: 'Geometry Point', icon: <FiberManualRecordIcon sx={{ fontSize: 14 }} /> },
+  { type: 'geometry-segment', label: 'Geometry Segment', icon: <HorizontalRuleIcon sx={{ fontSize: 14 }} /> },
+  { type: 'geometry-line', label: 'Geometry Line', icon: <TimelineIcon sx={{ fontSize: 14 }} /> },
+  { type: 'geometry-angle', label: 'Geometry Angle', icon: <ChangeHistoryIcon sx={{ fontSize: 14 }} /> },
+  { type: 'divider5' },
   { type: 'import-mesh', label: 'Import Mesh...', icon: <FileUploadIcon sx={{ fontSize: 14 }} /> },
 ];
 
@@ -774,7 +787,7 @@ export function SceneTreePanel({
         >
           <MenuList dense>
             {addMenuItems.map((item, i) =>
-              item.type === 'divider' || item.type === 'divider2' || item.type === 'divider3' || item.type === 'divider4' ? (
+              item.type === 'divider' || item.type === 'divider2' || item.type === 'divider3' || item.type === 'divider4' || item.type === 'divider5' ? (
                 <Divider key={`add-div-${i}`} sx={{ my: 0.25 }} />
               ) : (
                 <MenuItem

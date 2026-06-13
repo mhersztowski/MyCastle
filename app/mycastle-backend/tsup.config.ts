@@ -9,6 +9,10 @@ export default defineConfig({
   external: [
     '@mhersztowski/core',
     '@mhersztowski/core-backend',
+    '@mhersztowski/devtools',
+    'web-tree-sitter',
+    'tree-sitter-wasms',
+    'typescript',
     'dayjs',
     'dotenv',
     'node-cron',

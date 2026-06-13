@@ -11,3 +11,22 @@ export { GroupNode } from './GroupNode';
 
 export { AudioNode } from './AudioNode';
 export type { AudioDistanceModel, AudioNodeData } from './AudioNode';
+
+export {
+  GeometryPointNode,
+  GeometrySegmentNode,
+  GeometryLineNode,
+  GeometryAngleNode,
+  GEOMETRY_PRIMITIVE_TYPES,
+  isGeometryPrimitiveNode,
+} from './GeometryNodes';
+export type {
+  GeometryPointNodeData,
+  GeometrySegmentNodeData,
+  GeometryLineNodeData,
+  GeometryAngleNodeData,
+  GeometryPrimitiveNode,
+  GeoFieldKind,
+  GeoEditableField,
+  GeoMetric,
+} from './GeometryNodes';

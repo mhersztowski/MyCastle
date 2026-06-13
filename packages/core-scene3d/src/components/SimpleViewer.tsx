@@ -1,10 +1,11 @@
 import { useRef, useMemo, useEffect, useCallback, useState, MutableRefObject, useLayoutEffect } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment } from '@react-three/drei';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SceneGraph } from '../scene/SceneGraph';
 import type { SceneNode } from '../scene/SceneNode';
 import type { MeshNode, BufferGeometryData, MaterialDescriptor } from '../nodes/MeshNode';
+import type { GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode } from '../nodes/GeometryNodes';
 import type { GeoNodeGraph } from '../geometry-nodes/types';
 import { evaluateGeoNodeGraph } from '../geometry-nodes/evaluate';
 import type { LightNode } from '../nodes/LightNode';
@@ -252,14 +253,17 @@ export interface SimpleViewerProps {
   gizmoSize?: number;
   /** Called when a gizmo drag ends — useful for animation recording. */
   onGizmoTransformEnd?: (nodeId: string, mode: 'translate' | 'rotate' | 'scale', value: [number, number, number]) => void;
+  /** Active geometry-point gizmo edit (e.g. dragging a segment endpoint). When set
+   *  for the selected node, a point gizmo replaces the whole-node gizmo. */
+  geoPointEdit?: { nodeId: string; fieldKey: string } | null;
+  /** Called as a geometry point is dragged — value is the new node-local point. */
+  onGeoPointChange?: (nodeId: string, fieldKey: string, value: [number, number, number]) => void;
 }
 
 function SelectableMesh({
   node,
   meshNode,
-  isSelected,
-  onSelect,
-  renderMode = 'realistic',
+  isSelected,  renderMode = 'realistic',
 }: {
   node: SceneNode;
   meshNode: MeshNode;
@@ -278,13 +282,10 @@ function SelectableMesh({
     <mesh
       ref={meshRef}
       name={node.id}
+      userData={{ pickNodeId: node.id }}
       position={node.position}
       rotation={node.rotation}
       scale={node.scale}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect?.(node.id);
-      }}
     >
       <MeshGeometry type={meshNode.geometry.type} params={meshNode.geometry.params} bufferData={meshNode.geometry.bufferData} code={meshNode.geometry.code} nodesGraph={meshNode.geometry.nodesGraph} />
       {renderMode === 'solid' && (
@@ -326,9 +327,22 @@ function GizmoControls({
   const { scene } = useThree();
   const controlsRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-  const targetObject = useMemo(() => {
-    return scene.getObjectByName(selectedNodeId) as THREE.Mesh | undefined;
-  }, [scene, selectedNodeId]);
+  // Resolve the gizmo target in an effect (after commit) via the node's live
+  // _threeObject, with a RAF retry — a useMemo during render runs *before* a
+  // freshly-added+selected node's object is committed to the scene, which left
+  // the gizmo with no target (targetFound=false).
+  const [targetObject, setTargetObject] = useState<THREE.Object3D | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const resolve = () => {
+      const node = sceneGraph.findNode(selectedNodeId);
+      const obj = (node?._threeObject as THREE.Object3D | null) ?? scene.getObjectByName(selectedNodeId) ?? null;
+      setTargetObject(obj);
+      if (!obj) raf = requestAnimationFrame(resolve);
+    };
+    resolve();
+    return () => cancelAnimationFrame(raf);
+  }, [scene, sceneGraph, selectedNodeId]);
 
   const handleDragEnd = useCallback(() => {
     if (!targetObject) return;
@@ -395,6 +409,8 @@ function GizmoControls({
     if (!controls) return;
     const onDraggingChanged = (e: { value: boolean }) => {
       addLog?.(`dragging-changed ${e.value}`);
+      // eslint-disable-next-line no-console
+      console.log(`[GEO] gizmo dragging=${e.value} node=${selectedNodeId.slice(0, 8)}`);
       if (e.value) {
         if (dragEndTimerRef.current) { clearTimeout(dragEndTimerRef.current); dragEndTimerRef.current = null; }
         if (isDraggingGizmoRef) isDraggingGizmoRef.current = true;
@@ -415,6 +431,9 @@ function GizmoControls({
     };
   }, [isDraggingGizmoRef, addLog]);
 
+  // eslint-disable-next-line no-console
+  console.log(`[GEO] gizmo render node=${selectedNodeId.slice(0, 8)} mode=${transformMode} targetFound=${!!targetObject}`);
+
   if (!targetObject) return null;
 
   return (
@@ -424,6 +443,92 @@ function GizmoControls({
       mode={transformMode}
       size={gizmoSize}
     />
+  );
+}
+
+/**
+ * Translate gizmo for a single local-space point of a geometry primitive
+ * (e.g. a segment's start/end). Creates an anchor at the point's WORLD position,
+ * lets the user drag it, then converts back to the node's local space and writes
+ * `geo.<fieldKey>`. Used instead of the whole-node gizmo while point editing is on.
+ */
+function PointEditGizmo({
+  sceneGraph,
+  nodeId,
+  fieldKey,
+  onChange,
+  isDraggingGizmoRef,
+  gizmoSize = 0.7,
+}: {
+  sceneGraph: SceneGraph;
+  nodeId: string;
+  fieldKey: string;
+  onChange?: (nodeId: string, fieldKey: string, value: [number, number, number]) => void;
+  isDraggingGizmoRef?: MutableRefObject<boolean>;
+  gizmoSize?: number;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const controlsRef = useRef<any>(null);
+  const anchorRef = useRef<THREE.Object3D>(null);
+  const [anchor, setAnchor] = useState<THREE.Object3D | null>(null);
+  const draggingRef = useRef(false);
+  const tmp = useMemo(() => new THREE.Vector3(), []);
+  const inv = useMemo(() => new THREE.Matrix4(), []);
+
+  useEffect(() => { setAnchor(anchorRef.current); }, []);
+
+  const groupOf = useCallback((): THREE.Object3D | null => {
+    const node = sceneGraph.findNode(nodeId);
+    return (node?._threeObject as THREE.Object3D | null) ?? null;
+  }, [sceneGraph, nodeId]);
+
+  const localPoint = useCallback((): [number, number, number] | null => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const v = (sceneGraph.findNode(nodeId) as any)?.[fieldKey];
+    return Array.isArray(v) && v.length === 3 ? [v[0], v[1], v[2]] : null;
+  }, [sceneGraph, nodeId, fieldKey]);
+
+  // Keep the anchor parked at the point's world position while not dragging.
+  useFrame(() => {
+    if (draggingRef.current) return;
+    const a = anchorRef.current; const g = groupOf(); const lp = localPoint();
+    if (!a || !g || !lp) return;
+    g.updateWorldMatrix(true, false);
+    tmp.set(lp[0], lp[1], lp[2]).applyMatrix4(g.matrixWorld);
+    a.position.copy(tmp);
+  });
+
+  const commit = useCallback(() => {
+    const a = anchorRef.current; const g = groupOf();
+    if (!a || !g) return;
+    g.updateWorldMatrix(true, false);
+    inv.copy(g.matrixWorld).invert();
+    a.getWorldPosition(tmp).applyMatrix4(inv);
+    onChange?.(nodeId, fieldKey, [tmp.x, tmp.y, tmp.z]);
+  }, [groupOf, inv, tmp, onChange, nodeId, fieldKey]);
+
+  useEffect(() => {
+    const c = controlsRef.current;
+    if (!c) return;
+    const onObj = () => { if (draggingRef.current) commit(); };
+    const onDrag = (e: { value: boolean }) => {
+      draggingRef.current = e.value;
+      if (isDraggingGizmoRef) isDraggingGizmoRef.current = e.value;
+      if (!e.value) commit();
+    };
+    c.addEventListener('objectChange', onObj);
+    c.addEventListener('dragging-changed', onDrag);
+    return () => {
+      c.removeEventListener('objectChange', onObj);
+      c.removeEventListener('dragging-changed', onDrag);
+    };
+  }, [anchor, commit, isDraggingGizmoRef]);
+
+  return (
+    <>
+      <object3D ref={anchorRef} />
+      {anchor && <TransformControls ref={controlsRef} object={anchor} mode="translate" size={gizmoSize} />}
+    </>
   );
 }
 
@@ -507,9 +612,7 @@ function CameraGizmoShape({
 function SceneCamera({
   node,
   cameraNode,
-  isSelected,
-  onSelect,
-}: {
+  isSelected,}: {
   node: SceneNode;
   cameraNode: CameraNode;
   isSelected: boolean;
@@ -529,7 +632,7 @@ function SceneCamera({
       position={node.position}
       rotation={node.rotation as [number, number, number]}
       scale={node.scale}
-      onClick={(e) => { e.stopPropagation(); onSelect?.(node.id); }}
+      userData={{ pickNodeId: node.id }}
     >
       <CameraGizmoShape
         color={isSelected ? '#4fc3f7' : '#66aaff'}
@@ -557,6 +660,8 @@ function SceneLight({
 
   useEffect(() => {
     node._threeObject = ref.current;
+    // Name the light so the transform gizmo can target it via getObjectByName.
+    if (ref.current) ref.current.name = node.id;
     return () => { node._threeObject = null; };
   }, [node]);
 
@@ -650,9 +755,7 @@ function AudioListenerEffect() {
 function SceneAudio({
   node,
   audioNode,
-  isSelected,
-  onSelect,
-  resolveAudioSrc,
+  isSelected,  resolveAudioSrc,
 }: {
   node: SceneNode;
   audioNode: SceneAudioNode;
@@ -739,7 +842,7 @@ function SceneAudio({
       position={node.position}
       rotation={node.rotation as [number, number, number]}
       scale={node.scale}
-      onClick={(e) => { e.stopPropagation(); onSelect?.(node.id); }}
+      userData={{ pickNodeId: node.id }}
     >
       {/* Speaker visual: wireframe octahedron */}
       <mesh>
@@ -757,9 +860,7 @@ function SceneAudio({
 
 function SceneGroup({
   node,
-  isSelected,
-  onSelect,
-  children,
+  isSelected,  children,
 }: {
   node: SceneNode;
   isSelected: boolean;
@@ -778,11 +879,480 @@ function SceneGroup({
       position={node.position}
       rotation={node.rotation as [number, number, number]}
       scale={node.scale}
-      onClick={(e) => { e.stopPropagation(); onSelect?.(node.id); }}
+      userData={{ pickNodeId: node.id }}
     >
       {/* invisible hit target so the group itself is clickable */}
       {isSelected && <mesh visible={false}><sphereGeometry args={[0.001]} /></mesh>}
       {children}
+    </group>
+  );
+}
+
+// ─── Geometry annotation primitives ───────────────────────────────────────────
+// These render points / segments / lines / angles with camera-aware sizing so
+// markers stay a constant pixel size and labels stay screen-facing & legible at
+// any zoom — the "intelligent display depending on camera" behaviour.
+
+// High-contrast white highlight — distinct from every default annotation color
+// (amber point, cyan segment, green line, purple angle) so selection is always visible.
+const GEO_SELECT_COLOR = '#ffffff';
+
+/**
+ * Wraps children in a group whose scale is recomputed every frame so that one
+ * world unit projects to `pixels` screen pixels at the group's world position.
+ * Used to keep marker dots / angle arcs a constant on-screen size.
+ */
+function ScreenSized({
+  pixels,
+  position,
+  children,
+}: {
+  pixels: number;
+  position?: [number, number, number];
+  children?: ReactNode;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const worldPos = useMemo(() => new THREE.Vector3(), []);
+  const parentScale = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((state) => {
+    const g = ref.current;
+    if (!g) return;
+    g.getWorldPosition(worldPos);
+    const cam = state.camera;
+    let worldPerPixel: number;
+    if ((cam as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const pc = cam as THREE.PerspectiveCamera;
+      const dist = pc.position.distanceTo(worldPos);
+      worldPerPixel = (2 * Math.tan((pc.fov * Math.PI) / 360) * dist) / state.size.height;
+    } else {
+      const oc = cam as THREE.OrthographicCamera;
+      worldPerPixel = (oc.top - oc.bottom) / (oc.zoom || 1) / state.size.height;
+    }
+    // Cancel any cumulative parent scale so the final on-screen size is exact.
+    let pScale = 1;
+    if (g.parent) {
+      g.parent.getWorldScale(parentScale);
+      pScale = parentScale.x || 1;
+    }
+    const s = (worldPerPixel * pixels) / pScale;
+    g.scale.setScalar(s > 1e-9 ? s : 1e-9);
+  });
+
+  return <group ref={ref} position={position}>{children}</group>;
+}
+
+/** Screen-facing, constant-size text label rendered as a DOM overlay. */
+function GeoLabel({
+  position,
+  text,
+  color,
+  offsetY = 0,
+}: {
+  position: [number, number, number];
+  text: string;
+  color: string;
+  offsetY?: number;
+}) {
+  return (
+    <Html position={position} center zIndexRange={[8, 0]} style={{ pointerEvents: 'none' }}>
+      <div
+        style={{
+          transform: offsetY ? `translateY(${offsetY}px)` : undefined,
+          fontFamily: 'monospace',
+          fontSize: 11,
+          lineHeight: '14px',
+          color: '#fff',
+          background: 'rgba(0,0,0,0.62)',
+          border: `1px solid ${color}`,
+          borderRadius: 4,
+          padding: '1px 5px',
+          whiteSpace: 'nowrap',
+          userSelect: 'none',
+        }}
+      >
+        {text}
+      </div>
+    </Html>
+  );
+}
+
+/** Continuous polyline built as a THREE.Line — avoids the `<line>` JSX intrinsic
+ *  which TypeScript resolves to SVGLineElement. */
+function GlLine({ geometry, color }: { geometry: THREE.BufferGeometry; color: string }) {
+  const obj = useMemo(() => {
+    const mat = new THREE.LineBasicMaterial({ color, depthTest: false, toneMapped: false });
+    return new THREE.Line(geometry, mat);
+  }, [geometry, color]);
+  useEffect(() => () => { (obj.material as THREE.Material).dispose(); }, [obj]);
+  return <primitive object={obj} />;
+}
+
+// Shared temps for updateHitTube (single-threaded per-frame reuse).
+const _htDir = new THREE.Vector3();
+const _htQuat = new THREE.Quaternion();
+const _htYUp = new THREE.Vector3(0, 1, 0);
+const _htWorld = new THREE.Vector3();
+const _htScale = new THREE.Vector3();
+
+/**
+ * Imperatively positions/orients an invisible cylinder (`tube`) along local
+ * points s→e and scales its radius to ~`pixels` screen pixels. Used as a robust
+ * raycast/GPU-pick hit target along thin geometry lines, refreshed every frame so
+ * it follows live-updating (e.g. bound) endpoints. Tube meshes are tagged
+ * `__geoHelper` + `pickNodeId` by the caller.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function updateHitTube(tube: THREE.Mesh, s: THREE.Vector3, e: THREE.Vector3, state: any, pixels = 16): void {
+  _htDir.copy(e).sub(s);
+  const len = _htDir.length() || 1e-6;
+  tube.position.set((s.x + e.x) / 2, (s.y + e.y) / 2, (s.z + e.z) / 2);
+  _htQuat.setFromUnitVectors(_htYUp, _htDir.normalize());
+  tube.quaternion.copy(_htQuat);
+  tube.getWorldPosition(_htWorld);
+  const cam = state.camera;
+  let wpp: number;
+  if (cam.isPerspectiveCamera) {
+    wpp = (2 * Math.tan((cam.fov * Math.PI) / 360) * cam.position.distanceTo(_htWorld)) / state.size.height;
+  } else {
+    wpp = (cam.top - cam.bottom) / (cam.zoom || 1) / state.size.height;
+  }
+  let ps = 1;
+  if (tube.parent) { tube.parent.getWorldScale(_htScale); ps = _htScale.x || 1; }
+  const r = Math.max((wpp * pixels) / ps, 1e-6);
+  tube.scale.set(r, len, r);
+}
+
+function GeoDot({ pixels, position, color, nodeId, selected }: { pixels: number; position: [number, number, number]; color: string; nodeId: string; selected?: boolean }) {
+  const hit = Math.max(pixels + 20, 28);
+  const visPx = selected ? Math.max(pixels * 1.6 + 4, 12) : pixels;
+  return (
+    <>
+      {/* selection glow halo */}
+      {selected && (
+        <ScreenSized pixels={visPx + 10} position={position}>
+          <mesh userData={{ __geoHelper: true }}>
+            <sphereGeometry args={[0.5, 16, 16]} />
+            <meshBasicMaterial color="#ffffff" transparent opacity={0.22} depthTest={false} toneMapped={false} />
+          </mesh>
+        </ScreenSized>
+      )}
+      {visPx > 0 && (
+        <ScreenSized pixels={visPx} position={position}>
+          <mesh userData={{ __geoHelper: true }}>
+            <sphereGeometry args={[0.5, 16, 16]} />
+            <meshBasicMaterial color={color} depthTest={false} toneMapped={false} />
+          </mesh>
+        </ScreenSized>
+      )}
+      {/* invisible enlarged hit target with its own handler (robust picking) */}
+      <ScreenSized pixels={hit} position={position}>
+        <mesh userData={{ __geoHelper: true, pickNodeId: nodeId }}>
+          <sphereGeometry args={[0.5, 10, 10]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
+        </mesh>
+      </ScreenSized>
+    </>
+  );
+}
+
+function GeometryPointObj({
+  node, geo, isSelected,
+}: { node: SceneNode; geo: GeometryPointNode; isSelected: boolean; onSelect?: (id: string) => void }) {
+  const ref = useRef<THREE.Group>(null);
+  useEffect(() => { node._threeObject = ref.current; return () => { node._threeObject = null; }; }, [node]);
+  const color = isSelected ? GEO_SELECT_COLOR : geo.color;
+  const label = geo.label || `${node.position[0].toFixed(2)}, ${node.position[1].toFixed(2)}, ${node.position[2].toFixed(2)}`;
+  return (
+    <group ref={ref} name={node.id} userData={{ pickNodeId: node.id }} position={node.position} rotation={node.rotation as [number, number, number]} scale={node.scale}>
+      <GeoDot pixels={geo.pixelSize} position={[0, 0, 0]} color={color} nodeId={node.id} selected={isSelected} />
+      {geo.showLabel && <GeoLabel position={[0, 0, 0]} text={label} color={color} offsetY={-16} />}
+    </group>
+  );
+}
+
+function GeometrySegmentObj({
+  node, geo, isSelected,
+}: { node: SceneNode; geo: GeometrySegmentNode; isSelected: boolean; onSelect?: (id: string) => void }) {
+  const { scene } = useThree();
+  const ref = useRef<THREE.Group>(null);
+  const startGrp = useRef<THREE.Group>(null);
+  const endGrp = useRef<THREE.Group>(null);
+  const labelGrp = useRef<THREE.Group>(null);
+  const labelSpan = useRef<HTMLSpanElement>(null);
+  const tubeRef = useRef<THREE.Mesh>(null);
+  const color = isSelected ? GEO_SELECT_COLOR : geo.color;
+
+  const lineGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0], 3));
+    return g;
+  }, []);
+  useEffect(() => () => lineGeo.dispose(), [lineGeo]);
+  useEffect(() => { node._threeObject = ref.current; return () => { node._threeObject = null; }; }, [node]);
+
+  const tmpA = useMemo(() => new THREE.Vector3(), []);
+  const tmpB = useMemo(() => new THREE.Vector3(), []);
+  const tmpW = useMemo(() => new THREE.Vector3(), []);
+  const tmpS = useMemo(() => new THREE.Vector3(), []);
+  const dir = useMemo(() => new THREE.Vector3(), []);
+  const quat = useMemo(() => new THREE.Quaternion(), []);
+  const yUp = useMemo(() => new THREE.Vector3(0, 1, 0), []);
+
+  // Live, binding-aware resolution of both endpoints every frame: a bound point
+  // copies the target node's world position (works during animation AND while the
+  // target is dragged in the editor); an unbound point uses its stored value.
+  useFrame((state) => {
+    const g = ref.current;
+    if (!g) return;
+    g.updateWorldMatrix(true, false);
+    const resolve = (binding: string | null, fallback: [number, number, number], out: THREE.Vector3) => {
+      if (binding) {
+        const t = scene.getObjectByName(binding);
+        if (t) { t.getWorldPosition(tmpW); g.worldToLocal(tmpW); return out.copy(tmpW); }
+      }
+      return out.set(fallback[0], fallback[1], fallback[2]);
+    };
+    const s = resolve(geo.startBinding, geo.start, tmpA);
+    const e = resolve(geo.endBinding, geo.end, tmpB);
+
+    const pos = lineGeo.attributes.position as THREE.BufferAttribute;
+    pos.setXYZ(0, s.x, s.y, s.z);
+    pos.setXYZ(1, e.x, e.y, e.z);
+    pos.needsUpdate = true;
+    lineGeo.computeBoundingSphere();
+
+    startGrp.current?.position.copy(s);
+    endGrp.current?.position.copy(e);
+
+    const tube = tubeRef.current;
+    if (tube) {
+      dir.copy(e).sub(s);
+      const len = dir.length() || 1e-6;
+      tube.position.set((s.x + e.x) / 2, (s.y + e.y) / 2, (s.z + e.z) / 2);
+      quat.setFromUnitVectors(yUp, dir.normalize());
+      tube.quaternion.copy(quat);
+      tube.getWorldPosition(tmpW);
+      const cam = state.camera as THREE.PerspectiveCamera & THREE.OrthographicCamera;
+      let wpp: number;
+      if ((cam as THREE.PerspectiveCamera).isPerspectiveCamera) {
+        wpp = (2 * Math.tan((cam.fov * Math.PI) / 360) * cam.position.distanceTo(tmpW)) / state.size.height;
+      } else {
+        wpp = (cam.top - cam.bottom) / (cam.zoom || 1) / state.size.height;
+      }
+      let ps = 1;
+      if (tube.parent) { tube.parent.getWorldScale(tmpS); ps = tmpS.x || 1; }
+      const r = Math.max((wpp * 16) / ps, 1e-6);
+      tube.scale.set(r, len, r);
+    }
+
+    if (labelGrp.current) labelGrp.current.position.set((s.x + e.x) / 2, (s.y + e.y) / 2, (s.z + e.z) / 2);
+    if (labelSpan.current) labelSpan.current.textContent = s.distanceTo(e).toFixed(2);
+  });
+
+  return (
+    <group ref={ref} name={node.id} userData={{ pickNodeId: node.id }} position={node.position} rotation={node.rotation as [number, number, number]} scale={node.scale}>
+      <GlLine geometry={lineGeo} color={color} />
+      <mesh ref={tubeRef} userData={{ __geoHelper: true, pickNodeId: node.id }}>
+        <cylinderGeometry args={[1, 1, 1, 10, 1, false]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
+      </mesh>
+      <group ref={startGrp}><GeoDot pixels={geo.pixelSize} position={[0, 0, 0]} color={color} nodeId={node.id} selected={isSelected} /></group>
+      <group ref={endGrp}><GeoDot pixels={geo.pixelSize} position={[0, 0, 0]} color={color} nodeId={node.id} selected={isSelected} /></group>
+      {geo.showLength && (
+        <group ref={labelGrp}>
+          <Html center zIndexRange={[8, 0]} style={{ pointerEvents: 'none' }}>
+            <div style={{ fontFamily: 'monospace', fontSize: 11, lineHeight: '14px', color: '#fff', background: 'rgba(0,0,0,0.62)', border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap', userSelect: 'none' }}>
+              <span ref={labelSpan}>0</span>
+            </div>
+          </Html>
+        </group>
+      )}
+    </group>
+  );
+}
+
+function GeometryLineObj({
+  node, geo, isSelected,
+}: { node: SceneNode; geo: GeometryLineNode; isSelected: boolean; onSelect?: (id: string) => void }) {
+  const { scene } = useThree();
+  const ref = useRef<THREE.Group>(null);
+  const originGrp = useRef<THREE.Group>(null);
+  const labelGrp = useRef<THREE.Group>(null);
+  const tubeRef = useRef<THREE.Mesh>(null);
+  const color = isSelected ? GEO_SELECT_COLOR : geo.color;
+
+  const lineGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0], 3));
+    return g;
+  }, []);
+  useEffect(() => () => lineGeo.dispose(), [lineGeo]);
+  useEffect(() => { node._threeObject = ref.current; return () => { node._threeObject = null; }; }, [node]);
+
+  const o = useMemo(() => new THREE.Vector3(), []);
+  const d = useMemo(() => new THREE.Vector3(), []);
+  const a = useMemo(() => new THREE.Vector3(), []);
+  const b = useMemo(() => new THREE.Vector3(), []);
+  const tmpW = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((state) => {
+    const g = ref.current;
+    if (!g) return;
+    g.updateWorldMatrix(true, false);
+    if (geo.originBinding) {
+      const t = scene.getObjectByName(geo.originBinding);
+      if (t) { t.getWorldPosition(tmpW); g.worldToLocal(tmpW); o.copy(tmpW); }
+      else o.set(geo.origin[0], geo.origin[1], geo.origin[2]);
+    } else {
+      o.set(geo.origin[0], geo.origin[1], geo.origin[2]);
+    }
+    d.set(geo.direction[0], geo.direction[1], geo.direction[2]);
+    if (d.lengthSq() < 1e-9) d.set(1, 0, 0);
+    d.normalize();
+    const BIG = 1e4;
+    a.copy(o).addScaledVector(d, -BIG);
+    b.copy(o).addScaledVector(d, BIG);
+    const pos = lineGeo.attributes.position as THREE.BufferAttribute;
+    pos.setXYZ(0, a.x, a.y, a.z);
+    pos.setXYZ(1, b.x, b.y, b.z);
+    pos.needsUpdate = true;
+    lineGeo.computeBoundingSphere();
+    originGrp.current?.position.copy(o);
+    labelGrp.current?.position.copy(o);
+    if (tubeRef.current) updateHitTube(tubeRef.current, a, b, state, 16);
+  });
+
+  return (
+    <group ref={ref} name={node.id} userData={{ pickNodeId: node.id }} position={node.position} rotation={node.rotation as [number, number, number]} scale={node.scale}>
+      <GlLine geometry={lineGeo} color={color} />
+      <mesh ref={tubeRef} userData={{ __geoHelper: true, pickNodeId: node.id }}>
+        <cylinderGeometry args={[1, 1, 1, 10, 1, false]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
+      </mesh>
+      <group ref={originGrp}><GeoDot pixels={8} position={[0, 0, 0]} color={color} nodeId={node.id} selected={isSelected} /></group>
+      {geo.showLabel && <group ref={labelGrp}><GeoLabel position={[0, 0, 0]} text={geo.label || 'line'} color={color} offsetY={-16} /></group>}
+    </group>
+  );
+}
+
+function GeometryAngleObj({
+  node, geo, isSelected,
+}: { node: SceneNode; geo: GeometryAngleNode; isSelected: boolean; onSelect?: (id: string) => void }) {
+  const { scene } = useThree();
+  const ref = useRef<THREE.Group>(null);
+  const vertexGrp = useRef<THREE.Group>(null);
+  const arcAnchor = useRef<THREE.Group>(null);
+  const labelGrp = useRef<THREE.Group>(null);
+  const labelSpan = useRef<HTMLSpanElement>(null);
+  const tube1 = useRef<THREE.Mesh>(null);
+  const tube2 = useRef<THREE.Mesh>(null);
+  const color = isSelected ? GEO_SELECT_COLOR : geo.color;
+  const N = 36;
+
+  const armsGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3));
+    return g;
+  }, []);
+  const arcGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array((N + 1) * 3), 3));
+    return g;
+  }, []);
+  useEffect(() => () => { armsGeo.dispose(); arcGeo.dispose(); }, [armsGeo, arcGeo]);
+  useEffect(() => { node._threeObject = ref.current; return () => { node._threeObject = null; }; }, [node]);
+
+  const V = useMemo(() => new THREE.Vector3(), []);
+  const P1 = useMemo(() => new THREE.Vector3(), []);
+  const P2 = useMemo(() => new THREE.Vector3(), []);
+  const u = useMemo(() => new THREE.Vector3(), []);
+  const w = useMemo(() => new THREE.Vector3(), []);
+  const e2 = useMemo(() => new THREE.Vector3(), []);
+  const pt = useMemo(() => new THREE.Vector3(), []);
+  const tmpW = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((state) => {
+    const g = ref.current;
+    if (!g) return;
+    g.updateWorldMatrix(true, false);
+    const resolve = (binding: string | null, fb: [number, number, number], out: THREE.Vector3) => {
+      if (binding) {
+        const t = scene.getObjectByName(binding);
+        if (t) { t.getWorldPosition(tmpW); g.worldToLocal(tmpW); return out.copy(tmpW); }
+      }
+      return out.set(fb[0], fb[1], fb[2]);
+    };
+    resolve(geo.vertexBinding, geo.vertex, V);
+    resolve(geo.p1Binding, geo.p1, P1);
+    resolve(geo.p2Binding, geo.p2, P2);
+
+    const ap = armsGeo.attributes.position as THREE.BufferAttribute;
+    ap.setXYZ(0, V.x, V.y, V.z); ap.setXYZ(1, P1.x, P1.y, P1.z);
+    ap.setXYZ(2, V.x, V.y, V.z); ap.setXYZ(3, P2.x, P2.y, P2.z);
+    ap.needsUpdate = true; armsGeo.computeBoundingSphere();
+
+    if (tube1.current) updateHitTube(tube1.current, V, P1, state, 16);
+    if (tube2.current) updateHitTube(tube2.current, V, P2, state, 16);
+
+    u.copy(P1).sub(V); w.copy(P2).sub(V);
+    const arcp = arcGeo.attributes.position as THREE.BufferAttribute;
+    let degrees = 0, mdx = 1, mdy = 0, mdz = 0;
+    if (u.lengthSq() > 1e-9 && w.lengthSq() > 1e-9) {
+      u.normalize(); w.normalize();
+      const cos = Math.max(-1, Math.min(1, u.dot(w)));
+      const ang = Math.acos(cos); degrees = (ang * 180) / Math.PI;
+      e2.copy(w).addScaledVector(u, -cos);
+      if (e2.lengthSq() < 1e-9) { e2.set(1, 0, 0).cross(u); if (e2.lengthSq() < 1e-9) e2.set(0, 1, 0).cross(u); }
+      e2.normalize();
+      for (let i = 0; i <= N; i++) {
+        const t = (ang * i) / N;
+        pt.copy(u).multiplyScalar(Math.cos(t)).addScaledVector(e2, Math.sin(t));
+        arcp.setXYZ(i, pt.x, pt.y, pt.z);
+      }
+      const half = ang / 2;
+      mdx = Math.cos(half) * u.x + Math.sin(half) * e2.x;
+      mdy = Math.cos(half) * u.y + Math.sin(half) * e2.y;
+      mdz = Math.cos(half) * u.z + Math.sin(half) * e2.z;
+    } else {
+      for (let i = 0; i <= N; i++) arcp.setXYZ(i, 0, 0, 0);
+    }
+    arcp.needsUpdate = true; arcGeo.computeBoundingSphere();
+
+    arcAnchor.current?.position.copy(V);
+    vertexGrp.current?.position.copy(V);
+    if (labelGrp.current) labelGrp.current.position.set(mdx, mdy, mdz);
+    if (labelSpan.current) labelSpan.current.textContent = `${degrees.toFixed(1)}°`;
+  });
+
+  return (
+    <group ref={ref} name={node.id} userData={{ pickNodeId: node.id }} position={node.position} rotation={node.rotation as [number, number, number]} scale={node.scale}>
+      <lineSegments geometry={armsGeo}>
+        <lineBasicMaterial color={color} depthTest={false} toneMapped={false} />
+      </lineSegments>
+      <mesh ref={tube1} userData={{ __geoHelper: true, pickNodeId: node.id }}>
+        <cylinderGeometry args={[1, 1, 1, 10, 1, false]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
+      </mesh>
+      <mesh ref={tube2} userData={{ __geoHelper: true, pickNodeId: node.id }}>
+        <cylinderGeometry args={[1, 1, 1, 10, 1, false]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
+      </mesh>
+      <group ref={arcAnchor}>
+        <ScreenSized pixels={geo.arcPixelRadius} position={[0, 0, 0]}>
+          <GlLine geometry={arcGeo} color={color} />
+          {geo.showLabel && (
+            <group ref={labelGrp}>
+              <Html center zIndexRange={[8, 0]} style={{ pointerEvents: 'none' }}>
+                <div style={{ fontFamily: 'monospace', fontSize: 11, lineHeight: '14px', color: '#fff', background: 'rgba(0,0,0,0.62)', border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap', userSelect: 'none' }}>
+                  <span ref={labelSpan}>0°</span>
+                </div>
+              </Html>
+            </group>
+          )}
+        </ScreenSized>
+      </group>
+      <group ref={vertexGrp}><GeoDot pixels={7} position={[0, 0, 0]} color={color} nodeId={node.id} selected={isSelected} /></group>
     </group>
   );
 }
@@ -856,7 +1426,28 @@ function renderSceneNode(node: SceneNode, ctx: RenderCtx): ReactElement | null {
     );
   }
 
+  if (node.type === 'geometry-point') {
+    return <GeometryPointObj key={node.id} node={node} geo={node as unknown as GeometryPointNode} isSelected={node.id === ctx.selectedNodeId} onSelect={ctx.onNodeSelect} />;
+  }
+  if (node.type === 'geometry-segment') {
+    return <GeometrySegmentObj key={node.id} node={node} geo={node as unknown as GeometrySegmentNode} isSelected={node.id === ctx.selectedNodeId} onSelect={ctx.onNodeSelect} />;
+  }
+  if (node.type === 'geometry-line') {
+    return <GeometryLineObj key={node.id} node={node} geo={node as unknown as GeometryLineNode} isSelected={node.id === ctx.selectedNodeId} onSelect={ctx.onNodeSelect} />;
+  }
+  if (node.type === 'geometry-angle') {
+    return <GeometryAngleObj key={node.id} node={node} geo={node as unknown as GeometryAngleNode} isSelected={node.id === ctx.selectedNodeId} onSelect={ctx.onNodeSelect} />;
+  }
+
   return null;
+}
+
+/** Node types that support the move/rotate/scale gizmo — all of them.
+ *  Safe to enable for geometry annotations now that selection runs through GPU
+ *  picking (which hides the gizmo during its pick pass, so the gizmo can no longer
+ *  intercept selection). GizmoControls renders nothing if no named target exists. */
+function supportsGizmo(type?: string | null): boolean {
+  return type != null;
 }
 
 function SceneRenderer({
@@ -1007,7 +1598,7 @@ function FitCameraEffect({
     const box = new THREE.Box3();
     let hasMesh = false;
     scene.traverse(obj => {
-      if (obj instanceof THREE.Mesh) {
+      if (obj instanceof THREE.Mesh && !obj.userData.__geoHelper) {
         // ensure world matrices are up to date
         obj.updateWorldMatrix(true, false);
         obj.geometry.computeBoundingBox();
@@ -1062,6 +1653,20 @@ function FitCameraEffect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFit, sceneGraph, childCount]);
 
+  return null;
+}
+
+/** Debug: exposes live camera / controls / scene refs on window for dumpScene(). */
+function Scene3dDebugProbe() {
+  const { camera, controls, scene, size } = useThree();
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    w.__r3f_camera = camera;
+    w.__r3f_controls = controls;
+    w.__r3f_scene = scene;
+    w.__r3f_size = size;
+  }, [camera, controls, scene, size]);
   return null;
 }
 
@@ -1121,6 +1726,120 @@ function PlacementPlane({ onPlaneClick }: { onPlaneClick: (wx: number, wz: numbe
   );
 }
 
+/**
+ * GPU color picking for geometry annotations. On pointerdown it renders only the
+ * pickable proxies (tagged userData.pickNodeId) into a 1×1 offscreen target — each
+ * in a unique flat color — then reads the single pixel under the cursor and maps the
+ * color back to a node id. This sidesteps raycaster line-threshold precision, gizmo
+ * interception and R3F's click synthesis entirely: whatever is drawn under the cursor
+ * IS the hit. Selection only fires on a positive hit; empty clicks fall through to the
+ * normal onPointerMissed deselect path.
+ */
+function GpuPicker({ onPick }: { onPick?: (id: string | null) => void }) {
+  const { gl, scene, camera } = useThree();
+  const target = useMemo(() => new THREE.WebGLRenderTarget(1, 1), []);
+  const reg = useMemo(() => ({
+    next: 1,
+    toInt: new Map<string, number>(),
+    toId: new Map<number, string>(),
+    mats: new Map<number, THREE.MeshBasicMaterial>(),
+  }), []);
+
+  useEffect(() => () => { target.dispose(); reg.mats.forEach((m) => m.dispose()); }, [target, reg]);
+
+  const matFor = useCallback((nodeId: string) => {
+    let v = reg.toInt.get(nodeId);
+    if (!v) { v = reg.next++; reg.toInt.set(nodeId, v); reg.toId.set(v, nodeId); }
+    let m = reg.mats.get(v);
+    if (!m) {
+      m = new THREE.MeshBasicMaterial({ toneMapped: false });
+      // Treat the value as already-linear so output bytes equal the encoded int exactly.
+      m.color.setHex(v, THREE.LinearSRGBColorSpace);
+      reg.mats.set(v, m);
+    }
+    return m;
+  }, [reg]);
+
+  const pickAt = useCallback((clientX: number, clientY: number): string | null => {
+    const rect = gl.domElement.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    if (px < 0 || py < 0 || px >= rect.width || py >= rect.height) return null;
+
+    // Resolve a node id from the object or any ancestor (roots are tagged).
+    const resolveId = (o: THREE.Object3D): string | null => {
+      let c: THREE.Object3D | null = o;
+      while (c) { const id = c.userData?.pickNodeId as string | undefined; if (id) return id; c = c.parent; }
+      return null;
+    };
+
+    const swapped: Array<[THREE.Mesh, THREE.Material | THREE.Material[] | null, boolean]> = [];
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh & { isLine?: boolean; isLineSegments?: boolean; isPoints?: boolean; isSprite?: boolean };
+      const renderable = mesh.isMesh || mesh.isLine || mesh.isLineSegments || mesh.isPoints || mesh.isSprite;
+      if (!renderable) return;
+      const id = mesh.isMesh ? resolveId(o) : null;
+      if (id) {
+        // selectable solid → render in its unique pick color
+        swapped.push([mesh, mesh.material, mesh.visible]);
+        mesh.material = matFor(id);
+        mesh.visible = true;
+      } else {
+        // non-selectable (gizmo, grid, visible lines…) hidden so it can't
+        // contaminate the single-pixel readback
+        swapped.push([mesh, null, mesh.visible]);
+        mesh.visible = false;
+      }
+    });
+
+    const prevTarget = gl.getRenderTarget();
+    const prevClear = new THREE.Color();
+    gl.getClearColor(prevClear);
+    const prevAlpha = gl.getClearAlpha();
+
+    camera.setViewOffset(rect.width, rect.height, px, py, 1, 1);
+    gl.setRenderTarget(target);
+    gl.setClearColor(0x000000, 1);
+    gl.clear();
+    gl.render(scene, camera);
+
+    const buf = new Uint8Array(4);
+    gl.readRenderTargetPixels(target, 0, 0, 1, 1, buf);
+
+    camera.clearViewOffset();
+    gl.setRenderTarget(prevTarget);
+    gl.setClearColor(prevClear, prevAlpha);
+    swapped.forEach(([o, m, v]) => { if (m !== null) o.material = m; o.visible = v; });
+
+    const value = (buf[0] << 16) | (buf[1] << 8) | buf[2];
+    return value ? (reg.toId.get(value) ?? null) : null;
+  }, [gl, scene, camera, target, matFor, reg]);
+
+  useEffect(() => {
+    if (!onPick) return;
+    const el = gl.domElement;
+    let downX = 0, downY = 0, downBtn = -1;
+    const onDown = (e: PointerEvent) => { downX = e.clientX; downY = e.clientY; downBtn = e.button; };
+    const onUp = (e: PointerEvent) => {
+      if (downBtn !== 0 || e.button !== 0) return;
+      // Ignore drags (camera orbit / gizmo drag) — only a click selects.
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return;
+      const hit = pickAt(e.clientX, e.clientY);
+      // eslint-disable-next-line no-console
+      console.log(`[GEO] gpu-pick client=(${Math.round(e.clientX)},${Math.round(e.clientY)}) -> ${hit ? hit.slice(0, 8) : 'null'}`);
+      onPick(hit);
+    };
+    el.addEventListener('pointerdown', onDown, true);
+    el.addEventListener('pointerup', onUp, true);
+    return () => {
+      el.removeEventListener('pointerdown', onDown, true);
+      el.removeEventListener('pointerup', onUp, true);
+    };
+  }, [gl, pickAt, onPick]);
+
+  return null;
+}
+
 function SceneContent({
   sceneGraph,
   version,
@@ -1142,6 +1861,8 @@ function SceneContent({
   addLog,
   resolveAudioSrc,
   gizmoSize = 0.7,
+  geoPointEdit,
+  onGeoPointChange,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
@@ -1163,9 +1884,12 @@ function SceneContent({
   addLog?: (msg: string) => void;
   resolveAudioSrc?: (src: string) => Promise<string>;
   gizmoSize?: number;
+  geoPointEdit?: { nodeId: string; fieldKey: string } | null;
+  onGeoPointChange?: (nodeId: string, fieldKey: string, value: [number, number, number]) => void;
 }) {
   const selectedNode = selectedNodeId && sceneGraph ? sceneGraph.findNode(selectedNodeId) : null;
-  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio' || selectedNode?.type === 'group';
+  const showGizmo = supportsGizmo(selectedNode?.type);
+  const pointEditActive = !!(geoPointEdit && selectedNodeId && geoPointEdit.nodeId === selectedNodeId);
   const presetConfig = CAMERA_PRESETS[cameraPreset];
 
   // Log showGizmo state changes
@@ -1182,8 +1906,10 @@ function SceneContent({
       {activeCameraNodeId && sceneGraph
         ? <ActiveSceneCamera sceneGraph={sceneGraph} activeCameraNodeId={activeCameraNodeId} />
         : null}
-      {/* Orbit disabled when a gizmo is shown — prevents camera competing with transform drag */}
-      <OrbitControls makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId && !showGizmo} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
+      {/* Orbit stays enabled even with a selection/gizmo — TransformControls auto-disables
+          it only while a gizmo handle is actively dragged (via its 'dragging-changed').
+          Disabling it on mere selection froze the camera ("kamera się blokuje"). */}
+      <OrbitControls makeDefault={!activeCameraNodeId} enabled={!activeCameraNodeId} enableDamping={false} mouseButtons={presetConfig.mouseButtons as Partial<{ LEFT: THREE.MOUSE; MIDDLE: THREE.MOUSE; RIGHT: THREE.MOUSE }>} />
       {sceneSettings?.backgroundType === 'solid' && (
         <color attach="background" args={[sceneSettings.backgroundColor]} />
       )}
@@ -1209,7 +1935,17 @@ function SceneContent({
         renderMode={renderMode}
         resolveAudioSrc={resolveAudioSrc}
       />
-      {showGizmo && sceneGraph && selectedNodeId && (
+      <GpuPicker onPick={onNodeSelect} />
+      {pointEditActive && sceneGraph && geoPointEdit ? (
+        <PointEditGizmo
+          sceneGraph={sceneGraph}
+          nodeId={geoPointEdit.nodeId}
+          fieldKey={geoPointEdit.fieldKey}
+          onChange={onGeoPointChange}
+          isDraggingGizmoRef={isDraggingGizmoRef}
+          gizmoSize={gizmoSize}
+        />
+      ) : showGizmo && sceneGraph && selectedNodeId && (
         <GizmoControls
           sceneGraph={sceneGraph}
           selectedNodeId={selectedNodeId}
@@ -1222,6 +1958,7 @@ function SceneContent({
         />
       )}
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
+      <Scene3dDebugProbe />
       {onPlaneClick && <PlacementPlane onPlaneClick={onPlaneClick} />}
       {showAxesGizmo !== false && (
         <GizmoHelper alignment="bottom-left" margin={[72, 72]}>
@@ -1259,6 +1996,8 @@ export function SimpleViewer({
   resolveAudioSrc,
   gizmoSize = 0.7,
   onGizmoTransformEnd,
+  geoPointEdit,
+  onGeoPointChange,
 }: SimpleViewerProps) {
   const scaleXRef = useRef<HTMLSpanElement>(null);
   const scaleYRef = useRef<HTMLSpanElement>(null);
@@ -1329,6 +2068,44 @@ export function SimpleViewer({
     }
   }, [debugLog]);
 
+  // WebGL context loss/restore — preventDefault on lost is REQUIRED for the browser
+  // to later fire 'restored'; without it the viewport stays frozen permanently
+  // (which looks exactly like "clicks/selection do nothing").
+  useEffect(() => {
+    if (!glInstance) return;
+    const el = glInstance.domElement;
+    const onLost = (e: Event) => {
+      e.preventDefault();
+      // eslint-disable-next-line no-console
+      console.warn('[GEO] WebGL context LOST — viewport frozen until restored');
+    };
+    const onRestored = () => {
+      // eslint-disable-next-line no-console
+      console.warn('[GEO] WebGL context RESTORED');
+      setDebugVer((v) => v + 1); // nudge a re-render
+    };
+    el.addEventListener('webglcontextlost', onLost, false);
+    el.addEventListener('webglcontextrestored', onRestored, false);
+    return () => {
+      el.removeEventListener('webglcontextlost', onLost);
+      el.removeEventListener('webglcontextrestored', onRestored);
+    };
+  }, [glInstance]);
+
+  // Diagnostic: capture-phase raw pointerdown — fires for EVERY click over the canvas,
+  // even ones the gizmo/TransformControls later swallows. A "dead" click shows up as a
+  // [GEO] RAW down with no following [GEO] click / pointerMissed → that = gizmo ate it.
+  useEffect(() => {
+    if (!glInstance) return;
+    const el = glInstance.domElement;
+    const onDown = (e: PointerEvent) => {
+      // eslint-disable-next-line no-console
+      console.log(`[GEO] RAW down client=(${e.clientX},${e.clientY}) btn=${e.button} type=${e.pointerType}`);
+    };
+    el.addEventListener('pointerdown', onDown, true);
+    return () => el.removeEventListener('pointerdown', onDown, true);
+  }, [glInstance]);
+
   // pointercancel → synthetic pointerup — fixes TransformControls getting stuck when stylus
   // is lifted quickly (browser fires cancel instead of up; Three.js TC doesn't handle cancel).
   useEffect(() => {
@@ -1398,7 +2175,7 @@ export function SimpleViewer({
   // R3F fires onPointerMissed for EVERY tap on the gizmo (<primitive> has no R3F handlers).
   // On mobile/stylus a tap always emits click → onPointerMissed → deselects node → gizmo gone.
   // Fix: suppress deselection whenever transform handles are visible.
-  const showGizmo = selectedNode?.type === 'mesh' || selectedNode?.type === 'camera' || selectedNode?.type === 'audio' || selectedNode?.type === 'group';
+  const showGizmo = supportsGizmo(selectedNode?.type);
 
   return (
     <div
@@ -1419,7 +2196,10 @@ export function SimpleViewer({
           const drag = isDraggingGizmoRef.current;
           const type = (e as unknown as PointerEvent).pointerType ?? 'mouse';
           addLog(`miss ${type} drag=${drag} gizmo=${showGizmo} → ${!drag ? 'DESELECT' : 'blocked'}`);
-          if (!drag) onNodeSelect?.(null);
+          // Deselect is handled by GpuPicker (click-miss → onPick(null)); this path
+          // only logs now, since with GPU picking there are no R3F interaction objects.
+          // eslint-disable-next-line no-console
+          console.log(`[GEO] pointerMissed type=${type} client=(${(e as unknown as MouseEvent).clientX},${(e as unknown as MouseEvent).clientY}) drag=${drag}`);
         }}
         onCreated={({ gl }) => setGlInstance(gl)}
       >
@@ -1444,6 +2224,8 @@ export function SimpleViewer({
           addLog={addLog}
           resolveAudioSrc={resolveAudioSrc}
           gizmoSize={gizmoSize}
+          geoPointEdit={geoPointEdit}
+          onGeoPointChange={onGeoPointChange}
         />
       </Canvas>
       {selectedNode && (

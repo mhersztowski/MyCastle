@@ -11,6 +11,7 @@ import { runPersonsExample } from './persons.example.js';
 import { runProjectsTasksExample } from './projects-tasks.example.js';
 import { runEventsExample } from './events.example.js';
 import { runFullFlowExample } from './full-flow.example.js';
+import { runScene3dExample } from './scene3d.example.js';
 
 // ── atrapa serwera VFS w pamięci ──
 const store = new Map();
@@ -41,4 +42,6 @@ console.log('');
 await runEventsExample(client);
 console.log('');
 await runFullFlowExample(client);
+console.log('');
+await runScene3dExample(); // brak klienta — czysta geometria
 console.log('\n✓ all examples ran');

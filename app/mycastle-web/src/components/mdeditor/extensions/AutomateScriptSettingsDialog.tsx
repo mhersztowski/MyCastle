@@ -32,6 +32,8 @@ import {
   Tooltip,
   Divider,
   Slider,
+  Checkbox,
+  FormGroup,
 } from '@mui/material';
 import CodeIcon from '@mui/icons-material/Code';
 import HtmlIcon from '@mui/icons-material/Html';
@@ -39,6 +41,7 @@ import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsIcon from '@mui/icons-material/Settings';
 import HeightIcon from '@mui/icons-material/Height';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 /** Sensible bounds for the windowHeight slider. Below 150px the header
  *  alone barely fits; above 1200px the block would scroll the document
@@ -68,6 +71,12 @@ export interface AutomateScriptSettingsDialogProps {
   onTagsChange: (next: string[]) => void;
   onWindowHeightChange: (next: number | null) => void;
 
+  /** UML projects available under Programming/Uml (file names, *.umlproj.json). */
+  availableUmlProjects: string[];
+  /** Currently selected UML projects whose classes become Blockly categories. */
+  umlProjects: string[];
+  onUmlProjectsChange: (next: string[]) => void;
+
   /** Opens the library picker dialog. Kept as a separate entry-point
    *  because the picker has its own state machine and code-rewriting
    *  side effects — folding it into this dialog would tangle two
@@ -87,7 +96,18 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
   onTagsChange,
   onWindowHeightChange,
   onOpenLibraryPicker,
+  availableUmlProjects,
+  umlProjects,
+  onUmlProjectsChange,
 }) => {
+  const umlDisplayName = (file: string) => file.replace(/\.umlproj\.json$/i, '');
+  const toggleUmlProject = useCallback((file: string, checked: boolean) => {
+    if (checked) {
+      if (!umlProjects.includes(file)) onUmlProjectsChange([...umlProjects, file]);
+    } else {
+      onUmlProjectsChange(umlProjects.filter((p) => p !== file));
+    }
+  }, [umlProjects, onUmlProjectsChange]);
   // Slider drives the height directly via the change callback. We also
   // accept a hand-typed value (TextField) — useful when the user wants an
   // exact pixel count. Both stay clamped to [MIN, MAX].
@@ -336,6 +356,51 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
               Tagi są zapisywane razem z blokiem w Markdown. Przydaje się do
               filtrowania / grupowania skryptów w przyszłych narzędziach.
+            </Typography>
+          </Box>
+
+          <Divider />
+
+          {/* ── Blockly UML Definition ──────────────────────────────── */}
+          {/* Wybrane projekty UML (z Programming/Uml) są parsowane przy
+              tworzeniu edytora Blockly: każda klasa → kategoria, jej statyczne
+              pola → bloki-stałe, a metody → bloki wywołań z argumentami i typem
+              zwracanym. */}
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <AccountTreeIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+              <Typography variant="body2" fontWeight={600}>
+                Blockly UML Definition
+              </Typography>
+            </Box>
+            {availableUmlProjects.length === 0 ? (
+              <Typography variant="caption" color="text.secondary">
+                Brak projektów UML. Utwórz je w Programming → UML.
+              </Typography>
+            ) : (
+              <FormGroup sx={{
+                maxHeight: 180, overflow: 'auto', borderRadius: 1,
+                bgcolor: 'action.hover', px: 1, py: 0.5,
+              }}>
+                {availableUmlProjects.map((file) => (
+                  <FormControlLabel
+                    key={file}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={umlProjects.includes(file)}
+                        onChange={(e) => toggleUmlProject(file, e.target.checked)}
+                      />
+                    }
+                    label={<Typography variant="body2">{umlDisplayName(file)}</Typography>}
+                  />
+                ))}
+              </FormGroup>
+            )}
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+              Klasy z zaznaczonych projektów pojawią się jako kategorie bloków w
+              edytorze Blockly: statyczne pola jako stałe, metody jako wywołania
+              z argumentami i typem zwracanym.
             </Typography>
           </Box>
 

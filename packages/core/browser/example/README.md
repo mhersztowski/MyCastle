@@ -13,6 +13,8 @@ Gotowe przykłady CRUD dla osób, projektów, zadań i wydarzeń, używające kl
 | `full-flow.example.js`        | pełny przepływ: projekt → zadanie → wydarzenie powiązane z zadaniem |
 | `index.html`                  | interaktywna strona — uruchamia przykłady na **prawdziwym** serwerze |
 | `run-node.mjs`                | uruchomienie w Node z atrapą `fetch` (offline, bez serwera) |
+| `scene3d.example.js`          | **scene3d**: parametry, obliczenia (objętość/pole/AABB) i siatka — bez serwera/tokenu |
+| `scene3d.html`                | **scene3d**: wizualne demo — własny mini-renderer na canvas 2D (bez bibliotek) |
 
 Każdy plik `*.example.js` eksportuje funkcję `run...Example(client, log?)`:
 - `client` — instancja `ApiClient`,
@@ -43,6 +45,22 @@ node packages/core/browser/example/run-node.mjs
 ```
 
 Używa in-memory atrapy `fetch`, więc weryfikuje logikę przykładów i API bez backendu.
+Na końcu uruchamia też `scene3d.example.js` (czysta geometria — bez `fetch`).
+
+## scene3d (geometria, bez serwera)
+
+`scene3d.example.js` i `scene3d.html` nie wymagają backendu ani tokenu — to czysta
+matematyka z `../scene3d/`:
+
+```js
+import { BoxGeometry, Geometry } from '../scene3d/index.js';
+BoxGeometry.volume({ width: 2, height: 1, depth: 3 });       // 6
+const mesh = Geometry.build('sphere', { radius: 2 });        // { positions, normals, uvs, indices }
+```
+
+Wizualne demo: otwórz `scene3d.html` (serwowane statycznie, np. `python3 -m http.server`
+w `packages/core/browser/`, potem `/example/scene3d.html`). Wybierasz bryłę, przeciągasz
+myszą, by obracać; panel pokazuje objętość/pole/liczbę wierzchołków i trójkątów.
 
 ## Jak zdobyć token
 
