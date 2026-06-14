@@ -89,6 +89,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DescriptionIcon from '@mui/icons-material/Description';
 
 import DriveSearchDialog from './DriveSearchDialog';
+import GitRepoPanel from './GitRepoPanel';
 import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearchTypes';
 
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
@@ -786,6 +787,9 @@ export default function DrivePage(): React.JSX.Element {
   // OR the filename matches a recognised code-file extension — the Monaco editor
   // in the right panel uses textContent as its initial value.
   const [viewing, setViewing] = useState<{ entry: VfsEntry; mime: string; dataB64: string; textContent?: string } | null>(null);
+  // Git repo panel state — set when a `.repo.json` file is opened. `path` is the
+  // .repo.json path relative to the user's drive root (e.g. `myrepo/.repo.json`).
+  const [repoViewing, setRepoViewing] = useState<{ entry: VfsEntry; path: string } | null>(null);
   // Monaco-edited text state. Tracks the buffer (so dirty/save logic works
   // without polling the editor), the dirty flag, and the in-flight save.
   const [editedText, setEditedText] = useState<string | null>(null);
@@ -1027,7 +1031,7 @@ export default function DrivePage(): React.JSX.Element {
   const runAbortRef = useRef<AbortController | null>(null);
   // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
   const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
-  const panelOpen = !!(viewing || mdEditing || mjdEditing || running || logsView);
+  const panelOpen = !!(viewing || repoViewing || mdEditing || mjdEditing || running || logsView);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
   const showAgent = isWide && agentOpen;
@@ -1281,6 +1285,15 @@ export default function DrivePage(): React.JSX.Element {
     }
     if (isMdEditable(entry.name)) {
       void openInMdEditorRef.current(entry);
+      return;
+    }
+    // `*.repo.json` (np. `.repo.json` lub `pubsub.repo.json`) → panel git
+    // (gałąź/tag, pull/push, clone). Dla `{nazwa}.repo.json` repo klonowane jest
+    // do podkatalogu `{nazwa}` (logika po stronie backendu).
+    if (entry.name.endsWith('.repo.json')) {
+      const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+      setViewing(null);
+      setRepoViewing({ entry, path: rel });
       return;
     }
 
@@ -1582,6 +1595,7 @@ export default function DrivePage(): React.JSX.Element {
 
   const closeRightPanel = useCallback(() => {
     setViewing(null);
+    setRepoViewing(null);
     setMdEditing(null);
     setMjdEditing(null);
     runAbortRef.current?.abort();
@@ -2659,7 +2673,7 @@ export default function DrivePage(): React.JSX.Element {
               flex: 1, minWidth: 0,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name}
+              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? repoViewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name}
               {mjdEditing && (
                 <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                   · {mjdEditing.mode === 'def' ? 'schemat MJD' : 'dane MJD'}
@@ -2778,6 +2792,11 @@ export default function DrivePage(): React.JSX.Element {
           {/* Panel content */}
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {viewing && viewerBody}
+            {repoViewing && (
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <GitRepoPanel key={repoViewing.path} userName={userName} repoPath={repoViewing.path} />
+              </Box>
+            )}
             {mdEditing && (
               <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                 <MdEditor

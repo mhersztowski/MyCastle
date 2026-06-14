@@ -20,10 +20,21 @@ import { useAuth } from '../../../modules/auth';
 //   in the DOM so its animation loop keeps painting; a string-serialised
 //   snapshot would freeze on the first frame.
 export interface DisplayItem {
+  /** Stabilny, globalnie unikatowy identyfikator pozycji — używany jako React
+   *  `key`. Dzięki niemu każde uruchomienie (clear output → push) tworzy
+   *  GENUINELY nowy element o nowym kluczu, więc React zawsze go re-montuje i
+   *  ref-callback dla `dom` na pewno wykona appendChild świeżego canvasu.
+   *  (Klucz po indeksie tablicy potrafił przy batchowaniu pominąć remount.) */
+  id: number;
   type: 'text' | 'table' | 'list' | 'json' | 'html' | 'dom';
   data: unknown;
   timestamp: number;
 }
+
+/** Monotoniczny licznik id pozycji display — nigdy się nie powtarza w sesji,
+ *  więc React `key` jest zawsze unikatowy między uruchomieniami. */
+let _displayItemSeq = 0;
+const nextDisplayItemId = (): number => ++_displayItemSeq;
 
 export interface DisplayApi {
   text: (str: string) => void;
@@ -55,6 +66,15 @@ export interface AutomateDocumentContextValue {
   registerBlock: (id: string) => void;
   unregisterBlock: (id: string) => void;
   updateBlockCode: (id: string, code: string) => void;
+  /** Rejestruje korzenie sceny QObject (z pliku JSON) dla danego bloku — przed
+   *  uruchomieniem skryptu są ustawiane na api, by `api.scripts.getRoot()`
+   *  zwracał root tej sceny. */
+  setBlockScene: (id: string, roots: unknown[]) => void;
+  /** Przywraca scenę QObject (żywe obiekty z getRoot) do stanu zapisanego przy
+   *  ostatnim uruchomieniu. Zwraca true jeśli było co przywracać. */
+  restoreScene: () => boolean;
+  /** Przerywa działający skrypt bloku (abort + czyszczenie timerów/rAF/onStop). */
+  stopBlock: (id: string) => void;
 
   runBlock: (id: string, codeOverride?: string) => Promise<void>;
   runAllBlocks: () => Promise<void>;
@@ -62,6 +82,56 @@ export interface AutomateDocumentContextValue {
 
   getBlockState: (id: string) => ScriptBlockState | undefined;
   clearBlockOutput: (id: string) => void;
+}
+
+/** Uchwyt pojedynczego przebiegu skryptu — pozwala go przerwać (Stop). */
+interface ScriptRunHandle {
+  ac: AbortController;
+  timers: Set<number>;
+  intervals: Set<number>;
+  rafs: Set<number>;
+  stopCallbacks: Array<() => void>;
+  stopped: boolean;
+}
+
+/** Tworzy uchwyt + obiekt `host` z przesłoniętymi timerami (śledzonymi) oraz
+ *  `signal`/`onStop`/`isStopped` do współpracy ze skryptem. */
+function makeRunHandle(): { handle: ScriptRunHandle; host: Record<string, unknown> } {
+  const handle: ScriptRunHandle = {
+    ac: new AbortController(), timers: new Set(), intervals: new Set(), rafs: new Set(),
+    stopCallbacks: [], stopped: false,
+  };
+  const host: Record<string, unknown> = {
+    signal: handle.ac.signal,
+    isStopped: () => handle.stopped,
+    onStop: (fn: () => void) => { if (typeof fn === 'function') handle.stopCallbacks.push(fn); },
+    setTimeout: (fn: (...a: unknown[]) => void, ms?: number, ...a: unknown[]) => {
+      let id = 0; id = window.setTimeout(() => { handle.timers.delete(id); fn(...a); }, ms); handle.timers.add(id); return id;
+    },
+    clearTimeout: (id: number) => { handle.timers.delete(id); window.clearTimeout(id); },
+    setInterval: (fn: (...a: unknown[]) => void, ms?: number, ...a: unknown[]) => {
+      const id = window.setInterval(() => fn(...a), ms); handle.intervals.add(id); return id;
+    },
+    clearInterval: (id: number) => { handle.intervals.delete(id); window.clearInterval(id); },
+    requestAnimationFrame: (fn: FrameRequestCallback) => {
+      let id = 0; id = window.requestAnimationFrame((t) => { handle.rafs.delete(id); fn(t); }); handle.rafs.add(id); return id;
+    },
+    cancelAnimationFrame: (id: number) => { handle.rafs.delete(id); window.cancelAnimationFrame(id); },
+  };
+  return { handle, host };
+}
+
+/** Przerywa przebieg: abort + czyści wszystkie śledzone timery/rAF + onStop. */
+function stopRunHandle(handle: ScriptRunHandle | undefined): void {
+  if (!handle || handle.stopped) return;
+  handle.stopped = true;
+  try { handle.ac.abort(); } catch { /* ignore */ }
+  for (const id of handle.timers) window.clearTimeout(id);
+  for (const id of handle.intervals) window.clearInterval(id);
+  for (const id of handle.rafs) window.cancelAnimationFrame(id);
+  handle.timers.clear(); handle.intervals.clear(); handle.rafs.clear();
+  for (const cb of handle.stopCallbacks) { try { cb(); } catch { /* ignore */ } }
+  handle.stopCallbacks = [];
 }
 
 const AutomateDocumentContext = createContext<AutomateDocumentContextValue | null>(null);
@@ -92,6 +162,11 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
   const variablesRef = useRef<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<Map<string, ScriptBlockState>>(new Map());
   const blockOrderRef = useRef<string[]>([]);
+  // Korzenie sceny QObject per blok (ustawiane przez bloki, czytane w runBlock).
+  const blockScenesRef = useRef<Map<string, unknown[]>>(new Map());
+  // Uchwyty żywych przebiegów per blok — pozwalają Stopem przerwać skrypt
+  // (abort + wyczyszczenie śledzonych setTimeout/setInterval/rAF + callbacki onStop).
+  const runHandlesRef = useRef<Map<string, ScriptRunHandle>>(new Map());
   const [isRunningAll, setIsRunningAll] = useState(false);
   const apiRef = useRef<AutomateSystemApi | null>(null);
   // Document path is held in a ref so the api singleton sees the latest
@@ -139,6 +214,28 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       return next;
     });
     blockOrderRef.current = blockOrderRef.current.filter(bid => bid !== id);
+    blockScenesRef.current.delete(id);
+  }, []);
+
+  const setBlockScene = useCallback((id: string, roots: unknown[]) => {
+    blockScenesRef.current.set(id, Array.isArray(roots) ? roots : []);
+  }, []);
+
+  const restoreScene = useCallback(() => {
+    const api = apiRef.current;
+    return api && typeof api.restoreScene === 'function' ? api.restoreScene() : false;
+  }, []);
+
+  /** Przerywa działający skrypt bloku: czyści śledzone timery/rAF, sygnalizuje
+   *  abort i woła callbacki onStop. Status bloku ustawiany na 'idle'. */
+  const stopBlock = useCallback((id: string) => {
+    stopRunHandle(runHandlesRef.current.get(id));
+    runHandlesRef.current.delete(id);
+    setBlocks(prev => {
+      const next = new Map(prev); const cur = next.get(id);
+      if (cur && cur.status === 'running') next.set(id, { ...cur, status: 'idle' });
+      return next;
+    });
   }, []);
 
   const updateBlockCode = useCallback((id: string, code: string) => {
@@ -176,12 +273,12 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     };
 
     return {
-      text: (str: string) => pushOutput({ type: 'text', data: String(str), timestamp: Date.now() }),
-      table: (data: Record<string, unknown>[] | unknown[][]) => pushOutput({ type: 'table', data, timestamp: Date.now() }),
-      list: (items: unknown[]) => pushOutput({ type: 'list', data: items, timestamp: Date.now() }),
-      json: (obj: unknown) => pushOutput({ type: 'json', data: obj, timestamp: Date.now() }),
-      html: (markup: string) => pushOutput({ type: 'html', data: String(markup), timestamp: Date.now() }),
-      dom: (element: HTMLElement) => pushOutput({ type: 'dom', data: element, timestamp: Date.now() }),
+      text: (str: string) => pushOutput({ id: nextDisplayItemId(), type: 'text', data: String(str), timestamp: Date.now() }),
+      table: (data: Record<string, unknown>[] | unknown[][]) => pushOutput({ id: nextDisplayItemId(), type: 'table', data, timestamp: Date.now() }),
+      list: (items: unknown[]) => pushOutput({ id: nextDisplayItemId(), type: 'list', data: items, timestamp: Date.now() }),
+      json: (obj: unknown) => pushOutput({ id: nextDisplayItemId(), type: 'json', data: obj, timestamp: Date.now() }),
+      html: (markup: string) => pushOutput({ id: nextDisplayItemId(), type: 'html', data: String(markup), timestamp: Date.now() }),
+      dom: (element: HTMLElement) => pushOutput({ id: nextDisplayItemId(), type: 'dom', data: element, timestamp: Date.now() }),
     };
   }, []);
 
@@ -236,6 +333,8 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     await Promise.resolve(); // yield so React renders cleared state before new output
 
     const api = getOrCreateApi();
+    // Udostępnij skryptowi scenę QObject tego bloku przez api.scripts.getRoot().
+    api.setSceneRoots(blockScenesRef.current.get(id) ?? []);
 
     // Track previous lengths for logs and notifications
     const prevLogsLength = api.logs.length;
@@ -265,12 +364,20 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         throw new Error(`Library preload failed: ${msg}`);
       }
 
+      // Ubij ewentualny poprzedni przebieg tego bloku (Run = start od nowa),
+      // potem utwórz świeży uchwyt z przesłoniętymi timerami i AbortSignal.
+      stopRunHandle(runHandlesRef.current.get(id));
+      const { handle, host } = makeRunHandle();
+      runHandlesRef.current.set(id, handle);
+
       const wrappedScript = `const display = input.__display;\n${code}`;
       const result = await AutomateSandbox.execute(
         wrappedScript,
         api,
         { __display: displayApi },
         variablesRef.current,
+        undefined,
+        host,
       );
       // eslint-disable-next-line no-console
       console.log(`Result (${(performance.now() - tStart).toFixed(1)}ms):`, result);
@@ -386,6 +493,9 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     registerBlock,
     unregisterBlock,
     updateBlockCode,
+    setBlockScene,
+    restoreScene,
+    stopBlock,
     runBlock,
     runAllBlocks,
     isRunningAll,

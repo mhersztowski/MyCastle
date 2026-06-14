@@ -24,6 +24,7 @@ import type { BackendPluginService } from './modules/plugins/BackendPluginServic
 import type { PluginRequestContext } from './modules/plugins/backendPluginTypes.js';
 import type { SecretsService } from './modules/secrets/SecretsService.js';
 import type { DriveScriptScheduler } from './modules/scheduler/DriveScriptScheduler.js';
+import type { GitService } from './modules/git/GitService.js';
 import { UmlSyncService, type UmlProject } from '@mhersztowski/devtools';
 
 interface CrudConfig {
@@ -94,6 +95,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private backendPluginService: BackendPluginService | null = null;
   private secretsService: SecretsService | null = null;
   private driveScriptScheduler: DriveScriptScheduler | null = null;
+  private gitService: GitService | null = null;
   private rootDir: string | null;
   private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
@@ -111,7 +113,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     return null;
   }
 
-  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService, arduinoWasmBuilder?: ArduinoWasmBuilder | null, driveScriptScheduler?: DriveScriptScheduler) {
+  constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService, arduinoWasmBuilder?: ArduinoWasmBuilder | null, driveScriptScheduler?: DriveScriptScheduler, gitService?: GitService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
@@ -125,6 +127,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     this.backendPluginService = backendPluginService ?? null;
     this.secretsService = secretsService ?? null;
     this.driveScriptScheduler = driveScriptScheduler ?? null;
+    this.gitService = gitService ?? null;
     this.rootDir = rootDir ? path.resolve(rootDir) : null;
     this.ownStaticDir = staticDir ?? null;
     this.resolveSwaggerUiDir();
@@ -1808,6 +1811,21 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Git repository (.repo.json) ops: /users/{userName}/git/{op}
+    //   GET  …/git/info?path=<rel .repo.json>     → { repo, git }
+    //   POST …/git/{clone|pull|push}  body { path }
+    //   POST …/git/checkout          body { path, ref, type: 'branch'|'tag' }
+    const gitMatch = apiPath.match(/^\/users\/([^/]+)\/git\/([a-zA-Z]+)$/);
+    if (gitMatch) {
+      const gitUser = decodeURIComponent(gitMatch[1]);
+      if (!user.isAdmin && user.userName !== gitUser) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleUserGit(req, res, method, gitUser, gitMatch[2]);
+      return;
+    }
+
     // Cleanup orphaned project dirs: POST /api/users/{userName}/cleanup-projects
     const cleanupMatch = apiPath.match(/^\/users\/([^/]+)\/cleanup-projects$/);
     if (cleanupMatch && method === 'POST') {
@@ -2805,6 +2823,64 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.sendJsonResponse(res, 200, { ok: true, data });
     } catch (err) {
       this.sendJsonResponse(res, 500, { ok: false, error: this.errorMessage(err) });
+    }
+  }
+
+  /** Git ops na katalogu z `.repo.json` w drive użytkownika. */
+  private async handleUserGit(req: IncomingMessage, res: ServerResponse, method: string, userName: string, operation: string): Promise<void> {
+    if (!this.gitService) {
+      this.sendJsonResponse(res, 503, { error: 'Git service unavailable' });
+      return;
+    }
+    try {
+      if (operation === 'info' && method === 'GET') {
+        const urlObj = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+        const repoPath = urlObj.searchParams.get('path') ?? '';
+        const result = await this.gitService.info(userName, repoPath);
+        this.sendJsonResponse(res, 200, result);
+        return;
+      }
+      if (method !== 'POST') {
+        this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
+        return;
+      }
+      const body = await this.parseRequestBody(req) as { path?: string; ref?: string; type?: 'branch' | 'tag'; url?: string; remote?: string; branch?: string; token?: string };
+      const repoPath = body.path ?? '';
+      if (!repoPath) { this.sendJsonResponse(res, 400, { error: 'path is required' }); return; }
+      switch (operation) {
+        case 'save': {
+          const repo = await this.gitService.save(userName, repoPath, {
+            url: body.url, remote: body.remote, branch: body.branch, token: body.token,
+          });
+          this.sendJsonResponse(res, 200, { ok: true, repo });
+          return;
+        }
+        case 'clone': {
+          const r = await this.gitService.clone(userName, repoPath);
+          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          return;
+        }
+        case 'pull': {
+          const r = await this.gitService.pull(userName, repoPath);
+          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          return;
+        }
+        case 'push': {
+          const r = await this.gitService.push(userName, repoPath);
+          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          return;
+        }
+        case 'checkout': {
+          if (!body.ref) { this.sendJsonResponse(res, 400, { error: 'ref is required' }); return; }
+          const r = await this.gitService.checkout(userName, repoPath, body.ref, body.type === 'tag' ? 'tag' : 'branch');
+          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          return;
+        }
+        default:
+          this.sendJsonResponse(res, 404, { error: `Unknown git operation: ${operation}` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 400, { error: this.errorMessage(err) });
     }
   }
 

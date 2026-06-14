@@ -82,6 +82,11 @@ export interface AutomateScriptSettingsDialogProps {
    *  side effects — folding it into this dialog would tangle two
    *  unrelated workflows. */
   onOpenLibraryPicker: () => void;
+
+  /** Ścieżka pliku JSON ze sceną obiektów QObject (względna do home usera),
+   *  ładowana przy otwarciu edytora i zapisywana przy „Zapisz". '' = brak. */
+  scenePath: string;
+  onScenePathChange: (next: string) => void;
 }
 
 const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> = ({
@@ -99,6 +104,8 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
   availableUmlProjects,
   umlProjects,
   onUmlProjectsChange,
+  scenePath,
+  onScenePathChange,
 }) => {
   const umlDisplayName = (file: string) => file.replace(/\.umlproj\.json$/i, '');
   const toggleUmlProject = useCallback((file: string, checked: boolean) => {
@@ -401,6 +408,31 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
               Klasy z zaznaczonych projektów pojawią się jako kategorie bloków w
               edytorze Blockly: statyczne pola jako stałe, metody jako wywołania
               z argumentami i typem zwracanym.
+            </Typography>
+          </Box>
+
+          <Divider />
+
+          {/* ── Scena QObject (plik JSON) ───────────────────────────── */}
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <AccountTreeIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+              <Typography variant="body2" fontWeight={600}>
+                Scena QObject (plik JSON)
+              </Typography>
+            </Box>
+            <TextField
+              value={scenePath}
+              onChange={(e) => onScenePathChange(e.target.value)}
+              placeholder="np. drive/scenes/main.qscene.json"
+              size="small"
+              fullWidth
+            />
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+              Ścieżka (względna do katalogu użytkownika) pliku JSON ze sceną
+              obiektów QObject. Wczytywana przy otwarciu edytora skryptu i
+              zapisywana przyciskiem „Zapisz". Drzewo obiektów (ikona drzewa w
+              pasku edytora) pokazuje obiekty z tej sceny i pozwala je edytować.
             </Typography>
           </Box>
 

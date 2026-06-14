@@ -43,3 +43,7 @@ export type { GeneratedFile } from './codegen/index.js';
 // Orchestrator
 export { UmlSyncService } from './UmlSyncService.js';
 export type { ScanOptions, SyncResult } from './UmlSyncService.js';
+
+// Git repository support (.repo.json clones)
+export { GitRepoService, parseRepoJson, stringifyRepoJson } from './git/GitRepoService.js';
+export type { RepoJson, GitRef, GitStatus, GitInfo, GitCommandResult } from './git/GitRepoService.js';

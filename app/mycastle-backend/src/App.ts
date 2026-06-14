@@ -18,6 +18,7 @@ import { LspProxyService } from './modules/lsp/LspProxyService.js';
 import { PluginService } from './modules/plugins/PluginService.js';
 import { BackendPluginService } from './modules/plugins/BackendPluginService.js';
 import { SecretsService } from './modules/secrets/SecretsService.js';
+import { GitService } from './modules/git/GitService.js';
 
 export interface AppConfig {
   httpPort: number;
@@ -60,6 +61,7 @@ export class App {
   readonly pluginService: PluginService;
   readonly backendPluginService: BackendPluginService;
   readonly secretsService: SecretsService;
+  readonly gitService: GitService;
   private _mqttServer!: MqttServer;
   private terminalService!: TerminalService;
   private lspProxyService!: LspProxyService;
@@ -128,6 +130,7 @@ export class App {
     this.backendPluginService = new BackendPluginService(config.rootDir);
     this.secretsService = new SecretsService(config.rootDir);
     this.driveScriptScheduler = new DriveScriptScheduler(config.rootDir);
+    this.gitService = new GitService(config.rootDir);
 
     this.httpServer = new MycastleHttpServer(
       config.httpPort,
@@ -146,6 +149,7 @@ export class App {
       this.secretsService,
       this.arduinoWasmBuilder,
       this.driveScriptScheduler,
+      this.gitService,
     );
   }
 

@@ -60,7 +60,9 @@ function escapeAutomateScriptsForHtml(content: string): string {
   // so the parser can find them in any order.
   // umlProjects persist via a `:u=a,b,c` token (prefix `u=`) — same pattern as
   // tags; selected UML projects whose classes become Blockly block categories.
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null; umlProjects: string[] }[] = [];
+  // scenePath persists via a `:s=path` token (prefix `s=`) — ścieżka pliku JSON
+  // ze sceną obiektów QObject (URL-encoded, jeden segment).
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null; umlProjects: string[]; scenePath: string }[] = [];
 
   // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html:t=a,b:h=360:u=p.umlproj.json code fences
   const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
@@ -90,6 +92,10 @@ function escapeAutomateScriptsForHtml(content: string): string {
           catch { return t.trim(); }
         }).filter(Boolean)
       : [];
+    // `s=path` token for the QObject scene JSON file.
+    const sToken = parts.find((p: string) => p.startsWith('s='));
+    let scenePath = '';
+    if (sToken) { try { scenePath = decodeURIComponent(sToken.slice(2)); } catch { scenePath = sToken.slice(2); } }
     automateScripts.push({
       code: code.trimEnd(),
       blockId,
@@ -98,6 +104,7 @@ function escapeAutomateScriptsForHtml(content: string): string {
       tags,
       windowHeight,
       umlProjects,
+      scenePath,
     });
     return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
   });
@@ -196,7 +203,7 @@ function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): 
 }
 
 // Helper to restore automate script blocks after showdown conversion
-function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null; umlProjects?: string[] }[]): string {
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null; umlProjects?: string[]; scenePath?: string }[]): string {
   let result = html;
 
   automateScripts.forEach((script, index) => {
@@ -215,7 +222,10 @@ function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: s
     const umlAttr = (script.umlProjects && script.umlProjects.length > 0)
       ? ` data-uml-projects="${script.umlProjects.map(p => encodeURIComponent(p)).join(',')}"`
       : '';
-    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr}${umlAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    const sceneAttr = script.scenePath
+      ? ` data-scene-path="${encodeURIComponent(script.scenePath)}"`
+      : '';
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr}${umlAttr}${sceneAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
     const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -1096,6 +1106,7 @@ turndownService.addRule('automateScriptBlock', {
     let tagsRaw = element.getAttribute('data-tags') || '';
     let windowHeightRaw = element.getAttribute('data-window-height') || '';
     let umlRaw = element.getAttribute('data-uml-projects') || '';
+    let sceneRaw = element.getAttribute('data-scene-path') || '';
 
     const encodedCode = element.getAttribute('data-code');
     if (encodedCode) {
@@ -1114,6 +1125,7 @@ turndownService.addRule('automateScriptBlock', {
         tagsRaw = inner.getAttribute('data-tags') || tagsRaw;
         windowHeightRaw = inner.getAttribute('data-window-height') || windowHeightRaw;
         umlRaw = inner.getAttribute('data-uml-projects') || umlRaw;
+        sceneRaw = inner.getAttribute('data-scene-path') || sceneRaw;
       }
     }
 
@@ -1141,6 +1153,10 @@ turndownService.addRule('automateScriptBlock', {
     if (umlRaw) {
       // umlRaw is already comma-joined URL-encoded file names — pass through.
       parts.push(`u=${umlRaw}`);
+    }
+    if (sceneRaw) {
+      // sceneRaw is already URL-encoded (data-scene-path) — pass through.
+      parts.push(`s=${sceneRaw}`);
     }
     // Trim trailing empties so `automate::` (no flags, no id) stays plain `automate`.
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
@@ -1517,7 +1533,7 @@ export function htmlToMarkdown(html: string): string {
   );
 
   // Pre-process: Replace automate script blocks with placeholders before Turndown
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string; umlRaw: string }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string; umlRaw: string; sceneRaw: string }[] = [];
 
   processedHtml = processedHtml.replace(
     /<div[^>]*data-type="automate-script-block"[^>]*?(?:data-block-id="([^"]*)")?[^>]*?(?:data-code="([^"]*)")?[^>]*>[\s\S]*?<\/div>/gi,
@@ -1529,6 +1545,7 @@ export function htmlToMarkdown(html: string): string {
       const tagsMatch = match.match(/data-tags="([^"]*)"/);
       const whMatch = match.match(/data-window-height="([^"]*)"/);
       const umlMatch = match.match(/data-uml-projects="([^"]*)"/);
+      const sceneMatch = match.match(/data-scene-path="([^"]*)"/);
       automateScripts.push({
         code: codeMatch ? decodeURIComponent(codeMatch[1]) : '',
         blockId: blockIdMatch ? blockIdMatch[1] : '',
@@ -1540,6 +1557,8 @@ export function htmlToMarkdown(html: string): string {
         windowHeightRaw: whMatch ? whMatch[1] : '',
         // umlRaw: already-encoded comma-joined UML project file names.
         umlRaw: umlMatch ? umlMatch[1] : '',
+        // sceneRaw: already-encoded scene JSON path (data-scene-path).
+        sceneRaw: sceneMatch ? sceneMatch[1] : '',
       });
       return `##AUTOMATESCRIPT${automateScripts.length - 1}##`;
     }
@@ -1654,6 +1673,7 @@ export function htmlToMarkdown(html: string): string {
     if (script.tagsRaw) parts.push(`t=${script.tagsRaw}`);
     if (script.windowHeightRaw) parts.push(`h=${script.windowHeightRaw}`);
     if (script.umlRaw) parts.push(`u=${script.umlRaw}`);
+    if (script.sceneRaw) parts.push(`s=${script.sceneRaw}`);
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
     const langTag = parts.join(':');
     const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;

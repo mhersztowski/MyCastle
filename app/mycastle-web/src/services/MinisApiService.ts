@@ -70,6 +70,47 @@ export interface GithubModuleEntry {
   arduinoOptions?: Record<string, string>;
 }
 
+// ── Git repository (.repo.json) ───────────────────────────────────────────────
+export interface RepoJson {
+  type: 'git-repo';
+  version: number;
+  url: string;
+  branch?: string;
+  tag?: string;
+  remote?: string;
+  /** Zredagowany na backendzie do '***' gdy ustawiony. */
+  token?: string;
+  lastSync?: number;
+}
+
+export interface GitStatus {
+  branch: string | null;
+  tag: string | null;
+  commit: string;
+  ahead: number;
+  behind: number;
+  dirty: boolean;
+}
+
+export interface GitInfo {
+  isRepo: boolean;
+  url: string | null;
+  branches: string[];
+  remoteBranches: string[];
+  tags: string[];
+  status: GitStatus | null;
+}
+
+export interface GitRepoStatusResponse {
+  repo: RepoJson;
+  git: GitInfo;
+}
+
+export interface GitOpResult {
+  ok: boolean;
+  output: string;
+}
+
 
 class MinisApiService {
   private authToken: string | null = null;
@@ -795,6 +836,35 @@ class MinisApiService {
 
   async deleteIotAutomation(userName: string, automationId: string): Promise<void> {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/iot-automations/${encodeURIComponent(automationId)}`);
+  }
+
+  // ── Git repository (.repo.json) ─────────────────────────────────────────────
+  /** Status repo: RepoJson + gałęzie/tagi/status git. `repoPath` to ścieżka pliku
+   *  `.repo.json` względem drive użytkownika (np. `myrepo/.repo.json`). */
+  async getGitInfo(userName: string, repoPath: string): Promise<GitRepoStatusResponse> {
+    const q = new URLSearchParams({ path: repoPath }).toString();
+    return this.request('GET', `/users/${encodeURIComponent(userName)}/git/info?${q}`);
+  }
+
+  /** Zapisuje konfigurację repo (URL/remote/branch/token) do `.repo.json`. */
+  async gitSaveRepo(userName: string, repoPath: string, patch: { url?: string; remote?: string; branch?: string; token?: string }): Promise<{ ok: boolean; repo: RepoJson }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/save`, { path: repoPath, ...patch });
+  }
+
+  async gitClone(userName: string, repoPath: string): Promise<GitOpResult> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/clone`, { path: repoPath });
+  }
+
+  async gitCheckout(userName: string, repoPath: string, ref: string, type: 'branch' | 'tag'): Promise<GitOpResult> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/checkout`, { path: repoPath, ref, type });
+  }
+
+  async gitPull(userName: string, repoPath: string): Promise<GitOpResult> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/pull`, { path: repoPath });
+  }
+
+  async gitPush(userName: string, repoPath: string): Promise<GitOpResult> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/push`, { path: repoPath });
   }
 }
 

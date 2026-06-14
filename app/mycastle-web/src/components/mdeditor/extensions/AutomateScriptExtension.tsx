@@ -35,12 +35,14 @@ import {
   ToggleButtonGroup,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -59,6 +61,8 @@ import { useAuth } from '../../../modules/auth/AuthContext';
 // Help browser (filesystem tree of drive/public/doc + markdown viewer) — lazy
 // so its react-markdown chunk loads only when the user opens the help window.
 const AutomateHelpBrowserDialog = lazy(() => import('./AutomateHelpBrowserDialog'));
+// Inspektor QObject (drzewo obiektów parsowanych ze źródła) — lazy.
+const AutomateQObjectPanel = lazy(() => import('./AutomateQObjectPanel'));
 
 // Lazy — file picker only loads when the user clicks "Dołącz plik".
 const AutomateIncludeFileDialog = lazy(() => import('./AutomateIncludeFileDialog'));
@@ -67,6 +71,9 @@ const AutomateIncludeFileDialog = lazy(() => import('./AutomateIncludeFileDialog
 const AutomateBlocklyEditor = lazy(() => import('./AutomateBlocklyEditor'));
 
 import { listUmlProjects, loadUmlClasses, type UmlClassDef } from './umlBlockly';
+import { parseQObjects } from './qobjectSource';
+import { emptyScene, normalizeScene, type QObjectScene } from './qobjectScene';
+import { readUserJson, writeUserJson } from '../../../services/userJson';
 
 import { setupAutomateMonaco, mergeExtraLibs } from '../../../modules/automate/designer/automateMonacoSetup';
 import { editorOverlay } from '../editorOverlayState';
@@ -316,11 +323,11 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
 
   return (
     <Box sx={{ p: 1 }}>
-      {items.map((item, i) => {
+      {items.map((item) => {
         switch (item.type) {
           case 'text':
             return (
-              <Typography key={i} variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+              <Typography key={item.id} variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
                 {String(item.data)}
               </Typography>
             );
@@ -336,7 +343,7 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
               : (data[0] as unknown[]).map((_, idx) => `${idx}`);
 
             return (
-              <Table key={i} size="small" sx={{ my: 0.5 }}>
+              <Table key={item.id} size="small" sx={{ my: 0.5 }}>
                 <TableHead>
                   <TableRow>
                     {headers.map((h, hi) => (
@@ -373,7 +380,7 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
             if (!Array.isArray(listItems)) return null;
 
             return (
-              <List key={i} dense disablePadding sx={{ my: 0.5 }}>
+              <List key={item.id} dense disablePadding sx={{ my: 0.5 }}>
                 {listItems.map((li, idx) => (
                   <ListItem key={idx} disablePadding sx={{ pl: 1 }}>
                     <ListItemText
@@ -389,7 +396,7 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
           case 'json':
             return (
               <Box
-                key={i}
+                key={item.id}
                 sx={{
                   bgcolor: '#f5f5f5',
                   borderRadius: 0.5,
@@ -414,7 +421,7 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
             // author wrote it themselves), so dangerouslySetInnerHTML is OK.
             return (
               <Box
-                key={i}
+                key={item.id}
                 sx={{ my: 0.5, p: 0.5 }}
                 dangerouslySetInnerHTML={{ __html: String(item.data ?? '') }}
               />
@@ -427,7 +434,7 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
             // canvas needs to remain in the DOM to keep painting).
             return (
               <Box
-                key={i}
+                key={item.id}
                 // `min-width: 0` na dziecku flexa jest kluczowe dla komponentów
                 // rysujących na <canvas> (qt-canvas, Three.js): bez tego
                 // min-content flex-itema = intrinsic szerokość backing-bufora
@@ -466,6 +473,9 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     registerBlock,
     unregisterBlock,
     updateBlockCode,
+    setBlockScene,
+    restoreScene,
+    stopBlock,
     runBlock,
     getBlockState,
     clearBlockOutput,
@@ -481,6 +491,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     return () => editorOverlay.exit();
   }, [editorDialogOpen]);
   const [helpBrowserOpen, setHelpBrowserOpen] = useState(false);
+  // Panel inspektora QObject (drzewo obiektów ze źródła) — domyślnie ukryty.
+  const [qobjectPanelOpen, setQobjectPanelOpen] = useState(false);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   // Consolidated settings dialog (Auto / view mode / library / tags) opened
@@ -595,6 +607,18 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   const umlProjects: string[] = Array.isArray(node.attrs.umlProjects) ? (node.attrs.umlProjects as string[]) : [];
   const umlProjectsKey = umlProjects.join(',');
 
+  // Ścieżka pliku JSON ze sceną obiektów QObject (wybierana w ustawieniach).
+  const scenePath: string = typeof node.attrs.scenePath === 'string' ? node.attrs.scenePath : '';
+  // Scena wczytana z pliku — edytowana w panelu QObject, zapisywana przy „Zapisz".
+  const [qobjScene, setQobjScene] = useState<QObjectScene>(() => emptyScene());
+  // Czy scena ma niezapisane zmiany (edycja w panelu nie zmienia kodu, więc
+  // potrzebny osobny flag, żeby aktywować przycisk „Zapisz").
+  const [sceneDirty, setSceneDirty] = useState(false);
+  // Snapshot sceny (JSON) z momentu ostatniego Run — Stop przywraca do niego.
+  const sceneSnapshotRef = useRef<string | null>(null);
+  // Czy trwa przebieg (od Run do Stop) — steruje aktywnością przycisku Stop.
+  const [running, setRunning] = useState(false);
+
   // Available UML projects (for the settings picker) — loaded when the dialog opens.
   const [availableUmlProjects, setAvailableUmlProjects] = useState<string[]>([]);
   // Parsed UML classes from the selected projects — fed to the Blockly editor.
@@ -613,6 +637,25 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     loadUmlClasses(userName, umlProjectsKey.split(',')).then((classes) => { if (alive) setUmlClasses(classes); });
     return () => { alive = false; };
   }, [userName, umlProjectsKey]);
+
+  // Wczytaj scenę QObject z pliku: przy montażu bloku (żeby autorun/Run miały
+  // scenę dla api.scripts.getRoot()) oraz przy otwarciu edytora / zmianie pliku.
+  // Brak pliku → pusta scena.
+  useEffect(() => {
+    setSceneDirty(false);
+    if (!userName || !scenePath) { setQobjScene(emptyScene()); return; }
+    let alive = true;
+    readUserJson<unknown>(userName, scenePath)
+      .then((raw) => { if (alive) { setQobjScene(raw ? normalizeScene(raw) : emptyScene()); setSceneDirty(false); } })
+      .catch(() => { if (alive) setQobjScene(emptyScene()); });
+    return () => { alive = false; };
+  }, [editorDialogOpen, userName, scenePath]);
+
+  // Rejestruj korzenie sceny dla tego bloku, by api.scripts.getRoot() w
+  // uruchamianym skrypcie zwracał root aktualnej (także edytowanej) sceny.
+  useEffect(() => {
+    setBlockScene(blockId.current, qobjScene.roots);
+  }, [qobjScene, setBlockScene]);
 
   // Assign blockId if not set
   useEffect(() => {
@@ -706,7 +749,15 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     setCode(dialogCode);
     updateAttributes({ code: dialogCode });
     updateBlockCode(blockId.current, buildRuntimeCode(dialogCode));
-  }, [dialogCode, updateAttributes, updateBlockCode]);
+    // Zapisz też scenę QObject do wybranego pliku JSON (jeśli ustawiony).
+    if (userName && scenePath) {
+      writeUserJson(userName, scenePath, qobjScene)
+        .then(() => setSceneDirty(false))
+        .catch((e) => console.warn('Zapis sceny QObject nie powiódł się:', e));
+    } else {
+      setSceneDirty(false);
+    }
+  }, [dialogCode, updateAttributes, updateBlockCode, userName, scenePath, qobjScene]);
 
   /** Save + run inside the fullscreen dialog — keeps the dialog open so the
    *  user sees the output panel below the editor without losing context. */
@@ -715,12 +766,34 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     updateAttributes({ code: dialogCode });
     const runtime = buildRuntimeCode(dialogCode);
     updateBlockCode(blockId.current, runtime);
+    // Snapshot sceny QObject (zapisany stan) — Stop przywróci scenę do tej formy.
+    sceneSnapshotRef.current = JSON.stringify(qobjScene);
+    setRunning(true);
     // Pass the combined runtime code (Blockly blocks + normal body) as override
     // so runBlock executes the freshly-edited buffer regardless of whether the
     // context's block.code has committed yet.
     // Library preload happens inside runBlock now (uniform error path).
     void runBlock(blockId.current, runtime);
-  }, [dialogCode, updateAttributes, updateBlockCode, runBlock]);
+  }, [dialogCode, updateAttributes, updateBlockCode, runBlock, qobjScene]);
+
+  /** Stop — przywraca scenę QObject do stanu zapisanego przy ostatnim Run
+   *  (snapshot). Nie ubija samego skryptu (runtime nie wspiera przerwania), ale
+   *  cofa zmiany sceny do zapisanej formy i odświeża panel. */
+  const handleStop = useCallback(() => {
+    // 1) Przerwij wykonanie skryptu: abort + wyczyszczenie timerów/rAF/onStop.
+    stopBlock(blockId.current);
+    // 2) Cofnij zmiany na ŻYWYCH obiektach sceny (te z getRoot, na canvasie).
+    restoreScene();
+    // 3) Przywróć też dane sceny w panelu/edytorze do snapshotu z Run.
+    const snap = sceneSnapshotRef.current;
+    if (snap) {
+      try {
+        setQobjScene(normalizeScene(JSON.parse(snap)));
+        setSceneDirty(true);
+      } catch { /* uszkodzony snapshot — ignoruj */ }
+    }
+    setRunning(false);
+  }, [restoreScene, stopBlock]);
 
   /** Library picker callback — receives a fresh code body with `// @library:`
    *  marker(s) inserted. Mirror the change into both the local `dialogCode`
@@ -1189,7 +1262,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               <Tooltip title="Blockly (programowanie graficzne)"><ExtensionIcon fontSize="small" /></Tooltip>
             </ToggleButton>
             <ToggleButton value="blocklyCode">
-              <Tooltip title="Kod wygenerowany przez Blockly"><IntegrationInstructionsIcon fontSize="small" /></Tooltip>
+              <Tooltip title="Połączony kod wyjściowy (źródłowy + Blockly) — podgląd"><IntegrationInstructionsIcon fontSize="small" /></Tooltip>
             </ToggleButton>
           </ToggleButtonGroup>
           {/* "Include file" button — pulls from drive/mdscript/, inserts at
@@ -1216,6 +1289,15 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               <SettingsIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          <Tooltip title={qobjectPanelOpen ? 'Ukryj drzewo obiektów QObject' : 'Pokaż drzewo obiektów QObject'}>
+            <IconButton
+              size="small"
+              onClick={() => setQobjectPanelOpen((v) => !v)}
+              color={qobjectPanelOpen ? 'primary' : 'default'}
+            >
+              <AccountTreeIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Pomoc — przeglądarka dokumentacji (drive/public/doc)">
             <span>
               <IconButton size="small" onClick={() => setHelpBrowserOpen(true)} disabled={!userName}>
@@ -1228,28 +1310,41 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               output to hit Run/Save. Divider gives them visual weight so
               they don't blend with the icon-only utilities to the left. */}
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 1 }} />
-          <Tooltip title="Uruchom (Ctrl+Enter)">
+          {/* Run / Stop — tylko ikony. Run robi snapshot sceny QObject i uruchamia;
+              Stop przywraca scenę do zapisanego stanu (snapshotu z momentu Run). */}
+          <Tooltip title="Uruchom (Ctrl+Enter) — zapisuje snapshot sceny">
             <span>
-              <Button
+              <IconButton
                 onClick={handleEditorDialogRun}
                 disabled={status === 'running'}
-                startIcon={status === 'running'
-                  ? <CircularProgress size={14} sx={{ color: '#4caf50' }} />
-                  : <PlayArrowIcon />}
                 size="small"
                 sx={{ color: '#4caf50' }}
               >
-                {status === 'running' ? 'Uruchamiam…' : 'Uruchom'}
-              </Button>
+                {status === 'running'
+                  ? <CircularProgress size={16} sx={{ color: '#4caf50' }} />
+                  : <PlayArrowIcon fontSize="small" />}
+              </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title={isDirty ? 'Zapisz zmiany (dialog pozostanie otwarty)' : 'Brak niezapisanych zmian'}>
+          <Tooltip title="Stop — przerwij skrypt i przywróć scenę QObject">
+            <span>
+              <IconButton
+                onClick={handleStop}
+                disabled={!running}
+                size="small"
+                sx={{ color: '#e57373' }}
+              >
+                <StopIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={(isDirty || sceneDirty) ? 'Zapisz zmiany — kod i scenę QObject (dialog pozostanie otwarty)' : 'Brak niezapisanych zmian'}>
             <span>
               <Button
                 onClick={handleEditorDialogSave}
                 variant="contained"
                 size="small"
-                disabled={!isDirty}
+                disabled={!isDirty && !sceneDirty}
               >
                 Zapisz
               </Button>
@@ -1263,9 +1358,14 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
           </Button>
         </DialogTitle>
         <DialogContent dividers sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
+          {/* Wiersz: [edytor] [opcjonalny panel inspektora QObject po prawej]. */}
+          <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
           {/* Box wrapper ensures the Editor expands to fill remaining flex space
-              regardless of fullScreen dialog's inner padding/border math. */}
-          <Box sx={{ flex: 1, minHeight: 0 }}>
+              regardless of fullScreen dialog's inner padding/border math.
+              minWidth:0 pozwala edytorowi skurczyć się w wierszu flex, gdy obok
+              jest panel inspektora QObject (bez tego Monaco trzyma intrinsic
+              szerokość i wypycha panel poza ekran). */}
+          <Box sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
             {dialogEditMode === 'blockly' ? (
               <Suspense fallback={<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><CircularProgress /></Box>}>
                 <AutomateBlocklyEditor
@@ -1298,17 +1398,18 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               // user-defined classes (handled locally) showed completions but
               // `api.*` (resolved through the ambient .d.ts) did not.
               defaultLanguage="typescript"
-              // 'code' shows the normal body; 'blocklyCode' shows the JS that
-              // Blockly generated (the marker's `c` payload). Both hide the
-              // persisted marker itself.
-              value={dialogEditMode === 'blocklyCode' ? splitBlockly(dialogCode).blocklyCode : splitBlockly(dialogCode).body}
+              // 'code' shows the editable hand-written body. 'blocklyCode' shows
+              // the FINAL combined source that actually runs — the hand-written
+              // body joined with the Blockly-generated code (buildRuntimeCode),
+              // i.e. the output script. It's a read-only preview (you can't
+              // unambiguously split an edited merge back into body + blocks).
+              value={dialogEditMode === 'blocklyCode' ? buildRuntimeCode(dialogCode) : splitBlockly(dialogCode).body}
               onChange={value => {
+                // 'blocklyCode' is a read-only preview of the merged output —
+                // ignore stray change events. Only the 'code' view edits the body.
+                if (dialogEditMode === 'blocklyCode') return;
                 const prev = splitBlockly(dialogCode);
-                // 'blocklyCode' edits the generated code; 'code' edits the body.
-                // Either way keep the other parts of the marker intact.
-                const v = dialogEditMode === 'blocklyCode'
-                  ? joinBlockly(prev.body, prev.state, value || '')
-                  : joinBlockly(value || '', prev.state, prev.blocklyCode);
+                const v = joinBlockly(value || '', prev.state, prev.blocklyCode);
                 setDialogCode(v);
                 // Refresh library .d.ts stubs in case the user just typed a
                 // `// @library: foo` marker (or removed one). Cheap because
@@ -1381,10 +1482,26 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
                 wordWrap: 'on',
                 tabSize: 2,
                 automaticLayout: true,
+                // Połączony kod wyjściowy to tylko podgląd — nie do edycji.
+                readOnly: dialogEditMode === 'blocklyCode',
               }}
               theme="vs-dark"
             />
             )}
+          </Box>
+
+          {/* Panel inspektora QObject — po prawej, domyślnie ukryty. Parsuje
+              body skryptu i pozwala na operacje na hierarchii (edytują body). */}
+          {qobjectPanelOpen && (
+            <Suspense fallback={null}>
+              <AutomateQObjectPanel
+                scene={qobjScene}
+                onSceneChange={(s) => { setQobjScene(s); setSceneDirty(true); }}
+                {...(() => { const p = parseQObjects(splitBlockly(dialogCode).body); return { classes: p.classes, classProperties: p.classProperties }; })()}
+                onClose={() => setQobjectPanelOpen(false)}
+              />
+            </Suspense>
+          )}
           </Box>
 
           {/* Touch-friendly draggable selection handles (Android-style pins) —
@@ -1692,6 +1809,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             availableUmlProjects={availableUmlProjects}
             umlProjects={umlProjects}
             onUmlProjectsChange={(next) => updateAttributes({ umlProjects: next })}
+            scenePath={scenePath}
+            onScenePathChange={(next) => updateAttributes({ scenePath: next })}
           />
         )}
       </Suspense>
@@ -1730,6 +1849,8 @@ export const AutomateScriptBlock = Node.create({
       // UML project file names (drive/uml/*.umlproj.json) whose classes are
       // turned into Blockly block categories in the visual editor.
       umlProjects: { default: [] as string[] },
+      // Ścieżka pliku JSON ze sceną obiektów QObject (względna do home usera).
+      scenePath: { default: '' },
     };
   },
 
@@ -1767,6 +1888,9 @@ export const AutomateScriptBlock = Node.create({
             tags,
             windowHeight,
             umlProjects,
+            scenePath: element.getAttribute('data-scene-path')
+              ? decodeURIComponent(element.getAttribute('data-scene-path') || '')
+              : '',
           };
         },
       },
@@ -1800,6 +1924,9 @@ export const AutomateScriptBlock = Node.create({
     const umlArr: string[] = Array.isArray(node.attrs.umlProjects) ? node.attrs.umlProjects : [];
     if (umlArr.length > 0) {
       attrs['data-uml-projects'] = umlArr.map(p => encodeURIComponent(p)).join(',');
+    }
+    if (typeof node.attrs.scenePath === 'string' && node.attrs.scenePath) {
+      attrs['data-scene-path'] = encodeURIComponent(node.attrs.scenePath);
     }
 
     return ['div', attrs];

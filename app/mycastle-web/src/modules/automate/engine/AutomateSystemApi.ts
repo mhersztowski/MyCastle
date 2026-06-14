@@ -176,6 +176,14 @@ export interface AutomateSystemApiInterface {
    *  the result set so a self-tag can't trigger infinite recursion.
    */
   scripts: {
+    /** Korzeń drzewa obiektów QObject ze sceny (plik JSON wybrany w ustawieniach
+     *  bloku) — ŻYWY obiekt zbudowany z danych (instancja klasy + właściwości +
+     *  dzieci). null gdy scena pusta lub klasa korzenia nieznana. */
+    getRoot(): unknown;
+    /** Wszystkie zbudowane (żywe) korzenie sceny QObject. */
+    getRoots(): unknown[];
+    /** Surowe dane sceny (JSON) bez budowania obiektów. */
+    getSceneData(): unknown[];
     /** Find all automate scripts that carry the given tag — full drive scan. */
     findByTag(tag: string, options?: { root?: string }): Promise<DiscoveredScript[]>;
     /** Find scripts with the tag in ancestor directories of the calling
@@ -255,6 +263,101 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
   private _dataSource: DataSource;
   private _logs: LogEntry[] = [];
   private _notifications: NotificationEntry[] = [];
+  /** Korzenie sceny obiektów QObject wczytanej z pliku JSON dla aktualnie
+   *  uruchamianego bloku skryptu — udostępniane przez `api.scripts.getRoot()`.
+   *  Host ustawia je przed wykonaniem bloku (setSceneRoots). */
+  private _sceneRoots: unknown[] = [];
+
+  /** Zbudowane (żywe) korzenie — cache, budowane leniwie przy getRoot(). */
+  private _builtRoots: unknown[] | null = null;
+
+  /** Ustawia korzenie sceny QObject dla bieżącego wykonania (wołane przez host
+   *  przed uruchomieniem bloku). Surowe dane sceny (JSON). */
+  setSceneRoots(roots: unknown[]): void {
+    this._sceneRoots = Array.isArray(roots) ? roots : [];
+    this._builtRoots = null; // unieważnij cache
+  }
+
+  /** Konwersja stringowych wartości właściwości na typy (bool/number/null). */
+  private _coerceValue(v: unknown): unknown {
+    if (typeof v !== 'string') return v;
+    const s = v.trim();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    if (s === 'null') return null;
+    if (s !== '' && !Number.isNaN(Number(s))) return Number(s);
+    return v;
+  }
+
+  /** Buduje żywy obiekt QObject z węzła sceny: instancjonuje klasę z globalThis
+   *  (np. QPushButton, własna podklasa QObject), ustawia objectName + właściwości
+   *  i rekurencyjnie podpina dzieci (przez setParent — polimorficznie: widget→
+   *  drzewo widgetów, QObject→drzewo QObject). Zwraca null gdy klasa nieznana. */
+  private _buildSceneNode(data: unknown): unknown {
+    const d = data as { className?: string; objectName?: string; properties?: Array<{ key: string; value: unknown }>; children?: unknown[] } | null;
+    if (!d || !d.className) return null;
+    const g = globalThis as unknown as Record<string, unknown>;
+    const Cls = g[d.className] as (new () => Record<string, unknown>) | undefined;
+    let obj: Record<string, unknown> | null = null;
+    if (typeof Cls === 'function') {
+      try { obj = new Cls(); }
+      catch {
+        const factory = (Cls as unknown as { create?: () => Record<string, unknown> }).create;
+        if (typeof factory === 'function') { try { obj = factory(); } catch { obj = null; } }
+      }
+    }
+    if (!obj) return null;
+    const o = obj as Record<string, unknown> & {
+      setObjectName?: (n: string) => unknown; setProperty?: (k: string, v: unknown) => unknown; setParent?: (p: unknown) => unknown;
+    };
+    if (d.objectName && typeof o.setObjectName === 'function') o.setObjectName(d.objectName);
+    for (const p of d.properties ?? []) {
+      const val = this._coerceValue(p.value);
+      try {
+        if (typeof o.setProperty === 'function') o.setProperty(p.key, val);
+        else (o as Record<string, unknown>)[p.key] = val;
+      } catch { /* skip property that the setter rejects */ }
+    }
+    for (const c of d.children ?? []) {
+      const child = this._buildSceneNode(c) as { setParent?: (p: unknown) => unknown } | null;
+      if (child && typeof child.setParent === 'function') { try { child.setParent(o); } catch { /* ignore */ } }
+    }
+    return o;
+  }
+
+  private _ensureBuilt(): void {
+    if (this._builtRoots) return;
+    this._builtRoots = this._sceneRoots.map((d) => this._buildSceneNode(d)).filter((x) => x != null);
+  }
+
+  /** Re-aplikuje zapisany stan (dane sceny) na ISTNIEJĄCY żywy obiekt: ustawia
+   *  objectName + właściwości i schodzi po dzieciach (po indeksie), na końcu
+   *  woła update() by przerysować. NIE tworzy nowych obiektów — cofa zmiany na
+   *  tych samych instancjach (które są zamontowane na canvasie). */
+  private _applyState(obj: unknown, data: unknown): void {
+    const o = obj as (Record<string, unknown> & {
+      setObjectName?: (n: string) => unknown; setProperty?: (k: string, v: unknown) => unknown;
+      children?: () => unknown[]; update?: () => unknown;
+    }) | null;
+    const d = data as { objectName?: string; properties?: Array<{ key: string; value: unknown }>; children?: unknown[] } | null;
+    if (!o || !d) return;
+    if (d.objectName != null && typeof o.setObjectName === 'function') o.setObjectName(d.objectName);
+    for (const p of d.properties ?? []) {
+      try { if (typeof o.setProperty === 'function') o.setProperty(p.key, this._coerceValue(p.value)); } catch { /* setter odrzucił */ }
+    }
+    const kids = typeof o.children === 'function' ? o.children() : [];
+    const dkids = d.children ?? [];
+    for (let i = 0; i < Math.min(kids.length, dkids.length); i++) this._applyState(kids[i], dkids[i]);
+    if (typeof o.update === 'function') { try { o.update(); } catch { /* ignore */ } }
+  }
+
+  /** Przywraca scenę do stanu zapisanego przy Run: cofa zmiany na żywych
+   *  obiektach (tych z getRoot, zamontowanych na canvasie) i przerysowuje. */
+  restoreScene(): boolean {
+    if (!this._builtRoots || !this._builtRoots.length) return false;
+    for (let i = 0; i < this._builtRoots.length; i++) this._applyState(this._builtRoots[i], this._sceneRoots[i]);
+    return true;
+  }
   /** Getter for the currently-open markdown file's path. Stored as a
    *  function (not a static string) so the api singleton stays in sync
    *  with whatever document the host editor opens next, without having
@@ -902,6 +1005,16 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
   }
 
   scripts = {
+    // ── Scena QObject (wczytana z pliku JSON ustawionego w blocku) ───
+    /** Korzeń drzewa obiektów QObject zbudowany ze sceny — ŻYWY obiekt
+     *  (instancja klasy z globalThis, z ustawionym objectName/właściwościami i
+     *  podpiętymi dziećmi). null gdy scena pusta lub klasa korzenia nieznana. */
+    getRoot: (): unknown => { this._ensureBuilt(); return this._builtRoots && this._builtRoots.length ? this._builtRoots[0] : null; },
+    /** Wszystkie zbudowane (żywe) korzenie sceny. */
+    getRoots: (): unknown[] => { this._ensureBuilt(); return this._builtRoots ? this._builtRoots.slice() : []; },
+    /** Surowe dane sceny (JSON) bez budowania obiektów — do introspekcji. */
+    getSceneData: (): unknown[] => this._sceneRoots.slice(),
+
     // ── Full-drive scan ─────────────────────────────────────────────
     findByTag: async (tag: string, options?: { root?: string }): Promise<DiscoveredScript[]> => {
       // Default to '' = userBase root (what mqttClient.listDirectory('')
