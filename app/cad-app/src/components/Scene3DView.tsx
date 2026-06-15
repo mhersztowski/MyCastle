@@ -1,17 +1,23 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Box, Snackbar, Alert, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemButton, ListItemText, Typography } from '@mui/material';
+import { Box, Snackbar, Alert, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemButton, ListItemText, Typography, Popover } from '@mui/material';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import FolderIcon from '@mui/icons-material/Folder';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import CloseIcon from '@mui/icons-material/Close';
+import MapOutlinedIcon from '@mui/icons-material/MapOutlined';
+import ReplayIcon from '@mui/icons-material/Replay';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { RichEditor } from '@mhersztowski/ui-components-scene3d';
 import { SceneDeserializer, SceneSerializer } from '@mhersztowski/core-scene3d';
 import type { GeoNodeGraph } from '@mhersztowski/core-scene3d';
 import type { Project } from '@mhersztowski/core-cad';
 import { cadProjectToSceneJson } from '../bridge/CadToScene';
+import { mapNodesToSceneJson, deserializeMapNodes } from '../bridge/MapToScene';
 import { Scene3DProjectBrowser } from './Scene3DProjectBrowser';
-import { writeScene3dFile, vfsListDir, vfsReadFileBin, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs } from '../vfs/cadProjectApi';
+import { ServerFileBrowser } from './ServerFileBrowser';
+import { writeScene3dFile, vfsListDir, vfsReadFileBin, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs, readFileAt, MAP_EXT } from '../vfs/cadProjectApi';
 import type { PrefabEntry } from '@mhersztowski/core-scene3d';
 import type { ProjectPrefabGroup } from '@mhersztowski/ui-components-scene3d';
 import type { ActiveTemplate } from './RepositoryPanel';
@@ -21,6 +27,13 @@ import { evaluateDescriptor, geometryToEditable } from '../edit-mode/meshConvert
 import type { EditableMesh } from '../edit-mode/types';
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a'];
+
+interface MapImportRecord {
+  importId: string
+  groupNodeId: string
+  dir: string
+  name: string
+}
 const AUDIO_MIME: Record<string, string> = {
   mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
   flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4',
@@ -71,6 +84,9 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   useEffect(() => { refreshAllPrefabs(); }, [refreshAllPrefabs]);
   const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
   const [debugLog, setDebugLog] = useState(false);
+  const [mapImports, setMapImports] = useState<MapImportRecord[]>([]);
+  const [mapPanelAnchor, setMapPanelAnchor] = useState<HTMLElement | null>(null);
+  const [mapPickerOpen, setMapPickerOpen] = useState(false);
   const [audioPickerOpen, setAudioPickerOpen] = useState(false);
   const [audioPickerPath, setAudioPickerPath] = useState(userProjectsDir());
   const [audioPickerEntries, setAudioPickerEntries] = useState<{ name: string; isDir: boolean }[]>([]);
@@ -256,6 +272,53 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     return src;
   }, []);
 
+  const handleImportMap = useCallback(async (dir: string, name: string) => {
+    try {
+      const text = await readFileAt(dir, name, MAP_EXT);
+      const nodes = deserializeMapNodes(text);
+      const { sceneJson, groupId } = await mapNodesToSceneJson(nodes, name);
+      mergeSceneRef.current?.(sceneJson);
+      setMapImports(prev => [...prev, { importId: crypto.randomUUID(), groupNodeId: groupId, dir, name }]);
+      setMapPickerOpen(false);
+      setToast({ msg: `Imported map "${name}"`, severity: 'success' });
+    } catch (e) {
+      setToast({ msg: `Import failed: ${(e as Error).message}`, severity: 'error' });
+    }
+  }, []);
+
+  const handleReimportMap = useCallback(async (record: MapImportRecord) => {
+    try {
+      const text = await readFileAt(record.dir, record.name, MAP_EXT);
+      const nodes = deserializeMapNodes(text);
+      const currentJson = sceneJsonRef.current;
+      if (currentJson) {
+        const graph = SceneDeserializer.deserialize(currentJson);
+        const oldGroup = graph.findNode(record.groupNodeId);
+        const savedTransform = oldGroup ? {
+          position: [...oldGroup.position] as [number, number, number],
+          rotation: [...oldGroup.rotation] as [number, number, number],
+          scale:    [...oldGroup.scale]    as [number, number, number],
+        } : undefined;
+        graph.removeNode(record.groupNodeId);
+        const { sceneJson: newSubJson, groupId: newGroupId } = await mapNodesToSceneJson(nodes, record.name, savedTransform);
+        const newSubgraph = SceneDeserializer.deserialize(newSubJson);
+        for (const child of [...newSubgraph.root.children]) {
+          graph.addNode(child);
+        }
+        setSceneData(SceneSerializer.serialize(graph));
+        setEditorKey(`map-reimport-${Date.now()}`);
+        setMapImports(prev => prev.map(r => r.importId === record.importId ? { ...r, groupNodeId: newGroupId } : r));
+      } else {
+        const { sceneJson, groupId } = await mapNodesToSceneJson(nodes, record.name);
+        mergeSceneRef.current?.(sceneJson);
+        setMapImports(prev => prev.map(r => r.importId === record.importId ? { ...r, groupNodeId: groupId } : r));
+      }
+      setToast({ msg: `Reimported "${record.name}"`, severity: 'success' });
+    } catch (e) {
+      setToast({ msg: `Reimport failed: ${(e as Error).message}`, severity: 'error' });
+    }
+  }, []);
+
   const cadCount = project.entityRegistry.getAll().length;
 
   return (
@@ -287,6 +350,24 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           propertyChangeRef={propertyChangeRef}
           getNodeGeometryRef={getNodeGeometryRef}
         />
+        {/* Map imports button */}
+        <Tooltip title="Map imports">
+          <IconButton
+            size="small"
+            onClick={e => setMapPanelAnchor(e.currentTarget)}
+            sx={{
+              position: 'absolute', bottom: 44, right: 8, zIndex: 30,
+              bgcolor: mapImports.length > 0 ? 'rgba(79,195,247,0.15)' : 'rgba(0,0,0,0.4)',
+              border: '1px solid',
+              borderColor: mapImports.length > 0 ? 'rgba(79,195,247,0.5)' : 'rgba(255,255,255,0.15)',
+              color: mapImports.length > 0 ? '#4fc3f7' : 'text.disabled',
+              '&:hover': { bgcolor: 'rgba(79,195,247,0.2)' },
+            }}
+          >
+            <MapOutlinedIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+
         {/* Debug toggle — visible on mobile for diagnosing gizmo/touch issues */}
         <Tooltip title={debugLog ? 'Hide debug log' : 'Show debug log'}>
           <IconButton
@@ -303,6 +384,86 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
             <BugReportIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Tooltip>
+
+        {/* Map imports panel */}
+        <Popover
+          open={Boolean(mapPanelAnchor)}
+          anchorEl={mapPanelAnchor}
+          onClose={() => setMapPanelAnchor(null)}
+          anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          PaperProps={{
+            sx: {
+              width: 280,
+              bgcolor: '#1a1a1a',
+              border: '1px solid rgba(255,255,255,0.12)',
+              p: 0,
+              mb: 1,
+            },
+          }}
+        >
+          <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center' }}>
+            <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'text.secondary', flex: 1 }}>
+              Map Imports
+            </Typography>
+            <Button
+              size="small"
+              startIcon={<AddIcon sx={{ fontSize: 13 }} />}
+              onClick={() => { setMapPickerOpen(true); setMapPanelAnchor(null); }}
+              sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.25, minWidth: 0 }}
+            >
+              Import
+            </Button>
+          </Box>
+          {mapImports.length === 0 ? (
+            <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', px: 1.5, py: 1.5 }}>
+              No map imports yet. Use Import to add a .map.json file.
+            </Typography>
+          ) : (
+            <List dense disablePadding>
+              {mapImports.map(record => (
+                <ListItem
+                  key={record.importId}
+                  disablePadding
+                  sx={{ borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-child': { borderBottom: 'none' } }}
+                  secondaryAction={
+                    <Box sx={{ display: 'flex', gap: 0.25 }}>
+                      <Tooltip title="Reimport from server (preserves transform)">
+                        <IconButton
+                          size="small"
+                          onClick={() => handleReimportMap(record)}
+                          sx={{ p: 0.5, color: 'text.secondary', '&:hover': { color: '#4fc3f7' } }}
+                        >
+                          <ReplayIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Remove from list">
+                        <IconButton
+                          size="small"
+                          onClick={() => setMapImports(prev => prev.filter(r => r.importId !== record.importId))}
+                          sx={{ p: 0.5, color: 'text.secondary', '&:hover': { color: 'error.main' } }}
+                        >
+                          <DeleteOutlineIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                >
+                  <ListItemButton sx={{ py: 0.5, pr: 8 }} disableRipple>
+                    <ListItemText
+                      primary={record.name}
+                      secondary={record.dir}
+                      slotProps={{
+                        primary: { sx: { fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                        secondary: { sx: { fontSize: '0.65rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </Popover>
       </Box>
 
       <Scene3DProjectBrowser
@@ -390,6 +551,18 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
         initialMesh={editMeshState?.mesh ?? null}
         onApply={handleEditMeshApply}
         onClose={() => setEditMeshState(null)}
+      />
+
+      {/* Map file picker */}
+      <ServerFileBrowser
+        open={mapPickerOpen}
+        mode="open"
+        title="Import Map File"
+        extension={MAP_EXT}
+        storageKey="scene3d.mapImport.dir"
+        onClose={() => setMapPickerOpen(false)}
+        onOpen={handleImportMap}
+        onDone={() => setMapPickerOpen(false)}
       />
 
       <Snackbar

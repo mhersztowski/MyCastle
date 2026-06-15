@@ -9,6 +9,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import Looks3OutlinedIcon from '@mui/icons-material/Looks3Outlined';
 import LooksOneOutlinedIcon from '@mui/icons-material/LooksOneOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
+import MapOutlinedIcon from '@mui/icons-material/MapOutlined';
 import StorageIcon from '@mui/icons-material/Storage';
 import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -33,6 +34,7 @@ import { Toolbar } from './components/Toolbar';
 import { Cad3dView } from './components/Cad3dView';
 import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
+import { MapView } from './components/MapView';
 import { ResizeDivider } from './components/ResizeDivider';
 import { RepositoryPanel } from './components/RepositoryPanel';
 import { AudioPanel } from './components/AudioPanel';
@@ -49,7 +51,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'audio' | 'repository';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'map' | 'audio' | 'repository';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -301,6 +303,12 @@ export default function App() {
             iconPosition="start"
           />
           <Tab
+            value="map"
+            label="Map"
+            icon={<MapOutlinedIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+          />
+          <Tab
             value="audio"
             label="Audio"
             icon={<HeadphonesIcon sx={{ fontSize: 16 }} />}
@@ -541,6 +549,13 @@ export default function App() {
         </Box>
         <TemplatesPanel mode="electronics" templates={activeTemplates.filter(t => t.mode === 'electronics')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
       </Box>
+
+      {/* Map panel */}
+      {mode === 'map' && (
+        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+          <MapView />
+        </Box>
+      )}
 
       {/* Audio panel */}
       {mode === 'audio' && (

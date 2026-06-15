@@ -26,6 +26,8 @@ export const CAD_EXT = '.cad.json';
 export const SCENE_EXT = '.scene.json';
 /** Electronics schematic file extension. */
 export const ELEC_EXT = '.elec.json';
+/** Map project file extension. */
+export const MAP_EXT = '.map.json';
 
 // ── userId management ─────────────────────────────────────────────────────────
 

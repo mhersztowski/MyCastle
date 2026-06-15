@@ -866,6 +866,18 @@ class MinisApiService {
   async gitPush(userName: string, repoPath: string): Promise<GitOpResult> {
     return this.request('POST', `/users/${encodeURIComponent(userName)}/git/push`, { path: repoPath });
   }
+
+  /** Lista plików w repo na podanym ref (lub working tree gdy ref puste). */
+  async gitListFiles(userName: string, repoPath: string, ref?: string): Promise<string[]> {
+    const q = new URLSearchParams({ path: repoPath, ...(ref ? { ref } : {}) }).toString();
+    const r = await this.request<{ files: string[] }>('GET', `/users/${encodeURIComponent(userName)}/git/files?${q}`);
+    return r.files;
+  }
+
+  /** Unified diff. `to` puste = working tree (filesystem backendu) vs `from`. */
+  async gitDiff(userName: string, repoPath: string, opts: { from?: string; to?: string; file?: string }): Promise<{ ok: boolean; diff: string }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/diff`, { path: repoPath, ...opts });
+  }
 }
 
 export const minisApi = new MinisApiService();

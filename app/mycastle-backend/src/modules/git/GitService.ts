@@ -185,6 +185,31 @@ export class GitService {
     return { ok: r.ok, output: (r.stdout + (r.stderr ? '\n' + r.stderr : '')).trim() };
   }
 
+  /** Lista plików śledzonych przez git na podanym ref (lub working tree gdy ref puste). */
+  async listFiles(userName: string, relPath: string, ref?: string): Promise<string[]> {
+    const { dir } = this.resolve(userName, relPath);
+    if (!(await this.git.isRepo(dir))) return [];
+    return this.git.listFiles(dir, ref);
+  }
+
+  /** Unified diff między refami lub ref vs working tree.
+   *  `to` = undefined → porównanie `from` z working tree (filesystem backendu).
+   *  `to` = ref → `git diff from..to`. */
+  async diff(
+    userName: string,
+    relPath: string,
+    opts: { from?: string; to?: string; file?: string },
+  ): Promise<{ ok: boolean; diff: string }> {
+    const { dir } = this.resolve(userName, relPath);
+    if (!(await this.git.isRepo(dir))) throw new Error('Katalog nie jest repozytorium git');
+    try {
+      const text = await this.git.diff(dir, { ...opts, maxLines: 5000 });
+      return { ok: true, diff: text };
+    } catch (e) {
+      return { ok: false, diff: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   /** Push do remote (ustawia upstream gdy go brak). */
   async push(userName: string, relPath: string): Promise<{ ok: boolean; output: string }> {
     const { repoJsonPath, dir } = this.resolve(userName, relPath);

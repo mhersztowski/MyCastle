@@ -14,6 +14,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
+      // Load core-scene3d from source so Vite sees latest changes without rebuild
+      '@mhersztowski/core-scene3d': resolve(__dirname, '../../packages/core-scene3d/src/index.ts'),
       // Force all workspace packages to use cad-app's react instance
       'react': resolve(__dirname, 'node_modules/react'),
       'react-dom': resolve(__dirname, 'node_modules/react-dom'),

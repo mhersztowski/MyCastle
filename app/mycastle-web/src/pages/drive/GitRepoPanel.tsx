@@ -2,19 +2,27 @@
  * GitRepoPanel — panel boczny Drive dla pliku `.repo.json`. Pokazuje stan
  * repozytorium git leżącego w katalogu pliku oraz akcje: wybór gałęzi/tagu
  * (checkout), Pull, Push, Clone (gdy katalog nie jest jeszcze clone'em).
+ * Zawiera sekcję Diff: porównanie dwóch refów lub refa z working tree (filesystemem backendu).
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Select, MenuItem, Button, Stack, Chip, Divider,
-  CircularProgress, Alert, FormControl, InputLabel, Tooltip, IconButton, TextField,
+  CircularProgress, Alert, FormControl, InputLabel, Tooltip, IconButton,
+  TextField, Accordion, AccordionSummary, AccordionDetails, Autocomplete,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import SaveIcon from '@mui/icons-material/Save';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { minisApi, type GitRepoStatusResponse } from '../../services/MinisApiService';
+
+/** Sentinel oznaczający „working tree" — git diff <from> (bez <to>). */
+const WORKING_TREE = '__working_tree__';
+const WORKING_TREE_LABEL = 'Working tree (filesystem)';
 
 interface GitRepoPanelProps {
   userName: string;
@@ -22,6 +30,76 @@ interface GitRepoPanelProps {
   repoPath: string;
 }
 
+// ---------------------------------------------------------------------------
+// Kolorowanie diff output
+// ---------------------------------------------------------------------------
+type DiffLineKind = 'add' | 'remove' | 'hunk' | 'meta' | 'normal';
+
+function classifyDiffLine(line: string): DiffLineKind {
+  if (line.startsWith('+') && !line.startsWith('+++')) return 'add';
+  if (line.startsWith('-') && !line.startsWith('---')) return 'remove';
+  if (line.startsWith('@@')) return 'hunk';
+  if (
+    line.startsWith('diff --git') ||
+    line.startsWith('index ') ||
+    line.startsWith('--- ') ||
+    line.startsWith('+++ ') ||
+    line.startsWith('Binary')
+  )
+    return 'meta';
+  return 'normal';
+}
+
+const DIFF_COLORS: Record<DiffLineKind, string | undefined> = {
+  add: '#1a3a1a',
+  remove: '#3a1a1a',
+  hunk: '#1a1a3a',
+  meta: '#2a2a2a',
+  normal: undefined,
+};
+const DIFF_TEXT_COLORS: Record<DiffLineKind, string> = {
+  add: '#6dcf6d',
+  remove: '#cf6d6d',
+  hunk: '#7b7bcf',
+  meta: '#888',
+  normal: '#d4d4d4',
+};
+
+const DiffViewer: React.FC<{ text: string }> = ({ text }) => {
+  const lines = text.split('\n');
+  return (
+    <Box
+      sx={{
+        bgcolor: '#1e1e1e', borderRadius: 1, p: 1,
+        fontFamily: 'monospace', fontSize: '0.68rem',
+        overflow: 'auto', maxHeight: 480,
+        whiteSpace: 'pre',
+      }}
+    >
+      {lines.map((line, i) => {
+        const kind = classifyDiffLine(line);
+        return (
+          <Box
+            key={i}
+            component="span"
+            sx={{
+              display: 'block',
+              bgcolor: DIFF_COLORS[kind],
+              color: DIFF_TEXT_COLORS[kind],
+              px: 0.5,
+            }}
+          >
+            {line || ' '}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// GitRepoPanel
+// ---------------------------------------------------------------------------
 export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }) => {
   const [info, setInfo] = useState<GitRepoStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -31,6 +109,17 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
   // Edytowalna konfiguracja repo (URL + opcjonalny token HTTPS).
   const [urlDraft, setUrlDraft] = useState('');
   const [tokenDraft, setTokenDraft] = useState('');
+
+  // --- Diff state ---
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffFrom, setDiffFrom] = useState<string>('HEAD');
+  const [diffTo, setDiffTo] = useState<string>(WORKING_TREE);
+  const [diffFile, setDiffFile] = useState<string>('');
+  const [diffFiles, setDiffFiles] = useState<string[]>([]);
+  const [diffFilesLoading, setDiffFilesLoading] = useState(false);
+  const [diffResult, setDiffResult] = useState<string | null>(null);
+  const [diffBusy, setDiffBusy] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,15 +180,77 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
     }
   }, [userName, repoPath, urlDraft, tokenDraft, load]);
 
+  // --- Diff: ładowanie listy plików gdy sekcja jest otwarta ---
+  const loadDiffFiles = useCallback(async (ref?: string) => {
+    setDiffFilesLoading(true);
+    try {
+      const files = await minisApi.gitListFiles(userName, repoPath, ref && ref !== WORKING_TREE ? ref : undefined);
+      setDiffFiles(files);
+    } catch {
+      setDiffFiles([]);
+    } finally {
+      setDiffFilesLoading(false);
+    }
+  }, [userName, repoPath]);
+
+  const onDiffAccordionChange = useCallback((_: React.SyntheticEvent, expanded: boolean) => {
+    setDiffOpen(expanded);
+    if (expanded && diffFiles.length === 0) {
+      void loadDiffFiles(diffFrom);
+    }
+  }, [diffFiles.length, diffFrom, loadDiffFiles]);
+
+  const onDiffFromChange = useCallback((_: React.SyntheticEvent, value: string | null) => {
+    const v = value ?? 'HEAD';
+    setDiffFrom(v);
+    setDiffFiles([]);
+    setDiffFile('');
+    void loadDiffFiles(v);
+  }, [loadDiffFiles]);
+
+  const onRunDiff = useCallback(async () => {
+    setDiffBusy(true);
+    setDiffError(null);
+    setDiffResult(null);
+    try {
+      const opts: { from?: string; to?: string; file?: string } = {
+        from: diffFrom || 'HEAD',
+        to: diffTo === WORKING_TREE ? undefined : (diffTo || undefined),
+        file: diffFile || undefined,
+      };
+      const r = await minisApi.gitDiff(userName, repoPath, opts);
+      if (!r.ok) {
+        setDiffError(r.diff);
+      } else {
+        setDiffResult(r.diff || '(brak różnic)');
+      }
+    } catch (e) {
+      setDiffError((e as Error).message);
+    } finally {
+      setDiffBusy(false);
+    }
+  }, [userName, repoPath, diffFrom, diffTo, diffFile]);
+
   const git = info?.git;
   const repo = info?.repo;
   const isRepo = !!git?.isRepo;
   const urlDirty = !!info && urlDraft.trim() !== (repo?.url ?? '');
-  // Lista gałęzi do wyboru: lokalne + zdalne (bez duplikatów).
   const allBranches = Array.from(new Set([...(git?.branches ?? []), ...(git?.remoteBranches ?? [])]));
   const currentBranch = git?.status?.branch ?? '';
   const currentTag = git?.status?.tag ?? '';
   const anyBusy = !!busy;
+
+  // Opcje "From" — HEAD + HEAD~N + gałęzie + tagi
+  const fromOptions = useMemo(() => {
+    const opts = ['HEAD', 'HEAD~1', 'HEAD~2', ...allBranches, ...(git?.tags ?? [])];
+    return Array.from(new Set(opts));
+  }, [allBranches, git?.tags]);
+
+  // Opcje "To" — working tree (sentinel) + to samo co From
+  const toOptions = useMemo(() => {
+    const opts = [WORKING_TREE, 'HEAD', 'HEAD~1', ...allBranches, ...(git?.tags ?? [])];
+    return Array.from(new Set(opts));
+  }, [allBranches, git?.tags]);
 
   return (
     <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
@@ -227,6 +378,117 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                   {busy === 'push' ? 'Push…' : 'Push'}
                 </Button>
               </Stack>
+
+              {/* ---- Sekcja Diff ---- */}
+              <Accordion
+                expanded={diffOpen}
+                onChange={onDiffAccordionChange}
+                disableGutters
+                sx={{
+                  bgcolor: 'transparent',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 1,
+                  '&:before': { display: 'none' },
+                  mt: 0.5,
+                }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 40, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
+                  <Stack direction="row" alignItems="center" spacing={0.75}>
+                    <CompareArrowsIcon fontSize="small" color="action" />
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>Diff</Typography>
+                  </Stack>
+                </AccordionSummary>
+
+                <AccordionDetails sx={{ pt: 1, pb: 1.5, px: 1.5 }}>
+                  {/* From */}
+                  <Autocomplete
+                    freeSolo
+                    options={fromOptions}
+                    value={diffFrom}
+                    onInputChange={onDiffFromChange}
+                    size="small"
+                    renderInput={(params) => (
+                      <TextField {...params} label="From (ref / commit / branch)" placeholder="HEAD" sx={{ mb: 1 }} />
+                    )}
+                  />
+
+                  {/* To */}
+                  <Autocomplete
+                    freeSolo
+                    options={toOptions}
+                    value={diffTo}
+                    getOptionLabel={(opt) => opt === WORKING_TREE ? WORKING_TREE_LABEL : opt}
+                    onInputChange={(_e, value) => setDiffTo(value ?? WORKING_TREE)}
+                    onChange={(_e, value) => setDiffTo(typeof value === 'string' ? value : WORKING_TREE)}
+                    size="small"
+                    renderOption={(props, opt) => (
+                      <li {...props} key={opt}>
+                        {opt === WORKING_TREE
+                          ? <Box component="span" sx={{ color: 'warning.main' }}>{WORKING_TREE_LABEL}</Box>
+                          : opt}
+                      </li>
+                    )}
+                    renderInput={(params) => (
+                      <TextField {...params} label="To (ref / branch / Working tree)" placeholder={WORKING_TREE_LABEL} sx={{ mb: 1 }} />
+                    )}
+                  />
+
+                  {/* File filter */}
+                  <Autocomplete
+                    freeSolo
+                    options={diffFiles}
+                    value={diffFile}
+                    onInputChange={(_e, value) => setDiffFile(value ?? '')}
+                    loading={diffFilesLoading}
+                    size="small"
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Plik (opcjonalnie)"
+                        placeholder="src/index.ts"
+                        InputProps={{
+                          ...params.InputProps,
+                          endAdornment: (
+                            <>
+                              {diffFilesLoading && <CircularProgress size={14} />}
+                              {params.InputProps.endAdornment}
+                            </>
+                          ),
+                        }}
+                        sx={{ mb: 1.5 }}
+                      />
+                    )}
+                  />
+
+                  <Button
+                    variant="contained"
+                    startIcon={diffBusy ? <CircularProgress size={14} color="inherit" /> : <CompareArrowsIcon />}
+                    size="small"
+                    fullWidth
+                    onClick={onRunDiff}
+                    disabled={diffBusy || !diffFrom}
+                  >
+                    {diffBusy ? 'Porównuję…' : 'Run diff'}
+                  </Button>
+
+                  {diffError && (
+                    <Alert severity="error" sx={{ mt: 1 }} onClose={() => setDiffError(null)}>
+                      {diffError}
+                    </Alert>
+                  )}
+
+                  {diffResult !== null && (
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                        {diffFrom} → {diffTo === WORKING_TREE ? WORKING_TREE_LABEL : diffTo}
+                        {diffFile ? ` · ${diffFile}` : ''}
+                      </Typography>
+                      <DiffViewer text={diffResult} />
+                    </Box>
+                  )}
+                </AccordionDetails>
+              </Accordion>
             </>
           )}
 

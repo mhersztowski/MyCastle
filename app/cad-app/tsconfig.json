@@ -9,7 +9,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@mhersztowski/core-cad": ["../../packages/core-cad/src/index.ts"]
+      "@mhersztowski/core-cad": ["../../packages/core-cad/src/index.ts"],
+      "@mhersztowski/core-scene3d": ["../../packages/core-scene3d/src/index.ts"]
     },
     "noEmit": true
   },

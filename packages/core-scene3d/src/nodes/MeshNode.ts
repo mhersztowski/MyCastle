@@ -98,6 +98,9 @@ export interface MaterialDescriptor {
 
   // ── Depth ─────────────────────────────────────────────────
   depthPacking?: 'basic' | 'rgba';
+
+  // ── Texture map (data URL or HTTP URL) ────────────────────
+  textureDataUrl?: string;
 }
 
 export const DEFAULT_MATERIAL: MaterialDescriptor = {

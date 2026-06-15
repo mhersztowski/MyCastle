@@ -306,6 +306,40 @@ export class GitRepoService {
     }
   }
 
+  /** Lista plików śledzonych przez git na danym ref (lub w working tree gdy ref puste). */
+  async listFiles(dir: string, ref?: string): Promise<string[]> {
+    try {
+      const args = ref ? ['ls-tree', '-r', '--name-only', ref] : ['ls-files'];
+      const out = await this.git(dir, args);
+      return out.split('\n').map((s) => s.trim()).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Unified diff:
+   *  - `from` + `to` podane → `git diff --no-color <from>..<to> [-- file]`
+   *  - tylko `from` (to puste) → `git diff --no-color <from> [-- file]` (from vs working tree)
+   *  Domyślnie `from='HEAD'`. Zwraca tekst diffa lub rzuca gdy ref nie istnieje. */
+  async diff(dir: string, opts: { from?: string; to?: string; file?: string; maxLines?: number } = {}): Promise<string> {
+    const { from = 'HEAD', to, file } = opts;
+    const args = ['diff', '--no-color'];
+    if (to) {
+      args.push(`${from}..${to}`);
+    } else {
+      args.push(from);
+    }
+    if (file) args.push('--', file);
+    const out = await this.git(dir, args);
+    if (opts.maxLines) {
+      const lines = out.split('\n');
+      if (lines.length > opts.maxLines) {
+        return lines.slice(0, opts.maxLines).join('\n') + `\n… (diff ucięty, pokazano ${opts.maxLines} z ${lines.length} linii)`;
+      }
+    }
+    return out;
+  }
+
   /** Clone url do katalogu docelowego (musi być pusty/nieistniejący). */
   async clone(url: string, dir: string, opts: { branch?: string; token?: string } = {}): Promise<GitCommandResult> {
     const parent = path.dirname(dir);

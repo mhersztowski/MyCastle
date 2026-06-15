@@ -30,6 +30,58 @@ function toThreeBlending(blending: MaterialDescriptor['blending']): THREE.Blendi
   return THREE.NormalBlending;
 }
 
+function TexturedStandardMat({
+  mat, selEmissive, selEmissiveIntensity, side, blending,
+}: {
+  mat: MaterialDescriptor;
+  selEmissive: string;
+  selEmissiveIntensity: number;
+  side: THREE.Side;
+  blending: THREE.Blending;
+}) {
+  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+  useEffect(() => {
+    if (!mat.textureDataUrl) return;
+    let t: THREE.Texture | null = null;
+    let active = true;
+    const img = new Image();
+    img.onload = () => {
+      if (!active) return;
+      t = new THREE.Texture(img);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.needsUpdate = true;  // explicit GPU upload trigger
+      setTexture(t);
+    };
+    img.onerror = () => {
+      // eslint-disable-next-line no-console
+      console.warn('[SimpleViewer] TexturedStandardMat: failed to load texture data URL');
+    };
+    img.src = mat.textureDataUrl;
+    return () => {
+      active = false;
+      t?.dispose();
+    };
+  }, [mat.textureDataUrl]);
+  return (
+    <meshStandardMaterial
+      map={texture ?? undefined}
+      color={texture ? '#ffffff' : mat.color}
+      emissive={selEmissive}
+      emissiveIntensity={selEmissiveIntensity}
+      roughness={mat.roughness ?? 1}
+      metalness={mat.metalness ?? 0}
+      opacity={mat.opacity}
+      transparent={mat.transparent || mat.opacity < 1}
+      wireframe={mat.wireframe}
+      side={side}
+      blending={blending}
+      depthTest={mat.depthTest}
+      depthWrite={mat.depthWrite}
+      alphaTest={mat.alphaTest}
+    />
+  );
+}
+
 function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSelected: boolean }) {
   const side = toThreeSide(mat.side);
   const blending = toThreeBlending(mat.blending);
@@ -195,6 +247,17 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
 
     case 'MeshStandardMaterial':
     default:
+      if (mat.textureDataUrl) {
+        return (
+          <TexturedStandardMat
+            mat={mat}
+            selEmissive={selEmissive}
+            selEmissiveIntensity={selEmissiveIntensity}
+            side={side}
+            blending={blending}
+          />
+        );
+      }
       return (
         <meshStandardMaterial
           color={mat.color}
