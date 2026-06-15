@@ -86,14 +86,24 @@ export class GitRepoService {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  /** Uruchamia `git` w danym katalogu. Rzuca z połączonym stderr przy błędzie. */
+  /** Uruchamia `git` w danym katalogu. Rzuca z połączonym stderr przy błędzie.
+   *  Zawsze wyłącza credential helpery i interaktywne prompty — na serwerze
+   *  polegamy wyłącznie na tokenach wstrzykniętych w URL. */
   private async git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+    // -c credential.helper= nadpisuje dowolny globalny/systemowy helper → git
+    // nie pyta o hasło gdy brak poświadczeń w URL (fail fast zamiast hang/fallback).
+    const gitArgs = ['-c', 'credential.helper=', ...args];
+    const fullEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      ...env,
+    };
     try {
-      const { stdout } = await pExecFile('git', args, {
+      const { stdout } = await pExecFile('git', gitArgs, {
         cwd,
         timeout: this.timeoutMs,
         maxBuffer: 32 * 1024 * 1024,
-        env: env ? { ...process.env, ...env } : process.env,
+        env: fullEnv,
       });
       return stdout;
     } catch (e) {
@@ -253,6 +263,17 @@ export class GitRepoService {
     }
   }
 
+  /** Stage all changes + commit. */
+  async commit(dir: string, message: string): Promise<GitCommandResult> {
+    try {
+      await this.git(dir, ['add', '-A']);
+      const out = await this.git(dir, ['commit', '-m', message]);
+      return { ok: true, stdout: out, stderr: '' };
+    } catch (e) {
+      return { ok: false, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   /** Pull (fast-forward jeśli możliwe). Token wstrzykiwany ad-hoc do URL. */
   async pull(dir: string, opts: { remote?: string; branch?: string; token?: string } = {}): Promise<GitCommandResult> {
     const remote = opts.remote ?? 'origin';
@@ -277,6 +298,16 @@ export class GitRepoService {
     });
   }
 
+  /** Zwraca URL remote z wstrzykniętym tokenem (jeśli token podany), albo nazwę
+   *  remote gdy nie ma tokena lub URL nie jest HTTPS. */
+  private async resolvedRemote(dir: string, remote: string, token?: string): Promise<string> {
+    if (!token) return remote;
+    const url = await this.remoteUrl(dir, remote);
+    if (!url) return remote;
+    const withTok = this.urlWithToken(url, token);
+    return withTok !== url ? withTok : remote;
+  }
+
   /** Domyślny branch zdalnego (po fetchu): preferuje main/master, inaczej pierwszy. */
   async defaultRemoteBranch(dir: string, remote = 'origin'): Promise<string | null> {
     const remotes = await this.listRemoteBranches(dir, remote);
@@ -298,13 +329,11 @@ export class GitRepoService {
       const existing = await this.remoteUrl(dir, remote);
       if (existing) await this.git(dir, ['remote', 'set-url', remote, url]);
       else await this.git(dir, ['remote', 'add', remote, url]);
-      const result = await this.withToken(dir, remote, opts.token, async () => {
-        let out = await this.git(dir, ['fetch', remote]);
-        const branch = opts.branch || (await this.defaultRemoteBranch(dir, remote)) || 'main';
-        out += '\n' + await this.git(dir, ['checkout', '-B', branch, '--track', `${remote}/${branch}`]);
-        return out;
-      });
-      return result;
+      const fetchTarget = await this.resolvedRemote(dir, remote, opts.token);
+      let out = await this.git(dir, ['fetch', fetchTarget]);
+      const branch = opts.branch || (await this.defaultRemoteBranch(dir, remote)) || 'main';
+      out += '\n' + await this.git(dir, ['checkout', '-B', branch, '--track', `${remote}/${branch}`]);
+      return { ok: true, stdout: out, stderr: '' };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { ok: false, stdout: '', stderr: msg };
@@ -389,7 +418,7 @@ export class GitRepoService {
     const parent = path.dirname(dir);
     fs.mkdirSync(parent, { recursive: true });
     const src = this.urlWithToken(url, opts.token);
-    const args = ['clone'];
+    const args = ['-c', 'credential.helper=', 'clone'];
     if (opts.branch) args.push('--branch', opts.branch);
     args.push(src, path.basename(dir));
     try {
@@ -397,8 +426,9 @@ export class GitRepoService {
         cwd: parent,
         timeout: this.timeoutMs,
         maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       });
-      // jeśli wstrzyknięto token, oczyść remote z tokena
+      // Oczyść remote z tokena — nie trzymamy tokena w git config.
       if (opts.token) {
         await this.git(dir, ['remote', 'set-url', 'origin', url]).catch(() => undefined);
       }
@@ -422,7 +452,7 @@ export class GitRepoService {
       if (original) {
         const tokened = this.urlWithToken(original, token);
         if (tokened !== original) await this.git(dir, ['remote', 'set-url', remote, tokened]);
-        else original = null; // nic nie zmieniliśmy (np. SSH) — nie przywracaj
+        else original = null;
       }
     }
     try {

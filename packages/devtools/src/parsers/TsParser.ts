@@ -40,6 +40,10 @@ function heritage(node: ts.ClassDeclaration | ts.InterfaceDeclaration): { ext: s
   return { ext, impl };
 }
 
+function fileBaseName(file: string): string {
+  return file.replace(/\.[^.]+$/, '').split(/[/\\]/).pop() ?? 'module';
+}
+
 export class TsParser implements LanguageParser {
   readonly languages: Language[] = ['typescript', 'javascript'];
 
@@ -79,6 +83,40 @@ export class TsParser implements LanguageParser {
       ts.forEachChild(node, visit);
     };
     visit(sf);
+
+    // Collect top-level (module-level) functions, variables and type aliases.
+    // exported → public, non-exported → package (~).
+    const moduleName = fileBaseName(file);
+    const modMembers: CodeMember[] = [];
+    const usedMod = new Set<string>();
+    const pushMod = (base: Omit<CodeMember, 'id' | 'text'>) => {
+      let id = memberId(moduleName, base.kind, base.name);
+      while (usedMod.has(id)) id += '_';
+      usedMod.add(id);
+      modMembers.push({ ...base, id, text: renderMember(base) });
+    };
+
+    for (const stmt of sf.statements) {
+      const isExported = hasMod((stmt as ts.HasModifiers).modifiers, ts.SyntaxKind.ExportKeyword);
+      const vis: Visibility = isExported ? 'public' : 'package';
+      if (ts.isFunctionDeclaration(stmt) && stmt.name) {
+        pushMod({ kind: 'method', name: stmt.name.text, visibility: vis, type: typeText(stmt.type), params: params(stmt) });
+      } else if (ts.isVariableStatement(stmt)) {
+        for (const decl of stmt.declarationList.declarations) {
+          const name = decl.name.getText();
+          if (name && !name.startsWith('{') && !name.startsWith('[')) {
+            pushMod({ kind: 'field', name, visibility: vis, type: typeText(decl.type) });
+          }
+        }
+      } else if (ts.isTypeAliasDeclaration(stmt)) {
+        pushMod({ kind: 'field', name: stmt.name.text, visibility: vis, type: stmt.type.getText().replace(/\s+/g, ' ').slice(0, 60) });
+      }
+    }
+
+    if (modMembers.length > 0) {
+      symbols.push({ id: symbolId(moduleName), name: moduleName, kind: 'module', file, language, extends: [], implements: [], members: modMembers });
+    }
+
     return symbols;
   }
 

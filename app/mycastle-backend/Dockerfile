@@ -7,7 +7,7 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
 # System deps + Docker CLI
 RUN apt-get update -qq \
-    && apt-get install -y -qq --no-install-recommends python3 python3-pip make g++ ca-certificates curl \
+    && apt-get install -y -qq --no-install-recommends python3 python3-pip make g++ ca-certificates curl git \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \

@@ -2899,6 +2899,12 @@ export class MycastleHttpServer extends HttpUploadServer {
           this.sendJsonResponse(res, 200, r);
           return;
         }
+        case 'commit': {
+          if (!body.message) { this.sendJsonResponse(res, 400, { error: 'message is required' }); return; }
+          const r = await this.gitService.commit(userName, repoPath, body.message);
+          this.sendJsonResponse(res, 200, r);
+          return;
+        }
         default:
           this.sendJsonResponse(res, 404, { error: `Unknown git operation: ${operation}` });
       }

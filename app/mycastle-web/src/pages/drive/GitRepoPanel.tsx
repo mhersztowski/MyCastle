@@ -20,10 +20,11 @@ import SaveIcon from '@mui/icons-material/Save';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import KeyIcon from '@mui/icons-material/Key';
+import CheckIcon from '@mui/icons-material/Check';
 import { minisApi, type GitRepoStatusResponse } from '../../services/MinisApiService';
 
-/** Namespace w SecretsService zarezerwowany dla tokenów git. */
-const GIT_SECRETS_NS = 'git';
+/** Namespace współdzielony z Settings → Secrets. */
+const CREDENTIALS_NS = '__credentials__';
 
 /** Sentinel oznaczający „working tree" — git diff <from> (bez <to>). */
 const WORKING_TREE = '__working_tree__';
@@ -99,6 +100,9 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
   const [secretKeys, setSecretKeys] = useState<string[]>([]);
   const [secretsLoading, setSecretsLoading] = useState(false);
 
+  // Commit
+  const [commitMsg, setCommitMsg] = useState('');
+
   // Diff
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffFrom, setDiffFrom] = useState('HEAD');
@@ -113,9 +117,10 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
   const loadSecrets = useCallback(async () => {
     setSecretsLoading(true);
     try {
-      const list = await minisApi.listSecrets(userName, GIT_SECRETS_NS);
+      const list = await minisApi.listSecrets(userName, CREDENTIALS_NS);
       setSecretKeys(list.map((s) => s.key));
-    } catch {
+    } catch (e) {
+      console.error('[GitRepoPanel.loadSecrets] ERROR:', e);
       setSecretKeys([]);
     } finally {
       setSecretsLoading(false);
@@ -165,6 +170,15 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
       setBusy(null);
     }
   }, [load]);
+
+  const onCommit = () => {
+    if (!commitMsg.trim()) return;
+    run('commit', async () => {
+      const r = await minisApi.gitCommit(userName, repoPath, commitMsg.trim());
+      if (r.ok) setCommitMsg('');
+      return r;
+    });
+  };
 
   const onCheckoutBranch = (ref: string) => run(`checkout ${ref}`, () => minisApi.gitCheckout(userName, repoPath, ref, 'branch'));
   const onCheckoutTag = (ref: string) => run(`checkout ${ref}`, () => minisApi.gitCheckout(userName, repoPath, ref, 'tag'));
@@ -310,7 +324,7 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                 <MenuItem key={k} value={k}>
                   <Stack direction="row" spacing={1} alignItems="center">
                     <KeyIcon sx={{ fontSize: 14, color: 'success.main' }} />
-                    <span>{k}</span>
+                    <span>{k.replace(/^(?:token|password|other):/, '')}</span>
                   </Stack>
                 </MenuItem>
               ))}
@@ -322,9 +336,9 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
 
           {secretKeys.length === 0 && !secretsLoading && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, pl: 0.5 }}>
-              Brak sekretów w namespace <code>git</code>.{' '}
+              No token secrets found.{' '}
               <Link href="#" underline="hover" onClick={(e) => { e.preventDefault(); window.location.hash = 'settings'; }}>
-                Dodaj w Settings → Secrets
+                Add in Settings → Secrets (type: Token)
               </Link>
             </Typography>
           )}
@@ -344,7 +358,7 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
             <Chip
               size="small" color="success" variant="outlined"
               icon={<KeyIcon sx={{ fontSize: 14 }} />}
-              label={`Sekret: ${tokenSource}`}
+              label={`Secret: ${tokenSource.replace(/^(?:token|password|other):/, '')}`}
               sx={{ mt: 0.5, mb: 1 }}
             />
           )}
@@ -423,6 +437,26 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                 </Button>
                 <Button variant="contained" startIcon={<UploadIcon />} onClick={onPush} disabled={anyBusy} fullWidth>
                   {busy === 'push' ? 'Push…' : 'Push'}
+                </Button>
+              </Stack>
+
+              {/* ---- Sekcja Commit ---- */}
+              <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 1.5 }}>
+                <TextField
+                  label="Commit message" size="small" fullWidth
+                  placeholder="e.g. update config"
+                  value={commitMsg}
+                  onChange={(e) => setCommitMsg(e.target.value)}
+                  disabled={anyBusy}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onCommit(); } }}
+                  multiline maxRows={3}
+                />
+                <Button
+                  variant="contained" color="success" startIcon={<CheckIcon />}
+                  onClick={onCommit} disabled={anyBusy || !commitMsg.trim()}
+                  sx={{ whiteSpace: 'nowrap', flexShrink: 0, height: 40 }}
+                >
+                  {busy === 'commit' ? 'Commit…' : 'Commit'}
                 </Button>
               </Stack>
 

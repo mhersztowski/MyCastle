@@ -19,8 +19,8 @@ import {
 } from '@mhersztowski/devtools';
 import type { SecretsService } from '../secrets/SecretsService.js';
 
-/** Namespace w SecretsService gdzie użytkownik trzyma tokeny git. */
-const GIT_SECRETS_NS = 'git';
+/** Namespace współdzielony z Settings → Secrets (klucze: `token:{name}`). */
+const GIT_SECRETS_NS = '__credentials__';
 
 export interface GitRepoStatusResponse {
   /** RepoJson z zredagowanym tokenem (nie zwracamy sekretu na frontend). */
@@ -230,6 +230,14 @@ export class GitService {
     } catch (e) {
       return { ok: false, diff: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  /** Stage all + commit. */
+  async commit(userName: string, relPath: string, message: string): Promise<{ ok: boolean; output: string }> {
+    const { dir } = this.resolve(userName, relPath);
+    if (!(await this.git.isRepo(dir))) throw new Error('Katalog nie jest repozytorium git (najpierw Clone)');
+    const r = await this.git.commit(dir, message);
+    return { ok: r.ok, output: (r.stdout + (r.stderr ? '\n' + r.stderr : '')).trim() };
   }
 
   /** Push do remote (ustawia upstream gdy go brak). */

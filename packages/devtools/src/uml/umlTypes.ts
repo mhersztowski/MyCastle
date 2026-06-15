@@ -4,7 +4,7 @@
  * identical so generated projects load directly in the editor.
  */
 
-export type UmlKind = 'class' | 'abstract' | 'interface' | 'enum';
+export type UmlKind = 'class' | 'abstract' | 'interface' | 'enum' | 'struct' | 'module';
 export type MemberKind = 'field' | 'method';
 export type RelType =
   | 'association' | 'directed' | 'aggregation' | 'composition'

@@ -1,10 +1,12 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
+import * as fs from 'fs';
 
 export class IotDatabase {
   private db: Database.Database;
 
   constructor(dataDir: string) {
+    fs.mkdirSync(dataDir, { recursive: true });
     const dbPath = path.join(dataDir, 'iot.db');
     this.db = new Database(dbPath);
     this.init();

@@ -9,8 +9,10 @@ const uid = (p: string) => `${p}_${Date.now().toString(36)}_${counter++}`;
 function kindToUml(s: CodeSymbol): UmlKind {
   if (s.kind === 'interface') return 'interface';
   if (s.kind === 'enum') return 'enum';
+  if (s.kind === 'module') return 'module';
+  if (s.kind === 'struct') return 'struct';
   if (s.kind === 'class' && s.isAbstract) return 'abstract';
-  return 'class'; // class or struct
+  return 'class';
 }
 const relToUml = (t: RelationType): RelType => t; // names align with the editor
 

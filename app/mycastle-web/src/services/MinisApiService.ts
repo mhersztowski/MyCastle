@@ -881,6 +881,10 @@ class MinisApiService {
   async gitDiff(userName: string, repoPath: string, opts: { from?: string; to?: string; file?: string }): Promise<{ ok: boolean; diff: string }> {
     return this.request('POST', `/users/${encodeURIComponent(userName)}/git/diff`, { path: repoPath, ...opts });
   }
+
+  async gitCommit(userName: string, repoPath: string, message: string): Promise<GitOpResult> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/git/commit`, { path: repoPath, message });
+  }
 }
 
 export const minisApi = new MinisApiService();

@@ -45,7 +45,7 @@ import {
   Box, Button, Stack, Typography, IconButton, Tooltip, Divider, TextField, MenuItem,
   Dialog, DialogTitle, DialogContent, DialogActions, List, ListItem, ListItemButton,
   ListItemText, ListItemIcon, Collapse, Paper, Snackbar, Alert, Chip, Breadcrumbs,
-  Link as MuiLink, CircularProgress, useMediaQuery, useTheme,
+  Link as MuiLink, CircularProgress, useMediaQuery, useTheme, Popover,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -83,7 +83,7 @@ import { AccountMenu } from '../../components/AccountMenu';
 // Model
 // ──────────────────────────────────────────────────────────────────────────
 
-type UmlKind = 'class' | 'abstract' | 'interface' | 'enum';
+type UmlKind = 'class' | 'abstract' | 'interface' | 'enum' | 'struct' | 'module';
 type MemberKind = 'field' | 'method';
 
 interface UmlMember { id: string; kind: MemberKind; text: string; category?: string }
@@ -138,6 +138,8 @@ const KIND_META: Record<UmlKind, { stereotype: string | null; color: string; lab
   abstract: { stereotype: '«abstract»', color: '#6a1b9a', label: 'Abstract' },
   interface: { stereotype: '«interface»', color: '#00838f', label: 'Interface' },
   enum: { stereotype: '«enumeration»', color: '#ef6c00', label: 'Enum' },
+  struct: { stereotype: '«struct»', color: '#546e7a', label: 'Struct' },
+  module: { stereotype: '«module»', color: '#37474f', label: 'Module' },
 };
 
 const REL_META: Record<RelType, { label: string; markerStart?: string; markerEnd?: string; dashed?: boolean }> = {
@@ -348,19 +350,56 @@ function ancestry(h: UmlHistory, branch: string): UmlCommit[] {
 
 const handleStyle = { width: 9, height: 9, background: '#fff', border: '2px solid #888' };
 
+const VIS_ORDER = ['+', '#', '~', '-'] as const;
+const VIS_LABEL: Record<string, string> = { '+': 'public', '#': 'protected', '~': 'package', '-': 'private' };
+const VIS_COLOR: Record<string, string> = { '+': '#4caf50', '#': '#ff9800', '~': '#2196f3', '-': '#f44336' };
+
+/** Extract the leading visibility sigil from a rendered UML member text. */
+function memberSigil(text: string): string {
+  const ch = text.trimStart()[0];
+  return (ch === '+' || ch === '-' || ch === '#' || ch === '~') ? ch : '+';
+}
+
+/** Replace (or prepend) the leading visibility sigil in a UML member text line. */
+function changeTextSigil(text: string, sig: string): string {
+  const trimmed = text.trimStart();
+  const first = trimmed[0];
+  if (first === '+' || first === '-' || first === '#' || first === '~') {
+    return sig + trimmed.slice(1);
+  }
+  return sig + ' ' + trimmed;
+}
+
 function MemberLines({ members }: { members: UmlMember[] }) {
+  const groups = VIS_ORDER
+    .map(sig => ({ sig, items: members.filter(m => memberSigil(m.text) === sig) }))
+    .filter(g => g.items.length > 0);
+  const multiVis = groups.length > 1;
+
   return (
     <Box sx={{ px: 1, py: 0.5, minHeight: 18, borderBottom: '1px solid', borderColor: 'divider', whiteSpace: 'pre' }}>
       {members.length === 0
         ? <Typography sx={{ fontSize: 11, color: 'text.disabled' }}>&nbsp;</Typography>
-        : members.map((m) => (
-          <Typography key={m.id} sx={{ fontSize: 11, lineHeight: 1.5, fontFamily: 'monospace' }}>
-            {m.category && (
-              <Box component="span" title={m.category} sx={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', bgcolor: categoryColor(m.category), mr: 0.5, verticalAlign: 'middle' }} />
+        : groups.map(({ sig, items }, gi) => (
+          <Box key={sig}>
+            {multiVis && gi > 0 && (
+              <Box sx={{ mx: -1, px: 1, borderTop: '1px dashed', borderColor: 'divider', mt: 0.25 }}>
+                <Typography sx={{ fontSize: 9, color: 'text.disabled', fontFamily: 'monospace', lineHeight: 1.4 }}>
+                  {VIS_LABEL[sig]}
+                </Typography>
+              </Box>
             )}
-            {m.text}
-          </Typography>
-        ))}
+            {items.map(m => (
+              <Typography key={m.id} sx={{ fontSize: 11, lineHeight: 1.5, fontFamily: 'monospace' }}>
+                {m.category && (
+                  <Box component="span" title={m.category} sx={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', bgcolor: categoryColor(m.category), mr: 0.5, verticalAlign: 'middle' }} />
+                )}
+                {m.text}
+              </Typography>
+            ))}
+          </Box>
+        ))
+      }
     </Box>
   );
 }
@@ -847,6 +886,48 @@ function LinkedFilesPanel({ projectLinkedPath, items, onPreview, onClose }: { pr
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────
+// Category picker — compact dot button that opens a small popover
+// ──────────────────────────────────────────────────────────────────────────
+
+function CategoryPicker({ value, categories, listId, onChange }: {
+  value: string; categories: string[]; listId: string; onChange: (v: string) => void;
+}) {
+  const [anchor, setAnchor] = useState<Element | null>(null);
+  const [local, setLocal] = useState('');
+  const open = (e: React.MouseEvent) => { setLocal(value); setAnchor(e.currentTarget); };
+  const close = () => setAnchor(null);
+  const commit = (v: string) => { onChange(v); close(); };
+  return (
+    <>
+      <Tooltip title={value || 'Category'} placement="right">
+        <Box onClick={open} sx={{ width: 32, height: 19, border: '1px solid', borderColor: 'divider', borderRadius: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', '&:hover': { borderColor: 'text.primary' } }}>
+          {value
+            ? <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: categoryColor(value) }} />
+            : <Box sx={{ width: 8, height: 8, borderRadius: '50%', border: '1px dashed', borderColor: 'text.disabled' }} />}
+        </Box>
+      </Tooltip>
+      <Popover open={Boolean(anchor)} anchorEl={anchor} onClose={close} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }} PaperProps={{ sx: { p: 1, width: 200 } }}>
+        <datalist id={listId + '-cat'}>{categories.map((c) => <option key={c} value={c} />)}</datalist>
+        <TextField size="small" fullWidth autoFocus placeholder="Category…" value={local}
+          onChange={(e) => setLocal(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') commit(local); if (e.key === 'Escape') close(); }}
+          inputProps={{ list: listId + '-cat' }}
+          InputProps={{ endAdornment: local ? <IconButton size="small" onClick={() => commit('')}><CloseIcon sx={{ fontSize: 14 }} /></IconButton> : undefined }}
+        />
+        {categories.length > 0 && (
+          <Stack direction="row" flexWrap="wrap" gap={0.5} mt={0.75}>
+            {categories.map((c) => (
+              <Chip key={c} label={c} size="small" onClick={() => commit(c)}
+                sx={{ bgcolor: categoryColor(c), color: '#fff', fontSize: 10, cursor: 'pointer', height: 20 }} />
+            ))}
+          </Stack>
+        )}
+      </Popover>
+    </>
+  );
+}
+
 // Member list editor (properties panel section)
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -857,26 +938,43 @@ function MemberSection({ title, members, categories, onAdd, onChange, onCategory
   const listId = `uml-cat-${title.replace(/\s+/g, '-')}`;
   return (
     <Box>
-      <datalist id={listId}>{categories.map((c) => <option key={c} value={c} />)}</datalist>
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography variant="caption" color="text.secondary">{title}</Typography>
-        <Button size="small" startIcon={<AddIcon />} onClick={onAdd} sx={{ minWidth: 0 }}>Dodaj</Button>
+        <Button size="small" startIcon={<AddIcon />} onClick={onAdd} sx={{ minWidth: 0 }}>Add</Button>
       </Stack>
-      <Stack spacing={1}>
-        {members.length === 0 && <Typography variant="caption" color="text.disabled">— brak —</Typography>}
-        {members.map((m) => (
-          <Box key={m.id}>
-            <Stack direction="row" spacing={0.5} alignItems="center">
+      <Stack spacing={0.75}>
+        {members.length === 0 && <Typography variant="caption" color="text.disabled">— none —</Typography>}
+        {members.map((m) => {
+          const sig = memberSigil(m.text);
+          return (
+            <Stack key={m.id} direction="row" spacing={0.5} alignItems="flex-start">
+              {/* Left column: visibility dot + category dot, stacked — together same height as text field */}
+              <Stack spacing="1px" sx={{ flexShrink: 0 }}>
+                <TextField
+                  select size="small"
+                  value={sig}
+                  onChange={(e) => onChange(m.id, changeTextSigil(m.text, e.target.value))}
+                  sx={{ width: 32, '& .MuiInputBase-root': { height: 19 }, '& .MuiSelect-icon': { display: 'none' }, '& .MuiOutlinedInput-input': { px: '4px !important', py: '0px !important', display: 'flex', alignItems: 'center', justifyContent: 'center' } }}
+                  SelectProps={{ renderValue: (v) => (
+                    <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: VIS_COLOR[v as string] ?? '#888', mx: 'auto' }} />
+                  ) }}
+                >
+                  {VIS_ORDER.map((s) => (
+                    <MenuItem key={s} value={s} sx={{ fontSize: 12 }}>
+                      <Box component="span" sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: VIS_COLOR[s], display: 'inline-block', mr: 0.75, flexShrink: 0 }} />
+                      <Box component="span" sx={{ fontFamily: 'monospace', mr: 0.5, color: VIS_COLOR[s] }}>{s}</Box>
+                      {VIS_LABEL[s]}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <CategoryPicker value={m.category ?? ''} categories={categories} listId={listId} onChange={(v) => onCategory(m.id, v)} />
+              </Stack>
+              {/* Text field + delete */}
               <TextField size="small" fullWidth value={m.text} onChange={(e) => onChange(m.id, e.target.value)} InputProps={{ sx: { fontFamily: 'monospace', fontSize: 12 } }} />
               <IconButton size="small" onClick={() => onDelete(m.id)}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton>
             </Stack>
-            <TextField size="small" fullWidth placeholder="kategoria (opcjonalnie)" value={m.category ?? ''}
-              onChange={(e) => onCategory(m.id, e.target.value)}
-              inputProps={{ list: listId }}
-              InputProps={{ sx: { fontSize: 11 }, startAdornment: m.category ? <Box component="span" sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: categoryColor(m.category), mr: 0.5, flexShrink: 0 }} /> : undefined }}
-              sx={{ mt: 0.25 }} />
-          </Box>
-        ))}
+          );
+        })}
       </Stack>
     </Box>
   );
@@ -1282,21 +1380,21 @@ function UmlEditor({ userName }: { userName: string }) {
 
           {selectedNode && (
             <Stack spacing={1.5}>
-              <Typography variant="subtitle2">Właściwości klasy</Typography>
-              <TextField select size="small" label="Typ" value={selectedNode.data.kind} onChange={(e) => patchNodeData(selectedNode.id, { kind: e.target.value as UmlKind })}>
+              <Typography variant="subtitle2">Class properties</Typography>
+              <TextField select size="small" label="Type" value={selectedNode.data.kind} onChange={(e) => patchNodeData(selectedNode.id, { kind: e.target.value as UmlKind })}>
                 {(Object.keys(KIND_META) as UmlKind[]).map((k) => <MenuItem key={k} value={k}>{KIND_META[k].label}</MenuItem>)}
               </TextField>
-              <TextField size="small" label="Nazwa" value={selectedNode.data.name} onChange={(e) => patchNodeData(selectedNode.id, { name: e.target.value })} />
+              <TextField size="small" label="Name" value={selectedNode.data.name} onChange={(e) => patchNodeData(selectedNode.id, { name: e.target.value })} />
 
-              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Pola</Typography></Divider>
-              <MemberSection title="Zmienne / pola" members={selFields} categories={allCategories}
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Fields</Typography></Divider>
+              <MemberSection title="Fields" members={selFields} categories={allCategories}
                 onAdd={() => updateMembers(selectedNode.id, (ms) => [...ms, member('field', '- field: type')])}
                 onChange={(mid, text) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, text } : m)))}
                 onCategory={(mid, category) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, category: category || undefined } : m)))}
                 onDelete={(mid) => updateMembers(selectedNode.id, (ms) => ms.filter((m) => m.id !== mid))} />
 
-              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Metody</Typography></Divider>
-              <MemberSection title="Metody" members={selMethods} categories={allCategories}
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Methods</Typography></Divider>
+              <MemberSection title="Methods" members={selMethods} categories={allCategories}
                 onAdd={() => updateMembers(selectedNode.id, (ms) => [...ms, member('method', '+ method(): void')])}
                 onChange={(mid, text) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, text } : m)))}
                 onCategory={(mid, category) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, category: category || undefined } : m)))}

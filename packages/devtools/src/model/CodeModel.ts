@@ -6,7 +6,7 @@
 
 export type Language = 'typescript' | 'javascript' | 'python' | 'c' | 'cpp';
 
-export type SymbolKind = 'class' | 'interface' | 'enum' | 'struct';
+export type SymbolKind = 'class' | 'interface' | 'enum' | 'struct' | 'module';
 export type MemberKind = 'field' | 'method';
 export type Visibility = 'public' | 'private' | 'protected' | 'package';
 
