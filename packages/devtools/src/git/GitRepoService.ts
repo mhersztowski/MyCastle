@@ -302,16 +302,6 @@ export class GitRepoService {
     });
   }
 
-  /** Zwraca URL remote z wstrzykniętym tokenem (jeśli token podany), albo nazwę
-   *  remote gdy nie ma tokena lub URL nie jest HTTPS. */
-  private async resolvedRemote(dir: string, remote: string, token?: string): Promise<string> {
-    if (!token) return remote;
-    const url = await this.remoteUrl(dir, remote);
-    if (!url) return remote;
-    const withTok = this.urlWithToken(url, token);
-    return withTok !== url ? withTok : remote;
-  }
-
   /** Domyślny branch zdalnego (po fetchu): preferuje main/master, inaczej pierwszy. */
   async defaultRemoteBranch(dir: string, remote = 'origin'): Promise<string | null> {
     const remotes = await this.listRemoteBranches(dir, remote);
