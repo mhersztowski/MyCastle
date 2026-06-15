@@ -130,7 +130,7 @@ export class App {
     this.backendPluginService = new BackendPluginService(config.rootDir);
     this.secretsService = new SecretsService(config.rootDir);
     this.driveScriptScheduler = new DriveScriptScheduler(config.rootDir);
-    this.gitService = new GitService(config.rootDir);
+    this.gitService = new GitService(config.rootDir, this.secretsService);
 
     this.httpServer = new MycastleHttpServer(
       config.httpPort,

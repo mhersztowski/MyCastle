@@ -80,6 +80,9 @@ export interface RepoJson {
   remote?: string;
   /** Zredagowany na backendzie do '***' gdy ustawiony. */
   token?: string;
+  /** Klucz sekretu z SecretsService (namespace `git`). Gdy ustawiony, token jest
+   *  przechowywany zaszyfrowany i rozwiązywany przez backend przy każdej operacji. */
+  tokenSecretKey?: string;
   lastSync?: number;
 }
 
@@ -847,7 +850,7 @@ class MinisApiService {
   }
 
   /** Zapisuje konfigurację repo (URL/remote/branch/token) do `.repo.json`. */
-  async gitSaveRepo(userName: string, repoPath: string, patch: { url?: string; remote?: string; branch?: string; token?: string }): Promise<{ ok: boolean; repo: RepoJson }> {
+  async gitSaveRepo(userName: string, repoPath: string, patch: { url?: string; remote?: string; branch?: string; token?: string; tokenSecretKey?: string | null }): Promise<{ ok: boolean; repo: RepoJson }> {
     return this.request('POST', `/users/${encodeURIComponent(userName)}/git/save`, { path: repoPath, ...patch });
   }
 

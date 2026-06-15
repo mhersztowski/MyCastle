@@ -2857,36 +2857,37 @@ export class MycastleHttpServer extends HttpUploadServer {
         this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
         return;
       }
-      const body = await this.parseRequestBody(req) as { path?: string; ref?: string; type?: 'branch' | 'tag'; url?: string; remote?: string; branch?: string; token?: string; from?: string; to?: string; file?: string };
+      const body = await this.parseRequestBody(req) as { path?: string; ref?: string; type?: 'branch' | 'tag'; url?: string; remote?: string; branch?: string; token?: string; tokenSecretKey?: string | null; from?: string; to?: string; file?: string };
       const repoPath = body.path ?? '';
       if (!repoPath) { this.sendJsonResponse(res, 400, { error: 'path is required' }); return; }
       switch (operation) {
         case 'save': {
           const repo = await this.gitService.save(userName, repoPath, {
             url: body.url, remote: body.remote, branch: body.branch, token: body.token,
+            tokenSecretKey: body.tokenSecretKey,
           });
           this.sendJsonResponse(res, 200, { ok: true, repo });
           return;
         }
         case 'clone': {
           const r = await this.gitService.clone(userName, repoPath);
-          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          this.sendJsonResponse(res, 200, r);
           return;
         }
         case 'pull': {
           const r = await this.gitService.pull(userName, repoPath);
-          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          this.sendJsonResponse(res, 200, r);
           return;
         }
         case 'push': {
           const r = await this.gitService.push(userName, repoPath);
-          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          this.sendJsonResponse(res, 200, r);
           return;
         }
         case 'checkout': {
           if (!body.ref) { this.sendJsonResponse(res, 400, { error: 'ref is required' }); return; }
           const r = await this.gitService.checkout(userName, repoPath, body.ref, body.type === 'tag' ? 'tag' : 'branch');
-          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          this.sendJsonResponse(res, 200, r);
           return;
         }
         case 'diff': {
@@ -2895,7 +2896,7 @@ export class MycastleHttpServer extends HttpUploadServer {
             to: body.to || undefined,
             file: body.file || undefined,
           });
-          this.sendJsonResponse(res, r.ok ? 200 : 500, r);
+          this.sendJsonResponse(res, 200, r);
           return;
         }
         default:

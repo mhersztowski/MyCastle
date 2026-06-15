@@ -2,7 +2,7 @@
  * GitRepoPanel — panel boczny Drive dla pliku `.repo.json`. Pokazuje stan
  * repozytorium git leżącego w katalogu pliku oraz akcje: wybór gałęzi/tagu
  * (checkout), Pull, Push, Clone (gdy katalog nie jest jeszcze clone'em).
- * Zawiera sekcję Diff: porównanie dwóch refów lub refa z working tree (filesystemem backendu).
+ * Zawiera sekcję Diff oraz wybór tokena z SecretsService (namespace `git`).
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -10,6 +10,7 @@ import {
   Box, Typography, Select, MenuItem, Button, Stack, Chip, Divider,
   CircularProgress, Alert, FormControl, InputLabel, Tooltip, IconButton,
   TextField, Accordion, AccordionSummary, AccordionDetails, Autocomplete,
+  Link,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -18,11 +19,20 @@ import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import SaveIcon from '@mui/icons-material/Save';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import KeyIcon from '@mui/icons-material/Key';
 import { minisApi, type GitRepoStatusResponse } from '../../services/MinisApiService';
+
+/** Namespace w SecretsService zarezerwowany dla tokenów git. */
+const GIT_SECRETS_NS = 'git';
 
 /** Sentinel oznaczający „working tree" — git diff <from> (bez <to>). */
 const WORKING_TREE = '__working_tree__';
 const WORKING_TREE_LABEL = 'Working tree (filesystem)';
+
+/** Opcja „brak tokena". */
+const NO_TOKEN = '__none__';
+/** Opcja „wpisz ręcznie" — fallback dla starych repo z jawnym tokenem. */
+const MANUAL_TOKEN = '__manual__';
 
 interface GitRepoPanelProps {
   userName: string;
@@ -50,52 +60,25 @@ function classifyDiffLine(line: string): DiffLineKind {
   return 'normal';
 }
 
-const DIFF_COLORS: Record<DiffLineKind, string | undefined> = {
-  add: '#1a3a1a',
-  remove: '#3a1a1a',
-  hunk: '#1a1a3a',
-  meta: '#2a2a2a',
-  normal: undefined,
+const DIFF_BG: Record<DiffLineKind, string | undefined> = {
+  add: '#1a3a1a', remove: '#3a1a1a', hunk: '#1a1a3a', meta: '#2a2a2a', normal: undefined,
 };
-const DIFF_TEXT_COLORS: Record<DiffLineKind, string> = {
-  add: '#6dcf6d',
-  remove: '#cf6d6d',
-  hunk: '#7b7bcf',
-  meta: '#888',
-  normal: '#d4d4d4',
+const DIFF_FG: Record<DiffLineKind, string> = {
+  add: '#6dcf6d', remove: '#cf6d6d', hunk: '#7b7bcf', meta: '#888', normal: '#d4d4d4',
 };
 
-const DiffViewer: React.FC<{ text: string }> = ({ text }) => {
-  const lines = text.split('\n');
-  return (
-    <Box
-      sx={{
-        bgcolor: '#1e1e1e', borderRadius: 1, p: 1,
-        fontFamily: 'monospace', fontSize: '0.68rem',
-        overflow: 'auto', maxHeight: 480,
-        whiteSpace: 'pre',
-      }}
-    >
-      {lines.map((line, i) => {
-        const kind = classifyDiffLine(line);
-        return (
-          <Box
-            key={i}
-            component="span"
-            sx={{
-              display: 'block',
-              bgcolor: DIFF_COLORS[kind],
-              color: DIFF_TEXT_COLORS[kind],
-              px: 0.5,
-            }}
-          >
-            {line || ' '}
-          </Box>
-        );
-      })}
-    </Box>
-  );
-};
+const DiffViewer: React.FC<{ text: string }> = ({ text }) => (
+  <Box sx={{ bgcolor: '#1e1e1e', borderRadius: 1, p: 1, fontFamily: 'monospace', fontSize: '0.68rem', overflow: 'auto', maxHeight: 480, whiteSpace: 'pre' }}>
+    {text.split('\n').map((line, i) => {
+      const kind = classifyDiffLine(line);
+      return (
+        <Box key={i} component="span" sx={{ display: 'block', bgcolor: DIFF_BG[kind], color: DIFF_FG[kind], px: 0.5 }}>
+          {line || ' '}
+        </Box>
+      );
+    })}
+  </Box>
+);
 
 // ---------------------------------------------------------------------------
 // GitRepoPanel
@@ -106,20 +89,38 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string>('');
-  // Edytowalna konfiguracja repo (URL + opcjonalny token HTTPS).
-  const [urlDraft, setUrlDraft] = useState('');
-  const [tokenDraft, setTokenDraft] = useState('');
 
-  // --- Diff state ---
+  // URL
+  const [urlDraft, setUrlDraft] = useState('');
+
+  // Token source: NO_TOKEN | MANUAL_TOKEN | '{secretKey}'
+  const [tokenSource, setTokenSource] = useState<string>(NO_TOKEN);
+  const [manualToken, setManualToken] = useState('');
+  const [secretKeys, setSecretKeys] = useState<string[]>([]);
+  const [secretsLoading, setSecretsLoading] = useState(false);
+
+  // Diff
   const [diffOpen, setDiffOpen] = useState(false);
-  const [diffFrom, setDiffFrom] = useState<string>('HEAD');
-  const [diffTo, setDiffTo] = useState<string>(WORKING_TREE);
-  const [diffFile, setDiffFile] = useState<string>('');
+  const [diffFrom, setDiffFrom] = useState('HEAD');
+  const [diffTo, setDiffTo] = useState(WORKING_TREE);
+  const [diffFile, setDiffFile] = useState('');
   const [diffFiles, setDiffFiles] = useState<string[]>([]);
   const [diffFilesLoading, setDiffFilesLoading] = useState(false);
   const [diffResult, setDiffResult] = useState<string | null>(null);
   const [diffBusy, setDiffBusy] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+
+  const loadSecrets = useCallback(async () => {
+    setSecretsLoading(true);
+    try {
+      const list = await minisApi.listSecrets(userName, GIT_SECRETS_NS);
+      setSecretKeys(list.map((s) => s.key));
+    } catch {
+      setSecretKeys([]);
+    } finally {
+      setSecretsLoading(false);
+    }
+  }, [userName]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,7 +129,15 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
       const r = await minisApi.getGitInfo(userName, repoPath);
       setInfo(r);
       setUrlDraft(r.repo?.url ?? '');
-      setTokenDraft('');
+      // Ustaw token source na podstawie zapisanego stanu
+      if (r.repo?.tokenSecretKey) {
+        setTokenSource(r.repo.tokenSecretKey);
+      } else if (r.repo?.token) {
+        setTokenSource(MANUAL_TOKEN);
+      } else {
+        setTokenSource(NO_TOKEN);
+      }
+      setManualToken('');
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -136,9 +145,11 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
     }
   }, [userName, repoPath]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    void loadSecrets();
+  }, [load, loadSecrets]);
 
-  /** Wykonuje operację git, pokazuje output i odświeża status. */
   const run = useCallback(async (label: string, fn: () => Promise<{ ok: boolean; output: string }>) => {
     setBusy(label);
     setError(null);
@@ -161,31 +172,39 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
   const onPush = () => run('push', () => minisApi.gitPush(userName, repoPath));
   const onClone = () => run('clone', () => minisApi.gitClone(userName, repoPath));
 
-  /** Zapisuje URL (+ token) do `.repo.json`. */
   const onSaveConfig = useCallback(async () => {
     setBusy('save');
     setError(null);
     setOutput('');
     try {
-      const patch: { url: string; token?: string } = { url: urlDraft.trim() };
-      if (tokenDraft) patch.token = tokenDraft;
+      const patch: Parameters<typeof minisApi.gitSaveRepo>[2] = { url: urlDraft.trim() };
+      if (tokenSource === NO_TOKEN) {
+        patch.token = '';
+        patch.tokenSecretKey = null; // wyczyść oba
+      } else if (tokenSource === MANUAL_TOKEN) {
+        if (manualToken) patch.token = manualToken;
+        patch.tokenSecretKey = null;
+      } else {
+        // tokenSource to klucz sekretu
+        patch.tokenSecretKey = tokenSource;
+        patch.token = '';
+      }
       await minisApi.gitSaveRepo(userName, repoPath, patch);
-      setOutput('Zapisano konfigurację repo');
-      setTokenDraft('');
+      setOutput('Konfiguracja zapisana');
+      setManualToken('');
       await load();
     } catch (e) {
       setError(`zapis: ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
-  }, [userName, repoPath, urlDraft, tokenDraft, load]);
+  }, [userName, repoPath, urlDraft, tokenSource, manualToken, load]);
 
-  // --- Diff: ładowanie listy plików gdy sekcja jest otwarta ---
+  // Diff helpers
   const loadDiffFiles = useCallback(async (ref?: string) => {
     setDiffFilesLoading(true);
     try {
-      const files = await minisApi.gitListFiles(userName, repoPath, ref && ref !== WORKING_TREE ? ref : undefined);
-      setDiffFiles(files);
+      setDiffFiles(await minisApi.gitListFiles(userName, repoPath, ref && ref !== WORKING_TREE ? ref : undefined));
     } catch {
       setDiffFiles([]);
     } finally {
@@ -195,9 +214,7 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
 
   const onDiffAccordionChange = useCallback((_: React.SyntheticEvent, expanded: boolean) => {
     setDiffOpen(expanded);
-    if (expanded && diffFiles.length === 0) {
-      void loadDiffFiles(diffFrom);
-    }
+    if (expanded && diffFiles.length === 0) void loadDiffFiles(diffFrom);
   }, [diffFiles.length, diffFrom, loadDiffFiles]);
 
   const onDiffFromChange = useCallback((_: React.SyntheticEvent, value: string | null) => {
@@ -213,17 +230,13 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
     setDiffError(null);
     setDiffResult(null);
     try {
-      const opts: { from?: string; to?: string; file?: string } = {
+      const r = await minisApi.gitDiff(userName, repoPath, {
         from: diffFrom || 'HEAD',
         to: diffTo === WORKING_TREE ? undefined : (diffTo || undefined),
         file: diffFile || undefined,
-      };
-      const r = await minisApi.gitDiff(userName, repoPath, opts);
-      if (!r.ok) {
-        setDiffError(r.diff);
-      } else {
-        setDiffResult(r.diff || '(brak różnic)');
-      }
+      });
+      if (!r.ok) setDiffError(r.diff);
+      else setDiffResult(r.diff || '(brak różnic)');
     } catch (e) {
       setDiffError((e as Error).message);
     } finally {
@@ -240,17 +253,13 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
   const currentTag = git?.status?.tag ?? '';
   const anyBusy = !!busy;
 
-  // Opcje "From" — HEAD + HEAD~N + gałęzie + tagi
-  const fromOptions = useMemo(() => {
-    const opts = ['HEAD', 'HEAD~1', 'HEAD~2', ...allBranches, ...(git?.tags ?? [])];
-    return Array.from(new Set(opts));
-  }, [allBranches, git?.tags]);
+  // Czy jest jakaś niezapisana zmiana w config tokena
+  const savedSource = repo?.tokenSecretKey ?? (repo?.token ? MANUAL_TOKEN : NO_TOKEN);
+  const tokenDirty = tokenSource !== savedSource || (tokenSource === MANUAL_TOKEN && !!manualToken);
+  const configDirty = urlDirty || tokenDirty;
 
-  // Opcje "To" — working tree (sentinel) + to samo co From
-  const toOptions = useMemo(() => {
-    const opts = [WORKING_TREE, 'HEAD', 'HEAD~1', ...allBranches, ...(git?.tags ?? [])];
-    return Array.from(new Set(opts));
-  }, [allBranches, git?.tags]);
+  const fromOptions = useMemo(() => Array.from(new Set(['HEAD', 'HEAD~1', 'HEAD~2', ...allBranches, ...(git?.tags ?? [])])), [allBranches, git?.tags]);
+  const toOptions = useMemo(() => Array.from(new Set([WORKING_TREE, 'HEAD', 'HEAD~1', ...allBranches, ...(git?.tags ?? [])])), [allBranches, git?.tags]);
 
   return (
     <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
@@ -269,33 +278,86 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
         {repoPath}
       </Typography>
 
-      {/* Konfiguracja: edytowalny URL repo + opcjonalny token (HTTPS). */}
       {!loading && info && (
         <Box sx={{ mt: 1 }}>
+          {/* URL */}
           <TextField
             label="URL repozytorium (git)" size="small" fullWidth
             placeholder="https://github.com/uzytkownik/repo.git"
             value={urlDraft}
             onChange={(e) => setUrlDraft(e.target.value)}
             disabled={anyBusy}
-            sx={{ mb: 1 }}
+            sx={{ mb: 1.5 }}
           />
-          <TextField
-            label="Token (opcjonalnie, dla HTTPS push/pull)" size="small" fullWidth type="password"
-            placeholder={repo?.token === '***' ? 'token zapisany — wpisz aby zmienić' : 'np. ghp_…'}
-            value={tokenDraft}
-            onChange={(e) => setTokenDraft(e.target.value)}
-            disabled={anyBusy}
-            sx={{ mb: 1 }}
-          />
+
+          {/* Token source */}
+          <FormControl fullWidth size="small" sx={{ mb: 0.5 }}>
+            <InputLabel id="token-source-label">
+              <Stack direction="row" spacing={0.5} alignItems="center" component="span">
+                <KeyIcon sx={{ fontSize: 14 }} />
+                <span>Token (z Secrets)</span>
+              </Stack>
+            </InputLabel>
+            <Select
+              labelId="token-source-label"
+              label="Token (z Secrets)"
+              value={tokenSource}
+              onChange={(e) => setTokenSource(e.target.value)}
+              disabled={anyBusy || secretsLoading}
+            >
+              <MenuItem value={NO_TOKEN}><em>— brak tokena —</em></MenuItem>
+              {secretKeys.map((k) => (
+                <MenuItem key={k} value={k}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <KeyIcon sx={{ fontSize: 14, color: 'success.main' }} />
+                    <span>{k}</span>
+                  </Stack>
+                </MenuItem>
+              ))}
+              <MenuItem value={MANUAL_TOKEN}>
+                <em>Wpisz ręcznie…</em>
+              </MenuItem>
+            </Select>
+          </FormControl>
+
+          {secretKeys.length === 0 && !secretsLoading && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, pl: 0.5 }}>
+              Brak sekretów w namespace <code>git</code>.{' '}
+              <Link href="#" underline="hover" onClick={(e) => { e.preventDefault(); window.location.hash = 'settings'; }}>
+                Dodaj w Settings → Secrets
+              </Link>
+            </Typography>
+          )}
+
+          {tokenSource === MANUAL_TOKEN && (
+            <TextField
+              label="Token (PAT)" size="small" fullWidth type="password"
+              placeholder={repo?.token === '***' ? 'token zapisany — wpisz nowy aby zmienić' : 'ghp_…'}
+              value={manualToken}
+              onChange={(e) => setManualToken(e.target.value)}
+              disabled={anyBusy}
+              sx={{ mt: 1, mb: 1 }}
+            />
+          )}
+
+          {tokenSource !== NO_TOKEN && tokenSource !== MANUAL_TOKEN && (
+            <Chip
+              size="small" color="success" variant="outlined"
+              icon={<KeyIcon sx={{ fontSize: 14 }} />}
+              label={`Sekret: ${tokenSource}`}
+              sx={{ mt: 0.5, mb: 1 }}
+            />
+          )}
+
           <Button
-            variant={urlDirty || tokenDraft ? 'contained' : 'outlined'}
-            color={urlDirty || tokenDraft ? 'warning' : 'primary'}
+            variant={configDirty ? 'contained' : 'outlined'}
+            color={configDirty ? 'warning' : 'primary'}
             startIcon={<SaveIcon />} size="small"
             onClick={onSaveConfig}
-            disabled={anyBusy || !urlDraft.trim() || (!urlDirty && !tokenDraft)}
+            disabled={anyBusy || !urlDraft.trim() || !configDirty}
+            sx={{ mt: 0.5 }}
           >
-            {busy === 'save' ? 'Zapisywanie…' : 'Zapisz URL'}
+            {busy === 'save' ? 'Zapisywanie…' : 'Zapisz konfigurację'}
           </Button>
         </Box>
       )}
@@ -311,10 +373,7 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
               <Alert severity="info" sx={{ mb: 1 }}>
                 Katalog nie jest jeszcze sklonowany. Kliknij „Clone", aby pobrać repozytorium z URL.
               </Alert>
-              <Button
-                variant="contained" startIcon={<CloudDownloadIcon />} onClick={onClone}
-                disabled={anyBusy || !repo?.url}
-              >
+              <Button variant="contained" startIcon={<CloudDownloadIcon />} onClick={onClone} disabled={anyBusy || !repo?.url}>
                 {busy === 'clone' ? 'Klonowanie…' : 'Clone'}
               </Button>
             </Box>
@@ -322,7 +381,6 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
             <>
               <Divider sx={{ my: 1.5 }} />
 
-              {/* Stan bieżący */}
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
                 {currentBranch && <Chip size="small" color="primary" label={`branch: ${currentBranch}`} />}
                 {currentTag && <Chip size="small" color="secondary" label={`tag: ${currentTag}`} />}
@@ -333,7 +391,6 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                 {git?.status?.commit && <Chip size="small" variant="outlined" label={git.status.commit} />}
               </Stack>
 
-              {/* Wybór gałęzi */}
               <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
                 <InputLabel id="git-branch-label">Gałąź (branch)</InputLabel>
                 <Select
@@ -348,7 +405,6 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                 </Select>
               </FormControl>
 
-              {/* Wybór tagu */}
               <FormControl fullWidth size="small" sx={{ mb: 1.5 }} disabled={!(git?.tags?.length)}>
                 <InputLabel id="git-tag-label">Tag</InputLabel>
                 <Select
@@ -357,41 +413,23 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                   onChange={(e) => e.target.value && onCheckoutTag(String(e.target.value))}
                   disabled={anyBusy || !(git?.tags?.length)}
                 >
-                  {(git?.tags ?? []).map((t) => (
-                    <MenuItem key={t} value={t}>{t}</MenuItem>
-                  ))}
+                  {(git?.tags ?? []).map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
                 </Select>
               </FormControl>
 
-              {/* Akcje */}
               <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
-                <Button
-                  variant="outlined" startIcon={<DownloadIcon />} onClick={onPull}
-                  disabled={anyBusy} fullWidth
-                >
+                <Button variant="outlined" startIcon={<DownloadIcon />} onClick={onPull} disabled={anyBusy} fullWidth>
                   {busy === 'pull' ? 'Pull…' : 'Pull'}
                 </Button>
-                <Button
-                  variant="contained" startIcon={<UploadIcon />} onClick={onPush}
-                  disabled={anyBusy} fullWidth
-                >
+                <Button variant="contained" startIcon={<UploadIcon />} onClick={onPush} disabled={anyBusy} fullWidth>
                   {busy === 'push' ? 'Push…' : 'Push'}
                 </Button>
               </Stack>
 
               {/* ---- Sekcja Diff ---- */}
               <Accordion
-                expanded={diffOpen}
-                onChange={onDiffAccordionChange}
-                disableGutters
-                sx={{
-                  bgcolor: 'transparent',
-                  border: '1px solid',
-                  borderColor: 'divider',
-                  borderRadius: 1,
-                  '&:before': { display: 'none' },
-                  mt: 0.5,
-                }}
+                expanded={diffOpen} onChange={onDiffAccordionChange} disableGutters
+                sx={{ bgcolor: 'transparent', border: '1px solid', borderColor: 'divider', borderRadius: 1, '&:before': { display: 'none' }, mt: 0.5 }}
               >
                 <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 40, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
                   <Stack direction="row" alignItems="center" spacing={0.75}>
@@ -399,90 +437,48 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>Diff</Typography>
                   </Stack>
                 </AccordionSummary>
-
                 <AccordionDetails sx={{ pt: 1, pb: 1.5, px: 1.5 }}>
-                  {/* From */}
                   <Autocomplete
-                    freeSolo
-                    options={fromOptions}
-                    value={diffFrom}
-                    onInputChange={onDiffFromChange}
-                    size="small"
-                    renderInput={(params) => (
-                      <TextField {...params} label="From (ref / commit / branch)" placeholder="HEAD" sx={{ mb: 1 }} />
-                    )}
+                    freeSolo options={fromOptions} value={diffFrom}
+                    onInputChange={onDiffFromChange} size="small"
+                    renderInput={(params) => <TextField {...params} label="From (ref / commit / branch)" placeholder="HEAD" sx={{ mb: 1 }} />}
                   />
-
-                  {/* To */}
                   <Autocomplete
-                    freeSolo
-                    options={toOptions}
-                    value={diffTo}
+                    freeSolo options={toOptions} value={diffTo}
                     getOptionLabel={(opt) => opt === WORKING_TREE ? WORKING_TREE_LABEL : opt}
                     onInputChange={(_e, value) => setDiffTo(value ?? WORKING_TREE)}
                     onChange={(_e, value) => setDiffTo(typeof value === 'string' ? value : WORKING_TREE)}
                     size="small"
                     renderOption={(props, opt) => (
                       <li {...props} key={opt}>
-                        {opt === WORKING_TREE
-                          ? <Box component="span" sx={{ color: 'warning.main' }}>{WORKING_TREE_LABEL}</Box>
-                          : opt}
+                        {opt === WORKING_TREE ? <Box component="span" sx={{ color: 'warning.main' }}>{WORKING_TREE_LABEL}</Box> : opt}
                       </li>
                     )}
-                    renderInput={(params) => (
-                      <TextField {...params} label="To (ref / branch / Working tree)" placeholder={WORKING_TREE_LABEL} sx={{ mb: 1 }} />
-                    )}
+                    renderInput={(params) => <TextField {...params} label="To (ref / branch / Working tree)" placeholder={WORKING_TREE_LABEL} sx={{ mb: 1 }} />}
                   />
-
-                  {/* File filter */}
                   <Autocomplete
-                    freeSolo
-                    options={diffFiles}
-                    value={diffFile}
+                    freeSolo options={diffFiles} value={diffFile}
                     onInputChange={(_e, value) => setDiffFile(value ?? '')}
-                    loading={diffFilesLoading}
-                    size="small"
+                    loading={diffFilesLoading} size="small"
                     renderInput={(params) => (
                       <TextField
-                        {...params}
-                        label="Plik (opcjonalnie)"
-                        placeholder="src/index.ts"
-                        InputProps={{
-                          ...params.InputProps,
-                          endAdornment: (
-                            <>
-                              {diffFilesLoading && <CircularProgress size={14} />}
-                              {params.InputProps.endAdornment}
-                            </>
-                          ),
-                        }}
+                        {...params} label="Plik (opcjonalnie)" placeholder="src/index.ts"
+                        InputProps={{ ...params.InputProps, endAdornment: <>{diffFilesLoading && <CircularProgress size={14} />}{params.InputProps.endAdornment}</> }}
                         sx={{ mb: 1.5 }}
                       />
                     )}
                   />
-
                   <Button
-                    variant="contained"
+                    variant="contained" size="small" fullWidth onClick={onRunDiff} disabled={diffBusy || !diffFrom}
                     startIcon={diffBusy ? <CircularProgress size={14} color="inherit" /> : <CompareArrowsIcon />}
-                    size="small"
-                    fullWidth
-                    onClick={onRunDiff}
-                    disabled={diffBusy || !diffFrom}
                   >
                     {diffBusy ? 'Porównuję…' : 'Run diff'}
                   </Button>
-
-                  {diffError && (
-                    <Alert severity="error" sx={{ mt: 1 }} onClose={() => setDiffError(null)}>
-                      {diffError}
-                    </Alert>
-                  )}
-
+                  {diffError && <Alert severity="error" sx={{ mt: 1 }} onClose={() => setDiffError(null)}>{diffError}</Alert>}
                   {diffResult !== null && (
                     <Box sx={{ mt: 1 }}>
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                        {diffFrom} → {diffTo === WORKING_TREE ? WORKING_TREE_LABEL : diffTo}
-                        {diffFile ? ` · ${diffFile}` : ''}
+                        {diffFrom} → {diffTo === WORKING_TREE ? WORKING_TREE_LABEL : diffTo}{diffFile ? ` · ${diffFile}` : ''}
                       </Typography>
                       <DiffViewer text={diffResult} />
                     </Box>
@@ -493,13 +489,7 @@ export const GitRepoPanel: React.FC<GitRepoPanelProps> = ({ userName, repoPath }
           )}
 
           {output && (
-            <Box
-              sx={{
-                mt: 1, p: 1, bgcolor: '#1e1e1e', color: '#d4d4d4', borderRadius: 1,
-                fontFamily: 'monospace', fontSize: '0.72rem', whiteSpace: 'pre-wrap',
-                maxHeight: 240, overflow: 'auto',
-              }}
-            >
+            <Box sx={{ mt: 1, p: 1, bgcolor: '#1e1e1e', color: '#d4d4d4', borderRadius: 1, fontFamily: 'monospace', fontSize: '0.72rem', whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
               {output}
             </Box>
           )}

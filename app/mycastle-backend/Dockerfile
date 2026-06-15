@@ -32,6 +32,7 @@ COPY packages/ui-core/package.json packages/ui-core/
 COPY packages/core-scene3d/package.json packages/core-scene3d/
 COPY packages/core-cad/package.json packages/core-cad/
 COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
+COPY packages/devtools/package.json packages/devtools/
 COPY packages/minislib/package.json packages/minislib/
 COPY packages/minisc/package.json packages/minisc/
 COPY packages/web-cpp/package.json packages/web-cpp/
@@ -50,6 +51,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # Now copy source files and build
 COPY packages/core/ packages/core/
 COPY packages/core-backend/ packages/core-backend/
+COPY packages/devtools/ packages/devtools/
 COPY packages/texteditor/ packages/texteditor/
 COPY packages/web-client/ packages/web-client/
 COPY packages/web-cpp/ packages/web-cpp/
@@ -58,6 +60,7 @@ COPY app/mycastle-web/ app/mycastle-web/
 COPY docs/ docs/
 RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
+RUN pnpm --filter @mhersztowski/devtools build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 RUN pnpm --filter @mhersztowski/web-cpp build --silent

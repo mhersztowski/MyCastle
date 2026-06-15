@@ -32,8 +32,12 @@ export interface RepoJson {
   remote?: string;
   /** Opcjonalny token (PAT) do HTTPS push/pull — wstrzykiwany do URL operacji.
    *  Uwaga: trzymany jawnie w pliku; używaj tylko w prywatnym drive. Dla SSH
-   *  zostaw puste i polegaj na kluczach SSH serwera. */
+   *  zostaw puste i polegaj na kluczach SSH serwera.
+   *  Preferuj `tokenSecretKey` — wtedy wartość trzymana jest szyfrowana w SecretsService. */
   token?: string;
+  /** Klucz sekretu z SecretsService (namespace `git`) zamiast wpisywania tokena
+   *  jawnie. Gdy ustawiony, backend rozwiązuje token w runtime. */
+  tokenSecretKey?: string;
   /** Timestamp ostatniej synchronizacji (pull/push/clone), ms. */
   lastSync?: number;
 }
@@ -239,9 +243,10 @@ export class GitRepoService {
     if (!/^https?:\/\//i.test(url)) return url; // SSH/inne — token nie ma zastosowania
     try {
       const u = new URL(url);
-      // x-access-token działa dla GitHub; dla innych hostów token jako username
-      u.username = token;
-      u.password = '';
+      // PAT musi być w polu password: https://x-access-token:<TOKEN>@host/...
+      // Tak działa GitHub, Gitea i większość innych hostów git HTTPS.
+      u.username = 'x-access-token';
+      u.password = token;
       return u.toString();
     } catch {
       return url;
@@ -330,7 +335,29 @@ export class GitRepoService {
       args.push(from);
     }
     if (file) args.push('--', file);
-    const out = await this.git(dir, args);
+    let out = await this.git(dir, args);
+
+    // Working tree mode: git diff shows only tracked files. Untracked (new) files
+    // need separate treatment via git diff --no-index /dev/null <file>.
+    if (!to) {
+      try {
+        const untrackedArgs = ['ls-files', '--others', '--exclude-standard'];
+        if (file) untrackedArgs.push('--', file);
+        const untracked = await this.git(dir, untrackedArgs);
+        const untrackedFiles = untracked.split('\n').map((s) => s.trim()).filter(Boolean);
+        if (untrackedFiles.length > 0) {
+          const parts: string[] = out ? [out] : [];
+          for (const uf of untrackedFiles) {
+            try {
+              const fd = await this.gitNoIndexDiff(dir, uf);
+              if (fd) parts.push(fd);
+            } catch { /* binary or inaccessible — skip */ }
+          }
+          out = parts.join('\n');
+        }
+      } catch { /* ignore ls-files errors */ }
+    }
+
     if (opts.maxLines) {
       const lines = out.split('\n');
       if (lines.length > opts.maxLines) {
@@ -338,6 +365,23 @@ export class GitRepoService {
       }
     }
     return out;
+  }
+
+  /** `git diff --no-index /dev/null <file>` — bezpieczne wywołanie, które NIE
+   *  rzuca na exit code 1 (standardowy wynik gdy pliki się różnią). */
+  private async gitNoIndexDiff(dir: string, file: string): Promise<string> {
+    try {
+      const { stdout } = await pExecFile(
+        'git', ['diff', '--no-color', '--no-index', '/dev/null', file],
+        { cwd: dir, timeout: this.timeoutMs, maxBuffer: 32 * 1024 * 1024 },
+      );
+      return stdout; // exit 0 = brak różnic (praktycznie niemożliwe dla /dev/null vs plik)
+    } catch (e) {
+      const err = e as { code?: number; stdout?: string; stderr?: string };
+      if (err.code === 1 && err.stdout) return err.stdout; // exit 1 = są różnice — stdout to diff
+      const msg = (err.stderr || err.stdout || 'git diff --no-index error').toString().trim();
+      throw new Error(msg);
+    }
   }
 
   /** Clone url do katalogu docelowego (musi być pusty/nieistniejący). */
@@ -409,6 +453,7 @@ export function parseRepoJson(text: string): RepoJson {
     tag: data.tag,
     remote: data.remote ?? 'origin',
     token: data.token,
+    tokenSecretKey: data.tokenSecretKey,
     lastSync: data.lastSync,
   };
 }

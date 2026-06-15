@@ -17,6 +17,10 @@ import {
   type RepoJson,
   type GitInfo,
 } from '@mhersztowski/devtools';
+import type { SecretsService } from '../secrets/SecretsService.js';
+
+/** Namespace w SecretsService gdzie użytkownik trzyma tokeny git. */
+const GIT_SECRETS_NS = 'git';
 
 export interface GitRepoStatusResponse {
   /** RepoJson z zredagowanym tokenem (nie zwracamy sekretu na frontend). */
@@ -28,9 +32,21 @@ export interface GitRepoStatusResponse {
 export class GitService {
   private readonly git = new GitRepoService();
   private readonly rootDir: string;
+  private readonly secrets: SecretsService | null;
 
-  constructor(rootDir: string) {
+  constructor(rootDir: string, secrets?: SecretsService) {
     this.rootDir = path.resolve(rootDir);
+    this.secrets = secrets ?? null;
+  }
+
+  /** Zwraca rzeczywisty token do użycia: najpierw próbuje rozwiązać z SecretsService
+   *  (gdy `tokenSecretKey` ustawiony), potem fallback na `token` w `.repo.json`. */
+  private async resolveToken(userName: string, repo: RepoJson): Promise<string | undefined> {
+    if (repo.tokenSecretKey && this.secrets) {
+      const s = await this.secrets.get(userName, GIT_SECRETS_NS, repo.tokenSecretKey);
+      if (s) return s.value;
+    }
+    return repo.token;
   }
 
   /** Resolwuje ścieżkę pliku `*.repo.json` do absolutnej + katalog repo.
@@ -127,7 +143,7 @@ export class GitService {
   async save(
     userName: string,
     relPath: string,
-    patch: { url?: string; remote?: string; branch?: string; token?: string },
+    patch: { url?: string; remote?: string; branch?: string; token?: string; tokenSecretKey?: string | null },
   ): Promise<RepoJson> {
     const { repoJsonPath, dir } = this.resolve(userName, relPath);
     const cur = this.read(repoJsonPath);
@@ -140,8 +156,12 @@ export class GitService {
       tag: cur.tag,
       // '***' to wartość zredagowana z frontu — nie nadpisuj nią realnego tokena.
       token: patch.token !== undefined && patch.token !== '***' ? (patch.token || undefined) : cur.token,
+      // null = wyczyść; string = ustaw; undefined = zostaw jak było.
+      tokenSecretKey: patch.tokenSecretKey !== undefined ? (patch.tokenSecretKey ?? undefined) : cur.tokenSecretKey,
       lastSync: cur.lastSync,
     };
+    // Gdy ustawiono tokenSecretKey — wyczyść surowy token (nie trzymaj obu).
+    if (next.tokenSecretKey) next.token = undefined;
     this.write(repoJsonPath, next);
     // Jeśli repo już istnieje, a URL się zmienił — zaktualizuj remote.
     if (next.url && (await this.git.isRepo(dir))) {
@@ -156,7 +176,8 @@ export class GitService {
     const repo = this.read(repoJsonPath);
     if (!repo.url) throw new Error('Brak URL repozytorium — najpierw ustaw i zapisz URL');
     if (await this.git.isRepo(dir)) throw new Error('Katalog jest już repozytorium git');
-    const r = await this.git.cloneInto(dir, repo.url, { branch: repo.branch, token: repo.token, remote: repo.remote });
+    const token = await this.resolveToken(userName, repo);
+    const r = await this.git.cloneInto(dir, repo.url, { branch: repo.branch, token, remote: repo.remote });
     if (r.ok) await this.syncRepoJson(repoJsonPath, dir);
     return { ok: r.ok, output: (r.stdout + (r.stderr ? '\n' + r.stderr : '')).trim() };
   }
@@ -180,7 +201,8 @@ export class GitService {
     const { repoJsonPath, dir } = this.resolve(userName, relPath);
     const repo = this.read(repoJsonPath);
     if (!(await this.git.isRepo(dir))) throw new Error('Katalog nie jest repozytorium git (najpierw Clone)');
-    const r = await this.git.pull(dir, { remote: repo.remote, branch: repo.branch, token: repo.token });
+    const token = await this.resolveToken(userName, repo);
+    const r = await this.git.pull(dir, { remote: repo.remote, branch: repo.branch, token });
     if (r.ok) await this.syncRepoJson(repoJsonPath, dir);
     return { ok: r.ok, output: (r.stdout + (r.stderr ? '\n' + r.stderr : '')).trim() };
   }
@@ -219,7 +241,7 @@ export class GitService {
     const r = await this.git.push(dir, {
       remote: repo.remote,
       branch: ref.branch ?? repo.branch,
-      token: repo.token,
+      token: await this.resolveToken(userName, repo),
       setUpstream: true,
     });
     if (r.ok) await this.syncRepoJson(repoJsonPath, dir);
