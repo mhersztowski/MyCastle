@@ -489,10 +489,6 @@ class QPainterPath {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Signal / QObject — zdefiniowane w qobject.module.js (import na górze pliku).
-// ═════════════════════════════════════════════════════════════════════════════
-
-// ═════════════════════════════════════════════════════════════════════════════
 //  Klasy zdarzeń (QEvent + pochodne) — z accept()/ignore()
 // ═════════════════════════════════════════════════════════════════════════════
 class QEvent {
@@ -2102,9 +2098,8 @@ Qt.gray = new QColor(160, 160, 164); Qt.darkGray = new QColor(128, 128, 128); Qt
 // ═════════════════════════════════════════════════════════════════════════════
 //  Eksport przez globalny namespace (BEZ `export`) — wszystkie klasy lądują na
 //  globalThis, więc są dostępne bez `import` (także w runtime skryptów
-//  automatyzacji uruchamianych przez AsyncFunction/eval). Signal/SignalConnection/
-//  QObject pochodzą z qobject.module.js i są już na globalu — re-przypisanie jest
-//  bezpieczne (ta sama referencja).
+//  automatyzacji uruchamianych przez AsyncFunction/eval).
+//  Signal/SignalConnection/QObject eksportuje qobject.module.js — pomijamy tu.
 // ═════════════════════════════════════════════════════════════════════════════
 {
   const _g = (typeof globalThis !== 'undefined') ? globalThis
@@ -2113,7 +2108,6 @@ Qt.gray = new QColor(160, 160, 164); Qt.darkGray = new QColor(128, 128, 128); Qt
   Object.assign(_g, {
     Qt, QPoint, QPointF, QSize, QSizeF, QMargins, QRect, QRectF, QLine, QLineF, QPolygon,
     QColor, QGradient, QLinearGradient, QRadialGradient, QFont, QFontMetrics, QPen, QBrush, QPainterPath,
-    Signal, SignalConnection, QObject,
     QEvent, QInputEvent, QMouseEvent, QTabletEvent, QKeyEvent, QWheelEvent, QResizeEvent,
     QPainter, QSizePolicy,
     QWidget, QFrame,

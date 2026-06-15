@@ -264,10 +264,14 @@ export class GitRepoService {
   }
 
   /** Stage all changes + commit. */
-  async commit(dir: string, message: string): Promise<GitCommandResult> {
+  async commit(dir: string, message: string, opts: { authorName?: string; authorEmail?: string } = {}): Promise<GitCommandResult> {
     try {
       await this.git(dir, ['add', '-A']);
-      const out = await this.git(dir, ['commit', '-m', message]);
+      // Fallback identity — serwer (Docker) może nie mieć skonfigurowanego
+      // globalnego user.name/email; git commit zawiodłoby bez tych wartości.
+      const name = opts.authorName ?? 'MyCastle';
+      const email = opts.authorEmail ?? 'mycastle@localhost';
+      const out = await this.git(dir, ['-c', `user.name=${name}`, '-c', `user.email=${email}`, 'commit', '-m', message]);
       return { ok: true, stdout: out, stderr: '' };
     } catch (e) {
       return { ok: false, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
@@ -325,19 +329,22 @@ export class GitRepoService {
     fs.mkdirSync(dir, { recursive: true });
     try {
       if (!(await this.isRepo(dir))) await this.git(dir, ['init']);
-      // ustaw/utwórz remote
+      // ustaw/utwórz remote (bez tokena — withToken wstrzyknie go tymczasowo)
       const existing = await this.remoteUrl(dir, remote);
       if (existing) await this.git(dir, ['remote', 'set-url', remote, url]);
       else await this.git(dir, ['remote', 'add', remote, url]);
-      const fetchTarget = await this.resolvedRemote(dir, remote, opts.token);
-      let out = await this.git(dir, ['fetch', fetchTarget]);
-      const branch = opts.branch || (await this.defaultRemoteBranch(dir, remote)) || 'main';
-      out += '\n' + await this.git(dir, ['checkout', '-B', branch, '--track', `${remote}/${branch}`]);
-      return { ok: true, stdout: out, stderr: '' };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { ok: false, stdout: '', stderr: msg };
     }
+    // fetch + checkout przez withToken: git fetch <remote> (nie URL!) tworzy
+    // refs/remotes/origin/*, dzięki czemu checkout --track origin/branch działa.
+    return this.withToken(dir, remote, opts.token, async () => {
+      let out = await this.git(dir, ['fetch', remote]);
+      const branch = opts.branch || (await this.defaultRemoteBranch(dir, remote)) || 'main';
+      out += '\n' + await this.git(dir, ['checkout', '-B', branch, '--track', `${remote}/${branch}`]);
+      return out;
+    });
   }
 
   /** Lista plików śledzonych przez git na danym ref (lub w working tree gdy ref puste). */

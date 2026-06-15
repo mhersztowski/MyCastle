@@ -236,7 +236,7 @@ export class GitService {
   async commit(userName: string, relPath: string, message: string): Promise<{ ok: boolean; output: string }> {
     const { dir } = this.resolve(userName, relPath);
     if (!(await this.git.isRepo(dir))) throw new Error('Katalog nie jest repozytorium git (najpierw Clone)');
-    const r = await this.git.commit(dir, message);
+    const r = await this.git.commit(dir, message, { authorName: userName });
     return { ok: r.ok, output: (r.stdout + (r.stderr ? '\n' + r.stderr : '')).trim() };
   }
 
