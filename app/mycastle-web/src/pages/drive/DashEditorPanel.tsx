@@ -219,7 +219,13 @@ const autoTransform = (count: number): DashTransform => ({
 });
 
 const apiBase = (userName: string) => `/api/users/${encodeURIComponent(userName)}/vfs`;
-const authToken = () => localStorage.getItem('minis_token') ?? '';
+const authToken = () => {
+  try {
+    const raw = localStorage.getItem('minis_current_user');
+    if (!raw) return '';
+    return (JSON.parse(raw) as { token?: string }).token ?? '';
+  } catch { return ''; }
+};
 
 // Backend VFS requires absolute paths rooted at /data/Minis/Users/{u}.
 // Drive-relative paths (e.g. "uml/foo.dash.json") get expanded here.
@@ -231,19 +237,34 @@ const toAbsVfsPath = (userName: string, rel: string): string => {
     : `/data/Minis/Users/${userName}/drive`;
 };
 
+const b64ToText = (b64: string): string => {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+};
+const textToB64 = (s: string): string => {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+};
+
 const vfsRead = async (userName: string, path: string): Promise<string> => {
   const r = await fetch(`${apiBase(userName)}/readFile?path=${encodeURIComponent(toAbsVfsPath(userName, path))}`,
     { headers: { Authorization: `Bearer ${authToken()}` } });
+  if (!r.ok) throw new Error(`readFile ${r.status}`);
   const j = (await r.json()) as { data?: string };
-  return atob(j.data ?? '');
+  return b64ToText(j.data ?? '');
 };
 
 const vfsWrite = async (userName: string, path: string, text: string): Promise<void> => {
-  await fetch(`${apiBase(userName)}/writeFile?path=${encodeURIComponent(toAbsVfsPath(userName, path))}`, {
+  const r = await fetch(`${apiBase(userName)}/writeFile?path=${encodeURIComponent(toAbsVfsPath(userName, path))}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken()}` },
-    body: JSON.stringify({ data: btoa(unescape(encodeURIComponent(text))) }),
+    body: JSON.stringify({ data: textToB64(text), options: { create: true, overwrite: true } }),
   });
+  if (!r.ok) throw new Error(`writeFile ${r.status}`);
 };
 
 const vfsReaddir = async (userName: string, path: string): Promise<Array<{ name: string; isDir: boolean }>> => {
@@ -369,39 +390,65 @@ const QStringWidget: React.FC<{ value: DashValue; onChange: (v: DashValue) => vo
     onClick={() => { setDraft(String(value ?? '')); setEditing(true); }}>{String(value ?? '') || '…'}</Typography>;
 };
 
+const fmtNum = (n: number): string => {
+  if (!Number.isFinite(n)) return '0';
+  // Trim to 4 decimal places, strip trailing zeros
+  return Number(n.toFixed(4)).toString();
+};
+
 const QNumberWidget: React.FC<{ value: DashValue; onChange: (v: DashValue) => void; step?: number }> = ({ value, onChange, step = 1 }) => {
-  const [draft, setDraft] = useState(String(value ?? 0));
-  const focusedRef = useRef(false);
-  useEffect(() => { if (!focusedRef.current) setDraft(String(value ?? 0)); }, [value]);
-  const commit = (raw: string) => { focusedRef.current = false; onChange(Number(raw) || 0); };
+  const numVal = typeof value === 'number' ? value : (Number(value) || 0);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const startEdit = () => { setDraft(fmtNum(numVal)); setEditing(true); };
+  const commit = (raw: string) => { setEditing(false); onChange(Number(raw) || 0); };
   const nudge = (dir: 1 | -1) => {
-    const next = String((Number(draft) || 0) + dir * step);
-    setDraft(next);
-    onChange(Number(next));
+    const next = Math.round((numVal + dir * step) * 10000) / 10000;
+    onChange(next);
   };
+
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-      <IconButton size="small" sx={{ p: 0.125, flexShrink: 0 }}
-        onMouseDown={(e) => { e.preventDefault(); nudge(-1); }}>
-        <ArrowDownwardIcon sx={{ fontSize: 12 }} />
-      </IconButton>
-      <TextField size="small" type="text" variant="standard" value={draft}
-        inputProps={{ style: { fontSize: 11, fontFamily: 'monospace', textAlign: 'center' } }}
-        onChange={(e) => { if (/^-?\d*\.?\d*$/.test(e.target.value)) setDraft(e.target.value); }}
-        onFocus={() => { focusedRef.current = true; }}
-        onBlur={(e) => commit(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === 'Enter') commit(draft);
-          if (e.key === 'Escape') { setDraft(String(value ?? 0)); (e.target as HTMLInputElement).blur(); }
-          if (e.key === 'ArrowUp') { e.preventDefault(); nudge(1); }
-          if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-1); }
-        }}
-        sx={{ flex: 1, minWidth: 0 }} />
-      <IconButton size="small" sx={{ p: 0.125, flexShrink: 0 }}
-        onMouseDown={(e) => { e.preventDefault(); nudge(1); }}>
-        <ArrowUpwardIcon sx={{ fontSize: 12 }} />
-      </IconButton>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <Box component="span"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); nudge(-1); }}
+        sx={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'action.hover', borderRadius: '6px', cursor: 'pointer', flexShrink: 0, fontSize: 16, lineHeight: 1, fontWeight: 400, userSelect: 'none', '&:hover': { bgcolor: 'action.selected' } }}>
+        −
+      </Box>
+      {editing ? (
+        <TextField size="small" type="text" variant="standard" value={draft} autoFocus
+          inputProps={{ style: { fontSize: 12, fontFamily: 'monospace', textAlign: 'center' } }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onChange={(e) => { if (/^-?\d*\.?\d*$/.test(e.target.value)) setDraft(e.target.value); }}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') { commit(draft); }
+            if (e.key === 'Escape') setEditing(false);
+            if (e.key === 'ArrowUp') { e.preventDefault(); nudge(1); setEditing(false); }
+            if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-1); setEditing(false); }
+          }}
+          sx={{ flex: 1, minWidth: 0, '& .MuiInput-root:after': { borderColor: '#4fc3f7' } }} />
+      ) : (
+        <Box onPointerDown={(e) => e.stopPropagation()} onClick={startEdit} sx={{
+          flex: 1, textAlign: 'center', cursor: 'text',
+          bgcolor: 'action.hover', borderRadius: '8px', px: 1, py: '3px',
+          fontFamily: 'monospace', fontSize: 12, fontWeight: 600,
+          color: 'primary.main', letterSpacing: 0.3,
+          border: '1px solid transparent',
+          '&:hover': { borderColor: 'divider', bgcolor: 'action.selected' },
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {fmtNum(numVal)}
+        </Box>
+      )}
+      <Box component="span"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); nudge(1); }}
+        sx={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'action.hover', borderRadius: '6px', cursor: 'pointer', flexShrink: 0, fontSize: 16, lineHeight: 1, fontWeight: 400, userSelect: 'none', '&:hover': { bgcolor: 'action.selected' } }}>
+        +
+      </Box>
     </Box>
   );
 };
@@ -414,7 +461,7 @@ const QIconWidget: React.FC<{ value: DashValue; onChange: (v: DashValue) => void
   return (
     <>
       <Box onClick={(e) => { e.stopPropagation(); setAnchor(e.currentTarget as HTMLElement); setCustom(name); }}
-        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', px: 0.5, py: 0.25, borderRadius: 0.5, '&:hover': { bgcolor: 'action.hover' } }}>
         <MuiIconPreview name={name} size={16} />
         <Typography sx={{ fontSize: 11, color: name ? 'text.primary' : 'text.disabled' }}>{name || '(none)'}</Typography>
@@ -611,7 +658,7 @@ const AddFieldRow: React.FC<{ onAdd: (name: string, type: QFieldType) => void }>
         onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setOpen(false); }}
         inputProps={{ style: { fontSize: 11 } }} sx={{ width: 90, flexShrink: 0 }} />
       <Select size="small" value={type} onChange={(e) => setType(e.target.value as QFieldType)} variant="standard"
-        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
         MenuProps={{ onClick: (e: React.MouseEvent) => e.stopPropagation(), disablePortal: false }}
         sx={{ fontSize: 10, minWidth: 72, flexShrink: 0, '& .MuiSelect-select': { py: 0, fontSize: 10 } }}>
@@ -985,17 +1032,18 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
       ...(t.height > 0 ? { height: t.height } : {}),
       ...(t.rot !== 0 || t.scale !== 1 ? { transform: `${t.rot !== 0 ? `rotate(${t.rot}deg) ` : ''}${t.scale !== 1 ? `scale(${t.scale})` : ''}`.trim() } : {}),
     }}>
-      {/* Move handle — top-left, used as ReactFlow dragHandle */}
-      <div
-        className="dash-drag-handle"
-        title="Drag to move"
-        style={{
-          ...handleStyle,
-          top: -HANDLE_SIZE / 2 - 1,
-          left: -HANDLE_SIZE / 2 - 1,
-          cursor: 'grab',
-        }}
-      />
+      {/* Drag bar — always visible, used as ReactFlow dragHandle */}
+      <Box className="dash-drag-handle" title="Drag to move" sx={{
+        flexShrink: 0, height: 12, cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        bgcolor: data.selected ? '#4fc3f718' : 'action.hover',
+        borderBottom: '1px solid', borderColor: 'divider',
+        borderRadius: '2px 2px 0 0',
+        '&:active': { cursor: 'grabbing' },
+      }}>
+        <Box sx={{ display: 'flex', gap: '3px', opacity: 0.35 }}>
+          {[0,1,2,3,4].map((i) => <Box key={i} sx={{ width: 3, height: 3, bgcolor: 'text.primary', borderRadius: '50%' }} />)}
+        </Box>
+      </Box>
 
       {/* Resize handle — bottom-right */}
       <div
@@ -1016,7 +1064,7 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
 
       {/* Header */}
       {data.showHeader && (
-        <Box sx={{ flexShrink: 0, bgcolor: isMarkdownView ? '#4fc3f70a' : isUnknown ? '#ffffff08' : '#4fc3f714', textAlign: 'center', borderBottom: '1px solid', borderColor: 'divider', px: 1, py: 0.5 }}>
+        <Box onPointerDown={(e) => e.stopPropagation()} sx={{ flexShrink: 0, bgcolor: isMarkdownView ? '#4fc3f70a' : isUnknown ? '#ffffff08' : '#4fc3f714', textAlign: 'center', borderBottom: '1px solid', borderColor: 'divider', px: 1, py: 0.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
             {isUnknown && <HelpOutlineIcon sx={{ fontSize: 11, color: 'text.disabled' }} />}
             {isMarkdownView && <ArticleIcon sx={{ fontSize: 11, color: '#4fc3f7' }} />}
@@ -1039,18 +1087,14 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
 
       {/* Fields / Markdown content */}
       {isMarkdownView ? (
-        <Box sx={{ flex: 1, overflow: 'auto', ...(t.height === 0 ? { height: 400 } : {}) }}
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}>
+        <Box onPointerDown={(e) => e.stopPropagation()} sx={{ flex: 1, overflow: 'auto', touchAction: 'pan-y', ...(t.height === 0 ? { height: 400 } : {}) }}>
           <MarkdownViewContent
             src={String(data.properties['src'] ?? '')}
             userName={data.userName}
           />
         </Box>
       ) : (
-        <Box sx={{ px: 1, py: 0.25, flex: 1, overflow: 'auto', ...(t.height === 0 ? { maxHeight: 320 } : {}) }}
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}>
+        <Box onPointerDown={(e) => e.stopPropagation()} sx={{ px: 1, py: 0.25, flex: 1, overflow: 'auto', touchAction: 'pan-y', ...(t.height === 0 ? { maxHeight: 320 } : {}) }}>
           {data.fields.length === 0 && !isUnknown && (
             <Typography sx={{ fontSize: 10, color: 'text.disabled', py: 0.5, fontStyle: 'italic' }}>no fields</Typography>
           )}
@@ -1074,7 +1118,7 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
                       <>
                         <EditableFieldName name={f.name} onRename={(n) => data.onFieldRename(f.name, n)} />
                         <Select size="small" value={qtype} onChange={(e) => data.onFieldTypeChange(f.name, e.target.value)} variant="standard"
-                          onMouseDown={(e) => e.stopPropagation()}
+                          onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => e.stopPropagation()}
                           MenuProps={{ onClick: (e: React.MouseEvent) => e.stopPropagation(), disablePortal: false }}
                           sx={{ fontSize: 9, '& .MuiSelect-select': { py: 0, fontSize: 9, color: '#4fc3f7aa', fontStyle: 'italic', fontFamily: 'monospace' } }}>
@@ -1155,7 +1199,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const scheduleSave = useCallback((s: DashScene) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      void vfsWrite(userName, filePath, JSON.stringify(s, null, 2));
+      vfsWrite(userName, filePath, JSON.stringify(s, null, 2))
+        .catch((e) => console.error('[DashEditor] save failed:', e));
     }, 1500);
   }, [userName, filePath]);
 
@@ -1210,21 +1255,23 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     try {
       const clsList = parseUmlProject(await vfsRead(userName, p));
       const name = p.split('/').pop()?.replace(/\.umlproj\.json$/, '') ?? p;
-      setUmlSources((prev) => {
-        if (prev.find((s) => s.path === p)) return prev.map((s) => s.path === p ? { ...s, classes: clsList } : s);
-        const id = makeId();
-        const next = [...prev, { id, path: p, name, classes: clsList }];
-        updateScene((sc) => ({ ...sc, umlSources: next.map((s) => ({ id: s.id, path: s.path })) }));
-        setExpandedSources((ex) => { const n = new Set(ex); n.add(id); return n; });
-        return next;
-      });
+      // Compute next outside updater to avoid calling setState inside setState
+      const prev = umlSources;
+      const existing = prev.find((s) => s.path === p);
+      const next: UmlSource[] = existing
+        ? prev.map((s) => s.path === p ? { ...s, classes: clsList } : s)
+        : [...prev, { id: makeId(), path: p, name, classes: clsList }];
+      const newId = existing ? null : next[next.length - 1].id;
+      setUmlSources(next);
+      updateScene((sc) => ({ ...sc, umlSources: next.map((s) => ({ id: s.id, path: s.path })) }));
+      if (newId) setExpandedSources((ex) => { const n = new Set(ex); n.add(newId); return n; });
       setShowImportDialog(false);
     } catch (e) {
       setImportError(`Cannot load: ${(e as Error).message}`);
     } finally {
       setImportPathLoading(false);
     }
-  }, [userName, updateScene]);
+  }, [userName, umlSources, updateScene]);
 
   const reloadUmlSource = useCallback(async (sourceId: string) => {
     const src = umlSources.find((s) => s.id === sourceId);
@@ -1442,7 +1489,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [scene.objects, objectIds]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    const posChanges = changes.filter((c) => c.type === 'position' && c.position);
+    const posChanges = changes.filter(
+      (c) => c.type === 'position' && c.position &&
+        Number.isFinite(c.position.x) && Number.isFinite(c.position.y),
+    );
     if (posChanges.length > 0) {
       updateScene((prev) => ({ ...prev, objects: prev.objects.map((obj) => {
         const pc = posChanges.find((c) => c.type === 'position' && c.id === obj.id);

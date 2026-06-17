@@ -87,6 +87,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DescriptionIcon from '@mui/icons-material/Description';
+import DashboardIcon from '@mui/icons-material/Dashboard';
 
 import DriveSearchDialog from './DriveSearchDialog';
 import GitRepoPanel from './GitRepoPanel';
@@ -1582,6 +1583,20 @@ export default function DrivePage(): React.JSX.Element {
     }
   }, [userName, cwd, toast]);
 
+  const openDashAsRawSource = useCallback(async (entry: VfsEntry) => {
+    try {
+      const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+      const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+      if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+      const json = await r.json() as { data?: string };
+      const data = json.data ?? '';
+      setDashEditing(null);
+      setViewing({ entry, mime: 'application/json', dataB64: data, textContent: base64ToText(data) });
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }, [userName, cwd, toast]);
+
   // Wire the forward-declared ref now that openInMdEditor exists — goToFavorite
   // (declared earlier) calls through the ref to bypass TDZ ordering.
   useEffect(() => {
@@ -2769,6 +2784,23 @@ export default function DrivePage(): React.JSX.Element {
               <Tooltip title="Otwórz kod źródłowy (Markdown w edytorze tekstu)">
                 <IconButton size="small" onClick={() => void openMdAsRawSource(mdEditing.entry)}>
                   <CodeIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {dashEditing && (
+              <Tooltip title="Open as JSON text editor">
+                <IconButton size="small" onClick={() => void openDashAsRawSource(dashEditing.entry)}>
+                  <CodeIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {viewing && viewing.entry.name.endsWith('.dash.json') && (
+              <Tooltip title="Open in visual dashboard editor">
+                <IconButton size="small" onClick={() => {
+                  setViewing(null);
+                  setDashEditing({ entry: viewing.entry, path: cwd ? `${cwd}/${viewing.entry.name}` : viewing.entry.name });
+                }}>
+                  <DashboardIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
