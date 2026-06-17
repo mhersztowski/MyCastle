@@ -6,3 +6,6 @@ export type { MjdDataEditorProps } from './MjdDataEditor';
 
 export { MjdVfsLoader } from './MjdVfsLoader';
 export type { MjdVfsLoaderProps } from './MjdVfsLoader';
+
+export { MjdVisualEditor } from './MjdVisualEditor';
+export type { MjdVisualEditorProps } from './MjdVisualEditor';

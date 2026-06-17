@@ -10,10 +10,15 @@ import {
   Select,
   Switch,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
+import TableRowsIcon from '@mui/icons-material/TableRows';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import type { MjdDocument, MjdFieldDef, MjdFieldType } from '@mhersztowski/core';
 import { getFieldsForView } from '@mhersztowski/core';
+import { MjdVisualEditor } from './MjdVisualEditor';
 
 export interface MjdDataEditorProps {
   definition: MjdDocument;
@@ -238,6 +243,7 @@ function getDefaultForType(type: MjdFieldType): unknown {
 // --- Main Component ---
 
 export function MjdDataEditor({ definition, value, onChange }: MjdDataEditorProps) {
+  const [mode, setMode] = useState<'form' | 'visual'>('form');
   const [selectedView, setSelectedView] = useState<string>(definition.views[0]?.name ?? '');
 
   const visibleFields = useMemo(() => {
@@ -251,39 +257,59 @@ export function MjdDataEditor({ definition, value, onChange }: MjdDataEditorProp
   }, [value, onChange]);
 
   return (
-    <Box sx={{ p: 2 }}>
-      {/* View selector */}
-      {definition.views.length > 0 && (
-        <FormControl size="small" sx={{ mb: 2, minWidth: 200 }}>
-          <InputLabel>View</InputLabel>
-          <Select
-            value={selectedView}
-            label="View"
-            onChange={(e) => setSelectedView(e.target.value)}
-          >
-            {definition.views.map((v) => (
-              <MenuItem key={v.name} value={v.name}>{v.name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-      )}
-
-      {/* Fields */}
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {visibleFields.map((field) => (
-          <FieldControl
-            key={field.name}
-            field={field}
-            value={value[field.name]}
-            onChange={(v) => updateFieldValue(field.name, v)}
-          />
-        ))}
-        {visibleFields.length === 0 && (
-          <Typography variant="body2" color="text.secondary">
-            No fields in this view
-          </Typography>
-        )}
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Mode toggle */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 1.5, pt: 1, pb: 0.5, flexShrink: 0 }}>
+        <ToggleButtonGroup size="small" value={mode} exclusive onChange={(_, v) => v && setMode(v)}>
+          <ToggleButton value="form" sx={{ gap: 0.5, px: 1.5 }}>
+            <TableRowsIcon sx={{ fontSize: 15 }} />
+            <Typography sx={{ fontSize: 11 }}>Form</Typography>
+          </ToggleButton>
+          <ToggleButton value="visual" sx={{ gap: 0.5, px: 1.5 }}>
+            <AccountTreeIcon sx={{ fontSize: 15 }} />
+            <Typography sx={{ fontSize: 11 }}>Visual</Typography>
+          </ToggleButton>
+        </ToggleButtonGroup>
       </Box>
+
+      {mode === 'visual' ? (
+        <MjdVisualEditor value={value} onChange={onChange} height="100%" />
+      ) : (
+        <Box sx={{ p: 2, overflow: 'auto', flex: 1 }}>
+          {/* View selector */}
+          {definition.views.length > 0 && (
+            <FormControl size="small" sx={{ mb: 2, minWidth: 200 }}>
+              <InputLabel>View</InputLabel>
+              <Select
+                value={selectedView}
+                label="View"
+                onChange={(e) => setSelectedView(e.target.value)}
+              >
+                {definition.views.map((v) => (
+                  <MenuItem key={v.name} value={v.name}>{v.name}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+
+          {/* Fields */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {visibleFields.map((field) => (
+              <FieldControl
+                key={field.name}
+                field={field}
+                value={value[field.name]}
+                onChange={(v) => updateFieldValue(field.name, v)}
+              />
+            ))}
+            {visibleFields.length === 0 && (
+              <Typography variant="body2" color="text.secondary">
+                No fields in this view
+              </Typography>
+            )}
+          </Box>
+        </Box>
+      )}
     </Box>
   );
 }

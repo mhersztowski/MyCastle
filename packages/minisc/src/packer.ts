@@ -46,12 +46,16 @@ export function pack(prog: CompiledProgram): Uint8Array {
     // ── String pool ──
     writeU16(prog.strPool.length);
     for (const s of prog.strPool) {
-        const bytes = Buffer.from(s, 'utf8');
+        const bytes = new TextEncoder().encode(s);
         writeU8(Math.min(bytes.length, 47));     // max 47 chars (MINIS_STR_LEN-1)
         for (let i = 0; i < Math.min(bytes.length, 47); i++) writeU8(bytes[i]);
     }
 
     // ── Compute absolute code offsets for each function ──
+    // We need to know where each function's code starts in the final buffer.
+    // First: calculate the size of the function table header bytes (without code),
+    // then lay out code sections.
+
     // Size of everything written so far = header of each function (4 bytes each)
     const funcHeaderBytes = prog.functions.length * 4; // param[1]+local[1]+size[2]
     let   headerEnd = buf.length + funcHeaderBytes;
@@ -100,7 +104,7 @@ export function disassemble(data: Uint8Array): string {
 
     if (data[0] !== 0x4D || data[1] !== 0x43) { return 'invalid magic'; }
     i = 2;
-    const ver = r8(); const flags = r8(); const nGlobals = r8(); const nFuncs = r8(); r16();
+    const ver = r8(); r8(); /* flags reserved */ const nGlobals = r8(); const nFuncs = r8(); r16();
     lines.push(`MinisC bytecode v${ver} | globals=${nGlobals} funcs=${nFuncs}`);
 
     const ni = r16(); const intPool: number[] = [];
@@ -145,7 +149,5 @@ export function disassemble(data: Uint8Array): string {
             lines.push(`  ${addr.toString(16).padStart(4,'0')}  ${name.padEnd(10)} ${opr}`);
         }
     }
-
-    void flags; // suppress unused warning
     return lines.join('\n');
 }

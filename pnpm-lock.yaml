@@ -247,6 +247,9 @@ importers:
       '@mhersztowski/devtools':
         specifier: workspace:*
         version: link:../../packages/devtools
+      '@mhersztowski/minisc':
+        specifier: workspace:*
+        version: link:../../packages/minisc
       adm-zip:
         specifier: ^0.5.16
         version: 0.5.16

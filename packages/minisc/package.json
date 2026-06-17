@@ -22,7 +22,7 @@
   "bin": {
     "minisc": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "runtime"],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",

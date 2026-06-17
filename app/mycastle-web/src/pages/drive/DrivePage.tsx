@@ -90,6 +90,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 
 import DriveSearchDialog from './DriveSearchDialog';
 import GitRepoPanel from './GitRepoPanel';
+import DashEditorPanel from './DashEditorPanel';
 import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearchTypes';
 
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
@@ -790,6 +791,7 @@ export default function DrivePage(): React.JSX.Element {
   // Git repo panel state — set when a `.repo.json` file is opened. `path` is the
   // .repo.json path relative to the user's drive root (e.g. `myrepo/.repo.json`).
   const [repoViewing, setRepoViewing] = useState<{ entry: VfsEntry; path: string } | null>(null);
+  const [dashEditing, setDashEditing] = useState<{ entry: VfsEntry; path: string } | null>(null);
   // Monaco-edited text state. Tracks the buffer (so dirty/save logic works
   // without polling the editor), the dirty flag, and the in-flight save.
   const [editedText, setEditedText] = useState<string | null>(null);
@@ -1031,7 +1033,7 @@ export default function DrivePage(): React.JSX.Element {
   const runAbortRef = useRef<AbortController | null>(null);
   // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
   const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
-  const panelOpen = !!(viewing || repoViewing || mdEditing || mjdEditing || running || logsView);
+  const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || running || logsView);
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
   const showAgent = isWide && agentOpen;
@@ -1287,6 +1289,16 @@ export default function DrivePage(): React.JSX.Element {
       void openInMdEditorRef.current(entry);
       return;
     }
+    // `*.dash.json` → Dash scene editor (3-pane: Types | Scene | ReactFlow UML)
+    if (entry.name.endsWith('.dash.json')) {
+      const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+      setViewing(null);
+      setRepoViewing(null);
+      setMjdEditing(null);
+      setMdEditing(null);
+      setDashEditing({ entry, path: rel });
+      return;
+    }
     // `*.repo.json` (np. `.repo.json` lub `pubsub.repo.json`) → panel git
     // (gałąź/tag, pull/push, clone). Dla `{nazwa}.repo.json` repo klonowane jest
     // do podkatalogu `{nazwa}` (logika po stronie backendu).
@@ -1469,6 +1481,7 @@ export default function DrivePage(): React.JSX.Element {
       const content = base64ToText(json.data ?? '');
       setViewing(null);          // swap from preview → editor
       setMjdEditing(null);       // mutually exclusive with MJD editor
+      setDashEditing(null);
       setMdEditing({ entry, rel, initialContent: content, saving: false });
     } catch (err) {
       toast((err as Error).message, 'error');
@@ -1596,6 +1609,7 @@ export default function DrivePage(): React.JSX.Element {
   const closeRightPanel = useCallback(() => {
     setViewing(null);
     setRepoViewing(null);
+    setDashEditing(null);
     setMdEditing(null);
     setMjdEditing(null);
     runAbortRef.current?.abort();
@@ -1605,7 +1619,7 @@ export default function DrivePage(): React.JSX.Element {
   }, []);
 
   const openLogs = useCallback(async (rel: string) => {
-    setViewing(null); setMdEditing(null); setMjdEditing(null);
+    setViewing(null); setMdEditing(null); setMjdEditing(null); setDashEditing(null);
     runAbortRef.current?.abort(); setRunning(null);
     setLogsView({ rel, content: '…' });
     try {
@@ -1638,7 +1652,7 @@ export default function DrivePage(): React.JSX.Element {
   // Generic SSE → console streamer. Shared by Run (node {file}) and npm install
   // (both stream the same `output`/`done` SSE events into the right-panel console).
   const streamConsole = useCallback(async (url: string, meta: { rel: string; kind: 'run' | 'install'; target: string }) => {
-    setViewing(null); setMdEditing(null); setMjdEditing(null); setLogsView(null);
+    setViewing(null); setMdEditing(null); setMjdEditing(null); setDashEditing(null); setLogsView(null);
     runAbortRef.current?.abort();
     const ctrl = new AbortController();
     runAbortRef.current = ctrl;
@@ -2797,6 +2811,11 @@ export default function DrivePage(): React.JSX.Element {
                 <GitRepoPanel key={repoViewing.path} userName={userName} repoPath={repoViewing.path} />
               </Box>
             )}
+            {dashEditing && (
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <DashEditorPanel key={dashEditing.path} userName={userName} filePath={dashEditing.path} />
+              </Box>
+            )}
             {mdEditing && (
               <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                 <MdEditor
@@ -2809,14 +2828,10 @@ export default function DrivePage(): React.JSX.Element {
               </Box>
             )}
             {mjdEditing && (
-              // ONE scroll, here on the wrapper. Previously we also passed
-              // `height="100%"` down which made MjdVfsLoader install its own
-              // overflow:auto on top — two nested scroll contexts meant the
-              // editor's long content would push past the panel and the page
-              // would scroll instead of the panel. Letting the inner content
-              // size naturally + scrolling the wrapper keeps the editor
-              // contained inside the right-side panel as expected.
-              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              // Visual editor needs flex column + full height (canvas must fill
+              // available space). Form / def editors scroll internally so we
+              // let MjdVfsLoader control overflow per mode.
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <MjdVfsLoader
                   key={mjdEditing.rel}
                   provider={mjdFs}

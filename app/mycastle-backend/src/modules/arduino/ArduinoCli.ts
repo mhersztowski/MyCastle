@@ -18,6 +18,8 @@ export interface CompileOptions {
   outputDir: string;
   buildDir: string;
   verbose?: boolean;
+  /** Additional library directories passed as --library <path> (no copying needed). */
+  extraLibraryPaths?: string[];
   /** If provided, called with each stdout/stderr chunk in real time (SSE streaming). */
   onChunk?: (chunk: string) => void;
 }

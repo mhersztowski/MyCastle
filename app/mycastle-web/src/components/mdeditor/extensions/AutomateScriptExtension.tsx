@@ -43,6 +43,7 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ViewQuiltIcon from '@mui/icons-material/ViewQuilt';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -63,6 +64,9 @@ import { useAuth } from '../../../modules/auth/AuthContext';
 const AutomateHelpBrowserDialog = lazy(() => import('./AutomateHelpBrowserDialog'));
 // Inspektor QObject (drzewo obiektów parsowanych ze źródła) — lazy.
 const AutomateQObjectPanel = lazy(() => import('./AutomateQObjectPanel'));
+
+// Wizualny builder sceny QWidget — lazy, ciężki komponent.
+const QObjectSceneBuilderDialog = lazy(() => import('./QObjectSceneBuilderDialog'));
 
 // Lazy — file picker only loads when the user clicks "Dołącz plik".
 const AutomateIncludeFileDialog = lazy(() => import('./AutomateIncludeFileDialog'));
@@ -86,6 +90,8 @@ const AutomateLibraryPickerDialog = lazy(() => import('./AutomateLibraryPickerDi
 // keep the initial document parse cheap (every script block in the doc would
 // otherwise pull this code).
 const AutomateScriptSettingsDialog = lazy(() => import('./AutomateScriptSettingsDialog'));
+// Update Script dialog — lazy, opens only when user clicks the button in settings.
+const AutomateUpdateScriptDialog = lazy(() => import('./AutomateUpdateScriptDialog'));
 import { useAutomateDocument, DisplayItem } from './AutomateDocumentContext';
 
 const DISPLAY_API_TYPES = `
@@ -479,6 +485,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     runBlock,
     getBlockState,
     clearBlockOutput,
+    getScriptRoots,
     blocks,
   } = useAutomateDocument();
 
@@ -501,6 +508,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   // header bar; that worked but discoverability was poor and tags had no
   // home at all. One button, one dialog.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateScriptOpen, setUpdateScriptOpen] = useState(false);
+  const [sceneBuilderOpen, setSceneBuilderOpen] = useState(false);
   // viewMode controls how the block renders inside the markdown document.
   // 'code' = current full UI (header + textarea + output panel).
   // 'html' = compact view that only shows the script's result rendered as HTML
@@ -809,6 +818,41 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     // path retries and surfaces errors properly.
     void preloadLibrariesForCode(newCode);
   }, [updateAttributes, updateBlockCode]);
+
+  /** Called by AutomateUpdateScriptDialog when a browser script is
+   *  embedded or updated in-place. Persists immediately (same as library
+   *  change) so the block is saved without requiring the fullscreen editor. */
+  const handleUpdateScript = useCallback((newCode: string) => {
+    setDialogCode(newCode);
+    setCode(newCode);
+    updateAttributes({ code: newCode });
+    updateBlockCode(blockId.current, buildRuntimeCode(newCode));
+  }, [updateAttributes, updateBlockCode]);
+
+  /** Called by QObjectSceneBuilderDialog — inserts generated init/modify code
+   *  at the top of the script body so the user can review and run it. */
+  const handleSceneBuilderCode = useCallback((generated: string) => {
+    const editor = monacoEditorRef.current;
+    const separator = '\n\n';
+    if (editor) {
+      const pos = editor.getPosition();
+      const range = pos
+        ? { startLineNumber: pos.lineNumber, startColumn: pos.column, endLineNumber: pos.lineNumber, endColumn: pos.column }
+        : { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 };
+      editor.executeEdits('scene-builder', [{ range, text: generated + separator, forceMoveMarkers: true }]);
+      const newCode = editor.getValue();
+      setDialogCode(newCode);
+      setCode(newCode);
+      updateAttributes({ code: newCode });
+      updateBlockCode(blockId.current, buildRuntimeCode(newCode));
+    } else {
+      const newCode = generated + separator + (dialogCode || '');
+      setDialogCode(newCode);
+      setCode(newCode);
+      updateAttributes({ code: newCode });
+      updateBlockCode(blockId.current, buildRuntimeCode(newCode));
+    }
+  }, [dialogCode, updateAttributes, updateBlockCode]);
 
   /** Insert the picker's chosen file contents at the cursor (or replace
    *  current selection). Goes through `executeEdits` so it lands in Monaco's
@@ -1296,6 +1340,11 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               color={qobjectPanelOpen ? 'primary' : 'default'}
             >
               <AccountTreeIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="QWidget Scene Builder — wizualny konstruktor GUI (QLabel, QPushButton, QSlider…)">
+            <IconButton size="small" onClick={() => setSceneBuilderOpen(true)}>
+              <ViewQuiltIcon fontSize="small" />
             </IconButton>
           </Tooltip>
           <Tooltip title="Pomoc — przeglądarka dokumentacji (drive/public/doc)">
@@ -1806,11 +1855,33 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             onTagsChange={(next) => updateAttributes({ tags: next })}
             onWindowHeightChange={(next) => updateAttributes({ windowHeight: next })}
             onOpenLibraryPicker={() => setLibraryPickerOpen(true)}
+            onOpenUpdateScript={() => { setSettingsOpen(false); setUpdateScriptOpen(true); }}
             availableUmlProjects={availableUmlProjects}
             umlProjects={umlProjects}
             onUmlProjectsChange={(next) => updateAttributes({ umlProjects: next })}
             scenePath={scenePath}
             onScenePathChange={(next) => updateAttributes({ scenePath: next })}
+          />
+        )}
+        {updateScriptOpen && (
+          <AutomateUpdateScriptDialog
+            open={updateScriptOpen}
+            onClose={() => setUpdateScriptOpen(false)}
+            currentCode={code}
+            onChange={handleUpdateScript}
+          />
+        )}
+        {sceneBuilderOpen && (
+          <QObjectSceneBuilderDialog
+            open={sceneBuilderOpen}
+            onClose={() => setSceneBuilderOpen(false)}
+            onInsertCode={handleSceneBuilderCode}
+            getLiveRoots={getScriptRoots}
+            initialRoots={qobjScene.roots}
+            onRootsChange={(newRoots) => {
+              setQobjScene(prev => ({ ...prev, roots: newRoots }));
+              setSceneDirty(true);
+            }}
           />
         )}
       </Suspense>

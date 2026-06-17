@@ -381,8 +381,9 @@ export class Parser {
                     const castType = this.parseType();
                     this.expect(TT.RPAREN, ')');
                     const operand = this.parseUnary();
-                    // Casts encoded as UnaryExpr with op = type name
-                    const op = castType as A.UnaryOp;
+                    // Represent cast as a unary with special op
+                    // We encode casts as (int), (float), (bool), (string)
+                    const op = castType as A.UnaryOp; // reuse UnaryOp field, value = type name
                     return { kind: 'UnaryExpr', op, operand } as A.UnaryExpr;
                 }
                 const expr = this.parseExpr();

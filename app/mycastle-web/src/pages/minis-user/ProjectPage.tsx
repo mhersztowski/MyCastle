@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  Alert,
   AppBar,
   Box,
   Button,
@@ -14,14 +15,17 @@ import {
   DialogTitle,
   Divider,
   FormControl,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   InputLabel,
+  Switch,
   List,
   ListItemButton,
   ListItemText,
   MenuItem,
   Select,
+  Snackbar,
   TextField,
   Toolbar,
   Tooltip,
@@ -67,6 +71,306 @@ import { ArduinoWasmRuntime } from '../../components/ArduinoWasmRuntime';
 import type { MinisDeviceModel, MinisProjectLibrary } from '@mhersztowski/core';
 
 type ViewMode = 'blockly' | 'split' | 'code';
+
+// ─── Arduino examples browser ────────────────────────────────────────────────
+
+type ExampleEntry = { name: string; filePath: string };
+type ExampleLibEntry = { name: string; examples: ExampleEntry[] };
+
+interface ExamplesDialogProps {
+  open: boolean;
+  onClose: () => void;
+  userName: string;
+  onOpenExample: (content: string, name: string) => void;
+}
+
+function ExamplesDialog({ open, onClose, userName, onOpenExample }: ExamplesDialogProps) {
+  const { token } = useAuth();
+  const [libraries, setLibraries] = useState<ExampleLibEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState('');
+  const [code, setCode] = useState('');
+  const [loadingCode, setLoadingCode] = useState(false);
+  const [filter, setFilter] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true); setError(null); setSelectedPath(null); setCode(''); setFilter('');
+    fetch(`/api/users/${encodeURIComponent(userName)}/arduino-local-examples`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.json() as Promise<{ libraries?: ExampleLibEntry[] }>)
+      .then(data => setLibraries(data.libraries ?? []))
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, [open, userName, token]);
+
+  const loadCode = (filePath: string, name: string) => {
+    setSelectedPath(filePath); setSelectedName(name); setLoadingCode(true); setCode('');
+    fetch(`/api/users/${encodeURIComponent(userName)}/arduino-example-content?path=${encodeURIComponent(filePath)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.json() as Promise<{ content?: string }>)
+      .then(d => setCode(d.content ?? ''))
+      .catch((e: unknown) => setCode(`// Error: ${String(e)}`))
+      .finally(() => setLoadingCode(false));
+  };
+
+  const toggle = (name: string) => setExpanded(prev => {
+    const n = new Set(prev);
+    if (n.has(name)) n.delete(name); else n.add(name);
+    return n;
+  });
+
+  const filterLow = filter.toLowerCase();
+  const filteredLibs = filter
+    ? libraries
+        .map(lib => ({ ...lib, examples: lib.examples.filter(e => e.name.toLowerCase().includes(filterLow) || lib.name.toLowerCase().includes(filterLow)) }))
+        .filter(lib => lib.examples.length)
+    : libraries;
+
+  return (
+    <Dialog open={open} onClose={onClose} fullScreen>
+      <AppBar position="static" elevation={0} sx={{ bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}>
+        <Toolbar variant="dense">
+          <IconButton edge="start" onClick={onClose} size="small" sx={{ mr: 1 }}><Close /></IconButton>
+          <Typography variant="subtitle1" sx={{ flexGrow: 1, color: 'text.primary' }}>
+            Arduino Examples — drive/git/arduino
+          </Typography>
+          {selectedPath && code && (
+            <Button size="small" variant="contained" sx={{ mr: 1 }} onClick={() => { onOpenExample(code, selectedName); onClose(); }}>
+              Open in sketch
+            </Button>
+          )}
+        </Toolbar>
+      </AppBar>
+      <Box sx={{ display: 'flex', height: 'calc(100vh - 48px)', overflow: 'hidden' }}>
+        {/* Left: library tree */}
+        <Box sx={{ width: 280, flexShrink: 0, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Box sx={{ p: 1 }}>
+            <TextField
+              size="small" fullWidth placeholder="Filter…"
+              value={filter} onChange={e => setFilter(e.target.value)}
+              sx={{ '& .MuiInputBase-input': { fontSize: 12 } }}
+              InputProps={{ endAdornment: filter ? <IconButton size="small" onClick={() => setFilter('')}><Close sx={{ fontSize: 14 }} /></IconButton> : undefined }}
+            />
+          </Box>
+          <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
+            {loading && <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}><CircularProgress size={24} /></Box>}
+            {error && <Alert severity="error" sx={{ m: 1 }}>{error}</Alert>}
+            {!loading && filteredLibs.length === 0 && <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>No examples found.</Typography>}
+            <List dense disablePadding>
+              {filteredLibs.map(lib => (
+                <React.Fragment key={lib.name}>
+                  <ListItemButton dense onClick={() => toggle(lib.name)} sx={{ py: 0.5 }}>
+                    <Box sx={{ width: 20, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                      {expanded.has(lib.name) ? <ExpandLess sx={{ fontSize: 14 }} /> : <ExpandMore sx={{ fontSize: 14 }} />}
+                    </Box>
+                    <FolderOpen sx={{ fontSize: 14, mr: 0.75, color: 'primary.main' }} />
+                    <ListItemText primary={lib.name} primaryTypographyProps={{ fontSize: 12, fontWeight: 600 }} />
+                  </ListItemButton>
+                  <Collapse in={expanded.has(lib.name)} unmountOnExit>
+                    {lib.examples.map(ex => (
+                      <ListItemButton
+                        key={ex.filePath} dense
+                        selected={selectedPath === ex.filePath}
+                        onClick={() => loadCode(ex.filePath, ex.name)}
+                        sx={{ pl: 4, py: 0.25 }}
+                      >
+                        <InsertDriveFile sx={{ fontSize: 12, mr: 0.75, color: 'text.secondary' }} />
+                        <ListItemText primary={ex.name} primaryTypographyProps={{ fontSize: 12 }} />
+                      </ListItemButton>
+                    ))}
+                  </Collapse>
+                </React.Fragment>
+              ))}
+            </List>
+          </Box>
+        </Box>
+        {/* Right: code preview */}
+        <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: '#1e1e1e' }}>
+          {!selectedPath && (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+              <Typography color="text.secondary" variant="body2">Select an example from the list</Typography>
+            </Box>
+          )}
+          {selectedPath && loadingCode && (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+              <CircularProgress size={24} />
+            </Box>
+          )}
+          {selectedPath && !loadingCode && (
+            <Box
+              component="pre"
+              sx={{
+                flexGrow: 1, m: 0, p: 2, overflowY: 'auto',
+                fontFamily: '"Fira Code", "Consolas", monospace', fontSize: 13, lineHeight: 1.5,
+                color: '#d4d4d4', bgcolor: '#1e1e1e', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}
+            >
+              {code}
+            </Box>
+          )}
+        </Box>
+      </Box>
+    </Dialog>
+  );
+}
+
+// ─── Local drive library picker ───────────────────────────────────────────────
+
+type LocalLibEntry = { name: string; relPath: string; isLib: boolean; libName?: string; depends?: string[]; children?: LocalLibEntry[] };
+
+interface LocalLibPickerProps {
+  open: boolean;
+  onClose: () => void;
+  userName: string;
+  onSelect: (libs: MinisProjectLibrary[], missing: string[]) => void;
+}
+
+function LocalLibPickerDialog({ open, onClose, userName, onSelect }: LocalLibPickerProps) {
+  const { token } = useAuth();
+  const [entries, setEntries] = useState<LocalLibEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    setError(null);
+    setExpanded(new Set());
+    fetch(`/api/users/${encodeURIComponent(userName)}/arduino-local-libs`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.json() as Promise<{ entries?: LocalLibEntry[] }>)
+      .then(data => setEntries(data.entries ?? []))
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, [open, userName, token]);
+
+  // Build flat map: libName (from library.properties name=) → entry
+  const libNameMap = React.useMemo(() => {
+    const map = new Map<string, LocalLibEntry>();
+    const flatten = (es: LocalLibEntry[]) => {
+      for (const e of es) {
+        if (e.isLib && e.libName) map.set(e.libName, e);
+        if (e.children) flatten(e.children);
+      }
+    };
+    flatten(entries);
+    return map;
+  }, [entries]);
+
+  const handleSelect = (entry: LocalLibEntry) => {
+    const toAdd: MinisProjectLibrary[] = [];
+    const missing: string[] = [];
+    const visited = new Set<string>();
+    const queue: LocalLibEntry[] = [entry];
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (visited.has(current.relPath)) continue;
+      visited.add(current.relPath);
+      toAdd.push({ url: `drive://${current.relPath}` });
+      for (const dep of current.depends ?? []) {
+        const found = libNameMap.get(dep);
+        if (found && !visited.has(found.relPath)) {
+          queue.push(found);
+        } else if (!found && !missing.includes(dep)) {
+          missing.push(dep);
+        }
+      }
+    }
+    onSelect(toAdd, missing);
+    onClose();
+  };
+
+  const toggleExpand = (relPath: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(relPath)) next.delete(relPath); else next.add(relPath);
+      return next;
+    });
+  };
+
+  const renderEntry = (entry: LocalLibEntry, depth = 0): ReactNode => (
+    <React.Fragment key={entry.relPath}>
+      <ListItemButton
+        dense
+        sx={{ pl: 1 + depth * 2 }}
+        onClick={() => {
+          if (entry.children?.length && !entry.isLib) toggleExpand(entry.relPath);
+          else handleSelect(entry);
+        }}
+      >
+        <Box sx={{ width: 28, flexShrink: 0 }}>
+          {(entry.children?.length ?? 0) > 0 && !entry.isLib ? (
+            <IconButton size="small" sx={{ p: 0 }} onClick={e => { e.stopPropagation(); toggleExpand(entry.relPath); }}>
+              {expanded.has(entry.relPath) ? <ExpandLess sx={{ fontSize: 16 }} /> : <ExpandMore sx={{ fontSize: 16 }} />}
+            </IconButton>
+          ) : null}
+        </Box>
+        <FolderOpen sx={{ fontSize: 15, mr: 0.75, color: entry.isLib ? 'success.main' : 'text.secondary', flexShrink: 0 }} />
+        <ListItemText
+          primary={entry.libName ?? entry.name}
+          secondary={entry.isLib ? (entry.depends?.length ? `depends: ${entry.depends.join(', ')}` : 'library.properties ✓') : undefined}
+          primaryTypographyProps={{ fontSize: 13 }}
+          secondaryTypographyProps={{ fontSize: 10, color: entry.depends?.length ? 'info.main' : 'success.main' }}
+          sx={{ my: 0 }}
+        />
+        {entry.isLib && (
+          <Button
+            size="small"
+            variant="outlined"
+            sx={{ fontSize: 11, ml: 1, flexShrink: 0 }}
+            onClick={e => { e.stopPropagation(); handleSelect(entry); }}
+          >
+            Add
+          </Button>
+        )}
+      </ListItemButton>
+      {(entry.children?.length ?? 0) > 0 && (
+        <Collapse in={expanded.has(entry.relPath)} unmountOnExit>
+          {entry.children!.map(child => renderEntry(child, depth + 1))}
+        </Collapse>
+      )}
+    </React.Fragment>
+  );
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ py: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <FolderOpen fontSize="small" />
+          Local Arduino libraries
+        </Box>
+        <Typography variant="caption" color="text.secondary" display="block">
+          drive/git/arduino/
+        </Typography>
+      </DialogTitle>
+      <DialogContent dividers sx={{ p: 0, minHeight: 180 }}>
+        {loading && <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}><CircularProgress size={28} /></Box>}
+        {error && <Alert severity="error" sx={{ m: 2 }}>{error}</Alert>}
+        {!loading && !error && entries.length === 0 && (
+          <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
+            No directories found in drive/git/arduino/.
+          </Typography>
+        )}
+        {!loading && entries.length > 0 && (
+          <List dense disablePadding>
+            {entries.map(e => renderEntry(e))}
+          </List>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} size="small">Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 
 const MIN_PANEL_PX = 200;
 
@@ -131,8 +435,12 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   });
   const initialSketch = searchParams.get('sketch');
   const [libraries, setLibraries] = useState<MinisProjectLibrary[]>([]);
+  const [useMinisC, setUseMinisC] = useState(false);
   const [libInput, setLibInput] = useState('');
   const [libSaving, setLibSaving] = useState(false);
+  const [localLibPickerOpen, setLocalLibPickerOpen] = useState(false);
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const [missingDepsMsg, setMissingDepsMsg] = useState<string | null>(null);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [readmeExpanded, setReadmeExpanded] = useState(false);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
@@ -265,6 +573,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           serviceRef.current?.changeBoard(boardKey);
         }
         if (project.libraries) setLibraries(project.libraries);
+        if ('useMinisC' in project) setUseMinisC(!!(project as { useMinisC?: boolean }).useMinisC);
       } catch { /* ignore */ }
     })();
   }, [userName, projectId]);
@@ -345,6 +654,16 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       await minisApi.updateProjectLibraries(userName, projectId, libraries);
     } finally {
       setLibSaving(false);
+    }
+  };
+
+  const handleToggleMinisC = async (enabled: boolean) => {
+    if (!userName || !projectId) return;
+    setUseMinisC(enabled);
+    try {
+      await minisApi.updateProjectUseMinisC(userName, projectId, enabled);
+    } catch {
+      setUseMinisC(!enabled); // revert on error
     }
   };
 
@@ -712,6 +1031,15 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           </Button>
 
           <Button
+            size="small" variant="outlined" color="inherit"
+            startIcon={<InsertDriveFile />}
+            onClick={() => setExamplesOpen(true)}
+            sx={{ ml: 1, ...btnSx(false) }}
+          >
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Examples</Box>
+          </Button>
+
+          <Button
             size="small" variant={sketchesOpen ? 'contained' : 'outlined'} color="inherit"
             startIcon={<FolderOpen />}
             onClick={() => setSketchesOpen((v) => !v)}
@@ -879,13 +1207,23 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               <Tooltip title="Add library">
                 <IconButton size="small" onClick={handleAddLibrary}><Add fontSize="small" /></IconButton>
               </Tooltip>
+              <Tooltip title="Browse local drive (drive/git/arduino)">
+                <IconButton size="small" onClick={() => setLocalLibPickerOpen(true)}>
+                  <FolderOpen fontSize="small" />
+                </IconButton>
+              </Tooltip>
             </Box>
 
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5, minHeight: 24 }}>
               {libraries.map((lib, i) => {
-                const label = lib.url
-                  ? lib.url.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
-                  : `${lib.name ?? ''}${lib.version ? `@${lib.version}` : ''}`;
+                let label: string;
+                if (lib.url?.startsWith('drive://')) {
+                  label = `📁 ${lib.url.split('/').pop() ?? lib.url.slice('drive://'.length)}`;
+                } else if (lib.url) {
+                  label = lib.url.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+                } else {
+                  label = `${lib.name ?? ''}${lib.version ? `@${lib.version}` : ''}`;
+                }
                 return (
                   <Chip
                     key={i}
@@ -908,6 +1246,23 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
             >
               Save libraries
             </Button>
+
+            <Divider sx={{ my: 2 }} />
+
+            <Typography variant="subtitle2" gutterBottom>MinisC VM</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+              Automatically include the MinisC C++ runtime when compiling.
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={useMinisC}
+                  onChange={(e) => handleToggleMinisC(e.target.checked)}
+                />
+              }
+              label={<Typography variant="body2">Use MinisC VM</Typography>}
+            />
           </Box>
         )}
 
@@ -1278,6 +1633,45 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           <Button onClick={handleConfirmOverwrite} color="warning" variant="contained">Overwrite</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Local drive library picker */}
+      <LocalLibPickerDialog
+        open={localLibPickerOpen}
+        onClose={() => setLocalLibPickerOpen(false)}
+        userName={userName ?? ''}
+        onSelect={(libs, missing) => {
+          setLibraries(prev => [...prev, ...libs]);
+          if (missing.length) {
+            setMissingDepsMsg(`Dependencies not found on disk: ${missing.join(', ')}`);
+          }
+        }}
+      />
+
+      <Snackbar
+        open={!!missingDepsMsg}
+        autoHideDuration={8000}
+        onClose={() => setMissingDepsMsg(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="warning" onClose={() => setMissingDepsMsg(null)} sx={{ width: '100%' }}>
+          {missingDepsMsg}
+        </Alert>
+      </Snackbar>
+
+      {/* Arduino examples browser */}
+      <ExamplesDialog
+        open={examplesOpen}
+        onClose={() => setExamplesOpen(false)}
+        userName={userName ?? ''}
+        onOpenExample={(content) => {
+          editorRef.current?.setContent(content);
+          setCodeEdited(true);
+          codeEditedRef.current = true;
+          setIsDirty(true);
+          setViewMode('code');
+          setExamplesOpen(false);
+        }}
+      />
     </Box>
   );
 }

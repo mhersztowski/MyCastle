@@ -42,6 +42,7 @@ import AddIcon from '@mui/icons-material/Add';
 import SettingsIcon from '@mui/icons-material/Settings';
 import HeightIcon from '@mui/icons-material/Height';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 
 /** Sensible bounds for the windowHeight slider. Below 150px the header
  *  alone barely fits; above 1200px the block would scroll the document
@@ -83,6 +84,10 @@ export interface AutomateScriptSettingsDialogProps {
    *  unrelated workflows. */
   onOpenLibraryPicker: () => void;
 
+  /** Opens the Update Script dialog — embeds or refreshes predefined
+   *  browser scripts (packages/core/browser/scripts.json) inline. */
+  onOpenUpdateScript: () => void;
+
   /** Ścieżka pliku JSON ze sceną obiektów QObject (względna do home usera),
    *  ładowana przy otwarciu edytora i zapisywana przy „Zapisz". '' = brak. */
   scenePath: string;
@@ -101,6 +106,7 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
   onTagsChange,
   onWindowHeightChange,
   onOpenLibraryPicker,
+  onOpenUpdateScript,
   availableUmlProjects,
   umlProjects,
   onUmlProjectsChange,
@@ -227,14 +233,24 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
             <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>
               Biblioteki zewnętrzne
             </Typography>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<LibraryAddIcon />}
-              onClick={onOpenLibraryPicker}
-            >
-              Użyj biblioteki…
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<LibraryAddIcon />}
+                onClick={onOpenLibraryPicker}
+              >
+                Użyj biblioteki…
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SystemUpdateAltIcon />}
+                onClick={onOpenUpdateScript}
+              >
+                Dodaj Bibliotekę
+              </Button>
+            </Box>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
               Otwiera katalog (Three.js, Lit, …). Wybranie biblioteki wstawi do
               kodu marker <code>// @library: nazwa</code>.

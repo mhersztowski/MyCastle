@@ -83,6 +83,7 @@ const MinisPicoSdkProjectPage = lazy(() => import('./pages/minis-user/PicoSdkPro
 const MinisCppProjectPage = lazy(() => import('./pages/minis-user/CppProjectPage'));
 // Programming — UML editor (ReactFlow bundle is heavy → lazy load)
 const UmlEditorPage = lazy(() => import('./pages/programming/UmlEditorPage'));
+const MiniscPage = lazy(() => import('./pages/programming/MiniscPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -220,6 +221,18 @@ function AppRoot() {
               <Box sx={{ display: 'flex', minHeight: '100vh' }}>
                 <Layout fullBleed hideChrome>
                   <Suspense fallback={null}><UmlEditorPage /></Suspense>
+                </Layout>
+              </Box>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/user/:userName/programming/minisc"
+          element={
+            <RequireAuth>
+              <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+                <Layout fullBleed>
+                  <Suspense fallback={null}><MiniscPage /></Suspense>
                 </Layout>
               </Box>
             </RequireAuth>

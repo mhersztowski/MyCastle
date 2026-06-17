@@ -78,6 +78,7 @@ export class ArduinoCliDockerRun implements ArduinoCli {
       '--config-file', this.toContainer(options.configFilePath),
       '--output-dir', this.toContainer(options.outputDir),
       '--build-path', this.toContainer(options.buildDir),
+      ...(options.extraLibraryPaths ?? []).flatMap(p => ['--library', this.toContainer(p)]),
     ];
     const dockerArgs = [
       ...this.baseRunArgs,

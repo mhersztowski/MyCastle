@@ -82,6 +82,9 @@ export interface AutomateDocumentContextValue {
 
   getBlockState: (id: string) => ScriptBlockState | undefined;
   clearBlockOutput: (id: string) => void;
+  /** Zwraca żywe korzenie sceny QObject z ostatniego uruchomionego bloku
+   *  (te same obiekty co api.scripts.getRoots() wewnątrz skryptu). */
+  getScriptRoots: () => unknown[];
 }
 
 /** Uchwyt pojedynczego przebiegu skryptu — pozwala go przerwać (Stop). */
@@ -260,27 +263,6 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     });
   }, []);
 
-  const createDisplayApi = useCallback((blockId: string): DisplayApi => {
-    const pushOutput = (item: DisplayItem) => {
-      setBlocks(prev => {
-        const next = new Map(prev);
-        const block = next.get(blockId);
-        if (block) {
-          next.set(blockId, { ...block, output: [...block.output, item] });
-        }
-        return next;
-      });
-    };
-
-    return {
-      text: (str: string) => pushOutput({ id: nextDisplayItemId(), type: 'text', data: String(str), timestamp: Date.now() }),
-      table: (data: Record<string, unknown>[] | unknown[][]) => pushOutput({ id: nextDisplayItemId(), type: 'table', data, timestamp: Date.now() }),
-      list: (items: unknown[]) => pushOutput({ id: nextDisplayItemId(), type: 'list', data: items, timestamp: Date.now() }),
-      json: (obj: unknown) => pushOutput({ id: nextDisplayItemId(), type: 'json', data: obj, timestamp: Date.now() }),
-      html: (markup: string) => pushOutput({ id: nextDisplayItemId(), type: 'html', data: String(markup), timestamp: Date.now() }),
-      dom: (element: HTMLElement) => pushOutput({ id: nextDisplayItemId(), type: 'dom', data: element, timestamp: Date.now() }),
-    };
-  }, []);
 
   // blocksRef tracks the latest `blocks` so runBlock can read it without
   // having `blocks` as a useCallback dep — that dep would re-create runBlock
@@ -321,16 +303,18 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       console.log(`[AutomateScript] runBlock(${id}): skip — empty code (block ${block ? 'idle but empty' : 'not registered'})`);
       return;
     }
-    // Clear previous output before running so only the latest result is shown
+    // Mark block as running but keep the previous output visible — the old
+    // canvas (or other DOM item) stays rendered while the library preloads
+    // and the script executes. The output is replaced atomically at the end
+    // of the run so there's no intermediate blank frame between runs.
     setBlocks(prev => {
       const next = new Map(prev);
       const current = next.get(id);
       if (current) {
-        next.set(id, { ...current, status: 'running', output: [], logs: [], error: undefined, result: undefined });
+        next.set(id, { ...current, status: 'running', logs: [], error: undefined, result: undefined });
       }
       return next;
     });
-    await Promise.resolve(); // yield so React renders cleared state before new output
 
     const api = getOrCreateApi();
     // Udostępnij skryptowi scenę QObject tego bloku przez api.scripts.getRoot().
@@ -340,7 +324,20 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     const prevLogsLength = api.logs.length;
     const prevNotificationsLength = api.notifications.length;
 
-    const displayApi = createDisplayApi(id);
+    // Buffer all display.* calls during execution. They're committed atomically
+    // at the end via a single setBlocks replacing the old output — this avoids
+    // the "flash of empty canvas" that the previous clear-before-run approach
+    // caused (the gap between output:[] and the new canvas appeared as a brief
+    // blank during library preload / script startup).
+    const bufferedOutput: DisplayItem[] = [];
+    const displayApi: DisplayApi = {
+      text:  (str)   => bufferedOutput.push({ id: nextDisplayItemId(), type: 'text',  data: String(str), timestamp: Date.now() }),
+      table: (data)  => bufferedOutput.push({ id: nextDisplayItemId(), type: 'table', data,              timestamp: Date.now() }),
+      list:  (items) => bufferedOutput.push({ id: nextDisplayItemId(), type: 'list',  data: items,       timestamp: Date.now() }),
+      json:  (obj)   => bufferedOutput.push({ id: nextDisplayItemId(), type: 'json',  data: obj,         timestamp: Date.now() }),
+      html:  (markup)=> bufferedOutput.push({ id: nextDisplayItemId(), type: 'html',  data: String(markup), timestamp: Date.now() }),
+      dom:   (el)    => bufferedOutput.push({ id: nextDisplayItemId(), type: 'dom',   data: el,          timestamp: Date.now() }),
+    };
     // eslint-disable-next-line no-console
     console.groupCollapsed(`[AutomateScript] runBlock(${id}) — ${code.length} chars`);
     // eslint-disable-next-line no-console
@@ -393,11 +390,12 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         notify(n.message, n.severity || 'info');
       }
 
+      // Atomic replace: swap old output with the freshly-collected items.
       setBlocks(prev => {
         const next = new Map(prev);
         const current = next.get(id);
         if (current) {
-          next.set(id, { ...current, status: 'completed', logs: newLogs, result });
+          next.set(id, { ...current, status: 'completed', output: bufferedOutput, logs: newLogs, result });
         }
         return next;
       });
@@ -462,7 +460,9 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         const next = new Map(prev);
         const current = next.get(id);
         if (current) {
-          next.set(id, { ...current, status: 'error', error: errorMsg, logs: newLogs });
+          // On error clear the output (show error banner without stale canvas)
+          // and include any items buffered before the throw.
+          next.set(id, { ...current, status: 'error', output: bufferedOutput, error: errorMsg, logs: newLogs });
         }
         return next;
       });
@@ -471,7 +471,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     // blocks read via blocksRef.current (latest), writes via functional
     // setBlocks updaters — so a stable identity for runBlock is correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getOrCreateApi, createDisplayApi, notify]);
+  }, [getOrCreateApi, notify]);
 
   const runAllBlocks = useCallback(async () => {
     setIsRunningAll(true);
@@ -487,6 +487,17 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     return blocks.get(id);
   }, [blocks]);
 
+  const getScriptRoots = useCallback((): unknown[] => {
+    // First try scene-JSON-based roots (Mode 2 / scene-driven scripts).
+    const apiRoots = apiRef.current?.scripts.getRoots() ?? [];
+    if (apiRoots.length > 0) return apiRoots;
+    // Fallback: roots registered by Mode 1 Init code via globalThis.__qscene_roots.
+    const g = globalThis as unknown as Record<string, unknown>;
+    const gr = g['__qscene_roots'];
+    if (Array.isArray(gr) && gr.length > 0) return gr as unknown[];
+    return [];
+  }, []);
+
   const value: AutomateDocumentContextValue = {
     variables: variablesRef.current,
     blocks,
@@ -501,6 +512,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     isRunningAll,
     getBlockState,
     clearBlockOutput,
+    getScriptRoots,
   };
 
   return (

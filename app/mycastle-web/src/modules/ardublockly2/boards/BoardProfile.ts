@@ -393,13 +393,17 @@ boardProfiles.esp32s3_pico = {
 /**
  * Waveshare ESP32-S3-Zero (4MB Flash + 2MB OPI PSRAM, native USB only)
  * Chip: ESP32-S3FH4R2 — no USB-UART bridge, CDCOnBoot=cdc required for Serial over USB.
- * PSRAM=opi required — without it the chip crashes on boot.
- * Also compatible with LOLIN S3 Mini and similar "Zero" boards with OPI PSRAM.
+ * Uses the dedicated waveshare_esp32_s3_zero board definition (ESP32 Arduino 3.0.7) which
+ * has the correct variant, bootloader and USB VID/PID for this board. HWCDC (usb_mode=1,
+ * USB Serial-JTAG peripheral) is the native USB mode for this board — it uses the same
+ * GPIO19/GPIO20 pins but through the dedicated hardware peripheral, matching what MicroPython
+ * also uses. The platform-injected MinisHooks.cpp calls isCDC_Connected() in a while(!Serial)
+ * loop; that function enables the TX ISR so data flows as soon as the USB cable is detected.
  */
 boardProfiles.esp32s3_zero = {
   name: 'ESP32-S3 Zero',
-  description: 'Waveshare/LOLIN ESP32-S3 Zero (4MB Flash, 2MB OPI PSRAM, native USB)',
-  compilerFlag: 'esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=4M,PSRAM=opi',
+  description: 'Waveshare ESP32-S3 Zero (4MB Flash, HWCDC native USB)',
+  compilerFlag: 'esp32:esp32:waveshare_esp32_s3_zero:CDCOnBoot=cdc',
   flashConfig: { filePattern: '{sketch}.ino.merged.bin', offset: 0x0000 },
   analogPins: [
     ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'],

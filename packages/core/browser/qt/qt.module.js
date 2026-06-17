@@ -2081,13 +2081,24 @@ class QtCanvas extends LitElement {
   static firstUpdated(self) { return self.firstUpdated(); }
   static disconnectedCallback(self) { return self.disconnectedCallback(); }
 }
-// Auto-rejestracja taga 'qt-canvas' dla bieżącej generacji (WebEmbed/HTML
-// `<qt-canvas>`). Zapisujemy też `__tag`, by QtCanvas.create() wiedział, że TA
-// klasa jest już zarejestrowana i NIE próbował definiować jej drugi raz
-// (inaczej: "this constructor has already been used with this registry").
-if (!customElements.get('qt-canvas')) { customElements.define('qt-canvas', QtCanvas); QtCanvas.__tag = 'qt-canvas'; }
+// Auto-rejestracja taga dla bieżącej generacji QtCanvas.
+// Gdy 'qt-canvas' jest już zajęty (stara generacja z poprzedniego uruchomienia
+// skryptu), rejestrujemy pod świeżym tagiem qt-canvas-N. Dzięki temu zarówno
+// `new QtCanvas()` jak i `QtCanvas.create()` działają przy każdym ponownym
+// uruchomieniu skryptu bez "Failed to construct 'HTMLElement': Illegal constructor".
+if (!customElements.get('qt-canvas')) {
+  customElements.define('qt-canvas', QtCanvas);
+  QtCanvas.__tag = 'qt-canvas';
+} else if (!Object.prototype.hasOwnProperty.call(QtCanvas, '__tag')) {
+  // Nowa generacja (re-ewaluacja): rejestrujemy pod unikalnym tagiem qt-canvas-N.
+  let _seq = (globalThis.__QT_CANVAS_SEQ = (globalThis.__QT_CANVAS_SEQ || 0) + 1);
+  let _tag = `qt-canvas-${_seq}`;
+  while (customElements.get(_tag)) _tag = `qt-canvas-${(globalThis.__QT_CANVAS_SEQ = globalThis.__QT_CANVAS_SEQ + 1)}`;
+  customElements.define(_tag, QtCanvas);
+  QtCanvas.__tag = _tag;
+}
 
-const QT_CANVAS_TAG = 'qt-canvas';
+const QT_CANVAS_TAG = QtCanvas.__tag;
 
 // inicjalizacja kolorów globalnych Qt.* (po zdefiniowaniu QColor)
 Qt.white = new QColor(255, 255, 255); Qt.black = new QColor(0, 0, 0); Qt.red = new QColor(255, 0, 0); Qt.darkRed = new QColor(128, 0, 0);

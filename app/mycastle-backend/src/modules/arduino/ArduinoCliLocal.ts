@@ -39,6 +39,7 @@ export class ArduinoCliLocal implements ArduinoCli {
       '--config-file', options.configFilePath,
       '--output-dir', options.outputDir,
       '--build-path', options.buildDir,
+      ...(options.extraLibraryPaths ?? []).flatMap(p => ['--library', p]),
     ];
     const cmdLine = `$ ${this.resolvedPath} ${args.join(' ')}\n`;
 

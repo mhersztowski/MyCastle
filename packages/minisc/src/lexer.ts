@@ -1,4 +1,4 @@
-export const enum TT {
+export enum TT {
     // Literals
     INT_LIT, FLOAT_LIT, STRING_LIT,
     // Keywords
@@ -46,7 +46,6 @@ export function tokenize(src: string): Token[] {
     function error(msg: string): never { throw new Error(`Lexer error at line ${line}: ${msg}`); }
 
     while (i < src.length) {
-        const start = i;
         const c = advance();
 
         // Whitespace
@@ -158,8 +157,6 @@ export function tokenize(src: string): Token[] {
             case ']': tok(TT.RBRACKET, c); break;
             default: error(`unexpected character '${c}'`);
         }
-
-        void start; // suppress unused warning
     }
 
     tok(TT.EOF, '');

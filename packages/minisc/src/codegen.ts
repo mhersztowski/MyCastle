@@ -1,6 +1,6 @@
 import * as A from './ast';
 import { Op } from './opcodes';
-import { buildNativeMap, NativeInfo } from './natives';
+import { buildNativeMap } from './natives';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -450,7 +450,8 @@ export class Codegen {
     // Insert conversion opcode for a value that is NOT at the top of stack
     // (used when right operand hasn't been pushed yet — insert before top)
     private emitBeforeTop(op: Op): void {
-        // Insert below the top: SWAP, emit op, SWAP
+        // We need to insert an opcode "below" the top item.
+        // Strategy: emit SWAP, emit op, emit SWAP (for unary conversions of the second-to-top)
         this.emit(Op.SWAP);
         this.emit(op);
         this.emit(Op.SWAP);
@@ -514,6 +515,14 @@ export class Codegen {
         if (expr.kind === 'Ident') {
             this.compileStore(expr.name, expr.line);
         } else if (expr.kind === 'IndexExpr') {
+            // For arr[i] store: we need arr_ref and idx on stack, then SWAP with value
+            // Stack state: [new_value]
+            // We need: [arr_ref, idx, new_value] → ARR_SET
+            // Emit DUP of new_value then load arr+idx then reorder... simpler:
+            // Actually at this point stack has new_value on top.
+            // We need to get arr_ref and idx below it: use a temp approach.
+            // Simplification: not supported in this pass (limitation of simple codegen).
+            // For assignment to arr[i], use compileAssign which handles it properly.
             throw new Error('prefix/postfix on array element not supported; use arr[i] = arr[i] + 1');
         }
     }
@@ -552,7 +561,7 @@ export class Codegen {
                 this.emit(Op.ARR_SET);
                 return t;
             } else {
-                // Compound on array element: DUP2 to get arr+idx for both GET and SET
+                // Compound on array element: need DUP2 to get arr+idx for both GET and SET
                 this.emit(Op.DUP2);             // [arr,i,arr,i]
                 this.emit(Op.ARR_GET);          // [arr,i,old]
                 const rt = this.compileExpr(value);

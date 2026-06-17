@@ -7,7 +7,7 @@ export class ArduinoProject {
 
   constructor(
     private readonly cli: ArduinoCli,
-    rootDir: string,
+    private readonly rootDir: string,
     userName: string,
     projectId: string,
     private readonly fqbn: string,
@@ -20,7 +20,17 @@ export class ArduinoProject {
   get librariesDir(): string { return path.join(this.projectDir, 'libraries'); }
   get outputDir(): string { return path.join(this.projectDir, 'output'); }
   get configFile(): string { return path.join(this.projectDir, 'custom-config.yaml'); }
-  sketchBuildDir(sketchName: string): string { return path.join(this.sketchesDir, sketchName, '.build'); }
+  sketchBuildDir(sketchName: string): string {
+    // Include a short FQBN hash in the build dir name so changing the FQBN (e.g. switching
+    // USBMode) always gets a fresh directory. Docker writes root-owned files that Node.js
+    // cannot delete, so a single shared .build/ would retain stale core.a across FQBN changes.
+    let h = 5381;
+    for (let i = 0; i < this.fqbn.length; i++) {
+      h = (((h << 5) + h) + this.fqbn.charCodeAt(i)) & 0xffffffff;
+    }
+    const hash = Math.abs(h).toString(36).slice(0, 6);
+    return path.join(this.sketchesDir, sketchName, `.build_${hash}`);
+  }
 
   async ensureConfig(): Promise<void> {
     const content = `directories:\n  user: ${this.projectDir}\nlibrary:\n  enable_unsafe_install: true\n`;
@@ -33,14 +43,28 @@ export class ArduinoProject {
     await fs.mkdir(this.librariesDir, { recursive: true });
   }
 
-  async compile(sketchName: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>, onChunk?: (chunk: string) => void): Promise<CompileResult> {
+  async compile(sketchName: string, minisConfig?: MinisConfig, libraries?: Array<{ name: string; version?: string; url?: string }>, onChunk?: (chunk: string) => void, options?: { useMinisC?: boolean; miniscRuntimeDir?: string }): Promise<CompileResult> {
     await this.ensureConfig();
     await this.ensureDirs(sketchName);
     await this.cleanDir(this.outputDir);
 
     // Install required libraries into project-local libraries dir
     const libLogs: string[] = [];
+    const extraLibraryPaths: string[] = [];
     for (const lib of libraries ?? []) {
+      // Local drive library — reference directly via --library, no copying needed.
+      if (lib.url?.startsWith('drive://')) {
+        const relPath = lib.url.slice('drive://'.length);
+        const srcPath = path.resolve(this.rootDir, relPath);
+        // Path traversal guard.
+        if (!srcPath.startsWith(path.resolve(this.rootDir))) {
+          libLogs.push(`[lib] blocked path traversal: ${relPath}`);
+          continue;
+        }
+        extraLibraryPaths.push(srcPath);
+        libLogs.push(`[lib] using local lib "${path.basename(srcPath)}" from drive`);
+        continue;
+      }
       const spec = lib.url ?? (lib.version ? `${lib.name}@${lib.version}` : lib.name);
       try {
         await this.cli.libInstall(lib, this.configFile);
@@ -64,8 +88,49 @@ export class ArduinoProject {
       }
     }
 
+    // Inject MinisC C++ runtime when useMinisC is requested
+    if (options?.useMinisC && options.miniscRuntimeDir) {
+      const dest = path.join(this.librariesDir, 'MinisC');
+      await fs.mkdir(dest, { recursive: true });
+      const runtimeFiles = await fs.readdir(options.miniscRuntimeDir);
+      for (const file of runtimeFiles) {
+        await fs.copyFile(
+          path.join(options.miniscRuntimeDir, file),
+          path.join(dest, file),
+        );
+      }
+      extraLibraryPaths.push(dest);
+      libLogs.push(`[lib] injected MinisC runtime (${runtimeFiles.length} files)`);
+    }
+
     const sketchPath = path.join(this.sketchesDir, sketchName, `${sketchName}.ino`);
     const headerPath = path.join(this.sketchesDir, sketchName, 'MinisConfig.h');
+    const hooksPath  = path.join(this.sketchesDir, sketchName, 'MinisHooks.cpp');
+
+    // Platform hook: initVariant() is a weak symbol in ESP32 Arduino 3.0.7
+    // (esp32-hal-misc.c:222), called from initArduino() in app_main() BEFORE
+    // loopTask / setup() is created.  With HWCDC (waveshare_esp32_s3_zero default,
+    // usb_mode=1) Serial.operator bool() calls HWCDC::isCDC_Connected(), which
+    // enables the INTR_SERIAL_IN_EMPTY ISR.  Without that ISR, data written via
+    // Serial.print() in setup() sits in the ring buffer forever and never reaches
+    // the host — even when the terminal is open.  The loop here enables the ISR
+    // by polling isCDC_Connected() and exits as soon as USB is physically present
+    // (~50 ms).  The 200 ms tail delay lets the Web Serial reader start before
+    // setup() fires its first println.  10-second overall timeout lets the board
+    // run normally when no USB cable is attached.
+    // initVariant() is a weak symbol (esp32-hal-misc.c) called before setup().
+    // With HWCDC (usb_mode=1) the TX ISR (INTR_SERIAL_IN_EMPTY) is only armed
+    // once isCDC_Connected() is called — that happens inside the while(!Serial)
+    // loop below.  Without it, Serial.print() data sits in the ring buffer
+    // forever and never reaches the host.
+    const hooks = [
+      '#include "Arduino.h"',
+      'void initVariant() {',
+      '  unsigned long start = millis();',
+      '  while (!Serial && (millis() - start < 500UL)) { delay(10); }',
+      '}',
+    ].join('\n') + '\n';
+    await fs.writeFile(hooksPath, hooks, 'utf-8');
 
     if (minisConfig) {
       const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -89,6 +154,7 @@ export class ArduinoProject {
       outputDir: this.outputDir,
       buildDir,
       verbose: true,
+      extraLibraryPaths: extraLibraryPaths.length ? extraLibraryPaths : undefined,
       onChunk,
     });
 
@@ -124,16 +190,26 @@ export class ArduinoProject {
     try {
       const dirs = await fs.readdir(this.librariesDir);
       for (const dir of dirs) {
+        // Standard Arduino format: library.properties with "depends=" line
         try {
-          const propsPath = path.join(this.librariesDir, dir, 'library.properties');
-          const content = await fs.readFile(propsPath, 'utf-8');
+          const content = await fs.readFile(path.join(this.librariesDir, dir, 'library.properties'), 'utf-8');
           for (const line of content.split('\n')) {
             const m = line.match(/^depends\s*=\s*(.+)/);
-            if (m) {
-              deps.push(...m[1].split(',').map(d => d.trim()).filter(Boolean));
+            if (m) deps.push(...m[1].split(',').map(d => d.trim()).filter(Boolean));
+          }
+        } catch { /* no library.properties */ }
+
+        // PlatformIO/npm format: library.json with dependencies[].name array
+        // (used by e.g. ESP-DASH which omits "depends=" from library.properties)
+        try {
+          const content = await fs.readFile(path.join(this.librariesDir, dir, 'library.json'), 'utf-8');
+          const json = JSON.parse(content) as { dependencies?: Array<{ name?: string }> };
+          if (Array.isArray(json.dependencies)) {
+            for (const dep of json.dependencies) {
+              if (dep.name) deps.push(dep.name);
             }
           }
-        } catch { /* skip */ }
+        } catch { /* no library.json */ }
       }
     } catch { /* librariesDir not readable */ }
     return [...new Set(deps)];

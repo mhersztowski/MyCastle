@@ -30,6 +30,7 @@ export class ArduinoCliDocker implements ArduinoCli {
       '--config-file', options.configFilePath,
       '--output-dir', options.outputDir,
       '--build-path', options.buildDir,
+      ...(options.extraLibraryPaths ?? []).flatMap(p => ['--library', p]),
     ];
     const cmdLine = `$ docker exec ${this.containerName} arduino-cli ${args.join(' ')}\n\n`;
     try {

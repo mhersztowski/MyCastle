@@ -60,6 +60,7 @@ import {
   FitnessCenter as FitnessCenterIcon,
   IntegrationInstructions as IntegrationInstructionsIcon,
   Schema as SchemaIcon,
+  Memory as MemoryIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -142,6 +143,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
         {
           text: 'Programming', icon: <IntegrationInstructionsIcon />, children: [
             { text: 'UML', icon: <SchemaIcon />, path: `/user/${userName}/programming/uml` },
+            { text: 'MinisC', icon: <MemoryIcon />, path: `/user/${userName}/programming/minisc` },
           ],
         },
         {

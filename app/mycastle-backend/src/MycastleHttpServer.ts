@@ -26,6 +26,7 @@ import type { SecretsService } from './modules/secrets/SecretsService.js';
 import type { DriveScriptScheduler } from './modules/scheduler/DriveScriptScheduler.js';
 import type { GitService } from './modules/git/GitService.js';
 import { UmlSyncService, type UmlProject } from '@mhersztowski/devtools';
+import { compile as miniscCompile } from '@mhersztowski/minisc';
 
 interface CrudConfig {
   filePath: string;
@@ -447,6 +448,38 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Browser scripts — public, no auth required
+    // GET /api/browser-scripts  → { scripts: string[] } from packages/core/browser/scripts.json
+    if (apiPath === '/browser-scripts' && method === 'GET') {
+      try {
+        const browserDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..', 'packages', 'core', 'browser');
+        const scripts: string[] = JSON.parse(fs.readFileSync(path.join(browserDir, 'scripts.json'), 'utf-8'));
+        this.sendJsonResponse(res, 200, { scripts });
+      } catch {
+        this.sendJsonResponse(res, 200, { scripts: [] });
+      }
+      return;
+    }
+
+    // GET /api/browser-scripts/content?path=  → plain-text file content
+    // path must be listed in scripts.json (security gate)
+    if (apiPath === '/browser-scripts/content' && method === 'GET') {
+      const filePath = new URL(req.url!, 'http://localhost').searchParams.get('path');
+      if (!filePath) { this.sendJsonResponse(res, 400, { error: 'path required' }); return; }
+      try {
+        const browserDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..', 'packages', 'core', 'browser');
+        const scripts: string[] = JSON.parse(fs.readFileSync(path.join(browserDir, 'scripts.json'), 'utf-8'));
+        if (!scripts.includes(filePath)) { this.sendJsonResponse(res, 403, { error: 'Not in scripts list' }); return; }
+        const fullPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..', filePath);
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(content);
+      } catch {
+        this.sendJsonResponse(res, 404, { error: 'File not found' });
+      }
+      return;
+    }
+
     // User public files — public, no auth required
     // GET /api/users/{userName}/public/{filePath} → serves data/Minis/Users/{userName}/public/{filePath}
     const userPublicMatch = apiPath.match(/^\/users\/([^/]+)\/public\/(.+)$/);
@@ -723,6 +756,26 @@ export class MycastleHttpServer extends HttpUploadServer {
         }
       }
       this.sendJsonResponse(res, 200, { key, value: secret.value, shared: secret.shared });
+      return;
+    }
+
+    // POST /api/minisc/compile  { source: string } → { bytecode: number[], size: number, disasm: string }
+    if (apiPath === '/minisc/compile' && method === 'POST') {
+      try {
+        const body = await this.parseRequestBody(req) as { source?: string };
+        if (!body.source || typeof body.source !== 'string') {
+          this.sendJsonResponse(res, 400, { error: 'source required' });
+          return;
+        }
+        const result = miniscCompile(body.source);
+        this.sendJsonResponse(res, 200, {
+          bytecode: Array.from(result.bytecode),
+          size: result.size,
+          disasm: result.disasm,
+        });
+      } catch (err: any) {
+        this.sendJsonResponse(res, 400, { error: err?.message ?? String(err) });
+      }
       return;
     }
 
@@ -1290,6 +1343,30 @@ export class MycastleHttpServer extends HttpUploadServer {
       const userName = decodeURIComponent(userProjectsMatch[1]);
       const projectName = userProjectsMatch[2] ? decodeURIComponent(userProjectsMatch[2]) : undefined;
       await this.handleUserProjects(req, res, method, userName, projectName);
+      return;
+    }
+
+    // Arduino: local drive libs browser (GET /api/users/{u}/arduino-local-libs?subpath=)
+    const localLibsMatch = apiPath.match(/^\/users\/([^/]+)\/arduino-local-libs$/);
+    if (localLibsMatch && method === 'GET') {
+      const userName = decodeURIComponent(localLibsMatch[1]);
+      const subpath = new URL(req.url ?? '', 'http://localhost').searchParams.get('subpath') ?? '';
+      await this.handleArduinoLocalLibs(res, userName, subpath);
+      return;
+    }
+
+    // Arduino: examples browser (GET /api/users/{u}/arduino-local-examples)
+    const localExamplesMatch = apiPath.match(/^\/users\/([^/]+)\/arduino-local-examples$/);
+    if (localExamplesMatch && method === 'GET') {
+      await this.handleArduinoLocalExamples(res, decodeURIComponent(localExamplesMatch[1]));
+      return;
+    }
+
+    // Arduino: example file content (GET /api/users/{u}/arduino-example-content?path=)
+    const exampleContentMatch = apiPath.match(/^\/users\/([^/]+)\/arduino-example-content$/);
+    if (exampleContentMatch && method === 'GET') {
+      const filePath = new URL(req.url ?? '', 'http://localhost').searchParams.get('path') ?? '';
+      await this.handleArduinoExampleContent(res, decodeURIComponent(exampleContentMatch[1]), filePath);
       return;
     }
 
@@ -2058,6 +2135,144 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
   }
 
+  private async handleArduinoLocalLibs(res: ServerResponse, userName: string, subpath: string): Promise<void> {
+    // Resolve base dir: data/Minis/Users/{user}/drive/git/arduino/{subpath}
+    const baseRelative = path.join('Minis', 'Users', userName, 'drive', 'git', 'arduino');
+    const base = path.resolve(this.rootDir!, baseRelative);
+    const target = subpath ? path.resolve(base, subpath) : base;
+    // Path traversal guard.
+    if (!target.startsWith(base)) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid subpath' });
+      return;
+    }
+    type LibEntry = { name: string; relPath: string; isLib: boolean; libName?: string; depends?: string[]; children?: LibEntry[] };
+
+    const parseLibProps = async (dir: string): Promise<{ libName?: string; depends?: string[] } | null> => {
+      try {
+        const content = await fs.promises.readFile(path.join(dir, 'library.properties'), 'utf-8');
+        let libName: string | undefined;
+        let depends: string[] | undefined;
+        for (const line of content.split('\n')) {
+          const nameM = line.match(/^name\s*=\s*(.+)/);
+          if (nameM) libName = nameM[1].trim();
+          const depsM = line.match(/^depends\s*=\s*(.+)/);
+          if (depsM) depends = depsM[1].split(',').map(d => d.trim()).filter(Boolean);
+        }
+        return { libName, depends };
+      } catch { return null; }
+    };
+
+    const scanDir = async (dir: string, depth: number): Promise<LibEntry[]> => {
+      let entries: fs.Dirent[];
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+      catch { return []; }
+      const result: LibEntry[] = [];
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith('.')) continue;
+        const fullPath = path.join(dir, e.name);
+        const relPath = path.relative(this.rootDir!, fullPath).replace(/\\/g, '/');
+        const props = await parseLibProps(fullPath);
+        const isLib = props !== null;
+        const entry: LibEntry = { name: e.name, relPath, isLib };
+        if (isLib && props) {
+          if (props.libName) entry.libName = props.libName;
+          if (props.depends?.length) entry.depends = props.depends;
+        }
+        if (!isLib && depth < 2) {
+          const children = await scanDir(fullPath, depth + 1);
+          if (children.length) entry.children = children;
+        }
+        result.push(entry);
+      }
+      return result.sort((a, b) => a.name.localeCompare(b.name));
+    };
+
+    try {
+      const entries = await scanDir(target, 1);
+      this.sendJsonResponse(res, 200, { entries });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: String(err) });
+    }
+  }
+
+  private async handleArduinoLocalExamples(res: ServerResponse, userName: string): Promise<void> {
+    const driveBase = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'drive', 'git', 'arduino');
+    type ExampleEntry = { name: string; filePath: string };
+    type LibEntry = { name: string; examples: ExampleEntry[] };
+
+    const hasLibProps = async (dir: string): Promise<boolean> => {
+      try { await fs.promises.access(path.join(dir, 'library.properties')); return true; } catch { return false; }
+    };
+
+    // Scan examples/ dir for .ino files (max 3 levels, skips hidden dirs like .git)
+    const findInoFiles = async (dir: string, depth = 0): Promise<ExampleEntry[]> => {
+      if (depth > 3) return [];
+      const results: ExampleEntry[] = [];
+      let entries: fs.Dirent[];
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+      catch { return results; }
+      for (const e of entries) {
+        if (e.name.startsWith('.')) continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          results.push(...await findInoFiles(full, depth + 1));
+        } else if (e.isFile() && e.name.endsWith('.ino')) {
+          const filePath = path.relative(this.rootDir!, full).replace(/\\/g, '/');
+          results.push({ name: path.basename(e.name, '.ino'), filePath });
+        }
+      }
+      return results;
+    };
+
+    // Recursively find libraries (handles group folders like adafruit/ containing Adafruit_EPD/ etc.)
+    const scanForLibs = async (dir: string, depth = 0): Promise<LibEntry[]> => {
+      if (depth > 2) return [];
+      const libs: LibEntry[] = [];
+      let entries: fs.Dirent[];
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+      catch { return libs; }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith('.')) continue;
+        const full = path.join(dir, e.name);
+        if (await hasLibProps(full)) {
+          const examplesDir = path.join(full, 'examples');
+          try {
+            await fs.promises.access(examplesDir);
+            const examples = await findInoFiles(examplesDir);
+            if (examples.length) libs.push({ name: e.name, examples });
+          } catch { /* no examples dir */ }
+        } else {
+          // Group folder — recurse one level deeper
+          libs.push(...await scanForLibs(full, depth + 1));
+        }
+      }
+      return libs;
+    };
+
+    try {
+      const libraries = await scanForLibs(driveBase);
+      libraries.sort((a, b) => a.name.localeCompare(b.name));
+      this.sendJsonResponse(res, 200, { libraries });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: String(err) });
+    }
+  }
+
+  private async handleArduinoExampleContent(res: ServerResponse, userName: string, filePath: string): Promise<void> {
+    const base = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'drive', 'git', 'arduino');
+    const full = path.resolve(this.rootDir!, filePath);
+    if (!full.startsWith(base)) {
+      this.sendJsonResponse(res, 400, { error: 'Invalid path' });
+      return;
+    }
+    try {
+      const content = await fs.promises.readFile(full, 'utf-8');
+      this.sendJsonResponse(res, 200, { content });
+    } catch {
+      this.sendJsonResponse(res, 404, { error: 'File not found' });
+    }
+  }
+
   private async handleArduinoBoards(res: ServerResponse): Promise<void> {
     if (!this.arduinoService?.isAvailable) {
       this.sendJsonResponse(res, 503, { error: 'Arduino CLI not configured' });
@@ -2124,11 +2339,19 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
 
     let libraries: Array<{ name: string; version?: string; url?: string }> | undefined;
+    let useMinisC = false;
     try {
-      const projectData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as { projects?: Array<{ id: string; name: string; libraries?: Array<{ name: string; version?: string; url?: string }> }> };
-      const projectEntry = (Array.isArray(projectData?.projects) ? projectData.projects : []).find(p => p.name === projectId || p.id === projectId);
-      if (projectEntry?.libraries?.length) libraries = projectEntry.libraries;
-    } catch { /* ignore */ }
+      const localProjectPath = path.resolve(this.rootDir!, 'Minis', 'Users', userName, 'Projects', projectId.split('/')[0], projectName, 'project.json');
+      const raw = await fs.promises.readFile(localProjectPath, 'utf-8');
+      const localJson = JSON.parse(raw) as { libraries?: Array<{ name: string; version?: string; url?: string }>; useMinisC?: boolean };
+      if (localJson.libraries?.length) libraries = localJson.libraries;
+      useMinisC = localJson.useMinisC === true;
+    } catch { /* no local project.json or no libraries */ }
+
+    const miniscRuntimeDir = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      '..', '..', '..', '..', 'packages', 'minisc', 'runtime',
+    );
 
     if (isSSE) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -2141,7 +2364,7 @@ export class MycastleHttpServer extends HttpUploadServer {
       const onChunk = (chunk: string) => sendEvent('output', { chunk });
 
       try {
-        const result = await this.arduinoService.compile(userName, projectId, sketchName, fqbn, minisConfig, libraries, onChunk);
+        const result = await this.arduinoService.compile(userName, projectId, sketchName, fqbn, minisConfig, libraries, onChunk, { useMinisC, miniscRuntimeDir });
         if (deviceName && minisConfig?.serialNumber) {
           await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn, success: result.success, projectId, sketchName });
         }
@@ -2152,7 +2375,7 @@ export class MycastleHttpServer extends HttpUploadServer {
       res.end();
     } else {
       try {
-        const result = await this.arduinoService.compile(userName, projectId, sketchName, fqbn, minisConfig, libraries);
+        const result = await this.arduinoService.compile(userName, projectId, sketchName, fqbn, minisConfig, libraries, undefined, { useMinisC, miniscRuntimeDir });
         if (deviceName && minisConfig?.serialNumber) {
           await this.saveDeviceLastBuild(userName, minisConfig.serialNumber, { platform: 'arduino', fqbn, success: result.success, projectId, sketchName });
         }
@@ -4424,6 +4647,44 @@ const { password, ...safeBody } = body;
       return;
     }
 
+    // For PUT: after standard CRUD update, sync libraries to local project.json
+    if (method === 'PUT' && projectName && this.rootDir) {
+      const body = await this.parseRequestBody(req) as Record<string, unknown>;
+      // Perform the standard update on Project.json
+      const data = await this.readJsonFile(config.filePath) as Record<string, unknown>;
+      const items = (data[config.itemsKey] || []) as Record<string, unknown>[];
+      const index = items.findIndex((item) => (item as Record<string, unknown>)[config.lookupKey] === projectName);
+      if (index === -1) {
+        this.sendJsonResponse(res, 404, { error: `Project ${projectName} not found` });
+        return;
+      }
+      items[index] = { ...items[index], ...body };
+      data[config.itemsKey] = items;
+      await this.writeJsonFile(config.filePath, data);
+
+      // Sync to local project.json
+      const updated = items[index] as { softwarePlatform?: string; name?: string; libraries?: unknown };
+      const platform = updated.softwarePlatform ?? 'Arduino';
+      const localProjectPath = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'Projects', platform, projectName, 'project.json');
+      try {
+        let localJson: Record<string, unknown> = {};
+        try {
+          const raw = await fs.promises.readFile(localProjectPath, 'utf-8');
+          localJson = JSON.parse(raw) as Record<string, unknown>;
+        } catch { /* file may not exist yet */ }
+        if ('libraries' in body) {
+          localJson.libraries = body.libraries;
+        }
+        if ('useMinisC' in body) {
+          localJson.useMinisC = body.useMinisC;
+        }
+        await fs.promises.writeFile(localProjectPath, JSON.stringify(localJson, null, 2), 'utf-8');
+      } catch { /* ignore if project dir doesn't exist */ }
+
+      this.sendJsonResponse(res, 200, items[index]);
+      return;
+    }
+
     await this.handleCrud(req, res, method, config, projectName);
   }
 
@@ -5183,6 +5444,10 @@ Rules:
   }
 
   private githubRawBase(repoUrl: string): string | null {
+    // Local / custom HTTP server — use directly as rawBase (e.g. http://localhost:8765)
+    if (/^https?:\/\//.test(repoUrl) && !repoUrl.includes('github.com')) {
+      return repoUrl.replace(/\/$/, '');
+    }
     const m = repoUrl.match(/github\.com\/([^/]+)\/([^/\s]+?)(?:\.git)?(?:\/|$)/);
     if (!m) return null;
     return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main`;
@@ -5266,25 +5531,29 @@ Rules:
         }
       }
 
-      // Ensure project.json exists in the project directory so VFS workspace can detect it
+      // Write project.json into the project directory (always — so libraries stay in sync after re-clone)
       const registryData = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Project.json`) as Record<string, unknown>;
       const registryProjects = (Array.isArray(registryData.projects) ? registryData.projects : []) as Array<Record<string, unknown>>;
       const registryProject = registryProjects.find(p => p.name === projectName || p.id === projectName);
-      if (registryProject) {
-        const platform = (typeof registryProject.softwarePlatform === 'string' ? registryProject.softwarePlatform : null) ?? 'Arduino';
+      {
+        const platform = registryProject
+          ? ((typeof registryProject.softwarePlatform === 'string' ? registryProject.softwarePlatform : null) ?? 'Arduino')
+          : 'Arduino';
         const pjPath = path.join(projectDir, 'project.json');
-        // Only write if not already present
-        const alreadyExists = await fs.promises.access(pjPath).then(() => true).catch(() => false);
-        if (!alreadyExists) {
-          const projectJson = {
-            id: registryProject.name ?? projectName,
-            name: registryProject.name ?? projectName,
-            platform,
-            ...(registryProject.boardProfileKey ? { boardProfileKey: registryProject.boardProfileKey } : {}),
-          };
-          await fs.promises.mkdir(projectDir, { recursive: true });
-          await fs.promises.writeFile(pjPath, JSON.stringify(projectJson, null, 2), 'utf-8');
-        }
+        // Merge with existing content so user-set fields (boardProfileKey etc.) are preserved
+        let existingPj: Record<string, unknown> = {};
+        try { existingPj = JSON.parse(await fs.promises.readFile(pjPath, 'utf-8')); } catch { /* first write */ }
+        const projectJson: Record<string, unknown> = {
+          ...existingPj,
+          id: (registryProject?.name as string | undefined) ?? projectName,
+          name: (registryProject?.name as string | undefined) ?? projectName,
+          platform,
+          ...(registryProject?.boardProfileKey ? { boardProfileKey: registryProject.boardProfileKey } : {}),
+          // libraries must be present so compile() knows which libraries to install
+          ...(libraries && libraries.length > 0 ? { libraries } : {}),
+        };
+        await fs.promises.mkdir(projectDir, { recursive: true });
+        await fs.promises.writeFile(pjPath, JSON.stringify(projectJson, null, 2), 'utf-8');
       }
 
       this.sendJsonResponse(res, 200, { ok: true });

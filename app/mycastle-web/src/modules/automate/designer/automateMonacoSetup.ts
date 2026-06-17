@@ -882,6 +882,45 @@ interface ScriptsApi {
     /** Przerwij batch po pierwszym błędzie. Domyślnie false. */
     stopOnError?: boolean;
   }): Promise<ScriptRunResult[]>;
+
+  // ── Scena QObject ────────────────────────────────────────────────────────
+  // Dostępne gdy blok ma ustawioną "Ścieżkę sceny" (Ustawienia → Scena QObject).
+  // Host wczytuje plik JSON ze sceną i buduje obiekty przed każdym uruchomieniem.
+
+  /**
+   * Zwraca PIERWSZY żywy korzeń sceny QObject — gotową instancję klasy
+   * (np. QPushButton, własna podklasa QObject) z ustawionymi właściwościami
+   * i podpiętymi dziećmi.
+   *
+   * @returns Instancja klasy lub null gdy scena jest pusta / klasa korzenia nieznana.
+   *
+   * @example
+   * const btn = api.scripts.getRoot() as QPushButton;
+   * btn.setText('Kliknij mnie');
+   */
+  getRoot(): unknown;
+
+  /**
+   * Zwraca WSZYSTKIE żywe korzenie sceny QObject (w kolejności z pliku JSON).
+   *
+   * @returns Tablica instancji (może być pusta gdy scena nie skonfigurowana).
+   *
+   * @example
+   * const [label, btn] = api.scripts.getRoots() as [QLabel, QPushButton];
+   */
+  getRoots(): unknown[];
+
+  /**
+   * Zwraca surowe dane sceny (JSON) bez budowania obiektów — do introspekcji
+   * lub ręcznego przetworzenia.
+   *
+   * @returns Tablica surowych węzłów JSON sceny.
+   *
+   * @example
+   * const data = api.scripts.getSceneData();
+   * console.log(JSON.stringify(data, null, 2));
+   */
+  getSceneData(): unknown[];
 }
 
 /**
@@ -938,6 +977,14 @@ interface SpeechApi {
  * - \`api.utils\` - uuid, dayjs, sleep
  * - \`api.ai\` - interakcja z modelami AI (chat, chatMessages, isConfigured)
  * - \`api.speech\` - synteza i rozpoznawanie mowy (say, stop, isTtsConfigured, isSttConfigured)
+ * - \`api.scripts\` - wyszukiwanie/uruchamianie innych skryptów + dostęp do sceny QObject:
+ *   - \`findByTag / runByTag\` - operacje na całym drive
+ *   - \`findInParentsByTag / runInParentsByTag\` - katalogi nadrzędne hosta
+ *   - \`findInChildsByTag / runInChildsByTag\` - katalogi podrzędne hosta
+ *   - \`getRoot()\` - pierwszy żywy korzeń sceny QObject
+ *   - \`getRoots()\` - wszystkie żywe korzenie sceny QObject
+ *   - \`getSceneData()\` - surowe dane sceny (JSON)
+ * - \`api.secrets\` - zaszyfrowane credentiale (list, get, set, delete)
  */
 declare const api: SystemApi;
 

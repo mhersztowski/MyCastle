@@ -1,0 +1,5 @@
+[
+    "packages/core/browser/qt/qobject.module.js",
+    "packages/core/browser/qt/qt.module.js",
+    "packages/core/browser/mycastle/mycastle.js"
+]

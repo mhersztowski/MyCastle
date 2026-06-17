@@ -101,6 +101,10 @@ export function WebSerialTerminal({ open, onClose }: WebSerialTerminalProps) {
       term.write(text);
     });
 
+    serialRef.current?.setOnDisconnected(() => {
+      setConnected(false);
+    });
+
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 

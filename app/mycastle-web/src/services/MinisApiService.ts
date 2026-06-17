@@ -283,6 +283,10 @@ class MinisApiService {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}`, { libraries });
   }
 
+  async updateProjectUseMinisC(userName: string, projectName: string, useMinisC: boolean): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}`, { useMinisC });
+  }
+
   async syncProjectFromGithub(userName: string, projectName: string): Promise<void> {
     await this.request('POST', `/users/${encodeURIComponent(userName)}/project-arduino/${encodeURIComponent(projectName)}/sync-from-github`);
   }
@@ -884,6 +888,10 @@ class MinisApiService {
 
   async gitCommit(userName: string, repoPath: string, message: string): Promise<GitOpResult> {
     return this.request('POST', `/users/${encodeURIComponent(userName)}/git/commit`, { path: repoPath, message });
+  }
+
+  async miniscCompile(source: string): Promise<{ bytecode: number[]; size: number; disasm: string }> {
+    return this.request('POST', '/minisc/compile', { source });
   }
 }
 

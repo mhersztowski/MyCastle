@@ -21,6 +21,7 @@ export class WebSerialService {
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private onData: ((data: string) => void) | null = null;
+  private onDisconnected: (() => void) | null = null;
   private reading = false;
 
   get isSupported(): boolean {
@@ -35,53 +36,34 @@ export class WebSerialService {
     this.onData = callback;
   }
 
+  setOnDisconnected(callback: () => void): void {
+    this.onDisconnected = callback;
+  }
+
   async connect(options: WebSerialOptions = DEFAULT_OPTIONS): Promise<void> {
     if (!this.isSupported || !navigator.serial) {
       throw new Error('Web Serial API is not supported in this browser');
     }
-
     this.port = await navigator.serial.requestPort();
     await this.port.open(options);
-
-    // Toggle DTR low→high so ESP32 native USB CDC detects a new host connection and starts sending data.
-    // Setting DTR=true alone is not enough when the device was already running — the edge matters.
-    try {
-      await this.port.setSignals({ dataTerminalReady: false });
-      await new Promise((r) => setTimeout(r, 50));
-      await this.port.setSignals({ dataTerminalReady: true });
-    } catch {
-      // not all ports support setSignals — ignore
-    }
-
     this.reading = true;
     this.readLoop();
   }
 
   async disconnect(): Promise<void> {
     this.reading = false;
-
     if (this.reader) {
-      try {
-        await this.reader.cancel();
-      } catch {
-        // ignore
-      }
+      try { await this.reader.cancel(); } catch { /* ignore */ }
       this.reader = null;
     }
-
     if (this.port) {
-      try {
-        await this.port.close();
-      } catch {
-        // ignore
-      }
+      try { await this.port.close(); } catch { /* ignore */ }
       this.port = null;
     }
   }
 
   async write(data: string): Promise<void> {
     if (!this.port?.writable) return;
-
     const writer = this.port.writable.getWriter();
     try {
       const encoder = new TextEncoder();
@@ -92,11 +74,14 @@ export class WebSerialService {
   }
 
   private async readLoop(): Promise<void> {
-    if (!this.port?.readable) return;
-
     const decoder = new TextDecoder();
 
-    while (this.reading && this.port?.readable) {
+    while (this.reading) {
+      if (!this.port?.readable) {
+        await new Promise((r) => setTimeout(r, 100));
+        continue;
+      }
+
       this.reader = this.port.readable.getReader();
       try {
         while (this.reading) {
@@ -111,6 +96,13 @@ export class WebSerialService {
       } finally {
         this.reader?.releaseLock();
         this.reader = null;
+      }
+
+      // Port dropped (device reset after flash or manual RST).
+      if (this.reading) {
+        this.reading = false;
+        this.onData?.('\r\n\x1b[33m[disconnected — click Connect to reconnect]\x1b[0m\r\n');
+        this.onDisconnected?.();
       }
     }
   }

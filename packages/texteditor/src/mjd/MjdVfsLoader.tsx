@@ -306,8 +306,10 @@ export function MjdVfsLoader({ provider, mjdPath, dataPath, height }: MjdVfsLoad
   const containerSx = height ? { height, overflow: 'auto' } : {};
 
   if (dataPath) {
+    // Fill the parent flex column so the visual editor canvas can expand fully.
+    // When no explicit height is given we stretch to 100% of the parent.
     return (
-      <Box sx={containerSx}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', ...(height ? { height } : { flex: 1, minHeight: 0 }) }}>
         <MjdDataEditor
           definition={state.definition}
           value={state.data ?? {}}
