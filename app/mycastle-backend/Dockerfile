@@ -52,6 +52,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 COPY packages/core/ packages/core/
 COPY packages/core-backend/ packages/core-backend/
 COPY packages/devtools/ packages/devtools/
+COPY packages/minisc/ packages/minisc/
 COPY packages/texteditor/ packages/texteditor/
 COPY packages/web-client/ packages/web-client/
 COPY packages/web-cpp/ packages/web-cpp/
@@ -61,6 +62,7 @@ COPY docs/ docs/
 RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
 RUN pnpm --filter @mhersztowski/devtools build --silent
+RUN pnpm --filter @mhersztowski/minisc build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 RUN pnpm --filter @mhersztowski/web-cpp build --silent
