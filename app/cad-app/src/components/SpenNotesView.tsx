@@ -8,6 +8,9 @@ import Slider from '@mui/material/Slider';
 import TextField from '@mui/material/TextField';
 import Popover from '@mui/material/Popover';
 import AddIcon from '@mui/icons-material/Add';
+import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
+import CameraAltIcon from '@mui/icons-material/CameraAlt';
+import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import UndoIcon from '@mui/icons-material/Undo';
@@ -37,9 +40,16 @@ interface NoteText {
   text: string; fontSize: number; color: string;
 }
 
-type NoteElement = NoteStroke | NoteText;
+interface NoteImage {
+  id: string; kind: 'image';
+  x: number; y: number; w: number; h: number;
+  src: string;
+}
+
+type NoteElement = NoteStroke | NoteText | NoteImage;
 interface NotePage { id: string; elements: NoteElement[]; bgColor?: string; }
 type NoteTool = 'text' | 'pencil' | 'marker' | 'eraser' | 'lasso';
+type ResizeEdge = 'move' | 'top' | 'right' | 'bottom' | 'left' | 'tl' | 'tr' | 'bl' | 'br';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -77,6 +87,29 @@ const TOOLS: { t: NoteTool; label: string; Icon: React.FC<SvgIconProps> }[] = [
 const uid = () => Math.random().toString(36).slice(2, 10);
 const newPage = (): NotePage => ({ id: uid(), elements: [] });
 
+function isLightColor(hex: string): boolean {
+  const h = hex.replace('#', '');
+  if (h.length !== 6) return false;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 > 140;
+}
+
+const imgCache = new Map<string, HTMLImageElement>();
+function getImg(src: string): HTMLImageElement {
+  if (!imgCache.has(src)) {
+    const img = new Image();
+    img.src = src;
+    imgCache.set(src, img);
+  }
+  return imgCache.get(src)!;
+}
+
+function hitImage(el: NoteImage, lx: number, ly: number): boolean {
+  return lx >= el.x && lx <= el.x + el.w && ly >= el.y && ly <= el.y + el.h;
+}
+
 function loadStorage(): { pages: NotePage[]; currentId: string } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -101,12 +134,26 @@ function renderElements(
   selected: ReadonlySet<string>,
   sx: number, sy: number,
   bgColor = DEFAULT_BG,
+  skipBackground = false,
 ) {
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  if (!skipBackground) {
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
   for (const el of elements) {
     const hi = selected.has(el.id);
-    if (el.kind === 'text') {
+    if (el.kind === 'image') {
+      const img = getImg(el.src);
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, el.x * sx, el.y * sy, el.w * sx, el.h * sy);
+      }
+      if (hi) {
+        ctx.save();
+        ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+        ctx.strokeRect(el.x * sx, el.y * sy, el.w * sx, el.h * sy);
+        ctx.restore();
+      }
+    } else if (el.kind === 'text') {
       ctx.font = `${el.fontSize * sy}px sans-serif`;
       ctx.fillStyle = hi ? '#60a5fa' : el.color;
       ctx.fillText(el.text, el.x * sx, el.y * sy);
@@ -224,6 +271,10 @@ export function SpenNotesView() {
   const [historyVer, setHistoryVer] = useState(0);
   const [dragSrc, setDragSrc] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const [selectedImgId, setSelectedImgId] = useState<string | null>(null);
+  const [imgAnchor, setImgAnchor] = useState<HTMLElement | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [zoomPct, setZoomPct] = useState(100);
 
   // Drawing refs (updated synchronously, not through React)
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -231,6 +282,21 @@ export function SpenNotesView() {
   const activeStrokeRef = useRef<NoteStroke | null>(null);
   const lassoRef = useRef<NotePoint[]>([]);
   const eraserActiveRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const imgDragRef = useRef<{
+    edge: ResizeEdge;
+    startCX: number; startCY: number;
+    startX: number; startY: number; startW: number; startH: number;
+  } | null>(null);
+  const zoomRef = useRef(1);
+  const panPxRef = useRef({ x: 0, y: 0 });
+  const activePointersRef = useRef<Map<number, { cx: number; cy: number }>>(new Map());
+  const pinchRef = useRef<{
+    initDist: number; initZoom: number;
+    initPan: { x: number; y: number };
+    initMidPx: { x: number; y: number };
+  } | null>(null);
 
   // Stable refs for DOM event handlers
   const toolRef = useRef(tool);
@@ -280,10 +346,20 @@ export function SpenNotesView() {
     const ctx = c.getContext('2d');
     if (!ctx) return;
     const { sx, sy } = getScale();
-    renderElements(ctx, elementsRef.current, selectedRef.current, sx, sy, bgColorRef.current);
+    const z = zoomRef.current;
+    const { x: px, y: py } = panPxRef.current;
+    // Background (full canvas, no transform)
+    ctx.fillStyle = bgColorRef.current;
+    ctx.fillRect(0, 0, c.width, c.height);
+    // Zoomed+panned content
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.scale(z, z);
+    renderElements(ctx, elementsRef.current, selectedRef.current, sx, sy, bgColorRef.current, true);
     if (activeStrokeRef.current) renderStroke(ctx, activeStrokeRef.current, sx, sy);
     if (lassoRef.current.length > 1 && toolRef.current === 'lasso')
       renderLasso(ctx, lassoRef.current, sx, sy);
+    ctx.restore();
   }, [getScale]);
 
   // Resize canvas buffer to match CSS size
@@ -314,11 +390,11 @@ export function SpenNotesView() {
     }, 0);
   }, []);
 
-  const commitElements = useCallback((elements: NoteElement[]) => {
+  const commitElements = useCallback((elements: NoteElement[], { thumbnail = true } = {}) => {
     elementsRef.current = elements;
     const pageId = currentIdRef.current;
     setPages(prev => prev.map(p => p.id === pageId ? { ...p, elements } : p));
-    triggerThumbnail(pageId, elements);
+    if (thumbnail) triggerThumbnail(pageId, elements);
   }, [triggerThumbnail]);
 
   const pushUndo = useCallback((pageId: string, snapshot: NoteElement[]) => {
@@ -336,21 +412,65 @@ export function SpenNotesView() {
     const c = canvasRef.current;
     if (!c) return;
 
-    const toLogical = (e: PointerEvent) => {
+    const toBufPx = (e: PointerEvent) => {
       const r = c.getBoundingClientRect();
       return {
-        x: (e.clientX - r.left) / r.width * CANVAS_W,
-        y: (e.clientY - r.top) / r.height * CANVAS_H,
+        bx: (e.clientX - r.left) / r.width * c.width,
+        by: (e.clientY - r.top) / r.height * c.height,
+      };
+    };
+
+    const toLogical = (e: PointerEvent) => {
+      const { bx, by } = toBufPx(e);
+      const z = zoomRef.current;
+      const { x: px, y: py } = panPxRef.current;
+      return {
+        x: (bx - px) / z / (c.width / CANVAS_W),
+        y: (by - py) / z / (c.height / CANVAS_H),
       };
     };
 
     const onDown = (e: PointerEvent) => {
+      activePointersRef.current.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
+
+      // ── Pinch start (2 fingers) ──────────────────────────────────────────
+      if (activePointersRef.current.size === 2) {
+        activeStrokeRef.current = null; // cancel any in-progress stroke
+        const pts = [...activePointersRef.current.values()];
+        const r = c.getBoundingClientRect();
+        const toPx = (pt: { cx: number; cy: number }) => ({
+          bx: (pt.cx - r.left) / r.width * c.width,
+          by: (pt.cy - r.top) / r.height * c.height,
+        });
+        const p0 = toPx(pts[0]); const p1 = toPx(pts[1]);
+        const dist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
+        pinchRef.current = {
+          initDist: dist,
+          initZoom: zoomRef.current,
+          initPan: { ...panPxRef.current },
+          initMidPx: { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 },
+        };
+        return;
+      }
+
+      if (pinchRef.current) return;
       c.setPointerCapture(e.pointerId);
       const { x, y } = toLogical(e);
       const pressure = e.pressure > 0 ? e.pressure : 0.5;
       const t = toolRef.current;
 
       if (t === 'text') return; // handled by React click
+
+      // Image hit-test (works in all non-text tools)
+      const imgs = elementsRef.current.filter((el): el is NoteImage => el.kind === 'image');
+      for (let i = imgs.length - 1; i >= 0; i--) {
+        if (hitImage(imgs[i], x, y)) {
+          setSelectedImgId(imgs[i].id);
+          return;
+        }
+      }
+      // Missed all images → deselect
+      setSelectedImgId(null);
 
       if (t === 'lasso') {
         setSelectedIds(new Set());
@@ -382,6 +502,31 @@ export function SpenNotesView() {
     };
 
     const onMove = (e: PointerEvent) => {
+      activePointersRef.current.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
+
+      // ── Pinch update ─────────────────────────────────────────────────────
+      if (pinchRef.current && activePointersRef.current.size >= 2) {
+        const { initDist, initZoom, initPan, initMidPx } = pinchRef.current;
+        const pts = [...activePointersRef.current.values()];
+        const r = c.getBoundingClientRect();
+        const toPx = (pt: { cx: number; cy: number }) => ({
+          bx: (pt.cx - r.left) / r.width * c.width,
+          by: (pt.cy - r.top) / r.height * c.height,
+        });
+        const p0 = toPx(pts[0]); const p1 = toPx(pts[1]);
+        const newDist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
+        const newMid  = { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 };
+        const newZoom = Math.max(0.25, Math.min(8, initZoom * newDist / initDist));
+        // Keep the initial midpoint pinned in world space
+        const worldMidX = (initMidPx.x - initPan.x) / initZoom;
+        const worldMidY = (initMidPx.y - initPan.y) / initZoom;
+        zoomRef.current = newZoom;
+        panPxRef.current = { x: newMid.x - worldMidX * newZoom, y: newMid.y - worldMidY * newZoom };
+        setZoomPct(Math.round(newZoom * 100));
+        redraw();
+        return;
+      }
+
       if (!e.buttons) return;
       const { x, y } = toLogical(e);
       const pressure = e.pressure > 0 ? e.pressure : 0.5;
@@ -415,6 +560,10 @@ export function SpenNotesView() {
     };
 
     const onUp = (e: PointerEvent) => {
+      activePointersRef.current.delete(e.pointerId);
+      if (activePointersRef.current.size < 2) pinchRef.current = null;
+      if (pinchRef.current) return; // still pinching with remaining finger
+
       eraserActiveRef.current = false;
       const t = toolRef.current;
 
@@ -564,11 +713,82 @@ export function SpenNotesView() {
     setCurrentPageId(id);
   }, []);
 
-  const setPageBgColor = useCallback((color: string) => {
-    bgColorRef.current = color;
+  const insertImage = useCallback((src: string, nw: number, nh: number) => {
+    const maxW = CANVAS_W * 0.55;
+    const maxH = CANVAS_H * 0.55;
+    const scale = Math.min(maxW / nw, maxH / nh, 1);
+    const w = nw * scale;
+    const h = nh * scale;
+    const x = (CANVAS_W - w) / 2;
+    const y = (CANVAS_H - h) / 2;
+    const el: NoteImage = { id: uid(), kind: 'image', x, y, w, h, src };
+    pushUndo(currentIdRef.current, elementsRef.current);
+    commitElements([...elementsRef.current, el]);
+    setSelectedImgId(el.id);
+  }, [commitElements, pushUndo]);
+
+  const handleFileChosen = useCallback((file: File | null | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const src = e.target?.result as string;
+      if (!src) return;
+      const img = new Image();
+      img.onload = () => insertImage(src, img.naturalWidth, img.naturalHeight);
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  }, [insertImage]);
+
+  const setPageBgColor = useCallback((bgColor: string) => {
+    bgColorRef.current = bgColor;
+    // Auto-switch ink to ensure contrast with new background
+    const lightBg  = isLightColor(bgColor);
+    const lightInk = isLightColor(colorRef.current);
+    if (lightBg && lightInk) {
+      const dark = '#1a1a1a';
+      colorRef.current = dark;
+      setColor(dark);
+    } else if (!lightBg && !lightInk) {
+      const light = '#ffffff';
+      colorRef.current = light;
+      setColor(light);
+    }
     const pageId = currentIdRef.current;
-    setPages(prev => prev.map(p => p.id === pageId ? { ...p, bgColor: color } : p));
-    // Redraw immediately (bgColorRef already updated)
+    setPages(prev => prev.map(p => p.id === pageId ? { ...p, bgColor } : p));
+    requestAnimationFrame(() => redraw());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const applyZoom = useCallback((newZoom: number, centerBufX?: number, centerBufY?: number) => {
+    const c = canvasRef.current;
+    const clamped = Math.max(0.25, Math.min(8, newZoom));
+    if (centerBufX !== undefined && centerBufY !== undefined) {
+      // Zoom toward given point
+      const oldZ = zoomRef.current;
+      const { x: px, y: py } = panPxRef.current;
+      const worldX = (centerBufX - px) / oldZ;
+      const worldY = (centerBufY - py) / oldZ;
+      panPxRef.current = { x: centerBufX - worldX * clamped, y: centerBufY - worldY * clamped };
+    } else if (c) {
+      // Zoom toward canvas center
+      const cx = c.width / 2; const cy = c.height / 2;
+      const oldZ = zoomRef.current;
+      const { x: px, y: py } = panPxRef.current;
+      const worldX = (cx - px) / oldZ;
+      const worldY = (cy - py) / oldZ;
+      panPxRef.current = { x: cx - worldX * clamped, y: cy - worldY * clamped };
+    }
+    zoomRef.current = clamped;
+    setZoomPct(Math.round(clamped * 100));
+    requestAnimationFrame(() => redraw());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    zoomRef.current = 1;
+    panPxRef.current = { x: 0, y: 0 };
+    setZoomPct(100);
     requestAnimationFrame(() => redraw());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -623,14 +843,37 @@ export function SpenNotesView() {
     <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'background.default' }}>
 
       {/* ── Pages sidebar ──────────────────────────────────────────────────── */}
+      {/* Toggle button — always visible outside sidebar */}
       <Box sx={{
-        width: 180, flexShrink: 0, display: 'flex', flexDirection: 'column',
-        bgcolor: 'background.paper', borderRight: '1px solid rgba(255,255,255,0.08)',
+        width: 28, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', pt: 0.5, bgcolor: 'background.paper',
+        borderRight: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <Tooltip title={sidebarVisible ? 'Hide pages' : 'Show pages'} placement="right">
+          <IconButton size="small" onClick={() => setSidebarVisible(v => !v)}
+            sx={{ width: 24, height: 24, borderRadius: 1 }}>
+            <Box sx={{
+              width: 14, height: 10, display: 'flex', flexDirection: 'column',
+              justifyContent: 'space-between',
+            }}>
+              {[0, 1, 2].map(i => (
+                <Box key={i} sx={{ height: 2, borderRadius: 1, bgcolor: 'text.secondary', width: i === 1 ? '70%' : '100%' }} />
+              ))}
+            </Box>
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      <Box sx={{
+        width: sidebarVisible ? 180 : 0,
+        flexShrink: 0, display: 'flex', flexDirection: 'column',
+        bgcolor: 'background.paper', borderRight: sidebarVisible ? '1px solid rgba(255,255,255,0.08)' : 'none',
         overflow: 'hidden',
+        transition: 'width 0.2s ease',
       }}>
         <Box sx={{
           display: 'flex', alignItems: 'center', px: 1, py: 0.5, flexShrink: 0,
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
+          borderBottom: '1px solid rgba(255,255,255,0.08)', minWidth: 180,
         }}>
           <Typography variant="caption" sx={{ flex: 1, fontWeight: 700, letterSpacing: 1, color: 'text.secondary' }}>
             PAGES
@@ -693,6 +936,37 @@ export function SpenNotesView() {
               )}
             </Box>
           ))}
+        </Box>
+
+        {/* Background theme selector */}
+        <Box sx={{
+          flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.08)',
+          px: 1, py: 1,
+        }}>
+          <Typography variant="caption" sx={{ display: 'block', color: 'text.disabled', mb: 0.75, fontSize: 9, letterSpacing: 1 }}>
+            BACKGROUND
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.75 }}>
+            {BG_THEMES.map(({ color: bg, label, dark }) => (
+              <Box
+                key={bg}
+                component="button"
+                title={label}
+                onClick={() => setPageBgColor(bg)}
+                sx={{
+                  flex: 1, height: 32, borderRadius: 1, cursor: 'pointer', outline: 'none',
+                  bgcolor: bg,
+                  border: currentBgColor === bg
+                    ? '2.5px solid #60a5fa'
+                    : `1.5px solid ${dark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.28)'}`,
+                  boxShadow: currentBgColor === bg ? '0 0 0 1px #60a5fa44' : 'none',
+                  transition: 'border-color 0.15s, box-shadow 0.15s',
+                  minWidth: 0,
+                  '&:active': { opacity: 0.75 },
+                }}
+              />
+            ))}
+          </Box>
         </Box>
       </Box>
 
@@ -803,24 +1077,36 @@ export function SpenNotesView() {
 
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
-          {/* Background theme presets */}
-          {BG_THEMES.map(({ color: bg, label, dark }) => (
-            <Tooltip key={bg} title={`Background: ${label}`}>
-              <Box
-                component="button"
-                onClick={() => setPageBgColor(bg)}
+          {/* Insert image */}
+          <Tooltip title="Insert image">
+            <IconButton size="small" onClick={e => setImgAnchor(e.currentTarget)}
+              sx={{ color: 'text.secondary' }}>
+              <AddPhotoAlternateIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Tooltip>
+          <Popover open={Boolean(imgAnchor)} anchorEl={imgAnchor} onClose={() => setImgAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
+            <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              <Box component="button" onClick={() => { cameraInputRef.current?.click(); setImgAnchor(null); }}
                 sx={{
-                  width: 22, height: 22, borderRadius: 1, flexShrink: 0,
-                  bgcolor: bg, cursor: 'pointer', outline: 'none',
-                  border: currentBgColor === bg
-                    ? '2px solid #60a5fa'
-                    : `2px solid ${dark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.25)'}`,
-                  '&:hover': { borderColor: '#60a5fa' },
-                  transition: 'border-color 0.15s',
-                }}
-              />
-            </Tooltip>
-          ))}
+                  display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+                  cursor: 'pointer', borderRadius: 1, bgcolor: 'transparent', border: 'none',
+                  color: 'text.primary', fontSize: 13,
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}>
+                <CameraAltIcon sx={{ fontSize: 18 }} /> Camera
+              </Box>
+              <Box component="button" onClick={() => { fileInputRef.current?.click(); setImgAnchor(null); }}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+                  cursor: 'pointer', borderRadius: 1, bgcolor: 'transparent', border: 'none',
+                  color: 'text.primary', fontSize: 13,
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}>
+                <PhotoLibraryIcon sx={{ fontSize: 18 }} /> Gallery / File
+              </Box>
+            </Box>
+          </Popover>
 
           {/* Delete selected — visible only when lasso selection is active */}
           {hasSelection && (
@@ -849,6 +1135,37 @@ export function SpenNotesView() {
             }}
           />
 
+          {/* Zoom controls */}
+          <Box sx={{
+            position: 'absolute', bottom: 10, right: 10, zIndex: 20,
+            display: 'flex', alignItems: 'center', gap: 0.25,
+            bgcolor: 'rgba(30,30,30,0.82)', backdropFilter: 'blur(6px)',
+            borderRadius: 2, px: 0.5, py: 0.25,
+            border: '1px solid rgba(255,255,255,0.1)',
+          }}>
+            <IconButton size="small" onClick={() => applyZoom(zoomRef.current / 1.25)}
+              sx={{ width: 26, height: 26, color: 'text.secondary' }}>
+              <Box component="span" sx={{ fontSize: 18, lineHeight: 1, userSelect: 'none' }}>−</Box>
+            </IconButton>
+            <Box
+              component="button"
+              title="Reset zoom"
+              onClick={resetZoom}
+              sx={{
+                minWidth: 44, px: 0.5, py: 0.25, cursor: 'pointer',
+                bgcolor: 'transparent', border: 'none', color: 'text.primary',
+                fontSize: 11, fontFamily: 'monospace', borderRadius: 1,
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+            >
+              {zoomPct}%
+            </Box>
+            <IconButton size="small" onClick={() => applyZoom(zoomRef.current * 1.25)}
+              sx={{ width: 26, height: 26, color: 'text.secondary' }}>
+              <Box component="span" sx={{ fontSize: 18, lineHeight: 1, userSelect: 'none' }}>+</Box>
+            </IconButton>
+          </Box>
+
           {/* Floating text input — positioned over canvas */}
           {textInput && (() => {
             const pos = getTextInputPos();
@@ -875,6 +1192,182 @@ export function SpenNotesView() {
               </Box>
             );
           })()}
+          {/* Image resize overlay — zoomPct in scope ensures re-render on zoom */}
+          {(() => {
+            void zoomPct; // re-render when zoom changes
+            if (!selectedImgId) return null;
+            const imgEl = elementsRef.current.find(
+              (el): el is NoteImage => el.kind === 'image' && el.id === selectedImgId,
+            );
+            // Use React-state-derived position (updates after commitElements)
+            const imgState = pages
+              .find(p => p.id === currentPageId)
+              ?.elements.find((el): el is NoteImage => el.kind === 'image' && el.id === selectedImgId);
+            if (!imgEl && !imgState) return null;
+            const im = imgState ?? imgEl!;
+
+            // Account for zoom+pan in overlay positioning
+            const z = zoomRef.current;
+            const { x: panX, y: panY } = panPxRef.current;
+            const c = canvasRef.current;
+            const cW = c?.width  ?? 1;
+            const cH = c?.height ?? 1;
+            const bufLeft   = im.x / CANVAS_W * cW * z + panX;
+            const bufTop    = im.y / CANVAS_H * cH * z + panY;
+            const bufWidth  = im.w / CANVAS_W * cW * z;
+            const bufHeight = im.h / CANVAS_H * cH * z;
+            const pctLeft   = bufLeft   / cW * 100;
+            const pctTop    = bufTop    / cH * 100;
+            const pctWidth  = bufWidth  / cW * 100;
+            const pctHeight = bufHeight / cH * 100;
+
+            const HANDLE = 10; // handle visual size px
+            const HIT    = 16; // hit-area px
+
+            const startDrag = (e: React.PointerEvent, edge: ResizeEdge) => {
+              e.stopPropagation();
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              const cur = elementsRef.current.find(
+                (el): el is NoteImage => el.kind === 'image' && el.id === selectedImgId,
+              );
+              if (!cur) return;
+              pushUndo(currentIdRef.current, elementsRef.current);
+              imgDragRef.current = {
+                edge,
+                startCX: e.clientX, startCY: e.clientY,
+                startX: cur.x, startY: cur.y, startW: cur.w, startH: cur.h,
+              };
+            };
+
+            const onDragMove = (e: React.PointerEvent) => {
+              const d = imgDragRef.current;
+              if (!d || !e.buttons) return;
+              const c = canvasRef.current;
+              if (!c) return;
+              const r = c.getBoundingClientRect();
+              const dx = (e.clientX - d.startCX) / r.width  * CANVAS_W;
+              const dy = (e.clientY - d.startCY) / r.height * CANVAS_H;
+              let { startX: x, startY: y, startW: w, startH: h } = d;
+              switch (d.edge) {
+                case 'move':   x += dx; y += dy; break;
+                case 'top':    y += dy; h -= dy; break;
+                case 'bottom': h += dy; break;
+                case 'left':   x += dx; w -= dx; break;
+                case 'right':  w += dx; break;
+                case 'tl': x += dx; y += dy; w -= dx; h -= dy; break;
+                case 'tr': y += dy; w += dx; h -= dy; break;
+                case 'bl': x += dx; w -= dx; h += dy; break;
+                case 'br': w += dx; h += dy; break;
+              }
+              w = Math.max(20, w); h = Math.max(20, h);
+              // Imperatively update ref + redraw (no React state → no re-render lag)
+              elementsRef.current = elementsRef.current.map(el =>
+                el.id === selectedImgId ? { ...el, x, y, w, h } : el,
+              );
+              redraw();
+            };
+
+            const onDragEnd = () => {
+              if (!imgDragRef.current) return;
+              imgDragRef.current = null;
+              // Commit to React state (triggers re-render + thumbnail)
+              commitElements(elementsRef.current);
+            };
+
+            const handleSx = { position: 'absolute', bgcolor: '#60a5fa', borderRadius: '2px', zIndex: 12 } as const;
+            const edgeSx   = { position: 'absolute', zIndex: 11 } as const;
+
+            return (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  left: `${pctLeft}%`, top: `${pctTop}%`,
+                  width: `${pctWidth}%`, height: `${pctHeight}%`,
+                  zIndex: 10, pointerEvents: 'none',
+                }}
+                onPointerMove={onDragMove}
+                onPointerUp={onDragEnd}
+              >
+                {/* Dashed border */}
+                <Box sx={{ position: 'absolute', inset: 0, border: '2px dashed #60a5fa', pointerEvents: 'none', zIndex: 10 }} />
+
+                {/* Move area (interior) */}
+                <Box sx={{ position: 'absolute', inset: HIT / 2, cursor: 'move', pointerEvents: 'auto', zIndex: 11 }}
+                  onPointerDown={e => startDrag(e, 'move')} />
+
+                {/* ── Edge handles (bar + hit zone) ── */}
+                {/* Top */}
+                <Box sx={{ ...edgeSx, left: HANDLE, right: HANDLE, top: -HIT / 2, height: HIT, cursor: 'n-resize', pointerEvents: 'auto' }}
+                  onPointerDown={e => startDrag(e, 'top')}>
+                  <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 32, height: HANDLE / 2 }} />
+                </Box>
+                {/* Bottom */}
+                <Box sx={{ ...edgeSx, left: HANDLE, right: HANDLE, bottom: -HIT / 2, height: HIT, cursor: 's-resize', pointerEvents: 'auto' }}
+                  onPointerDown={e => startDrag(e, 'bottom')}>
+                  <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 32, height: HANDLE / 2 }} />
+                </Box>
+                {/* Left */}
+                <Box sx={{ ...edgeSx, top: HANDLE, bottom: HANDLE, left: -HIT / 2, width: HIT, cursor: 'w-resize', pointerEvents: 'auto' }}
+                  onPointerDown={e => startDrag(e, 'left')}>
+                  <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: HANDLE / 2, height: 32 }} />
+                </Box>
+                {/* Right */}
+                <Box sx={{ ...edgeSx, top: HANDLE, bottom: HANDLE, right: -HIT / 2, width: HIT, cursor: 'e-resize', pointerEvents: 'auto' }}
+                  onPointerDown={e => startDrag(e, 'right')}>
+                  <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: HANDLE / 2, height: 32 }} />
+                </Box>
+
+                {/* ── Corner handles ── */}
+                {([ ['tl','nw-resize',-HIT/2,-HIT/2], ['tr','ne-resize',undefined,-HIT/2],
+                    ['bl','sw-resize',-HIT/2,undefined], ['br','se-resize',undefined,undefined] ] as const)
+                  .map(([edge, cur, t, l]) => {
+                    const right  = (edge === 'tr' || edge === 'br') ? -HIT/2 : undefined;
+                    const bottom = (edge === 'bl' || edge === 'br') ? -HIT/2 : undefined;
+                    return (
+                      <Box key={edge}
+                        sx={{
+                          ...edgeSx, width: HIT, height: HIT,
+                          ...(t      !== undefined ? { top:    t }    : {}),
+                          ...(l      !== undefined ? { left:   l }    : {}),
+                          ...(right  !== undefined ? { right:  right } : {}),
+                          ...(bottom !== undefined ? { bottom: bottom } : {}),
+                          cursor: cur, pointerEvents: 'auto',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                        onPointerDown={e => startDrag(e, edge)}>
+                        <Box sx={{ width: HANDLE, height: HANDLE, bgcolor: '#60a5fa', borderRadius: '2px' }} />
+                      </Box>
+                    );
+                  })}
+
+                {/* Delete image button */}
+                <Box
+                  component="button"
+                  title="Delete image"
+                  onClick={e => {
+                    e.stopPropagation();
+                    pushUndo(currentIdRef.current, elementsRef.current);
+                    commitElements(elementsRef.current.filter(el => el.id !== selectedImgId));
+                    setSelectedImgId(null);
+                  }}
+                  sx={{
+                    position: 'absolute', top: -28, right: 0,
+                    bgcolor: '#ef4444', color: '#fff', border: 'none', borderRadius: 1,
+                    px: 0.75, py: 0.25, fontSize: 11, cursor: 'pointer', pointerEvents: 'auto',
+                    zIndex: 13, '&:hover': { bgcolor: '#dc2626' },
+                  }}
+                >
+                  ✕ Delete
+                </Box>
+              </Box>
+            );
+          })()}
+
+          {/* Hidden file inputs */}
+          <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={e => handleFileChosen(e.target.files?.[0])} />
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+            onChange={e => handleFileChosen(e.target.files?.[0])} />
         </Box>
       </Box>
     </Box>
