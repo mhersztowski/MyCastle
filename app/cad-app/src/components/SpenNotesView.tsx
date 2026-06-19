@@ -350,7 +350,9 @@ export function SpenNotesView() {
     const ctx = c.getContext('2d');
     if (!ctx) return;
     const { sx, sy } = getScale();
-    const z = zoomRef.current;
+    // Clamp zoom so NaN/Infinity from degenerate pinch never corrupts rendering
+    const z = isFinite(zoomRef.current) && zoomRef.current > 0 ? zoomRef.current : 1;
+    zoomRef.current = z;
     const { x: px, y: py } = panPxRef.current;
     // Background (full canvas, no transform)
     ctx.fillStyle = bgColorRef.current;
@@ -449,6 +451,8 @@ export function SpenNotesView() {
       const pts = [...activePointersRef.current.values()];
       const p0 = toPxFromTracked(pts[0]); const p1 = toPxFromTracked(pts[1]);
       const dist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
+      // Reject degenerate pinch (fingers too close) — prevents initDist=0 → Infinity zoom
+      if (dist < 20) return;
       pinchRef.current = {
         initDist: dist,
         initZoom: zoomRef.current,
@@ -478,11 +482,14 @@ export function SpenNotesView() {
       if (pinchRef.current && activePointersRef.current.size >= 2) {
         // Pinch zoom + pan
         const { initDist, initZoom, initPan, initMidPx } = pinchRef.current;
+        if (initDist < 20) return; // degenerate pinch — skip to avoid Infinity/NaN zoom
         const pts = [...activePointersRef.current.values()];
         const p0 = toPxFromTracked(pts[0]); const p1 = toPxFromTracked(pts[1]);
         const newDist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
         const newMid  = { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 };
-        const newZoom = Math.max(0.25, Math.min(8, initZoom * newDist / initDist));
+        const rawZoom = initZoom * newDist / initDist;
+        if (!isFinite(rawZoom)) return; // safety: ignore NaN/Infinity
+        const newZoom = Math.max(0.25, Math.min(8, rawZoom));
         const worldMidX = (initMidPx.x - initPan.x) / initZoom;
         const worldMidY = (initMidPx.y - initPan.y) / initZoom;
         zoomRef.current = newZoom;
