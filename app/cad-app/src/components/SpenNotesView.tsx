@@ -297,6 +297,10 @@ export function SpenNotesView() {
     initPan: { x: number; y: number };
     initMidPx: { x: number; y: number };
   } | null>(null);
+  const singleTouchPanRef = useRef<{
+    startBx: number; startBy: number;
+    startPan: { x: number; y: number };
+  } | null>(null);
 
   // Stable refs for DOM event handlers
   const toolRef = useRef(tool);
@@ -430,30 +434,89 @@ export function SpenNotesView() {
       };
     };
 
-    const onDown = (e: PointerEvent) => {
+    // ── Helpers shared across handlers ──────────────────────────────────────
+    const toBufPxFromClient = (cx: number, cy: number) => {
+      const r = c.getBoundingClientRect();
+      return {
+        bx: (cx - r.left) / r.width * c.width,
+        by: (cy - r.top) / r.height * c.height,
+      };
+    };
+    const toPxFromTracked = (pt: { cx: number; cy: number }) =>
+      toBufPxFromClient(pt.cx, pt.cy);
+
+    const startPinch = () => {
+      const pts = [...activePointersRef.current.values()];
+      const p0 = toPxFromTracked(pts[0]); const p1 = toPxFromTracked(pts[1]);
+      const dist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
+      pinchRef.current = {
+        initDist: dist,
+        initZoom: zoomRef.current,
+        initPan: { ...panPxRef.current },
+        initMidPx: { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 },
+      };
+      singleTouchPanRef.current = null;
+    };
+
+    // ── Touch (finger) handlers: pan + pinch zoom, no drawing ───────────────
+    const onTouchDown = (e: PointerEvent) => {
+      activePointersRef.current.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
+      if (activePointersRef.current.size >= 2) {
+        startPinch();
+      } else {
+        // Start single-finger pan
+        const { bx, by } = toBufPxFromClient(e.clientX, e.clientY);
+        singleTouchPanRef.current = { startBx: bx, startBy: by, startPan: { ...panPxRef.current } };
+        pinchRef.current = null;
+      }
+    };
+
+    const onTouchMove = (e: PointerEvent) => {
+      if (!activePointersRef.current.has(e.pointerId)) return;
       activePointersRef.current.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
 
-      // ── Pinch start (2 fingers) ──────────────────────────────────────────
-      if (activePointersRef.current.size === 2) {
-        activeStrokeRef.current = null; // cancel any in-progress stroke
+      if (pinchRef.current && activePointersRef.current.size >= 2) {
+        // Pinch zoom + pan
+        const { initDist, initZoom, initPan, initMidPx } = pinchRef.current;
         const pts = [...activePointersRef.current.values()];
-        const r = c.getBoundingClientRect();
-        const toPx = (pt: { cx: number; cy: number }) => ({
-          bx: (pt.cx - r.left) / r.width * c.width,
-          by: (pt.cy - r.top) / r.height * c.height,
-        });
-        const p0 = toPx(pts[0]); const p1 = toPx(pts[1]);
-        const dist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
-        pinchRef.current = {
-          initDist: dist,
-          initZoom: zoomRef.current,
-          initPan: { ...panPxRef.current },
-          initMidPx: { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 },
-        };
+        const p0 = toPxFromTracked(pts[0]); const p1 = toPxFromTracked(pts[1]);
+        const newDist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
+        const newMid  = { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 };
+        const newZoom = Math.max(0.25, Math.min(8, initZoom * newDist / initDist));
+        const worldMidX = (initMidPx.x - initPan.x) / initZoom;
+        const worldMidY = (initMidPx.y - initPan.y) / initZoom;
+        zoomRef.current = newZoom;
+        panPxRef.current = { x: newMid.x - worldMidX * newZoom, y: newMid.y - worldMidY * newZoom };
+        setZoomPct(Math.round(newZoom * 100));
+        redraw();
         return;
       }
 
-      if (pinchRef.current) return;
+      // Single-finger pan
+      if (singleTouchPanRef.current && activePointersRef.current.size === 1) {
+        const { bx, by } = toBufPxFromClient(e.clientX, e.clientY);
+        const { startBx, startBy, startPan } = singleTouchPanRef.current;
+        panPxRef.current = { x: startPan.x + (bx - startBx), y: startPan.y + (by - startBy) };
+        redraw();
+      }
+    };
+
+    const onTouchUp = (e: PointerEvent) => {
+      activePointersRef.current.delete(e.pointerId);
+      if (activePointersRef.current.size < 2) pinchRef.current = null;
+      if (activePointersRef.current.size === 0) singleTouchPanRef.current = null;
+      // If one finger remains after pinch, restart single-pan from current position
+      if (activePointersRef.current.size === 1 && !pinchRef.current) {
+        const remaining = [...activePointersRef.current.entries()][0];
+        const { bx, by } = toBufPxFromClient(remaining[1].cx, remaining[1].cy);
+        singleTouchPanRef.current = { startBx: bx, startBy: by, startPan: { ...panPxRef.current } };
+      }
+    };
+
+    // ── Pen / mouse handlers: drawing ────────────────────────────────────────
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') { onTouchDown(e); return; }
+
       c.setPointerCapture(e.pointerId);
       const { x, y } = toLogical(e);
       const pressure = e.pressure > 0 ? e.pressure : 0.5;
@@ -469,7 +532,6 @@ export function SpenNotesView() {
           return;
         }
       }
-      // Missed all images → deselect
       setSelectedImgId(null);
 
       if (t === 'lasso') {
@@ -502,30 +564,7 @@ export function SpenNotesView() {
     };
 
     const onMove = (e: PointerEvent) => {
-      activePointersRef.current.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
-
-      // ── Pinch update ─────────────────────────────────────────────────────
-      if (pinchRef.current && activePointersRef.current.size >= 2) {
-        const { initDist, initZoom, initPan, initMidPx } = pinchRef.current;
-        const pts = [...activePointersRef.current.values()];
-        const r = c.getBoundingClientRect();
-        const toPx = (pt: { cx: number; cy: number }) => ({
-          bx: (pt.cx - r.left) / r.width * c.width,
-          by: (pt.cy - r.top) / r.height * c.height,
-        });
-        const p0 = toPx(pts[0]); const p1 = toPx(pts[1]);
-        const newDist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
-        const newMid  = { x: (p0.bx + p1.bx) / 2, y: (p0.by + p1.by) / 2 };
-        const newZoom = Math.max(0.25, Math.min(8, initZoom * newDist / initDist));
-        // Keep the initial midpoint pinned in world space
-        const worldMidX = (initMidPx.x - initPan.x) / initZoom;
-        const worldMidY = (initMidPx.y - initPan.y) / initZoom;
-        zoomRef.current = newZoom;
-        panPxRef.current = { x: newMid.x - worldMidX * newZoom, y: newMid.y - worldMidY * newZoom };
-        setZoomPct(Math.round(newZoom * 100));
-        redraw();
-        return;
-      }
+      if (e.pointerType === 'touch') { onTouchMove(e); return; }
 
       if (!e.buttons) return;
       const { x, y } = toLogical(e);
@@ -560,9 +599,7 @@ export function SpenNotesView() {
     };
 
     const onUp = (e: PointerEvent) => {
-      activePointersRef.current.delete(e.pointerId);
-      if (activePointersRef.current.size < 2) pinchRef.current = null;
-      if (pinchRef.current) return; // still pinching with remaining finger
+      if (e.pointerType === 'touch') { onTouchUp(e); return; }
 
       eraserActiveRef.current = false;
       const t = toolRef.current;
@@ -584,7 +621,6 @@ export function SpenNotesView() {
 
       if (!activeStrokeRef.current) return;
       const stroke = activeStrokeRef.current;
-      // Add final point
       const { x, y } = toLogical(e);
       const last = stroke.points[stroke.points.length - 1];
       if (Math.hypot(x - last.x, y - last.y) > 0.8)
@@ -598,15 +634,28 @@ export function SpenNotesView() {
       redraw();
     };
 
+    const onCancel = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') { onTouchUp(e); return; }
+      // Pen cancel: commit partial stroke if long enough
+      eraserActiveRef.current = false;
+      lassoRef.current = [];
+      if (activeStrokeRef.current && activeStrokeRef.current.points.length >= 2) {
+        pushUndo(currentIdRef.current, elementsRef.current);
+        commitElements([...elementsRef.current, activeStrokeRef.current]);
+      }
+      activeStrokeRef.current = null;
+      redraw();
+    };
+
     c.addEventListener('pointerdown', onDown);
     c.addEventListener('pointermove', onMove);
     c.addEventListener('pointerup', onUp);
-    c.addEventListener('pointercancel', onUp);
+    c.addEventListener('pointercancel', onCancel);
     return () => {
       c.removeEventListener('pointerdown', onDown);
       c.removeEventListener('pointermove', onMove);
       c.removeEventListener('pointerup', onUp);
-      c.removeEventListener('pointercancel', onUp);
+      c.removeEventListener('pointercancel', onCancel);
     };
   }, [commitElements, pushUndo, redraw]);
 
@@ -952,16 +1001,16 @@ export function SpenNotesView() {
                 key={bg}
                 component="button"
                 title={label}
-                onClick={() => setPageBgColor(bg)}
+                onPointerUp={(e) => { e.stopPropagation(); setPageBgColor(bg); }}
                 sx={{
-                  flex: 1, height: 32, borderRadius: 1, cursor: 'pointer', outline: 'none',
+                  flex: 1, height: 36, borderRadius: 1, cursor: 'pointer', outline: 'none',
                   bgcolor: bg,
                   border: currentBgColor === bg
                     ? '2.5px solid #60a5fa'
                     : `1.5px solid ${dark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.28)'}`,
                   boxShadow: currentBgColor === bg ? '0 0 0 1px #60a5fa44' : 'none',
                   transition: 'border-color 0.15s, box-shadow 0.15s',
-                  minWidth: 0,
+                  minWidth: 0, touchAction: 'none',
                   '&:active': { opacity: 0.75 },
                 }}
               />
