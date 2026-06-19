@@ -9,6 +9,7 @@ import {
   Handle,
   Position,
   ConnectionMode,
+  SelectionMode,
   useReactFlow,
   type Node,
   type Edge,
@@ -44,6 +45,7 @@ import {
   DialogContent,
   DialogActions,
   Chip,
+  Checkbox,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import ContentCutIcon from '@mui/icons-material/ContentCut';
@@ -102,6 +104,9 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DataObjectIcon from '@mui/icons-material/DataObject';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import SyncIcon from '@mui/icons-material/Sync';
+import CropFreeIcon from '@mui/icons-material/CropFree';
+import PanToolIcon from '@mui/icons-material/PanTool';
+import FitScreenIcon from '@mui/icons-material/FitScreen';
 import ReactMarkdown from 'react-markdown';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -2590,10 +2595,10 @@ const FunctionCallNode: React.FC<NodeProps<Node<FcNodeData>>> = ({ data }) => {
 
   return (
     <Box sx={{ minWidth: 200, bgcolor: '#1a1028', border: '2px solid', borderColor: data.selected ? '#ce93d8' : '#7c4dff55', borderRadius: 1.5, userSelect: 'none', position: 'relative' }}>
-      {/* exec_in — handle at top edge */}
+      {/* exec_in — top edge */}
       <Handle type="target" position={Position.Top} id="exec_in"
-        title="Execution input — drag exec_out of another node here"
-        style={{ width: 14, height: 14, background: '#ffffffcc', border: '2px solid #1a1028', borderRadius: 2, pointerEvents: 'all', cursor: 'default' }} />
+        title="Connect exec_out of a previous node here to chain execution"
+        style={{ width: 14, height: 14, background: '#ffffffcc', border: '2px solid #7c4dff', borderRadius: 2, pointerEvents: 'all', cursor: 'crosshair' }} />
       <Box sx={{ height: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff06', borderBottom: '1px solid #ffffff11', borderRadius: '4px 4px 0 0', pointerEvents: 'none' }}>
         <Typography sx={{ fontSize: 7, color: '#ffffff44', letterSpacing: 1.5, userSelect: 'none', textTransform: 'uppercase' }}>exec in</Typography>
       </Box>
@@ -2688,12 +2693,12 @@ const FunctionCallNode: React.FC<NodeProps<Node<FcNodeData>>> = ({ data }) => {
       </Box>
       {/* Result preview */}
       <ValuePreviewButton jsonValue={data.error ?? data.result} accentColor={data.error ? '#ef5350' : '#81c784'} label="Result" />
-      {/* exec_out — visual bar + handle at bottom edge */}
+      {/* exec_out — bottom edge */}
       <Box sx={{ height: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff0a', borderTop: '1px solid #ffffff18', borderRadius: '0 0 4px 4px', pointerEvents: 'none' }}>
         <Typography sx={{ fontSize: 7, color: '#ffffffaa', letterSpacing: 1.5, userSelect: 'none', textTransform: 'uppercase' }}>exec out ▶</Typography>
       </Box>
       <Handle type="source" position={Position.Bottom} id="exec_out"
-        title="Drag to connect to exec_in of next node"
+        title="Drag to exec_in of next node to chain execution"
         style={{ width: 14, height: 14, background: '#ffffffee', border: '2px solid #7c4dff', borderRadius: 2, pointerEvents: 'all', cursor: 'crosshair' }} />
     </Box>
   );
@@ -3049,8 +3054,15 @@ const GetPropNode: React.FC<NodeProps<Node<GetPropNodeData>>> = ({ data }) => {
 
   return (
     <Box sx={{ minWidth: 160, bgcolor: '#061a1c', border: '2px solid', borderColor: data.selected ? accent : `${accent}44`, borderRadius: 1.5, userSelect: 'none', position: 'relative' }}>
+      {/* exec_in — top edge */}
+      <Handle type="target" position={Position.Top} id="exec_in"
+        title="Connect exec_out of a previous node here"
+        style={{ width: 14, height: 14, background: '#ffffffcc', border: '2px solid #7c4dff', borderRadius: 2, pointerEvents: 'all', cursor: 'crosshair' }} />
+      <Box sx={{ height: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff06', borderBottom: '1px solid #ffffff11', borderRadius: '4px 4px 0 0', pointerEvents: 'none' }}>
+        <Typography sx={{ fontSize: 6, color: '#ffffff44', letterSpacing: 1.5, userSelect: 'none', textTransform: 'uppercase' }}>exec in</Typography>
+      </Box>
       {/* Header */}
-      <Box className="dash-drag-handle" sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: `${accent}12`, borderBottom: `1px solid ${accent}22`, borderRadius: '4px 4px 0 0', cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
+      <Box className="dash-drag-handle" sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: `${accent}12`, borderBottom: `1px solid ${accent}22`, cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
         <ArrowUpwardIcon sx={{ fontSize: 11, color: accent, flexShrink: 0 }} />
         <Typography sx={{ fontSize: 11, fontWeight: 700, color: accent, fontFamily: 'monospace', flex: 1 }}>GetProp</Typography>
         <Tooltip title="Run">
@@ -3090,6 +3102,13 @@ const GetPropNode: React.FC<NodeProps<Node<GetPropNodeData>>> = ({ data }) => {
       {(data.result !== null || data.error) && (
         <ValuePreviewButton jsonValue={data.result} accentColor={data.error ? '#ef5350' : accent} label={data.error ?? 'Result'} />
       )}
+      {/* exec_out — bottom edge */}
+      <Box sx={{ height: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff0a', borderTop: '1px solid #ffffff18', borderRadius: '0 0 4px 4px', pointerEvents: 'none' }}>
+        <Typography sx={{ fontSize: 6, color: '#ffffffaa', letterSpacing: 1.5, userSelect: 'none', textTransform: 'uppercase' }}>exec out ▶</Typography>
+      </Box>
+      <Handle type="source" position={Position.Bottom} id="exec_out"
+        title="Drag to exec_in of next node to chain execution"
+        style={{ width: 14, height: 14, background: '#ffffffee', border: '2px solid #7c4dff', borderRadius: 2, pointerEvents: 'all', cursor: 'crosshair' }} />
     </Box>
   );
 };
@@ -3119,8 +3138,15 @@ const SetPropNode: React.FC<NodeProps<Node<SetPropNodeData>>> = ({ data }) => {
 
   return (
     <Box sx={{ minWidth: 160, bgcolor: '#1a1100', border: '2px solid', borderColor: data.selected ? accent : `${accent}44`, borderRadius: 1.5, userSelect: 'none', position: 'relative' }}>
+      {/* exec_in — top edge */}
+      <Handle type="target" position={Position.Top} id="exec_in"
+        title="Connect exec_out of a previous node here"
+        style={{ width: 14, height: 14, background: '#ffffffcc', border: '2px solid #7c4dff', borderRadius: 2, pointerEvents: 'all', cursor: 'crosshair' }} />
+      <Box sx={{ height: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff06', borderBottom: '1px solid #ffffff11', borderRadius: '4px 4px 0 0', pointerEvents: 'none' }}>
+        <Typography sx={{ fontSize: 6, color: '#ffffff44', letterSpacing: 1.5, userSelect: 'none', textTransform: 'uppercase' }}>exec in</Typography>
+      </Box>
       {/* Header */}
-      <Box className="dash-drag-handle" sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: `${accent}12`, borderBottom: `1px solid ${accent}22`, borderRadius: '4px 4px 0 0', cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
+      <Box className="dash-drag-handle" sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: `${accent}12`, borderBottom: `1px solid ${accent}22`, cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
         <ArrowDownwardIcon sx={{ fontSize: 11, color: accent, flexShrink: 0 }} />
         <Typography sx={{ fontSize: 11, fontWeight: 700, color: accent, fontFamily: 'monospace', flex: 1 }}>SetProp</Typography>
         <Tooltip title="Run">
@@ -3165,6 +3191,13 @@ const SetPropNode: React.FC<NodeProps<Node<SetPropNodeData>>> = ({ data }) => {
       {(data.result !== null || data.error) && (
         <ValuePreviewButton jsonValue={data.result} accentColor={data.error ? '#ef5350' : accent} label={data.error ?? 'Result'} />
       )}
+      {/* exec_out — bottom edge */}
+      <Box sx={{ height: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff0a', borderTop: '1px solid #ffffff18', borderRadius: '0 0 4px 4px', pointerEvents: 'none' }}>
+        <Typography sx={{ fontSize: 6, color: '#ffffffaa', letterSpacing: 1.5, userSelect: 'none', textTransform: 'uppercase' }}>exec out ▶</Typography>
+      </Box>
+      <Handle type="source" position={Position.Bottom} id="exec_out"
+        title="Drag to exec_in of next node to chain execution"
+        style={{ width: 14, height: 14, background: '#ffffffee', border: '2px solid #7c4dff', borderRadius: 2, pointerEvents: 'all', cursor: 'crosshair' }} />
     </Box>
   );
 };
@@ -3300,7 +3333,7 @@ const VarInitDialog: React.FC<{
 
 const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath }) => {
   const isMobile = useMediaQuery('(pointer: coarse)');
-  const { setCenter, screenToFlowPosition } = useReactFlow();
+  const { setCenter, screenToFlowPosition, fitView } = useReactFlow();
   const [scene, setScene] = useState<DashScene>({ type: 'dash-scene', version: 1, objects: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -3314,6 +3347,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [dsPickerOpen, setDsPickerOpen] = useState(false);
   const [sourceCtxMenu, setSourceCtxMenu] = useState<{ mouseX: number; mouseY: number; sourceId: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [canvasMode, setCanvasMode] = useState<'pan' | 'select'>('pan');
   const [selectedField, setSelectedField] = useState<{ objId: string; fieldName: string } | null>(null);
   const [clipboard, setClipboard] = useState<{ objects: DashObject[] } | null>(null);
   const [newMenuAnchor, setNewMenuAnchor] = useState<HTMLElement | null>(null);
@@ -3334,6 +3368,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [varInitDialogOpen, setVarInitDialogOpen] = useState(false);
   const [varInitTargetId, setVarInitTargetId] = useState<string | null>(null);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
+  // Overlay for mid-drag positions — avoids writing scene during drag (prevents feedback loop/flying).
+  const [dragNodePositions, setDragNodePositions] = useState<Map<string, { x: number; y: number }> | null>(null);
+  // Ref mirrors dragNodePositions for reading inside stable callbacks without stale closure.
+  const dragNodePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sceneRef = useRef<DashScene>({ type: 'dash-scene', version: 1, objects: [] });
@@ -3584,6 +3622,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     }));
   }, [updateScene]);
 
+  const runGetPropRef = useRef<((id: string) => void) | null>(null);
+  const runSetPropRef = useRef<((id: string) => void) | null>(null);
+
   const callFunctionForNode = useCallback(async (fcId: string) => {
     const fc = sceneRef.current.functionCalls?.find((f) => f.id === fcId);
     if (!fc) return;
@@ -3662,12 +3703,17 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       }));
     } finally {
       setFcRunning((prev) => { const n = new Set(prev); n.delete(fcId); return n; });
-      // Follow exec_out → exec_in chain
+      // Follow exec_out → exec_in chain (FC, GetProp, SetProp)
       const execEdge = (sceneRef.current.fcEdges ?? []).find((e) => e.source === fcId && e.sourceHandle === 'exec_out' && e.targetHandle === 'exec_in');
       if (execEdge) {
-        const nextFcId = execEdge.target;
-        const nextExists = (sceneRef.current.functionCalls ?? []).some((f) => f.id === nextFcId);
-        if (nextExists) void callFunctionForNode(nextFcId);
+        const nextId = execEdge.target;
+        if ((sceneRef.current.functionCalls ?? []).some((f) => f.id === nextId)) {
+          void callFunctionForNode(nextId);
+        } else if ((sceneRef.current.getProps ?? []).some((n) => n.id === nextId)) {
+          runGetPropRef.current?.(nextId);
+        } else if ((sceneRef.current.setProps ?? []).some((n) => n.id === nextId)) {
+          runSetPropRef.current?.(nextId);
+        }
       }
     }
   }, [dataSources, userName, updateScene]);
@@ -3743,7 +3789,20 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         getProps: (prev.getProps ?? []).map((n) => n.id !== nodeId ? n : { ...n, error: (e as Error).message, result: null }),
       }));
     }
-  }, [updateScene]);
+    // Follow exec_out → exec_in chain
+    const execEdge = (sceneRef.current.fcEdges ?? []).find((e) => e.source === nodeId && e.sourceHandle === 'exec_out' && e.targetHandle === 'exec_in');
+    if (execEdge) {
+      const nextId = execEdge.target;
+      if ((sceneRef.current.functionCalls ?? []).some((f) => f.id === nextId)) {
+        void callFunctionForNode(nextId);
+      } else if ((sceneRef.current.getProps ?? []).some((n) => n.id === nextId)) {
+        runGetPropRef.current?.(nextId);
+      } else if ((sceneRef.current.setProps ?? []).some((n) => n.id === nextId)) {
+        runSetPropRef.current?.(nextId);
+      }
+    }
+  }, [updateScene, callFunctionForNode]);
+  runGetPropRef.current = runGetProp;
 
   const runSetProp = useCallback((nodeId: string) => {
     const node = sceneRef.current.setProps?.find((n) => n.id === nodeId);
@@ -3792,7 +3851,20 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         setProps: (prev.setProps ?? []).map((n) => n.id !== nodeId ? n : { ...n, error: (e as Error).message, result: null }),
       }));
     }
-  }, [updateScene]);
+    // Follow exec_out → exec_in chain
+    const execEdge = (sceneRef.current.fcEdges ?? []).find((e) => e.source === nodeId && e.sourceHandle === 'exec_out' && e.targetHandle === 'exec_in');
+    if (execEdge) {
+      const nextId = execEdge.target;
+      if ((sceneRef.current.functionCalls ?? []).some((f) => f.id === nextId)) {
+        void callFunctionForNode(nextId);
+      } else if ((sceneRef.current.getProps ?? []).some((n) => n.id === nextId)) {
+        runGetPropRef.current?.(nextId);
+      } else if ((sceneRef.current.setProps ?? []).some((n) => n.id === nextId)) {
+        runSetPropRef.current?.(nextId);
+      }
+    }
+  }, [updateScene, callFunctionForNode]);
+  runSetPropRef.current = runSetProp;
 
   const processDropAt = useCallback((clientX: number, clientY: number, mime: string, data: string) => {
     const pos = screenToFlowPosition({ x: clientX, y: clientY });
@@ -4052,7 +4124,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return selectedFields.find((f) => f.name === selectedField.fieldName) ?? null;
   }, [selectedField, selectedObject, selectedFields]);
 
-  const rfNodes = useMemo((): Node[] => {
+  const rfNodesBase = useMemo((): Node[] => {
     const dashNodes: Node<DashObjectNodeData>[] = scene.objects.map((obj) => {
       const isCustom = obj.className === 'Unknown' || obj.customFields !== undefined;
       const fields: FieldDef[] = isCustom ? (obj.customFields ?? []) : (classMap.get(obj.className)?.fields ?? []);
@@ -4206,6 +4278,16 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       functionCalls, vars, fcRunning, callFunctionForNode, updateFcArgOverride, updateVarName,
       applyClassObj, flipClassObj, runGetProp, runSetProp, updateGetPropName, updateSetPropName]);
 
+  // Overlay drag positions on top of base nodes without touching scene state.
+  // rfNodesBase stays stable during drag (no scene updates) → callbacks remain fresh.
+  const rfNodes = useMemo((): Node[] => {
+    if (!dragNodePositions) return rfNodesBase;
+    return rfNodesBase.map((n) => {
+      const pos = dragNodePositions.get(n.id);
+      return pos ? { ...n, position: pos } : n;
+    });
+  }, [rfNodesBase, dragNodePositions]);
+
   const rfEdges = useMemo((): Edge[] => {
     const propEdges: Edge[] = [];
     for (const obj of scene.objects) {
@@ -4223,7 +4305,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         selected: isSelected,
         animated: !isExec,
         style: isExec
-          ? { stroke: isSelected ? '#ef5350' : '#ffffffbb', strokeWidth: isSelected ? 3 : 2.5, strokeDasharray: '6 3' }
+          ? { stroke: isSelected ? '#ef5350' : '#7c4dff', strokeWidth: isSelected ? 3 : 2, strokeDasharray: '6 3' }
           : { stroke: isSelected ? '#ef5350' : '#81c784', strokeWidth: isSelected ? 2.5 : 1.5 },
         deletable: true,
       };
@@ -4231,47 +4313,63 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return [...propEdges, ...flowEdges];
   }, [scene.objects, scene.fcEdges, objectIds, selectedEdgeIds]);
 
+  // Max canvas-unit delta per drag step. At minZoom=0.2 this equals 400px on screen per frame,
+  // which is physically impossible — so this only rejects ReactFlow's buggy mobile coordinates.
+  const MAX_DRAG_STEP = 2000;
+
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    const posChanges = changes.filter(
-      (c) => c.type === 'position' && c.position &&
-        Number.isFinite(c.position.x) && Number.isFinite(c.position.y),
-    );
-    if (posChanges.length > 0) {
-      updateScene((prev) => ({
-        ...prev,
-        objects: prev.objects.map((obj) => {
-          const pc = posChanges.find((c) => c.type === 'position' && c.id === obj.id);
-          if (pc && pc.type === 'position' && pc.position)
-            return { ...obj, transform: { ...getTransform(obj), x: pc.position.x, y: pc.position.y } };
-          return obj;
-        }),
-        functionCalls: (prev.functionCalls ?? []).map((fc) => {
-          const pc = posChanges.find((c) => c.type === 'position' && c.id === fc.id);
-          if (pc && pc.type === 'position' && pc.position) return { ...fc, x: pc.position.x, y: pc.position.y };
-          return fc;
-        }),
-        vars: (prev.vars ?? []).map((v) => {
-          const pc = posChanges.find((c) => c.type === 'position' && c.id === v.id);
-          if (pc && pc.type === 'position' && pc.position) return { ...v, x: pc.position.x, y: pc.position.y };
-          return v;
-        }),
-        classObjs: (prev.classObjs ?? []).map((o) => {
-          const pc = posChanges.find((c) => c.type === 'position' && c.id === o.id);
-          if (pc && pc.type === 'position' && pc.position) return { ...o, x: pc.position.x, y: pc.position.y };
-          return o;
-        }),
-        getProps: (prev.getProps ?? []).map((n) => {
-          const pc = posChanges.find((c) => c.type === 'position' && c.id === n.id);
-          if (pc && pc.type === 'position' && pc.position) return { ...n, x: pc.position.x, y: pc.position.y };
-          return n;
-        }),
-        setProps: (prev.setProps ?? []).map((n) => {
-          const pc = posChanges.find((c) => c.type === 'position' && c.id === n.id);
-          if (pc && pc.type === 'position' && pc.position) return { ...n, x: pc.position.x, y: pc.position.y };
-          return n;
-        }),
-      }));
+    // Mid-drag: validate each step delta and update only the overlay Map.
+    const validMidDrag: Array<{ id: string; x: number; y: number }> = [];
+    for (const c of changes) {
+      if (c.type !== 'position' || !c.dragging || !c.position) continue;
+      if (!Number.isFinite(c.position.x) || !Number.isFinite(c.position.y)) continue;
+
+      // Compare against last known position (from ref) or fall back to scene base.
+      const lastKnown = dragNodePositionsRef.current.get(c.id);
+      let baseX: number, baseY: number;
+      if (lastKnown) {
+        baseX = lastKnown.x; baseY = lastKnown.y;
+      } else {
+        const sc = sceneRef.current;
+        const obj = sc.objects.find((o) => o.id === c.id);
+        if (obj) { const t = getTransform(obj); baseX = t.x; baseY = t.y; }
+        else {
+          const fc = (sc.functionCalls ?? []).find((f) => f.id === c.id);
+          if (fc) { baseX = fc.x; baseY = fc.y; }
+          else {
+            const v = (sc.vars ?? []).find((v) => v.id === c.id);
+            if (v) { baseX = v.x; baseY = v.y; }
+            else {
+              const co = (sc.classObjs ?? []).find((o) => o.id === c.id);
+              if (co) { baseX = co.x; baseY = co.y; }
+              else {
+                const gp = (sc.getProps ?? []).find((n) => n.id === c.id);
+                if (gp) { baseX = gp.x; baseY = gp.y; }
+                else {
+                  const sp = (sc.setProps ?? []).find((n) => n.id === c.id);
+                  if (sp) { baseX = sp.x; baseY = sp.y; }
+                  else { baseX = c.position.x; baseY = c.position.y; } // unknown node, accept
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (Math.abs(c.position.x - baseX) > MAX_DRAG_STEP || Math.abs(c.position.y - baseY) > MAX_DRAG_STEP) continue;
+      validMidDrag.push({ id: c.id, x: c.position.x, y: c.position.y });
     }
+
+    if (validMidDrag.length > 0) {
+      for (const p of validMidDrag) dragNodePositionsRef.current.set(p.id, { x: p.x, y: p.y });
+      setDragNodePositions((prev) => {
+        const m = new Map(prev);
+        for (const p of validMidDrag) m.set(p.id, { x: p.x, y: p.y });
+        return m;
+      });
+    }
+
+    // Selection changes go straight through.
     const selChanges = changes.filter((c) => c.type === 'select');
     if (selChanges.length > 0) {
       setSelectedIds((prev) => {
@@ -4280,7 +4378,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         return next;
       });
     }
-  }, [updateScene]);
+    // Final positions are written in onNodeDragStop.
+  }, []);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     const removedIds = changes.filter((c) => c.type === 'remove').map((c) => c.id);
@@ -4299,12 +4398,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const onConnect = useCallback((connection: Connection) => {
-    let { source, sourceHandle, target, targetHandle } = connection;
+    const { source, sourceHandle, target, targetHandle } = connection;
     if (!source || !target) return;
-    // Normalize exec edge direction — user may drag from either end in Loose mode
-    if (sourceHandle === 'exec_in' && targetHandle === 'exec_out') {
-      [source, sourceHandle, target, targetHandle] = [target, 'exec_out', source, 'exec_in'];
-    }
     const fcIds = new Set((sceneRef.current.functionCalls ?? []).map((f) => f.id));
     const varIds = new Set((sceneRef.current.vars ?? []).map((v) => v.id));
     const classObjIds = new Set((sceneRef.current.classObjs ?? []).map((o) => o.id));
@@ -4340,6 +4435,41 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     setCenter(cx, cy, { zoom: 1.2, duration: 450 });
   }, [setCenter]);
 
+  const onNodeDragStop = useCallback((_evt: React.MouseEvent | React.TouchEvent, _node: Node, _draggedNodes: Node[]) => {
+    // Use our validated ref (not ReactFlow's draggedNodes — may have bad mobile coords).
+    const finalPos = new Map(dragNodePositionsRef.current);
+    dragNodePositionsRef.current.clear();
+    setDragNodePositions(null);
+    if (finalPos.size === 0) return; // nothing moved (all positions were filtered)
+    updateScene((prev) => ({
+      ...prev,
+      objects: prev.objects.map((obj) => {
+        const p = finalPos.get(obj.id);
+        return p ? { ...obj, transform: { ...getTransform(obj), x: p.x, y: p.y } } : obj;
+      }),
+      functionCalls: (prev.functionCalls ?? []).map((fc) => {
+        const p = finalPos.get(fc.id);
+        return p ? { ...fc, x: p.x, y: p.y } : fc;
+      }),
+      vars: (prev.vars ?? []).map((v) => {
+        const p = finalPos.get(v.id);
+        return p ? { ...v, x: p.x, y: p.y } : v;
+      }),
+      classObjs: (prev.classObjs ?? []).map((o) => {
+        const p = finalPos.get(o.id);
+        return p ? { ...o, x: p.x, y: p.y } : o;
+      }),
+      getProps: (prev.getProps ?? []).map((gp) => {
+        const p = finalPos.get(gp.id);
+        return p ? { ...gp, x: p.x, y: p.y } : gp;
+      }),
+      setProps: (prev.setProps ?? []).map((sp) => {
+        const p = finalPos.get(sp.id);
+        return p ? { ...sp, x: p.x, y: p.y } : sp;
+      }),
+    }));
+  }, [updateScene]);
+
   const showTypes = visiblePanels.includes('types');
   const showScene = visiblePanels.includes('scene');
   const showProperties = visiblePanels.includes('properties');
@@ -4371,6 +4501,19 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           </ToggleButton>
         </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />
+        <Tooltip title={canvasMode === 'select' ? 'Switch to Pan mode' : 'Rect Select: drag on canvas to select multiple nodes'}>
+          <IconButton
+            size="small"
+            onClick={() => setCanvasMode((m) => m === 'select' ? 'pan' : 'select')}
+            sx={{ p: 0.5, bgcolor: canvasMode === 'select' ? 'primary.main' : 'transparent', color: canvasMode === 'select' ? 'primary.contrastText' : 'inherit', borderRadius: 1, '&:hover': { bgcolor: canvasMode === 'select' ? 'primary.dark' : 'action.hover' } }}>
+            {canvasMode === 'select' ? <CropFreeIcon sx={{ fontSize: 18 }} /> : <PanToolIcon sx={{ fontSize: 18 }} />}
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Fit all nodes in view">
+          <IconButton size="small" onClick={() => fitView({ duration: 300 })} sx={{ p: 0.5 }}>
+            <FitScreenIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
         {(selectedIds.size > 0 || selectedEdgeIds.size > 0) && (
           <Tooltip title="Delete selected (nodes + connections)">
             <IconButton size="small" color="error" onClick={deleteSelected} sx={{ p: 0.5 }}>
@@ -4485,6 +4628,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           <Box sx={{ width: 200, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>Scene</Typography>
+              {canvasMode === 'select' && selectedIds.size > 0 && (
+                <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, mr: 0.5 }}>{selectedIds.size}</Typography>
+              )}
               <Tooltip title="Search"><IconButton size="small" onClick={() => setShowSearch((v) => !v)}><SearchIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
             </Box>
             {showSearch && (
@@ -4502,10 +4648,14 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
               <List dense disablePadding>
                 {filteredObjects.map((obj) => (
                   <ListItemButton key={obj.id} selected={selectedIds.has(obj.id)}
-                    onClick={(e) => toggleSelect(obj.id, e.ctrlKey || e.metaKey)}
+                    onClick={(e) => toggleSelect(obj.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
                     onDoubleClick={() => flyTo(obj.id)}
                     onContextMenu={(e) => openSceneCtx(e, obj.id)}
-                    sx={{ py: 0.5, px: 1.5, '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText' }, '&.Mui-selected:hover': { bgcolor: 'primary.dark' } }}>
+                    sx={{ py: 0.5, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText' }, '&.Mui-selected:hover': { bgcolor: 'primary.dark' } }}>
+                    {canvasMode === 'select' && (
+                      <Checkbox size="small" checked={selectedIds.has(obj.id)} tabIndex={-1} disableRipple
+                        sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: 'primary.contrastText' } }} />
+                    )}
                     <ListItemText
                       primary={<Typography component="span" sx={{ fontSize: 12 }}>
                         <strong>{obj.objectName}</strong>
@@ -4516,8 +4666,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                 ))}
                 {(scene.functionCalls ?? []).map((fc) => (
                   <ListItemButton key={fc.id} selected={selectedIds.has(fc.id)}
-                    onClick={(e) => toggleSelect(fc.id, e.ctrlKey || e.metaKey)}
-                    sx={{ py: 0.5, px: 1.5, '&.Mui-selected': { bgcolor: '#7c4dff', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#6939e0' } }}>
+                    onClick={(e) => toggleSelect(fc.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
+                    sx={{ py: 0.5, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#7c4dff', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#6939e0' } }}>
+                    {canvasMode === 'select' && (
+                      <Checkbox size="small" checked={selectedIds.has(fc.id)} tabIndex={-1} disableRipple
+                        sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: '#fff' } }} />
+                    )}
                     <ListItemText
                       primary={<Typography component="span" sx={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <CodeIcon sx={{ fontSize: 13, color: selectedIds.has(fc.id) ? '#fff' : '#ce93d8' }} />
@@ -4529,8 +4683,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                 ))}
                 {(scene.vars ?? []).map((v) => (
                   <ListItemButton key={v.id} selected={selectedIds.has(v.id)}
-                    onClick={(e) => toggleSelect(v.id, e.ctrlKey || e.metaKey)}
-                    sx={{ py: 0.5, px: 1.5, '&.Mui-selected': { bgcolor: '#388e3c', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#2e7d32' } }}>
+                    onClick={(e) => toggleSelect(v.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
+                    sx={{ py: 0.5, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#388e3c', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#2e7d32' } }}>
+                    {canvasMode === 'select' && (
+                      <Checkbox size="small" checked={selectedIds.has(v.id)} tabIndex={-1} disableRipple
+                        sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: '#fff' } }} />
+                    )}
                     <ListItemText
                       primary={<Typography component="span" sx={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <StorageIcon sx={{ fontSize: 13, color: selectedIds.has(v.id) ? '#fff' : '#81c784' }} />
@@ -4546,14 +4704,35 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         )}
 
         {/* ── Canvas ── */}
-        <Box sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}>
+        {/* touchAction:none prevents browser from stealing pointer events as scroll/pan mid-drag.
+            stopPropagation on pointerdown stops parent windows (GlobalWindow drag handler) from
+            interfering with ReactFlow's pointer capture. */}
+        <Box
+          sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', touchAction: 'none', userSelect: 'none' }}
+          onPointerDown={(e) => e.stopPropagation()}>
           {error && <Alert severity="error" onClose={() => setError(null)} sx={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 10 }}>{error}</Alert>}
           <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
+            onNodeDragStop={onNodeDragStop}
             fitView minZoom={0.2} maxZoom={3} style={{ width: '100%', height: '100%' }}
-            connectionMode={ConnectionMode.Loose}
+            connectionMode={ConnectionMode.Strict}
             deleteKeyCode={null}
-            connectionRadius={40}
+            connectionRadius={20}
+            autoPanOnNodeDrag
+            nodeExtent={[[-20000, -20000], [20000, 20000]]}
+            selectionOnDrag={canvasMode === 'select'}
+            panOnDrag={isMobile ? false : (canvasMode === 'select' ? [1] : true)}
+            selectionMode={SelectionMode.Partial}
+            isValidConnection={(c) => {
+              const srcExec = c.sourceHandle === 'exec_out';
+              const tgtExec = c.targetHandle === 'exec_in';
+              const srcData = !srcExec;
+              const tgtData = c.targetHandle !== 'exec_in';
+              // exec_out może łączyć się tylko z exec_in; data source nie może z exec_in
+              if (srcExec) return tgtExec;
+              if (tgtExec) return false;
+              return srcData && tgtData;
+            }}
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
             onDrop={handleCanvasDrop}>
             <Background variant={BackgroundVariant.Dots} />
