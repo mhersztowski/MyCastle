@@ -275,6 +275,15 @@ export function SpenNotesView() {
   const [imgAnchor, setImgAnchor] = useState<HTMLElement | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [zoomPct, setZoomPct] = useState(100);
+  const [debugVisible, setDebugVisible] = useState(false);
+  const [debugTick, setDebugTick] = useState(0);
+  const debugBufRef = useRef<string[]>([]);
+  // dbg writes to ref only — zero React re-renders during drawing
+  const dbg = (msg: string) => {
+    const t = new Date().toISOString().slice(11, 23);
+    debugBufRef.current.push(`${t} ${msg}`);
+    if (debugBufRef.current.length > 80) debugBufRef.current.shift();
+  };
 
   // Drawing refs (updated synchronously, not through React)
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -352,12 +361,12 @@ export function SpenNotesView() {
     const { sx, sy } = getScale();
     // Clamp zoom — NaN/Infinity from degenerate pinch would render all content off-screen
     const z = isFinite(zoomRef.current) && zoomRef.current > 0 ? zoomRef.current : 1;
-    zoomRef.current = z;
+    if (z !== zoomRef.current) { dbg(`ZOOM healed: ${zoomRef.current} → 1`); zoomRef.current = z; }
     // Clamp pan — NaN/Infinity from phantom touch or zero-size BoundingClientRect corrupts context
     const rawPx = panPxRef.current.x; const rawPy = panPxRef.current.y;
     const px = isFinite(rawPx) ? rawPx : 0;
     const py = isFinite(rawPy) ? rawPy : 0;
-    if (rawPx !== px || rawPy !== py) panPxRef.current = { x: px, y: py };
+    if (rawPx !== px || rawPy !== py) { dbg(`PAN healed: ${rawPx},${rawPy} → 0,0`); panPxRef.current = { x: px, y: py }; }
     // Background (full canvas, no transform)
     ctx.fillStyle = bgColorRef.current;
     ctx.fillRect(0, 0, c.width, c.height);
@@ -370,6 +379,7 @@ export function SpenNotesView() {
     if (lassoRef.current.length > 1 && toolRef.current === 'lasso')
       renderLasso(ctx, lassoRef.current, sx, sy);
     ctx.restore();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getScale]);
 
   // Resize canvas buffer to match CSS size
@@ -390,6 +400,13 @@ export function SpenNotesView() {
 
   // Redraw when page/selection changes
   useEffect(() => { redraw(); }, [pages, currentPageId, selectedIds, redraw]);
+
+  // Debug panel auto-refresh (2×/s when visible, zero cost when hidden)
+  useEffect(() => {
+    if (!debugVisible) return;
+    const id = setInterval(() => setDebugTick(t => t + 1), 500);
+    return () => clearInterval(id);
+  }, [debugVisible]);
 
   // ── Commit helpers ───────────────────────────────────────────────────────────
 
@@ -471,6 +488,7 @@ export function SpenNotesView() {
 
     // ── Touch (finger) handlers: pan + pinch zoom, no drawing ───────────────
     const onTouchDown = (e: PointerEvent) => {
+      dbg(`TOUCH_DN id=${e.pointerId} cx=${e.clientX.toFixed(0)} cy=${e.clientY.toFixed(0)} pan=${panPxRef.current.x.toFixed(1)},${panPxRef.current.y.toFixed(1)}`);
       activePointersRef.current.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
       if (activePointersRef.current.size >= 2) {
         startPinch();
@@ -519,11 +537,14 @@ export function SpenNotesView() {
         if (isFinite(newX) && isFinite(newY)) {
           panPxRef.current = { x: newX, y: newY };
           redraw();
+        } else {
+          dbg(`PAN_BLOCKED bx=${bx} startBx=${startBx} → newX=${newX}`);
         }
       }
     };
 
     const onTouchUp = (e: PointerEvent) => {
+      dbg(`TOUCH_UP id=${e.pointerId} remaining=${activePointersRef.current.size - 1} pan=${panPxRef.current.x.toFixed(1)},${panPxRef.current.y.toFixed(1)}`);
       activePointersRef.current.delete(e.pointerId);
       if (activePointersRef.current.size < 2) pinchRef.current = null;
       if (activePointersRef.current.size === 0) singleTouchPanRef.current = null;
@@ -538,6 +559,7 @@ export function SpenNotesView() {
     // ── Pen / mouse handlers: drawing ────────────────────────────────────────
     const onDown = (e: PointerEvent) => {
       if (e.pointerType === 'touch') { onTouchDown(e); return; }
+      dbg(`PEN_DN id=${e.pointerId} type=${e.pointerType} p=${e.pressure.toFixed(2)} els=${elementsRef.current.length} pan=${panPxRef.current.x.toFixed(1)},${panPxRef.current.y.toFixed(1)}`);
 
       c.setPointerCapture(e.pointerId);
       const { x, y } = toLogical(e);
@@ -648,15 +670,19 @@ export function SpenNotesView() {
       if (Math.hypot(x - last.x, y - last.y) > 0.8)
         stroke.points.push({ x, y, p: e.pressure > 0 ? e.pressure : 0.5 });
 
-      if (stroke.points.length >= 2) {
+      const committed = stroke.points.length >= 2;
+      dbg(`PEN_UP pts=${stroke.points.length} commit=${committed} els_before=${elementsRef.current.length} pan=${panPxRef.current.x.toFixed(1)},${panPxRef.current.y.toFixed(1)} z=${zoomRef.current.toFixed(2)}`);
+      if (committed) {
         pushUndo(currentIdRef.current, elementsRef.current);
         commitElements([...elementsRef.current, stroke]);
       }
       activeStrokeRef.current = null;
       redraw();
+      dbg(`PEN_UP_AFTER_REDRAW els=${elementsRef.current.length} pan=${panPxRef.current.x.toFixed(1)},${panPxRef.current.y.toFixed(1)}`);
     };
 
     const onCancel = (e: PointerEvent) => {
+      dbg(`CANCEL type=${e.pointerType} id=${e.pointerId} activeStroke=${activeStrokeRef.current?.points.length ?? 'null'}`);
       if (e.pointerType === 'touch') { onTouchUp(e); return; }
       // Pen cancel: commit partial stroke if long enough
       eraserActiveRef.current = false;
@@ -1193,6 +1219,20 @@ export function SpenNotesView() {
               </Tooltip>
             </>
           )}
+
+          {/* Debug toggle */}
+          <Box sx={{ ml: 'auto' }}>
+            <Box
+              component="button"
+              onClick={() => { setDebugVisible(v => !v); setDebugTick(t => t + 1); }}
+              sx={{
+                px: 1, py: 0.25, fontSize: 10, fontFamily: 'monospace', cursor: 'pointer',
+                bgcolor: debugVisible ? '#7c3aed' : 'rgba(255,255,255,0.07)',
+                color: debugVisible ? '#fff' : 'text.disabled',
+                border: '1px solid rgba(255,255,255,0.15)', borderRadius: 1, outline: 'none',
+              }}
+            >DBG</Box>
+          </Box>
         </Box>
 
         {/* Canvas */}
@@ -1205,6 +1245,31 @@ export function SpenNotesView() {
               cursor: getCursor(), touchAction: 'none',
             }}
           />
+
+          {/* Debug log overlay */}
+          {debugVisible && (() => {
+            // debugTick referenced here so interval re-render refreshes the log text
+            const _t = debugTick;
+            const logText = debugBufRef.current.length
+              ? debugBufRef.current.slice().reverse().join('\n')
+              : `(no logs yet — tick=${_t})`;
+            return (
+              <Box sx={{
+                position: 'absolute', top: 6, left: 6, right: 6, zIndex: 50,
+                bgcolor: 'rgba(0,0,0,0.88)', borderRadius: 1,
+                border: '1px solid #7c3aed', p: 0.75,
+                maxHeight: '55%', overflow: 'hidden',
+                pointerEvents: 'none',
+              }}>
+                <Box component="pre" sx={{
+                  m: 0, color: '#a78bfa', fontFamily: 'monospace', fontSize: 9,
+                  lineHeight: 1.35, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                }}>
+                  {logText}
+                </Box>
+              </Box>
+            );
+          })()}
 
           {/* Zoom controls */}
           <Box sx={{
