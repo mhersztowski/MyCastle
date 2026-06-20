@@ -1393,7 +1393,8 @@ export function SpenNotesView() {
 
             const onDragMove = (e: React.PointerEvent) => {
               const d = imgDragRef.current;
-              if (!d || !e.buttons) return;
+              if (!d) return;
+              // Note: !e.buttons guard removed — touch pointerType reports buttons=0 on some Android WebViews
               const c = canvasRef.current;
               if (!c) return;
               const r = c.getBoundingClientRect();
@@ -1428,6 +1429,13 @@ export function SpenNotesView() {
 
             const handleSx = { position: 'absolute', bgcolor: '#60a5fa', borderRadius: '2px', zIndex: 12 } as const;
             const edgeSx   = { position: 'absolute', zIndex: 11 } as const;
+            // Drag event props applied to every interactive element — onPointerMove/Up must live on the
+            // same element that received setPointerCapture (not a parent with pointer-events:none)
+            const dragProps = {
+              onPointerMove: onDragMove,
+              onPointerUp: onDragEnd,
+              style: { touchAction: 'none' } as React.CSSProperties,
+            };
 
             return (
               <Box
@@ -1437,35 +1445,33 @@ export function SpenNotesView() {
                   width: `${pctWidth}%`, height: `${pctHeight}%`,
                   zIndex: 10, pointerEvents: 'none',
                 }}
-                onPointerMove={onDragMove}
-                onPointerUp={onDragEnd}
               >
                 {/* Dashed border */}
                 <Box sx={{ position: 'absolute', inset: 0, border: '2px dashed #60a5fa', pointerEvents: 'none', zIndex: 10 }} />
 
                 {/* Move area (interior) */}
                 <Box sx={{ position: 'absolute', inset: HIT / 2, cursor: 'move', pointerEvents: 'auto', zIndex: 11 }}
-                  onPointerDown={e => startDrag(e, 'move')} />
+                  {...dragProps} onPointerDown={e => startDrag(e, 'move')} />
 
                 {/* ── Edge handles (bar + hit zone) ── */}
                 {/* Top */}
                 <Box sx={{ ...edgeSx, left: HANDLE, right: HANDLE, top: -HIT / 2, height: HIT, cursor: 'n-resize', pointerEvents: 'auto' }}
-                  onPointerDown={e => startDrag(e, 'top')}>
+                  {...dragProps} onPointerDown={e => startDrag(e, 'top')}>
                   <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 32, height: HANDLE / 2 }} />
                 </Box>
                 {/* Bottom */}
                 <Box sx={{ ...edgeSx, left: HANDLE, right: HANDLE, bottom: -HIT / 2, height: HIT, cursor: 's-resize', pointerEvents: 'auto' }}
-                  onPointerDown={e => startDrag(e, 'bottom')}>
+                  {...dragProps} onPointerDown={e => startDrag(e, 'bottom')}>
                   <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 32, height: HANDLE / 2 }} />
                 </Box>
                 {/* Left */}
                 <Box sx={{ ...edgeSx, top: HANDLE, bottom: HANDLE, left: -HIT / 2, width: HIT, cursor: 'w-resize', pointerEvents: 'auto' }}
-                  onPointerDown={e => startDrag(e, 'left')}>
+                  {...dragProps} onPointerDown={e => startDrag(e, 'left')}>
                   <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: HANDLE / 2, height: 32 }} />
                 </Box>
                 {/* Right */}
                 <Box sx={{ ...edgeSx, top: HANDLE, bottom: HANDLE, right: -HIT / 2, width: HIT, cursor: 'e-resize', pointerEvents: 'auto' }}
-                  onPointerDown={e => startDrag(e, 'right')}>
+                  {...dragProps} onPointerDown={e => startDrag(e, 'right')}>
                   <Box sx={{ ...handleSx, left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: HANDLE / 2, height: 32 }} />
                 </Box>
 
@@ -1486,7 +1492,7 @@ export function SpenNotesView() {
                           cursor: cur, pointerEvents: 'auto',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}
-                        onPointerDown={e => startDrag(e, edge)}>
+                        {...dragProps} onPointerDown={e => startDrag(e, edge)}>
                         <Box sx={{ width: HANDLE, height: HANDLE, bgcolor: '#60a5fa', borderRadius: '2px' }} />
                       </Box>
                     );
