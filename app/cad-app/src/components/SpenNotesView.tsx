@@ -350,10 +350,14 @@ export function SpenNotesView() {
     const ctx = c.getContext('2d');
     if (!ctx) return;
     const { sx, sy } = getScale();
-    // Clamp zoom so NaN/Infinity from degenerate pinch never corrupts rendering
+    // Clamp zoom — NaN/Infinity from degenerate pinch would render all content off-screen
     const z = isFinite(zoomRef.current) && zoomRef.current > 0 ? zoomRef.current : 1;
     zoomRef.current = z;
-    const { x: px, y: py } = panPxRef.current;
+    // Clamp pan — NaN/Infinity from phantom touch or zero-size BoundingClientRect corrupts context
+    const rawPx = panPxRef.current.x; const rawPy = panPxRef.current.y;
+    const px = isFinite(rawPx) ? rawPx : 0;
+    const py = isFinite(rawPy) ? rawPy : 0;
+    if (rawPx !== px || rawPy !== py) panPxRef.current = { x: px, y: py };
     // Background (full canvas, no transform)
     ctx.fillStyle = bgColorRef.current;
     ctx.fillRect(0, 0, c.width, c.height);
@@ -420,6 +424,7 @@ export function SpenNotesView() {
 
     const toBufPx = (e: PointerEvent) => {
       const r = c.getBoundingClientRect();
+      if (!r.width || !r.height) return { bx: 0, by: 0 };
       return {
         bx: (e.clientX - r.left) / r.width * c.width,
         by: (e.clientY - r.top) / r.height * c.height,
@@ -439,6 +444,8 @@ export function SpenNotesView() {
     // ── Helpers shared across handlers ──────────────────────────────────────
     const toBufPxFromClient = (cx: number, cy: number) => {
       const r = c.getBoundingClientRect();
+      // Guard: zero-size rect during layout → division by zero → NaN corrupts panPxRef
+      if (!r.width || !r.height) return { bx: 0, by: 0 };
       return {
         bx: (cx - r.left) / r.width * c.width,
         by: (cy - r.top) / r.height * c.height,
@@ -451,8 +458,8 @@ export function SpenNotesView() {
       const pts = [...activePointersRef.current.values()];
       const p0 = toPxFromTracked(pts[0]); const p1 = toPxFromTracked(pts[1]);
       const dist = Math.hypot(p1.bx - p0.bx, p1.by - p0.by);
-      // Reject degenerate pinch (fingers too close) — prevents initDist=0 → Infinity zoom
-      if (dist < 20) return;
+      // Reject degenerate pinch: NaN (invalid coords) or < 20px (too close → Infinity zoom)
+      if (!isFinite(dist) || dist < 20) return;
       pinchRef.current = {
         initDist: dist,
         initZoom: zoomRef.current,
@@ -470,6 +477,9 @@ export function SpenNotesView() {
       } else {
         // Start single-finger pan
         const { bx, by } = toBufPxFromClient(e.clientX, e.clientY);
+        // Guard: if canvas has no size yet, bx/by would be 0 (safe per toBufPxFromClient guard)
+        // but if somehow NaN slips through, ignore this touch to protect panPxRef
+        if (!isFinite(bx) || !isFinite(by)) return;
         singleTouchPanRef.current = { startBx: bx, startBy: by, startPan: { ...panPxRef.current } };
         pinchRef.current = null;
       }
@@ -503,8 +513,13 @@ export function SpenNotesView() {
       if (singleTouchPanRef.current && activePointersRef.current.size === 1) {
         const { bx, by } = toBufPxFromClient(e.clientX, e.clientY);
         const { startBx, startBy, startPan } = singleTouchPanRef.current;
-        panPxRef.current = { x: startPan.x + (bx - startBx), y: startPan.y + (by - startBy) };
-        redraw();
+        const newX = startPan.x + (bx - startBx);
+        const newY = startPan.y + (by - startBy);
+        // Guard: phantom touch with invalid coords (NaN/Infinity) must not corrupt pan
+        if (isFinite(newX) && isFinite(newY)) {
+          panPxRef.current = { x: newX, y: newY };
+          redraw();
+        }
       }
     };
 
