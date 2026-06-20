@@ -97,13 +97,16 @@ function isLightColor(hex: string): boolean {
 }
 
 const imgCache = new Map<string, HTMLImageElement>();
+// Set by the component to trigger canvas redraw after async image load
+let _imgRedrawCb: (() => void) | null = null;
+
 function getImg(src: string): HTMLImageElement {
-  if (!imgCache.has(src)) {
-    const img = new Image();
-    img.src = src;
-    imgCache.set(src, img);
-  }
-  return imgCache.get(src)!;
+  if (imgCache.has(src)) return imgCache.get(src)!;
+  const img = new Image();
+  img.onload = () => { _imgRedrawCb?.(); };
+  img.src = src;
+  imgCache.set(src, img);
+  return img;
 }
 
 function hitImage(el: NoteImage, lx: number, ly: number): boolean {
@@ -403,6 +406,12 @@ export function SpenNotesView() {
 
   // Redraw when page/selection changes
   useEffect(() => { redraw(); }, [pages, currentPageId, selectedIds, redraw]);
+
+  // Wire image async-load → redraw (handles data URLs that load asynchronously)
+  useEffect(() => {
+    _imgRedrawCb = redraw;
+    return () => { _imgRedrawCb = null; };
+  }, [redraw]);
 
   // Debug panel auto-refresh (2×/s when visible, zero cost when hidden)
   useEffect(() => {
@@ -834,7 +843,11 @@ export function SpenNotesView() {
       const src = e.target?.result as string;
       if (!src) return;
       const img = new Image();
-      img.onload = () => insertImage(src, img.naturalWidth, img.naturalHeight);
+      img.onload = () => {
+        // Pre-warm cache with already-loaded image so renderElements draws it immediately
+        imgCache.set(src, img);
+        insertImage(src, img.naturalWidth, img.naturalHeight);
+      };
       img.src = src;
     };
     reader.readAsDataURL(file);
