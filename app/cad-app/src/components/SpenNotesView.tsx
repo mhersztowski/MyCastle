@@ -281,6 +281,7 @@ export function SpenNotesView() {
   const [zoomPct, setZoomPct] = useState(100);
   const [debugVisible, setDebugVisible] = useState(false);
   const [debugTick, setDebugTick] = useState(0);
+  const [imgDragVer, setImgDragVer] = useState(0);
   const debugBufRef = useRef<string[]>([]);
   // dbg writes to ref only — zero React re-renders during drawing
   const dbg = (msg: string) => {
@@ -1344,19 +1345,16 @@ export function SpenNotesView() {
               </Box>
             );
           })()}
-          {/* Image resize overlay — zoomPct in scope ensures re-render on zoom */}
+          {/* Image resize overlay — zoomPct/imgDragVer in scope ensures re-render on zoom/drag */}
           {(() => {
-            void zoomPct; // re-render when zoom changes
+            void zoomPct;    // re-render when zoom changes
+            void imgDragVer; // re-render on every drag move
             if (!selectedImgId) return null;
-            const imgEl = elementsRef.current.find(
+            // Always read from elementsRef.current — updated imperatively during drag
+            const im = elementsRef.current.find(
               (el): el is NoteImage => el.kind === 'image' && el.id === selectedImgId,
             );
-            // Use React-state-derived position (updates after commitElements)
-            const imgState = pages
-              .find(p => p.id === currentPageId)
-              ?.elements.find((el): el is NoteImage => el.kind === 'image' && el.id === selectedImgId);
-            if (!imgEl && !imgState) return null;
-            const im = imgState ?? imgEl!;
+            if (!im) return null;
 
             // Account for zoom+pan in overlay positioning
             const z = zoomRef.current;
@@ -1413,11 +1411,12 @@ export function SpenNotesView() {
                 case 'br': w += dx; h += dy; break;
               }
               w = Math.max(20, w); h = Math.max(20, h);
-              // Imperatively update ref + redraw (no React state → no re-render lag)
+              // Update ref + redraw canvas; also bump imgDragVer so overlay re-renders in sync
               elementsRef.current = elementsRef.current.map(el =>
                 el.id === selectedImgId ? { ...el, x, y, w, h } : el,
               );
               redraw();
+              setImgDragVer(v => v + 1);
             };
 
             const onDragEnd = () => {

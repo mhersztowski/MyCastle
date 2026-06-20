@@ -85,6 +85,45 @@ export default function App() {
   const [injectedPoint, setInjectedPoint] = useState<Point2D | null>(null);
   const [injectedAngle, setInjectedAngle] = useState<number | null>(null);
   const lastPointRef = useRef<Point2D | null>(null);
+  const tabBarRef = useRef<HTMLDivElement>(null);
+
+  // Drag-to-scroll tab bar with pen/mouse (touch uses native scroll)
+  useEffect(() => {
+    const bar = tabBarRef.current;
+    if (!bar) return;
+    const getScroller = () => bar.querySelector<HTMLElement>('.MuiTabs-scroller');
+    let startX = 0, startScroll = 0, pointerId = -1, didDrag = false;
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return;
+      const s = getScroller(); if (!s) return;
+      startX = e.clientX; startScroll = s.scrollLeft; pointerId = e.pointerId; didDrag = false;
+    };
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId || e.pointerType === 'touch') return;
+      const s = getScroller(); if (!s) return;
+      const dx = e.clientX - startX;
+      if (!didDrag && Math.abs(dx) > 5) { didDrag = true; bar.setPointerCapture(e.pointerId); }
+      if (didDrag) { s.scrollLeft = startScroll - dx; e.stopPropagation(); }
+    };
+    const onUp = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      if (bar.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);
+      pointerId = -1;
+    };
+    const onClick = (e: MouseEvent) => { if (didDrag) { e.stopPropagation(); e.preventDefault(); didDrag = false; } };
+    bar.addEventListener('pointerdown', onDown);
+    bar.addEventListener('pointermove', onMove);
+    bar.addEventListener('pointerup', onUp);
+    bar.addEventListener('pointercancel', onUp);
+    bar.addEventListener('click', onClick, true);
+    return () => {
+      bar.removeEventListener('pointerdown', onDown);
+      bar.removeEventListener('pointermove', onMove);
+      bar.removeEventListener('pointerup', onUp);
+      bar.removeEventListener('pointercancel', onUp);
+      bar.removeEventListener('click', onClick, true);
+    };
+  }, []);
 
   const handleCoordinate = useCallback((point: Point2D) => {
     setInjectedPoint({ ...point });
@@ -275,7 +314,10 @@ export default function App() {
             onSceneData={json => { setAiSceneData(json); setSavedSceneJson(json); }}
           />
         )}
+        <Box ref={tabBarRef} sx={{ flex: 1, minWidth: 0, overflow: 'hidden', cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
         <Tabs
+          variant="scrollable"
+          scrollButtons={false}
           value={mode}
           onChange={(_, v: AppMode) => setMode(v)}
           sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0, fontSize: 12 } }}
@@ -329,6 +371,7 @@ export default function App() {
             iconPosition="start"
           />
         </Tabs>
+        </Box>
 
         {/* AI + code-editor toggles (all modes) */}
         <Tooltip title={aiOpen ? 'Close AI assistant' : 'Open AI assistant'}>
