@@ -258,9 +258,10 @@ function makeThumbnail(page: NotePage): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function SpenNotesView() {
-  // React state
-  const [pages, setPages] = useState<NotePage[]>(() => loadStorage().pages);
-  const [currentPageId, setCurrentPageId] = useState<string>(() => loadStorage().currentId);
+  // React state — loadStorage() called ONCE so pages[0].id === currentId (avoids mismatch when localStorage empty)
+  const [_init] = useState(loadStorage);
+  const [pages, setPages] = useState<NotePage[]>(_init.pages);
+  const [currentPageId, setCurrentPageId] = useState<string>(_init.currentId);
   const [tool, setTool] = useState<NoteTool>('pencil');
   const [color, setColor] = useState('#ffffff');
   const [brushSize, setBrushSize] = useState(3);
@@ -330,7 +331,9 @@ export function SpenNotesView() {
   // Sync elementsRef + bgColorRef when pages/currentPage changes
   useEffect(() => {
     const page = pages.find(p => p.id === currentPageId);
-    elementsRef.current = page?.elements ?? [];
+    const els = page?.elements ?? [];
+    dbg(`SYNC_EFF id=${currentPageId} found=${!!page} els=${els.length} pages=${pages.length}`);
+    elementsRef.current = els;
     bgColorRef.current = page?.bgColor ?? DEFAULT_BG;
   }, [pages, currentPageId]);
 
