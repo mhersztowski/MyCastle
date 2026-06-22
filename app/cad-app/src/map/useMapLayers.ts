@@ -1,6 +1,9 @@
 import { useState, useCallback } from 'react'
 import type { MapNode, MapNodeType } from './types'
 
+/** Where a dragged node lands relative to the drop target. */
+export type DropPosition = 'before' | 'after' | 'inside'
+
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
@@ -21,6 +24,7 @@ const TYPE_DEFAULTS: Record<MapNodeType, Partial<MapNode>> = {
   },
   circle: { lat: 52.2297, lng: 21.0122, radius: 800, color: '#66bb6a', fillOpacity: 0.3, weight: 2 },
   group: { children: [] },
+  route: { color: '#42a5f5', weight: 4 },
 }
 
 const INITIAL_NODES: MapNode[] = [
@@ -72,6 +76,27 @@ function insertAfter(nodes: MapNode[], afterId: string, newNode: MapNode): MapNo
   }
   return nodes.map(n =>
     n.children ? { ...n, children: insertAfter(n.children, afterId, newNode) } : n
+  )
+}
+
+/** True when `id` is `node` itself or any of its descendants. */
+function containsId(node: MapNode, id: string): boolean {
+  if (node.id === id) return true
+  return (node.children ?? []).some(c => containsId(c, id))
+}
+
+/** Insert `node` immediately before/after the sibling identified by `targetId`, anywhere in the tree. */
+function insertRelative(
+  nodes: MapNode[], targetId: string, node: MapNode, pos: 'before' | 'after',
+): MapNode[] {
+  const idx = nodes.findIndex(n => n.id === targetId)
+  if (idx !== -1) {
+    const result = [...nodes]
+    result.splice(pos === 'before' ? idx : idx + 1, 0, node)
+    return result
+  }
+  return nodes.map(n =>
+    n.children ? { ...n, children: insertRelative(n.children, targetId, node, pos) } : n
   )
 }
 
@@ -181,6 +206,40 @@ export function useMapLayers() {
     setSelectedId(newNode.id)
   }, [])
 
+  // Drag & drop reparent/reorder. `pos`: drop before/after the target, or inside it (groups only).
+  const moveNode = useCallback((dragId: string, targetId: string, pos: DropPosition) => {
+    setNodes(prev => {
+      if (dragId === targetId) return prev
+      const dragged = findNode(prev, dragId)
+      const target = findNode(prev, targetId)
+      if (!dragged || !target) return prev
+      // Never drop a node into its own subtree.
+      if (containsId(dragged, targetId)) return prev
+      // Only groups can contain children.
+      if (pos === 'inside' && target.type !== 'group') return prev
+      const without = removeNode(prev, dragId)
+      return pos === 'inside'
+        ? insertUnder(without, targetId, dragged)
+        : insertRelative(without, targetId, dragged, pos)
+    })
+    setSelectedId(dragId)
+  }, [])
+
+  // Add a route node (geometry already computed by the caller).
+  const placeRoute = useCallback((props: Partial<MapNode>) => {
+    const node: MapNode = {
+      id: uid(),
+      name: props.name ?? 'Route',
+      type: 'route',
+      visible: true,
+      weight: 4,
+      ...props,
+    }
+    setNodes(prev => [...prev, node])
+    setSelectedId(node.id)
+    return node.id
+  }, [])
+
   // Replace entire scene (used by file open)
   const loadNodes = useCallback((newNodes: MapNode[]) => {
     setNodes(newNodes)
@@ -204,6 +263,8 @@ export function useMapLayers() {
     updateLayers,
     importAsGroup,
     addSibling,
+    moveNode,
+    placeRoute,
     loadNodes,
   }
 }

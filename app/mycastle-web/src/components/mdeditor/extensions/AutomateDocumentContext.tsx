@@ -158,10 +158,12 @@ interface AutomateDocumentProviderProps {
 export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> = ({ children, documentPath }) => {
   const { dataSource } = useFilesystem();
   const { notify } = useNotification();
-  const { currentUser } = useAuth();
-  // userName w refie — api jest tworzone raz, a closure czyta zawsze aktualną wartość.
+  const { currentUser, token } = useAuth();
+  // userName i token w refach — api jest tworzone raz, a closure czyta zawsze aktualną wartość.
   const userNameRef = useRef<string | null>(currentUser?.name ?? null);
+  const tokenRef = useRef<string | null>(token ?? null);
   useEffect(() => { userNameRef.current = currentUser?.name ?? null; }, [currentUser]);
+  useEffect(() => { tokenRef.current = token ?? null; }, [token]);
   const variablesRef = useRef<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<Map<string, ScriptBlockState>>(new Map());
   const blockOrderRef = useRef<string[]>([]);
@@ -186,6 +188,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         variablesRef.current,
         () => documentPathRef.current,
         () => userNameRef.current,
+        () => tokenRef.current,
       );
     }
     return apiRef.current;

@@ -1,14 +1,12 @@
 /**
  * Read-only CAD 2D viewer — renders project as inline SVG.
- * URL: /viewer/cad/{vfsPath}  e.g. /viewer/cad/users/default/projects/mypart
+ * URL: /viewer/cad/{vfsPath}
  */
-
 import { useEffect, useState } from 'react';
-import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { Box, CircularProgress, Typography } from '@mui/material';
 import { Project } from '@mhersztowski/core-cad';
-import { CAD_EXT, readFileAt } from '../vfs/cadProjectApi';
-import { loadProjectFromText, buildSVGString } from '../io/CadExporter';
+import { CAD_EXT, readFileAt } from '../vfs';
+import { loadProjectFromText, buildSVGString } from '../cad/buildSvg';
 
 interface Props { vfsPath: string }
 
@@ -20,7 +18,6 @@ export function CadViewerPage({ vfsPath }: Props) {
     const parts = vfsPath.split('/');
     const name = parts.pop()!;
     const dir = '/' + parts.join('/');
-
     let cancelled = false;
     (async () => {
       try {
@@ -43,21 +40,12 @@ export function CadViewerPage({ vfsPath }: Props) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
         <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary' }}>CAD 2D</Typography>
         <Typography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: '#4fc3f7' }}>{label}</Typography>
-        <Box sx={{ flex: 1 }} />
-        <Tooltip title="Open in editor">
-          <IconButton size="small" onClick={() => { window.location.href = '/'; }}>
-            <OpenInNewIcon sx={{ fontSize: 16 }} />
-          </IconButton>
-        </Tooltip>
       </Box>
       <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
         {!svg && !error && <CircularProgress size={32} />}
         {error && <Typography sx={{ color: 'error.main', fontSize: 14 }}>Failed to load: {error}</Typography>}
         {svg && (
-          <Box
-            dangerouslySetInnerHTML={{ __html: svg }}
-            sx={{ width: '100%', height: '100%', '& svg': { display: 'block' } }}
-          />
+          <Box dangerouslySetInnerHTML={{ __html: svg }} sx={{ width: '100%', height: '100%', '& svg': { display: 'block' } }} />
         )}
       </Box>
     </Box>

@@ -17,7 +17,8 @@ import { cadProjectToSceneJson } from '../bridge/CadToScene';
 import { mapNodesToSceneJson, deserializeMapNodes } from '../bridge/MapToScene';
 import { Scene3DProjectBrowser } from './Scene3DProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
-import { writeScene3dFile, vfsListDir, vfsReadFileBin, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs, readFileAt, MAP_EXT } from '../vfs/cadProjectApi';
+import { writeScene3dFile, vfsListDir, vfsReadFileBin, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs, readFileAt, MAP_EXT, buildViewerUrl, getCurrentUserId } from '../vfs/cadProjectApi';
+import { useRegisterFileOps } from '../fileops/FileOpsContext';
 import type { PrefabEntry } from '@mhersztowski/core-scene3d';
 import type { ProjectPrefabGroup } from '@mhersztowski/ui-components-scene3d';
 import type { ActiveTemplate } from './RepositoryPanel';
@@ -70,6 +71,19 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   const [serverMode, setServerMode] = useState<'open' | 'save' | null>(null);
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const sceneViewerUrl = (currentProject && currentFile)
+    ? buildViewerUrl('scene3d', `/users/${getCurrentUserId()}/scene3d/${currentProject}`, currentFile)
+    : null;
+
+  // Register file operations with the unified top-bar File menu.
+  useRegisterFileOps('scene3d', {
+    currentName: currentFile,
+    server: [
+      { label: 'Open Scene 3D from Server…', run: () => setServerMode('open') },
+      { label: 'Save Scene 3D to Server…', run: () => setServerMode('save') },
+    ],
+    viewerUrl: sceneViewerUrl,
+  }, [currentFile, sceneViewerUrl]);
   const [initialPrefabs, setInitialPrefabs] = useState<string | undefined>(undefined);
   const [allProjectsPrefabs, setAllProjectsPrefabs] = useState<ProjectPrefabGroup[]>([]);
   const currentProjectRef = useRef<string | null>(null);

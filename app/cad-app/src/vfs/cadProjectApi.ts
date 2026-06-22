@@ -18,6 +18,34 @@
 
 const BASE = '/api/vfs';
 
+/** Abort a VFS request after this many ms so an unreachable backend can't hang the UI forever. */
+const REQUEST_TIMEOUT_MS = 12000;
+
+/** Error thrown when the backend is unreachable or does not respond in time. */
+class VfsNetworkError extends Error {
+  readonly code = 'NETWORK';
+  constructor(message: string) {
+    super(message);
+    this.name = 'VfsNetworkError';
+  }
+}
+
+/** fetch() with a hard timeout; maps connection/timeout failures to a clear, identifiable error. */
+async function vfsFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') {
+      throw new VfsNetworkError('CAD backend did not respond — is it running? (port 1897, e.g. `pnpm dev:cad`)');
+    }
+    // fetch() rejects with a TypeError on connection refused / network error.
+    if (e instanceof TypeError) {
+      throw new VfsNetworkError('Cannot reach CAD backend — is it running? (port 1897, e.g. `pnpm dev:cad`)');
+    }
+    throw e;
+  }
+}
+
 // ── file extensions ───────────────────────────────────────────────────────────
 
 /** CAD project file extension. */
@@ -28,6 +56,18 @@ export const SCENE_EXT = '.scene.json';
 export const ELEC_EXT = '.elec.json';
 /** Map project file extension. */
 export const MAP_EXT = '.map.json';
+/** Notes project file extension. */
+export const NOTES_EXT = '.notes.json';
+
+/**
+ * Build a read-only viewer URL for a saved scene.
+ * `dir` is an absolute VFS directory (e.g. `/users/default/projects`),
+ * `name` the file name without extension. Segments are URL-encoded, slashes kept.
+ */
+export function buildViewerUrl(mode: string, dir: string, name: string): string {
+  const full = `${dir}/${name}`.replace(/^\/+/, '');
+  return '/viewer/' + mode + '/' + full.split('/').map(encodeURIComponent).join('/');
+}
 
 // ── userId management ─────────────────────────────────────────────────────────
 
@@ -69,7 +109,7 @@ function filePath(dir: string, name: string, extension: string): string {
 async function vfsGet<T>(op: string, path?: string): Promise<T> {
   const url = new URL(BASE + op, window.location.origin);
   if (path) url.searchParams.set('path', path);
-  const res = await fetch(url.toString());
+  const res = await vfsFetch(url.toString());
   const data = await res.json() as { error?: string; code?: string } & T;
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data;
@@ -78,7 +118,7 @@ async function vfsGet<T>(op: string, path?: string): Promise<T> {
 async function vfsPost(op: string, path?: string | null, body?: unknown): Promise<void> {
   const url = new URL(BASE + op, window.location.origin);
   if (path != null) url.searchParams.set('path', path);
-  const res = await fetch(url.toString(), {
+  const res = await vfsFetch(url.toString(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -134,7 +174,10 @@ export async function listDirectory(dir: string, extension: string): Promise<Dir
   try {
     const res = await vfsGet<{ entries: Array<{ name: string; type: number }> }>('/readdir', dir);
     entries = res.entries;
-  } catch {
+  } catch (e) {
+    // A missing directory is normal (browser can still create one) → empty listing.
+    // A network/timeout failure must surface so the caller stops spinning and shows the error.
+    if (e instanceof VfsNetworkError) throw e;
     return { dirs: [], files: [] };
   }
 

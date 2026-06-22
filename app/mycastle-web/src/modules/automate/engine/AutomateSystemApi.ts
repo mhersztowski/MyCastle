@@ -46,9 +46,47 @@ interface FileEntry {
   isDirectory: boolean;
 }
 
+/** One embedded script block found in the hosting markdown document. */
+export interface DocBlockRef {
+  /** Block unique ID (TipTap node id). */
+  id: string;
+  /** Block type — `'automate'` or `'pscript'` (Plugin Script). */
+  type: 'automate' | 'pscript';
+  /** Human-readable label from the block header (Plugin Script only). */
+  label?: string;
+  /** Run mode (Plugin Script only): `'auto'` runs on mount, `'manual'` on click. */
+  mode?: 'auto' | 'manual';
+  /** Tags assigned to this block (Automate Script only). */
+  tags?: string[];
+  /** Raw source code exactly as written by the user. */
+  code: string;
+}
+
+/** Options accepted by `api.http.*` methods. */
+export interface ApiHttpOptions {
+  /** Extra headers merged with Content-Type and Authorization. */
+  headers?: Record<string, string>;
+  /** Set false to omit automatic Authorization header (external APIs). Default: true. */
+  auth?: boolean;
+}
+
 export interface AutomateSystemApiInterface {
   /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
   secrets: CredentialsApi;
+
+  /** Authenticated HTTP client — identical to `http` in Plugin Script.
+   *  Automatically adds `Authorization: Bearer` (unless `auth:false`). */
+  http: {
+    get<T = unknown>(url: string, options?: ApiHttpOptions): Promise<T>;
+    post<T = unknown>(url: string, body?: unknown, options?: ApiHttpOptions): Promise<T>;
+    put<T = unknown>(url: string, body?: unknown, options?: ApiHttpOptions): Promise<T>;
+    patch<T = unknown>(url: string, body?: unknown, options?: ApiHttpOptions): Promise<T>;
+    delete<T = unknown>(url: string, options?: ApiHttpOptions): Promise<T>;
+    /** GET → raw text (CSV, Markdown, XML, plain HTML). */
+    getText(url: string, options?: ApiHttpOptions): Promise<string>;
+    /** Raw fetch — no automatic headers. Returns native Response. */
+    raw(url: string, init?: RequestInit): Promise<Response>;
+  };
   file: {
     // ── Read / write ──
     /** Wczytaj plik tekstowy. Rzuca błąd gdy nie istnieje. */
@@ -210,6 +248,26 @@ export interface AutomateSystemApiInterface {
       stopOnError?: boolean;
     }): Promise<ScriptRunResult[]>;
   };
+
+  /** Introspect the hosting markdown document and its embedded script blocks.
+   *  Methods that read the document throw when the api has no document
+   *  context (dash.json panel, flow designer, etc.). `path()` is safe to
+   *  call from any context — it returns `undefined` instead of throwing. */
+  doc: {
+    /** VFS path of the hosting `.md` file.
+     *  `undefined` when running outside a markdown editor. */
+    path(): string | undefined;
+    /** Read the raw markdown source of the hosting document.
+     *  Throws when there is no document context. */
+    read(): Promise<string>;
+    /** Parse and list all embedded script blocks in the document.
+     *  Returns both `automate` and `pscript` (Plugin Script) blocks.
+     *  Optional `filter` narrows by type, tag (automate), or label (pscript). */
+    blocks(filter?: { type?: 'automate' | 'pscript'; tag?: string; label?: string }): Promise<DocBlockRef[]>;
+    /** Return the raw source code of one block by its ID.
+     *  Returns `undefined` if no block with that ID is found. */
+    blockCode(blockId: string): Promise<string | undefined>;
+  };
 }
 
 /** Metadata + body of an automate script block found in a markdown file. */
@@ -364,6 +422,7 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
    *  to recreate the api. Returns undefined when the host doesn't know
    *  (api lives outside MdEditor — flow/designer surfaces). */
   private _getDocumentPath: () => string | undefined;
+  private _getToken: () => string | null;
 
   /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
   secrets: CredentialsApi;
@@ -373,10 +432,12 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
     variables: Record<string, unknown>,
     getDocumentPath: () => string | undefined = () => undefined,
     getUserName: () => string | null = () => null,
+    getToken: () => string | null = () => null,
   ) {
     this._dataSource = dataSource;
     this._variables = variables;
     this._getDocumentPath = getDocumentPath;
+    this._getToken = getToken;
     this.secrets = makeCredentialsApi(getUserName);
   }
 
@@ -433,6 +494,56 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
     const final = withSingleStar.replace(/__GLOBSTAR__/g, '.*');
     return new RegExp(`^${final}$`);
   }
+
+  // ─── http ────────────────────────────────────────────────────────────
+
+  private _httpHeaders(opts?: ApiHttpOptions): Record<string, string> {
+    const token = this._getToken();
+    return {
+      'Content-Type': 'application/json',
+      ...(opts?.auth !== false && token ? { Authorization: `Bearer ${token}` } : {}),
+      ...opts?.headers,
+    };
+  }
+
+  private _httpCheck(resp: Response, url: string): void {
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${url}`);
+  }
+
+  http = {
+    get: async <T = unknown>(url: string, opts?: ApiHttpOptions): Promise<T> => {
+      const r = await fetch(url, { headers: this._httpHeaders(opts) });
+      this._httpCheck(r, url);
+      return r.json() as Promise<T>;
+    },
+    post: async <T = unknown>(url: string, body?: unknown, opts?: ApiHttpOptions): Promise<T> => {
+      const r = await fetch(url, { method: 'POST', headers: this._httpHeaders(opts), body: body !== undefined ? JSON.stringify(body) : undefined });
+      this._httpCheck(r, url);
+      return r.json() as Promise<T>;
+    },
+    put: async <T = unknown>(url: string, body?: unknown, opts?: ApiHttpOptions): Promise<T> => {
+      const r = await fetch(url, { method: 'PUT', headers: this._httpHeaders(opts), body: body !== undefined ? JSON.stringify(body) : undefined });
+      this._httpCheck(r, url);
+      return r.json() as Promise<T>;
+    },
+    patch: async <T = unknown>(url: string, body?: unknown, opts?: ApiHttpOptions): Promise<T> => {
+      const r = await fetch(url, { method: 'PATCH', headers: this._httpHeaders(opts), body: body !== undefined ? JSON.stringify(body) : undefined });
+      this._httpCheck(r, url);
+      return r.json() as Promise<T>;
+    },
+    delete: async <T = unknown>(url: string, opts?: ApiHttpOptions): Promise<T> => {
+      const r = await fetch(url, { method: 'DELETE', headers: this._httpHeaders(opts) });
+      this._httpCheck(r, url);
+      const text = await r.text();
+      return (text ? JSON.parse(text) : null) as T;
+    },
+    getText: async (url: string, opts?: ApiHttpOptions): Promise<string> => {
+      const r = await fetch(url, { headers: this._httpHeaders(opts) });
+      this._httpCheck(r, url);
+      return r.text();
+    },
+    raw: (url: string, init?: RequestInit): Promise<Response> => fetch(url, init),
+  };
 
   file = {
     read: async (path: string): Promise<string> => {
@@ -1132,6 +1243,70 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
     runInChildsByTag: async (tag: string, options?: { stopOnError?: boolean }): Promise<ScriptRunResult[]> => {
       const scripts = await this.scripts.findInChildsByTag(tag);
       return this._executeDiscovered(scripts, tag, !!options?.stopOnError, 'runInChildsByTag');
+    },
+  };
+
+  // ─── Internal helpers for the doc namespace ──────────────────────────
+
+  /** Parse all `pscript:ID:mode:encodedLabel` fences from raw markdown.
+   *  Mirrors `_parseAutomateFences` for Plugin Script blocks. */
+  private _parsePscriptFences(raw: string): DocBlockRef[] {
+    const out: DocBlockRef[] = [];
+    const re = /```pscript(?::([^\n]*))?\n([\s\S]*?)```/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+      const params = (m[1] || '').trim();
+      const code = m[2].replace(/\s+$/, '');
+      const parts = params.split(':');
+      const id = parts[0] || '';
+      const modeRaw = parts[1] ?? '';
+      const mode: 'auto' | 'manual' = modeRaw === 'auto' ? 'auto' : 'manual';
+      // Label may itself contain ':' so join remaining parts back.
+      const encodedLabel = parts.slice(2).join(':');
+      let label: string | undefined;
+      try { label = encodedLabel ? decodeURIComponent(encodedLabel) : undefined; } catch { label = encodedLabel || undefined; }
+      out.push({ id, type: 'pscript', label, mode, code });
+    }
+    return out;
+  }
+
+  /** Collect all embedded blocks (automate + pscript) from raw markdown as DocBlockRef[]. */
+  private _allDocBlocks(raw: string): DocBlockRef[] {
+    const p = this._getDocumentPath() ?? '';
+    const auto: DocBlockRef[] = this._parseAutomateFences(raw, p).map(s => ({
+      id: s.blockId,
+      type: 'automate' as const,
+      tags: s.tags,
+      code: s.code,
+    }));
+    return [...auto, ...this._parsePscriptFences(raw)];
+  }
+
+  doc = {
+    path: (): string | undefined => this._getDocumentPath(),
+
+    read: async (): Promise<string> => {
+      const p = this._requireDocumentPath('doc.read');
+      return this.file.read(p);
+    },
+
+    blocks: async (filter?: { type?: 'automate' | 'pscript'; tag?: string; label?: string }): Promise<DocBlockRef[]> => {
+      const p = this._requireDocumentPath('doc.blocks');
+      const raw = await this.file.read(p);
+      const all = this._allDocBlocks(raw);
+      if (!filter) return all;
+      return all.filter(b => {
+        if (filter.type && b.type !== filter.type) return false;
+        if (filter.tag && !(b.tags ?? []).includes(filter.tag)) return false;
+        if (filter.label && b.label !== filter.label) return false;
+        return true;
+      });
+    },
+
+    blockCode: async (blockId: string): Promise<string | undefined> => {
+      const p = this._requireDocumentPath('doc.blockCode');
+      const raw = await this.file.read(p);
+      return this._allDocBlocks(raw).find(b => b.id === blockId)?.code;
     },
   };
 }

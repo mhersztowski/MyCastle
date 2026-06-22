@@ -107,6 +107,8 @@ import SyncIcon from '@mui/icons-material/Sync';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import PanToolIcon from '@mui/icons-material/PanTool';
 import FitScreenIcon from '@mui/icons-material/FitScreen';
+import TerminalIcon from '@mui/icons-material/Terminal';
+import ClearAllIcon from '@mui/icons-material/ClearAll';
 import ReactMarkdown from 'react-markdown';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -274,6 +276,32 @@ interface DashObjectNodeData extends Record<string, unknown> {
   selectedFieldName: string | null;
   onFieldSelect: (fieldName: string | null) => void;
 }
+
+import { useNotification } from '../../modules/notification';
+import { useAlliApi } from '../../modules/automate/engine/useAlliApi';
+import type { AutomateSystemApiInterface } from '../../modules/automate/engine/AutomateSystemApi';
+
+interface ConsoleEntry {
+  id: string;
+  level: 'log' | 'info' | 'warn' | 'error' | 'debug';
+  message: string;
+  fcLabel?: string;
+  ts: number;
+}
+
+const LEVEL_COLORS: Record<ConsoleEntry['level'], string> = {
+  log: 'text.primary',
+  info: 'info.light',
+  warn: 'warning.main',
+  error: 'error.main',
+  debug: 'text.secondary',
+};
+
+const argsToStr = (args: unknown[]): string =>
+  args.map((a) => {
+    if (typeof a === 'string') return a;
+    try { return JSON.stringify(a, null, 2); } catch { return String(a); }
+  }).join(' ');
 
 interface DashEditorPanelProps { userName: string; filePath: string; }
 
@@ -557,7 +585,7 @@ const makeId = () => Math.random().toString(36).slice(2, 10);
 
 // Executes a named function/method from a JS source string.
 // Strips ES module syntax (import/export) so new Function() can run the code.
-const executeFunctionFromSource = async (code: string, symbolPath: string, args: unknown[], thisValue?: unknown): Promise<unknown> => {
+const executeFunctionFromSource = async (api: AutomateSystemApiInterface, code: string, symbolPath: string, args: unknown[], thisValue?: unknown): Promise<unknown> => {
   const stripped = code
     .replace(/^\s*export\s+default\s+/gm, '')
     .replace(/^\s*export\s+\{[^}]*\}\s*(?:from\s+['"][^'"]*['"])?\s*;?/gm, '')
@@ -603,9 +631,9 @@ const executeFunctionFromSource = async (code: string, symbolPath: string, args:
   }
   // eslint-disable-next-line no-new-func
   const fn = thisValue !== undefined
-    ? new Function('__args__', '__thisValue__', `${stripped}\n${callExpr}`)
-    : new Function('__args__', `${stripped}\n${callExpr}`);
-  const result = thisValue !== undefined ? fn(args, thisValue) : fn(args);
+    ? new Function('api', '__args__', '__thisValue__', `${stripped}\n${callExpr}`)
+    : new Function('api', '__args__', `${stripped}\n${callExpr}`);
+  const result = thisValue !== undefined ? fn(api, args, thisValue) : fn(api, args);
   return result instanceof Promise ? await result : result;
 };
 
@@ -3332,6 +3360,16 @@ const VarInitDialog: React.FC<{
 // ─── Main editor ─────────────────────────────────────────────────────────────
 
 const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath }) => {
+  const alliApi = useAlliApi();
+  const { notify } = useNotification();
+  const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const consoleScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (consoleScrollRef.current) {
+      consoleScrollRef.current.scrollTop = consoleScrollRef.current.scrollHeight;
+    }
+  }, [consoleLogs]);
   const isMobile = useMediaQuery('(pointer: coarse)');
   const { setCenter, screenToFlowPosition, fitView } = useReactFlow();
   const [scene, setScene] = useState<DashScene>({ type: 'dash-scene', version: 1, objects: [] });
@@ -3657,7 +3695,43 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       const thisValue: unknown = thisEdge ? resolveSource(thisEdge, sceneRef.current) : undefined;
 
       const text = await vfsRead(userName, ds.filePath);
-      const result = await executeFunctionFromSource(text, fc.symbolPath, argValues, thisValue);
+      const prevNotifLen = alliApi.notifications.length;
+      const prevLogLen = alliApi.logs.length;
+      // Intercept console.* during script execution
+      const fcLabel = fc.symbolPath;
+      const captured: ConsoleEntry[] = [];
+      const origConsole = {
+        log: console.log, warn: console.warn, error: console.error,
+        info: console.info, debug: console.debug,
+      } as Record<string, (...args: unknown[]) => void>;
+      const makeCapture = (level: ConsoleEntry['level']) =>
+        (...args: unknown[]) => {
+          captured.push({ id: makeId(), level, message: argsToStr(args), fcLabel, ts: Date.now() });
+          origConsole[level]?.(...args);
+        };
+      (console as unknown as Record<string, unknown>).log = makeCapture('log');
+      (console as unknown as Record<string, unknown>).warn = makeCapture('warn');
+      (console as unknown as Record<string, unknown>).error = makeCapture('error');
+      (console as unknown as Record<string, unknown>).info = makeCapture('info');
+      (console as unknown as Record<string, unknown>).debug = makeCapture('debug');
+      let result: unknown;
+      try {
+        result = await executeFunctionFromSource(alliApi, text, fc.symbolPath, argValues, thisValue);
+      } finally {
+        // Restore console
+        Object.assign(console, origConsole);
+        // Collect api.log.* entries added during execution
+        for (const l of alliApi.logs.slice(prevLogLen)) {
+          captured.push({ id: makeId(), level: l.level, message: l.message, fcLabel, ts: l.timestamp });
+        }
+        if (captured.length > 0) {
+          setConsoleLogs((prev) => [...prev, ...captured]);
+          setConsoleOpen(true);
+        }
+      }
+      for (const n of alliApi.notifications.slice(prevNotifLen)) {
+        notify(n.message, n.severity as 'success' | 'info' | 'warning' | 'error' | undefined);
+      }
       const resultJson = JSON.stringify(result);
       updateScene((prev) => {
         const outEdges = (prev.fcEdges ?? []).filter((e) => e.source === fcId && e.sourceHandle === 'return');
@@ -3697,6 +3771,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       });
     } catch (e) {
       const msg = (e as Error).message;
+      setConsoleLogs((prev) => [...prev, { id: makeId(), level: 'error', message: `${fc?.symbolPath ?? fcId}: ${msg}`, fcLabel: fc?.symbolPath, ts: Date.now() }]);
+      setConsoleOpen(true);
       updateScene((prev) => ({
         ...prev,
         functionCalls: (prev.functionCalls ?? []).map((f) => f.id === fcId ? { ...f, error: msg, result: null } : f),
@@ -3716,7 +3792,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         }
       }
     }
-  }, [dataSources, userName, updateScene]);
+  }, [dataSources, userName, updateScene, alliApi, notify, setConsoleLogs, setConsoleOpen]);
 
   const createGetProp = useCallback((x: number, y: number) => {
     const newNode: GetPropObject = { id: makeId(), propNameOverride: '', result: null, error: null, x, y };
@@ -4521,6 +4597,15 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             </IconButton>
           </Tooltip>
         )}
+        <Tooltip title={consoleOpen ? 'Hide Console' : 'Show Console'}>
+          <IconButton size="small" onClick={() => setConsoleOpen((v) => !v)}
+            sx={{ p: 0.5, color: consoleLogs.length > 0 && !consoleOpen ? 'warning.main' : 'inherit', position: 'relative' }}>
+            <TerminalIcon sx={{ fontSize: 18 }} />
+            {consoleLogs.length > 0 && !consoleOpen && (
+              <Box component="span" sx={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', bgcolor: 'warning.main' }} />
+            )}
+          </IconButton>
+        </Tooltip>
         <Button size="small" variant="outlined" onClick={() => { setImportError(null); setShowImportDialog(true); }}
           sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Import UML</Button>
         <Button size="small" variant="outlined" onClick={saveNow}
@@ -4909,6 +4994,51 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         )}
 
       </Box>
+
+      {/* ── Console ── */}
+      {consoleOpen && (
+        <Box sx={{ flexShrink: 0, borderTop: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', height: 200, bgcolor: 'background.paper' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.25, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0, gap: 0.5 }}>
+            <TerminalIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
+            <Typography sx={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>
+              Console {consoleLogs.length > 0 && <Box component="span" sx={{ fontWeight: 400, color: 'text.secondary' }}>({consoleLogs.length})</Box>}
+            </Typography>
+            {consoleLogs.length > 0 && (
+              <Tooltip title="Clear console">
+                <IconButton size="small" onClick={() => setConsoleLogs([])} sx={{ p: 0.25 }}>
+                  <ClearAllIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Tooltip>
+            )}
+            <IconButton size="small" onClick={() => setConsoleOpen(false)} sx={{ p: 0.25 }}>
+              <CloseIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Box>
+          <Box ref={consoleScrollRef} sx={{ flex: 1, overflow: 'auto', fontFamily: 'monospace' }}>
+            {consoleLogs.length === 0 ? (
+              <Typography sx={{ fontSize: 11, color: 'text.disabled', p: 1 }}>
+                No output yet. Use <Box component="code" sx={{ bgcolor: 'action.selected', px: 0.5, borderRadius: 0.5 }}>console.log()</Box> or <Box component="code" sx={{ bgcolor: 'action.selected', px: 0.5, borderRadius: 0.5 }}>api.log.*</Box> in your scripts.
+              </Typography>
+            ) : (
+              consoleLogs.map((entry) => (
+                <Box key={entry.id} sx={{ px: 1, py: 0.15, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', gap: 0.75, alignItems: 'flex-start', '&:hover': { bgcolor: 'action.hover' } }}>
+                  <Typography component="span" sx={{ fontSize: 9, mt: 0.4, flexShrink: 0, textTransform: 'uppercase', fontWeight: 700, color: LEVEL_COLORS[entry.level], width: 36 }}>
+                    {entry.level}
+                  </Typography>
+                  {entry.fcLabel && (
+                    <Typography component="span" sx={{ fontSize: 10, mt: 0.2, flexShrink: 0, color: '#ce93d8', fontFamily: 'monospace', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {entry.fcLabel}
+                    </Typography>
+                  )}
+                  <Typography component="span" sx={{ fontSize: 11, fontFamily: 'monospace', color: LEVEL_COLORS[entry.level], whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5 }}>
+                    {entry.message}
+                  </Typography>
+                </Box>
+              ))
+            )}
+          </Box>
+        </Box>
+      )}
 
       {/* New-object submenu (used from within scene context menu) */}
       <Menu anchorEl={newMenuAnchor} open={Boolean(newMenuAnchor)} onClose={() => setNewMenuAnchor(null)} MenuListProps={{ dense: true }}>

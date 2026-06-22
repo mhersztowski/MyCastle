@@ -6,7 +6,12 @@ import Slider from '@mui/material/Slider'
 import Chip from '@mui/material/Chip'
 import Divider from '@mui/material/Divider'
 import Tooltip from '@mui/material/Tooltip'
+import Select from '@mui/material/Select'
+import MenuItem from '@mui/material/MenuItem'
+import Button from '@mui/material/Button'
+import VisibilityIcon from '@mui/icons-material/Visibility'
 import type { MapNode, MapNodeType } from '../map/types'
+import { TRAVEL_MODES, formatDistance, formatDuration } from '../map/routing'
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -17,6 +22,7 @@ const TYPE_COLOR: Record<MapNodeType, string> = {
   polyline:     '#66bb6a',
   circle:       '#ce93d8',
   group:        '#78909c',
+  route:        '#42a5f5',
 }
 
 // ── small building blocks ─────────────────────────────────────────────────────
@@ -316,9 +322,10 @@ interface Props {
   selectedNodes: MapNode[]
   onUpdate: (id: string, changes: Partial<MapNode>) => void
   onUpdateMany: (ids: string[], changes: Partial<MapNode>) => void
+  onShowInfo?: (node: MapNode) => void
 }
 
-export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany }: Props) {
+export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany, onShowInfo }: Props) {
   const isMulti = selectedNodes.length > 1
 
   const upd = useCallback((changes: Partial<MapNode>) => {
@@ -479,6 +486,32 @@ export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany
             </Row>
           </>)}
 
+          {/* ── route ────────────────────────────────────── */}
+          {node.type === 'route' && (<>
+            <SectionLabel>Route</SectionLabel>
+            <Row label="Mode">
+              <Chip
+                size="small"
+                label={node.travelMode ? TRAVEL_MODES[node.travelMode].label : '—'}
+                sx={{ height: 18, fontSize: '0.66rem' }}
+              />
+            </Row>
+            <Row label="Distance">
+              <Typography sx={{ fontSize: '0.72rem' }}>{formatDistance(node.distanceM)}</Typography>
+            </Row>
+            <Row label="Duration">
+              <Typography sx={{ fontSize: '0.72rem' }}>{formatDuration(node.durationS)}</Typography>
+            </Row>
+            <Divider sx={{ opacity: 0.3, mx: 1.5, my: 0.5 }} />
+            <SectionLabel>Appearance</SectionLabel>
+            <Row label="Color">
+              <ColorPicker value={node.color} fallback="#42a5f5" onChange={v => upd({ color: v })} />
+            </Row>
+            <Row label="Width">
+              <NumberInput value={node.weight} placeholder={4} min={0.5} step={0.5} onChange={v => upd({ weight: v })} />
+            </Row>
+          </>)}
+
           {/* ── group ────────────────────────────────────── */}
           {node.type === 'group' && (<>
             <SectionLabel>Contents</SectionLabel>
@@ -500,6 +533,71 @@ export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany
               </Box>
             )}
           </>)}
+
+          {/* ── description / info (all node types) ───────── */}
+          <Divider sx={{ opacity: 0.3, mx: 1.5, my: 0.5 }} />
+          <SectionLabel>Description</SectionLabel>
+          <Row label="Source">
+            <Select
+              size="small"
+              fullWidth
+              value={node.infoType ?? 'markdown'}
+              onChange={e => upd({ infoType: e.target.value as 'markdown' | 'url' })}
+              sx={{ fontSize: '0.72rem', '& .MuiSelect-select': { py: 0.5 } }}
+            >
+              <MenuItem value="markdown" sx={{ fontSize: '0.75rem' }}>Markdown text</MenuItem>
+              <MenuItem value="url" sx={{ fontSize: '0.75rem' }}>Web page (URL)</MenuItem>
+            </Select>
+          </Row>
+          <Box sx={{ px: 1.5, py: 0.4 }}>
+            {(node.infoType ?? 'markdown') === 'url' ? (
+              <TextField
+                size="small"
+                fullWidth
+                placeholder="https://example.com"
+                value={node.info ?? ''}
+                onChange={e => upd({ info: e.target.value })}
+                slotProps={{ input: { sx: { fontSize: '0.72rem' } } }}
+              />
+            ) : (
+              <TextField
+                size="small"
+                fullWidth
+                multiline
+                minRows={3}
+                maxRows={10}
+                placeholder="# Title&#10;Some **markdown** description…"
+                value={node.info ?? ''}
+                onChange={e => upd({ info: e.target.value })}
+                slotProps={{ input: { sx: { fontSize: '0.72rem', fontFamily: 'monospace', lineHeight: 1.5 } } }}
+              />
+            )}
+          </Box>
+          <Row label="Show info">
+            <Select
+              size="small"
+              fullWidth
+              value={node.showInfo ?? 'compact'}
+              onChange={e => upd({ showInfo: e.target.value as 'compact' | 'fullscreen' })}
+              sx={{ fontSize: '0.72rem', '& .MuiSelect-select': { py: 0.5 } }}
+            >
+              <MenuItem value="compact" sx={{ fontSize: '0.75rem' }}>Compact</MenuItem>
+              <MenuItem value="fullscreen" sx={{ fontSize: '0.75rem' }}>Fullscreen</MenuItem>
+            </Select>
+          </Row>
+          <Box sx={{ px: 1.5, pt: 0.4, pb: 1.25 }}>
+            <Button
+              size="small"
+              fullWidth
+              variant="outlined"
+              startIcon={<VisibilityIcon sx={{ fontSize: 15 }} />}
+              disabled={!node.info?.trim() || !onShowInfo}
+              onClick={() => node && onShowInfo?.(node)}
+              sx={{ textTransform: 'none', fontSize: '0.72rem' }}
+            >
+              Show info
+            </Button>
+          </Box>
 
         </Box>
       )}

@@ -49,23 +49,75 @@ interface ScriptAuth {
   readonly isAdmin: boolean;
 }
 
+/** Options accepted by every \`http.*\` method. */
+interface HttpOptions {
+  /**
+   * Additional headers merged on top of Content-Type and Authorization.
+   * @example { 'X-Api-Version': '2', 'Accept': 'text/csv' }
+   */
+  headers?: Record<string, string>;
+  /**
+   * Set to \`false\` to omit the automatic \`Authorization: Bearer\` header.
+   * Useful when calling external APIs that must not receive your JWT.
+   * @default true
+   */
+  auth?: boolean;
+}
+
 /**
- * Thin fetch wrapper with auto \`Authorization: Bearer\` and
- * \`Content-Type: application/json\`. Throws on non-2xx, returns parsed JSON.
+ * Authenticated fetch wrapper. Every method automatically adds
+ * \`Authorization: Bearer <jwt>\` and \`Content-Type: application/json\`
+ * (unless overridden via \`options\`). Throws \`Error\` on non-2xx responses
+ * with a message containing the status code and URL.
  *
  * @example
+ *   // Internal API (with auth)
  *   const me = await http.get('/api/me');
- *   const result = await http.post('/api/users/' + auth.currentUser + '/devices/lamp-1/command', {
- *     action: 'toggle',
+ *   const devices = await http.get<Device[]>('/api/users/' + auth.currentUser + '/devices');
+ *
+ *   // External API (skip JWT)
+ *   const rates = await http.get('https://api.exchangerate.host/latest', { auth: false });
+ *
+ *   // Custom headers
+ *   const data = await http.get('https://api.github.com/user', {
+ *     auth: false,
+ *     headers: { Authorization: 'Bearer ' + await secrets.get('GITHUB_TOKEN') },
+ *   });
+ *
+ *   // Raw fetch for full control
+ *   const resp = await http.raw('https://example.com/upload', {
+ *     method: 'POST',
+ *     body: formData,
  *   });
  */
 interface ScriptHttp {
-  /** GET — throws on non-2xx, returns parsed JSON. */
-  get<T = unknown>(path: string): Promise<T>;
-  /** POST with JSON body — throws on non-2xx, returns parsed JSON. */
-  post<T = unknown>(path: string, body?: unknown): Promise<T>;
-  /** PUT with JSON body — throws on non-2xx, returns parsed JSON. */
-  put<T = unknown>(path: string, body?: unknown): Promise<T>;
+  /** GET → parse response as JSON. Throws on non-2xx. */
+  get<T = unknown>(url: string, options?: HttpOptions): Promise<T>;
+  /** POST with JSON body → parse response as JSON. Throws on non-2xx. */
+  post<T = unknown>(url: string, body?: unknown, options?: HttpOptions): Promise<T>;
+  /** PUT with JSON body → parse response as JSON. Throws on non-2xx. */
+  put<T = unknown>(url: string, body?: unknown, options?: HttpOptions): Promise<T>;
+  /** PATCH with JSON body → parse response as JSON. Throws on non-2xx. */
+  patch<T = unknown>(url: string, body?: unknown, options?: HttpOptions): Promise<T>;
+  /** DELETE → parse response as JSON (or null for 204 No Content). Throws on non-2xx. */
+  delete<T = unknown>(url: string, options?: HttpOptions): Promise<T>;
+  /**
+   * GET → return raw response body as plain text.
+   * Use when the server returns Markdown, CSV, XML, HTML or any non-JSON format.
+   * @example
+   *   const csv = await http.getText('/api/export/tasks.csv');
+   *   const lines = csv.split('\\n').slice(1); // skip header
+   */
+  getText(url: string, options?: HttpOptions): Promise<string>;
+  /**
+   * Low-level escape hatch — returns the native \`Response\` object.
+   * No automatic headers are added. Use when you need binary data,
+   * streaming, or complete control over the request.
+   * @example
+   *   const resp = await http.raw('https://example.com/image.png');
+   *   const blob = await resp.blob();
+   */
+  raw(url: string, init?: RequestInit): Promise<Response>;
 }
 
 /**

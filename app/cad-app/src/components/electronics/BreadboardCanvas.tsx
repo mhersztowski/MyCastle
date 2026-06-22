@@ -13,14 +13,13 @@ import UndoIcon from '@mui/icons-material/Undo';
 import Rotate90DegreesCwIcon from '@mui/icons-material/Rotate90DegreesCw';
 import FlipToFrontIcon from '@mui/icons-material/FlipToFront';
 import FlipToBackIcon from '@mui/icons-material/FlipToBack';
-import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
-import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
 import { GRID, SNAP_RADIUS, WIRE_COLORS, pinWorldCenter, rotationOffset, type ComponentPlacement, type Wire, type WirePoint, type InteractionMode, type ElectronicsSchema } from '../../electronics/types';
 import { getPartDef } from '../../electronics/partLibrary';
 import type { PartDef } from '../../electronics/types';
 import { ServerFileBrowser } from '../ServerFileBrowser';
 import { ElectronicsPropertiesPanel } from './ElectronicsPropertiesPanel';
-import { ELEC_EXT, readFileAt, writeFileAt } from '../../vfs/cadProjectApi';
+import { ELEC_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../../vfs/cadProjectApi';
+import { useRegisterFileOps } from '../../fileops/FileOpsContext';
 import type { ActiveTemplate } from '../RepositoryPanel';
 
 // ── Part renderer ─────────────────────────────────────────────────────────────
@@ -497,11 +496,13 @@ interface Props {
    *  panel so a single toggle button on the toolbar collapses both at once. */
   sidePanelsVisible?: boolean;
   onToggleSidePanels?: () => void;
+  /** Read-only mode (viewer): pan/zoom only, no editing, no toolbar. */
+  readOnly?: boolean;
 }
 
 export function BreadboardCanvas({
   pendingPartId, onPendingPartConsumed, mergeSchemaRef, placementTemplate,
-  sidePanelsVisible = true, onToggleSidePanels,
+  sidePanelsVisible = true, onToggleSidePanels, readOnly = false,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -546,6 +547,8 @@ export function BreadboardCanvas({
 
   // Server (VFS) open/save dialog
   const [serverBrowser, setServerBrowser] = useState<'open' | 'save' | null>(null);
+  const [currentFile, setCurrentFile] = useState<{ dir: string; name: string } | null>(null);
+  const viewerUrl = currentFile ? buildViewerUrl('electronics', currentFile.dir, currentFile.name) : null;
 
   // Drag refs (avoid stale closures)
   const dragRef = useRef<{
@@ -653,6 +656,7 @@ export function BreadboardCanvas({
   const placementFetchingRef = useRef(false);
 
   const handlePlacementClick = useCallback((e: React.PointerEvent) => {
+    if (readOnly) return;
     if (e.button !== 0) return;
     if (!placementTemplate?.cadFile || placementFetchingRef.current) return;
     const { gx, gy } = clientToGrid(e.clientX, e.clientY);
@@ -707,6 +711,7 @@ export function BreadboardCanvas({
   // ── Keyboard ────────────────────────────────────────────────────────────────
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (readOnly) return;
     if (e.key === 'Escape') {
       if (modeRef.current === 'wire' && wirePointsRef.current.length > 0) {
         // Esc finishes the wire immediately, trimmed back to the last point that
@@ -1066,6 +1071,8 @@ export function BreadboardCanvas({
   }, []);
 
   const handleComponentMouseDown = useCallback((compId: string, e: React.PointerEvent) => {
+    // Read-only: let the press fall through to the SVG so panning still works.
+    if (readOnly) return;
     // Only mouse buttons other than primary are ignored; touch / pen primaries
     // also report button===0 so we accept them.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -1112,6 +1119,7 @@ export function BreadboardCanvas({
 
   // Long-press on a wire opens the same context menu as on a component.
   const handleWirePointerDown = useCallback((wireId: string, e: React.PointerEvent) => {
+    if (readOnly) return;
     if (modeRef.current !== 'select') return;
     if (e.pointerType === 'mouse') return;
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
@@ -1169,6 +1177,19 @@ export function BreadboardCanvas({
     setWireJunctions([]);
   }, []);
 
+  // Register file operations with the unified top-bar File menu.
+  useRegisterFileOps('electronics', {
+    currentName: currentFile?.name ?? null,
+    newDoc: handleClear,
+    server: [
+      { label: 'Open Schematic from Server…', run: () => setServerBrowser('open') },
+      { label: 'Save Schematic to Server…', run: () => setServerBrowser('save') },
+    ],
+    importItems: [{ label: 'Open local file…', run: handleLoad }],
+    exportItems: [{ label: 'Save local file', run: handleSave }],
+    viewerUrl,
+  }, [currentFile, viewerUrl, handleLoad, handleSave, handleClear]);
+
   // ── Server (VFS) Save / Load ──────────────────────────────────────────────────
 
   const handleServerOpen = useCallback(async (dir: string, name: string) => {
@@ -1180,11 +1201,13 @@ export function BreadboardCanvas({
     setSelectedType(null);
     setWirePoints([]);
     setWireJunctions([]);
+    setCurrentFile({ dir, name });
   }, []);
 
   const handleServerSave = useCallback(async (dir: string, name: string) => {
     const schema: ElectronicsSchema = { version: 1, components: componentsRef.current, wires: wiresRef.current };
     await writeFileAt(dir, name, ELEC_EXT, JSON.stringify(schema, null, 2));
+    setCurrentFile({ dir, name });
   }, []);
 
   // ── Derived render values ──────────────────────────────────────────────────
@@ -1233,7 +1256,7 @@ export function BreadboardCanvas({
           squeezed by the side panels. Each immediate child keeps its natural
           width (`flexShrink:0`) so nothing collapses to a useless sliver. */}
       <Box sx={{
-        display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
+        display: readOnly ? 'none' : 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
         bgcolor: 'background.paper', borderBottom: '1px solid rgba(255,255,255,0.08)',
         flexShrink: 0, minWidth: 0,
         overflowX: 'auto', overflowY: 'hidden',
@@ -1354,18 +1377,7 @@ export function BreadboardCanvas({
         )}
 
         <Box sx={{ display: 'flex', gap: 0.5, ml: 1, alignItems: 'center' }}>
-          <Tooltip title="Open from server">
-            <IconButton size="small" onClick={() => setServerBrowser('open')}>
-              <CloudDownloadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Save to server">
-            <IconButton size="small" onClick={() => setServerBrowser('save')}>
-              <CloudUploadOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Open local file"><IconButton size="small" onClick={handleLoad} sx={{ fontSize: 11, color: 'text.secondary' }}>Open</IconButton></Tooltip>
-          <Tooltip title="Save local file"><IconButton size="small" onClick={handleSave} sx={{ fontSize: 11, color: 'text.secondary' }}>Save</IconButton></Tooltip>
+          {/* Open/save/import/export/viewer now live in the top-bar File menu */}
           <Tooltip title="Clear all"><IconButton size="small" onClick={handleClear} sx={{ fontSize: 11, color: 'error.main' }}>Clear</IconButton></Tooltip>
         </Box>
       </Box>

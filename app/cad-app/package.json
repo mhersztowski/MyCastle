@@ -15,6 +15,7 @@
     "@emotion/styled": "^11.14.1",
     "@mhersztowski/core": "workspace:*",
     "@mhersztowski/core-cad": "workspace:*",
+    "@mhersztowski/core-cad-viewer": "workspace:*",
     "@mhersztowski/core-scene3d": "workspace:*",
     "@mhersztowski/texteditor": "workspace:*",
     "@mhersztowski/ui-components-scene3d": "workspace:*",

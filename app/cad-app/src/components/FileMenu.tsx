@@ -30,11 +30,13 @@ interface Props {
   getSceneData?: () => string | null;
   /** Called when a project with a companion .scene.json is opened */
   onSceneData?: (json: string) => void;
+  /** Called with the CAD project name after opening/saving to the server. */
+  onProjectFile?: (name: string) => void;
 }
 
 type BrowserMode = 'open' | 'save';
 
-export function FileMenu({ project, getSceneData, onSceneData }: Props) {
+export function FileMenu({ project, getSceneData, onSceneData, onProjectFile }: Props) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
@@ -334,7 +336,7 @@ export function FileMenu({ project, getSceneData, onSceneData }: Props) {
           mode={browserMode}
           project={project}
           onClose={() => setBrowserMode(null)}
-          onDone={name => setToast({ msg: `${browserMode === 'open' ? 'Opened CAD' : 'Saved CAD'}: ${name}`, severity: 'success' })}
+          onDone={name => { onProjectFile?.(name); setToast({ msg: `${browserMode === 'open' ? 'Opened CAD' : 'Saved CAD'}: ${name}`, severity: 'success' }); }}
         />
       )}
 

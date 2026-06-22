@@ -26,7 +26,11 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import FolderIcon from '@mui/icons-material/Folder'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import ContentCutIcon from '@mui/icons-material/ContentCut'
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator'
+import RouteIcon from '@mui/icons-material/Route'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { MapNode, MapNodeType } from '../map/types'
+import type { DropPosition } from '../map/useMapLayers'
 
 // ── icons ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +42,7 @@ function getNodeIcon(type: MapNodeType) {
     case 'polyline':   return <TimelineIcon sx={{ fontSize: 14, color: '#66bb6a' }} />
     case 'circle':     return <RadioButtonUncheckedIcon sx={{ fontSize: 14, color: '#ce93d8' }} />
     case 'group':      return <FolderIcon sx={{ fontSize: 14, color: '#78909c' }} />
+    case 'route':      return <RouteIcon sx={{ fontSize: 14, color: '#42a5f5' }} />
   }
 }
 
@@ -54,6 +59,12 @@ const ADD_ITEMS: Array<{ type: MapNodeType; label: string } | 'divider'> = [
 ]
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/** True when `id` is `node` itself or any of its descendants. */
+function containsId(node: MapNode, id: string): boolean {
+  if (node.id === id) return true
+  return (node.children ?? []).some(c => containsId(c, id))
+}
 
 function findInTree(nodes: MapNode[], id: string): MapNode | null {
   for (const n of nodes) {
@@ -82,12 +93,18 @@ interface TreeNodeProps {
   onRenameValueChange: (v: string) => void
   onRenameCommit: () => void
   onRenameCancel: () => void
+  dropTarget: { id: string; pos: DropPosition } | null
+  onHandlePointerDown: (e: React.PointerEvent, id: string) => void
+  onHandlePointerMove: (e: React.PointerEvent) => void
+  onHandlePointerUp: (e: React.PointerEvent) => void
+  onShowInfo?: (id: string) => void
 }
 
 function TreeNode({
   node, depth, selectedIds, expandedIds, renamingId, renameValue,
   onSelect, onToggleExpand, onToggleVisibility, onContextMenu,
   onRenameValueChange, onRenameCommit, onRenameCancel,
+  dropTarget, onHandlePointerDown, onHandlePointerMove, onHandlePointerUp, onShowInfo,
 }: TreeNodeProps) {
   const hasChildren = (node.children?.length ?? 0) > 0
   const isExpanded  = expandedIds.has(node.id)
@@ -95,6 +112,7 @@ function TreeNode({
   const isPrimary   = selectedIds.size === 1 && isSelected
   const isRenaming  = node.id === renamingId
   const inputRef    = useRef<HTMLInputElement>(null)
+  const dropPos     = dropTarget?.id === node.id ? dropTarget.pos : null
 
   useEffect(() => {
     if (isRenaming) inputRef.current?.focus()
@@ -104,6 +122,7 @@ function TreeNode({
     <>
       <ListItemButton
         selected={isSelected}
+        data-node-id={node.id}
         onClick={e => onSelect(node.id, e.ctrlKey || e.metaKey)}
         onDoubleClick={() => {
           // trigger rename via parent — fired via context-menu handler
@@ -111,13 +130,23 @@ function TreeNode({
         onContextMenu={e => { e.preventDefault(); onContextMenu(e, node.id) }}
         sx={{
           py: 0,
-          pl: depth * 2 + 1,
+          pl: depth * 2 + 0.5,
           pr: 0.5,
           minHeight: 24,
           opacity: node.visible ? 1 : 0.38,
           touchAction: 'pan-y',
           WebkitTouchCallout: 'none',
           userSelect: 'none',
+          // Drag & drop drop indicators (box-shadow lines = no layout shift)
+          boxShadow:
+            dropPos === 'before' ? 'inset 0 2px 0 0 #4fc3f7'
+            : dropPos === 'after' ? 'inset 0 -2px 0 0 #4fc3f7'
+            : 'none',
+          ...(dropPos === 'inside' && {
+            bgcolor: 'rgba(79,195,247,0.16)',
+            outline: '2px solid #4fc3f7',
+            outlineOffset: '-2px',
+          }),
           '&.Mui-selected': {
             bgcolor: isPrimary ? 'action.selected' : 'action.selected',
             outline: isSelected && !isPrimary ? '1px solid rgba(79,195,247,0.4)' : 'none',
@@ -127,6 +156,26 @@ function TreeNode({
           '&:hover .map-vis-btn': { opacity: 1 },
         }}
       >
+        {/* drag handle — pointer-based so it works with mouse, touch & stylus */}
+        {!isRenaming && (
+          <Box
+            onPointerDown={e => onHandlePointerDown(e, node.id)}
+            onPointerMove={onHandlePointerMove}
+            onPointerUp={onHandlePointerUp}
+            onClick={e => e.stopPropagation()}
+            sx={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 16, flexShrink: 0, alignSelf: 'stretch',
+              cursor: 'grab', touchAction: 'none',
+              color: 'text.disabled', opacity: 0.45,
+              '&:hover': { opacity: 1 },
+              '&:active': { cursor: 'grabbing' },
+            }}
+          >
+            <DragIndicatorIcon sx={{ fontSize: 13 }} />
+          </Box>
+        )}
+
         {/* expand chevron */}
         {hasChildren ? (
           <ListItemIcon
@@ -183,6 +232,19 @@ function TreeNode({
           />
         )}
 
+        {/* info button — shown when the node has a description */}
+        {!isRenaming && node.info?.trim() && onShowInfo && (
+          <Tooltip title="Show info" placement="right">
+            <IconButton
+              size="small"
+              onClick={e => { e.stopPropagation(); onShowInfo(node.id) }}
+              sx={{ p: 0.25, flexShrink: 0, color: '#4fc3f7' }}
+            >
+              <InfoOutlinedIcon sx={{ fontSize: 13 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+
         {/* visibility toggle — visible on hover (or when hidden) */}
         {!isRenaming && (
           <Tooltip title={node.visible ? 'Hide' : 'Show'} placement="right">
@@ -226,6 +288,11 @@ function TreeNode({
                 onRenameValueChange={onRenameValueChange}
                 onRenameCommit={onRenameCommit}
                 onRenameCancel={onRenameCancel}
+                dropTarget={dropTarget}
+                onHandlePointerDown={onHandlePointerDown}
+                onHandlePointerMove={onHandlePointerMove}
+                onHandlePointerUp={onHandlePointerUp}
+                onShowInfo={onShowInfo}
               />
             ))}
           </List>
@@ -257,15 +324,83 @@ interface Props {
   onRename: (id: string, name: string) => void
   onDelete: (id: string) => void
   onAdd: (type: MapNodeType, parentId?: string | null) => void
+  onAddRoute?: () => void
   onSplit?: (id: string) => void
+  onMove: (dragId: string, targetId: string, pos: DropPosition) => void
+  onShowInfo?: (id: string) => void
 }
 
-export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, onToggleVisibility, onRename, onDelete, onAdd, onSplit }: Props) {
+export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, onToggleVisibility, onRename, onDelete, onAdd, onAddRoute, onSplit, onMove, onShowInfo }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set(['root-group']))
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null)
+  const [addCtxPos, setAddCtxPos] = useState<{ left: number; top: number } | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ pos: { left: number; top: number }; nodeId: string } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+
+  // ── drag & drop state (pointer-based: works with mouse, touch & stylus) ─────
+  const dragIdRef = useRef<string | null>(null)
+  const dragStartRef = useRef<{ x: number; y: number; started: boolean } | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; pos: DropPosition } | null>(null)
+  const [dragGhost, setDragGhost] = useState<{ name: string; x: number; y: number } | null>(null)
+
+  // Resolve the row under the pointer into a valid drop {id, pos}, or null.
+  const computeDrop = useCallback((clientX: number, clientY: number): { id: string; pos: DropPosition } | null => {
+    const drag = dragIdRef.current
+    if (!drag) return null
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+    const rowEl = el?.closest('[data-node-id]') as HTMLElement | null
+    if (!rowEl) return null
+    const id = rowEl.dataset.nodeId
+    if (!id || id === drag) return null
+    // Disallow dropping a node into its own subtree.
+    const dragged = findInTree(nodes, drag)
+    if (dragged && containsId(dragged, id)) return null
+    const rect = rowEl.getBoundingClientRect()
+    const y = clientY - rect.top
+    const target = findInTree(nodes, id)
+    const pos: DropPosition = target?.type === 'group'
+      ? (y < rect.height * 0.3 ? 'before' : y > rect.height * 0.7 ? 'after' : 'inside')
+      : (y < rect.height / 2 ? 'before' : 'after')
+    return { id, pos }
+  }, [nodes])
+
+  const handleHandlePointerDown = useCallback((e: React.PointerEvent, id: string) => {
+    // Don't let the press scroll the list, start a click, or select text.
+    e.stopPropagation()
+    e.preventDefault()
+    dragIdRef.current = id
+    dragStartRef.current = { x: e.clientX, y: e.clientY, started: false }
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) } catch { /* ignore */ }
+  }, [])
+
+  const handleHandlePointerMove = useCallback((e: React.PointerEvent) => {
+    const start = dragStartRef.current
+    if (!dragIdRef.current || !start) return
+    // Require a small movement before treating it as a drag (so taps still select).
+    if (!start.started) {
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) < 5) return
+      start.started = true
+      const dn = findInTree(nodes, dragIdRef.current)
+      setDragGhost({ name: dn?.name ?? '', x: e.clientX, y: e.clientY })
+    }
+    setDropTarget(computeDrop(e.clientX, e.clientY))
+    setDragGhost(g => (g ? { ...g, x: e.clientX, y: e.clientY } : g))
+  }, [nodes, computeDrop])
+
+  const handleHandlePointerUp = useCallback((e: React.PointerEvent) => {
+    const drag = dragIdRef.current
+    const started = dragStartRef.current?.started ?? false
+    const drop = started ? computeDrop(e.clientX, e.clientY) : null
+    dragIdRef.current = null
+    dragStartRef.current = null
+    setDragGhost(null)
+    setDropTarget(null)
+    if (drag && drop) {
+      onMove(drag, drop.id, drop.pos)
+      if (drop.pos === 'inside') setExpandedIds(prev => new Set(prev).add(drop.id))
+    }
+  }, [computeDrop, onMove])
 
   const toggleExpand = useCallback((id: string) => {
     setExpandedIds(prev => {
@@ -294,13 +429,47 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
     if (!selectedIds.has(nodeId)) onSelect(nodeId, false)
   }, [onSelect, selectedIds])
 
-  const handleAddFromMenu = (type: MapNodeType) => {
-    // Add under selected node if it's a group, otherwise at root level
-    const sel = selectedId ? findInTree(nodes, selectedId) : null
-    const parentId = sel?.type === 'group' ? sel.id : null
-    onAdd(type, parentId)
-    setAddAnchor(null)
+  // Right-click on empty tree space → Add menu at the cursor (adds at root).
+  const handleTreeContextMenu = (e: React.MouseEvent) => {
+    // Row right-clicks are handled per-node; only react to empty space.
+    if ((e.target as HTMLElement).closest('[data-node-id]')) return
+    e.preventDefault()
+    setAddCtxPos({ left: e.clientX, top: e.clientY })
   }
+
+  const ADD_ITEM_SX = { fontSize: '0.75rem', minHeight: 28, py: 0.25 }
+
+  // Build the shared "Add layer" menu items for a given parent (null = root).
+  const buildAddItems = (parentId: string | null, close: () => void): React.ReactNode[] => {
+    const items: React.ReactNode[] = []
+    ADD_ITEMS.forEach((item, i) => {
+      if (item === 'divider') { items.push(<Divider key={`add-div-${i}`} />); return }
+      items.push(
+        <MenuItem key={`add-${item.type}`} dense onClick={() => { close(); onAdd(item.type, parentId) }} sx={ADD_ITEM_SX}>
+          <ListItemIcon sx={{ minWidth: 26 }}>{getNodeIcon(item.type)}</ListItemIcon>
+          {item.label}
+        </MenuItem>,
+      )
+    })
+    if (onAddRoute) {
+      items.push(<Divider key="add-div-route" />)
+      items.push(
+        <MenuItem key="add-route" dense onClick={() => { close(); onAddRoute() }} sx={ADD_ITEM_SX}>
+          <ListItemIcon sx={{ minWidth: 26 }}><RouteIcon sx={{ fontSize: 14, color: '#42a5f5' }} /></ListItemIcon>
+          Route…
+        </MenuItem>,
+      )
+    }
+    return items
+  }
+
+  // Parent for the header "+" button: selected group, else root.
+  const headerSel = selectedId ? findInTree(nodes, selectedId) : null
+  const headerAddParent = headerSel?.type === 'group' ? headerSel.id : null
+
+  // Parent for the node context menu's Add section: that node if a group, else root.
+  const ctxNode = ctxMenu ? findInTree(nodes, ctxMenu.nodeId) : null
+  const ctxAddParent = ctxNode?.type === 'group' ? ctxNode.id : null
 
   const treeProps = {
     selectedIds,
@@ -314,6 +483,11 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
     onRenameValueChange: setRenameValue,
     onRenameCommit: commitRename,
     onRenameCancel: () => setRenamingId(null),
+    dropTarget,
+    onHandlePointerDown: handleHandlePointerDown,
+    onHandlePointerMove: handleHandlePointerMove,
+    onHandlePointerUp: handleHandlePointerUp,
+    onShowInfo,
   }
 
   return (
@@ -353,7 +527,7 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
       </Box>
 
       {/* ── Tree ───────────────────────────────────────────── */}
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
+      <Box sx={{ flex: 1, overflow: 'auto' }} onContextMenu={handleTreeContextMenu}>
         <List dense disablePadding>
           {nodes.map(node => (
             <TreeNode key={node.id} node={node} depth={0} {...treeProps} />
@@ -361,30 +535,25 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
         </List>
       </Box>
 
-      {/* ── Add menu ───────────────────────────────────────── */}
+      {/* ── Add menu (from header "+" button) ──────────────── */}
       <Menu
         anchorEl={addAnchor}
         open={Boolean(addAnchor)}
         onClose={() => setAddAnchor(null)}
         slotProps={{ paper: { sx: { minWidth: 160 } } }}
       >
-        {ADD_ITEMS.map((item, i) =>
-          item === 'divider' ? (
-            <Divider key={`div-${i}`} />
-          ) : (
-            <MenuItem
-              key={item.type}
-              dense
-              onClick={() => handleAddFromMenu(item.type)}
-              sx={{ fontSize: '0.75rem', minHeight: 28, py: 0.25 }}
-            >
-              <ListItemIcon sx={{ minWidth: 26 }}>
-                {getNodeIcon(item.type)}
-              </ListItemIcon>
-              {item.label}
-            </MenuItem>
-          )
-        )}
+        {buildAddItems(headerAddParent, () => setAddAnchor(null))}
+      </Menu>
+
+      {/* ── Add menu (right-click on empty tree space) ─────── */}
+      <Menu
+        open={Boolean(addCtxPos)}
+        onClose={() => setAddCtxPos(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={addCtxPos ?? undefined}
+        slotProps={{ paper: { sx: { minWidth: 160 } } }}
+      >
+        {buildAddItems(null, () => setAddCtxPos(null))}
       </Menu>
 
       {/* ── Context menu ───────────────────────────────────── */}
@@ -393,8 +562,17 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
         onClose={() => setCtxMenu(null)}
         anchorReference="anchorPosition"
         anchorPosition={ctxMenu?.pos}
-        slotProps={{ paper: { sx: { minWidth: 140 } } }}
+        slotProps={{ paper: { sx: { minWidth: 150 } } }}
       >
+        <Typography sx={{
+          px: 2, py: 0.25, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.07em',
+          textTransform: 'uppercase', color: 'text.disabled',
+        }}>
+          {ctxAddParent ? 'Add inside' : 'Add layer'}
+        </Typography>
+        {buildAddItems(ctxAddParent, () => setCtxMenu(null))}
+        <Divider />
+
         <MenuItem
           dense
           onClick={() => { ctxMenu && startRename(ctxMenu.nodeId) }}
@@ -429,6 +607,31 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
           Delete
         </MenuItem>
       </Menu>
+
+      {/* ── Floating drag label ────────────────────────────── */}
+      {dragGhost && (
+        <Box sx={{
+          position: 'fixed',
+          left: dragGhost.x + 12,
+          top: dragGhost.y + 8,
+          zIndex: 2000,
+          pointerEvents: 'none',
+          px: 1,
+          py: 0.25,
+          borderRadius: 1,
+          bgcolor: 'rgba(79,195,247,0.92)',
+          color: '#06222e',
+          fontSize: '0.7rem',
+          fontWeight: 600,
+          boxShadow: 3,
+          maxWidth: 180,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {dragGhost.name}
+        </Box>
+      )}
     </Box>
   )
 }

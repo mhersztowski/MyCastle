@@ -16,6 +16,8 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
       // Load core-scene3d from source so Vite sees latest changes without rebuild
       '@mhersztowski/core-scene3d': resolve(__dirname, '../../packages/core-scene3d/src/index.ts'),
+      // Load the viewer package from source too (no rebuild needed in dev)
+      '@mhersztowski/core-cad-viewer': resolve(__dirname, '../../packages/core-cad-viewer/src/index.ts'),
       // Force all workspace packages to use cad-app's react instance
       'react': resolve(__dirname, 'node_modules/react'),
       'react-dom': resolve(__dirname, 'node_modules/react-dom'),
@@ -38,6 +40,7 @@ export default defineConfig({
       '@mhersztowski/ui-components-scene3d',
       '@mhersztowski/core-scene3d',
       '@mhersztowski/core-cad',
+      '@mhersztowski/core-cad-viewer',
       'opencascade.js',
     ],
   },

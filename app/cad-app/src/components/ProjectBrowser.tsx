@@ -14,6 +14,8 @@ interface Props {
   onClose: () => void;
   /** Called after a successful open or save with the project name */
   onDone?: (name: string) => void;
+  /** Called with the actual directory + name after a successful open or save. */
+  onFile?: (dir: string, name: string) => void;
 }
 
 /**
@@ -22,14 +24,16 @@ interface Props {
  * per-row viewer links. Scene3D files are handled by their own menu actions so
  * each file is opened / saved independently.
  */
-export function ProjectBrowser({ open, mode, project, onClose, onDone }: Props) {
+export function ProjectBrowser({ open, mode, project, onClose, onDone, onFile }: Props) {
   async function handleOpen(dir: string, name: string) {
     const jsonText = await readFileAt(dir, name, CAD_EXT);
     loadProjectFromText(jsonText, project);
+    onFile?.(dir, name);
   }
 
   async function handleSave(dir: string, name: string) {
     await writeFileAt(dir, name, CAD_EXT, JSON.stringify(project.toJSON()));
+    onFile?.(dir, name);
   }
 
   return (

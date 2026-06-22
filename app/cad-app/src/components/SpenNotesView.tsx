@@ -21,7 +21,16 @@ import BorderColorIcon from '@mui/icons-material/BorderColor';
 import AutoFixNormalIcon from '@mui/icons-material/AutoFixNormal';
 import GpsNotFixedIcon from '@mui/icons-material/GpsNotFixed';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import ContentCutIcon from '@mui/icons-material/ContentCut';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
+import Snackbar from '@mui/material/Snackbar';
 import type { SvgIconProps } from '@mui/material';
+import { ServerFileBrowser } from './ServerFileBrowser';
+import { NOTES_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../vfs/cadProjectApi';
+import { useRegisterFileOps } from '../fileops/FileOpsContext';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -99,6 +108,15 @@ function isLightColor(hex: string): boolean {
 const imgCache = new Map<string, HTMLImageElement>();
 // Set by the component to trigger canvas redraw after async image load
 let _imgRedrawCb: (() => void) | null = null;
+
+// Module-level clipboard for cut/copy/paste across pages
+let noteClipboard: NoteElement[] = [];
+
+function elLabel(el: NoteElement): string {
+  if (el.kind === 'stroke') return el.tool === 'marker' ? 'Marker stroke' : 'Pencil stroke';
+  if (el.kind === 'text') return el.text ? (el.text.length > 22 ? el.text.slice(0, 22) + '…' : el.text) : 'Text';
+  return 'Image';
+}
 
 function getImg(src: string): HTMLImageElement {
   if (imgCache.has(src)) return imgCache.get(src)!;
@@ -282,6 +300,38 @@ export function SpenNotesView() {
   const [debugVisible, setDebugVisible] = useState(false);
   const [debugTick, setDebugTick] = useState(0);
   const [imgDragVer, setImgDragVer] = useState(0);
+  const [scenePanelOpen, setScenePanelOpen] = useState(false);
+  const [propElId, setPropElId] = useState<string | null>(null);
+  const [notesBrowser, setNotesBrowser] = useState<'open' | 'save' | null>(null);
+  const [notesFile, setNotesFile] = useState<{ dir: string; name: string } | null>(null);
+  const [notesToast, setNotesToast] = useState<string | null>(null);
+  const notesViewerUrl = notesFile ? buildViewerUrl('notes', notesFile.dir, notesFile.name) : null;
+
+  // Plain functions (not memoized) so they always read the latest pages/currentPageId.
+  const handleNotesSave = async (dir: string, name: string) => {
+    await writeFileAt(dir, name, NOTES_EXT, JSON.stringify({ version: 1, pages, currentId: currentPageId }, null, 2));
+    setNotesFile({ dir, name });
+    setNotesToast(`Saved "${name}"`);
+  };
+  const handleNotesOpen = async (dir: string, name: string) => {
+    const text = await readFileAt(dir, name, NOTES_EXT);
+    const data = JSON.parse(text) as { pages?: NotePage[]; currentId?: string };
+    const loaded = Array.isArray(data.pages) && data.pages.length ? data.pages : [newPage()];
+    setPages(loaded);
+    setCurrentPageId(data.currentId && loaded.some(p => p.id === data.currentId) ? data.currentId : loaded[0].id);
+    setSelectedIds(new Set());
+    setNotesFile({ dir, name });
+  };
+
+  // Register file operations with the unified top-bar File menu.
+  useRegisterFileOps('notes', {
+    currentName: notesFile?.name ?? null,
+    server: [
+      { label: 'Open Notes from Server…', run: () => setNotesBrowser('open') },
+      { label: 'Save Notes to Server…', run: () => setNotesBrowser('save') },
+    ],
+    viewerUrl: notesViewerUrl,
+  }, [notesFile, notesViewerUrl]);
   const debugBufRef = useRef<string[]>([]);
   // dbg writes to ref only — zero React re-renders during drawing
   const dbg = (msg: string) => {
@@ -445,6 +495,41 @@ export function SpenNotesView() {
     redoStacks.current[pageId] = [];
     setHistoryVer(v => v + 1);
   }, []);
+
+  const handleCut = useCallback(() => {
+    if (!selectedIds.size) return;
+    noteClipboard = elementsRef.current.filter(el => selectedIds.has(el.id));
+    pushUndo(currentIdRef.current, elementsRef.current);
+    commitElements(elementsRef.current.filter(el => !selectedIds.has(el.id)));
+    setSelectedIds(new Set());
+    setSelectedImgId(null);
+  }, [selectedIds, commitElements, pushUndo]);
+
+  const handleCopy = useCallback(() => {
+    if (!selectedIds.size) return;
+    noteClipboard = elementsRef.current.filter(el => selectedIds.has(el.id));
+  }, [selectedIds]);
+
+  const handlePaste = useCallback(() => {
+    if (!noteClipboard.length) return;
+    const off = 20 / (zoomRef.current || 1);
+    const pasted: NoteElement[] = noteClipboard.map(el => {
+      const id = uid();
+      if (el.kind === 'stroke') return { ...el, id, points: el.points.map(p => ({ ...p, x: p.x + off, y: p.y + off })) };
+      if (el.kind === 'text') return { ...el, id, x: el.x + off, y: el.y + off };
+      return { ...el, id, x: el.x + off, y: el.y + off };
+    });
+    pushUndo(currentIdRef.current, elementsRef.current);
+    commitElements([...elementsRef.current, ...pasted]);
+    setSelectedIds(new Set(pasted.map(el => el.id)));
+  }, [commitElements, pushUndo]);
+
+  const updatePropEl = useCallback((patch: Partial<NoteStroke> | Partial<NoteText> | Partial<NoteImage>) => {
+    if (!propElId) return;
+    const next = elementsRef.current.map(el => el.id === propElId ? { ...el, ...patch } as NoteElement : el);
+    commitElements(next, { thumbnail: false });
+    redraw();
+  }, [propElId, commitElements, redraw]);
 
   // ── DOM pointer events ───────────────────────────────────────────────────────
 
@@ -1237,8 +1322,17 @@ export function SpenNotesView() {
             </>
           )}
 
+          {/* Scene panel toggle — file ops now live in the top-bar File menu */}
+          <Tooltip title="Scene (object tree + properties)">
+            <IconButton size="small" onClick={() => setScenePanelOpen(v => !v)}
+              sx={{ ml: 'auto', borderRadius: 1, bgcolor: scenePanelOpen ? 'primary.main' : undefined,
+                color: scenePanelOpen ? '#fff' : 'text.secondary' }}>
+              <AccountTreeOutlinedIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
+
           {/* Debug toggle */}
-          <Box sx={{ ml: 'auto' }}>
+          <Box>
             <Box
               component="button"
               onClick={() => { setDebugVisible(v => !v); setDebugTick(t => t + 1); }}
@@ -1527,6 +1621,199 @@ export function SpenNotesView() {
             onChange={e => handleFileChosen(e.target.files?.[0])} />
         </Box>
       </Box>
+
+      {/* ── Scene panel ──────────────────────────────────────────────────────── */}
+      {scenePanelOpen && (() => {
+        const currentPage = pages.find(p => p.id === currentPageId);
+        const els = currentPage?.elements ?? [];
+        const propEl = propElId ? els.find(e => e.id === propElId) ?? null : null;
+        return (
+          <Box sx={{
+            width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column',
+            borderLeft: '1px solid rgba(255,255,255,0.1)', bgcolor: 'background.paper',
+            overflow: 'hidden',
+          }}>
+
+            {/* Header */}
+            <Box sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5,
+              borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, flex: 1 }}>Scene</Typography>
+              <Tooltip title="Cut"><span>
+                <IconButton size="small" disabled={!selectedIds.size} onClick={handleCut}
+                  sx={{ p: 0.25 }}><ContentCutIcon sx={{ fontSize: 15 }} /></IconButton>
+              </span></Tooltip>
+              <Tooltip title="Copy"><span>
+                <IconButton size="small" disabled={!selectedIds.size} onClick={handleCopy}
+                  sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 15 }} /></IconButton>
+              </span></Tooltip>
+              <Tooltip title="Paste"><span>
+                <IconButton size="small" disabled={!noteClipboard.length} onClick={handlePaste}
+                  sx={{ p: 0.25 }}><ContentPasteIcon sx={{ fontSize: 15 }} /></IconButton>
+              </span></Tooltip>
+            </Box>
+
+            {/* Object tree */}
+            <Box sx={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+              {els.length === 0 && (
+                <Typography variant="caption" sx={{ color: 'text.disabled', p: 1, display: 'block' }}>
+                  No objects
+                </Typography>
+              )}
+              {[...els].reverse().map((el, revIdx) => {
+                const idx = els.length - 1 - revIdx;
+                const isSelected = selectedIds.has(el.id);
+                const Icon = el.kind === 'stroke' ? (el.tool === 'marker' ? BorderColorIcon : GestureIcon)
+                  : el.kind === 'text' ? TextFieldsIcon : ImageOutlinedIcon;
+                return (
+                  <Box
+                    key={el.id}
+                    onClick={() => {
+                      const next = new Set([el.id]);
+                      setSelectedIds(next);
+                      setSelectedImgId(el.kind === 'image' ? el.id : null);
+                      setPropElId(el.id);
+                      redraw();
+                    }}
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 0.75, px: 1, py: 0.4,
+                      cursor: 'pointer', fontSize: 12,
+                      bgcolor: isSelected ? 'rgba(79,195,247,0.15)' : 'transparent',
+                      borderLeft: isSelected ? '2px solid #4fc3f7' : '2px solid transparent',
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' },
+                    }}
+                  >
+                    <Icon sx={{ fontSize: 14, color: el.kind === 'stroke' ? el.color : 'text.secondary', flexShrink: 0 }} />
+                    <Typography variant="caption" noWrap sx={{ flex: 1 }}>
+                      {elLabel(el)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10 }}>
+                      {idx}
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+
+            <Divider />
+
+            {/* Properties */}
+            <Box sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>Properties</Typography>
+              {propEl && (
+                <Typography variant="caption" sx={{ color: 'text.disabled', ml: 'auto' }}>
+                  {propEl.kind}
+                </Typography>
+              )}
+            </Box>
+
+            <Box sx={{ px: 1, pb: 1, flex: 1, overflow: 'auto', minHeight: 0 }}>
+              {!propEl && (
+                <Typography variant="caption" sx={{ color: 'text.disabled' }}>Select an object</Typography>
+              )}
+
+              {propEl?.kind === 'stroke' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" sx={{ width: 60, color: 'text.secondary' }}>Color</Typography>
+                    <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: propEl.color, border: '1px solid rgba(255,255,255,0.3)' }} />
+                    <Typography variant="caption">{propEl.color}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" sx={{ width: 60, color: 'text.secondary' }}>Tool</Typography>
+                    <Typography variant="caption">{propEl.tool}</Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>Width: {propEl.width}</Typography>
+                    <Slider size="small" min={1} max={40} value={propEl.width}
+                      onChange={(_, v) => updatePropEl({ width: v as number })} />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: 'text.disabled' }}>
+                    {propEl.points.length} points
+                  </Typography>
+                </Box>
+              )}
+
+              {propEl?.kind === 'text' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <TextField size="small" label="Text" multiline maxRows={4} value={propEl.text}
+                    onChange={e => updatePropEl({ text: e.target.value })}
+                    sx={{ '& .MuiInputBase-root': { fontSize: 12 } }} />
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <TextField size="small" label="X" type="number" value={Math.round(propEl.x)}
+                      onChange={e => updatePropEl({ x: Number(e.target.value) })}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
+                    <TextField size="small" label="Y" type="number" value={Math.round(propEl.y)}
+                      onChange={e => updatePropEl({ y: Number(e.target.value) })}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>Font size: {propEl.fontSize}px</Typography>
+                    <Slider size="small" min={8} max={120} value={propEl.fontSize}
+                      onChange={(_, v) => updatePropEl({ fontSize: v as number })} />
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" sx={{ width: 40, color: 'text.secondary' }}>Color</Typography>
+                    <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: propEl.color, border: '1px solid rgba(255,255,255,0.3)', cursor: 'pointer' }}
+                      onClick={() => { const c = document.createElement('input'); c.type = 'color'; c.value = propEl.color;
+                        c.onchange = () => updatePropEl({ color: c.value }); c.click(); }} />
+                    <Typography variant="caption">{propEl.color}</Typography>
+                  </Box>
+                </Box>
+              )}
+
+              {propEl?.kind === 'image' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <TextField size="small" label="X" type="number" value={Math.round(propEl.x)}
+                      onChange={e => updatePropEl({ x: Number(e.target.value) })}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
+                    <TextField size="small" label="Y" type="number" value={Math.round(propEl.y)}
+                      onChange={e => updatePropEl({ y: Number(e.target.value) })}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <TextField size="small" label="W" type="number" value={Math.round(propEl.w)}
+                      onChange={e => updatePropEl({ w: Math.max(10, Number(e.target.value)) })}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
+                    <TextField size="small" label="H" type="number" value={Math.round(propEl.h)}
+                      onChange={e => updatePropEl({ h: Math.max(10, Number(e.target.value)) })}
+                      sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
+                  </Box>
+                  {propEl.src && (
+                    <Box component="img" src={propEl.src}
+                      sx={{ width: '100%', height: 80, objectFit: 'contain', bgcolor: 'rgba(0,0,0,0.3)', borderRadius: 1 }} />
+                  )}
+                </Box>
+              )}
+            </Box>
+
+          </Box>
+        );
+      })()}
+
+      {/* Server file browser (open / save .notes.json) */}
+      {notesBrowser && (
+        <ServerFileBrowser
+          open
+          mode={notesBrowser}
+          title={notesBrowser === 'open' ? 'Open Notes from Server' : 'Save Notes to Server'}
+          extension={NOTES_EXT}
+          defaultName={notesFile?.name ?? 'untitled'}
+          storageKey="notes.serverFileBrowser.dir"
+          onClose={() => setNotesBrowser(null)}
+          onOpen={handleNotesOpen}
+          onSave={handleNotesSave}
+          onDone={name => { setNotesBrowser(null); if (notesBrowser === 'open') setNotesToast(`Opened "${name}"`); }}
+        />
+      )}
+
+      <Snackbar
+        open={notesToast !== null}
+        autoHideDuration={2500}
+        onClose={() => setNotesToast(null)}
+        message={notesToast}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
     </Box>
   );
 }

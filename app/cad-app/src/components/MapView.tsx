@@ -1,22 +1,17 @@
-import { useState, useCallback, type ReactNode } from 'react'
+import { useState, useCallback, useRef, useMemo, type MutableRefObject } from 'react'
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import Snackbar from '@mui/material/Snackbar'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
-import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined'
-import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
+import CloseIcon from '@mui/icons-material/Close'
 import {
   MapContainer,
-  TileLayer,
-  CircleMarker,
-  Popup,
-  Polygon,
-  Polyline,
-  Circle,
-  LayerGroup,
+  useMap,
+  useMapEvents,
 } from 'react-leaflet'
+import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { MapHierarchyPanel } from './MapHierarchyPanel'
 import { MapPropertiesPanel } from './MapPropertiesPanel'
@@ -25,9 +20,14 @@ import { MapEditLayer } from './MapEditLayer'
 import { OverpassDialog } from './OverpassDialog'
 import { SplitPathDialog } from './SplitPathDialog'
 import { ServerFileBrowser } from './ServerFileBrowser'
+import { RouteDialog, type RouteDraft } from './RouteDialog'
+import { InfoView } from './InfoView'
 import { readFileAt, writeFileAt, MAP_EXT } from '../vfs/cadProjectApi'
 import { useMapLayers } from '../map/useMapLayers'
-import type { MapNode } from '../map/types'
+import { renderMapNode } from '../map/renderMapNode'
+import { fetchRoute, TRAVEL_MODES, formatDistance, formatDuration } from '../map/routing'
+import { useRegisterFileOps } from '../fileops/FileOpsContext'
+import type { MapNode, RoutePoint, TravelMode } from '../map/types'
 
 // ── serialization ─────────────────────────────────────────────────────────────
 
@@ -67,6 +67,20 @@ function findParentNode(nodes: MapNode[], id: string, parent: MapNode | null = n
   return undefined
 }
 
+// Collect every lat/lng a node covers (its own point + positions + descendants).
+function collectLatLngs(node: MapNode, acc: [number, number][]): void {
+  if (node.lat != null && node.lng != null) acc.push([node.lat, node.lng])
+  if (node.positions?.length) for (const p of node.positions) acc.push(p)
+  if (node.children) for (const c of node.children) collectLatLngs(c, acc)
+}
+
+// Captures the Leaflet map instance into a ref so MapView can fly imperatively.
+function MapRefCapture({ mapRef }: { mapRef: MutableRefObject<L.Map | null> }) {
+  const map = useMap()
+  mapRef.current = map
+  return null
+}
+
 // Collect all nodes whose id is in the given set (recursive)
 function collectNodes(nodes: MapNode[], ids: Set<string>): MapNode[] {
   const result: MapNode[] = []
@@ -80,71 +94,12 @@ function collectNodes(nodes: MapNode[], ids: Set<string>): MapNode[] {
   return result
 }
 
-// ── Recursive layer renderer ──────────────────────────────────────────────────
-
-function renderMapNode(node: MapNode): ReactNode {
-  if (!node.visible) return null
-
-  switch (node.type) {
-    case 'tile-layer':
-      return (
-        <TileLayer
-          key={node.id}
-          url={node.url ?? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'}
-          attribution={node.attribution}
-          opacity={node.opacity ?? 1}
-        />
-      )
-    case 'marker':
-      if (node.lat == null || node.lng == null) return null
-      return (
-        <CircleMarker
-          key={node.id}
-          center={[node.lat, node.lng]}
-          radius={7}
-          pathOptions={{ color: node.color ?? '#ef5350', fillColor: node.color ?? '#ef5350', fillOpacity: 0.85, weight: 1.5 }}
-        >
-          {node.popup ? <Popup><pre style={{ margin: 0, fontSize: '0.72rem' }}>{node.popup}</pre></Popup> : null}
-        </CircleMarker>
-      )
-    case 'polygon':
-      if (!node.positions?.length) return null
-      return (
-        <Polygon
-          key={node.id}
-          positions={node.positions}
-          pathOptions={{ color: node.color ?? '#4fc3f7', fillOpacity: node.fillOpacity ?? 0.3, weight: node.weight ?? 2 }}
-        />
-      )
-    case 'polyline':
-      if (!node.positions?.length) return null
-      return (
-        <Polyline
-          key={node.id}
-          positions={node.positions}
-          pathOptions={{ color: node.color ?? '#ff7043', weight: node.weight ?? 3 }}
-        />
-      )
-    case 'circle':
-      if (node.lat == null || node.lng == null) return null
-      return (
-        <Circle
-          key={node.id}
-          center={[node.lat, node.lng]}
-          radius={node.radius ?? 500}
-          pathOptions={{ color: node.color ?? '#66bb6a', fillOpacity: node.fillOpacity ?? 0.3, weight: node.weight ?? 2 }}
-        />
-      )
-    case 'group':
-      if (!node.children?.length) return null
-      return (
-        <LayerGroup key={node.id}>
-          {node.children.map(renderMapNode)}
-        </LayerGroup>
-      )
-    default:
-      return null
-  }
+// Captures map clicks while the route dialog is in "pick on map" mode.
+function RoutePickCapture({ active, onPick }: { active: boolean; onPick: (pt: [number, number]) => void }) {
+  useMapEvents({
+    click(e) { if (active) onPick([e.latlng.lat, e.latlng.lng]) },
+  })
+  return null
 }
 
 // ── MapView ───────────────────────────────────────────────────────────────────
@@ -153,31 +108,132 @@ export function MapView() {
   const {
     nodes, selectedId, selectedIds, selectedNode,
     toggleSelect,
-    addLayer, placeNode, deleteLayer, renameLayer, toggleVisibility, updateLayer, updateLayers, importAsGroup, addSibling, loadNodes,
+    addLayer, placeNode, deleteLayer, renameLayer, toggleVisibility, updateLayer, updateLayers, importAsGroup, addSibling, moveNode, placeRoute, loadNodes,
   } = useMapLayers()
 
   const selectedNodes = collectNodes(nodes, selectedIds)
+
+  // Leaflet map instance — used to zoom to a node when activated in the hierarchy.
+  const mapRef = useRef<L.Map | null>(null)
+
+  const flyToNode = useCallback((node: MapNode) => {
+    const map = mapRef.current
+    if (!map) return
+    // Circle: frame the whole disc using its radius.
+    if (node.type === 'circle' && node.lat != null && node.lng != null && node.radius) {
+      const bounds = L.latLng(node.lat, node.lng).toBounds(node.radius * 2.4)
+      map.flyToBounds(bounds, { animate: true, duration: 0.5 })
+      return
+    }
+    const pts: [number, number][] = []
+    collectLatLngs(node, pts)
+    if (pts.length === 0) return
+    if (pts.length === 1) {
+      map.flyTo(pts[0], Math.max(map.getZoom(), 16), { animate: true, duration: 0.5 })
+      return
+    }
+    const bounds = L.latLngBounds(pts)
+    if (bounds.isValid()) map.flyToBounds(bounds.pad(0.2), { animate: true, duration: 0.5 })
+  }, [])
+
+  // Hierarchy activation: select the node AND zoom the map to it.
+  const handleHierarchySelect = useCallback((id: string, multi: boolean) => {
+    toggleSelect(id, multi)
+    const node = findNode(nodes, id)
+    if (node) flyToNode(node)
+  }, [toggleSelect, nodes, flyToNode])
 
   // ── file state ─────────────────────────────────────────────────────────────
   const [openDialog, setOpenDialog]   = useState(false)
   const [saveDialog, setSaveDialog]   = useState(false)
   const [currentName, setCurrentName] = useState<string | null>(null)
+  const [currentDir, setCurrentDir]   = useState<string | null>(null)
   const [toast, setToast]             = useState<string | null>(null)
 
   const handleOpen = useCallback(async (dir: string, name: string) => {
     const text = await readFileAt(dir, name, MAP_EXT)
     loadNodes(deserializeMap(text))
     setCurrentName(name)
+    setCurrentDir(dir)
   }, [loadNodes])
 
   const handleSave = useCallback(async (dir: string, name: string) => {
     await writeFileAt(dir, name, MAP_EXT, serializeMap(nodes))
     setCurrentName(name)
+    setCurrentDir(dir)
     setToast(`Saved "${name}"`)
   }, [nodes])
 
+  // Build the read-only viewer URL for the currently saved scene file.
+  const viewerUrl = useMemo(() => {
+    if (!currentName || currentDir == null) return null
+    const full = `${currentDir}/${currentName}`.replace(/^\/+/, '')
+    return '/viewer/map/' + full.split('/').map(encodeURIComponent).join('/')
+  }, [currentDir, currentName])
+
   const [overpassOpen, setOverpassOpen] = useState(false)
   const [splitNode, setSplitNode] = useState<MapNode | null>(null)
+
+  // Node whose info/description is currently displayed (lookup keeps it live while editing).
+  const [infoNodeId, setInfoNodeId] = useState<string | null>(null)
+  const infoNode = infoNodeId ? findNode(nodes, infoNodeId) : null
+
+  // ── route state ─────────────────────────────────────────────────────────────
+  const [routeOpen, setRouteOpen] = useState(false)
+  const [routeDraft, setRouteDraft] = useState<RouteDraft>({ mode: 'car', from: null, to: null })
+  const [routePicking, setRoutePicking] = useState<'from' | 'to' | null>(null)
+  const [routeBusy, setRouteBusy] = useState(false)
+  const [routeError, setRouteError] = useState<string | null>(null)
+
+  const openRouteDialog = useCallback(() => {
+    setRouteDraft({ mode: 'car', from: null, to: null })
+    setRouteError(null)
+    setRoutePicking(null)
+    setRouteOpen(true)
+  }, [])
+
+  const handleRouteMode = useCallback((mode: TravelMode) => setRouteDraft(d => ({ ...d, mode })), [])
+  const handleRouteEndpoint = useCallback((which: 'from' | 'to', point: RoutePoint | null) =>
+    setRouteDraft(d => ({ ...d, [which]: point })), [])
+
+  // Map click while picking → fill the pending endpoint and return to the dialog.
+  const handleRoutePick = useCallback((pt: [number, number]) => {
+    if (!routePicking) return
+    const point: RoutePoint = { lat: pt[0], lng: pt[1], label: `${pt[0].toFixed(5)}, ${pt[1].toFixed(5)}` }
+    setRouteDraft(d => ({ ...d, [routePicking]: point }))
+    setRoutePicking(null)
+  }, [routePicking])
+
+  const handleRouteConfirm = useCallback(async () => {
+    const { mode, from, to } = routeDraft
+    if (!from || !to) return
+    setRouteBusy(true)
+    setRouteError(null)
+    try {
+      const result = await fetchRoute(mode, from, to)
+      const meta = TRAVEL_MODES[mode]
+      const durTxt = result.durationS != null ? ` · ${formatDuration(result.durationS)}` : ''
+      const popup =
+        `${meta.label}: ${from.label ?? 'Start'} → ${to.label ?? 'End'}\n` +
+        `${formatDistance(result.distanceM)}${durTxt}${result.straight ? '\n(straight line)' : ''}`
+      placeRoute({
+        name: `${meta.label}: ${from.label ?? 'A'} → ${to.label ?? 'B'}`,
+        travelMode: mode,
+        from, to,
+        positions: result.positions,
+        distanceM: result.distanceM,
+        durationS: result.durationS,
+        color: meta.color,
+        weight: 4,
+        popup,
+      })
+      setRouteOpen(false)
+    } catch (e) {
+      setRouteError((e as Error).message || 'Failed to compute route')
+    } finally {
+      setRouteBusy(false)
+    }
+  }, [routeDraft, placeRoute])
 
   // ── drawing state ─────────────────────────────────────────────────────────
   const [activeTool, setActiveTool] = useState<DrawTool>('select')
@@ -261,6 +317,19 @@ export function MapView() {
     addSibling(splitNode.id, newNode)
   }, [splitNode, addSibling])
 
+  // Register file operations with the unified top-bar File menu.
+  useRegisterFileOps('map', {
+    currentName,
+    server: [
+      { label: 'Open Map from Server…', run: () => setOpenDialog(true) },
+      { label: 'Save Map to Server…', run: () => setSaveDialog(true) },
+    ],
+    importItems: [
+      { label: 'Overpass Query…', secondary: 'Import OSM features', run: () => setOverpassOpen(true) },
+    ],
+    viewerUrl,
+  }, [currentName, viewerUrl])
+
   return (
     <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left: Hierarchy panel */}
@@ -268,12 +337,15 @@ export function MapView() {
         nodes={nodes}
         selectedId={selectedId}
         selectedIds={selectedIds}
-        onSelect={toggleSelect}
+        onSelect={handleHierarchySelect}
         onToggleVisibility={toggleVisibility}
         onRename={renameLayer}
         onDelete={deleteLayer}
         onAdd={addLayer}
+        onAddRoute={openRouteDialog}
         onSplit={handleSplitOpen}
+        onMove={moveNode}
+        onShowInfo={setInfoNodeId}
       />
 
       {/* Center: Leaflet map */}
@@ -285,7 +357,9 @@ export function MapView() {
           scrollWheelZoom
           doubleClickZoom={activeTool === 'select'}
         >
-          {nodes.map(renderMapNode)}
+          <MapRefCapture mapRef={mapRef} />
+          <RoutePickCapture active={routePicking !== null} onPick={handleRoutePick} />
+          {nodes.map(n => renderMapNode(n))}
           <MapDrawingLayer
             activeTool={activeTool}
             drawingPts={drawingPts}
@@ -300,6 +374,24 @@ export function MapView() {
             />
           )}
         </MapContainer>
+
+        {/* Route point-picking hint */}
+        {routePicking && (
+          <Box sx={{
+            position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 1200,
+            display: 'flex', alignItems: 'center', gap: 1.5,
+            px: 1.5, py: 0.75, borderRadius: 1,
+            bgcolor: 'rgba(66,165,245,0.95)', color: '#06222e',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+          }}>
+            <Typography sx={{ fontSize: '0.78rem', fontWeight: 600 }}>
+              Click on the map to set the {routePicking === 'from' ? 'start' : 'end'} point
+            </Typography>
+            <IconButton size="small" onClick={() => setRoutePicking(null)} sx={{ p: 0.25, color: '#06222e' }}>
+              <CloseIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Box>
+        )}
 
         {/* Left: draw tools toolbar */}
         <MapDrawingToolbar
@@ -333,37 +425,7 @@ export function MapView() {
           )}
 
           <Box sx={{ display: 'flex', gap: 0.5 }}>
-            {/* Open */}
-            <Tooltip title="Open map from server" placement="left">
-              <IconButton
-                size="small"
-                onClick={() => setOpenDialog(true)}
-                sx={{
-                  bgcolor: 'background.paper', border: '1px solid rgba(255,255,255,0.15)',
-                  boxShadow: '0 1px 5px rgba(0,0,0,0.4)', borderRadius: 1,
-                  '&:hover': { bgcolor: 'action.hover' },
-                }}
-              >
-                <FolderOpenOutlinedIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Tooltip>
-
-            {/* Save */}
-            <Tooltip title="Save map to server" placement="left">
-              <IconButton
-                size="small"
-                onClick={() => setSaveDialog(true)}
-                sx={{
-                  bgcolor: 'background.paper', border: '1px solid rgba(255,255,255,0.15)',
-                  boxShadow: '0 1px 5px rgba(0,0,0,0.4)', borderRadius: 1,
-                  '&:hover': { bgcolor: 'action.hover' },
-                }}
-              >
-                <SaveOutlinedIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Tooltip>
-
-            {/* Overpass */}
+            {/* Overpass — open/save/viewer now live in the top-bar File menu */}
             <Tooltip title="Overpass Query Explorer" placement="left">
               <IconButton
                 size="small"
@@ -389,13 +451,31 @@ export function MapView() {
         initialCenter={MAP_CENTER}
       />
 
+      {/* Route builder dialog (hidden while picking a point on the map) */}
+      <RouteDialog
+        open={routeOpen && routePicking === null}
+        draft={routeDraft}
+        nodes={nodes}
+        busy={routeBusy}
+        error={routeError}
+        onModeChange={handleRouteMode}
+        onSetEndpoint={handleRouteEndpoint}
+        onPickOnMap={setRoutePicking}
+        onConfirm={handleRouteConfirm}
+        onClose={() => setRouteOpen(false)}
+      />
+
       {/* Right: Properties inspector */}
       <MapPropertiesPanel
         node={selectedNode ?? null}
         selectedNodes={selectedNodes}
         onUpdate={updateLayer}
         onUpdateMany={updateLayers}
+        onShowInfo={n => setInfoNodeId(n.id)}
       />
+
+      {/* Info / description viewer (compact card or fullscreen) */}
+      <InfoView node={infoNode} onClose={() => setInfoNodeId(null)} />
 
       {/* Split / extract segment dialog */}
       <SplitPathDialog

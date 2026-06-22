@@ -3,6 +3,7 @@ import {
   ScriptContext,
   ScriptOutput,
   DisplayApi,
+  HttpOptions,
   md,
   table,
   reactive,
@@ -11,35 +12,62 @@ import { pluginRegistry } from '../web-plugins';
 import { makeCredentialsApi } from '../../services/credentialsApi';
 
 export function buildScriptContext(auth: ScriptAuth): ScriptContext {
-  const headers = () => ({
+  const defaultHeaders = (opts?: HttpOptions): Record<string, string> => ({
     'Content-Type': 'application/json',
-    ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+    ...(opts?.auth !== false && auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+    ...opts?.headers,
   });
 
+  const checkOk = (resp: Response, url: string) => {
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${url}`);
+  };
+
   const http = {
-    get: async (path: string): Promise<unknown> => {
-      const resp = await fetch(path, { headers: headers() });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${path}`);
-      return resp.json();
+    get: async <T = unknown>(url: string, opts?: HttpOptions): Promise<T> => {
+      const resp = await fetch(url, { headers: defaultHeaders(opts) });
+      checkOk(resp, url);
+      return resp.json() as Promise<T>;
     },
-    post: async (path: string, body?: unknown): Promise<unknown> => {
-      const resp = await fetch(path, {
+    post: async <T = unknown>(url: string, body?: unknown, opts?: HttpOptions): Promise<T> => {
+      const resp = await fetch(url, {
         method: 'POST',
-        headers: headers(),
+        headers: defaultHeaders(opts),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${path}`);
-      return resp.json();
+      checkOk(resp, url);
+      return resp.json() as Promise<T>;
     },
-    put: async (path: string, body?: unknown): Promise<unknown> => {
-      const resp = await fetch(path, {
+    put: async <T = unknown>(url: string, body?: unknown, opts?: HttpOptions): Promise<T> => {
+      const resp = await fetch(url, {
         method: 'PUT',
-        headers: headers(),
+        headers: defaultHeaders(opts),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${path}`);
-      return resp.json();
+      checkOk(resp, url);
+      return resp.json() as Promise<T>;
     },
+    patch: async <T = unknown>(url: string, body?: unknown, opts?: HttpOptions): Promise<T> => {
+      const resp = await fetch(url, {
+        method: 'PATCH',
+        headers: defaultHeaders(opts),
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      checkOk(resp, url);
+      return resp.json() as Promise<T>;
+    },
+    delete: async <T = unknown>(url: string, opts?: HttpOptions): Promise<T> => {
+      const resp = await fetch(url, { method: 'DELETE', headers: defaultHeaders(opts) });
+      checkOk(resp, url);
+      // DELETE may return 204 No Content
+      const text = await resp.text();
+      return (text ? JSON.parse(text) : null) as T;
+    },
+    getText: async (url: string, opts?: HttpOptions): Promise<string> => {
+      const resp = await fetch(url, { headers: defaultHeaders(opts) });
+      checkOk(resp, url);
+      return resp.text();
+    },
+    raw: (url: string, init?: RequestInit): Promise<Response> => fetch(url, init),
   };
 
   const secrets = makeCredentialsApi(() => auth.currentUser);

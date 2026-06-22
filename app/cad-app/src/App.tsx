@@ -25,7 +25,9 @@ import { Project } from '@mhersztowski/core-cad';
 import type { Point2D, ViewMode } from '@mhersztowski/core-cad';
 import { CadCanvas } from './components/CadCanvas';
 import { CommandLine } from './components/CommandLine';
-import { FileMenu } from './components/FileMenu';
+import { FileMenu } from './components/UnifiedFileMenu';
+import { CadFileOps } from './components/CadFileOps';
+import { FileOpsProvider } from './fileops/FileOpsContext';
 import { LayerPanel } from './components/LayerPanel';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Scene3DView } from './components/Scene3DView';
@@ -304,12 +306,15 @@ export default function App() {
   }, [placementTemplate]);
 
   return (
+    <FileOpsProvider>
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh', overflow: 'hidden', bgcolor: 'background.default' }}>
-      {/* Top bar: mode tabs + 2D/3D toggle */}
+      {/* Top bar: unified File menu (always visible) + mode tabs + 2D/3D toggle */}
       <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center' }}>
+        <FileMenu mode={mode} />
         {(mode === 'cad' || mode === 'cad3d') && (
-          <FileMenu
+          <CadFileOps
             project={project}
+            mode={mode}
             getSceneData={() => savedSceneJson}
             onSceneData={json => { setAiSceneData(json); setSavedSceneJson(json); }}
           />
@@ -763,5 +768,6 @@ export default function App() {
         );
       })()}
     </Box>
+    </FileOpsProvider>
   );
 }

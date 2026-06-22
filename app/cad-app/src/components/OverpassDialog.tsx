@@ -31,6 +31,7 @@ import CropSquareIcon from '@mui/icons-material/CropSquare'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import SelectAllIcon from '@mui/icons-material/SelectAll'
 import DeselectIcon from '@mui/icons-material/Deselect'
+import SearchIcon from '@mui/icons-material/Search'
 import L from 'leaflet'
 import { MapContainer, TileLayer, CircleMarker, Polyline, Polygon, useMap } from 'react-leaflet'
 import type { OsmElement, OsmNode, OsmWay, OsmRelation } from '../map/overpassTypes'
@@ -141,6 +142,19 @@ const DEFAULT_QUERY = `[out:json][timeout:25];
 out geom;`
 
 const DEFAULT_ENDPOINT = 'https://overpass-api.de/api/interpreter'
+
+// Nominatim — OSM geocoder used for fuzzy / typo-tolerant name lookup.
+// It resolves a free-text name (optionally narrowed by place) into concrete
+// OSM elements (osm_type + osm_id); we then ask Overpass for their geometry.
+const NOMINATIM_ENDPOINT = 'https://nominatim.openstreetmap.org/search'
+
+interface NominatimHit {
+  osm_type?: 'node' | 'way' | 'relation'
+  osm_id?: number
+  display_name?: string
+  lat: string
+  lon: string
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -424,6 +438,8 @@ interface Props {
 export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.2297, 21.0122] }: Props) {
   const [query, setQuery] = useState(DEFAULT_QUERY)
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT)
+  const [nameSearch, setNameSearch] = useState('')
+  const [areaSearch, setAreaSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [elements, setElements] = useState<OsmElement[]>([])
@@ -461,6 +477,18 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
       .replace(/\{\{center\}\}/g, center)
   }, [query])
 
+  // POST a resolved Overpass QL string and return its parsed elements.
+  const fetchOverpass = useCallback(async (resolved: string, ctrl: AbortController): Promise<OsmElement[]> => {
+    const body = new URLSearchParams({ data: resolved })
+    const res = await fetch(endpoint, { method: 'POST', body, signal: ctrl.signal })
+    if (!res.ok) {
+      const txt = await res.text()
+      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`)
+    }
+    const json = await res.json()
+    return (json.elements ?? []) as OsmElement[]
+  }, [endpoint])
+
   const handleRun = useCallback(async () => {
     abortRef.current?.abort()
     const ctrl = new AbortController()
@@ -471,15 +499,7 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
     setSelected(new Set())
     setActiveId(null)
     try {
-      const resolved = resolveQuery()
-      const body = new URLSearchParams({ data: resolved })
-      const res = await fetch(endpoint, { method: 'POST', body, signal: ctrl.signal })
-      if (!res.ok) {
-        const txt = await res.text()
-        throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`)
-      }
-      const json = await res.json()
-      const els: OsmElement[] = json.elements ?? []
+      const els = await fetchOverpass(resolveQuery(), ctrl)
       setElements(els)
       if (els.length === 0) setError('Query returned no elements. Try zooming out or changing the query.')
     } catch (e: unknown) {
@@ -487,7 +507,72 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
     } finally {
       setLoading(false)
     }
-  }, [endpoint, resolveQuery])
+  }, [fetchOverpass, resolveQuery])
+
+  // Fuzzy / typo-tolerant name search: Nominatim resolves the name (optionally
+  // narrowed by place) into OSM elements, then Overpass fetches their geometry.
+  const handleNameSearch = useCallback(async () => {
+    const term = nameSearch.trim()
+    if (!term) return
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    setLoading(true)
+    setError(null)
+    setElements([])
+    setSelected(new Set())
+    setActiveId(null)
+    try {
+      const area = areaSearch.trim()
+      const q = area ? `${term}, ${area}` : term
+      const nomUrl = `${NOMINATIM_ENDPOINT}?` + new URLSearchParams({
+        q,
+        format: 'jsonv2',
+        limit: '40',
+        dedupe: '1',
+      }).toString()
+      const nres = await fetch(nomUrl, { signal: ctrl.signal })
+      if (!nres.ok) throw new Error(`Nominatim HTTP ${nres.status}`)
+      const hits = (await nres.json()) as NominatimHit[]
+      if (!hits.length) {
+        setError(`Nothing found for “${q}”. Check the spelling or add a place/area.`)
+        return
+      }
+
+      // Group matched ids by element type for a single Overpass id query.
+      const ids: Record<'node' | 'way' | 'relation', number[]> = { node: [], way: [], relation: [] }
+      for (const h of hits) {
+        if ((h.osm_type === 'node' || h.osm_type === 'way' || h.osm_type === 'relation') && typeof h.osm_id === 'number') {
+          ids[h.osm_type].push(h.osm_id)
+        }
+      }
+      const parts: string[] = []
+      if (ids.node.length) parts.push(`  node(id:${ids.node.join(',')});`)
+      if (ids.way.length) parts.push(`  way(id:${ids.way.join(',')});`)
+      if (ids.relation.length) parts.push(`  relation(id:${ids.relation.join(',')});`)
+      if (!parts.length) {
+        setError('Matches found but none were resolvable OSM elements.')
+        return
+      }
+
+      const oq = `[out:json][timeout:60];\n(\n${parts.join('\n')}\n);\nout geom;`
+      setQuery(oq) // reflect the generated query in the editor for transparency / tweaking
+      const els = await fetchOverpass(oq, ctrl)
+      setElements(els)
+
+      // Fly the preview map to the best match (first Nominatim hit).
+      const lat = parseFloat(hits[0].lat)
+      const lon = parseFloat(hits[0].lon)
+      if (mapRef.current && Number.isFinite(lat) && Number.isFinite(lon)) {
+        mapRef.current.flyTo([lat, lon], Math.max(mapRef.current.getZoom(), 14), { animate: true, duration: 0.6 })
+      }
+      if (els.length === 0) setError('Matched a place but Overpass returned no geometry.')
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name !== 'AbortError') setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [nameSearch, areaSearch, fetchOverpass])
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort()
@@ -637,6 +722,54 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
           borderRight: '1px solid rgba(255,255,255,0.08)',
           overflow: 'hidden',
         }}>
+          {/* Find by name (fuzzy / typo-tolerant via Nominatim) */}
+          <Box sx={{ px: 1.5, pt: 1.5, pb: 0.5, flexShrink: 0 }}>
+            <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'text.secondary' }}>
+              Find by Name
+            </Typography>
+          </Box>
+          <Box sx={{ px: 1.5, pb: 1, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            <TextField
+              fullWidth
+              size="small"
+              label="Name"
+              placeholder="e.g. Muzeum Pamięci Sybiru"
+              value={nameSearch}
+              onChange={e => setNameSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleNameSearch() } }}
+              sx={{ '& .MuiInputBase-input': { fontSize: '0.75rem' }, '& .MuiInputLabel-root': { fontSize: '0.72rem' } }}
+            />
+            <TextField
+              fullWidth
+              size="small"
+              label="Place / area (optional)"
+              placeholder="e.g. Białystok"
+              value={areaSearch}
+              onChange={e => setAreaSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleNameSearch() } }}
+              sx={{ '& .MuiInputBase-input': { fontSize: '0.75rem' }, '& .MuiInputLabel-root': { fontSize: '0.72rem' } }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={loading
+                ? <CircularProgress size={13} color="inherit" />
+                : <SearchIcon sx={{ fontSize: 16 }} />
+              }
+              onClick={handleNameSearch}
+              disabled={loading || !nameSearch.trim()}
+              sx={{ textTransform: 'none', fontSize: '0.76rem' }}
+            >
+              Search by name
+            </Button>
+            <Typography sx={{ fontSize: '0.6rem', color: 'text.disabled', lineHeight: 1.4 }}>
+              Fuzzy lookup (tolerates typos &amp; partial names) via Nominatim, then fetches full
+              Node/Way/Relation geometry from Overpass.
+            </Typography>
+          </Box>
+
+          <Divider sx={{ mx: 1.5, flexShrink: 0 }} />
+
           {/* Section label */}
           <Box sx={{ px: 1.5, pt: 1.5, pb: 0.5, flexShrink: 0 }}>
             <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'text.secondary' }}>

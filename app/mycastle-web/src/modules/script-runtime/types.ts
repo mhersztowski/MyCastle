@@ -67,10 +67,28 @@ export interface ScriptAuth {
   isAdmin: boolean;
 }
 
+export interface HttpOptions {
+  /** Extra headers merged with the default Content-Type / Authorization. */
+  headers?: Record<string, string>;
+  /** Set false to skip the auto Authorization header (external APIs). Default true. */
+  auth?: boolean;
+}
+
 export interface ScriptHttp {
-  get: (path: string) => Promise<unknown>;
-  post: (path: string, body?: unknown) => Promise<unknown>;
-  put: (path: string, body?: unknown) => Promise<unknown>;
+  /** GET → parse JSON. Throws on non-2xx. */
+  get<T = unknown>(url: string, options?: HttpOptions): Promise<T>;
+  /** POST JSON body → parse JSON. Throws on non-2xx. */
+  post<T = unknown>(url: string, body?: unknown, options?: HttpOptions): Promise<T>;
+  /** PUT JSON body → parse JSON. Throws on non-2xx. */
+  put<T = unknown>(url: string, body?: unknown, options?: HttpOptions): Promise<T>;
+  /** PATCH JSON body → parse JSON. Throws on non-2xx. */
+  patch<T = unknown>(url: string, body?: unknown, options?: HttpOptions): Promise<T>;
+  /** DELETE → parse JSON. Throws on non-2xx. */
+  delete<T = unknown>(url: string, options?: HttpOptions): Promise<T>;
+  /** GET → return raw text (not JSON). Useful for Markdown, CSV, plain HTML. */
+  getText(url: string, options?: HttpOptions): Promise<string>;
+  /** Raw fetch — full control, no automatic headers. Returns the native Response. */
+  raw(url: string, init?: RequestInit): Promise<Response>;
 }
 
 export interface ScriptContext {
