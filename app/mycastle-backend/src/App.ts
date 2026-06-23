@@ -19,6 +19,7 @@ import { PluginService } from './modules/plugins/PluginService.js';
 import { BackendPluginService } from './modules/plugins/BackendPluginService.js';
 import { SecretsService } from './modules/secrets/SecretsService.js';
 import { GitService } from './modules/git/GitService.js';
+import { IotServer, type IMqttTransport } from '@mhersztowski/server-logic';
 
 export interface AppConfig {
   httpPort: number;
@@ -63,6 +64,7 @@ export class App {
   readonly secretsService: SecretsService;
   readonly gitService: GitService;
   private _mqttServer!: MqttServer;
+  serverLogic!: IotServer;
   private terminalService!: TerminalService;
   private lspProxyService!: LspProxyService;
   private jwtService: JwtService;
@@ -285,6 +287,19 @@ export class App {
     });
     console.log('IoT service started (SQLite + MQTT)');
 
+    // Wire the server-logic layer (server/user/client MQTT control plane).
+    const serverLogicTransport: IMqttTransport = {
+      publish: (topic, payload) => this._mqttServer.publishMessage(topic, payload),
+      subscribe: (handler) => this._mqttServer.onMessage(handler),
+    };
+    this.serverLogic = new IotServer({
+      transport: serverLogicTransport,
+      staleClientMs: 60_000,
+      cronScheduler: { schedule: (expr, fn) => cron.schedule(expr, () => void fn()) },
+    });
+    this.serverLogic.start();
+    console.log('Server logic started (server/user/client MQTT topics)');
+
     // Load user backend plugins (build + activate; routes dispatched by the HTTP server)
     try {
       await this.backendPluginService.loadAllUsers();
@@ -462,6 +477,12 @@ export class App {
       this.iotService.stop();
     } catch (err) {
       console.warn('Error stopping IoT service:', err);
+    }
+
+    try {
+      this.serverLogic?.stop();
+    } catch (err) {
+      console.warn('Error stopping server logic:', err);
     }
 
     try {

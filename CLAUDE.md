@@ -49,6 +49,10 @@ Monorepo z pnpm workspaces. Shared code w `packages/`, aplikacje w `app/`.
   - `datasource/` — DataSource (in-memory store, auto-reload z FileSystem events)
   - `rpc/` — **RpcRouter**. `RpcRouter`: register/dispatch/getRegisteredMethods. `RpcContext` z `user?: AuthTokenPayload`. Używany przez mycastle-backend.
   - `interfaces.ts` — IAutomateService, IDataSource (dependency inversion — backend-specific modules implementują te interfejsy)
+- **@mhersztowski/server-logic** (`packages/server-logic/`) — **warstwa „server logic"** (wg `docs/ServerLogic.md`), uruchamiana **in-process z mycastle-backend**. ESM-only build (tsup). Zależność tylko `@mhersztowski/minislib` (Signal/MObject); broker MQTT wstrzykiwany przez interfejs (`IMqttTransport`).
+  - **`IotServer`** — mózg serwera: `log: LogService` (EnumLogKind/ILogMessage, `log/debug/info/warning/error`, `onMessage` signal, ring buffer), `activity: ActivityService` (feed zdarzeń), `console: ConsoleService`, `cron: CronService` (`every` natywnie; `schedule(expr)` przez wstrzyknięty `ICronScheduler`), `clients: ClientRegistry` (presence `(userName, device, clientType, id)`), sygnały `onServerMessage`/`onUiEvent`. `start()`/`stop()`.
+  - **Topiki** (bez wiodącego `/`): `server/inbox`·`server/outbox`, `{user}/inbox`·`{user}/outbox`, `{user}/{device}-{clientType}/{id}/inbox`·`/outbox`; `classifyTopic()` parsuje dowolny topic. Konwencja: **inbox = do encji** (serwer pisze), **outbox = od encji** (serwer czyta).
+  - **`MqttList<T>`** (obserwowalna kolekcja CRUD, opcjonalnie mirrorowana przez MQTT — `bind`), **`Envelope`** + słownik zdarzeń UI **`UiEvent`** (focus/blur/change/click/submit/keydown/…), **`IMqttTransport`**/`InMemoryTransport`. Spięty w `App.ts` (adapter transportu na `MqttServer.publishMessage`/`onMessage`, cron przez `node-cron`).
 - **@mhersztowski/devtools** (`packages/devtools/`) — **toolkit kod źródłowy ⇄ UML** (Node.js, ESM-only build tsup). Parsuje **C/C++/Python/JS/TS** do wspólnego IR (`CodeModel`), generuje z niego **projekty UML** w formacie edytora (`*.umlproj.json`), liczy **diff** kolejnych wersji do **historii git-like** projektu, oraz robi round-trip **UML → szkielety kodu**. Ściśle współpracuje z edytorem UML (ten sam format projektu v2).
   - **Parsery (najlepsze biblioteki):** `typescript` Compiler API dla TS/JS (semantyczny, bez natywnych zależności); **`web-tree-sitter` + `tree-sitter-wasms`** (prebuilt gramatyki WASM, bez node-gyp) dla Python/C/C++. Gramatyki ładowane leniwie i odpornie — ścieżka TS działa nawet bez WASM. Detekcja języka po rozszerzeniu (`detectLanguage`).
   - `model/` — **`CodeModel`** (IR: `CodeSymbol` {id, kind `class|interface|enum|struct`, name, file, language, isAbstract, members, extends[], implements[]}, **`CodeMember`** {id, kind `field|method`, name, visibility `public|private|protected|package`, type?, params?, isStatic?, isAbstract?, text}, **`CodeRelation`** {fromId, toId, type `generalization|realization|association|composition|dependency`}). `ids.ts` — **deterministyczne id** (djb2→base36): re-parse daje te same id, więc UML zachowuje tożsamość węzłów (manual layout przeżywa re-sync) a diff dopasowuje składowe między wersjami. `render.ts` — `renderMember()` (struktura→linia UML np. `+ getId(): string`) + `parseMemberText()` (odwrotnie). `resolve.ts` — `resolveRelations()` buduje relacje: extends→generalization, implements→realization, typy pól wskazujące znaną klasę→association; `extractTypeNames()` zdejmuje generyki/tablice/wskaźniki.
@@ -449,6 +453,11 @@ mycastle/                           # Root monorepo
 │   │   ├── src/interfaces.ts       # IAutomateService, IDataSource
 │   │   ├── vitest.config.ts        # Unit tests
 │   │   ├── tsup.config.ts          # ESM-only, target node20
+│   │   └── package.json
+│   ├── server-logic/               # @mhersztowski/server-logic (IotServer + services + MQTT control plane, runs in mycastle-backend)
+│   │   ├── src/{IotServer,topics,transport,messages,MqttList,ClientRegistry,types}.ts
+│   │   ├── src/services/           # Service, LogService, ConsoleService, CronService, ActivityService
+│   │   ├── tsup.config.ts          # ESM-only, target node20 (external: minislib)
 │   │   └── package.json
 │   ├── devtools/                   # @mhersztowski/devtools (code ⇄ UML: parse C/C++/Py/JS/TS → UML project, diff→history, codegen + GitRepoService)
 │   │   ├── src/model/              # CodeModel (IR), ids (deterministic), render, resolve (relations)
