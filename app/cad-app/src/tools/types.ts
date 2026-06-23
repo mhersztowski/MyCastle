@@ -70,6 +70,8 @@ export interface ToolContext {
   snapResult: SnapResult;
   /** Input device data. Always present; uses mouse defaults for keyboard-injected actions. */
   pen: PenInput;
+  /** World units per screen pixel — for screen-consistent thresholds (e.g. dimension anchoring). */
+  pixelToWorld?: number;
 }
 
 export interface PreviewGeometry {

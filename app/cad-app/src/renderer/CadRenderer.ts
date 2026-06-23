@@ -208,9 +208,14 @@ export class CadRenderer {
       if (!entity.visible) continue;
       const layer = this.project.layerSystem.get(entity.layerId);
       if (layer && !layer.visible) continue;
-      const obj = this._buildObject(entity, layer, selected.has(entity.id));
-      this.meshMap.set(entity.id, obj);
-      this.entitiesGroup.add(obj);
+      // Isolate each entity: one bad build must not abort the whole scene.
+      try {
+        const obj = this._buildObject(entity, layer, selected.has(entity.id));
+        this.meshMap.set(entity.id, obj);
+        this.entitiesGroup.add(obj);
+      } catch (e) {
+        console.error('[CadRenderer] failed to build entity', entity.type, entity.id, e);
+      }
     }
   }
 
@@ -223,9 +228,13 @@ export class CadRenderer {
     const layer = this.project.layerSystem.get(entity.layerId);
     if (layer && !layer.visible) return;
     const selected = this.project.selectionManager.isSelected(entityId);
-    const obj = this._buildObject(entity, layer, selected);
-    this.meshMap.set(entityId, obj);
-    this.entitiesGroup.add(obj);
+    try {
+      const obj = this._buildObject(entity, layer, selected);
+      this.meshMap.set(entityId, obj);
+      this.entitiesGroup.add(obj);
+    } catch (e) {
+      console.error('[CadRenderer] failed to build entity', entity.type, entityId, e);
+    }
   }
 
   private _buildObject(entity: Entity, layer: ReturnType<typeof this.project.layerSystem.get>, selected: boolean): THREE.Object3D {
@@ -309,17 +318,29 @@ export class CadRenderer {
   pickEntity(screenX: number, screenY: number): string | null {
     const worldPt = this.screenToWorld(screenX, screenY);
     const threshold = 8 * this.zoom;
+    const entities = this.project.entityRegistry.getAll().filter(e => e.visible && !e.locked);
+
+    // Pass 1 — outline/line proximity. Lines, edges and curves take priority over
+    // a filled shape's interior, so a line drawn over a rectangle stays selectable.
     let best: string | null = null;
     let bestDist = threshold;
-
-    for (const entity of this.project.entityRegistry.getAll()) {
-      const d = distanceToEntity(worldPt, entity);
-      if (d < bestDist) {
-        bestDist = d;
-        best = entity.id;
-      }
+    for (const entity of entities) {
+      const d = outlineDistanceToEntity(worldPt, entity);
+      if (d <= bestDist) { bestDist = d; best = entity.id; } // `<=` → topmost wins on overlap
     }
-    return best;
+    if (best) return best;
+
+    // Pass 2 — interior of a closed shape (only when no outline is near). Pick the
+    // smallest containing shape (the most specific), topmost on ties.
+    let contained: string | null = null;
+    let bestArea = Infinity;
+    for (const entity of entities) {
+      if (!containsPoint(worldPt, entity)) continue;
+      const b = entity.boundingBox;
+      const area = Math.max(1e-6, (b.maxX - b.minX) * (b.maxY - b.minY));
+      if (area <= bestArea) { bestArea = area; contained = entity.id; }
+    }
+    return contained;
   }
 
   /** Pick entity in 3D mode via raycasting against meshes */
@@ -384,43 +405,96 @@ export class CadRenderer {
 
 // ── Geometric picking helpers ────────────────────────────────────────────────
 
-function distanceToEntity(pt: { x: number; y: number }, entity: Entity): number {
+type Pt = { x: number; y: number };
+
+/** Distance to an entity's OUTLINE (edges/curve) — never 0 for an interior click,
+ *  so lines/edges stay selectable over a filled shape. Interior is handled by
+ *  containsPoint() in a separate pick pass. */
+function outlineDistanceToEntity(pt: Pt, entity: Entity): number {
   switch (entity.type) {
     case 'line':
       return distToSegment(pt, { x: entity.x1, y: entity.y1 }, { x: entity.x2, y: entity.y2 });
     case 'circle':
-      return Math.abs(Math.sqrt((pt.x - entity.cx) ** 2 + (pt.y - entity.cy) ** 2) - entity.radius);
-    case 'rect': {
-      const corners = [
-        { x: entity.x, y: entity.y }, { x: entity.x + entity.width, y: entity.y },
-        { x: entity.x + entity.width, y: entity.y + entity.height }, { x: entity.x, y: entity.y + entity.height },
-      ];
-      let min = Infinity;
-      for (let i = 0; i < 4; i++) min = Math.min(min, distToSegment(pt, corners[i], corners[(i + 1) % 4]));
-      return min;
-    }
-    case 'polyline': {
-      let min = Infinity;
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        min = Math.min(min, distToSegment(pt, entity.points[i], entity.points[i + 1]));
-      }
-      if (entity.closed && entity.points.length > 1) {
-        min = Math.min(min, distToSegment(pt, entity.points[entity.points.length - 1], entity.points[0]));
-      }
-      return min;
-    }
-    case 'box3d': {
-      const dx = Math.abs(pt.x - entity.cx) - entity.width / 2;
-      const dy = Math.abs(pt.y - entity.cy) - entity.depth / 2;
-      return Math.max(dx, dy); // rough 2D box distance
-    }
     case 'cylinder3d':
-      return Math.abs(Math.sqrt((pt.x - entity.cx) ** 2 + (pt.y - entity.cy) ** 2) - entity.radius);
     case 'sphere3d':
-      return Math.abs(Math.sqrt((pt.x - entity.cx) ** 2 + (pt.y - entity.cy) ** 2) - entity.radius);
+      return Math.abs(Math.hypot(pt.x - entity.cx, pt.y - entity.cy) - entity.radius);
+    case 'arc':
+      return Math.abs(Math.hypot(pt.x - entity.cx, pt.y - entity.cy) - entity.radius);
+    case 'rect':
+      return rectOutlineDist(pt, entity.x, entity.y, entity.width, entity.height);
+    case 'box3d':
+      return rectOutlineDist(pt, entity.cx - entity.width / 2, entity.cy - entity.depth / 2, entity.width, entity.depth);
+    case 'polyline':
+      return polylineOutlineDist(pt, entity.points, entity.closed);
+    case 'freehand':
+      return polylineOutlineDist(pt, entity.points, false);
+    case 'dimension': {
+      // Pick by the visible dimension line (at `offset`), NOT the measured
+      // segment — otherwise a dimension drawn along a shape sits exactly on it
+      // and would steal every click meant for that shape.
+      const dx = entity.x2 - entity.x1, dy = entity.y2 - entity.y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / len) * entity.offset, ny = (dx / len) * entity.offset;
+      return distToSegment(pt,
+        { x: entity.x1 + nx, y: entity.y1 + ny },
+        { x: entity.x2 + nx, y: entity.y2 + ny });
+    }
+    case 'text':
+    case 'image': {
+      const b = entity.boundingBox;
+      return rectOutlineDist(pt, b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+    }
     default:
       return Infinity;
   }
+}
+
+/** Whether a point is inside a closed shape's filled area (for interior picking). */
+function containsPoint(pt: Pt, entity: Entity): boolean {
+  switch (entity.type) {
+    case 'circle':
+    case 'cylinder3d':
+    case 'sphere3d':
+      return Math.hypot(pt.x - entity.cx, pt.y - entity.cy) <= entity.radius;
+    case 'rect':
+      return pt.x >= entity.x && pt.x <= entity.x + entity.width && pt.y >= entity.y && pt.y <= entity.y + entity.height;
+    case 'box3d':
+      return Math.abs(pt.x - entity.cx) <= entity.width / 2 && Math.abs(pt.y - entity.cy) <= entity.depth / 2;
+    case 'polyline':
+      return entity.closed && pointInPolygon(pt, entity.points);
+    case 'text':
+    case 'image': {
+      const b = entity.boundingBox;
+      return pt.x >= b.minX && pt.x <= b.maxX && pt.y >= b.minY && pt.y <= b.maxY;
+    }
+    default:
+      return false;
+  }
+}
+
+function rectOutlineDist(pt: Pt, x: number, y: number, w: number, h: number): number {
+  const c = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  let min = Infinity;
+  for (let i = 0; i < 4; i++) min = Math.min(min, distToSegment(pt, c[i], c[(i + 1) % 4]));
+  return min;
+}
+
+function polylineOutlineDist(pt: Pt, points: Pt[], closed: boolean): number {
+  let min = Infinity;
+  for (let i = 0; i < points.length - 1; i++) min = Math.min(min, distToSegment(pt, points[i], points[i + 1]));
+  if (closed && points.length > 1) min = Math.min(min, distToSegment(pt, points[points.length - 1], points[0]));
+  return min;
+}
+
+/** Ray-casting point-in-polygon test. */
+function pointInPolygon(pt: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    const intersect = (yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 function distToSegment(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {

@@ -12,17 +12,38 @@ import { textTool } from '../tools/TextTool';
 type TextEntity = { type: 'text'; x: number; y: number; content: string; fontSize: number; fontFamily: string; angle: number };
 type ImageEntity = { type: 'image'; x: number; y: number; width: number; height: number; src: string };
 
+// Lite mirror of DimAnchor (avoids depending on a freshly-rebuilt core-cad dist).
+type DimAnchorLite = { entityId: string; kind: 'endpoint' | 'midpoint' | 'center' | 'point-on'; index?: number; t?: number; angle?: number; disabled?: boolean };
+
+/** Toggle row for a dimension endpoint's "follow shape" anchor. */
+function AnchorRow({ label, anchor, onToggle }: { label: string; anchor?: DimAnchorLite; onToggle: (enabled: boolean) => void }) {
+  const linked = !!anchor;
+  const active = linked && !anchor!.disabled;
+  return (
+    <FormControlLabel
+      control={<Checkbox size="small" checked={active} disabled={!linked} onChange={e => onToggle(e.target.checked)} sx={{ p: 0.25 }} />}
+      label={
+        <Typography variant="caption" sx={{ color: linked ? 'text.primary' : 'text.disabled' }}>
+          {label}{linked ? ` → follows ${anchor!.kind}` : ' · not linked'}
+        </Typography>
+      }
+      sx={{ m: 0 }}
+    />
+  );
+}
+
 interface Props {
   project: Project;
   version: number;
 }
 
 function NumField({
-  label, value, onChange,
+  label, value, onChange, disabled,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
+  disabled?: boolean;
 }) {
   return (
     <TextField
@@ -30,6 +51,7 @@ function NumField({
       size="small"
       variant="outlined"
       type="number"
+      disabled={disabled}
       value={value.toFixed(2)}
       onChange={e => {
         const n = parseFloat(e.target.value);
@@ -263,14 +285,25 @@ function EntityFields({ entity, project }: { entity: Entity; project: Project })
       const len = Math.sqrt(
         (entity.x2 - entity.x1) ** 2 + (entity.y2 - entity.y1) ** 2,
       );
+      const dim = entity as unknown as { anchor1?: DimAnchorLite; anchor2?: DimAnchorLite };
+      const a1Active = !!dim.anchor1 && !dim.anchor1.disabled;
+      const a2Active = !!dim.anchor2 && !dim.anchor2.disabled;
+      const toggle = (which: 'anchor1' | 'anchor2', anchor: DimAnchorLite | undefined, enabled: boolean) => {
+        if (!anchor) return;
+        update({ [which]: { ...anchor, disabled: !enabled } } as unknown as Partial<Entity>);
+        // Re-enabling: immediately snap the endpoint back onto its shape.
+        if (enabled) (project as { refreshAnchoredDimensions?: () => void }).refreshAnchoredDimensions?.();
+      };
       fields.push(
         <Typography key="len" variant="caption" sx={{ color: 'primary.main', fontWeight: 600 }}>
           Length: {len.toFixed(3)}
         </Typography>,
-        <NumField key="x1" label="X1" value={entity.x1} onChange={v => update({ x1: v } as Partial<Entity>)} />,
-        <NumField key="y1" label="Y1" value={entity.y1} onChange={v => update({ y1: v } as Partial<Entity>)} />,
-        <NumField key="x2" label="X2" value={entity.x2} onChange={v => update({ x2: v } as Partial<Entity>)} />,
-        <NumField key="y2" label="Y2" value={entity.y2} onChange={v => update({ y2: v } as Partial<Entity>)} />,
+        <AnchorRow key="a1" label="P1 follow shape" anchor={dim.anchor1} onToggle={en => toggle('anchor1', dim.anchor1, en)} />,
+        <NumField key="x1" label="X1" value={entity.x1} disabled={a1Active} onChange={v => update({ x1: v } as Partial<Entity>)} />,
+        <NumField key="y1" label="Y1" value={entity.y1} disabled={a1Active} onChange={v => update({ y1: v } as Partial<Entity>)} />,
+        <AnchorRow key="a2" label="P2 follow shape" anchor={dim.anchor2} onToggle={en => toggle('anchor2', dim.anchor2, en)} />,
+        <NumField key="x2" label="X2" value={entity.x2} disabled={a2Active} onChange={v => update({ x2: v } as Partial<Entity>)} />,
+        <NumField key="y2" label="Y2" value={entity.y2} disabled={a2Active} onChange={v => update({ y2: v } as Partial<Entity>)} />,
         <NumField key="off" label="Offset" value={entity.offset} onChange={v => update({ offset: v } as Partial<Entity>)} />,
       );
       break;

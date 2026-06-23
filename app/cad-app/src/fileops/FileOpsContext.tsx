@@ -8,7 +8,7 @@
  * never go stale.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 export interface FileMenuItem {
   label: string;
@@ -56,7 +56,12 @@ export function FileOpsProvider({ children }: { children: ReactNode }) {
   }, []);
   const get = useCallback((mode: string) => ref.current[mode], []);
 
-  return <Ctx.Provider value={{ register, unregister, get, version }}>{children}</Ctx.Provider>;
+  // Stable identity except when `version` changes — without this, every register()
+  // (which bumps version) hands consumers a brand-new ctx object, and any effect
+  // that depends on the ctx would re-run → re-register → infinite loop.
+  const value = useMemo(() => ({ register, unregister, get, version }), [register, unregister, get, version]);
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useFileOps(): FileOpsCtx {
@@ -75,10 +80,18 @@ export function useFileOps(): FileOpsCtx {
  */
 export function useRegisterFileOps(mode: string, ops: FileOps, deps: unknown[]): void {
   const ctx = useContext(Ctx);
+  // register/unregister are stable (useCallback([])) even though the ctx object's
+  // identity changes on every version bump — depend on the functions, never on ctx.
+  const register = ctx?.register;
+  const unregister = ctx?.unregister;
+  // Keep the latest ops without making it an effect dependency (it's a fresh object
+  // every render); the effect re-registers only when `deps` actually change.
+  const opsRef = useRef(ops);
+  opsRef.current = ops;
   useEffect(() => {
-    if (!ctx) return;
-    ctx.register(mode, ops);
-    return () => ctx.unregister(mode);
+    if (!register || !unregister) return;
+    register(mode, opsRef.current);
+    return () => unregister(mode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, ctx, ...deps]);
+  }, [mode, register, unregister, ...deps]);
 }

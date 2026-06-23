@@ -41,7 +41,9 @@ export class AgentEngine {
     config: AiProviderConfig,
     maxIterations = 15,
     temperature = 0.2,
-    maxTokens = 4096,
+    // Large enough for write_file tool calls that embed whole files in `content`;
+    // 4096 truncated the tool_use JSON mid-content → "missing content" retries.
+    maxTokens = 16384,
     webFetchUrl?: string,
     authToken?: string,
     injectedClaudeMd?: string,

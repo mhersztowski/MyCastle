@@ -14,8 +14,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
-      // Load core-scene3d from source so Vite sees latest changes without rebuild
+      // Load core packages from source so Vite sees latest changes without rebuild
+      // (also lets the source-aliased viewer package resolve core-cad in dev).
       '@mhersztowski/core-scene3d': resolve(__dirname, '../../packages/core-scene3d/src/index.ts'),
+      '@mhersztowski/core-cad': resolve(__dirname, '../../packages/core-cad/src/index.ts'),
       // Load the viewer package from source too (no rebuild needed in dev)
       '@mhersztowski/core-cad-viewer': resolve(__dirname, '../../packages/core-cad-viewer/src/index.ts'),
       // Force all workspace packages to use cad-app's react instance

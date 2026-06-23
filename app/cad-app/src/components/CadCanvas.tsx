@@ -86,6 +86,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   const mouseRef = useRef({ isPanning: false, lastX: 0, lastY: 0, isDown: false });
   const [dimLabels, setDimLabels] = useState<DimensionLabel[]>([]);
   const [penInput, setPenInput] = useState<PenInput | null>(null);
+  const [zoomTick, setZoomTick] = useState(0); // bumps on zoom so dimension labels re-project
 
 
   // Init renderer
@@ -291,7 +292,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     }
 
     const tool = tools[activeTool];
-    tool.onPointerMove(snap.point, { project, snapResult: snap, pen });
+    tool.onPointerMove(snap.point, { project, snapResult: snap, pen, pixelToWorld: rendererRef.current?.getPixelToWorld() ?? 1 });
     renderer.setPreview(tool.getPreview());
     setDimLabels(tool.getDimensionLabels?.() ?? []);
   }, [activeTool, project, getSnapPoint, placementTemplate]);
@@ -354,7 +355,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     }
 
     const tool = tools[activeTool];
-    tool.onPointerDown(snap.point, { project, snapResult: snap, pen });
+    tool.onPointerDown(snap.point, { project, snapResult: snap, pen, pixelToWorld: rendererRef.current?.getPixelToWorld() ?? 1 });
     renderer.setPreview(tool.getPreview());
     renderer.syncAll();
     setDimLabels(tool.getDimensionLabels?.() ?? []);
@@ -390,6 +391,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     const sy = e.clientY - rect.top;
     const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
     renderer.zoomAt(sx, sy, factor);
+    setZoomTick(t => t + 1); // re-project dimension labels at the new zoom
   }, []);
 
   useEffect(() => {
@@ -430,6 +432,27 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   const is3d = viewMode === '3d';
   const cursor = placementTemplate ? 'copy' : is3d ? 'default' : activeTool === 'select' ? 'default' : 'crosshair';
 
+  // Length labels for committed dimensions — drawn as HTML so they stay crisp and
+  // a constant on-screen size at any zoom. Recomputed each render (cheap); the
+  // overlay re-projects on pan (cursorWorld), zoom (zoomTick) and edits (version).
+  void zoomTick; void version;
+  const committedDimLabels: DimensionLabel[] = is3d ? [] : project.entityRegistry.getByType('dimension')
+    .map(e => e as unknown as { x1: number; y1: number; x2: number; y2: number; offset: number; visible: boolean })
+    .filter(d => d.visible)
+    .map(d => {
+      const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+      const len = Math.hypot(dx, dy);
+      const l = len || 1;
+      const nx = (-dy / l) * d.offset, ny = (dx / l) * d.offset;
+      return {
+        worldX: (d.x1 + d.x2) / 2 + nx,
+        worldY: (d.y1 + d.y2) / 2 + ny,
+        text: len.toFixed(2),
+        variant: 'primary' as const,
+      };
+    });
+  const overlayLabels = [...committedDimLabels, ...dimLabels];
+
   return (
     <Box
       sx={{ width: '100%', height: '100%', position: 'relative', outline: 'none' }}
@@ -454,9 +477,9 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         />
       )}
       {!is3d && rendererRef.current && <ScaleBar renderer={rendererRef.current} />}
-      {!is3d && rendererRef.current && dimLabels.length > 0 && (
+      {!is3d && rendererRef.current && overlayLabels.length > 0 && (
         <DimensionOverlay
-          labels={dimLabels}
+          labels={overlayLabels}
           renderer={rendererRef.current}
           onCommit={() => {
             const renderer = rendererRef.current;

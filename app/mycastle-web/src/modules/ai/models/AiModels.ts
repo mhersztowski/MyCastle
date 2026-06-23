@@ -108,7 +108,7 @@ export const DEFAULT_AI_CONFIG: AiConfigModel = {
     anthropic: {
       apiKey: '',
       baseUrl: 'https://api.anthropic.com',
-      defaultModel: 'claude-sonnet-4-20250514',
+      defaultModel: 'claude-sonnet-4-6',
     },
     ollama: {
       apiKey: '',

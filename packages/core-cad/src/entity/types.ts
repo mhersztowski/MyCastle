@@ -77,6 +77,24 @@ export interface FreehandEntity extends EntityBase {
   smooth: boolean;
 }
 
+/**
+ * Anchors a dimension endpoint to a feature of another entity so it follows
+ * that entity when the shape moves or is reshaped ("intelligent dimension").
+ * `point-on` lets the endpoint ride any point along an edge (param t / angle).
+ */
+export interface DimAnchor {
+  entityId: string;
+  kind: 'endpoint' | 'midpoint' | 'center' | 'point-on';
+  /** endpoint/midpoint index, or polyline segment, or rect edge (0..3). */
+  index?: number;
+  /** parameter [0..1] along a segment/edge (point-on line/polyline/rect). */
+  t?: number;
+  /** radians on a circle/arc (point-on circle/arc). */
+  angle?: number;
+  /** When true the anchor is kept but ignored — the endpoint behaves as a literal point. */
+  disabled?: boolean;
+}
+
 export interface DimensionEntity extends EntityBase {
   type: 'dimension';
   x1: number;
@@ -84,6 +102,10 @@ export interface DimensionEntity extends EntityBase {
   x2: number;
   y2: number;
   offset: number; // signed perpendicular distance from p1-p2 line to dimension line
+  /** When set, x1,y1 are resolved live from this anchor (follows the shape). */
+  anchor1?: DimAnchor;
+  /** When set, x2,y2 are resolved live from this anchor (follows the shape). */
+  anchor2?: DimAnchor;
 }
 
 // 3D primitive entities — placed in XY plane, extruding along +Z

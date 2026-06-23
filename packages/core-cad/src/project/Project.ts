@@ -1,5 +1,6 @@
 import { EntityRegistry } from '../entity/EntityRegistry';
-import type { Entity, EntityInput } from '../entity/types';
+import type { DimensionEntity, Entity, EntityInput } from '../entity/types';
+import { resolveDimAnchor } from '../entity/dimensionAnchor';
 import { EventBus } from '../events/EventBus';
 import { HistoryManager } from '../history/HistoryManager';
 import type { Layer } from '../layer/Layer';
@@ -40,9 +41,47 @@ export class Project {
   settings: ProjectSettings = { ...DEFAULT_SETTINGS };
   viewMode: ViewMode = '2d';
 
+  private refreshingDims = false;
+
   constructor() {
     this.selectionManager = new SelectionManager(this.entityRegistry);
     this.snapEngine.setGridSize(this.settings.gridSize);
+
+    // Anchored ("intelligent") dimensions follow the shapes they reference:
+    // whenever a non-dimension entity changes/disappears, re-resolve their endpoints.
+    this.eventBus.on('entity:updated', (e: Entity) => {
+      if (e?.type !== 'dimension') this.refreshAnchoredDimensions();
+    });
+    this.eventBus.on('entity:removed', () => this.refreshAnchoredDimensions());
+    this.eventBus.on('project:loaded', () => this.refreshAnchoredDimensions());
+  }
+
+  /**
+   * Re-resolve every anchored dimension's endpoints from its referenced
+   * entities. Updates the registry directly (no history entry — this is derived
+   * state) and emits `entity:updated` so the renderer rebuilds the dimension.
+   */
+  refreshAnchoredDimensions(): void {
+    if (this.refreshingDims) return;
+    this.refreshingDims = true;
+    try {
+      for (const dim of this.entityRegistry.getByType('dimension') as DimensionEntity[]) {
+        const a1 = dim.anchor1 && !dim.anchor1.disabled ? dim.anchor1 : null;
+        const a2 = dim.anchor2 && !dim.anchor2.disabled ? dim.anchor2 : null;
+        if (!a1 && !a2) continue;
+        const p1 = a1 ? resolveDimAnchor(a1, this.entityRegistry.get(a1.entityId)) : null;
+        const p2 = a2 ? resolveDimAnchor(a2, this.entityRegistry.get(a2.entityId)) : null;
+        const nx1 = p1?.x ?? dim.x1, ny1 = p1?.y ?? dim.y1;
+        const nx2 = p2?.x ?? dim.x2, ny2 = p2?.y ?? dim.y2;
+        if (Math.abs(nx1 - dim.x1) > 1e-6 || Math.abs(ny1 - dim.y1) > 1e-6 ||
+            Math.abs(nx2 - dim.x2) > 1e-6 || Math.abs(ny2 - dim.y2) > 1e-6) {
+          const updated = this.entityRegistry.update(dim.id, { x1: nx1, y1: ny1, x2: nx2, y2: ny2 });
+          if (updated) this.eventBus.emit('entity:updated', updated);
+        }
+      }
+    } finally {
+      this.refreshingDims = false;
+    }
   }
 
   // --- Entity operations (go through history) ---

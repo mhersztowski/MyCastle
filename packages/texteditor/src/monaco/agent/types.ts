@@ -146,5 +146,5 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
   },
   maxIterations: 15,
   temperature: 0.2,
-  maxTokens: 4096,
+  maxTokens: 16384,
 };

@@ -17,6 +17,11 @@ export function loadAgentConfig(defaults?: Partial<AgentConfig>): AgentConfig {
     if (stored) {
       const parsed = JSON.parse(stored) as AgentConfig;
       const merged: AgentConfig = { ...DEFAULT_AGENT_CONFIG, ...defaults, ...parsed };
+      // Auto-heal stale low maxTokens (old default was 4096, which truncated
+      // write_file tool calls mid-content). There is no UI field to raise it.
+      if (!merged.maxTokens || merged.maxTokens < DEFAULT_AGENT_CONFIG.maxTokens) {
+        merged.maxTokens = DEFAULT_AGENT_CONFIG.maxTokens;
+      }
       // defaults.providers[type].apiKey always wins — lets caller inject key from backend env
       if (defaults?.providers) {
         for (const type of Object.keys(defaults.providers) as AiProviderType[]) {

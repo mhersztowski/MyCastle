@@ -19,7 +19,7 @@
     "build:core-scene3d": "pnpm --filter @mhersztowski/core-scene3d run build",
     "build:cad-viewer": "pnpm --filter @mhersztowski/core-cad-viewer run build",
     "build:ui-scene3d": "pnpm --filter @mhersztowski/ui-components-scene3d run build",
-    "build:cad": "pnpm build:texteditor && pnpm build:cad-viewer && pnpm --filter cad-app run build",
+    "build:cad": "pnpm build:core-cad && pnpm build:texteditor && pnpm build:cad-viewer && pnpm --filter cad-app run build",
     "build:cad-backend": "pnpm --filter cad-backend run build",
     "build:ui-core": "pnpm --filter @mhersztowski/ui-core run build",
     "build:cad-all": "pnpm build:core && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:ui-scene3d && pnpm build:texteditor && pnpm build:cad-backend && pnpm build:cad",

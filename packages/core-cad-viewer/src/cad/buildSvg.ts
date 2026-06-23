@@ -55,13 +55,26 @@ function entityToSvgElement(entity: Entity, layer: Layer | undefined): string {
       const { x1, y1, x2, y2, offset } = entity;
       const len = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
       if (len < 0.001) return '';
-      const nx = -(y2 - y1) / len, ny = (x2 - x1) / len;
+      const ux = (x2 - x1) / len, uy = (y2 - y1) / len;   // along the dimension line
+      const nx = -uy, ny = ux;                            // perpendicular
       const d1x = x1 + nx * offset, d1y = y1 + ny * offset;
       const d2x = x2 + nx * offset, d2y = y2 + ny * offset;
+      // Arrowhead V at (px,py) pointing along (dx,dy).
+      const arrowSize = Math.max(4, len * 0.04);
+      const wing = arrowSize * 0.4;
+      const arrow = (px: number, py: number, dx: number, dy: number): string => {
+        const bx = px - dx * arrowSize, by = py - dy * arrowSize;   // base behind the tip
+        const a1x = bx - dy * wing, a1y = by + dx * wing;
+        const a2x = bx + dy * wing, a2y = by - dx * wing;
+        return `<line x1="${px}" y1="${py}" x2="${a1x}" y2="${a1y}" ${stroke}/>` +
+               `<line x1="${px}" y1="${py}" x2="${a2x}" y2="${a2y}" ${stroke}/>`;
+      };
       return [
         `<line x1="${x1}" y1="${y1}" x2="${d1x}" y2="${d1y}" ${stroke}/>`,
         `<line x1="${x2}" y1="${y2}" x2="${d2x}" y2="${d2y}" ${stroke}/>`,
         `<line x1="${d1x}" y1="${d1y}" x2="${d2x}" y2="${d2y}" ${stroke}/>`,
+        arrow(d1x, d1y, ux, uy),    // at d1, pointing toward d2
+        arrow(d2x, d2y, -ux, -uy),  // at d2, pointing toward d1
         `<text x="${(d1x + d2x) / 2}" y="${(d1y + d2y) / 2}" font-size="10" fill="${colorHex}" text-anchor="middle">${len.toFixed(2)}</text>`,
       ].join('\n');
     }

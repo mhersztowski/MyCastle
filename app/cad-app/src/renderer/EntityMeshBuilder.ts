@@ -30,21 +30,6 @@ function circlePoints(cx: number, cy: number, r: number, segments = CIRCLE_SEGME
   return pts;
 }
 
-function makeTextSprite(text: string, colorHex: string): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 48;
-  const ctx = canvas.getContext('2d')!;
-  ctx.font = 'bold 28px monospace';
-  ctx.fillStyle = colorHex;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, 128, 24);
-  const texture = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-  return new THREE.Sprite(mat);
-}
-
 const textureCache = new Map<string, THREE.Texture>();
 
 function buildTextObject(entity: TextEntity, layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
@@ -68,11 +53,15 @@ function buildTextObject(entity: TextEntity, layer: Layer | undefined, isSelecte
   ctx2d.fillText(entity.content || '', 4, ch * 0.78);
 
   const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
   const worldW = cw / PX_PER_UNIT;
   const worldH = ch / PX_PER_UNIT;
   const geo = new THREE.PlaneGeometry(worldW, worldH);
-  const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthTest: false });
+  const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 10;
   mesh.position.set(entity.x + worldW / 2, entity.y + worldH / 2, 0.2);
   if (entity.angle) mesh.rotation.z = entity.angle;
 
@@ -94,21 +83,26 @@ function buildTextObject(entity: TextEntity, layer: Layer | undefined, isSelecte
 }
 
 function buildImageObject(entity: ImageEntity, _layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
+  const geo = new THREE.PlaneGeometry(entity.width, entity.height);
+  const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 9;
+  mesh.position.set(entity.x + entity.width / 2, entity.y + entity.height / 2, 0.1);
+
   const cached = textureCache.get(entity.src);
-  let texture: THREE.Texture;
   if (cached) {
-    texture = cached;
+    mat.map = cached;
+    mat.needsUpdate = true;
   } else {
-    texture = new THREE.TextureLoader().load(entity.src, (t) => {
+    new THREE.TextureLoader().load(entity.src, (t) => {
       t.colorSpace = THREE.SRGBColorSpace;
+      t.needsUpdate = true;
       textureCache.set(entity.src, t);
+      mat.map = t;
+      mat.needsUpdate = true;   // attach the texture once decoded so the plane shows it
     });
   }
-
-  const geo = new THREE.PlaneGeometry(entity.width, entity.height);
-  const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(entity.x + entity.width / 2, entity.y + entity.height / 2, 0.1);
 
   const group = new THREE.Group();
   group.userData['entityId'] = entity.id;
@@ -248,14 +242,8 @@ function buildDimensionObject(entity: DimensionEntity, layer: Layer | undefined,
   addLineSegment(group, mat, a2s1);
   addLineSegment(group, mat, a2s2);
 
-  // Measurement text sprite
-  const midX = (d1.x + d2.x) / 2;
-  const midY = (d1.y + d2.y) / 2;
-  const sprite = makeTextSprite(len.toFixed(2), colorHex);
-  const textH = Math.max(6, len * 0.08);
-  sprite.scale.set(textH * (256 / 48), textH, 1);
-  sprite.position.set(midX + nx * (offSign * 6), midY + ny * (offSign * 6), 2);
-  group.add(sprite);
+  // The length value is drawn as an HTML overlay label (DimensionOverlay) so it
+  // stays crisp and a constant on-screen size at any zoom — not a WebGL sprite.
 
   return group;
 }

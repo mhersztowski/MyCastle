@@ -6,6 +6,17 @@
 import { AiChatMessage, AiChatResponse, AiChatRequest, AiProviderConfig, AiToolCall, getTextContent } from '../models/AiModels';
 import { AiProvider } from './AiProvider';
 
+/**
+ * Some Claude models deprecated `temperature` and reject it with HTTP 400
+ * ("temperature is deprecated for this model"). Omit it only for those — other
+ * models (incl. opus-4-6, sonnet) still accept it. Extend this list as needed.
+ */
+const TEMPERATURE_UNSUPPORTED = [/opus-4-8/];
+
+function modelAcceptsTemperature(model: string): boolean {
+  return !TEMPERATURE_UNSUPPORTED.some(re => re.test(model));
+}
+
 export class AnthropicProvider implements AiProvider {
   async chat(request: AiChatRequest, config: AiProviderConfig): Promise<AiChatResponse> {
     const systemMessages = request.messages.filter(m => m.role === 'system');
@@ -18,13 +29,14 @@ export class AnthropicProvider implements AiProvider {
       'anthropic-dangerous-direct-browser-access': 'true',
     };
 
+    const model = request.model || config.defaultModel;
     const body: Record<string, unknown> = {
-      model: request.model || config.defaultModel,
+      model,
       max_tokens: request.maxTokens || 2048,
       messages: this.mapMessages(nonSystemMessages),
     };
 
-    if (request.temperature !== undefined) {
+    if (request.temperature !== undefined && modelAcceptsTemperature(model)) {
       body.temperature = request.temperature;
     }
 

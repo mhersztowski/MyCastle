@@ -1,4 +1,9 @@
-import type { Entity, EntityInput, Point2D } from '@mhersztowski/core-cad';
+import type { Entity, EntityInput, Point2D, DimensionEntity, DimAnchor } from '@mhersztowski/core-cad';
+
+/** An anchor that is present and not disabled actively pins its endpoint to a shape. */
+function isAnchored(a: DimAnchor | undefined): boolean {
+  return !!a && !a.disabled;
+}
 
 // ── Translation ───────────────────────────────────────────────────────────────
 
@@ -20,8 +25,13 @@ export function translateEntity(entity: Entity, dx: number, dy: number): Partial
       return { x: entity.x + dx, y: entity.y + dy };
     case 'arc':
       return { cx: entity.cx + dx, cy: entity.cy + dy };
-    case 'dimension':
-      return { x1: entity.x1 + dx, y1: entity.y1 + dy, x2: entity.x2 + dx, y2: entity.y2 + dy };
+    case 'dimension': {
+      // Actively-anchored endpoints follow their shape — don't translate them.
+      const ch: Partial<DimensionEntity> = {};
+      if (!isAnchored(entity.anchor1)) { ch.x1 = entity.x1 + dx; ch.y1 = entity.y1 + dy; }
+      if (!isAnchored(entity.anchor2)) { ch.x2 = entity.x2 + dx; ch.y2 = entity.y2 + dy; }
+      return ch;
+    }
     default:
       return {};
   }
@@ -70,9 +80,11 @@ export function rotateEntity(entity: Entity, cx: number, cy: number, angle: numb
       return { cx: c.x, cy: c.y, startAngle: entity.startAngle + angle, endAngle: entity.endAngle + angle };
     }
     case 'dimension': {
-      const p1 = rotatePoint({ x: entity.x1, y: entity.y1 }, cx, cy, angle);
-      const p2 = rotatePoint({ x: entity.x2, y: entity.y2 }, cx, cy, angle);
-      return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+      // Actively-anchored endpoints follow their shape — don't rotate them.
+      const ch: Partial<DimensionEntity> = {};
+      if (!isAnchored(entity.anchor1)) { const p1 = rotatePoint({ x: entity.x1, y: entity.y1 }, cx, cy, angle); ch.x1 = p1.x; ch.y1 = p1.y; }
+      if (!isAnchored(entity.anchor2)) { const p2 = rotatePoint({ x: entity.x2, y: entity.y2 }, cx, cy, angle); ch.x2 = p2.x; ch.y2 = p2.y; }
+      return ch;
     }
     default:
       return {};
