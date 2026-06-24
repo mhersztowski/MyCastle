@@ -1,22 +1,10 @@
 import { Signal } from '@mhersztowski/minislib';
 import { Service } from './Service';
+import { EnumLogKind, type ILogMessage } from '../log-types';
 
-/** Severity of a log message (see ServerLogic.md → Service Log). */
-export enum EnumLogKind {
-  Log = 'log',
-  Debug = 'debug',
-  Warning = 'warning',
-  Error = 'error',
-}
-
-export interface ILogMessage {
-  message: string;
-  kind: EnumLogKind;
-  /** Epoch millis; stamped by `log()` when absent. */
-  ts?: number;
-  /** Optional originating subsystem/client. */
-  source?: string;
-}
+// Re-export so existing `from './services/LogService'` imports keep working.
+export { EnumLogKind } from '../log-types';
+export type { ILogMessage } from '../log-types';
 
 /**
  * Server log service. `log(msg)` runs and emits `onMessage(msg)` — the exact

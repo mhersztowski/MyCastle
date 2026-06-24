@@ -403,6 +403,9 @@ importers:
       '@mhersztowski/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@mhersztowski/server-logic':
+        specifier: workspace:*
+        version: link:../../packages/server-logic
       '@mhersztowski/texteditor':
         specifier: workspace:*
         version: link:../../packages/texteditor

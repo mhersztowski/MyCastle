@@ -16,6 +16,7 @@
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
     "@mhersztowski/core": "workspace:*",
+    "@mhersztowski/server-logic": "workspace:*",
     "@mhersztowski/texteditor": "workspace:*",
     "@mhersztowski/web-client": "workspace:*",
     "@mhersztowski/web-cpp": "workspace:*",

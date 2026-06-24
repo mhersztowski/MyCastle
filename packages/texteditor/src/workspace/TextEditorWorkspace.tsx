@@ -51,6 +51,8 @@ export interface TextEditorWorkspaceProps {
     context: VfsProjectContext,
     saveProjectJson: (updates: Record<string, unknown>) => Promise<void>,
   ) => void;
+  /** File opened automatically on mount / when changed (path within `provider`). */
+  initialPath?: string;
 }
 
 /**
@@ -81,6 +83,7 @@ export function TextEditorWorkspace({
   terminalTokenStorageKey = DEFAULT_TERMINAL_TOKEN_KEY,
   projectDeps,
   onDialogAction,
+  initialPath,
 }: TextEditorWorkspaceProps) {
   // Plugins built from the editor's filesystem provider.
   const tsPlugin = useMemo(() => createTypeScriptPlugin(provider), [provider]);
@@ -155,6 +158,7 @@ export function TextEditorWorkspace({
         onTerminalConfigRequest={() => setTerminalConfigOpen(true)}
         projectDeps={projectDeps}
         onDialogAction={handleDialogAction}
+        initialPath={initialPath}
       />
       {boardConfigContext && (
         <ArduinoBoardConfigDialog

@@ -152,6 +152,10 @@ interface DashObject {
   showDetails?: boolean;
   showHeader?: boolean;
   zIndex?: number;
+  /** 'group' renders a labeled container box that moves its children with it. */
+  kind?: 'group';
+  /** Id of the Group this object belongs to (children are tracked by parentId). */
+  parentId?: string;
 }
 
 // Used only when parsing old scenes that stored x/y directly (no transform)
@@ -3230,7 +3234,88 @@ const SetPropNode: React.FC<NodeProps<Node<SetPropNodeData>>> = ({ data }) => {
   );
 };
 
-const NODE_TYPES = { dashObject: DashObjectNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
+// ─── Group node — labeled container box that moves its children with it ─────────
+interface GroupNodeData extends Record<string, unknown> {
+  objectId: string;
+  objectName: string;
+  transform: DashTransform;
+  selected: boolean;
+  childCount: number;
+  onObjectNameChange: (name: string) => void;
+  onResizeDrag: (width: number, height: number) => void;
+}
+
+const GroupNode: React.FC<NodeProps<Node<GroupNodeData>>> = ({ data }) => {
+  const { getZoom } = useReactFlow();
+  const [editingName, setEditingName] = useState(false);
+  const [nameVal, setNameVal] = useState(data.objectName);
+  useEffect(() => { setNameVal(data.objectName); }, [data.objectName]);
+  const t = data.transform;
+  const w = t.width > 0 ? t.width : 320;
+  const h = t.height > 0 ? t.height : 240;
+
+  const onResizePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation(); e.preventDefault(); e.nativeEvent.stopImmediatePropagation();
+    const el = e.currentTarget; el.setPointerCapture(e.pointerId);
+    const startX = e.clientX, startY = e.clientY;
+    const startW = w, startH = h;
+    const onMove = (me: PointerEvent) => {
+      const zoom = getZoom();
+      const newW = Math.max(120, Math.round(startW + (me.clientX - startX) / zoom));
+      const newH = Math.max(80, Math.round(startH + (me.clientY - startY) / zoom));
+      data.onResizeDrag(newW, newH);
+    };
+    const onUp = (me: PointerEvent) => {
+      el.releasePointerCapture(me.pointerId);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+  }, [w, h, getZoom, data]);
+
+  const commitName = () => { setEditingName(false); if (nameVal.trim() && nameVal !== data.objectName) data.onObjectNameChange(nameVal.trim()); };
+
+  return (
+    <Box sx={{
+      width: w, height: h, position: 'relative',
+      border: '2px dashed', borderColor: data.selected ? '#4fc3f7' : '#7c4dff77',
+      borderRadius: 1.5, bgcolor: data.selected ? '#4fc3f70d' : '#7c4dff0a',
+      boxShadow: data.selected ? '0 0 0 2px #4fc3f755' : 'none',
+      cursor: 'grab', '&:active': { cursor: 'grabbing' }, userSelect: 'none',
+      ...(t.rot !== 0 || t.scale !== 1
+        ? { transform: `${t.rot !== 0 ? `rotate(${t.rot}deg) ` : ''}${t.scale !== 1 ? `scale(${t.scale})` : ''}`.trim() }
+        : {}),
+    }}>
+      {/* Header label (sits just above the box) */}
+      <Box sx={{
+        position: 'absolute', top: 0, left: -2, transform: 'translateY(-100%)',
+        display: 'flex', alignItems: 'center', gap: 0.5, px: 0.75, py: 0.25,
+        bgcolor: data.selected ? '#4fc3f7' : '#7c4dff', color: '#fff',
+        borderRadius: '4px 4px 0 0', maxWidth: w + 4, whiteSpace: 'nowrap',
+      }}>
+        <GroupIcon sx={{ fontSize: 13 }} />
+        {editingName
+          ? <TextField value={nameVal} autoFocus variant="standard" onPointerDown={(e) => e.stopPropagation()}
+              onChange={(e) => setNameVal(e.target.value)} onBlur={commitName}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setEditingName(false); }}
+              inputProps={{ style: { fontSize: 11, color: '#fff', padding: 0 } }} sx={{ width: 120 }} />
+          : <Typography sx={{ fontSize: 11, fontWeight: 600, cursor: 'text' }}
+              onPointerDown={(e) => e.stopPropagation()} onDoubleClick={() => setEditingName(true)}>
+              {data.objectName}
+            </Typography>}
+        <Typography sx={{ fontSize: 10, opacity: 0.8 }}>· {data.childCount}</Typography>
+      </Box>
+      {/* Resize handle (bottom-right corner) */}
+      <div onPointerDown={onResizePointerDown} style={{
+        position: 'absolute', width: 12, height: 12, bottom: -6, right: -6,
+        cursor: 'se-resize', background: data.selected ? '#4fc3f7' : '#7c4dff', borderRadius: 2,
+      }} />
+    </Box>
+  );
+};
+
+const NODE_TYPES = { dashObject: DashObjectNode, group: GroupNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
 
 // ─── VarInitDialog ────────────────────────────────────────────────────────────
 
@@ -3401,6 +3486,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const closeSceneCtx = useCallback(() => setSceneCtxMenu(null), []);
   const [searchText, setSearchText] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  // Scene tree: collapsed groups + in-progress drag (object id) / hovered drop group.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [treeDragId, setTreeDragId] = useState<string | null>(null);
+  const [treeDragOverId, setTreeDragOverId] = useState<string | null>(null);
   const [visiblePanels, setVisiblePanels] = useState<string[]>(['scene', 'properties']);
   const [fcRunning, setFcRunning] = useState<Set<string>>(new Set());
   const [varInitDialogOpen, setVarInitDialogOpen] = useState(false);
@@ -3453,6 +3542,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             id: o.id, className: o.className, objectName: o.objectName,
             customFields: o.customFields, properties: o.properties,
             transform: o.transform ?? defaultTransform(o.x ?? 0, o.y ?? 0),
+            ...(o.kind ? { kind: o.kind } : {}),
+            ...(o.parentId ? { parentId: o.parentId } : {}),
           })),
         };
         setScene(parsed);
@@ -4023,6 +4114,63 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     setSelectedIds(new Set([obj.id]));
   }, [updateScene]);
 
+  // ── Groups ──────────────────────────────────────────────────────────────
+  const createGroup = useCallback((x: number, y: number) => {
+    const count = sceneRef.current.objects.filter((o) => o.kind === 'group').length;
+    const group: DashObject = {
+      id: makeId(), className: 'Group', kind: 'group',
+      objectName: `group${count}`,
+      transform: { x, y, rot: 0, scale: 1, width: 320, height: 240 },
+      properties: {},
+    };
+    updateScene((prev) => ({ ...prev, objects: [group, ...prev.objects] }));
+    setSelectedIds(new Set([group.id]));
+  }, [updateScene]);
+
+  // Wrap the selected (non-group) objects in a new Group covering their bbox.
+  const groupSelection = useCallback(() => {
+    const sel = sceneRef.current.objects.filter((o) => selectedIds.has(o.id) && o.kind !== 'group');
+    if (sel.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const o of sel) {
+      const t = getTransform(o);
+      const w = t.width > 0 ? t.width : 200;
+      const h = t.height > 0 ? t.height : 120;
+      minX = Math.min(minX, t.x); minY = Math.min(minY, t.y);
+      maxX = Math.max(maxX, t.x + w); maxY = Math.max(maxY, t.y + h);
+    }
+    const pad = 24;
+    const groupId = makeId();
+    const count = sceneRef.current.objects.filter((o) => o.kind === 'group').length;
+    const group: DashObject = {
+      id: groupId, className: 'Group', kind: 'group',
+      objectName: `group${count}`,
+      transform: { x: minX - pad, y: minY - pad, rot: 0, scale: 1, width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2 },
+      properties: {},
+    };
+    const ids = new Set(sel.map((o) => o.id));
+    updateScene((prev) => ({
+      ...prev,
+      objects: [group, ...prev.objects.map((o) => ids.has(o.id) ? { ...o, parentId: groupId } : o)],
+    }));
+    setSelectedIds(new Set([groupId]));
+  }, [selectedIds, updateScene]);
+
+  // Remove the selected group(s); detach their children (clear parentId).
+  const ungroupSelected = useCallback(() => {
+    const groupIds = new Set(
+      [...selectedIds].filter((id) => sceneRef.current.objects.find((o) => o.id === id)?.kind === 'group'),
+    );
+    if (groupIds.size === 0) return;
+    updateScene((prev) => ({
+      ...prev,
+      objects: prev.objects
+        .filter((o) => !groupIds.has(o.id))
+        .map((o) => (o.parentId && groupIds.has(o.parentId)) ? { ...o, parentId: undefined } : o),
+    }));
+    setSelectedIds(new Set());
+  }, [selectedIds, updateScene]);
+
   const updateProperty = useCallback((objId: string, field: string, value: DashValue) => {
     updateScene((prev) => ({ ...prev, objects: prev.objects.map((o) => o.id === objId ? { ...o, properties: { ...o.properties, [field]: value } } : o) }));
   }, [updateScene]);
@@ -4032,10 +4180,27 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const updateTransform = useCallback((objId: string, patch: Partial<DashTransform>) => {
-    updateScene((prev) => ({
-      ...prev,
-      objects: prev.objects.map((o) => o.id === objId ? { ...o, transform: { ...getTransform(o), ...patch } } : o),
-    }));
+    updateScene((prev) => {
+      const target = prev.objects.find((o) => o.id === objId);
+      // Moving a Group via the properties panel offsets its children too.
+      if (target?.kind === 'group' && (patch.x !== undefined || patch.y !== undefined)) {
+        const t = getTransform(target);
+        const dx = patch.x !== undefined ? patch.x - t.x : 0;
+        const dy = patch.y !== undefined ? patch.y - t.y : 0;
+        return {
+          ...prev,
+          objects: prev.objects.map((o) => {
+            if (o.id === objId) return { ...o, transform: { ...getTransform(o), ...patch } };
+            if (o.parentId === objId && (dx !== 0 || dy !== 0)) {
+              const ct = getTransform(o);
+              return { ...o, transform: { ...ct, x: ct.x + dx, y: ct.y + dy } };
+            }
+            return o;
+          }),
+        };
+      }
+      return { ...prev, objects: prev.objects.map((o) => o.id === objId ? { ...o, transform: { ...getTransform(o), ...patch } } : o) };
+    });
   }, [updateScene]);
 
   const addCustomField = useCallback((objId: string, name: string, type: string) => {
@@ -4102,7 +4267,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     if (!selectedIds.size && !selectedEdgeIds.size) return;
     updateScene((prev) => ({
       ...prev,
-      objects: prev.objects.filter((o) => !selectedIds.has(o.id)),
+      objects: prev.objects
+        .filter((o) => !selectedIds.has(o.id))
+        .map((o) => (o.parentId && selectedIds.has(o.parentId)) ? { ...o, parentId: undefined } : o),
       functionCalls: (prev.functionCalls ?? []).filter((f) => !selectedIds.has(f.id)),
       vars: (prev.vars ?? []).filter((v) => !selectedIds.has(v.id)),
       classObjs: (prev.classObjs ?? []).filter((o) => !selectedIds.has(o.id)),
@@ -4201,10 +4368,25 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [selectedField, selectedObject, selectedFields]);
 
   const rfNodesBase = useMemo((): Node[] => {
-    const dashNodes: Node<DashObjectNodeData>[] = scene.objects.map((obj) => {
+    const dashNodes: Node[] = scene.objects.map((obj): Node => {
+      const t = getTransform(obj);
+      if (obj.kind === 'group') {
+        const childCount = scene.objects.filter((o) => o.parentId === obj.id).length;
+        return {
+          id: obj.id, type: 'group',
+          position: { x: t.x, y: t.y },
+          selected: selectedIds.has(obj.id),
+          zIndex: obj.zIndex ?? -10,   // behind regular objects
+          data: {
+            objectId: obj.id, objectName: obj.objectName, transform: t,
+            selected: selectedIds.has(obj.id), childCount,
+            onObjectNameChange: (name: string) => updateObjectName(obj.id, name),
+            onResizeDrag: (width: number, height: number) => updateTransform(obj.id, { width, height }),
+          } as GroupNodeData,
+        };
+      }
       const isCustom = obj.className === 'Unknown' || obj.customFields !== undefined;
       const fields: FieldDef[] = isCustom ? (obj.customFields ?? []) : (classMap.get(obj.className)?.fields ?? []);
-      const t = getTransform(obj);
       return {
         id: obj.id, type: 'dashObject',
         position: { x: t.x, y: t.y },
@@ -4436,6 +4618,26 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       validMidDrag.push({ id: c.id, x: c.position.x, y: c.position.y });
     }
 
+    // Live-follow: when a Group is dragged, move its children by the same delta
+    // (so children track the box during the drag, not just on release).
+    if (validMidDrag.length > 0) {
+      const sc = sceneRef.current;
+      const dragged = new Set(validMidDrag.map((m) => m.id));
+      const extra: Array<{ id: string; x: number; y: number }> = [];
+      for (const m of validMidDrag) {
+        const grp = sc.objects.find((o) => o.id === m.id && o.kind === 'group');
+        if (!grp) continue;
+        const g0 = getTransform(grp);
+        const dx = m.x - g0.x, dy = m.y - g0.y;
+        for (const child of sc.objects) {
+          if (child.parentId !== grp.id || dragged.has(child.id)) continue;
+          const ct = getTransform(child);
+          extra.push({ id: child.id, x: ct.x + dx, y: ct.y + dy });
+        }
+      }
+      validMidDrag.push(...extra);
+    }
+
     if (validMidDrag.length > 0) {
       for (const p of validMidDrag) dragNodePositionsRef.current.set(p.id, { x: p.x, y: p.y });
       setDragNodePositions((prev) => {
@@ -4495,6 +4697,23 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return scene.objects.filter((o) => o.objectName.toLowerCase().includes(q) || o.className.toLowerCase().includes(q));
   }, [scene.objects, searchText]);
 
+  // Hierarchy for the Scene tree: groups are parents, objects with a matching
+  // parentId render as their children (indented). Each object appears once.
+  const treeRows = useMemo((): Array<{ obj: DashObject; depth: number; childCount: number }> => {
+    const present = new Set(filteredObjects.map((o) => o.id));
+    const rows: Array<{ obj: DashObject; depth: number; childCount: number }> = [];
+    for (const obj of filteredObjects) {
+      const isRoot = !obj.parentId || !present.has(obj.parentId);
+      if (!isRoot) continue; // children are emitted under their group below
+      const children = obj.kind === 'group' ? filteredObjects.filter((c) => c.parentId === obj.id) : [];
+      rows.push({ obj, depth: 0, childCount: children.length });
+      if (obj.kind === 'group' && !collapsedGroups.has(obj.id)) {
+        for (const c of children) rows.push({ obj: c, depth: 1, childCount: 0 });
+      }
+    }
+    return rows;
+  }, [filteredObjects, collapsedGroups]);
+
   const toggleSelect = useCallback((id: string, multi: boolean) => {
     setSelectedIds((prev) => {
       if (multi) { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }
@@ -4511,6 +4730,17 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     setCenter(cx, cy, { zoom: 1.2, duration: 450 });
   }, [setCenter]);
 
+  // Re-parent an object via the Scene tree (drag-and-drop). Groups can't nest.
+  const reparentObject = useCallback((objId: string, newParentId: string | undefined) => {
+    if (objId === newParentId) return;
+    const dragged = sceneRef.current.objects.find((o) => o.id === objId);
+    if (!dragged || dragged.kind === 'group') return;
+    updateScene((prev) => ({
+      ...prev,
+      objects: prev.objects.map((o) => o.id === objId ? { ...o, parentId: newParentId } : o),
+    }));
+  }, [updateScene]);
+
   const onNodeDragStop = useCallback((_evt: React.MouseEvent | React.TouchEvent, _node: Node, _draggedNodes: Node[]) => {
     // Use our validated ref (not ReactFlow's draggedNodes — may have bad mobile coords).
     const finalPos = new Map(dragNodePositionsRef.current);
@@ -4519,10 +4749,45 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     if (finalPos.size === 0) return; // nothing moved (all positions were filtered)
     updateScene((prev) => ({
       ...prev,
-      objects: prev.objects.map((obj) => {
-        const p = finalPos.get(obj.id);
-        return p ? { ...obj, transform: { ...getTransform(obj), x: p.x, y: p.y } } : obj;
-      }),
+      objects: (() => {
+        // Group boxes at their final positions — for drag-into/out detection.
+        const groupRects = prev.objects.filter((o) => o.kind === 'group').map((o) => {
+          const t = getTransform(o);
+          const fp = finalPos.get(o.id);
+          return { id: o.id, x: fp ? fp.x : t.x, y: fp ? fp.y : t.y, w: t.width > 0 ? t.width : 320, h: t.height > 0 ? t.height : 240 };
+        });
+        // Delta of each moved group — to offset children not captured in finalPos.
+        const groupDelta = new Map<string, { dx: number; dy: number }>();
+        for (const o of prev.objects) {
+          if (o.kind !== 'group') continue;
+          const fp = finalPos.get(o.id);
+          if (fp) { const t = getTransform(o); groupDelta.set(o.id, { dx: fp.x - t.x, dy: fp.y - t.y }); }
+        }
+        return prev.objects.map((obj) => {
+          if (obj.kind === 'group') {
+            const p = finalPos.get(obj.id);
+            return p ? { ...obj, transform: { ...getTransform(obj), x: p.x, y: p.y } } : obj;
+          }
+          const p = finalPos.get(obj.id);
+          if (p) {
+            // Moved directly → update position and (re)assign parent by center-in-box.
+            const t = getTransform(obj);
+            const w = t.width > 0 ? t.width : 200, h = t.height > 0 ? t.height : 120;
+            const cx = p.x + w / 2, cy = p.y + h / 2;
+            const host = groupRects.find((g) => cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h);
+            const next: DashObject = { ...obj, transform: { ...t, x: p.x, y: p.y } };
+            if (host) next.parentId = host.id; else delete next.parentId;
+            return next;
+          }
+          // Not moved directly, but its group moved → offset to keep relative position.
+          if (obj.parentId && groupDelta.has(obj.parentId)) {
+            const d = groupDelta.get(obj.parentId)!;
+            const t = getTransform(obj);
+            return { ...obj, transform: { ...t, x: t.x + d.dx, y: t.y + d.dy } };
+          }
+          return obj;
+        });
+      })(),
       functionCalls: (prev.functionCalls ?? []).map((fc) => {
         const p = finalPos.get(fc.id);
         return p ? { ...fc, x: p.x, y: p.y } : fc;
@@ -4724,31 +4989,56 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                   autoFocus fullWidth inputProps={{ style: { fontSize: 11 } }} />
               </Box>
             )}
-            <Box sx={{ flex: 1, overflow: 'auto' }} onContextMenu={(e) => openSceneCtx(e, null)}>
+            <Box sx={{ flex: 1, overflow: 'auto' }}
+              onContextMenu={(e) => openSceneCtx(e, null)}
+              onDragOver={(e) => { if (treeDragId) e.preventDefault(); }}
+              onDrop={(e) => { e.preventDefault(); if (treeDragId) reparentObject(treeDragId, undefined); setTreeDragId(null); setTreeDragOverId(null); }}>
               {filteredObjects.length === 0 && (
                 <Typography sx={{ fontSize: 11, color: 'text.disabled', p: 1.5, fontStyle: 'italic' }}>
                   {scene.objects.length === 0 ? 'Right-click to add' : 'No matches'}
                 </Typography>
               )}
               <List dense disablePadding>
-                {filteredObjects.map((obj) => (
+                {treeRows.map(({ obj, depth, childCount }) => {
+                  const isGroup = obj.kind === 'group';
+                  const collapsed = collapsedGroups.has(obj.id);
+                  const isDropTarget = isGroup && treeDragOverId === obj.id;
+                  return (
                   <ListItemButton key={obj.id} selected={selectedIds.has(obj.id)}
+                    draggable={!isGroup}
+                    onDragStart={!isGroup ? (e) => { setTreeDragId(obj.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', obj.id); } : undefined}
+                    onDragEnd={() => { setTreeDragId(null); setTreeDragOverId(null); }}
+                    onDragOver={isGroup ? (e) => { if (treeDragId && treeDragId !== obj.id) { e.preventDefault(); e.stopPropagation(); setTreeDragOverId(obj.id); } } : undefined}
+                    onDragLeave={isGroup ? () => setTreeDragOverId((cur) => cur === obj.id ? null : cur) : undefined}
+                    onDrop={isGroup ? (e) => { e.preventDefault(); e.stopPropagation(); if (treeDragId) reparentObject(treeDragId, obj.id); setTreeDragId(null); setTreeDragOverId(null); } : undefined}
                     onClick={(e) => toggleSelect(obj.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
                     onDoubleClick={() => flyTo(obj.id)}
                     onContextMenu={(e) => openSceneCtx(e, obj.id)}
-                    sx={{ py: 0.5, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText' }, '&.Mui-selected:hover': { bgcolor: 'primary.dark' } }}>
+                    sx={{ py: 0.5, pr: 1, pl: (canvasMode === 'select' ? 0.5 : 1.5) + depth * 2,
+                      ...(isDropTarget ? { outline: '2px solid #7c4dff', outlineOffset: '-2px', bgcolor: '#7c4dff22' } : {}),
+                      '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText' }, '&.Mui-selected:hover': { bgcolor: 'primary.dark' } }}>
                     {canvasMode === 'select' && (
                       <Checkbox size="small" checked={selectedIds.has(obj.id)} tabIndex={-1} disableRipple
                         sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: 'primary.contrastText' } }} />
                     )}
+                    {isGroup && (
+                      <Box component="span" onClick={(e) => { e.stopPropagation(); setCollapsedGroups((prev) => { const n = new Set(prev); if (n.has(obj.id)) n.delete(obj.id); else n.add(obj.id); return n; }); }}
+                        sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer', mr: 0.25 }}>
+                        {collapsed ? <ChevronRightIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                      </Box>
+                    )}
+                    {isGroup && <GroupIcon sx={{ fontSize: 14, color: selectedIds.has(obj.id) ? 'inherit' : '#7c4dff', mr: 0.5, flexShrink: 0 }} />}
                     <ListItemText
                       primary={<Typography component="span" sx={{ fontSize: 12 }}>
                         <strong>{obj.objectName}</strong>
-                        <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.secondary' }}> :{obj.className}</Typography>
+                        {isGroup
+                          ? <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.disabled' }}> · {childCount}</Typography>
+                          : <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.secondary' }}> :{obj.className}</Typography>}
                       </Typography>}
                     />
                   </ListItemButton>
-                ))}
+                  );
+                })}
                 {(scene.functionCalls ?? []).map((fc) => (
                   <ListItemButton key={fc.id} selected={selectedIds.has(fc.id)}
                     onClick={(e) => toggleSelect(fc.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
@@ -5067,6 +5357,14 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         }} sx={{ fontSize: 13, gap: 1 }}>
           <ArrowDownwardIcon sx={{ fontSize: 16, color: '#ffb74d' }} />SetProp
         </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => {
+          const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 80, y: 80 };
+          createGroup(pos.x, pos.y);
+          setNewMenuAnchor(null); closeSceneCtx();
+        }} sx={{ fontSize: 13, gap: 1 }}>
+          <GroupIcon sx={{ fontSize: 16, color: '#7c4dff' }} />Group
+        </MenuItem>
       </Menu>
 
       {/* Scene context menu */}
@@ -5079,6 +5377,15 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       >
         <MenuItem onClick={(e) => { setNewMenuAnchor(e.currentTarget); }} sx={{ fontSize: 13, gap: 1 }}>
           <AddIcon fontSize="small" />New…
+        </MenuItem>
+        <Divider />
+        <MenuItem disabled={!scene.objects.some((o) => selectedIds.has(o.id) && o.kind !== 'group')}
+          onClick={() => { groupSelection(); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1 }}>
+          <GroupIcon fontSize="small" />Group selection
+        </MenuItem>
+        <MenuItem disabled={!scene.objects.some((o) => selectedIds.has(o.id) && o.kind === 'group')}
+          onClick={() => { ungroupSelected(); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1 }}>
+          <GroupIcon fontSize="small" sx={{ opacity: 0.55 }} />Ungroup
         </MenuItem>
         <Divider />
         <MenuItem disabled={!selectedIds.size} onClick={() => { cutSelected(); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1 }}>

@@ -296,6 +296,10 @@ export class App {
       transport: serverLogicTransport,
       staleClientMs: 60_000,
       cronScheduler: { schedule: (expr, fn) => cron.schedule(expr, () => void fn()) },
+      // Stream log/activity/clients on the server outbox for the Server Logic page.
+      broadcastLog: true,
+      broadcastActivity: true,
+      broadcastClients: true,
     });
     this.serverLogic.start();
     console.log('Server logic started (server/user/client MQTT topics)');

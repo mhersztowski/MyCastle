@@ -10,9 +10,10 @@
  * (`/api/users/{u}/vfs/*`). No new backend endpoints needed.
  */
 
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
+import { useMqtt } from '../../modules/mqttclient';
 import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
   Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
@@ -25,22 +26,9 @@ import MenuIcon from '@mui/icons-material/Menu';
 import { useLayoutChrome } from '../../components/Layout';
 import { AccountMenu } from '../../components/AccountMenu';
 import { MdEditor } from '@/components/mdeditor';
-import Editor from '@monaco-editor/react';
-import type { editor as MonacoEditorTypes } from 'monaco-editor';
 // Side-effect: ensures Monaco workers + compiler options + completionItems
-// configuration is in place BEFORE any <Editor> in this page mounts.
-// MdEditor pulls it in transitively too, but the in-page text editor is
-// reachable on Drive even without MdEditor on screen (preview a .json file),
-// so we make the dependency explicit here.
+// configuration is in place BEFORE MdEditor (or the embedded workspace) mounts.
 import '../../modules/editor/monacoWorkers';
-import { setupDriveEditorMonaco } from './driveMonacoSetup';
-import { MonacoSelectionHandles } from './MonacoSelectionHandles';
-
-// Lazy: the include-file picker is borrowed wholesale from the Automate
-// Script editor — same `drive/mdscript` + `drive/treejs` roots, same tree
-// UI, same content-into-cursor flow. We only fetch its chunk when the user
-// actually clicks the attach icon.
-const AutomateIncludeFileDialog = React.lazy(() => import('../../components/mdeditor/extensions/AutomateIncludeFileDialog'));
 import CloseIcon from '@mui/icons-material/Close';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -76,10 +64,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import TerminalIcon from '@mui/icons-material/Terminal';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import SubjectIcon from '@mui/icons-material/Subject';
-import SaveIcon from '@mui/icons-material/Save';
-import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CodeIcon from '@mui/icons-material/Code';
 import TodayIcon from '@mui/icons-material/Today';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -97,10 +85,15 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
 // until the user actually opens a .mjd / .data.json file. RemoteFS is the
 // VFS adapter MjdVfsLoader expects.
-import { MjdVfsLoader, AgentPanel, SubpathFS, DEFAULT_AGENT_CONFIG } from '@mhersztowski/texteditor';
+import { MjdVfsLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
 import { RemoteFS, CompositeFS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
+// Value import (not just types): used to reach the live Monaco model of the
+// file currently open in the embedded workspace (`file://<wsPath>`), so the
+// in-browser runner executes unsaved edits, and to transpile .ts via the TS
+// worker. Same module instance the workspace bundles, so getModel() resolves.
+import * as monaco from 'monaco-editor';
 import { minisApi } from '../../services/MinisApiService';
 
 // ─── VFS helpers ─────────────────────────────────────────────────────────────
@@ -575,41 +568,6 @@ const isAudioMime = (m: string) => m.startsWith('audio/');
 const isVideoMime = (m: string) => m.startsWith('video/');
 
 /**
- * Map a filename to a Monaco language id. Covers the common config / source
- * formats we want syntax-highlighted in the right panel; falls back to
- * 'plaintext' for unknown extensions (so the editor still works — just no
- * highlighting). MdEditor handles `.md` so we never route those here.
- */
-function fileToMonacoLanguage(name: string): string {
-  const ext = (name.toLowerCase().split('.').pop() ?? '');
-  const map: Record<string, string> = {
-    json: 'json', jsonc: 'json', json5: 'json', map: 'json',
-    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
-    ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-    py: 'python', pyi: 'python',
-    md: 'markdown', markdown: 'markdown',
-    xml: 'xml', svg: 'xml', xsd: 'xml', xsl: 'xml',
-    html: 'html', htm: 'html',
-    css: 'css', scss: 'scss', less: 'less',
-    yaml: 'yaml', yml: 'yaml',
-    sh: 'shell', bash: 'shell', zsh: 'shell',
-    sql: 'sql',
-    c: 'c', h: 'c',
-    cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp', hxx: 'cpp',
-    java: 'java', kt: 'kotlin',
-    rs: 'rust', go: 'go', rb: 'ruby', php: 'php',
-    cs: 'csharp', fs: 'fsharp',
-    swift: 'swift', dart: 'dart',
-    lua: 'lua', r: 'r',
-    pl: 'perl',
-    ini: 'ini', cfg: 'ini', toml: 'ini', env: 'ini', conf: 'ini',
-    dockerfile: 'dockerfile',
-    gitignore: 'plaintext', gitattributes: 'plaintext',
-  };
-  return map[ext] ?? 'plaintext';
-}
-
-/**
  * Anything that benefits from a real code editor (syntax highlight, brackets,
  * indent) versus the static `<pre>` viewer. Includes the obvious text/JSON/XML
  * MIME types (so the existing detection still wins) plus a long list of
@@ -752,6 +710,27 @@ function formatDate(ms?: number): string {
   return new Date(ms).toLocaleString();
 }
 
+// ─── In-browser script runner ────────────────────────────────────────────────
+// JS/TS files opened in the Drive editor can be executed in the page itself
+// (the user's own code, same trust model as Plugin Scripts). `console.*` is
+// redirected into a panel below the editor.
+type BrowserConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';
+interface BrowserConsoleLine { level: BrowserConsoleLevel; text: string }
+const MAX_BROWSER_CONSOLE = 500;
+const isBrowserRunnable = (name: string) => /\.(js|mjs|cjs|ts)$/i.test(name);
+function fmtConsoleArg(a: unknown): string {
+  if (typeof a === 'string') return a;
+  if (a instanceof Error) return a.stack ?? a.message;
+  try { return JSON.stringify(a, null, 2); } catch { return String(a); }
+}
+function browserConsoleColor(l: BrowserConsoleLevel): string {
+  return l === 'error' ? 'error.main'
+    : l === 'warn' ? 'warning.main'
+    : l === 'info' ? 'info.main'
+    : l === 'debug' ? 'text.secondary'
+    : 'text.primary';
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function DrivePage(): React.JSX.Element {
@@ -759,7 +738,8 @@ export default function DrivePage(): React.JSX.Element {
   // back to the logged-in user so this component also works as a Global window
   // mounted outside any route — there `useParams` returns no userName.
   const params = useParams<{ userName: string }>();
-  const { currentUser, token } = useAuth();
+  const { currentUser, token, isAdmin } = useAuth();
+  const { rawPublish, rawSubscribe } = useMqtt();
   const userName = params.userName || currentUser?.name || '';
   const { openNav } = useLayoutChrome();
   const [cwd, setCwd] = useState('');                       // relative under /drive/
@@ -793,18 +773,6 @@ export default function DrivePage(): React.JSX.Element {
   // .repo.json path relative to the user's drive root (e.g. `myrepo/.repo.json`).
   const [repoViewing, setRepoViewing] = useState<{ entry: VfsEntry; path: string } | null>(null);
   const [dashEditing, setDashEditing] = useState<{ entry: VfsEntry; path: string } | null>(null);
-  // Monaco-edited text state. Tracks the buffer (so dirty/save logic works
-  // without polling the editor), the dirty flag, and the in-flight save.
-  const [editedText, setEditedText] = useState<string | null>(null);
-  const [editorDirty, setEditorDirty] = useState(false);
-  const [editorSaving, setEditorSaving] = useState(false);
-  const monacoEditorRef = useRef<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
-  // Separate state so MonacoSelectionHandles re-renders when the editor mounts.
-  const [monacoEditorInstance, setMonacoEditorInstance] = useState<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
-  // "Dołącz plik" picker — shared with Automate Script. Multi-root tree over
-  // drive/mdscript + drive/treejs; insertion goes through executeEdits so
-  // it lands in Monaco's undo stack like a manual type.
-  const [includeOpen, setIncludeOpen] = useState(false);
   // "New empty file" dialog. Just a name field — content is empty bytes.
   const [newFileDialog, setNewFileDialog] = useState<{ name: string; presetKey: string } | null>(null);
   // "Create from clipboard" dialog. `kind` distinguishes between system clipboard text
@@ -839,10 +807,215 @@ export default function DrivePage(): React.JSX.Element {
   );
   useEffect(() => { mjdFs.setToken(token ?? undefined); }, [token, mjdFs]);
 
+  // ── Right-panel code editor: full workspace ──────────────────────────────
+  // Config / source files open in the same full editor as Electronics → Editor
+  // (the reusable TextEditorWorkspace: file tree, tabs, IntelliSense, search,
+  // save via Ctrl+S).
+  // Provider for the embedded workspace: SubpathFS rooted at the user's drive,
+  // so for regular users the workspace's `/` IS the Drive root (no extra
+  // nesting). For admins we compose it under `/drive` and additionally mount
+  // the full server data dir under `/server` (the same `/api/vfs` the
+  // Electronics → Editor workspace exposes). RemoteFS instances are held in
+  // refs so token refreshes propagate without recreating the provider (which
+  // would remount the workspace and lose open tabs).
+  const driveWorkspaceRemoteRef = useRef<RemoteFS | null>(null);
+  const driveServerRemoteRef = useRef<RemoteFS | null>(null);
+  const driveWorkspaceFs = useMemo<FileSystemProvider | null>(() => {
+    if (!userName) return null;
+    const remote = new RemoteFS({ baseUrl: `/api/users/${encodeURIComponent(userName)}/vfs`, token: token ?? undefined });
+    driveWorkspaceRemoteRef.current = remote;
+    // Whole user directory (drive/, Projects/, Electronics/, app/, …) — not just
+    // the drive subfolder — so the editor can reach the user's entire space.
+    const userFs = new SubpathFS(remote, `/data/Minis/Users/${userName}`) as unknown as FileSystemProvider;
+    if (!isAdmin) return userFs;
+    // Admin: user dir under `/user`, server data dir under `/server`.
+    const serverRemote = new RemoteFS({ baseUrl: '/api/vfs', token: token ?? undefined });
+    driveServerRemoteRef.current = serverRemote;
+    const cfs = new CompositeFS();
+    cfs.mount('/user', userFs);
+    cfs.mount('/server', serverRemote as unknown as FileSystemProvider);
+    return cfs as unknown as FileSystemProvider;
+    // token intentionally omitted — synced via the effect below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userName, isAdmin]);
+  useEffect(() => {
+    driveWorkspaceRemoteRef.current?.setToken(token ?? undefined);
+    driveServerRemoteRef.current?.setToken(token ?? undefined);
+  }, [token]);
+  // Project actions (Compile / Deploy / Build) inside the embedded workspace —
+  // same shape Electronics → Editor passes through.
+  const driveWorkspaceProjectDeps = useMemo(
+    () => (userName ? { baseUrl: '', authToken: token ?? undefined, userName } : undefined),
+    [userName, token],
+  );
+  // CommentTools plugin — embed VFS files into the active file + scan comments
+  // for TODO/FIXME-style markers. Scoped to the same workspace provider.
+  const commentToolsPlugin = useMemo(
+    () => (driveWorkspaceFs ? createCommentToolsPlugin(driveWorkspaceFs) : null),
+    [driveWorkspaceFs],
+  );
+  const driveExtraPlugins = useMemo(
+    () => (commentToolsPlugin ? [commentToolsPlugin] : undefined),
+    [commentToolsPlugin],
+  );
+
+  // ── In-browser runner for the open .js/.ts file ──────────────────────────
+  // Runs the LIVE editor buffer (the Monaco model, so unsaved edits count) in
+  // the page with a redirected console. A session tracks the script's timers
+  // so Stop can tear them down.
+  const [browserConsole, setBrowserConsole] = useState<BrowserConsoleLine[]>([]);
+  const [browserConsoleOpen, setBrowserConsoleOpen] = useState(false);
+  const [browserRunning, setBrowserRunning] = useState(false);
+  const browserSessionRef = useRef<{ stopped: boolean; timers: number[]; subs: Array<() => void> } | null>(null);
+
   // Defined early (before the AI agent / prompt-library blocks reference it).
   const toast = useCallback((msg: string, severity: 'success'|'error'|'info' = 'success') => {
     setSnack({ open: true, msg, severity });
   }, []);
+
+  // Tear down a running browser script: stop further console output and clear
+  // any timers/intervals it registered through the wrapped globals.
+  const stopBrowserSession = useCallback(() => {
+    const s = browserSessionRef.current;
+    if (s) {
+      s.stopped = true;
+      for (const u of s.subs) { try { u(); } catch { /* already gone */ } }
+      for (const id of s.timers) { window.clearTimeout(id); window.clearInterval(id); }
+      s.subs = [];
+      s.timers = [];
+    }
+    browserSessionRef.current = null;
+    setBrowserRunning(false);
+  }, []);
+
+  // Run the .js/.ts file currently open in the embedded workspace. Reads the
+  // live Monaco model (so unsaved edits run), transpiles .ts via the TS worker,
+  // then executes in an async IIFE with console/timers redirected.
+  const runInBrowser = useCallback(async () => {
+    if (!viewing) return;
+    stopBrowserSession();
+    const name = viewing.entry.name;
+    const rel = cwd ? `${cwd}/${name}` : name;
+    const wsPath = isAdmin ? `/user/drive/${rel}` : `/drive/${rel}`;
+
+    // Prefer the live editor buffer; fall back to the on-open snapshot.
+    let code = viewing.textContent ?? '';
+    try {
+      const model = monaco.editor.getModel(monaco.Uri.parse(`file://${wsPath}`));
+      if (model) code = model.getValue();
+    } catch { /* fall back to snapshot */ }
+
+    setBrowserConsole([]);
+    setBrowserConsoleOpen(true);
+    setBrowserRunning(true);
+    const session = { stopped: false, timers: [] as number[], subs: [] as Array<() => void> };
+    browserSessionRef.current = session;
+
+    const push = (level: BrowserConsoleLevel, args: unknown[]) => {
+      if (session.stopped) return;
+      setBrowserConsole(prev => {
+        const next = [...prev, { level, text: args.map(fmtConsoleArg).join(' ') }];
+        return next.length > MAX_BROWSER_CONSOLE ? next.slice(-MAX_BROWSER_CONSOLE) : next;
+      });
+    };
+    const sandboxConsole = {
+      log: (...a: unknown[]) => push('log', a),
+      info: (...a: unknown[]) => push('info', a),
+      warn: (...a: unknown[]) => push('warn', a),
+      error: (...a: unknown[]) => push('error', a),
+      debug: (...a: unknown[]) => push('debug', a),
+    };
+    // Wrapped timers so Stop can cancel pending callbacks — forwards ALL args
+    // (incl. the variadic callback arguments) so it behaves like the real one.
+    // Typed as a plain call signature (not `typeof setTimeout`) to avoid the
+    // @types/node `__promisify__` requirement that `.bind()` strips.
+    const wrapTimer = (orig: (handler: TimerHandler, timeout?: number, ...args: unknown[]) => number) =>
+      (handler: TimerHandler, timeout?: number, ...args: unknown[]): number => {
+        const id = orig(handler, timeout, ...args);
+        session.timers.push(id);
+        return id;
+      };
+
+    // MQTT client injected as `client` — publish (object → JSON) / subscribe
+    // (msg parsed from JSON, falls back to the raw string) over MyCastle's
+    // built-in connection. Subscriptions are tracked so Stop tears them down,
+    // and keep the session "running" after the script body resolves.
+    const client = {
+      userName: currentUser?.name ?? userName,
+      publish: (topic: string, payload: unknown) => {
+        if (session.stopped) return;
+        rawPublish(topic, typeof payload === 'string' ? payload : JSON.stringify(payload));
+      },
+      subscribe: (topic: string, cb: (msg: unknown, topic: string) => void): (() => void) => {
+        const unsub = rawSubscribe(topic, (raw: string) => {
+          if (session.stopped) return;
+          let msg: unknown = raw;
+          try { msg = JSON.parse(raw); } catch { /* keep raw string */ }
+          try { cb(msg, topic); } catch (err) {
+            push('error', [err instanceof Error ? (err.stack ?? err.message) : String(err)]);
+          }
+        });
+        session.subs.push(unsub);
+        return () => {
+          unsub();
+          session.subs = session.subs.filter(u => u !== unsub);
+        };
+      },
+    };
+
+    try {
+      if (/\.ts$/i.test(name)) {
+        const tmpUri = monaco.Uri.parse(`inmemory://drive-run/${rel.replace(/[^\w.]/g, '_')}.ts`);
+        const tmp = monaco.editor.getModel(tmpUri) ?? monaco.editor.createModel(code, 'typescript', tmpUri);
+        tmp.setValue(code);
+        try {
+          const getWorker = await monaco.languages.typescript.getTypeScriptWorker();
+          const worker = await getWorker(tmpUri);
+          const out = await worker.getEmitOutput(tmpUri.toString());
+          const js = out.outputFiles?.find(f => /\.jsx?$/.test(f.name))?.text;
+          if (js != null) code = js;
+        } finally {
+          tmp.dispose();
+        }
+      }
+      if (session.stopped) return;
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(
+        'client', 'console', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+        `"use strict";\nreturn (async () => {\n${code}\n})();`,
+      );
+      await fn(
+        client,
+        sandboxConsole,
+        wrapTimer(window.setTimeout.bind(window)),
+        wrapTimer(window.setInterval.bind(window)),
+        window.clearTimeout.bind(window),
+        window.clearInterval.bind(window),
+      );
+      if (session.stopped) return;
+      // Keep the session live while subscriptions / timers are pending so
+      // incoming messages keep printing until the user hits Stop.
+      if (session.subs.length > 0 || session.timers.length > 0) {
+        push('info', ['Listening… press ⏹ Stop to end.']);
+      } else {
+        push('info', ['✓ done']);
+        browserSessionRef.current = null;
+        setBrowserRunning(false);
+      }
+    } catch (e) {
+      push('error', [e instanceof Error ? (e.stack ?? e.message) : String(e)]);
+      for (const u of session.subs) { try { u(); } catch { /* already gone */ } }
+      for (const id of session.timers) { window.clearTimeout(id); window.clearInterval(id); }
+      if (browserSessionRef.current === session) {
+        browserSessionRef.current = null;
+        setBrowserRunning(false);
+      }
+    }
+  }, [viewing, cwd, isAdmin, currentUser, userName, rawPublish, rawSubscribe, stopBrowserSession]);
+
+  // Stop any run when the previewed file changes or the page unmounts.
+  useEffect(() => () => stopBrowserSession(), [stopBrowserSession]);
+  useEffect(() => { stopBrowserSession(); setBrowserConsoleOpen(false); }, [viewing?.entry.name, stopBrowserSession]);
 
   // ── AI Agent panel ──────────────────────────────────────────────────────
   // Opens on the right with an AgentEngine scoped to the user's Drive. The
@@ -1035,6 +1208,22 @@ export default function DrivePage(): React.JSX.Element {
   // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
   const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
   const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || running || logsView);
+
+  // Exactly ONE right-side panel may be open at a time. Every opener calls this
+  // first, so a new panel never renders stacked next to a stale one (the bug
+  // where two panels showed side by side). Aborts any in-flight run stream too.
+  // Does NOT touch panelFullscreen — closeRightPanel handles that on close.
+  const resetPanels = useCallback(() => {
+    setViewing(null);
+    setRepoViewing(null);
+    setDashEditing(null);
+    setMdEditing(null);
+    setMjdEditing(null);
+    runAbortRef.current?.abort();
+    setRunning(null);
+    setLogsView(null);
+  }, []);
+
   const showSidebar = !(isWide && panelFullscreen);
   const showRightPanel = isWide && panelOpen;
   const showAgent = isWide && agentOpen;
@@ -1222,26 +1411,18 @@ export default function DrivePage(): React.JSX.Element {
         // Source code / config files (.json, .ts, .py, …) are routed to the
         // Monaco editor, so we decode them as text too — not just text/* MIMEs.
         const textContent = isEditableTextFile(fileName, mime) ? base64ToText(data) : undefined;
+        resetPanels();
         setViewing({ entry, mime, dataB64: data, textContent });
       } catch (err) {
         toast((err as Error).message, 'error');
       }
     }
-  }, [userName, toast]);
+  }, [userName, toast, resetPanels]);
 
   // When the right panel closes (file deselected, MdEditor closed) drop the
   // fullscreen toggle — otherwise next time it opens it stays expanded with
   // no obvious way back without a re-click.
   useEffect(() => { if (!panelOpen) setPanelFullscreen(false); }, [panelOpen]);
-
-  // Whenever the previewed file changes (or the panel closes), reset the
-  // Monaco buffer to the freshly-fetched text. Without this the editor would
-  // keep showing the previous file's content until it's clicked.
-  useEffect(() => {
-    setEditedText(viewing?.textContent ?? null);
-    setEditorDirty(false);
-    setEditorSaving(false);
-  }, [viewing?.entry.name, viewing?.textContent]);
 
   // Going narrower than `md` while the inline panel is open: collapse the embed
   // because the sidebar would otherwise vanish completely without a way out
@@ -1293,10 +1474,7 @@ export default function DrivePage(): React.JSX.Element {
     // `*.dash.json` → Dash scene editor (3-pane: Types | Scene | ReactFlow UML)
     if (entry.name.endsWith('.dash.json')) {
       const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
-      setViewing(null);
-      setRepoViewing(null);
-      setMjdEditing(null);
-      setMdEditing(null);
+      resetPanels();
       setDashEditing({ entry, path: rel });
       return;
     }
@@ -1305,7 +1483,7 @@ export default function DrivePage(): React.JSX.Element {
     // do podkatalogu `{nazwa}` (logika po stronie backendu).
     if (entry.name.endsWith('.repo.json')) {
       const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
-      setViewing(null);
+      resetPanels();
       setRepoViewing({ entry, path: rel });
       return;
     }
@@ -1323,12 +1501,13 @@ export default function DrivePage(): React.JSX.Element {
         // See goToFavorite — same routing rule (code-like extensions get
         // decoded so the Monaco editor can highlight them).
         const textContent = isEditableTextFile(entry.name, mime) ? base64ToText(data) : undefined;
+        resetPanels();
         setViewing({ entry, mime, dataB64: data, textContent });
       } catch (e) {
         toast((e as Error).message, 'error');
       }
     })();
-  }, [userName, cwd, toast]);
+  }, [userName, cwd, toast, resetPanels]);
 
   const onDownload = useCallback(async (entry: VfsEntry) => {
     try {
@@ -1451,11 +1630,12 @@ export default function DrivePage(): React.JSX.Element {
       // extensions (Monaco gets to highlight either way). Binary content
       // stays as base64 — we render via data: URLs (img/iframe/audio/video).
       const textContent = isEditableTextFile(entry.name, mime) ? base64ToText(data) : undefined;
+      resetPanels();
       setViewing({ entry, mime, dataB64: data, textContent });
     } catch (err) {
       toast((err as Error).message, 'error');
     }
-  }, [userName, cwd, toast]);
+  }, [userName, cwd, toast, resetPanels]);
 
   // Open .md in MdEditor.
   //   - Tablet portrait + desktop (≥sm): inline split-view inside DrivePage —
@@ -1480,14 +1660,12 @@ export default function DrivePage(): React.JSX.Element {
       if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
       const json = await r.json() as { data?: string };
       const content = base64ToText(json.data ?? '');
-      setViewing(null);          // swap from preview → editor
-      setMjdEditing(null);       // mutually exclusive with MJD editor
-      setDashEditing(null);
+      resetPanels();             // swap to editor — exactly one panel open
       setMdEditing({ entry, rel, initialContent: content, saving: false });
     } catch (err) {
       toast((err as Error).message, 'error');
     }
-  }, [userName, cwd, isWide, toast]);
+  }, [userName, cwd, isWide, toast, resetPanels]);
 
   /** Drive-relative → backend full path (`/data/Minis/Users/{u}/drive/...`).
    *  RemoteFS wants the absolute form; the URL bar shows the relative one. */
@@ -1550,10 +1728,9 @@ export default function DrivePage(): React.JSX.Element {
       }
       mjdPath = linkedMjd ?? fullPath.replace(/\.data\.json$/i, '.mjd');
     }
-    setViewing(null);
-    setMdEditing(null);
+    resetPanels();
     setMjdEditing({ entry, rel, mjdPath, dataPath, mode });
-  }, [cwd, driveToFullPath]);
+  }, [cwd, driveToFullPath, userName, resetPanels]);
 
   /** Switch the right panel from MdEditor (WYSIWYG) to Monaco showing the
    *  raw markdown source. Lets users tweak code-fence params, edit tables
@@ -1576,12 +1753,12 @@ export default function DrivePage(): React.JSX.Element {
       // refuse markdown to keep MdEditor as the default; we're explicitly
       // overriding that here.
       const textContent = base64ToText(data);
-      setMdEditing(null);
+      resetPanels();
       setViewing({ entry, mime, dataB64: data, textContent });
     } catch (err) {
       toast((err as Error).message, 'error');
     }
-  }, [userName, cwd, toast]);
+  }, [userName, cwd, toast, resetPanels]);
 
   const openDashAsRawSource = useCallback(async (entry: VfsEntry) => {
     try {
@@ -1590,12 +1767,12 @@ export default function DrivePage(): React.JSX.Element {
       if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
       const json = await r.json() as { data?: string };
       const data = json.data ?? '';
-      setDashEditing(null);
+      resetPanels();
       setViewing({ entry, mime: 'application/json', dataB64: data, textContent: base64ToText(data) });
     } catch (err) {
       toast((err as Error).message, 'error');
     }
-  }, [userName, cwd, toast]);
+  }, [userName, cwd, toast, resetPanels]);
 
   // Wire the forward-declared ref now that openInMdEditor exists — goToFavorite
   // (declared earlier) calls through the ref to bypass TDZ ordering.
@@ -1622,20 +1799,12 @@ export default function DrivePage(): React.JSX.Element {
   }, [mdEditing, userName, toast]);
 
   const closeRightPanel = useCallback(() => {
-    setViewing(null);
-    setRepoViewing(null);
-    setDashEditing(null);
-    setMdEditing(null);
-    setMjdEditing(null);
-    runAbortRef.current?.abort();
-    setRunning(null);
-    setLogsView(null);
+    resetPanels();
     setPanelFullscreen(false);
-  }, []);
+  }, [resetPanels]);
 
   const openLogs = useCallback(async (rel: string) => {
-    setViewing(null); setMdEditing(null); setMjdEditing(null); setDashEditing(null);
-    runAbortRef.current?.abort(); setRunning(null);
+    resetPanels();
     setLogsView({ rel, content: '…' });
     try {
       const r = await fetch(apiUrl(userName, 'readFile', `.logs/${rel}.log`), { headers: authHeaders() });
@@ -1647,7 +1816,7 @@ export default function DrivePage(): React.JSX.Element {
     } catch (err) {
       setLogsView({ rel, content: `[błąd odczytu logów] ${(err as Error).message}` });
     }
-  }, [userName]);
+  }, [userName, resetPanels]);
 
   const clearLogs = useCallback(async (rel: string) => {
     try {
@@ -1667,8 +1836,7 @@ export default function DrivePage(): React.JSX.Element {
   // Generic SSE → console streamer. Shared by Run (node {file}) and npm install
   // (both stream the same `output`/`done` SSE events into the right-panel console).
   const streamConsole = useCallback(async (url: string, meta: { rel: string; kind: 'run' | 'install'; target: string }) => {
-    setViewing(null); setMdEditing(null); setMjdEditing(null); setDashEditing(null); setLogsView(null);
-    runAbortRef.current?.abort();
+    resetPanels();                       // close any other panel + abort prior run
     const ctrl = new AbortController();
     runAbortRef.current = ctrl;
     setRunning({ ...meta, output: '', status: 'running' });
@@ -1706,7 +1874,7 @@ export default function DrivePage(): React.JSX.Element {
       if ((err as Error).name === 'AbortError') return;
       setRunning(prev => (prev ? { ...prev, output: prev.output + `\n[błąd] ${(err as Error).message}\n`, status: 'error' } : prev));
     }
-  }, []);
+  }, [resetPanels]);
 
   const runScript = useCallback((rel: string) => streamConsole(
     `/api/users/${encodeURIComponent(userName)}/drive/run-script?path=${encodeURIComponent(rel)}`,
@@ -1907,56 +2075,6 @@ export default function DrivePage(): React.JSX.Element {
     if (ok) toast('Skopiowano cały tekst do schowka');
     else toast('Nie udało się skopiować — zaznacz tekst i użyj ⌘C', 'error');
   }, [viewing, toast]);
-
-  /** Insert text at the Monaco cursor (or replace current selection). Same
-   *  flow as the Automate Script fullscreen editor — `executeEdits` keeps
-   *  the change inside the editor's undo stack so Ctrl+Z reverts it cleanly.
-   *  Falls back to appending to the buffer if the editor ref is somehow
-   *  missing (e.g. picker triggered between mount and ref assignment). */
-  const handleIncludeInsert = useCallback((content: string) => {
-    const editor = monacoEditorRef.current;
-    if (!editor) {
-      setEditedText(prev => (prev ?? viewing?.textContent ?? '') + content);
-      setEditorDirty(true);
-      return;
-    }
-    const sel = editor.getSelection();
-    const model = editor.getModel();
-    if (!sel || !model) return;
-    editor.executeEdits('drive-include', [{
-      range: sel,
-      text: content,
-      forceMoveMarkers: true,
-    }]);
-    editor.focus();
-    // Sync our React mirror so the dirty flag + save button reflect the new
-    // buffer without waiting for the next onChange callback.
-    const next = model.getValue();
-    setEditedText(next);
-    setEditorDirty(next !== (viewing?.textContent ?? ''));
-  }, [viewing]);
-
-  /** Persist Monaco's current buffer to the backing VFS file. Idempotent —
-   *  no-op when nothing's dirty or there's no file open. After a successful
-   *  write we mirror the new value into `viewing.textContent` so the editor's
-   *  initial value matches reality on reload, and clear the dirty flag. */
-  const saveEditedText = useCallback(async () => {
-    if (!viewing || editedText === null) return;
-    const rel = cwd ? `${cwd}/${viewing.entry.name}` : viewing.entry.name;
-    setEditorSaving(true);
-    try {
-      await vfsWriteFile(userName, rel, textToBase64(editedText));
-      // Sync our snapshot of the on-disk content; without this the very next
-      // refresh would re-fire the reset useEffect with the OLD textContent.
-      setViewing(prev => prev ? { ...prev, textContent: editedText } : prev);
-      setEditorDirty(false);
-      toast(`Zapisano "${viewing.entry.name}"`, 'success');
-    } catch (err) {
-      toast(`Nie zapisano: ${(err as Error).message}`, 'error');
-    } finally {
-      setEditorSaving(false);
-    }
-  }, [viewing, editedText, cwd, userName, toast]);
 
   // ── Upload (file input + drag-and-drop) ─────────────────────────────────
   const upload = useCallback(async (files: ReadonlyArray<File | { file: File; relPath: string }>) => {
@@ -2170,68 +2288,23 @@ export default function DrivePage(): React.JSX.Element {
 
   // ── Right panel content (View or MdEditor) ──────────────────────────────
   // Rendered both as embedded panel (desktop) and as Dialog content (mobile).
+  // Drive-relative path of the file currently previewed (used as the workspace
+  // open target — the workspace's `/` is the Drive root via SubpathFS).
+  const viewingRel = viewing ? (cwd ? `${cwd}/${viewing.entry.name}` : viewing.entry.name) : '';
+
   const viewerBody = viewing && (
-    viewing.textContent !== undefined ? (
-      // Monaco editor with syntax highlighting for the file's detected language.
-      // Ctrl+S saves through `saveEditedText`; the dirty flag and save spinner
-      // are surfaced in the right-panel toolbar (next to the close button).
-      <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
-        <Editor
-          height="100%"
-          path={`drive://${viewing.entry.name}`}
-          language={fileToMonacoLanguage(viewing.entry.name)}
-          value={editedText ?? viewing.textContent}
-          beforeMount={setupDriveEditorMonaco}
-          onChange={(v) => {
-            const next = v ?? '';
-            setEditedText(next);
-            // Only flip dirty when content actually diverged from the
-            // on-disk snapshot, to avoid spurious "unsaved" chips after a
-            // fresh load.
-            setEditorDirty(next !== (viewing.textContent ?? ''));
-          }}
-          onMount={(editor, monaco) => {
-            monacoEditorRef.current = editor;
-            setMonacoEditorInstance(editor);
-            // Ctrl+S / Cmd+S → save. Goes through `saveEditedText` which
-            // already short-circuits when nothing is dirty.
-            editor.addCommand(
-              monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-              () => { void saveEditedText(); },
-            );
-          }}
-          theme="vs-dark"
-          options={{
-            fontSize: 13,
-            minimap: { enabled: false },
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            tabSize: 2,
-            automaticLayout: true,
-            // Without this, Monaco's suggest / hover / parameter-hints widgets
-            // anchor inside the editor's overflow container. In the Drive
-            // right-panel layout the editor lives inside several scrollable
-            // ancestors (Allotment pane → flex column → Paper). The widget
-            // then renders at the editor's TOP-LEFT in viewport space because
-            // our `position: fixed` CSS rule (`.suggest-widget` in
-            // monacoWorkers.ts) takes over without knowing the parent scroll
-            // offsets — that's the "weird place" you saw.
-            //
-            // `fixedOverflowWidgets: true` tells Monaco to render those
-            // widgets as fixed-positioned children of an overflow node it
-            // manages itself, aligned to the caret position regardless of
-            // ancestor scrolling. With the CSS rule already in place,
-            // z-index stays high enough to clear MUI stacking contexts.
-            fixedOverflowWidgets: true,
-            // Match the read-only feel of the old <pre> for files the user
-            // probably doesn't want to nuke by accident (none currently —
-            // every textContent path is editable), but keep the door open
-            // for a future read-only mode.
-            readOnly: false,
-          }}
-        />
-        <MonacoSelectionHandles editor={monacoEditorInstance} />
-      </Box>
+    viewing.textContent !== undefined && driveWorkspaceFs ? (
+      // Full editor — same component as Electronics → Editor. The workspace
+      // owns loading/saving (Ctrl+S → VFS), IntelliSense, tabs and search;
+      // `initialPath` opens the clicked file. Keyed by user so switching
+      // files reuses the same workspace (new tabs) instead of remounting.
+      <TextEditorWorkspace
+        key={`drive-ws-${userName}-${isAdmin ? 'admin' : 'user'}`}
+        provider={driveWorkspaceFs}
+        initialPath={isAdmin ? `/user/drive/${viewingRel}` : `/drive/${viewingRel}`}
+        projectDeps={driveWorkspaceProjectDeps}
+        extraPlugins={driveExtraPlugins}
+      />
     ) : isImageMime(viewing.mime) ? (
       <Box sx={{ textAlign: 'center', p: 2, height: '100%', overflow: 'auto' }}>
         <img
@@ -2719,50 +2792,31 @@ export default function DrivePage(): React.JSX.Element {
                 </IconButton>
               </Tooltip>
             )}
-            {/* "Dołącz plik" — multi-root picker (drive/mdscript + drive/treejs)
-                inserts the file's body at the cursor. Available for any text
-                file open in the editor, not just script-y ones — useful for
-                building up config files from templated chunks too. */}
-            {viewing && viewing.textContent !== undefined && (
-              <Tooltip title="Dołącz plik z drive/mdscript lub drive/treejs">
-                <span>
+            {/* Run the open .js/.ts file in the browser (live editor buffer) +
+                console panel toggle. */}
+            {viewing && viewing.textContent !== undefined && isBrowserRunnable(viewing.entry.name) && (
+              <>
+                <Tooltip title={browserRunning ? 'Zatrzymaj' : 'Uruchom w przeglądarce'}>
+                  <span>
+                    <IconButton
+                      size="small"
+                      color={browserRunning ? 'error' : 'success'}
+                      onClick={() => browserRunning ? stopBrowserSession() : void runInBrowser()}
+                    >
+                      {browserRunning ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title={browserConsoleOpen ? 'Ukryj konsolę' : 'Pokaż konsolę'}>
                   <IconButton
                     size="small"
-                    onClick={() => setIncludeOpen(true)}
-                    disabled={!userName}
+                    color={browserConsoleOpen ? 'primary' : 'default'}
+                    onClick={() => setBrowserConsoleOpen(o => !o)}
                   >
-                    <AttachFileIcon fontSize="small" />
+                    <TerminalIcon fontSize="small" />
                   </IconButton>
-                </span>
-              </Tooltip>
-            )}
-            {/* Code-editor save button — only when there's a text buffer.
-                Disabled when nothing's dirty so accidental clicks don't
-                rewrite the file with identical content. */}
-            {viewing && viewing.textContent !== undefined && (
-              <Tooltip title="Zapisz (Ctrl+S)">
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={() => void saveEditedText()}
-                    disabled={!editorDirty || editorSaving}
-                    color={editorDirty ? 'primary' : 'default'}
-                  >
-                    {editorSaving
-                      ? <CircularProgress size={14} />
-                      : <SaveIcon fontSize="small" />}
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-            {viewing && viewing.textContent !== undefined && editorDirty && (
-              <Chip
-                size="small"
-                variant="outlined"
-                color="warning"
-                label="Niezapisane"
-                sx={{ height: 22 }}
-              />
+                </Tooltip>
+              </>
             )}
             {/* Markdown view toggle — pair of symmetric buttons that swap
                 the panel between WYSIWYG (MdEditor / TipTap) and raw source
@@ -2797,8 +2851,10 @@ export default function DrivePage(): React.JSX.Element {
             {viewing && viewing.entry.name.endsWith('.dash.json') && (
               <Tooltip title="Open in visual dashboard editor">
                 <IconButton size="small" onClick={() => {
-                  setViewing(null);
-                  setDashEditing({ entry: viewing.entry, path: cwd ? `${cwd}/${viewing.entry.name}` : viewing.entry.name });
+                  const dashEntry = viewing.entry;
+                  const dashPath = cwd ? `${cwd}/${dashEntry.name}` : dashEntry.name;
+                  resetPanels();
+                  setDashEditing({ entry: dashEntry, path: dashPath });
                 }}>
                   <DashboardIcon fontSize="small" />
                 </IconButton>
@@ -2837,7 +2893,62 @@ export default function DrivePage(): React.JSX.Element {
           </Box>
           {/* Panel content */}
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            {viewing && viewerBody}
+            {viewing && (
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{ flex: 1, minHeight: 0 }}>{viewerBody}</Box>
+                {browserConsoleOpen && viewing.textContent !== undefined && isBrowserRunnable(viewing.entry.name) && (
+                  <Box sx={{
+                    height: '38%', minHeight: 120, flexShrink: 0,
+                    borderTop: 2, borderColor: 'divider',
+                    display: 'flex', flexDirection: 'column',
+                    bgcolor: 'background.paper',
+                  }}>
+                    {/* Console header — status + actions */}
+                    <Box sx={{
+                      display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5,
+                      borderBottom: 1, borderColor: 'divider',
+                    }}>
+                      <TerminalIcon fontSize="small" sx={{ color: browserRunning ? 'success.main' : 'text.secondary' }} />
+                      <Typography variant="caption" sx={{ flex: 1, fontWeight: 600 }}>
+                        Console {browserRunning && '· running…'}
+                      </Typography>
+                      {browserRunning && <CircularProgress size={12} sx={{ mr: 0.5 }} />}
+                      <Tooltip title={browserRunning ? 'Zatrzymaj' : 'Uruchom ponownie'}>
+                        <span>
+                          <IconButton size="small" color={browserRunning ? 'error' : 'success'}
+                            onClick={() => browserRunning ? stopBrowserSession() : void runInBrowser()}>
+                            {browserRunning ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Button size="small" onClick={() => setBrowserConsole([])} sx={{ minWidth: 0 }}>Clear</Button>
+                      <Tooltip title="Ukryj konsolę">
+                        <IconButton size="small" onClick={() => setBrowserConsoleOpen(false)}>
+                          <CloseIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                    {/* Console output */}
+                    <Box sx={{
+                      flex: 1, minHeight: 0, overflow: 'auto', px: 1, py: 0.5,
+                      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: 12, lineHeight: 1.5,
+                      bgcolor: 'action.hover',
+                    }}>
+                      {browserConsole.length === 0 ? (
+                        <Typography variant="caption" color="text.secondary">
+                          {browserRunning ? 'Running…' : 'No output. Click Run to execute.'}
+                        </Typography>
+                      ) : browserConsole.map((line, i) => (
+                        <Box key={i} component="pre" sx={{
+                          m: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                          color: browserConsoleColor(line.level),
+                        }}>{line.text}</Box>
+                      ))}
+                    </Box>
+                  </Box>
+                )}
+              </Box>
+            )}
             {repoViewing && (
               <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                 <GitRepoPanel key={repoViewing.path} userName={userName} repoPath={repoViewing.path} />
@@ -3672,21 +3783,6 @@ export default function DrivePage(): React.JSX.Element {
       <Snackbar open={snack.open} autoHideDuration={3500} onClose={() => setSnack({ ...snack, open: false })}>
         <Alert severity={snack.severity}>{snack.msg}</Alert>
       </Snackbar>
-
-      {/* "Dołącz plik" — same picker the Automate Script editor uses; chunk
-          is lazy so users who never open it don't pay for the import. The
-          `{includeOpen && …}` guard makes sure the dialog doesn't mount
-          until the user actually clicks the attach icon. */}
-      <Suspense fallback={null}>
-        {includeOpen && (
-          <AutomateIncludeFileDialog
-            open={includeOpen}
-            onClose={() => setIncludeOpen(false)}
-            userName={userName}
-            onInsert={handleIncludeInsert}
-          />
-        )}
-      </Suspense>
     </Box>
   );
 }

@@ -113,6 +113,12 @@ export interface MonacoMultiEditorProps {
   onDialogAction?: import('../vfs/types').VfsExplorerProps['onDialogAction'];
   /** Built-in mount presets always shown in the VFS mount manager (cannot be deleted by user). */
   defaultMountPresets?: import('../vfs/vfsMountPresets').VfsMountPreset[];
+  /**
+   * File to open automatically once the editor has mounted. Re-opening happens
+   * whenever the value changes (so a host can drive which file is shown). The
+   * path must be valid within {@link provider} (e.g. `/home/foo/config.json`).
+   */
+  initialPath?: string;
 }
 
 interface TabInfo {
@@ -976,163 +982,138 @@ const EditorGroupPane = memo(function EditorGroupPane({
     // navigate, so selectionStart never changes.
     //
     // Solution — Shadow Cursor:
-    //   1. Write a 21-char SHADOW string into Chrome's C++ textarea storage via
-    //      the native HTMLTextAreaElement value setter (bypasses any JS overrides).
-    //   2. Override the JS .value getter on this instance to return '' — Monaco
-    //      reads JS getter and still sees empty string, so it leaves textarea alone.
+    //   1. Write a long all-spaces SHADOW string into Chrome's C++ textarea storage
+    //      via the native HTMLTextAreaElement value setter (bypasses JS overrides).
+    //   2. Override the JS .value getter to return '' AND swallow every write —
+    //      Monaco sees '' and its IME surrounding-text mirror can't clobber SHADOW.
     //   3. Override .setSelectionRange on this instance — Monaco's calls are
     //      blocked; Gboard's C++-level setSelection bypasses JS entirely.
     //   4. Blur/focus cycle — forces Chrome to re-establish InputConnection by
     //      reading the C++ storage, which now has SHADOW. Gboard now knows the
-    //      field has 21 chars and will change selectionStart on gesture.
-    //   5. selectionchange listener reads the native selectionStart, computes
-    //      delta from SHADOW_MID (10), and moves Monaco cursor accordingly.
+    //      field has many chars and will change selectionStart on gesture.
+    //   5. selectionchange listener reads the native selectionStart and applies the
+    //      *incremental* delta since the previous event, moving Monaco's cursor in
+    //      lock-step with Gboard's finger; the buffer is recentered near its edges.
     let gboardCleanup: (() => void) | null = null;
     if (/Android/i.test(navigator.userAgent)) {
-      const monacoTextarea = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
-      if (monacoTextarea) {
-        // Debug overlay — remove once confirmed working
-        let dbgEl: HTMLDivElement | null = null;
-        const dbg = (msg: string) => {
-          if (!dbgEl) {
-            dbgEl = document.createElement('div');
-            dbgEl.style.cssText = 'position:fixed;bottom:72px;right:6px;background:rgba(0,0,0,.82);color:#7fff00;font:10px/1.4 monospace;padding:4px 8px;z-index:99999;pointer-events:none;max-width:240px;border-radius:4px;white-space:pre-wrap;';
-            // document.body.appendChild(dbgEl); // temporarily hidden
-          }
-          const ls = (dbgEl.textContent ?? '').split('\n').filter(Boolean);
-          ls.unshift(new Date().toISOString().slice(14, 22) + ' ' + msg);
-          if (ls.length > 10) ls.length = 10;
-          dbgEl.textContent = ls.join('\n');
-        };
+      // SHADOW: a long run of spaces — invisible, neutral, gives Gboard plenty of
+      // room to swipe left/right before we need to recenter the hidden cursor.
+      const SHADOW = ' '.repeat(401);
+      const SHADOW_MID = 200; // cursor sits in the middle
+      let lastSS = SHADOW_MID;     // last selectionStart we saw (for incremental deltas)
+      let applyingDelta = false;   // true while we push a delta into Monaco
+      let cycleInProgress = false; // true during a blur/focus re-init bounce
 
-        // SHADOW: 21 spaces — invisible, neutral, gives Gboard room to move left/right
-        const SHADOW = '                     '; // 21 spaces
-        const SHADOW_MID = 10; // cursor sits in the middle
+      // Native descriptors from the prototype chain — let us bypass our own
+      // per-instance overrides and reach Chrome's real C++ value/selection storage.
+      const nativeValDesc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!;
+      const nativeSsDesc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'selectionStart')!;
+      const nativeSsr = HTMLTextAreaElement.prototype.setSelectionRange;
+      const nativeSsOf = (ta: HTMLTextAreaElement) => nativeSsDesc.get!.call(ta) as number;
 
-        // Grab the native property descriptor from the prototype chain
-        // so we can write directly into Chrome's C++ value storage.
-        const nativeValDesc = Object.getOwnPropertyDescriptor(
-          HTMLTextAreaElement.prototype, 'value'
-        )!;
-        const nativeSsr = HTMLTextAreaElement.prototype.setSelectionRange;
+      // Why this is focus-driven instead of capturing one textarea at setup:
+      // Monaco creates/replaces its <textarea.inputarea> AFTER this effect runs
+      // (and there can be more than one). A single captured reference is therefore
+      // never the one Gboard actually drives — so we shadow whichever inputarea is
+      // focused, tracked in a WeakSet so each is patched exactly once.
+      const shadowed = new WeakSet<HTMLTextAreaElement>();
 
-        // Write SHADOW into C++ storage (Chrome reads this to init InputConnection)
-        nativeValDesc.set!.call(monacoTextarea, SHADOW);
+      // Off-screen textarea used to bounce focus and force Chrome to re-establish
+      // the Gboard InputConnection (so it re-reads SHADOW instead of stale content).
+      const tmp = document.createElement('textarea');
+      tmp.style.cssText = 'position:fixed;opacity:0;top:-9999px;left:-9999px;width:1px;height:1px;';
+      document.body.appendChild(tmp);
 
-        // Override JS .value getter on this instance so Monaco always sees ''
-        Object.defineProperty(monacoTextarea, 'value', {
+      // Write SHADOW + center the native cursor on a given textarea.
+      const writeShadow = (ta: HTMLTextAreaElement) => {
+        nativeValDesc.set!.call(ta, SHADOW);
+        nativeSsr.call(ta, SHADOW_MID, SHADOW_MID);
+        lastSS = SHADOW_MID;
+      };
+
+      // Patch a textarea once: value getter returns '' and swallows every write
+      // (so Monaco's IME mirror can't replace SHADOW), setSelectionRange is a no-op
+      // (Monaco can't move our shadow cursor; Gboard's C++ setSelection bypasses JS).
+      const installShadow = (ta: HTMLTextAreaElement) => {
+        if (shadowed.has(ta)) return;
+        shadowed.add(ta);
+        nativeValDesc.set!.call(ta, SHADOW);
+        Object.defineProperty(ta, 'value', {
           get() { return ''; },
-          set(v: string) {
-            // Monaco sets value=''; ignore — keep SHADOW in C++ storage
-            // But if Monaco sets a non-empty value (shouldn't happen), allow it
-            if (v !== '') nativeValDesc.set!.call(monacoTextarea, v);
-          },
+          set(_v: string) { /* keep SHADOW — ignore Monaco's writes */ },
           configurable: true,
         });
-
-        // Override .setSelectionRange on this instance — blocks Monaco's calls;
-        // Gboard's InputConnection.setSelection() is C++ and bypasses JS.
-        const origSsr = monacoTextarea.setSelectionRange.bind(monacoTextarea);
-        void origSsr; // suppress lint
-        Object.defineProperty(monacoTextarea, 'setSelectionRange', {
-          value(..._args: unknown[]) {
-            // Silently block — keep shadow cursor at SHADOW_MID
-          },
-          configurable: true,
-          writable: true,
+        Object.defineProperty(ta, 'setSelectionRange', {
+          value(..._args: unknown[]) { /* keep shadow cursor put */ },
+          configurable: true, writable: true,
         });
-
-        // Reset shadow cursor to middle via native setter (bypasses our override)
-        const resetShadow = () => {
-          nativeValDesc.set!.call(monacoTextarea, SHADOW);
-          nativeSsr.call(monacoTextarea, SHADOW_MID, SHADOW_MID);
-        };
-
-        // Blur/focus cycle: forces Chrome to re-init InputConnection from C++ storage.
-        // Create a tiny off-screen textarea to take focus temporarily.
-        const tmp = document.createElement('textarea');
-        tmp.style.cssText = 'position:fixed;opacity:0;top:-9999px;left:-9999px;width:1px;height:1px;';
-        document.body.appendChild(tmp);
-
-        const doBlurFocusCycle = () => {
-          resetShadow();
-          tmp.focus(); // moves focus away → Chrome will re-init InputConnection on next focus
+        // First focus already happened with the old (empty/word) content cached by
+        // Gboard — bounce focus so Chrome re-reads SHADOW into the InputConnection.
+        cycleInProgress = true;
+        writeShadow(ta);
+        tmp.focus();
+        requestAnimationFrame(() => {
+          ta.focus();
           requestAnimationFrame(() => {
-            monacoTextarea.focus(); // Chrome re-establishes InputConnection, reads C++ storage (SHADOW)
-            requestAnimationFrame(() => {
-              resetShadow(); // ensure cursor is at SHADOW_MID after IC init
-              dbg(`shadow ready mid=${SHADOW_MID}`);
-            });
+            writeShadow(ta);
+            setTimeout(() => { cycleInProgress = false; }, 300);
           });
-        };
+        });
+      };
 
-        // Run initial blur/focus cycle after Monaco has finished its own setup
-        const initTimer = setTimeout(doBlurFocusCycle, 300);
+      // Patch whichever inputarea textarea gets focus; recenter on re-focus.
+      const onFocusIn = (e: FocusEvent) => {
+        const t = e.target as Element | null;
+        if (t instanceof HTMLTextAreaElement && t.classList.contains('inputarea')) {
+          if (!shadowed.has(t)) installShadow(t);
+          else if (!cycleInProgress) writeShadow(t);
+        }
+      };
+      document.addEventListener('focusin', onFocusIn, true);
 
-        // When Monaco refocuses textarea (e.g. after tap), redo the cycle.
-        // Guard prevents recursive triggering when doBlurFocusCycle itself
-        // calls monacoTextarea.focus().
-        let cycleInProgress = false;
-        const onFocus = () => {
-          if (cycleInProgress) return;
-          dbg('focus — resetting shadow');
-          cycleInProgress = true;
-          setTimeout(() => {
-            doBlurFocusCycle();
-            setTimeout(() => { cycleInProgress = false; }, 400);
-          }, 50);
-        };
-        monacoTextarea.addEventListener('focus', onFocus);
+      // If the real textarea is already present + focused, patch it now.
+      const initEl = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
+      if (initEl && document.activeElement === initEl) installShadow(initEl);
 
-        // Track whether we are mid-gesture to suppress Monaco pointer handler
-        let applyingDelta = false;
+      const onGboardSel = () => {
+        const ta = document.activeElement;
+        if (!(ta instanceof HTMLTextAreaElement) || !ta.classList.contains('inputarea')) return;
+        if (!shadowed.has(ta)) { installShadow(ta); return; }
+        if (applyingDelta || cycleInProgress) return;
 
-        const onGboardSel = () => {
-          // Read native selectionStart directly from C++ storage
-          const nativeSS = Object.getOwnPropertyDescriptor(
-            HTMLTextAreaElement.prototype, 'selectionStart'
-          )!.get!.call(monacoTextarea) as number;
+        const nativeSS = nativeSsOf(ta);
+        // Incremental delta: follow Gboard's own absolute finger tracking by diffing
+        // against the last position we saw — resetting to mid every step fought
+        // Gboard's tracking and made the cursor jump/stall.
+        const delta = nativeSS - lastSS;
+        lastSS = nativeSS;
+        if (delta === 0) return;
 
-          const delta = nativeSS - SHADOW_MID;
-          const active = document.activeElement === monacoTextarea;
-          dbg(`SC nSS=${nativeSS} d=${delta} act=${active} apply=${applyingDelta}`);
+        const model = me.getModel();
+        const pos = me.getPosition();
+        if (!model || !pos) return;
 
-          if (!active) return;
-          if (applyingDelta) return;
-          if (delta === 0) return;
+        const newOffset = Math.max(0, Math.min(model.getValueLength(), model.getOffsetAt(pos) + delta));
+        const newPos = model.getPositionAt(newOffset);
 
-          // Reset shadow immediately so next Gboard step is relative to mid
-          resetShadow();
+        applyingDelta = true;
+        gboardState.lastActive = Date.now();
+        me.setPosition(newPos);
+        // revealPosition (not ...InCenter) only scrolls when the cursor would be
+        // off-screen, so stepping through text no longer yanks the viewport.
+        me.revealPosition(newPos);
+        requestAnimationFrame(() => { applyingDelta = false; });
 
-          const model = me.getModel();
-          const pos = me.getPosition();
-          if (!model || !pos) return;
+        // Recenter only near the buffer edge so a long swipe never runs out of room.
+        if (nativeSS < 16 || nativeSS > SHADOW.length - 16) writeShadow(ta);
+      };
+      document.addEventListener('selectionchange', onGboardSel);
 
-          const newOffset = Math.max(0, Math.min(model.getValueLength(), model.getOffsetAt(pos) + delta));
-
-          applyingDelta = true;
-          gboardState.lastActive = Date.now();
-          me.setPosition(model.getPositionAt(newOffset));
-          me.revealPositionInCenter(model.getPositionAt(newOffset));
-          dbg(`MOVE d=${delta}`);
-
-          // Release flag after Monaco echo SC fires
-          requestAnimationFrame(() => { applyingDelta = false; });
-        };
-
-        document.addEventListener('selectionchange', onGboardSel);
-
-        gboardCleanup = () => {
-          clearTimeout(initTimer);
-          document.removeEventListener('selectionchange', onGboardSel);
-          monacoTextarea.removeEventListener('focus', onFocus);
-          // Restore .value and .setSelectionRange on this instance
-          delete (monacoTextarea as unknown as Record<string, unknown>).value;
-          delete (monacoTextarea as unknown as Record<string, unknown>).setSelectionRange;
-          tmp.remove();
-          dbgEl?.remove();
-        };
-      }
+      gboardCleanup = () => {
+        document.removeEventListener('selectionchange', onGboardSel);
+        document.removeEventListener('focusin', onFocusIn, true);
+        tmp.remove();
+      };
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -1771,6 +1752,7 @@ export function MonacoMultiEditor({
   projectDeps,
   onDialogAction,
   defaultMountPresets,
+  initialPath,
 }: MonacoMultiEditorProps) {
   const [groups, setGroups] = useState<EditorGroup[]>(() => [{ id: makeGroupId(), tabs: [], activeTab: null, size: 1 }]);
   const [activeGroupId, setActiveGroupId] = useState<string>(groups[0].id);
@@ -2059,6 +2041,20 @@ export function MonacoMultiEditor({
       setSidebarPanel(null);
     }
   }, [provider, groups, activeGroupId]);
+
+  // Open `initialPath` once on mount and again whenever the host changes it.
+  // Tracks the last-opened value so re-renders (handleFileOpen identity changes
+  // on every group/tab edit) don't reopen the same file repeatedly.
+  const lastInitialPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialPath) return;
+    if (lastInitialPathRef.current === initialPath) return;
+    lastInitialPathRef.current = initialPath;
+    void handleFileOpen(initialPath);
+    // handleFileOpen intentionally omitted — its identity changes on every tab
+    // edit, which would defeat the lastInitialPathRef guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPath]);
 
   // Go to File — walk VFS to collect files, then show dialog
   const handleGoToFileOpen = useCallback(async () => {

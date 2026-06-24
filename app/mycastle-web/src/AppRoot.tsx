@@ -59,9 +59,6 @@ import { MinimalTopBar } from './components/MinimalTopBar';
 
 // Mycastle full-page routes (no layout)
 import WorkspaceMdPage from './pages/workspace/WorkspaceMdPage';
-// Lazy: UserDataEditorPage imports Monaco + monacoWorkers (~10 MB). Eager loading
-// puts Monaco in the initial bundle and crashes iOS Safari on all routes.
-const UserDataEditorPage = lazy(() => import('./pages/workspace/UserDataEditorPage'));
 import SimpleEditorPage from './pages/editor/SimpleEditorPage';
 import MdEditorPage from './pages/editor/MdEditorPage';
 import MdViewerPage from './pages/viewer/MdViewerPage';
@@ -84,6 +81,7 @@ const MinisCppProjectPage = lazy(() => import('./pages/minis-user/CppProjectPage
 // Programming — UML editor (ReactFlow bundle is heavy → lazy load)
 const UmlEditorPage = lazy(() => import('./pages/programming/UmlEditorPage'));
 const MiniscPage = lazy(() => import('./pages/programming/MiniscPage'));
+const ServerLogicPage = lazy(() => import('./pages/programming/ServerLogicPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -213,7 +211,6 @@ function AppRoot() {
             </Box>
           }
         />
-        <Route path="/user/:userName/electronics/editor" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><UserDataEditorPage /></Suspense></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route
           path="/user/:userName/programming/uml"
           element={
@@ -294,6 +291,7 @@ function AppRoot() {
                   <Route path="/user/:userName/iot/automations" element={<IotAutomationsPage />} />
                   <Route path="/user/:userName/iot/retention" element={<IotRetentionPage />} />
                   <Route path="/user/:userName/iot/emulator" element={<IotEmulatorPage />} />
+                  <Route path="/user/:userName/programming/server-logic" element={<AdminOnly><Suspense fallback={null}><ServerLogicPage /></Suspense></AdminOnly>} />
                   <Route path="/user/:userName/tools/rpc" element={<AdminOnly><RpcExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/mqtt-explorer" element={<AdminOnly><MqttExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/api-keys" element={<AdminOnly><ApiKeysPage /></AdminOnly>} />

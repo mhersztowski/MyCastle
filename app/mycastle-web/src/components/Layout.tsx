@@ -61,6 +61,7 @@ import {
   IntegrationInstructions as IntegrationInstructionsIcon,
   Schema as SchemaIcon,
   Memory as MemoryIcon,
+  Dns as DnsIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -120,6 +121,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
         { text: 'Scripts', icon: <TerminalIcon />, path: `/admin/${userName}/scripts` },
         { text: 'App Sessions', icon: <AppsIcon />, path: `/admin/${userName}/app-sessions` },
         { text: 'GitHub Import', icon: <CloudDownloadIcon />, path: `/admin/${userName}/github-projectdefs` },
+        { text: 'Server Logic', icon: <DnsIcon />, path: `/user/${userName}/programming/server-logic` },
       ];
     }
     if (isMinisView) {
@@ -130,7 +132,6 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },
             { text: 'Devices', icon: <DeveloperBoardIcon />, path: `/user/${userName}/electronics/devices` },
-            { text: 'Editor', icon: <CodeIcon />, path: `/user/${userName}/electronics/editor` },
             { text: 'DevicesDef', icon: <DevicesIcon />, path: `/user/${userName}/electronics/devicesdefs` },
             { text: 'Arduino', icon: <CodeIcon />, path: `/user/${userName}/electronics/arduino` },
             { text: 'uPython', icon: <CodeIcon />, path: `/user/${userName}/electronics/upython` },
@@ -144,6 +145,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
           text: 'Programming', icon: <IntegrationInstructionsIcon />, children: [
             { text: 'UML', icon: <SchemaIcon />, path: `/user/${userName}/programming/uml` },
             { text: 'MinisC', icon: <MemoryIcon />, path: `/user/${userName}/programming/minisc` },
+            { text: 'Server Logic', icon: <DnsIcon />, path: `/user/${userName}/programming/server-logic` },
           ],
         },
         {

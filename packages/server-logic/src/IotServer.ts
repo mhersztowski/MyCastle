@@ -26,6 +26,12 @@ export interface IotServerOptions {
   cronScheduler?: ICronScheduler;
   /** Drop clients unseen for this long (ms). 0/undefined = never prune. */
   staleClientMs?: number;
+  /** Re-publish every log entry on the server outbox (`log.entry`). */
+  broadcastLog?: boolean;
+  /** Re-publish every activity entry on the server outbox (`activity.entry`). */
+  broadcastActivity?: boolean;
+  /** Re-publish the client list whenever it changes (`clients.changed`). */
+  broadcastClients?: boolean;
 }
 
 /**
@@ -48,12 +54,18 @@ export class IotServer extends MObject {
 
   private readonly transport: IMqttTransport;
   private readonly staleClientMs: number;
+  private readonly broadcastLog: boolean;
+  private readonly broadcastActivity: boolean;
+  private readonly broadcastClients: boolean;
   private started = false;
 
   constructor(opts: IotServerOptions) {
     super();
     this.transport = opts.transport;
     this.staleClientMs = opts.staleClientMs ?? 0;
+    this.broadcastLog = opts.broadcastLog ?? false;
+    this.broadcastActivity = opts.broadcastActivity ?? false;
+    this.broadcastClients = opts.broadcastClients ?? false;
 
     this.log = new LogService();
     this.activity = new ActivityService();
@@ -72,6 +84,18 @@ export class IotServer extends MObject {
     this.cron.start();
 
     this.transport.subscribe((topic, payload) => this.handleMessage(topic, payload));
+
+    // Mirror in-process service events onto the server outbox so remote
+    // observers (e.g. the Server Logic page) get a live stream.
+    if (this.broadcastLog) {
+      this.log.onMessage.connect((m) => this.publishToServerOutbox({ type: 'log.entry', payload: m }), this);
+    }
+    if (this.broadcastActivity) {
+      this.activity.onActivity.connect((e) => this.publishToServerOutbox({ type: 'activity.entry', payload: e }), this);
+    }
+    if (this.broadcastClients) {
+      this.clients.changed.connect(() => this.publishToServerOutbox({ type: 'clients.changed', payload: this.clients.list() }), this);
+    }
 
     if (this.staleClientMs > 0) {
       this.cron.every('clients.prune', Math.max(1000, Math.floor(this.staleClientMs / 2)), () => {
@@ -137,6 +161,20 @@ export class IotServer extends MObject {
           type: 'clients.snapshot',
           reqId: env.reqId,
           payload: this.clients.list(),
+        });
+        break;
+      case 'log.list':
+        this.publishToServerOutbox({
+          type: 'log.snapshot',
+          reqId: env.reqId,
+          payload: this.log.recent(),
+        });
+        break;
+      case 'activity.list':
+        this.publishToServerOutbox({
+          type: 'activity.snapshot',
+          reqId: env.reqId,
+          payload: this.activity.recent(),
         });
         break;
     }
