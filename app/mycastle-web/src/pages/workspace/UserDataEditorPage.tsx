@@ -9,6 +9,7 @@ import type { VfsProviderDef, VfsMountPreset, AgentConfig } from '@mhersztowski/
 import { MarkdownEditorPlugin } from '../../plugins/MarkdownEditorPlugin';
 import { useAuth } from '../../modules/auth';
 import { minisApi } from '../../services/MinisApiService';
+import { ReadOnlyFS } from '../../vfs/ReadOnlyFS';
 import '@modules/editor/monacoWorkers';
 
 // localStorage key for the remote-terminal API key — kept stable so existing
@@ -27,6 +28,7 @@ function buildWorkspaceClaudeMd(userName: string, isAdmin: boolean): string {
   ];
   if (isAdmin) {
     lines.push('- `/server/` — full server filesystem (admin access only)');
+    lines.push('- `/mycastle-code/` — MyCastle monorepo source tree (**read-only** — do not attempt to write)');
   }
   lines.push(
     '',
@@ -143,6 +145,8 @@ export default function UserDataEditorPage() {
       const adminRemote = new RemoteFS({ baseUrl: '/api/vfs' });
       adminRemote.setToken(token);
       cfs.mount('/server', adminRemote);
+      // MyCastle source tree — read-only wrapper hides write actions from the editor and the agent.
+      cfs.mount('/mycastle-code', new ReadOnlyFS(new SubpathFS(homeRemote, '/mycastle-code')));
     }
   }, [currentUser, token, cfs, isAdmin]);
 
@@ -159,21 +163,49 @@ export default function UserDataEditorPage() {
     };
   }, [currentUser, remoteForProvider]);
 
+  // MyCastle source tree — admin only (uses /api/vfs admin scope). Wrapped in ReadOnlyFS
+  // so the editor hides write actions and the agent treats files as immutable.
+  const mycastleCodeProviderDef = useMemo((): VfsProviderDef | null => {
+    if (!isAdmin || !remoteForProvider) return null;
+    return {
+      type: 'mycastle-code',
+      label: 'MyCastle Source',
+      description: 'MyCastle monorepo source tree (read-only)',
+      configFields: [],
+      factory: () => new ReadOnlyFS(new SubpathFS(remoteForProvider, '/mycastle-code')),
+    };
+  }, [isAdmin, remoteForProvider]);
+
   const registry = useMemo(
-    () => [remoteFsProvider, ...(userHomeProviderDef ? [userHomeProviderDef] : []), ...defaultProviderRegistry],
-    [userHomeProviderDef],
+    () => [
+      remoteFsProvider,
+      ...(userHomeProviderDef ? [userHomeProviderDef] : []),
+      ...(mycastleCodeProviderDef ? [mycastleCodeProviderDef] : []),
+      ...defaultProviderRegistry,
+    ],
+    [userHomeProviderDef, mycastleCodeProviderDef],
   );
 
   const defaultMountPresets = useMemo((): VfsMountPreset[] => {
     if (!currentUser) return [];
-    return [{
+    const presets: VfsMountPreset[] = [{
       id: 'builtin-user-home',
       name: `${currentUser.name}'s home`,
       mountPoint: '/home',
       providerType: 'user-home',
       config: {},
     }];
-  }, [currentUser]);
+    if (isAdmin) {
+      presets.push({
+        id: 'builtin-mycastle-code',
+        name: 'MyCastle Source',
+        mountPoint: '/mycastle-code',
+        providerType: 'mycastle-code',
+        config: {},
+      });
+    }
+    return presets;
+  }, [currentUser, isAdmin]);
 
   const projectDeps = useMemo(
     () => currentUser ? { baseUrl: '', authToken: token ?? undefined, userName: currentUser.name } : undefined,

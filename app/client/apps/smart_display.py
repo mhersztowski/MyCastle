@@ -177,6 +177,9 @@ def _tts_to_wav(text: str) -> str | None:
 class SmartDisplay:
     """Pygame smart display that also implements the smart-display extension protocol."""
 
+    # Used by ClientAgent to build the MQTT topic and to announce the extension.
+    extension_type = "smart-display"
+
     def __init__(self):
         self._lock = threading.Lock()
 

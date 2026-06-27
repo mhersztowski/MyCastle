@@ -141,6 +141,13 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.scriptsService = new ScriptsService(path.resolve(rootDir));
     }
 
+    // Mount MyCastle source tree at /mycastle-code (read by ReadOnlyFS wrapper in the editor).
+    // Backend exposes it RW; the wrapper enforces read-only on the client. Override via MYCASTLE_CODE_DIR.
+    const mycastleCodeDir = process.env.MYCASTLE_CODE_DIR ?? '/home/mhersztowski/myprojects/claude/MyCastle';
+    if (fs.existsSync(mycastleCodeDir)) {
+      this.vfs.mount('/mycastle-code', new NodeFS({ rootDir: path.resolve(mycastleCodeDir) }));
+    }
+
     // Auto-mount device VFS extensions into the CompositeFS at /devices/{deviceId}
     if (this.iotService) {
       this.iotService.extensions.onVfsMounted = (deviceId, mqttFs) => {

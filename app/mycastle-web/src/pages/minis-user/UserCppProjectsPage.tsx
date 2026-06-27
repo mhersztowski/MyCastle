@@ -16,12 +16,21 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Add, Delete, Memory } from '@mui/icons-material';
+import { Add, Delete, Memory, GitHub, Refresh } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import { useAuth } from '../../modules/auth';
 import type { MinisProjectModel } from '@mhersztowski/core';
+import type { GithubProjectEntry, GithubModuleEntry } from '../../services/MinisApiService';
 import { CppWasmRuntime } from '@mhersztowski/web-cpp';
+
+const DEFAULT_REPO_URL = 'https://github.com/platform-minis/MinisProjects';
+const REPO_URL_KEY = 'minis_github_repo_url';
+
+// GitHub projects that belong in the C++ browser: native C++ or Arduino sketches
+// (anything that is not a uPython / Pygame / PicoSDK platform). Empty/null platform
+// is treated as Arduino, matching how local Arduino projects are listed below.
+const CPP_PLATFORMS = ['', 'Arduino', 'C++', 'cpp'];
 
 interface WasmTarget {
   projectName: string;
@@ -53,16 +62,23 @@ function UserCppProjectsPage() {
 
   const [wasmTarget, setWasmTarget] = useState<WasmTarget | null>(null);
 
+  // Add From Repo dialog state
+  const [repoDialogOpen, setRepoDialogOpen] = useState(false);
+  const [repoUrl, setRepoUrl] = useState(() => localStorage.getItem(REPO_URL_KEY) ?? DEFAULT_REPO_URL);
+  const [githubProjects, setGithubProjects] = useState<GithubProjectEntry[]>([]);
+  const [githubModules, setGithubModules] = useState<GithubModuleEntry[]>([]);
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const [selectedGithubProject, setSelectedGithubProject] = useState<GithubProjectEntry | null>(null);
+  const [repoProjectName, setRepoProjectName] = useState('');
+
   const load = useCallback(async () => {
     if (!userName) return;
     setLoading(true);
     try {
       const [arduinoProjects, cppProjects] = await Promise.all([
         minisApi.getUserProjects(userName).then(ps =>
-          ps.filter(p => {
-            const plat = p.softwarePlatform ?? '';
-            return plat === '' || plat === 'Arduino';
-          })
+          ps.filter(p => CPP_PLATFORMS.includes(p.softwarePlatform ?? ''))
         ),
         minisApi.listCppProjects(userName),
       ]);
@@ -87,6 +103,55 @@ function UserCppProjectsPage() {
       await minisApi.createCppProject(userName, newName.trim());
       setAddDialogOpen(false);
       setNewName('');
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project');
+    }
+  };
+
+  const handleFetchGithub = async () => {
+    setGithubLoading(true);
+    setGithubError(null);
+    setSelectedGithubProject(null);
+    localStorage.setItem(REPO_URL_KEY, repoUrl);
+    try {
+      const data = await minisApi.getGithubProjectdefs(repoUrl);
+      setGithubProjects(data.projects.filter(p => CPP_PLATFORMS.includes(p.softwarePlatform ?? '')));
+      setGithubModules(data.modules);
+    } catch (err) {
+      setGithubError(err instanceof Error ? err.message : 'Failed to fetch');
+    } finally {
+      setGithubLoading(false);
+    }
+  };
+
+  const handleAddFromRepo = async () => {
+    if (!userName || !selectedGithubProject || !repoProjectName.trim()) return;
+    try {
+      const moduleId = selectedGithubProject.moduleId ?? undefined;
+      const boardProfileKey = moduleId
+        ? githubModules.find(m => m.id === moduleId)?.boardProfileKey
+        : undefined;
+      const created = await minisApi.createUserProject(userName, {
+        name: repoProjectName.trim(),
+        githubProjectId: selectedGithubProject.id,
+        githubRepoUrl: repoUrl,
+        // Empty platform from the repo defdef is treated as Arduino so the project
+        // lands in this C++ browser (see CPP_PLATFORMS / load filter).
+        softwarePlatform: selectedGithubProject.softwarePlatform || 'Arduino',
+        moduleId,
+        boardProfileKey,
+      });
+      const sketches = selectedGithubProject.sketches ?? [];
+      const readmePath = selectedGithubProject.readmePath ?? null;
+      const libraries = selectedGithubProject.libraries?.length ? selectedGithubProject.libraries : undefined;
+      if (sketches.length > 0 || readmePath || libraries || selectedGithubProject.projectScriptPath) {
+        await minisApi.cloneProjectFromGithub(userName, created.name, repoUrl, sketches, readmePath, libraries, selectedGithubProject.projectScriptPath ?? undefined);
+      }
+      setRepoDialogOpen(false);
+      setSelectedGithubProject(null);
+      setRepoProjectName('');
+      setGithubProjects([]);
       void load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');
@@ -142,13 +207,22 @@ function UserCppProjectsPage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4">C++ Browser</Typography>
-        <Button
-          variant="contained"
-          startIcon={<Add />}
-          onClick={() => { setNewName(''); setAddDialogOpen(true); }}
-        >
-          New C++ Project
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<Add />}
+            onClick={() => { setNewName(''); setAddDialogOpen(true); }}
+          >
+            New C++ Project
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<GitHub />}
+            onClick={() => setRepoDialogOpen(true)}
+          >
+            Add From Repo
+          </Button>
+        </Box>
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -229,6 +303,66 @@ function UserCppProjectsPage() {
         <DialogActions>
           <Button onClick={() => setAddDialogOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={() => void handleAdd()} disabled={!newName.trim()}>
+            Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add From Repo dialog */}
+      <Dialog
+        open={repoDialogOpen}
+        onClose={() => { setRepoDialogOpen(false); setGithubProjects([]); setSelectedGithubProject(null); }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Create C++ Project from Repo</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', gap: 1, mt: 1, mb: 2 }}>
+            <TextField
+              fullWidth label="GitHub Repo URL" size="small" value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+            />
+            <Button
+              variant="outlined" size="small"
+              startIcon={githubLoading ? <CircularProgress size={14} /> : <Refresh />}
+              onClick={() => void handleFetchGithub()}
+              disabled={githubLoading || !repoUrl}
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              Load
+            </Button>
+          </Box>
+          {githubError && <Alert severity="error" sx={{ mb: 2 }}>{githubError}</Alert>}
+          {githubProjects.length > 0 && (
+            <TextField
+              fullWidth select label="GitHub Project" value={selectedGithubProject?.id ?? ''}
+              onChange={(e) => {
+                const p = githubProjects.find((x) => x.id === e.target.value) ?? null;
+                setSelectedGithubProject(p);
+                if (p) setRepoProjectName(p.name);
+              }}
+              sx={{ mb: 2 }}
+              InputLabelProps={{ shrink: true }}
+              SelectProps={{ native: true }}
+            >
+              <option value=""></option>
+              {githubProjects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} {p.moduleId ? `(${p.moduleId})` : ''}</option>
+              ))}
+            </TextField>
+          )}
+          <TextField
+            fullWidth label="Project Name" value={repoProjectName}
+            onChange={(e) => setRepoProjectName(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setRepoDialogOpen(false); setGithubProjects([]); setSelectedGithubProject(null); }}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => void handleAddFromRepo()}
+            disabled={!selectedGithubProject || !repoProjectName.trim()}
+          >
             Create
           </Button>
         </DialogActions>

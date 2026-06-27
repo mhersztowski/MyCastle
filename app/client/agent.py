@@ -72,12 +72,21 @@ class ClientAgent:
             ),
         )
 
+        # Display contract is generic — any object with an `extension_type`
+        # attribute is wired onto `ext/{type}/req` ⇄ `ext/{type}/res`.
+        # Legacy displays without the attribute keep the original smart-display routing.
         if display is not None:
+            ext_type = getattr(display, "extension_type", "smart-display")
+            self._display_req_topic = f"{config.TOPIC_PREFIX}/ext/{ext_type}/req"
+            self._display_res_topic = f"{config.TOPIC_PREFIX}/ext/{ext_type}/res"
             display.set_publish_fn(
                 lambda payload: self.client.publish(
-                    config.TOPICS["EXT_SMART_DISPLAY_RES"], payload, qos=1
+                    self._display_res_topic, payload, qos=1
                 )
             )
+        else:
+            self._display_req_topic = None
+            self._display_res_topic = None
         self.smart_display_ext = display
 
     # --- Entity registration ---
@@ -125,8 +134,8 @@ class ClientAgent:
             client.subscribe(config.TOPICS["EXT_VFS_REQ"], qos=1)
             client.subscribe(config.TOPICS["EXT_VKBD_REQ"], qos=1)
             client.subscribe(config.TOPICS["EXT_VMOUSE_REQ"], qos=1)
-            if self.smart_display_ext is not None:
-                client.subscribe(config.TOPICS["EXT_SMART_DISPLAY_REQ"], qos=1)
+            if self.smart_display_ext is not None and self._display_req_topic:
+                client.subscribe(self._display_req_topic, qos=1)
             log.info(f"Subscribed | prefix={config.TOPIC_PREFIX} | vfs root={config.DATA_DIR}")
             self._send_hello()
             self._presence.send_hello(client)
@@ -159,7 +168,7 @@ class ClientAgent:
             self.vkbd.handle_request(data)
         elif topic == config.TOPICS["EXT_VMOUSE_REQ"]:
             self.vmouse.handle_request(data)
-        elif topic == config.TOPICS["EXT_SMART_DISPLAY_REQ"]:
+        elif self._display_req_topic and topic == self._display_req_topic:
             if self.smart_display_ext is not None:
                 self.smart_display_ext.handle_request(data)
 
@@ -208,7 +217,8 @@ class ClientAgent:
         uptime = int(time.time() - self._start_time)
         extensions = list(config.EXTENSIONS)
         if self.smart_display_ext is not None:
-            extensions.append({"type": "smart-display", "enabled": True})
+            ext_type = getattr(self.smart_display_ext, "extension_type", "smart-display")
+            extensions.append({"type": ext_type, "enabled": True})
         packet: dict = {"uptime": uptime, "extensions": extensions}
         if self._entities:
             packet["entities"] = [e.to_dict() for e in self._entities.values()]
@@ -408,6 +418,9 @@ def main():
     if app_mode == "app:smart-display":
         from apps.smart_display import SmartDisplay
         display = SmartDisplay()
+    elif app_mode == "app:watchtower":
+        from apps.watchtower import Watchtower
+        display = Watchtower()
 
     agent = ClientAgent(display=display)
     _setup_example_entities(agent)

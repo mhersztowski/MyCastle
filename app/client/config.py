@@ -26,12 +26,14 @@ TOPICS = {
     "EXT_VKBD_RES":            f"{TOPIC_PREFIX}/ext/vkbd/res",
     "EXT_VMOUSE_RES":          f"{TOPIC_PREFIX}/ext/vmouse/res",
     "EXT_SMART_DISPLAY_RES":   f"{TOPIC_PREFIX}/ext/smart-display/res",
+    "EXT_VDD_RES":             f"{TOPIC_PREFIX}/ext/virtual-desktop-display/res",
     # server → device
     "COMMAND":                 f"{TOPIC_PREFIX}/command",
     "EXT_VFS_REQ":             f"{TOPIC_PREFIX}/ext/vfs/req",
     "EXT_VKBD_REQ":            f"{TOPIC_PREFIX}/ext/vkbd/req",
     "EXT_VMOUSE_REQ":          f"{TOPIC_PREFIX}/ext/vmouse/req",
     "EXT_SMART_DISPLAY_REQ":   f"{TOPIC_PREFIX}/ext/smart-display/req",
+    "EXT_VDD_REQ":             f"{TOPIC_PREFIX}/ext/virtual-desktop-display/req",
 }
 
 # --- Extensions advertised in hello ---
