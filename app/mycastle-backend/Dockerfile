@@ -34,6 +34,7 @@ COPY packages/core-cad/package.json packages/core-cad/
 COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
 COPY packages/devtools/package.json packages/devtools/
 COPY packages/minislib/package.json packages/minislib/
+COPY packages/server-logic/package.json packages/server-logic/
 COPY packages/minisc/package.json packages/minisc/
 COPY packages/web-cpp/package.json packages/web-cpp/
 COPY app/mycastle-backend/package.json app/mycastle-backend/
@@ -51,6 +52,8 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # Now copy source files and build
 COPY packages/core/ packages/core/
 COPY packages/core-backend/ packages/core-backend/
+COPY packages/minislib/ packages/minislib/
+COPY packages/server-logic/ packages/server-logic/
 COPY packages/devtools/ packages/devtools/
 COPY packages/minisc/ packages/minisc/
 COPY packages/texteditor/ packages/texteditor/
@@ -61,6 +64,8 @@ COPY app/mycastle-web/ app/mycastle-web/
 COPY docs/ docs/
 RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
+RUN pnpm --filter @mhersztowski/minislib build --silent
+RUN pnpm --filter @mhersztowski/server-logic build --silent
 RUN pnpm --filter @mhersztowski/devtools build --silent
 RUN pnpm --filter @mhersztowski/minisc build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
