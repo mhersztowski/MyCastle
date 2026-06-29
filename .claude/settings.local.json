@@ -71,7 +71,19 @@
       "Bash(mkdir -p data/Minis/Users/pawel/data)",
       "Bash(mkdir -p data/public)",
       "mcp__chrome-devtools__take_screenshot",
-      "Bash(ps -eo pid,ppid,stat,etime,command)"
+      "Bash(ps -eo pid,ppid,stat,etime,command)",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('index.json'\\)\\);print\\(list\\(d.keys\\(\\)\\)\\);print\\('projects:',len\\(d.get\\('projects',[]\\)\\),'modules:',len\\(d.get\\('modules',[]\\)\\),'libraries:',len\\(d.get\\('libraries',[]\\)\\)\\)\")",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('index.json'\\)\\);[print\\(json.dumps\\(p,indent=1,ensure_ascii=False\\)\\) for p in d['projects'] if p.get\\('id'\\)=='Esp32S3ZeroTest']\")",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('index.json'\\)\\);ps=[p for p in d['projects'] if p.get\\('libraries'\\)]; print\\(json.dumps\\(ps[0],indent=1,ensure_ascii=False\\)\\) if ps else print\\('none with libraries'\\)\")",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('index.json'\\)\\);libs=d.get\\('libraries',[]\\);print\\(json.dumps\\(libs[:2],indent=1,ensure_ascii=False\\)\\) if libs else print\\('no libraries key'\\)\")",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('index.json'\\)\\);[print\\(json.dumps\\(m,indent=1,ensure_ascii=False\\)\\) for m in d.get\\('modules',[]\\) if 'zero' in m.get\\('id',''\\).lower\\(\\)]\")",
+      "Bash(cp /home/mhersztowski/myprojects/claude/MinisProjects/libs/MinisLib/src/MinisGfx.h /home/mhersztowski/myprojects/claude/MinisProjects/src/Esp32S3ZeroGfxDemo/src/GfxDemo/MinisGfx.h)",
+      "Bash(cp /home/mhersztowski/myprojects/claude/MinisProjects/libs/MinisLib/src/MinisGfx.cpp /home/mhersztowski/myprojects/claude/MinisProjects/src/Esp32S3ZeroGfxDemo/src/GfxDemo/MinisGfx.cpp)",
+      "Bash(mkdir -p /home/mhersztowski/myprojects/claude/MinisProjects/src/Esp32S3ZeroGfxDemo/docs)",
+      "Bash(python3 -c ' *)",
+      "Bash(mkdir -p /tmp/qtpreview)",
+      "Bash(cp /home/mhersztowski/myprojects/claude/MinisProjects/libs/Qt/src/MinisQt.h /tmp/qtpreview/MinisQt.h)",
+      "Bash(npx tsx *)"
     ]
   }
 }

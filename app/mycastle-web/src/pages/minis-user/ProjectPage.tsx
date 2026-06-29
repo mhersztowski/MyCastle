@@ -26,6 +26,8 @@ import {
   MenuItem,
   Select,
   Snackbar,
+  Tab,
+  Tabs,
   TextField,
   Toolbar,
   Tooltip,
@@ -60,7 +62,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '@modules/editor/monacoWorkers';
-import { EditorInstance } from '@mhersztowski/web-client';
+import { EditorInstance, VfsExplorer } from '@mhersztowski/web-client';
 import { ArduBlocklyComponent, type ArduBlocklyService, boardProfiles } from '@modules/ardublockly2';
 import { WebSerialTerminal, FlashDialog, type FlashFileEntry } from '@modules/serial';
 import { minisApi } from '../../services/MinisApiService';
@@ -68,7 +70,11 @@ import { useAuth } from '../../modules/auth';
 import { AccountMenu } from '../../components/AccountMenu';
 import { BuildOutputPanel } from '../../components/BuildOutputPanel';
 import { ArduinoWasmRuntime } from '../../components/ArduinoWasmRuntime';
+import { RemoteFS } from '@mhersztowski/core';
 import type { MinisDeviceModel, MinisProjectLibrary } from '@mhersztowski/core';
+import { ProjectAssetFs } from '@modules/qtui/ProjectAssetFs';
+import { QtUiSceneEditor } from '@modules/qtui/QtUiSceneEditor';
+import { QTUI_EXT, defaultScene, serializeScene } from '@modules/qtui/QtUiTypes';
 
 type ViewMode = 'blockly' | 'split' | 'code';
 
@@ -434,6 +440,27 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
     return (projectId ? localStorage.getItem(`arduino_device_${projectId}`) : null) ?? '';
   });
   const initialSketch = searchParams.get('sketch');
+  // Device-side VFS: which extensions the selected device exposes, and a
+  // RemoteFS bound to its on-device filesystem (tunnelled to the device over
+  // MQTT by the backend). Mirrors the IoT device page wiring.
+  const [deviceExtensions, setDeviceExtensions] = useState<Array<{ type: string }>>([]);
+  const deviceHasVfs = deviceExtensions.some((e) => e.type === 'vfs');
+  const deviceVfs = React.useMemo(() => {
+    if (!userName || !selectedDeviceName || !deviceHasVfs) return null;
+    return new RemoteFS({
+      baseUrl: `/api/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(selectedDeviceName)}/vfs`,
+      token: token ?? undefined,
+    });
+  }, [userName, selectedDeviceName, deviceHasVfs, token]);
+  // Application data package ("Filesystem" tab): an in-project VFS where the
+  // user builds *.qtui.json UI scenes (and other text assets) to bundle later.
+  const assetFs = React.useMemo(
+    () => (userName && projectId ? new ProjectAssetFs(userName, projectId) : null),
+    [userName, projectId],
+  );
+  const [bottomTab, setBottomTab] = useState<'fs' | 'device'>('fs');
+  const [editorPath, setEditorPath] = useState<string | null>(null);
+  const assetRefreshRef = useRef<(() => void) | null>(null);
   const [libraries, setLibraries] = useState<MinisProjectLibrary[]>([]);
   const [useMinisC, setUseMinisC] = useState(false);
   const [libInput, setLibInput] = useState('');
@@ -582,7 +609,9 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
   useEffect(() => {
     if (!userName || !projectId) return;
     minisApi.listSketches(userName, projectId)
-      .then((list) => {
+      .then((all) => {
+        // Hide reserved sketches (app data package, generated scene preview).
+        const list = all.filter((n) => !n.startsWith('__'));
         setSketches(list);
         if (list.length > 0) {
           const target = initialSketch && list.includes(initialSketch) ? initialSketch : list[0];
@@ -613,6 +642,39 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
       localStorage.removeItem(`arduino_device_${projectId}`);
     }
   }, [projectId, selectedDeviceName]);
+
+  // Discover the selected device's extensions (to know if it exposes a VFS).
+  useEffect(() => {
+    if (!userName || !selectedDeviceName) { setDeviceExtensions([]); return; }
+    let cancelled = false;
+    minisApi.getIotExtensions(userName, selectedDeviceName)
+      .then((exts) => { if (!cancelled) setDeviceExtensions(exts); })
+      .catch(() => { if (!cancelled) setDeviceExtensions([]); });
+    return () => { cancelled = true; };
+  }, [userName, selectedDeviceName]);
+
+  // ── Application data package (Filesystem tab) ──────────────────────────────
+  // Open a *.qtui.json asset in the dedicated scene editor; ignore other files.
+  const handleAssetOpen = useCallback((path: string) => {
+    if (path.endsWith(QTUI_EXT)) setEditorPath(path);
+  }, []);
+
+  // Create a new UI scene file (seeded with a starter scene) and open it.
+  const handleNewScene = useCallback(async () => {
+    if (!assetFs) return;
+    const raw = window.prompt('New UI scene file name', `scene${QTUI_EXT}`);
+    if (!raw) return;
+    let name = raw.trim();
+    if (!name.endsWith(QTUI_EXT)) name = `${name.replace(/\.json$/, '')}${QTUI_EXT}`;
+    const path = '/' + name.replace(/^\/+/, '');
+    try {
+      await assetFs.writeFile(path, new TextEncoder().encode(serializeScene(defaultScene())));
+      assetRefreshRef.current?.();
+      setEditorPath(path);
+    } catch (err) {
+      console.error('Create scene failed:', err);
+    }
+  }, [assetFs]);
 
   // Restore compileSuccess from device's lastBuild when sketch is loaded
   useEffect(() => {
@@ -1060,7 +1122,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
                   try {
                     await minisApi.syncProjectFromGithub(userName, projectId);
                     const list = await minisApi.listSketches(userName, projectId);
-                    setSketches(list);
+                    setSketches(list.filter((n) => !n.startsWith('__')));
                   } catch (err) {
                     console.error('Sync failed:', err);
                   } finally {
@@ -1333,7 +1395,7 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
         {sketchesOpen && (
           <Box
             sx={{
-              width: { xs: '100%', sm: 220 }, maxWidth: { xs: 280, sm: 'none' },
+              width: { xs: '100%', sm: 300 }, maxWidth: { xs: 320, sm: 'none' },
               flexShrink: 0,
               position: { xs: 'absolute', sm: 'relative' },
               zIndex: { xs: 10, sm: 'auto' },
@@ -1343,6 +1405,8 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
               bgcolor: 'background.paper',
             }}
           >
+            {/* ── Sketches (project sources) ─────────────────────────────── */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 45%' }}>
             <Typography variant="subtitle2" sx={{ p: 2, pb: 1 }}>Sketches</Typography>
             <Box sx={{ px: 1, pb: 1, display: 'flex', gap: 0.5 }}>
               <TextField
@@ -1440,6 +1504,75 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
                 </Typography>
               )}
             </List>
+            </Box>
+
+            {/* ── Filesystem (app data package) + Device VFS, tabbed ──────── */}
+            <Divider />
+            <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 55%' }}>
+              <Tabs
+                value={bottomTab}
+                onChange={(_, v) => setBottomTab(v as 'fs' | 'device')}
+                variant="fullWidth"
+                sx={{ minHeight: 34, '& .MuiTab-root': { minHeight: 34, py: 0, fontSize: 12, textTransform: 'none' } }}
+              >
+                <Tab value="fs" label="Filesystem" />
+                <Tab value="device" label="Device VFS" />
+              </Tabs>
+
+              {/* Filesystem tab — application data package with *.qtui.json scenes */}
+              {bottomTab === 'fs' && (
+                <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, gap: 0.5 }}>
+                    <Memory fontSize="small" sx={{ color: 'text.secondary' }} />
+                    <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
+                      App data package
+                    </Typography>
+                    <Tooltip title="New UI scene (.qtui.json)">
+                      <span>
+                        <IconButton size="small" onClick={() => void handleNewScene()} disabled={!assetFs} sx={{ p: 0.25 }}>
+                          <Add fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </Box>
+                  <Box sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>
+                    {assetFs && (
+                      <VfsExplorer
+                        provider={assetFs}
+                        rootPath="/"
+                        height="100%"
+                        onFileOpen={handleAssetOpen}
+                        refreshRef={assetRefreshRef}
+                      />
+                    )}
+                  </Box>
+                </Box>
+              )}
+
+              {/* Device VFS tab — microcontroller filesystem over MQTT */}
+              {bottomTab === 'device' && (
+                <Box sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>
+                  {!selectedDeviceName ? (
+                    <Typography variant="caption" color="text.secondary" sx={{ p: 2, display: 'block' }}>
+                      Select a device in the Config panel to browse its filesystem.
+                    </Typography>
+                  ) : deviceVfs ? (
+                    <VfsExplorer
+                      key={`${selectedDeviceName}-${token ? 'authed' : 'anon'}`}
+                      provider={deviceVfs}
+                      rootPath="/"
+                      height="100%"
+                    />
+                  ) : (
+                    <Typography variant="caption" color="text.secondary" sx={{ p: 2, display: 'block' }}>
+                      {deviceExtensions.length === 0
+                        ? 'Device offline or no VFS extension yet.'
+                        : 'This device has no VFS extension.'}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+            </Box>
           </Box>
         )}
 
@@ -1580,6 +1713,19 @@ function ProjectPage({ mode = 'blockly' }: { mode?: 'blockly' | 'code' }) {
           userName={userName}
           projectName={projectId}
           sketchName={currentSketch}
+        />
+      )}
+
+      {/* UI scene editor (*.qtui.json) with faithful WASM preview */}
+      {editorPath && assetFs && userName && projectId && (
+        <QtUiSceneEditor
+          open={!!editorPath}
+          onClose={() => setEditorPath(null)}
+          fs={assetFs}
+          path={editorPath}
+          userName={userName}
+          projectId={projectId}
+          onSaved={() => assetRefreshRef.current?.()}
         />
       )}
 

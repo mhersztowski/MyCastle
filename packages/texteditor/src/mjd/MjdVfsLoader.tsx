@@ -54,6 +54,11 @@ type LoadState =
 export function MjdVfsLoader({ provider, mjdPath, dataPath, height }: MjdVfsLoaderProps) {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Data editor uses an explicit Save button rather than save-on-every-keystroke:
+  // edits buffer the next payload here and flip `dataDirty` until the user saves.
+  const pendingDataRef = useRef<unknown>(undefined);
+  const [dataDirty, setDataDirty] = useState(false);
+  const [savingData, setSavingData] = useState(false);
   // Tracks whether the sibling .data.json already exists. Drives the
   // disabled state of the "Create data file" button + the toast after a
   // generation. Recomputed on every mount and refreshed after writeFile.
@@ -193,8 +198,26 @@ export function MjdVfsLoader({ provider, mjdPath, dataPath, height }: MjdVfsLoad
       }
       return { ...prev, data };
     });
-    if (dataPath) saveToVfs(dataPath, payload);
-  }, [dataPath, mjdPath, saveToVfs]);
+    // Buffer instead of auto-saving; the Save button flushes it.
+    pendingDataRef.current = payload;
+    setDataDirty(true);
+  }, [mjdPath]);
+
+  // Flush the buffered data document to the VFS (explicit Save).
+  const handleSaveData = useCallback(async () => {
+    if (!dataPath || !provider.writeFile || pendingDataRef.current === undefined) return;
+    setSavingData(true);
+    try {
+      const json = JSON.stringify(pendingDataRef.current, null, 2);
+      await provider.writeFile(dataPath, encodeText(json), { create: true, overwrite: true });
+      setDataDirty(false);
+      setToast({ severity: 'success', message: 'Saved' });
+    } catch (e) {
+      setToast({ severity: 'error', message: e instanceof Error ? e.message : 'Save failed' });
+    } finally {
+      setSavingData(false);
+    }
+  }, [dataPath, provider]);
 
   // Dialog state for "Utwórz plik danych". null = dialog closed. The path
   // field is pre-filled with the sibling location but the user is free to
@@ -310,11 +333,27 @@ export function MjdVfsLoader({ provider, mjdPath, dataPath, height }: MjdVfsLoad
     // When no explicit height is given we stretch to 100% of the parent.
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', ...(height ? { height } : { flex: 1, minHeight: 0 }) }}>
-        <MjdDataEditor
-          definition={state.definition}
-          value={state.data ?? {}}
-          onChange={handleDataChange}
-        />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
+          <Typography variant="caption" sx={{ flexGrow: 1, color: dataDirty ? 'warning.main' : 'text.secondary' }}>
+            {dataDirty ? 'Unsaved changes' : 'All changes saved'}
+          </Typography>
+          <Button
+            size="small"
+            variant="contained"
+            onClick={() => void handleSaveData()}
+            disabled={!dataDirty || savingData}
+            startIcon={savingData ? <CircularProgress size={14} color="inherit" /> : undefined}
+          >
+            Save
+          </Button>
+        </Box>
+        <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <MjdDataEditor
+            definition={state.definition}
+            value={state.data ?? {}}
+            onChange={handleDataChange}
+          />
+        </Box>
       </Box>
     );
   }

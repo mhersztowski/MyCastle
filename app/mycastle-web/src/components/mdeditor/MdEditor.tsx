@@ -500,7 +500,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
     },
     onSelectionUpdate: ({ editor }) => {
       const { from, to } = editor.state.selection;
-      if (from !== to) {
+      if (editable && from !== to) {
         const vv = window.visualViewport;
         const liveKbOffset = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
         if (liveKbOffset > 100 && vv) {
@@ -1174,19 +1174,21 @@ const MdEditor: React.FC<MdEditorProps> = ({
     <>
     <AutomateDocumentProvider documentPath={filePath}>
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      {/* Collapsible toolbar for mobile */}
-      <Collapse in={toolbarVisible} timeout={200}>
-        <MdEditorToolbar
-          editor={editor}
-          onSave={handleSave}
-          saveDisabled={saveStatus === 'saved'}
-          onInsertInfoMark={openInsertInfoMarkDialog}
-          spellLanguage={spellLanguage}
-          spellEnabled={spellEnabled}
-          onSpellLanguageChange={setSpellLanguage}
-          onSpellEnabledChange={setSpellEnabled}
-        />
-      </Collapse>
+      {/* Editing toolbar — hidden in read-only (viewer) mode */}
+      {editable && (
+        <Collapse in={toolbarVisible} timeout={200}>
+          <MdEditorToolbar
+            editor={editor}
+            onSave={handleSave}
+            saveDisabled={saveStatus === 'saved'}
+            onInsertInfoMark={openInsertInfoMarkDialog}
+            spellLanguage={spellLanguage}
+            spellEnabled={spellEnabled}
+            onSpellLanguageChange={setSpellLanguage}
+            onSpellEnabledChange={setSpellEnabled}
+          />
+        </Collapse>
+      )}
 
       {/* FAB to show toolbar when hidden on mobile */}
       {isMobile && !toolbarVisible && (

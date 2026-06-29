@@ -90,15 +90,25 @@ export class ArduinoWasmBuilder {
     const containerBuildDir  = this.toContainer(buildDir);
     const containerOutputDir = this.toContainer(outputDir);
 
+    // Include project-local libraries (e.g. a header-only Qt-clone UI lib) so
+    // sketches can `#include` them. The WASM path does not run arduino-cli's
+    // library installer, so we surface whatever is already present under the
+    // project's `libraries/` dir: each lib's `src/` (and root) is added to the
+    // include path and any C/C++ sources found are compiled in.
+    const { includeArgs: libIncludeArgs, sourceArgs: libSourceArgs } =
+      await this.collectProjectLibraries(path.join(projectDir, 'libraries'));
+
     const sourceArgs = cppFiles.map(f => `${containerBuildDir}/${f}`);
     const emccArgs = [
       ...sourceArgs,
+      ...libSourceArgs,
       '/arduino-mock/Arduino.cpp',
       '-I', '/arduino-mock',
       '-I', containerBuildDir,
+      ...libIncludeArgs,
       '-std=c++17',
       '-s', 'ASYNCIFY=1',
-      '-s', "EXPORTED_FUNCTIONS=['_setup','_loop','_arduino_serial_push','_arduino_serial_available']",
+      '-s', "EXPORTED_FUNCTIONS=['_setup','_loop','_arduino_serial_push','_arduino_serial_available','_minis_canvas_push_event','_malloc','_free']",
       '-s', "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8']",
       '-s', 'MODULARIZE=1',
       '-s', 'EXPORT_NAME=createArduinoModule',
@@ -137,6 +147,72 @@ export class ArduinoWasmBuilder {
         resolve({ success: false, output: out, exitCode: 1 });
       });
     });
+  }
+
+  /**
+   * Scan a project's `libraries/` dir and return emcc include flags + source
+   * files for every Arduino library found. Arduino libraries keep their public
+   * headers either in `src/` (modern layout) or at the library root (legacy);
+   * we add whichever exists to the include path and compile all C/C++ sources
+   * beneath it. Missing dir → empty result (the common case).
+   */
+  private async collectProjectLibraries(
+    librariesDir: string,
+  ): Promise<{ includeArgs: string[]; sourceArgs: string[] }> {
+    const includeArgs: string[] = [];
+    const sourceArgs: string[] = [];
+
+    let libDirs: string[];
+    try {
+      const entries = await fs.readdir(librariesDir, { withFileTypes: true });
+      libDirs = entries.filter(e => e.isDirectory()).map(e => path.join(librariesDir, e.name));
+    } catch {
+      return { includeArgs, sourceArgs }; // no libraries/ dir
+    }
+
+    for (const libRoot of libDirs) {
+      const srcDir = path.join(libRoot, 'src');
+      const hasSrc = await this.dirExists(srcDir);
+      const codeRoot = hasSrc ? srcDir : libRoot;
+
+      includeArgs.push('-I', this.toContainer(codeRoot));
+
+      for (const file of await this.walkSources(codeRoot)) {
+        sourceArgs.push(this.toContainer(file));
+      }
+    }
+
+    return { includeArgs, sourceArgs };
+  }
+
+  private async dirExists(dir: string): Promise<boolean> {
+    try {
+      const st = await fs.stat(dir);
+      return st.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  /** Recursively collect .c/.cc/.cpp files under a directory (skips examples/). */
+  private async walkSources(dir: string): Promise<string[]> {
+    const out: string[] = [];
+    let entries: import('fs').Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return out;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === 'examples' || e.name === '.git') continue;
+        out.push(...await this.walkSources(full));
+      } else if (/\.(cpp|cc|c)$/i.test(e.name)) {
+        out.push(full);
+      }
+    }
+    return out;
   }
 
   private async cleanDir(dir: string): Promise<void> {

@@ -62,6 +62,7 @@ import WorkspaceMdPage from './pages/workspace/WorkspaceMdPage';
 import SimpleEditorPage from './pages/editor/SimpleEditorPage';
 import MdEditorPage from './pages/editor/MdEditorPage';
 import MdViewerPage from './pages/viewer/MdViewerPage';
+import RichMdViewerPage from './pages/viewer/RichMdViewerPage';
 import SharedMdViewerPage from './pages/viewer/SharedMdViewerPage';
 import UIDesignerPage from './pages/designer/UIDesignerPage';
 import FormEngineDesignerPage from './pages/designer/FormEngineDesignerPage';
@@ -172,6 +173,7 @@ function AppRoot() {
         <Route path="/editor/simple/*" element={<RequireAuth><MinimalTopBar><SimpleEditorPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdEditorPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/viewer/md/u/:userName/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><SharedMdViewerPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        <Route path="/viewer/md-rich/u/:userName/*" element={<MinimalTopBar><EditorErrorBoundary><RichMdViewerPage /></EditorErrorBoundary></MinimalTopBar>} />
         <Route path="/viewer/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdViewerPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/ui/:id?" element={<RequireAuth><MinimalTopBar><UIDesignerPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/designer/automate/:id?" element={<RequireAuth><MinimalTopBar><AutomateDesignerPage /></MinimalTopBar></RequireAuth>} />

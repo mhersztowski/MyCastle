@@ -16,9 +16,11 @@ import {
 } from '@mui/material';
 import TableRowsIcon from '@mui/icons-material/TableRows';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ExtensionIcon from '@mui/icons-material/Extension';
 import type { MjdDocument, MjdFieldDef, MjdFieldType } from '@mhersztowski/core';
 import { getFieldsForView } from '@mhersztowski/core';
 import { MjdVisualEditor } from './MjdVisualEditor';
+import { MjdBlocklyEditor } from './MjdBlocklyEditor';
 
 export interface MjdDataEditorProps {
   definition: MjdDocument;
@@ -243,7 +245,7 @@ function getDefaultForType(type: MjdFieldType): unknown {
 // --- Main Component ---
 
 export function MjdDataEditor({ definition, value, onChange }: MjdDataEditorProps) {
-  const [mode, setMode] = useState<'form' | 'visual'>('form');
+  const [mode, setMode] = useState<'form' | 'visual' | 'blockly'>('form');
   const [selectedView, setSelectedView] = useState<string>(definition.views[0]?.name ?? '');
 
   const visibleFields = useMemo(() => {
@@ -269,11 +271,17 @@ export function MjdDataEditor({ definition, value, onChange }: MjdDataEditorProp
             <AccountTreeIcon sx={{ fontSize: 15 }} />
             <Typography sx={{ fontSize: 11 }}>Visual</Typography>
           </ToggleButton>
+          <ToggleButton value="blockly" sx={{ gap: 0.5, px: 1.5 }}>
+            <ExtensionIcon sx={{ fontSize: 15 }} />
+            <Typography sx={{ fontSize: 11 }}>Blockly</Typography>
+          </ToggleButton>
         </ToggleButtonGroup>
       </Box>
 
       {mode === 'visual' ? (
         <MjdVisualEditor value={value} onChange={onChange} height="100%" />
+      ) : mode === 'blockly' ? (
+        <MjdBlocklyEditor value={value} onChange={onChange} />
       ) : (
         <Box sx={{ p: 2, overflow: 'auto', flex: 1 }}>
           {/* View selector */}

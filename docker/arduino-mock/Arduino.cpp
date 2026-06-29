@@ -59,6 +59,43 @@ int arduino_serial_available() {
 
 } // extern "C"
 
+// ── Display / canvas bridge ───────────────────────────────────────────────────
+// Blit an RGBA8888 framebuffer to the browser <canvas>. The byte order in WASM
+// (little-endian) for a uint32 packed as (r | g<<8 | b<<16 | a<<24) is r,g,b,a —
+// exactly what ImageData expects, so the JS side can putImageData() directly.
+EM_JS(void, em_canvas_present, (const uint32_t* ptr, int w, int h), {
+  if (typeof Module.onCanvasPresent !== 'function') return;
+  var bytes = w * h * 4;
+  // Copy out of the WASM heap — the caller reuses its framebuffer next frame.
+  var data = HEAPU8.slice(ptr, ptr + bytes);
+  Module.onCanvasPresent(data, w, h);
+});
+
+struct MinisPointerEvent { int type; int x; int y; };
+static std::deque<MinisPointerEvent> g_canvas_events;
+
+extern "C" {
+
+void minis_canvas_present(const uint32_t* pixels, int width, int height) {
+  em_canvas_present(pixels, width, height);
+}
+
+void minis_canvas_push_event(int type, int x, int y) {
+  g_canvas_events.push_back({ type, x, y });
+}
+
+int minis_canvas_poll(int* type, int* x, int* y) {
+  if (g_canvas_events.empty()) return 0;
+  MinisPointerEvent e = g_canvas_events.front();
+  g_canvas_events.pop_front();
+  if (type) *type = e.type;
+  if (x)    *x = e.x;
+  if (y)    *y = e.y;
+  return 1;
+}
+
+} // extern "C"
+
 // ── Digital I/O ───────────────────────────────────────────────────────────────
 void pinMode(uint8_t pin, uint8_t mode) { em_pin_mode(pin, mode); }
 void digitalWrite(uint8_t pin, uint8_t val) { em_digital_write(pin, val); }

@@ -169,24 +169,34 @@ function UserCppProjectsPage() {
     }
   };
 
-  const openWasm = (entry: ProjectEntry) => {
+  const openWasm = async (entry: ProjectEntry) => {
     if (!userName) return;
-    if (entry.kind === 'arduino') {
-      const name = entry.project.name;
-      setWasmTarget({
-        projectName: name,
-        sketchName: name,
-        buildSseUrl: minisApi.getArduinoWasmBuildSseUrl(userName, name, name),
-        wasmJsUrl: minisApi.getArduinoWasmJsUrl(userName, name, name),
-      });
-    } else {
-      const name = entry.project.name;
-      setWasmTarget({
-        projectName: name,
-        sketchName: name,
-        buildSseUrl: minisApi.getCppWasmBuildSseUrl(userName, name, name),
-        wasmJsUrl: minisApi.getCppWasmJsUrl(userName, name, name),
-      });
+    const name = entry.project.name;
+    try {
+      if (entry.kind === 'arduino') {
+        // Cloned projects keep their original sketch name (e.g. "QtDemo"),
+        // which usually differs from the project name — resolve the real one
+        // so the WASM build can find sketches/{sketchName}.
+        const sketches = await minisApi.listSketches(userName, name);
+        const sketchName = sketches[0] ?? name;
+        setWasmTarget({
+          projectName: name,
+          sketchName,
+          buildSseUrl: minisApi.getArduinoWasmBuildSseUrl(userName, name, sketchName),
+          wasmJsUrl: minisApi.getArduinoWasmJsUrl(userName, name, sketchName),
+        });
+      } else {
+        const sketches = await minisApi.listCppSketches(userName, name);
+        const sketchName = sketches[0] ?? name;
+        setWasmTarget({
+          projectName: name,
+          sketchName,
+          buildSseUrl: minisApi.getCppWasmBuildSseUrl(userName, name, sketchName),
+          wasmJsUrl: minisApi.getCppWasmJsUrl(userName, name, sketchName),
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resolve project sketch');
     }
   };
 
@@ -252,7 +262,7 @@ function UserCppProjectsPage() {
 
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', px: 0.5, pb: 0.5, gap: 0.5 }}>
               <Tooltip title="Run in browser (WASM simulator)">
-                <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); openWasm(entry); }}>
+                <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); void openWasm(entry); }}>
                   <Memory fontSize="small" />
                 </IconButton>
               </Tooltip>

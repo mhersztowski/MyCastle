@@ -146,6 +146,21 @@ extern "C" {
   int  arduino_serial_available();
 }
 
+// ── Display / canvas bridge (WASM simulator) ──────────────────────────────────
+// A sketch (or the Qt-clone UI library) renders into an RGBA8888 framebuffer and
+// calls minis_canvas_present() to blit it onto the browser <canvas>. Pointer
+// input from that canvas is pushed by JS into a FIFO, drained via minis_canvas_poll().
+extern "C" {
+  // Present a width*height RGBA8888 framebuffer (row-major, R at lowest byte).
+  // Bridges to Module.onCanvasPresent(Uint8Array, width, height).
+  void minis_canvas_present(const uint32_t* pixels, int width, int height);
+  // Pop one pointer event. Returns 1 and fills out-params when available, else 0.
+  // type: 1 = press, 2 = move, 3 = release.
+  int  minis_canvas_poll(int* type, int* x, int* y);
+  // Exported to JS — enqueue a pointer event from the canvas.
+  void minis_canvas_push_event(int type, int x, int y);
+}
+
 // ── User sketch declarations (defined in .ino → .cpp) ────────────────────────
 // extern "C" so EXPORTED_FUNCTIONS=['_setup','_loop'] can find them without C++ mangling
 extern "C" void setup();

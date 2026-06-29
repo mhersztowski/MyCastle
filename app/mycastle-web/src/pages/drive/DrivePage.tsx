@@ -11,7 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
 import { useMqtt } from '../../modules/mqttclient';
 import { readUserJson, writeUserJson } from '../../services/userJson';
@@ -23,6 +23,7 @@ import {
   Switch, FormControlLabel,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
+import ArticleIcon from '@mui/icons-material/Article';
 import { useLayoutChrome } from '../../components/Layout';
 import { AccountMenu } from '../../components/AccountMenu';
 import { MdEditor } from '@/components/mdeditor';
@@ -742,6 +743,7 @@ export default function DrivePage(): React.JSX.Element {
   const { rawPublish, rawSubscribe } = useMqtt();
   const userName = params.userName || currentUser?.name || '';
   const { openNav } = useLayoutChrome();
+  const navigate = useNavigate();
   const [cwd, setCwd] = useState('');                       // relative under /drive/
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3119,6 +3121,17 @@ export default function DrivePage(): React.JSX.Element {
           <MenuItem onClick={() => { void viewFile(menuFor.entry); setMenuFor(null); }}>
             <ListItemIcon><VisibilityIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Podgląd</ListItemText>
+          </MenuItem>
+        )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && /\.(md|markdown)$/i.test(menuFor.entry.name) && (
+          <MenuItem onClick={() => {
+            const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
+            const relEnc = rel.split('/').map(encodeURIComponent).join('/');
+            navigate(`/viewer/md-rich/u/${encodeURIComponent(userName)}/${relEnc}`);
+            setMenuFor(null);
+          }}>
+            <ListItemIcon><ArticleIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Otwórz w Viewer</ListItemText>
           </MenuItem>
         )}
         {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (

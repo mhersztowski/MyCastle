@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   Alert,
   Box,
@@ -47,10 +48,14 @@ interface EmscriptenModule {
   ): unknown;
   _arduino_serial_push(ptr: number, len: number): void;
   _arduino_serial_available(): number;
+  _minis_canvas_push_event(type: number, x: number, y: number): void;
   _malloc(size: number): number;
   _free(ptr: number): void;
   HEAP8: Int8Array;
 }
+
+// Pointer event types shared with the WASM canvas FIFO (minis_canvas_push_event).
+const CANVAS_EVENT = { down: 1, move: 2, up: 3 } as const;
 
 export interface CppWasmRuntimeProps {
   open: boolean;
@@ -183,6 +188,45 @@ export function CppWasmRuntime({
 
   const startTimeRef = useRef(0);
 
+  // ── Display canvas ───────────────────────────────────────────────────────
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [hasDisplay, setHasDisplay] = useState(false);
+  // A frame may arrive before the canvas element is mounted (first present
+  // flips hasDisplay → the pane renders next tick); stash it and flush on mount.
+  const pendingFrameRef = useRef<{ data: Uint8Array; w: number; h: number } | null>(null);
+
+  const drawFrame = useCallback((data: Uint8Array, w: number, h: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) { pendingFrameRef.current = { data, w, h }; return; }
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    // Copy into a fresh ArrayBuffer-backed array — the WASM heap view may be
+    // SharedArrayBuffer-backed (ArrayBufferLike), which ImageData rejects.
+    if (ctx) ctx.putImageData(new ImageData(new Uint8ClampedArray(data), w, h), 0, 0);
+  }, []);
+
+  // Flush a frame that arrived before the canvas mounted.
+  useEffect(() => {
+    if (hasDisplay && pendingFrameRef.current) {
+      const { data, w, h } = pendingFrameRef.current;
+      pendingFrameRef.current = null;
+      drawFrame(data, w, h);
+    }
+  }, [hasDisplay, drawFrame]);
+
+  // Map a DOM pointer event to framebuffer coords and push it into the WASM FIFO.
+  const pushCanvasEvent = useCallback((type: number, e: ReactPointerEvent<HTMLCanvasElement>) => {
+    const mod = moduleRef.current;
+    const canvas = canvasRef.current;
+    if (!mod || !canvas || !mod._minis_canvas_push_event) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const x = Math.round((e.clientX - rect.left) / rect.width * canvas.width);
+    const y = Math.round((e.clientY - rect.top) / rect.height * canvas.height);
+    mod._minis_canvas_push_event(type, x, y);
+  }, []);
+
   // ── Serial output ────────────────────────────────────────────────────────
   const appendSerial = useCallback((text: string) => {
     serialBufferRef.current += text;
@@ -295,6 +339,12 @@ export function CppWasmRuntime({
 
         onAnalogRead: (pin: number): number =>
           pin < ANALOG_COUNT ? analogPinsRef.current[pin].analog : 0,
+
+        // Display framebuffer (RGBA8888) from minis_canvas_present().
+        onCanvasPresent: (bytes: Uint8Array, w: number, h: number) => {
+          setHasDisplay(true);
+          drawFrame(bytes, w, h);
+        },
       });
 
       return mod;
@@ -304,7 +354,7 @@ export function CppWasmRuntime({
     } finally {
       setLoading(false);
     }
-  }, [wasmJsUrl, token, appendSerial]);
+  }, [wasmJsUrl, token, appendSerial, drawFrame]);
 
   // ── Serial input → WASM ──────────────────────────────────────────────────
   const pushSerialInput = useCallback((text: string) => {
@@ -363,6 +413,9 @@ export function CppWasmRuntime({
     setSerialLines([]);
     serialBufferRef.current = '';
     setRuntimeError(null);
+    pendingFrameRef.current = null;
+    const canvas = canvasRef.current;
+    if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
 
   // ── Build WASM ───────────────────────────────────────────────────────────
@@ -543,6 +596,39 @@ export function CppWasmRuntime({
             />
           ))}
         </Box>
+
+        {/* Middle: Display canvas (shown once the sketch presents a frame) ─── */}
+        {hasDisplay && (
+          <Box sx={{
+            flexShrink: 0, borderRight: 1, borderColor: 'divider',
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            bgcolor: '#1a1a1a', p: 1.5, gap: 1,
+          }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1 }}>
+              DISPLAY
+            </Typography>
+            <canvas
+              ref={canvasRef}
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                pushCanvasEvent(CANVAS_EVENT.down, e);
+              }}
+              onPointerMove={(e) => pushCanvasEvent(CANVAS_EVENT.move, e)}
+              onPointerUp={(e) => {
+                pushCanvasEvent(CANVAS_EVENT.up, e);
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }}
+              style={{
+                imageRendering: 'pixelated',
+                maxWidth: 480,
+                maxHeight: '70vh',
+                border: '1px solid #444',
+                touchAction: 'none',
+                background: '#000',
+              }}
+            />
+          </Box>
+        )}
 
         {/* Right: Serial Monitor / Build Log ──────────────────────────────── */}
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
