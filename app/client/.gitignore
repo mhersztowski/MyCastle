@@ -1,5 +1,7 @@
 .venv/
+.venv-win/
 .env
+.env.watchtower
 .env.smart-display
 __pycache__/
 *.pyc
