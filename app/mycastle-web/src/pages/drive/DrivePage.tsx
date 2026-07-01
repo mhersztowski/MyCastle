@@ -64,6 +64,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import TerminalIcon from '@mui/icons-material/Terminal';
@@ -86,7 +87,7 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
 // until the user actually opens a .mjd / .data.json file. RemoteFS is the
 // VFS adapter MjdVfsLoader expects.
-import { MjdVfsLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
+import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
 import { RemoteFS, CompositeFS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
@@ -503,9 +504,10 @@ const isMdEditable = (name: string) => {
   return n.endsWith('.md') || n.endsWith('.txt') || n.endsWith('.markdown');
 };
 
-// Files runnable on the backend via `node {file}` (Drive → Run). Typically
-// placed under `drive/server/`, but any JS file may be run.
-const isRunnable = (name: string) => /\.(mjs|cjs|js)$/i.test(name);
+// Files runnable on the backend (Drive → Run). Typically placed under
+// `drive/server/` or `drive/backend/`. TS files are transpiled+bundled on the
+// backend (so they can import other local .ts/.js files); JS runs as-is.
+const isRunnable = (name: string) => /\.(mjs|cjs|js|ts|tsx|mts|cts)$/i.test(name);
 
 // ── MJD editor association ──────────────────────────────────────────────────
 // `.mjd`           → opens MjdDefEditor (schema editor)
@@ -521,6 +523,10 @@ const getMjdMode = (name: string): MjdMode | null => {
   return null;
 };
 const isMjdEditable = (name: string) => getMjdMode(name) !== null;
+
+// `.myschema.json` → graphical schema/.d.ts editor (GlobalJsonLoader), opened in
+// the same right-side preview panel. Standalone JSON, no linked .mjd schema.
+const isMySchemaJson = (name: string) => /\.myschema\.json$/i.test(name);
 
 // ── New-file dialog presets ─────────────────────────────────────────────────
 // Each preset advertises a default filename + an extension. When the user
@@ -541,6 +547,7 @@ const FILE_PRESETS: FilePreset[] = [
   { key: 'json',      label: 'JSON (.json)',                    defaultName: 'data.json',          extension: '.json' },
   { key: 'mjd-def',   label: 'MJD definition (.mjd)',           defaultName: 'schema.mjd',         extension: '.mjd' },
   { key: 'mjd-data',  label: 'MJD data (.data.json)',           defaultName: 'dane.data.json',     extension: '.data.json' },
+  { key: 'myschema',  label: 'My Schema (.myschema.json)',      defaultName: 'schema.myschema.json', extension: '.myschema.json' },
   { key: 'yaml',      label: 'YAML — konfiguracja (.yaml)',     defaultName: 'config.yaml',        extension: '.yaml' },
   { key: 'toml',      label: 'TOML — konfiguracja (.toml)',     defaultName: 'config.toml',        extension: '.toml' },
   { key: 'ini',       label: 'INI — konfiguracja (.ini)',       defaultName: 'config.ini',         extension: '.ini' },
@@ -799,6 +806,8 @@ export default function DrivePage(): React.JSX.Element {
   const [mjdEditing, setMjdEditing] = useState<{
     entry: VfsEntry; rel: string; mjdPath: string; dataPath?: string; mode: MjdMode;
   } | null>(null);
+  // `.myschema.json` graphical editor (GlobalJsonLoader). path = full backend path.
+  const [globalEditing, setGlobalEditing] = useState<{ entry: VfsEntry; rel: string; path: string } | null>(null);
   // Singleton RemoteFS — MjdVfsLoader expects a FileSystemProvider. Token
   // updates propagate via setToken below so logout/login doesn't strand
   // the editor on a stale credential.
@@ -1209,7 +1218,7 @@ export default function DrivePage(): React.JSX.Element {
   const runAbortRef = useRef<AbortController | null>(null);
   // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
   const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
-  const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || running || logsView);
+  const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || globalEditing || running || logsView);
 
   // Exactly ONE right-side panel may be open at a time. Every opener calls this
   // first, so a new panel never renders stacked next to a stale one (the bug
@@ -1221,6 +1230,7 @@ export default function DrivePage(): React.JSX.Element {
     setDashEditing(null);
     setMdEditing(null);
     setMjdEditing(null);
+    setGlobalEditing(null);
     runAbortRef.current?.abort();
     setRunning(null);
     setLogsView(null);
@@ -1398,7 +1408,9 @@ export default function DrivePage(): React.JSX.Element {
     }
     setCwd(folder);
     const entry: VfsEntry = { name: fileName, type: FILE_TYPE };
-    if (isMjdEditable(fileName)) {
+    if (isMySchemaJson(fileName)) {
+      openGlobalEditor(entry, rel);
+    } else if (isMjdEditable(fileName)) {
       openInMjdEditor(entry, rel);
     } else if (isMdEditable(fileName)) {
       await openInMdEditorRef.current(entry, rel);
@@ -1465,6 +1477,10 @@ export default function DrivePage(): React.JSX.Element {
     // populated later in the file; calling through the ref avoids the TDZ
     // cycle that would happen if we tried to depend on `openInMdEditor`
     // directly here.
+    if (isMySchemaJson(entry.name)) {
+      openGlobalEditor(entry);
+      return;
+    }
     if (isMjdEditable(entry.name)) {
       openInMjdEditor(entry);
       return;
@@ -1734,6 +1750,14 @@ export default function DrivePage(): React.JSX.Element {
     setMjdEditing({ entry, rel, mjdPath, dataPath, mode });
   }, [cwd, driveToFullPath, userName, resetPanels]);
 
+  // Open a *.myschema.json in the graphical schema/.d.ts editor (right panel).
+  const openGlobalEditor = useCallback((entry: VfsEntry, relOverride?: string) => {
+    const rel = relOverride ?? (cwd ? `${cwd}/${entry.name}` : entry.name);
+    const path = driveToFullPath(rel);
+    resetPanels();
+    setGlobalEditing({ entry, rel, path });
+  }, [cwd, driveToFullPath, resetPanels]);
+
   /** Switch the right panel from MdEditor (WYSIWYG) to Monaco showing the
    *  raw markdown source. Lets users tweak code-fence params, edit tables
    *  byte-exact, or paste markdown that the WYSIWYG layer would otherwise
@@ -1882,6 +1906,27 @@ export default function DrivePage(): React.JSX.Element {
     `/api/users/${encodeURIComponent(userName)}/drive/run-script?path=${encodeURIComponent(rel)}`,
     { rel, kind: 'run', target: rel },
   ), [streamConsole, userName]);
+
+  // Restart a background script: kills the running instance and starts the
+  // freshly-edited (re-transpiled) version, then shows its log.
+  const restartScript = useCallback(async (rel: string) => {
+    try {
+      const r = await fetch(
+        `/api/users/${encodeURIComponent(userName)}/drive/restart-script?path=${encodeURIComponent(rel)}`,
+        { method: 'POST', headers: authHeaders() },
+      );
+      const j = await r.json().catch(() => ({} as { ok?: boolean; error?: string }));
+      if (r.ok && j.ok) {
+        void openLogs(rel); // panel has a Refresh button for the fresh output
+      } else {
+        resetPanels();
+        setLogsView({ rel, content: `Restart nie powiódł się: ${j.error ?? `HTTP ${r.status}`}` });
+      }
+    } catch (e) {
+      resetPanels();
+      setLogsView({ rel, content: `Restart nie powiódł się: ${(e as Error).message}` });
+    }
+  }, [userName, openLogs, resetPanels]);
 
   // Run `npm install` for a drive directory (the one holding package.json).
   // dirRel is relative to the drive root ('' = drive root). Reuses the existing
@@ -2777,10 +2822,15 @@ export default function DrivePage(): React.JSX.Element {
               flex: 1, minWidth: 0,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? repoViewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name}
+              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? repoViewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name ?? globalEditing?.entry.name}
               {mjdEditing && (
                 <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                   · {mjdEditing.mode === 'def' ? 'schemat MJD' : 'dane MJD'}
+                </Typography>
+              )}
+              {globalEditing && (
+                <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                  · schema
                 </Typography>
               )}
             </Typography>
@@ -2985,6 +3035,15 @@ export default function DrivePage(): React.JSX.Element {
                 />
               </Box>
             )}
+            {globalEditing && (
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <GlobalJsonLoader
+                  key={globalEditing.rel}
+                  provider={mjdFs}
+                  path={globalEditing.path}
+                />
+              </Box>
+            )}
             {running && (
               <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 {/* Console toolbar — status + Stop / Re-run */}
@@ -3147,6 +3206,16 @@ export default function DrivePage(): React.JSX.Element {
         {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (
           <MenuItem onClick={() => {
             const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
+            void restartScript(rel);
+            setMenuFor(null);
+          }}>
+            <ListItemIcon><RestartAltIcon fontSize="small" sx={{ color: 'primary.main' }} /></ListItemIcon>
+            <ListItemText primary="Restart" secondary="Ubij i uruchom w tle nową wersję" />
+          </MenuItem>
+        )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (
+          <MenuItem onClick={() => {
+            const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
             void openLogs(rel);
             setMenuFor(null);
           }}>
@@ -3257,7 +3326,9 @@ export default function DrivePage(): React.JSX.Element {
           const synthetic: VfsEntry = { name, type: FILE_TYPE };
           const targetDir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
           if (targetDir !== cwd) setCwd(targetDir);
-          if (isMjdEditable(name)) {
+          if (isMySchemaJson(name)) {
+            openGlobalEditor(synthetic, rel);
+          } else if (isMjdEditable(name)) {
             openInMjdEditor(synthetic, rel);
           } else if (isMdEditable(name)) {
             // Pass `rel` as override so openInMdEditor doesn't re-derive it

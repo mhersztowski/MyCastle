@@ -10,9 +10,10 @@
  * written (via the `/drive/schedules/reload` endpoint) or all users on startup.
  */
 import * as cron from 'node-cron';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { readFile, readdir, appendFile, mkdir, stat, writeFile } from 'fs/promises';
 import path from 'path';
+import { prepareRunnableScript, RUNNABLE_RE } from './prepareRunnableScript.js';
 
 const LOG_CAP_BYTES = 512 * 1024; // trim the log file when it grows past ~512KB
 
@@ -22,6 +23,8 @@ type SchedulesFile = Record<string, ScheduleEntry>;
 export class DriveScriptScheduler {
   /** key = `${user}:${rel}` → cron task */
   private jobs = new Map<string, cron.ScheduledTask>();
+  /** key = `${user}:${rel}` → currently running child process (for Restart/Stop). */
+  private running = new Map<string, ChildProcess>();
 
   constructor(private readonly rootDir: string) {}
 
@@ -70,7 +73,7 @@ export class DriveScriptScheduler {
 
   /** Resolve a drive-relative script path to an absolute file, or null if invalid. */
   private fileFor(user: string, rel: string): string | null {
-    if (!/\.(mjs|cjs|js)$/i.test(rel)) return null;
+    if (!RUNNABLE_RE.test(rel)) return null;
     const driveRoot = this.userDriveDir(user);
     const file = path.resolve(driveRoot, rel);
     return file.startsWith(driveRoot + path.sep) ? file : null; // traversal guard
@@ -98,7 +101,7 @@ export class DriveScriptScheduler {
         if (!entry?.runAtStartup) continue;
         const file = this.fileFor(user, rel);
         if (!file) continue;
-        this.run(user, rel, file, 'startup');
+        void this.run(user, rel, file, 'startup');
         n++;
       }
     }
@@ -130,23 +133,77 @@ export class DriveScriptScheduler {
     return count;
   }
 
-  private run(user: string, rel: string, file: string, source: 'cron' | 'startup' = 'cron'): void {
+  private async run(user: string, rel: string, file: string, source: 'cron' | 'startup' | 'manual' = 'cron'): Promise<void> {
     console.log(`DriveScriptScheduler: running ${user}/${rel} (${source})`);
-    const proc = spawn('node', [file], { cwd: path.dirname(file), shell: false });
+    const key = `${user}:${rel}`;
     const tag = `[${source} ${user}/${rel}]`;
     let buf = `\n===== ${new Date().toISOString()} (${source}) =====\n`;
+
+    let prepared: Awaited<ReturnType<typeof prepareRunnableScript>>;
+    try {
+      prepared = await prepareRunnableScript(file); // transpiles .ts (bundles local imports)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      buf += `\n[transpile error] ${msg}\n`;
+      void this.appendLog(user, rel, buf);
+      console.warn(`DriveScriptScheduler: ${user}/${rel} transpile error: ${msg}`);
+      return;
+    }
+
+    const proc = spawn('node', [prepared.runFile], { cwd: path.dirname(file), shell: false });
+    this.running.set(key, proc);
+    // Only clear the map entry if it's still THIS process (a Restart may have
+    // already replaced it with a newer one).
+    const untrack = () => { if (this.running.get(key) === proc) this.running.delete(key); };
     proc.stdout.on('data', (c: Buffer) => { buf += c.toString(); process.stdout.write(`${tag} ${c}`); });
     proc.stderr.on('data', (c: Buffer) => { buf += c.toString(); process.stderr.write(`${tag} ${c}`); });
     proc.on('close', (code) => {
+      untrack();
       buf += `\n[exit ${code}]\n`;
       void this.appendLog(user, rel, buf);
+      void prepared.cleanup();
       console.log(`DriveScriptScheduler: ${user}/${rel} exited code=${code}`);
     });
     proc.on('error', (err) => {
+      untrack();
       buf += `\n[error] ${err.message}\n`;
       void this.appendLog(user, rel, buf);
+      void prepared.cleanup();
       console.warn(`DriveScriptScheduler: ${user}/${rel} error: ${err.message}`);
     });
+  }
+
+  /** Is a background process for this script currently running? */
+  isRunning(user: string, rel: string): boolean {
+    return this.running.has(`${user}:${rel}`);
+  }
+
+  /**
+   * Kill any running background instance of a script and start it fresh (with the
+   * just-edited + re-transpiled code). Used by Drive → Restart.
+   */
+  async restart(user: string, rel: string): Promise<{ ok: boolean; error?: string }> {
+    const file = this.fileFor(user, rel);
+    if (!file) return { ok: false, error: 'Not a runnable script (.js/.ts/…)' };
+    const key = `${user}:${rel}`;
+    const existing = this.running.get(key);
+    if (existing) {
+      this.running.delete(key); // detach so its close handler won't clobber the new proc
+      try { existing.kill('SIGTERM'); } catch { /* already gone */ }
+      void this.appendLog(user, rel, `\n===== ${new Date().toISOString()} (restart — stopping previous) =====\n`);
+    }
+    void this.run(user, rel, file, 'manual');
+    return { ok: true };
+  }
+
+  /** Stop a running background instance (no restart). */
+  stop(user: string, rel: string): { ok: boolean } {
+    const key = `${user}:${rel}`;
+    const p = this.running.get(key);
+    if (!p) return { ok: false };
+    this.running.delete(key);
+    try { p.kill('SIGTERM'); } catch { /* already gone */ }
+    return { ok: true };
   }
 
   activeCount(): number { return this.jobs.size; }
@@ -154,5 +211,7 @@ export class DriveScriptScheduler {
   shutdownAll(): void {
     for (const task of this.jobs.values()) task.stop();
     this.jobs.clear();
+    for (const p of this.running.values()) { try { p.kill('SIGTERM'); } catch { /* ignore */ } }
+    this.running.clear();
   }
 }

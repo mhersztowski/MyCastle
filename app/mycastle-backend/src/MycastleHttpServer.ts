@@ -24,6 +24,7 @@ import type { BackendPluginService } from './modules/plugins/BackendPluginServic
 import type { PluginRequestContext } from './modules/plugins/backendPluginTypes.js';
 import type { SecretsService } from './modules/secrets/SecretsService.js';
 import type { DriveScriptScheduler } from './modules/scheduler/DriveScriptScheduler.js';
+import { prepareRunnableScript, RUNNABLE_RE, findMonorepoRoot } from './modules/scheduler/prepareRunnableScript.js';
 import type { GitService } from './modules/git/GitService.js';
 import { UmlSyncService, type UmlProject } from '@mhersztowski/devtools';
 import { compile as miniscCompile } from '@mhersztowski/minisc';
@@ -1704,6 +1705,32 @@ export class MycastleHttpServer extends HttpUploadServer {
         return;
       }
       await this.handleDriveRunScript(req, res, userName);
+      return;
+    }
+
+    // Drive: restart / stop a background script (kills the running instance and,
+    // for restart, starts the freshly-edited version). POST /…/drive/restart-script
+    const driveRestartMatch = apiPath.match(/^\/users\/([^/]+)\/drive\/(restart|stop)-script$/);
+    if (driveRestartMatch && (method === 'POST' || method === 'GET')) {
+      const userName = decodeURIComponent(driveRestartMatch[1]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const rel = (url.searchParams.get('path') ?? '').replace(/^\/+/, '');
+      if (!this.driveScriptScheduler) { this.sendJsonResponse(res, 503, { error: 'scheduler unavailable' }); return; }
+      const result = driveRestartMatch[2] === 'restart'
+        ? await this.driveScriptScheduler.restart(userName, rel)
+        : this.driveScriptScheduler.stop(userName, rel);
+      this.sendJsonResponse(res, result.ok ? 200 : 400, result);
+      return;
+    }
+
+    // Serve MyCastle monorepo source for editor IntelliSense on `mycastle/...`
+    // imports (read-only; only packages/ & app/ text sources).
+    if (apiPath === '/mycastle-src' && method === 'GET') {
+      await this.handleMycastleSrc(req, res);
       return;
     }
 
@@ -4275,8 +4302,8 @@ const { password, ...safeBody } = body;
       this.sendJsonResponse(res, 400, { error: 'Missing path parameter' });
       return;
     }
-    if (!/\.(mjs|cjs|js)$/i.test(rel)) {
-      this.sendJsonResponse(res, 400, { error: 'Only .js/.mjs/.cjs files can be run' });
+    if (!RUNNABLE_RE.test(rel)) {
+      this.sendJsonResponse(res, 400, { error: 'Only .js/.mjs/.cjs/.ts/.tsx files can be run' });
       return;
     }
     const driveRoot = path.resolve(this.rootDir, 'Minis', 'Users', userName, 'drive');
@@ -4307,8 +4334,25 @@ const { password, ...safeBody } = body;
     // (drive/.logs/{rel}.log) — same file the cron scheduler writes to.
     let logBuf = `\n===== ${new Date().toISOString()} (manual run) =====\n$ node ${rel}\n`;
     sendEvent('output', { chunk: `$ node ${rel}\n` });
+
+    // TS scripts are transpiled+bundled to a temp file first (bundling resolves
+    // `import`s of other local .ts/.js files); .js runs as-is.
+    let prepared: Awaited<ReturnType<typeof prepareRunnableScript>>;
+    try {
+      prepared = await prepareRunnableScript(file);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logBuf += `\n[transpile error] ${msg}\n`;
+      void this.driveScriptScheduler?.appendLog(userName, rel, logBuf);
+      sendEvent('output', { chunk: `Transpile error: ${msg}\n` });
+      sendEvent('done', { success: false, error: msg });
+      res.end();
+      return;
+    }
+
     // shell:false — node + the absolute path are passed as argv, no shell injection.
-    const proc = spawn('node', [file], { cwd: path.dirname(file), shell: false });
+    // cwd stays the original script's dir so its relative fs access is unchanged.
+    const proc = spawn('node', [prepared.runFile], { cwd: path.dirname(file), shell: false });
 
     proc.stdout.on('data', (chunk: Buffer) => { const s = chunk.toString(); logBuf += s; sendEvent('output', { chunk: s }); });
     proc.stderr.on('data', (chunk: Buffer) => { const s = chunk.toString(); logBuf += s; sendEvent('output', { chunk: s }); });
@@ -4316,17 +4360,50 @@ const { password, ...safeBody } = body;
     proc.on('close', (code) => {
       logBuf += `\n[exit ${code}]\n`;
       void this.driveScriptScheduler?.appendLog(userName, rel, logBuf);
+      void prepared.cleanup();
       sendEvent('done', { success: code === 0, exitCode: code });
       res.end();
     });
     proc.on('error', (err) => {
       logBuf += `\n[error] ${err.message}\n`;
       void this.driveScriptScheduler?.appendLog(userName, rel, logBuf);
+      void prepared.cleanup();
       sendEvent('output', { chunk: `Error: ${err.message}\n` });
       sendEvent('done', { success: false, error: err.message });
       res.end();
     });
     req.on('close', () => { proc.kill(); });
+  }
+
+  /**
+   * Serve a single MyCastle monorepo source file (read-only) so the editor's
+   * TypeScript IntelliSense can resolve `import 'mycastle/packages/...'`. Limited
+   * to text sources under `packages/` and `app/` — never .env, secrets, etc.
+   */
+  private async handleMycastleSrc(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const root = findMonorepoRoot();
+    if (!root) { this.sendJsonResponse(res, 404, { error: 'monorepo source not available' }); return; }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const rel = (url.searchParams.get('path') ?? '').replace(/^\/+/, '');
+    if (!rel || !/\.(d\.ts|ts|tsx|mts|cts|js|jsx|mjs|cjs|json)$/i.test(rel)) {
+      this.sendJsonResponse(res, 400, { error: 'unsupported path' });
+      return;
+    }
+    const file = path.resolve(root, rel);
+    const relResolved = path.relative(root, file);
+    if (file.startsWith('..') || !/^(packages|app)[/\\]/.test(relResolved)) {
+      this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    try {
+      const content = await import('fs/promises').then(m => m.readFile(file, 'utf-8'));
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      this.setCorsHeaders(res);
+      res.writeHead(200);
+      res.end(content);
+    } catch {
+      this.sendJsonResponse(res, 404, { error: `not found: ${rel}` });
+    }
   }
 
   /**

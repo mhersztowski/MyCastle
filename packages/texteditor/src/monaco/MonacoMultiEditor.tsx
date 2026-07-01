@@ -28,6 +28,8 @@ const SvgFindReplace = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" 
 const SvgFolderSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 13.5v2c0 .28.22.5.5.5h.5v.68l1.76 1.76c-.28.05-.51.07-.76.07-2.48 0-4.5-2.02-4.5-4.5S10.02 9 12.5 9c2.16 0 3.96 1.5 4.39 3.5H15v-.5c0-.28-.22-.5-.5-.5h-3c-.28 0-.5.22-.5.5M22 17.17l-2.64-2.62C19.74 14.06 20 13.31 20 12.5 20 10.01 17.99 8 15.5 8S11 10.01 11 12.5s2.01 4.5 4.5 4.5c.81 0 1.56-.26 2.17-.73L20.29 19H22v-1.83zM15.5 15c-1.38 0-2.5-1.12-2.5-2.5S14.12 10 15.5 10s2.5 1.12 2.5 2.5S16.88 15 15.5 15zM6 8l-4 4v8h16v-2H4v-5.17L7.17 12H8v-4H6z"/></svg>;
 const SvgFormat = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 21h18v-2H3zm0-4h18v-2H3zm0-4h18v-2H3zm0-4h18V7H3zm0-6v2h18V3z"/></svg>;
 const SvgSuggest = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 21c0 .5.4 1 1 1h4c.6 0 1-.5 1-1v-1H9zm3-19C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .5.4 1 1 1h6c.6 0 1-.5 1-1v-2.3c1.8-1.3 3-3.4 3-5.7 0-3.9-3.1-7-7-7z"/></svg>;
+// braces { } — "insert $schema"
+const SvgSchema = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 7v2c0 1.1-.9 2-2 2v2c1.1 0 2 .9 2 2v2c0 1.66 1.34 3 3 3h2v-2H7c-.55 0-1-.45-1-1v-2c0-1.3-.84-2.42-2-2.83v-.34C5.16 11.42 6 10.3 6 9V7c0-.55.45-1 1-1h2V4H7C5.34 4 4 5.34 4 7m16 4c-1.1 0-2-.9-2-2V7c0-1.66-1.34-3-3-3h-2v2h2c.55 0 1 .45 1 1v2c0 1.3.84 2.42 2 2.83v.34c-1.16.41-2 1.52-2 2.83v2c0 .55-.45 1-1 1h-2v2h2c1.66 0 3-1.34 3-3v-2c0-1.1.9-2 2-2z"/></svg>;
 
 const SvgCut = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.64 7.64c.23-.5.36-1.05.36-1.64 0-2.21-1.79-4-4-4S2 3.79 2 6s1.79 4 4 4c.59 0 1.14-.13 1.64-.36L10 12l-2.36 2.36C7.14 14.13 6.59 14 6 14c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4c0-.59-.13-1.14-.36-1.64L12 14l7 7h3v-1L9.64 7.64zM6 8c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm0 12c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm6-7.5c-.28 0-.5-.22-.5-.5s.22-.5.5-.5.5.22.5.5-.22.5-.5.5zM19 3l-6 6 2 2 7-7V3z"/></svg>;
 const SvgCopy = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>;
@@ -70,6 +72,7 @@ import { AgentPanel } from './agent/ui/AgentPanel';
 import type { AgentConfig } from './agent/types';
 import { BottomPanel } from './BottomPanel';
 import type { BottomTab } from './BottomPanel';
+import { InsertSchemaDialog } from './ui/InsertSchemaDialog';
 import * as monaco from 'monaco-editor';
 import type { IPlugin, ContextMenuContribution, CommandPaletteContribution, ToolbarContribution } from './plugins/types';
 import {
@@ -159,17 +162,77 @@ interface FileSearchResult {
 
 /* ── JSON schema auto-loader ── */
 
-// Cache of schema URIs already registered to avoid redundant setDiagnosticsOptions calls.
-const _registeredJsonSchemas = new Set<string>();
+// Walk a parsed schema and collect file-relative `$ref` targets (skips internal
+// `#/...` pointers and absolute http(s) URLs).
+function collectSchemaRefs(obj: unknown, acc: string[] = []): string[] {
+  if (Array.isArray(obj)) {
+    for (const x of obj) collectSchemaRefs(x, acc);
+  } else if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (k === '$ref' && typeof v === 'string') {
+        if (!v.startsWith('#') && !/^https?:\/\//.test(v)) acc.push(v);
+      } else {
+        collectSchemaRefs(v, acc);
+      }
+    }
+  }
+  return acc;
+}
+
+// Normalize an absolute VFS path, resolving "." / ".." segments.
+function normalizeVfsPath(p: string): string {
+  const out: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '..') out.pop();
+    else if (seg !== '.' && seg !== '') out.push(seg);
+  }
+  return '/' + out.join('/');
+}
+
+// Resolve a `$ref` (possibly with a #fragment) against the directory of the
+// schema that contains it → an absolute VFS path (or null to skip).
+function resolveRefToVfs(dir: string, ref: string): string | null {
+  const file = ref.split('#')[0];
+  if (!file) return null; // pure fragment → same document
+  return file.startsWith('/') ? normalizeVfsPath(file) : normalizeVfsPath(`${dir}/${file}`);
+}
+
+// Anchor a root-relative path (e.g. `drive/global/…`) to the open file's mount
+// prefix, so it resolves whether the workspace is mounted at `/drive/…` (user)
+// or `/user/drive/…` (admin). Falls back to a plain absolute path.
+function anchorRootRelative(p: string, filePath: string): string | null {
+  const rest = p.replace(/^\/+/, '');
+  if (!rest) return null;
+  const firstSeg = rest.split('/')[0];
+  const idx = filePath.indexOf(`/${firstSeg}/`);
+  if (idx >= 0) return normalizeVfsPath(filePath.slice(0, idx + 1) + rest);
+  return normalizeVfsPath(`/${rest}`);
+}
+
+// Resolve a JSON file's `$schema` value to an absolute VFS path. Supports:
+//   • scheme URIs (inmemory://drive/…, file:///drive/…) → anchored root-relative
+//   • absolute-ish paths (/drive/…) → anchored to the file's mount prefix
+//   • relative paths (./Type.schema.json, Type.schema.json) → file's directory
+// Returns null for http(s) (Monaco fetches those itself) or unusable refs.
+function resolveSchemaRefToVfs(raw: string, filePath: string): string | null {
+  if (/^https?:\/\//.test(raw)) return null;
+  const scheme = raw.match(/^[a-z][a-z0-9+.-]*:\/\/(.*)$/i);
+  if (scheme) return anchorRootRelative(scheme[1], filePath);
+  if (raw.startsWith('/')) return anchorRootRelative(raw, filePath);
+  const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+  return normalizeVfsPath(`${dir}/${raw}`);
+}
 
 /**
- * When a JSON file declares `"$schema": "./relative/path"`, resolve the schema
- * file from the VFS, load it, and register it with Monaco's JSON language
- * service so property-name completions work.
+ * When a JSON file declares `"$schema": "<vfs ref>"`, load that schema from the
+ * VFS and register it with Monaco's JSON language service so validation +
+ * property completions work. The `$schema` value may be a scheme URI
+ * (`inmemory://drive/…`), an absolute VFS path, or a relative path.
  *
- * Monaco JSON normally tries to fetch $schema URLs via XHR/fetch — but that
- * fails for `file://` URIs in the browser. This function intercepts that flow
- * by reading the schema from the VFS provider directly and passing it inline.
+ * Cross-file `$ref`s (one generated `*.schema.json` referencing sibling type
+ * files) are resolved too: every referenced schema is read from the VFS and
+ * registered under a matching `file://` URI, so Monaco follows the refs locally
+ * without any network access.
  */
 async function loadJsonSchemaFromVfs(
   provider: FileSystemProvider,
@@ -177,79 +240,70 @@ async function loadJsonSchemaFromVfs(
   content: string,
   fileUri: string,
 ): Promise<void> {
-  // Parse $schema field — fast path before full JSON.parse
   const schemaMatch = content.match(/"?\$schema"?\s*:\s*"([^"]+)"/);
   if (!schemaMatch) return;
-
-  const rawSchemaRef = schemaMatch[1];
-
-  // Resolve the schema path relative to the JSON file's directory
-  let schemaVfsPath: string;
-  if (rawSchemaRef.startsWith('/')) {
-    schemaVfsPath = rawSchemaRef;
-  } else if (rawSchemaRef.startsWith('http://') || rawSchemaRef.startsWith('https://')) {
-    return; // absolute HTTP — skip (Monaco handles these natively)
-  } else {
-    const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-    // Normalize: resolve ".." and "." segments
-    const parts = `${dir}/${rawSchemaRef}`.split('/');
-    const resolved: string[] = [];
-    for (const p of parts) {
-      if (p === '..') resolved.pop();
-      else if (p !== '.') resolved.push(p);
-    }
-    schemaVfsPath = resolved.join('/');
-  }
-
-  const schemaUri = `file://${schemaVfsPath}`;
-  if (_registeredJsonSchemas.has(schemaUri)) return; // already loaded
-
-  let schemaContent: string;
-  try {
-    const bytes = await provider.readFile(schemaVfsPath);
-    schemaContent = decodeText(bytes);
-  } catch {
-    return; // schema file not found — non-fatal
-  }
-
-  let schemaObj: unknown;
-  try {
-    schemaObj = JSON.parse(schemaContent);
-  } catch {
-    return; // invalid JSON in schema file — non-fatal
-  }
+  const rootVfsPath = resolveSchemaRefToVfs(schemaMatch[1], filePath);
+  if (!rootVfsPath) return;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const jsonDefaults = (monaco.languages as any).json?.jsonDefaults;
   if (!jsonDefaults) return;
 
   const currentOpts = jsonDefaults.diagnosticsOptions ?? {};
-  const existingSchemas: unknown[] = Array.isArray(currentOpts.schemas) ? currentOpts.schemas : [];
-
-  // Avoid duplicates by schema URI
-  if (existingSchemas.some((s: unknown) => (s as { uri?: string }).uri === schemaUri)) {
-    _registeredJsonSchemas.add(schemaUri);
-    return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const byUri = new Map<string, any>();
+  for (const s of (Array.isArray(currentOpts.schemas) ? currentOpts.schemas : [])) {
+    const uri = s && typeof s === 'object' ? (s as { uri?: string }).uri : undefined;
+    if (uri) byUri.set(uri, s);
   }
 
-  // Register by URI — Monaco JSON automatically uses this for any document
-  // whose $schema field resolves to this URI. No fileMatch needed.
-  // Also add fileMatch on the VFS path so files without $schema also benefit.
-  const filePathForMatch = filePath; // e.g. "/home/marcin/.../product.json"
-  jsonDefaults.setDiagnosticsOptions({
-    ...currentOpts,
-    schemas: [
-      ...existingSchemas,
-      {
-        uri: schemaUri,
-        fileMatch: [filePathForMatch],
-        schema: schemaObj,
-      },
-    ],
-  });
+  // BFS over the root schema + all of its cross-file $refs.
+  const visited = new Set<string>();
+  const queue = [rootVfsPath];
+  let changed = false;
+  while (queue.length && visited.size < 300) {
+    const vfsPath = queue.shift()!;
+    if (visited.has(vfsPath)) continue;
+    visited.add(vfsPath);
 
-  _registeredJsonSchemas.add(schemaUri);
-  console.log(`[Monaco] JSON schema loaded from VFS: ${schemaVfsPath} → applied to ${fileUri}`);
+    let schemaObj: unknown;
+    try {
+      schemaObj = JSON.parse(decodeText(await provider.readFile(vfsPath)));
+    } catch {
+      // A referenced schema we can't read/parse: register a permissive {} under
+      // its URI so the PARENT schema still resolves and keeps validating
+      // (`required` etc.), instead of one bad $ref disabling the whole thing.
+      if (vfsPath !== rootVfsPath) {
+        const uri = `file://${vfsPath}`;
+        if (!byUri.has(uri)) { byUri.set(uri, { uri, schema: {} }); changed = true; }
+      }
+      continue;
+    }
+
+    const uri = `file://${vfsPath}`;
+    const isRoot = vfsPath === rootVfsPath;
+    const prev = byUri.get(uri) as { fileMatch?: string[]; schema?: unknown } | undefined;
+    const fileMatch = isRoot
+      ? Array.from(new Set([...(prev?.fileMatch ?? []), fileUri, filePath]))
+      : prev?.fileMatch;
+    const sameSchema = prev && JSON.stringify(prev.schema) === JSON.stringify(schemaObj);
+    const sameMatch = JSON.stringify(prev?.fileMatch ?? null) === JSON.stringify(fileMatch ?? null);
+    if (!prev || !sameSchema || !sameMatch) {
+      byUri.set(uri, fileMatch ? { uri, fileMatch, schema: schemaObj } : { uri, schema: schemaObj });
+      changed = true;
+    }
+
+    const dir = vfsPath.substring(0, vfsPath.lastIndexOf('/'));
+    for (const ref of collectSchemaRefs(schemaObj)) {
+      const child = resolveRefToVfs(dir, ref);
+      if (child && !visited.has(child)) queue.push(child);
+    }
+  }
+
+  if (changed) {
+    jsonDefaults.setDiagnosticsOptions({ ...currentOpts, validate: true, schemas: Array.from(byUri.values()) });
+    console.log(`[Monaco] JSON schema loaded from VFS: ${rootVfsPath} (${visited.size} file(s)) → ${fileUri}`);
+  }
 }
 
 /* ── Language map ── */
@@ -840,6 +894,7 @@ const EditorGroupPane = memo(function EditorGroupPane({
       },
     });
 
+
     // Command palette is handled at MonacoMultiEditor level (custom overlay)
 
     // Selection handle listeners — must be registered here (editor is ready)
@@ -996,124 +1051,148 @@ const EditorGroupPane = memo(function EditorGroupPane({
     //      lock-step with Gboard's finger; the buffer is recentered near its edges.
     let gboardCleanup: (() => void) | null = null;
     if (/Android/i.test(navigator.userAgent)) {
-      // SHADOW: a long run of spaces — invisible, neutral, gives Gboard plenty of
-      // room to swipe left/right before we need to recenter the hidden cursor.
-      const SHADOW = ' '.repeat(401);
-      const SHADOW_MID = 200; // cursor sits in the middle
-      let lastSS = SHADOW_MID;     // last selectionStart we saw (for incremental deltas)
-      let applyingDelta = false;   // true while we push a delta into Monaco
-      let cycleInProgress = false; // true during a blur/focus re-init bounce
+      const monacoTextarea = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
+      if (monacoTextarea) {
+        // Debug overlay — remove once confirmed working
+        let dbgEl: HTMLDivElement | null = null;
+        const dbg = (msg: string) => {
+          if (!dbgEl) {
+            dbgEl = document.createElement('div');
+            dbgEl.style.cssText = 'position:fixed;bottom:72px;right:6px;background:rgba(0,0,0,.82);color:#7fff00;font:10px/1.4 monospace;padding:4px 8px;z-index:99999;pointer-events:none;max-width:240px;border-radius:4px;white-space:pre-wrap;';
+            // document.body.appendChild(dbgEl); // temporarily hidden
+          }
+          const ls = (dbgEl.textContent ?? '').split('\n').filter(Boolean);
+          ls.unshift(new Date().toISOString().slice(14, 22) + ' ' + msg);
+          if (ls.length > 10) ls.length = 10;
+          dbgEl.textContent = ls.join('\n');
+        };
 
-      // Native descriptors from the prototype chain — let us bypass our own
-      // per-instance overrides and reach Chrome's real C++ value/selection storage.
-      const nativeValDesc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!;
-      const nativeSsDesc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'selectionStart')!;
-      const nativeSsr = HTMLTextAreaElement.prototype.setSelectionRange;
-      const nativeSsOf = (ta: HTMLTextAreaElement) => nativeSsDesc.get!.call(ta) as number;
+        // SHADOW: 21 spaces — invisible, neutral, gives Gboard room to move left/right
+        const SHADOW = '                     '; // 21 spaces
+        const SHADOW_MID = 10; // cursor sits in the middle
 
-      // Why this is focus-driven instead of capturing one textarea at setup:
-      // Monaco creates/replaces its <textarea.inputarea> AFTER this effect runs
-      // (and there can be more than one). A single captured reference is therefore
-      // never the one Gboard actually drives — so we shadow whichever inputarea is
-      // focused, tracked in a WeakSet so each is patched exactly once.
-      const shadowed = new WeakSet<HTMLTextAreaElement>();
+        // Grab the native property descriptor from the prototype chain
+        // so we can write directly into Chrome's C++ value storage.
+        const nativeValDesc = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype, 'value'
+        )!;
+        const nativeSsr = HTMLTextAreaElement.prototype.setSelectionRange;
 
-      // Off-screen textarea used to bounce focus and force Chrome to re-establish
-      // the Gboard InputConnection (so it re-reads SHADOW instead of stale content).
-      const tmp = document.createElement('textarea');
-      tmp.style.cssText = 'position:fixed;opacity:0;top:-9999px;left:-9999px;width:1px;height:1px;';
-      document.body.appendChild(tmp);
+        // Write SHADOW into C++ storage (Chrome reads this to init InputConnection)
+        nativeValDesc.set!.call(monacoTextarea, SHADOW);
 
-      // Write SHADOW + center the native cursor on a given textarea.
-      const writeShadow = (ta: HTMLTextAreaElement) => {
-        nativeValDesc.set!.call(ta, SHADOW);
-        nativeSsr.call(ta, SHADOW_MID, SHADOW_MID);
-        lastSS = SHADOW_MID;
-      };
-
-      // Patch a textarea once: value getter returns '' and swallows every write
-      // (so Monaco's IME mirror can't replace SHADOW), setSelectionRange is a no-op
-      // (Monaco can't move our shadow cursor; Gboard's C++ setSelection bypasses JS).
-      const installShadow = (ta: HTMLTextAreaElement) => {
-        if (shadowed.has(ta)) return;
-        shadowed.add(ta);
-        nativeValDesc.set!.call(ta, SHADOW);
-        Object.defineProperty(ta, 'value', {
+        // Override JS .value getter on this instance so Monaco always sees ''
+        Object.defineProperty(monacoTextarea, 'value', {
           get() { return ''; },
-          set(_v: string) { /* keep SHADOW — ignore Monaco's writes */ },
+          set(v: string) {
+            // Monaco sets value=''; ignore — keep SHADOW in C++ storage
+            // But if Monaco sets a non-empty value (shouldn't happen), allow it
+            if (v !== '') nativeValDesc.set!.call(monacoTextarea, v);
+          },
           configurable: true,
         });
-        Object.defineProperty(ta, 'setSelectionRange', {
-          value(..._args: unknown[]) { /* keep shadow cursor put */ },
-          configurable: true, writable: true,
+
+        // Override .setSelectionRange on this instance — blocks Monaco's calls;
+        // Gboard's InputConnection.setSelection() is C++ and bypasses JS.
+        const origSsr = monacoTextarea.setSelectionRange.bind(monacoTextarea);
+        void origSsr; // suppress lint
+        Object.defineProperty(monacoTextarea, 'setSelectionRange', {
+          value(..._args: unknown[]) {
+            // Silently block — keep shadow cursor at SHADOW_MID
+          },
+          configurable: true,
+          writable: true,
         });
-        // First focus already happened with the old (empty/word) content cached by
-        // Gboard — bounce focus so Chrome re-reads SHADOW into the InputConnection.
-        cycleInProgress = true;
-        writeShadow(ta);
-        tmp.focus();
-        requestAnimationFrame(() => {
-          ta.focus();
+
+        // Reset shadow cursor to middle via native setter (bypasses our override)
+        const resetShadow = () => {
+          nativeValDesc.set!.call(monacoTextarea, SHADOW);
+          nativeSsr.call(monacoTextarea, SHADOW_MID, SHADOW_MID);
+        };
+
+        // Blur/focus cycle: forces Chrome to re-init InputConnection from C++ storage.
+        // Create a tiny off-screen textarea to take focus temporarily.
+        const tmp = document.createElement('textarea');
+        tmp.style.cssText = 'position:fixed;opacity:0;top:-9999px;left:-9999px;width:1px;height:1px;';
+        document.body.appendChild(tmp);
+
+        const doBlurFocusCycle = () => {
+          resetShadow();
+          tmp.focus(); // moves focus away → Chrome will re-init InputConnection on next focus
           requestAnimationFrame(() => {
-            writeShadow(ta);
-            setTimeout(() => { cycleInProgress = false; }, 300);
+            monacoTextarea.focus(); // Chrome re-establishes InputConnection, reads C++ storage (SHADOW)
+            requestAnimationFrame(() => {
+              resetShadow(); // ensure cursor is at SHADOW_MID after IC init
+              dbg(`shadow ready mid=${SHADOW_MID}`);
+            });
           });
-        });
-      };
+        };
 
-      // Patch whichever inputarea textarea gets focus; recenter on re-focus.
-      const onFocusIn = (e: FocusEvent) => {
-        const t = e.target as Element | null;
-        if (t instanceof HTMLTextAreaElement && t.classList.contains('inputarea')) {
-          if (!shadowed.has(t)) installShadow(t);
-          else if (!cycleInProgress) writeShadow(t);
-        }
-      };
-      document.addEventListener('focusin', onFocusIn, true);
+        // Run initial blur/focus cycle after Monaco has finished its own setup
+        const initTimer = setTimeout(doBlurFocusCycle, 300);
 
-      // If the real textarea is already present + focused, patch it now.
-      const initEl = me.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea');
-      if (initEl && document.activeElement === initEl) installShadow(initEl);
+        // When Monaco refocuses textarea (e.g. after tap), redo the cycle.
+        // Guard prevents recursive triggering when doBlurFocusCycle itself
+        // calls monacoTextarea.focus().
+        let cycleInProgress = false;
+        const onFocus = () => {
+          if (cycleInProgress) return;
+          dbg('focus — resetting shadow');
+          cycleInProgress = true;
+          setTimeout(() => {
+            doBlurFocusCycle();
+            setTimeout(() => { cycleInProgress = false; }, 400);
+          }, 50);
+        };
+        monacoTextarea.addEventListener('focus', onFocus);
 
-      const onGboardSel = () => {
-        const ta = document.activeElement;
-        if (!(ta instanceof HTMLTextAreaElement) || !ta.classList.contains('inputarea')) return;
-        if (!shadowed.has(ta)) { installShadow(ta); return; }
-        if (applyingDelta || cycleInProgress) return;
+        // Track whether we are mid-gesture to suppress Monaco pointer handler
+        let applyingDelta = false;
 
-        const nativeSS = nativeSsOf(ta);
-        // Incremental delta: follow Gboard's own absolute finger tracking by diffing
-        // against the last position we saw — resetting to mid every step fought
-        // Gboard's tracking and made the cursor jump/stall.
-        const delta = nativeSS - lastSS;
-        lastSS = nativeSS;
-        if (delta === 0) return;
+        const onGboardSel = () => {
+          // Read native selectionStart directly from C++ storage
+          const nativeSS = Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype, 'selectionStart'
+          )!.get!.call(monacoTextarea) as number;
 
-        const model = me.getModel();
-        const pos = me.getPosition();
-        if (!model || !pos) return;
+          const delta = nativeSS - SHADOW_MID;
+          const active = document.activeElement === monacoTextarea;
 
-        const newOffset = Math.max(0, Math.min(model.getValueLength(), model.getOffsetAt(pos) + delta));
-        const newPos = model.getPositionAt(newOffset);
+          if (!active) return;
+          if (applyingDelta) return;
+          if (delta === 0) return;
 
-        applyingDelta = true;
-        gboardState.lastActive = Date.now();
-        me.setPosition(newPos);
-        // revealPosition (not ...InCenter) only scrolls when the cursor would be
-        // off-screen, so stepping through text no longer yanks the viewport.
-        me.revealPosition(newPos);
-        requestAnimationFrame(() => { applyingDelta = false; });
+          // Reset shadow immediately so next Gboard step is relative to mid
+          resetShadow();
 
-        // Recenter only near the buffer edge so a long swipe never runs out of room.
-        if (nativeSS < 16 || nativeSS > SHADOW.length - 16) writeShadow(ta);
-      };
-      document.addEventListener('selectionchange', onGboardSel);
+          const model = me.getModel();
+          const pos = me.getPosition();
+          if (!model || !pos) return;
 
-      gboardCleanup = () => {
-        document.removeEventListener('selectionchange', onGboardSel);
-        document.removeEventListener('focusin', onFocusIn, true);
-        tmp.remove();
-      };
+          const newOffset = Math.max(0, Math.min(model.getValueLength(), model.getOffsetAt(pos) + delta));
+
+          applyingDelta = true;
+          gboardState.lastActive = Date.now();
+          me.setPosition(model.getPositionAt(newOffset));
+          me.revealPositionInCenter(model.getPositionAt(newOffset));
+
+          // Release flag after Monaco echo SC fires
+          requestAnimationFrame(() => { applyingDelta = false; });
+        };
+
+        document.addEventListener('selectionchange', onGboardSel);
+
+        gboardCleanup = () => {
+          clearTimeout(initTimer);
+          document.removeEventListener('selectionchange', onGboardSel);
+          monacoTextarea.removeEventListener('focus', onFocus);
+          // Restore .value and .setSelectionRange on this instance
+          delete (monacoTextarea as unknown as Record<string, unknown>).value;
+          delete (monacoTextarea as unknown as Record<string, unknown>).setSelectionRange;
+          tmp.remove();
+          dbgEl?.remove();
+        };
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -1874,6 +1953,21 @@ export function MonacoMultiEditor({
     });
     return unsub;
   }, []);
+
+  // "Insert $schema reference…" — opened from the toolbar button (JSON files);
+  // the chosen schema is inserted at the cursor as a path relative to the file.
+  const [insertSchemaFor, setInsertSchemaFor] = useState<string | null>(null);
+  const handleInsertSchema = useCallback((relativePath: string) => {
+    const text = `"$schema": "${relativePath}",`;
+    const editors = monaco.editor.getEditors();
+    const target = editors.find((e) => e.getModel()?.uri.path === insertSchemaFor)
+      ?? editors.find((e) => e.hasTextFocus())
+      ?? editors[0];
+    const sel = target?.getSelection();
+    if (!target || !sel) return;
+    target.executeEdits('insert-schema', [{ range: sel, text, forceMoveMarkers: true }]);
+    target.focus();
+  }, [insertSchemaFor]);
 
   // Listen for plugin requests to open a sidebar panel
   useEffect(() => {
@@ -3365,6 +3459,20 @@ export function MonacoMultiEditor({
           </span>
         </Tooltip>
 
+        <Box sx={{ width: '1px', height: 16, bgcolor: '#454545', mx: 0.25, flexShrink: 0 }} />
+
+        {/* Insert $schema (JSON files only) */}
+        <Tooltip title="Insert $schema reference…">
+          <span>
+            <IconButton size="small"
+              disabled={readOnly || !(activeGroup?.activeTab && /\.json$/i.test(activeGroup.activeTab))}
+              onClick={() => { if (activeGroup?.activeTab) setInsertSchemaFor(activeGroup.activeTab); }}
+              sx={{ color: '#ccc', borderRadius: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' }, '&.Mui-disabled': { color: '#555' } }}>
+              <SvgSchema />
+            </IconButton>
+          </span>
+        </Tooltip>
+
         {/* Plugin toolbar items — excluding 'markdown' group (shown in dedicated markdown toolbar) */}
         {pluginToolbarItems.filter(i => i.group !== 'markdown').length > 0 && (
           <>
@@ -4325,6 +4433,15 @@ export function MonacoMultiEditor({
           </DialogActions>
         )}
       </Dialog>
+
+      {/* ── Insert $schema reference (JSON) ── */}
+      <InsertSchemaDialog
+        open={insertSchemaFor !== null}
+        provider={provider}
+        currentFilePath={insertSchemaFor ?? ''}
+        onClose={() => setInsertSchemaFor(null)}
+        onInsert={handleInsertSchema}
+      />
     </Box>
   );
 }

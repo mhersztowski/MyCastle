@@ -65,6 +65,8 @@ import SchemaIcon from '@mui/icons-material/Schema';
 import FolderIcon from '@mui/icons-material/Folder';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CloseIcon from '@mui/icons-material/Close';
@@ -131,6 +133,8 @@ interface UmlProject {
   diagrams: UmlDiagram[]; // working tree
   history: UmlHistory;
   updatedAt: number;
+  /** Output files generated from the model (JSON Schema / .d.ts), by rel path. */
+  outputs?: string[];
 }
 
 const KIND_META: Record<UmlKind, { stereotype: string | null; color: string; label: string }> = {
@@ -202,6 +206,171 @@ async function vfsReadText(userName: string, rel: string): Promise<string | null
   return new TextDecoder().decode(bytes);
 }
 
+async function vfsWriteText(userName: string, rel: string, text: string): Promise<void> {
+  const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/writeFile`, window.location.origin);
+  u.searchParams.set('path', userRootPath(userName, rel));
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const r = await fetch(u.pathname + u.search, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ data: btoa(binary), options: { create: true, overwrite: true } }),
+  });
+  if (!r.ok) throw new Error(`writeText ${rel}: HTTP ${r.status}`);
+}
+
+// ── Code generation from the UML model ──────────────────────────────────────
+interface GenField { name: string; type: string; optional: boolean }
+
+function umlStripSigil(text: string): string {
+  let t = text.trim();
+  if (t && ['+', '-', '#', '~'].includes(t[0])) t = t.slice(1).trim();
+  return t;
+}
+function umlParseField(text: string): GenField {
+  const t = umlStripSigil(text);
+  const i = t.indexOf(':');
+  let namePart = (i < 0 ? t : t.slice(0, i)).trim();
+  const type = i < 0 ? 'any' : t.slice(i + 1).trim();
+  // `name?: type` → optional field (the `?` is dropped from the property name).
+  const optional = namePart.endsWith('?');
+  if (optional) namePart = namePart.slice(0, -1).trim();
+  return { name: namePart, type, optional };
+}
+/** True if a field member's text uses the `name?: type` optional form. */
+function fieldNameOptional(text: string): boolean {
+  const t = umlStripSigil(text);
+  const i = t.indexOf(':');
+  return (i < 0 ? t : t.slice(0, i)).trim().endsWith('?');
+}
+/** Tag any `name?: type` field with the "optional" category (e.g. after a code import). */
+function normalizeOptionalProject(p: UmlProject): UmlProject {
+  return {
+    ...p,
+    diagrams: p.diagrams.map((d) => ({
+      ...d,
+      nodes: d.nodes.map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          members: (n.data as UmlNodeData).members.map((m) =>
+            (m.kind === 'field' && m.category !== 'optional' && fieldNameOptional(m.text) ? { ...m, category: 'optional' } : m)),
+        },
+      })),
+    })),
+  };
+}
+// Collect every class/enum across ALL diagrams. A type shown on more than one
+// diagram (often once with members, once as a bare reference) is MERGED by name
+// — fields/methods/enum-values are unioned — so nothing is dropped when a later,
+// emptier occurrence would otherwise overwrite the rich one.
+function umlCollectModel(diagrams: UmlDiagram[]): {
+  classes: { name: string; fields: GenField[]; methods: string[] }[];
+  enums: { name: string; values: string[] }[];
+} {
+  interface ClassAcc { name: string; fields: GenField[]; fieldNames: Set<string>; methods: string[]; methodSet: Set<string> }
+  interface EnumAcc { name: string; values: string[]; valueSet: Set<string> }
+  const classes = new Map<string, ClassAcc>();
+  const enums = new Map<string, EnumAcc>();
+  for (const d of diagrams) for (const n of d.nodes) {
+    const data = n.data as UmlNodeData;
+    const name = (data.name || '').trim();
+    if (!name) continue;
+    if (data.kind === 'enum') {
+      let e = enums.get(name);
+      if (!e) { e = { name, values: [], valueSet: new Set() }; enums.set(name, e); }
+      for (const m of data.members) {
+        if (m.kind !== 'field') continue;
+        const v = umlStripSigil(m.text);
+        if (v && !e.valueSet.has(v)) { e.valueSet.add(v); e.values.push(v); }
+      }
+    } else {
+      let c = classes.get(name);
+      if (!c) { c = { name, fields: [], fieldNames: new Set(), methods: [], methodSet: new Set() }; classes.set(name, c); }
+      for (const m of data.members) {
+        if (m.kind === 'field') {
+          const p = umlParseField(m.text);
+          if (!p.name || c.fieldNames.has(p.name)) continue;
+          c.fieldNames.add(p.name);
+          c.fields.push({ ...p, optional: p.optional || m.category === 'optional' });
+        } else {
+          const t = umlStripSigil(m.text);
+          if (t && !c.methodSet.has(t)) { c.methodSet.add(t); c.methods.push(t); }
+        }
+      }
+    }
+  }
+  return {
+    classes: [...classes.values()].map((c) => ({ name: c.name, fields: c.fields, methods: c.methods })),
+    enums: [...enums.values()].map((e) => ({ name: e.name, values: e.values })),
+  };
+}
+
+const JSON_SCHEMA_DIALECT = 'https://json-schema.org/draft/2020-12/schema';
+
+// Map a UML/TS-ish type string to a JSON Schema fragment. `ref` resolves a named
+// type to a $ref target (in-document `#/$defs/X` vs sibling-file `X.schema.json`).
+function jsonTypeFromTs(ts: string, ref: (name: string) => string): Record<string, unknown> {
+  const t = ts.trim().replace(/;$/, '');
+  const arr = t.match(/^(.+)\[\]$/) || t.match(/^Array<(.+)>$/);
+  if (arr) return { type: 'array', items: jsonTypeFromTs(arr[1], ref) };
+  // Literal types are constant values, NOT type references — emit const/enum so
+  // a discriminator like `type: "person"` doesn't become a bogus `$ref`.
+  const strLit = t.match(/^"([^"]*)"$/) || t.match(/^'([^']*)'$/);
+  if (strLit) return { type: 'string', const: strLit[1] };
+  if (/^(['"][^'"]*['"]\s*\|\s*)+['"][^'"]*['"]$/.test(t)) {
+    return { type: 'string', enum: t.split('|').map((s) => s.trim().replace(/^['"]|['"]$/g, '')) };
+  }
+  if (/^-?\d+(\.\d+)?$/.test(t)) return { type: 'number', const: Number(t) };
+  if (t === 'true' || t === 'false') return { type: 'boolean', const: t === 'true' };
+  switch (t.toLowerCase()) {
+    case 'string': return { type: 'string' };
+    case 'number': case 'int': case 'integer': case 'long': case 'float': case 'double': return { type: 'number' };
+    case 'boolean': case 'bool': return { type: 'boolean' };
+    case '': case 'any': case 'unknown': case 'object': return {};
+    default: return { $ref: ref(t) };
+  }
+}
+// Split schema: one file per type (cross-referenced by sibling-file $ref) plus a
+// `{baseName}.schema.json` index that $refs every type.
+function generateUmlJsonSchemaFiles(diagrams: UmlDiagram[], baseName: string): { name: string; content: string }[] {
+  const { classes, enums } = umlCollectModel(diagrams);
+  const ref = (n: string) => `${n}.schema.json`;
+  const files: { name: string; content: string }[] = [];
+  for (const e of enums) {
+    files.push({ name: `${e.name}.schema.json`, content: JSON.stringify({ $schema: JSON_SCHEMA_DIALECT, $id: `${e.name}.schema.json`, title: e.name, enum: e.values }, null, 2) + '\n' });
+  }
+  for (const c of classes) {
+    const properties: Record<string, unknown> = {};
+    for (const f of c.fields) properties[f.name] = jsonTypeFromTs(f.type, ref);
+    const required = c.fields.filter((f) => !f.optional).map((f) => f.name);
+    files.push({ name: `${c.name}.schema.json`, content: JSON.stringify({ $schema: JSON_SCHEMA_DIALECT, $id: `${c.name}.schema.json`, title: c.name, type: 'object', properties, ...(required.length ? { required } : {}) }, null, 2) + '\n' });
+  }
+  const $defs: Record<string, unknown> = {};
+  for (const e of enums) $defs[e.name] = { $ref: ref(e.name) };
+  for (const c of classes) $defs[c.name] = { $ref: ref(c.name) };
+  files.push({ name: `${baseName}.schema.json`, content: JSON.stringify({ $schema: JSON_SCHEMA_DIALECT, title: baseName, $defs }, null, 2) + '\n' });
+  return files;
+}
+
+const TS_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+function generateUmlDts(diagrams: UmlDiagram[]): string {
+  const { classes, enums } = umlCollectModel(diagrams);
+  const blocks: string[] = [];
+  for (const e of enums) {
+    const union = e.values.length ? e.values.map((v) => JSON.stringify(v)).join(' | ') : 'never';
+    blocks.push(`export type ${e.name} = ${union};`);
+  }
+  for (const c of classes) {
+    const lines: string[] = [];
+    for (const f of c.fields) lines.push(`  ${TS_IDENT.test(f.name) ? f.name : JSON.stringify(f.name)}${f.optional ? '?' : ''}: ${f.type || 'unknown'};`);
+    for (const m of c.methods) lines.push(`  ${m.replace(/;$/, '')};`);
+    blocks.push(`export interface ${c.name} {\n${lines.join('\n')}\n}`);
+  }
+  return (blocks.length ? blocks.join('\n\n') : '// (no classes/enums in the model)') + '\n';
+}
+
 async function ensureUmlDir(userName: string): Promise<void> {
   const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/mkdir`, window.location.origin);
   u.searchParams.set('path', userRootPath(userName, UML_DIR));
@@ -248,6 +417,22 @@ let idSeq = 1;
 const nextId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${idSeq++}`;
 const member = (kind: MemberKind, text: string, category?: string): UmlMember => ({ id: nextId('m'), kind, text, category });
 
+// Reorder a member (by id) to another member's slot, within its own kind, while
+// keeping the positions of the other kind's members untouched.
+function reorderWithinKind(ms: UmlMember[], fromId: string, toId: string): UmlMember[] {
+  const moving = ms.find((m) => m.id === fromId);
+  if (!moving) return ms;
+  const kind = moving.kind;
+  const sameKind = ms.filter((m) => m.kind === kind);
+  const fromIdx = sameKind.findIndex((m) => m.id === fromId);
+  const toIdx = sameKind.findIndex((m) => m.id === toId);
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return ms;
+  const [mv] = sameKind.splice(fromIdx, 1);
+  sameKind.splice(toIdx, 0, mv);
+  let i = 0;
+  return ms.map((m) => (m.kind === kind ? sameKind[i++] : m));
+}
+
 function makeNode(kind: UmlKind, position: { x: number; y: number }): UmlNode {
   const members = kind === 'enum'
     ? [member('field', 'VALUE_A'), member('field', 'VALUE_B')]
@@ -282,7 +467,7 @@ function initialHistory(diagrams: UmlDiagram[], linkedPath: string | undefined, 
 
 function makeProject(name: string, seeded: boolean): UmlProject {
   const diagrams = [seeded ? seedDiagram('Diagram 1') : emptyDiagram('Diagram 1')];
-  return { type: 'uml-project', version: 2, name, diagrams, history: initialHistory(diagrams, undefined, 'Początek'), updatedAt: Date.now() };
+  return { type: 'uml-project', version: 2, name, diagrams, history: initialHistory(diagrams, undefined, 'Początek'), updatedAt: Date.now(), outputs: [] };
 }
 
 /** Accept any saved shape (v1 string-array members or v2) → canonical v2. */
@@ -322,7 +507,7 @@ function migrateProject(raw: unknown): UmlProject {
     }
     history = { commits, branches: history.branches, head: history.head };
   }
-  return { type: 'uml-project', version: 2, name: r.name ?? 'Project', linkedPath: r.linkedPath, diagrams, history, updatedAt: r.updatedAt ?? Date.now() };
+  return { type: 'uml-project', version: 2, name: r.name ?? 'Project', linkedPath: r.linkedPath, diagrams, history, updatedAt: r.updatedAt ?? Date.now(), outputs: Array.isArray(r.outputs) ? (r.outputs.filter((x: unknown) => typeof x === 'string') as string[]) : [] };
 }
 
 const cleanNodes = (nodes: UmlNode[]): UmlNode[] => nodes.map((n) => ({ id: n.id, type: 'umlClass', position: n.position, data: n.data }));
@@ -839,7 +1024,18 @@ function flattenTree(node: FileTreeNode, depth: number, collapsed: Set<string>, 
   if (!eff.isFile && !collapsed.has(eff.path)) for (const c of children) flattenTree(c, depth + 1, collapsed, out);
 }
 
-function LinkedFilesPanel({ projectLinkedPath, items, onPreview, onClose }: { projectLinkedPath?: string; items: { file: string; linker: Linker }[]; onPreview: (rel: string) => void; onClose: () => void }) {
+function LinkedFilesPanel({ projectLinkedPath, items, onPreview, onClose, width = 280, outputs = [], generating = null, onAddOutput, onRemoveOutput, onGenerate }: {
+  projectLinkedPath?: string;
+  items: { file: string; linker: Linker }[];
+  onPreview: (rel: string) => void;
+  onClose: () => void;
+  width?: number;
+  outputs?: string[];
+  generating?: string | null;
+  onAddOutput?: () => void;
+  onRemoveOutput?: (file: string) => void;
+  onGenerate?: (file: string) => void;
+}) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const tree = useMemo(() => buildFileTree(items), [items]);
   const rows = useMemo(() => {
@@ -850,7 +1046,7 @@ function LinkedFilesPanel({ projectLinkedPath, items, onPreview, onClose }: { pr
   }, [tree, collapsed]);
   const toggle = (path: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(path)) n.delete(path); else n.add(path); return n; });
   return (
-    <Box sx={{ width: 280, borderLeft: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box sx={{ width, borderLeft: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
         <AccountTreeIcon fontSize="small" color="action" />
         <Typography variant="subtitle2" sx={{ flex: 1 }}>Powiązane pliki</Typography>
@@ -862,6 +1058,51 @@ function LinkedFilesPanel({ projectLinkedPath, items, onPreview, onClose }: { pr
           <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' }}>{projectLinkedPath}</Typography>
         </Box>
       )}
+
+      {/* Output files generated from the UML model */}
+      <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Box sx={{ px: 1.5, py: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>Pliki wyjściowe</Typography>
+          {onAddOutput && <Button size="small" onClick={onAddOutput} sx={{ minWidth: 0, px: 1 }}>+ Dodaj</Button>}
+        </Box>
+        {outputs.length === 0 ? (
+          <Typography variant="caption" color="text.disabled" sx={{ px: 1.5, pb: 0.75, display: 'block' }}>
+            Dodaj *.schema.json lub *.d.ts, aby generować z modelu.
+          </Typography>
+        ) : (
+          <List dense disablePadding>
+            {outputs.map((f) => {
+              const base = f.split('/').pop() || f;
+              const kind = /\.schema\.json$/i.test(f) ? 'JSON Schema' : /\.d\.ts$/i.test(f) ? 'typy TS' : '—';
+              return (
+                <ListItem key={f} disablePadding sx={{ pr: 0.5 }}
+                  secondaryAction={
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <Tooltip title={`Generuj (${kind}) z modelu UML`}>
+                        <span>
+                          <IconButton size="small" color="success" onClick={() => onGenerate?.(f)} disabled={generating === f}>
+                            {generating === f ? <CircularProgress size={14} /> : <PlayArrowIcon sx={{ fontSize: 17 }} />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      {onRemoveOutput && (
+                        <Tooltip title="Usuń"><IconButton size="small" onClick={() => onRemoveOutput(f)}><CloseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                      )}
+                    </Box>
+                  }>
+                  <ListItemButton sx={{ py: 0.25, pr: 9 }} onClick={() => onPreview(f)}>
+                    <ListItemIcon sx={{ minWidth: 26 }}><InsertDriveFileIcon sx={{ fontSize: 16 }} color="action" /></ListItemIcon>
+                    <ListItemText primary={base} secondary={kind}
+                      primaryTypographyProps={{ noWrap: true, fontSize: 12, fontFamily: 'monospace' }}
+                      secondaryTypographyProps={{ noWrap: true, fontSize: 10 }} />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
+          </List>
+        )}
+      </Box>
+
       <Box sx={{ flex: 1, overflowY: 'auto' }}>
         {items.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ p: 1.5 }}>Brak powiązanych plików. Zaznacz klasę i użyj „Powiąż z plikiem".</Typography>
@@ -931,11 +1172,13 @@ function CategoryPicker({ value, categories, listId, onChange }: {
 // Member list editor (properties panel section)
 // ──────────────────────────────────────────────────────────────────────────
 
-function MemberSection({ title, members, categories, onAdd, onChange, onCategory, onDelete }: {
+function MemberSection({ title, members, categories, onAdd, onChange, onCategory, onDelete, onReorder }: {
   title: string; members: UmlMember[]; categories: string[];
   onAdd: () => void; onChange: (id: string, text: string) => void; onCategory: (id: string, category: string) => void; onDelete: (id: string) => void;
+  onReorder: (fromId: string, toId: string) => void;
 }) {
   const listId = `uml-cat-${title.replace(/\s+/g, '-')}`;
+  const dragId = useRef<string | null>(null);
   return (
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between">
@@ -947,7 +1190,19 @@ function MemberSection({ title, members, categories, onAdd, onChange, onCategory
         {members.map((m) => {
           const sig = memberSigil(m.text);
           return (
-            <Stack key={m.id} direction="row" spacing={0.5} alignItems="flex-start">
+            <Stack key={m.id} direction="row" spacing={0.5} alignItems="flex-start"
+              onDragOver={(e) => { if (dragId.current) e.preventDefault(); }}
+              onDrop={(e) => { e.preventDefault(); const from = dragId.current; dragId.current = null; if (from && from !== m.id) onReorder(from, m.id); }}>
+              {/* Drag handle — reorder within this section */}
+              <Box
+                draggable
+                onDragStart={(e) => { dragId.current = m.id; e.dataTransfer.effectAllowed = 'move'; }}
+                onDragEnd={() => { dragId.current = null; }}
+                title="Przeciągnij, aby zmienić kolejność"
+                sx={{ display: 'flex', alignItems: 'center', alignSelf: 'stretch', cursor: 'grab', color: 'text.disabled', '&:hover': { color: 'text.secondary' }, '&:active': { cursor: 'grabbing' } }}
+              >
+                <DragIndicatorIcon sx={{ fontSize: 16 }} />
+              </Box>
               {/* Left column: visibility dot + category dot, stacked — together same height as text field */}
               <Stack spacing="1px" sx={{ flexShrink: 0 }}>
                 <TextField
@@ -984,6 +1239,44 @@ function MemberSection({ title, members, categories, onAdd, onChange, onCategory
 // Editor
 // ──────────────────────────────────────────────────────────────────────────
 
+// Persisted resizable-panel width (survives reloads via localStorage).
+function usePersistentWidth(key: string, initial: number): [number, (w: number) => void] {
+  const [width, setWidth] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem(key)); return Number.isFinite(v) && v > 0 ? v : initial; } catch { return initial; }
+  });
+  const set = useCallback((w: number) => {
+    setWidth(w);
+    try { localStorage.setItem(key, String(Math.round(w))); } catch { /* ignore */ }
+  }, [key]);
+  return [width, set];
+}
+
+// Vertical drag handle that resizes the adjacent side panel. `side` tells which
+// side the panel sits on relative to the handle. Desktop only (panels overlay
+// on mobile, where dragging makes no sense).
+function ResizeHandle({ side, width, setWidth, min = 160, max = 700 }: {
+  side: 'left' | 'right'; width: number; setWidth: (w: number) => void; min?: number; max?: number;
+}) {
+  const start = useRef<{ x: number; w: number } | null>(null);
+  return (
+    <Box
+      onPointerDown={(e) => { start.current = { x: e.clientX, w: width }; (e.target as HTMLElement).setPointerCapture(e.pointerId); }}
+      onPointerMove={(e) => {
+        if (!start.current) return;
+        const dx = e.clientX - start.current.x;
+        const w = side === 'left' ? start.current.w + dx : start.current.w - dx;
+        setWidth(Math.max(min, Math.min(max, w)));
+      }}
+      onPointerUp={(e) => { start.current = null; try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ } }}
+      sx={{
+        display: { xs: 'none', md: 'block' }, flexShrink: 0, width: '6px', cursor: 'col-resize',
+        bgcolor: 'transparent', '&:hover': { bgcolor: 'primary.main', opacity: 0.5 },
+        transition: 'background-color .15s', zIndex: 7,
+      }}
+    />
+  );
+}
+
 function UmlEditor({ userName }: { userName: string }) {
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [project, setProject] = useState<UmlProject | null>(null);
@@ -1001,6 +1294,9 @@ function UmlEditor({ userName }: { userName: string }) {
   const [picker, setPicker] = useState<{ mode: 'dir' | 'file'; title: string; onPick: (rel: string) => void } | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [showFilesPanel, setShowFilesPanel] = useState(false);
+  const [generating, setGenerating] = useState<string | null>(null);
+  const [outputDialog, setOutputDialog] = useState(false);
+  const [outputPath, setOutputPath] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null); // null = wszystkie kategorie
   const [commitOpen, setCommitOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1015,6 +1311,10 @@ function UmlEditor({ userName }: { userName: string }) {
   // desktop, hidden on mobile (so the canvas gets the full width).
   const [treeOpen, setTreeOpen] = useState(!isNarrow);
   const [propsOpen, setPropsOpen] = useState(!isNarrow);
+  // Resizable side-panel widths (persisted so the layout survives reloads).
+  const [treeWidth, setTreeWidth] = usePersistentWidth('uml.treeWidth', 250);
+  const [propsWidth, setPropsWidth] = usePersistentWidth('uml.propsWidth', 290);
+  const [filesWidth, setFilesWidth] = usePersistentWidth('uml.filesWidth', 280);
 
   const refreshProjects = useCallback(async () => setProjectFiles(await listProjectFiles(userName)), [userName]);
 
@@ -1238,6 +1538,47 @@ function UmlEditor({ userName }: { userName: string }) {
   }, [userName, projectFile, openProject]);
 
   // ── Associations ──────────────────────────────────────────────────────────
+  // ── Output files (generated from the model) ────────────────────────────────
+  const addOutput = useCallback((file: string) => {
+    const f = file.trim();
+    if (!f) return;
+    setProject((p) => (p && !(p.outputs ?? []).includes(f) ? { ...p, outputs: [...(p.outputs ?? []), f] } : p));
+    setDirty(true);
+  }, []);
+  const removeOutput = useCallback((file: string) => {
+    setProject((p) => p && ({ ...p, outputs: (p.outputs ?? []).filter((x) => x !== file) }));
+    setDirty(true);
+  }, []);
+  const generateOutput = useCallback(async (file: string) => {
+    if (!project) return;
+    setGenerating(file);
+    try {
+      const diagrams = commitActive(project).diagrams; // include unsaved edits
+      const base = (file.split('/').pop() || file).replace(/\.(schema\.json|d\.ts)$/i, '');
+      if (/\.schema\.json$/i.test(file)) {
+        // Split into one file per type inside a `{base}/` folder next to the output.
+        const dir = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
+        const subdir = (dir ? `${dir}/` : '') + base;
+        const out = generateUmlJsonSchemaFiles(diagrams, base);
+        for (const ff of out) await vfsWriteText(userName, `${subdir}/${ff.name}`, ff.content);
+        setToast({ msg: `Wygenerowano ${out.length} plików schematu w ${subdir}/`, sev: 'success' });
+      } else if (/\.d\.ts$/i.test(file)) {
+        await vfsWriteText(userName, file, generateUmlDts(diagrams));
+        setToast({ msg: `Wygenerowano ${file}`, sev: 'success' });
+      } else {
+        setToast({ msg: 'Nieobsługiwane rozszerzenie — użyj *.schema.json lub *.d.ts', sev: 'error' });
+      }
+    } catch (e) {
+      setToast({ msg: e instanceof Error ? e.message : 'Błąd generowania', sev: 'error' });
+    } finally {
+      setGenerating(null);
+    }
+  }, [project, userName, commitActive]);
+  const openOutputDialog = useCallback(() => {
+    setOutputPath(project?.linkedPath ? `${project.linkedPath}/` : '');
+    setOutputDialog(true);
+  }, [project]);
+
   const pickProjectDir = useCallback(() => setPicker({ mode: 'dir', title: 'Powiąż projekt z katalogiem', onPick: (rel) => { setProject((p) => p && ({ ...p, linkedPath: rel })); setDirty(true); } }), []);
   const clearProjectDir = useCallback(() => { setProject((p) => p && ({ ...p, linkedPath: undefined })); setDirty(true); }, []);
   const pickNodeFile = useCallback((nodeId: string) => setPicker({ mode: 'file', title: 'Powiąż klasę z plikiem źródłowym', onPick: (rel) => patchNodeData(nodeId, { linkedFile: rel }) }), [patchNodeData]);
@@ -1251,7 +1592,8 @@ function UmlEditor({ userName }: { userName: string }) {
     try {
       const current = commitActive(project);
       const res = await minisApi.syncUmlFromCode<UmlProject>(userName, dir, current, current.name);
-      const np: UmlProject = { ...res.project, linkedPath: res.project.linkedPath ?? dir };
+      // Recognise `name?: type` fields coming from the parser as "optional".
+      const np: UmlProject = normalizeOptionalProject({ ...res.project, linkedPath: res.project.linkedPath ?? dir });
       setProject(np);
       loadDiagramIntoCanvas(np.diagrams[0]);
       setDirty(true);
@@ -1326,7 +1668,7 @@ function UmlEditor({ userName }: { userName: string }) {
 
       <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         {/* Left: projects + diagrams — overlay on mobile so the canvas keeps full width */}
-        <Box sx={{ width: 250, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', overflowY: 'auto', bgcolor: 'background.paper', flexDirection: 'column',
+        <Box sx={{ width: treeWidth, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', overflowY: 'auto', bgcolor: 'background.paper', flexDirection: 'column',
           display: treeOpen ? 'flex' : 'none',
           position: { xs: 'absolute', md: 'relative' }, left: 0, top: 0, height: '100%', zIndex: 6, boxShadow: { xs: 6, md: 0 } }}>
           <Box sx={{ display: 'flex', alignItems: 'center', px: 1, pt: 0.5 }}>
@@ -1353,6 +1695,7 @@ function UmlEditor({ userName }: { userName: string }) {
             })}
           </List>
         </Box>
+        {treeOpen && <ResizeHandle side="left" width={treeWidth} setWidth={setTreeWidth} />}
 
         {/* Center: canvas — minWidth:0 so it never collapses; key re-fits on diagram change */}
         <Box sx={{ flex: 1, minWidth: 0, position: 'relative' }}>
@@ -1368,8 +1711,9 @@ function UmlEditor({ userName }: { userName: string }) {
           </CategoryFilterContext.Provider>
         </Box>
 
+        {propsOpen && <ResizeHandle side="right" width={propsWidth} setWidth={setPropsWidth} />}
         {/* Right: properties — overlay on mobile, opens when something is selected */}
-        <Box sx={{ width: 290, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', overflowY: 'auto', p: 1.5, bgcolor: 'background.paper',
+        <Box sx={{ width: propsWidth, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', overflowY: 'auto', p: 1.5, bgcolor: 'background.paper',
           display: propsOpen ? 'block' : 'none',
           position: { xs: 'absolute', md: 'relative' }, right: 0, top: 0, height: '100%', zIndex: 6, boxShadow: { xs: 6, md: 0 } }}>
           <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
@@ -1389,16 +1733,18 @@ function UmlEditor({ userName }: { userName: string }) {
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Fields</Typography></Divider>
               <MemberSection title="Fields" members={selFields} categories={allCategories}
                 onAdd={() => updateMembers(selectedNode.id, (ms) => [...ms, member('field', '- field: type')])}
-                onChange={(mid, text) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, text } : m)))}
+                onChange={(mid, text) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, text, category: fieldNameOptional(text) ? 'optional' : m.category } : m)))}
                 onCategory={(mid, category) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, category: category || undefined } : m)))}
-                onDelete={(mid) => updateMembers(selectedNode.id, (ms) => ms.filter((m) => m.id !== mid))} />
+                onDelete={(mid) => updateMembers(selectedNode.id, (ms) => ms.filter((m) => m.id !== mid))}
+                onReorder={(from, to) => updateMembers(selectedNode.id, (ms) => reorderWithinKind(ms, from, to))} />
 
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Methods</Typography></Divider>
               <MemberSection title="Methods" members={selMethods} categories={allCategories}
                 onAdd={() => updateMembers(selectedNode.id, (ms) => [...ms, member('method', '+ method(): void')])}
                 onChange={(mid, text) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, text } : m)))}
                 onCategory={(mid, category) => updateMembers(selectedNode.id, (ms) => ms.map((m) => (m.id === mid ? { ...m, category: category || undefined } : m)))}
-                onDelete={(mid) => updateMembers(selectedNode.id, (ms) => ms.filter((m) => m.id !== mid))} />
+                onDelete={(mid) => updateMembers(selectedNode.id, (ms) => ms.filter((m) => m.id !== mid))}
+                onReorder={(from, to) => updateMembers(selectedNode.id, (ms) => reorderWithinKind(ms, from, to))} />
 
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Powiązany plik</Typography></Divider>
               {selectedNode.data.linkedFile ? (
@@ -1429,14 +1775,51 @@ function UmlEditor({ userName }: { userName: string }) {
         </Box>
 
         {/* Far right: linked-files tree (toggleable) — overlay on mobile */}
+        {showFilesPanel && <ResizeHandle side="right" width={filesWidth} setWidth={setFilesWidth} />}
         {showFilesPanel && (
           <Box sx={{ flexShrink: 0, position: { xs: 'absolute', md: 'relative' }, right: 0, top: 0, height: '100%', zIndex: 7, boxShadow: { xs: 6, md: 0 } }}>
-            <LinkedFilesPanel projectLinkedPath={project?.linkedPath} items={linkedItems} onPreview={(rel) => setPreviewRel(rel)} onClose={() => setShowFilesPanel(false)} />
+            <LinkedFilesPanel width={filesWidth} projectLinkedPath={project?.linkedPath} items={linkedItems}
+              outputs={project?.outputs ?? []} generating={generating}
+              onAddOutput={openOutputDialog} onRemoveOutput={removeOutput} onGenerate={generateOutput}
+              onPreview={(rel) => setPreviewRel(rel)} onClose={() => setShowFilesPanel(false)} />
           </Box>
         )}
       </Box>
 
       {picker && <VfsPickerDialog open userName={userName} mode={picker.mode} title={picker.title} onPick={picker.onPick} onClose={() => setPicker(null)} />}
+      <Dialog open={outputDialog} onClose={() => setOutputDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Dodaj plik wyjściowy</DialogTitle>
+        <DialogContent>
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mt: 1 }}>
+            <TextField
+              autoFocus fullWidth size="small"
+              label="Ścieżka (od katalogu użytkownika)"
+              placeholder="drive/uml/Model.d.ts"
+              value={outputPath}
+              onChange={(e) => setOutputPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && outputPath.trim()) { addOutput(outputPath); setOutputDialog(false); } }}
+              helperText="Pliki w Drive zaczynają się od „drive/”. Rozszerzenie wybiera generator: *.schema.json → JSON Schema, *.d.ts → typy TS."
+            />
+            <Button size="small" sx={{ mt: 0.5, whiteSpace: 'nowrap' }}
+              onClick={() => setPicker({ mode: 'dir', title: 'Wybierz folder docelowy (np. w drive/…)', onPick: (rel) => {
+                const fn = outputPath.split('/').pop() || 'Model.d.ts';
+                setOutputPath(`${rel.replace(/\/+$/, '')}/${fn}`);
+              } })}>
+              Folder…
+            </Button>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOutputDialog(false)}>Anuluj</Button>
+          <Button
+            variant="contained"
+            disabled={!/\.(schema\.json|d\.ts)$/i.test(outputPath.trim())}
+            onClick={() => { addOutput(outputPath); setOutputDialog(false); }}
+          >
+            Dodaj
+          </Button>
+        </DialogActions>
+      </Dialog>
       <FilePreviewDialog open={!!previewRel} userName={userName} rel={previewRel} onClose={() => setPreviewRel(null)} />
       <CommitDialog open={commitOpen} canCommit={uncommitted} onCommit={doCommit} onClose={() => setCommitOpen(false)} />
       <HistoryDialog open={historyOpen} history={project?.history ?? null} uncommitted={uncommitted} onClose={() => setHistoryOpen(false)} onCheckoutBranch={checkoutBranch} onNewBranch={newBranch} onRestore={restoreCommit} />

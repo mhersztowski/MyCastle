@@ -204,6 +204,7 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
           lib: ['es2020', 'dom'],
           noEmit: true,
           isolatedModules: true,
+          allowImportingTsExtensions: true, // `import 'mycastle/…/index.ts'` (explicit .ts)
         });
       } catch (err) {
         console.warn('[TSPlugin] setCompilerOptions failed:', err);
@@ -217,7 +218,7 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
           noSyntaxValidation: false,
           // Cannot find module errors are noisy when packages resolve through
           // our model registry rather than the worker's own resolver.
-          diagnosticCodesToIgnore: [2307, 2792, 7016],
+          diagnosticCodesToIgnore: [2307, 2792, 7016, 2691],
         });
       } catch { /* older Monaco — ignore */ }
 
@@ -756,6 +757,58 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
         await resolveImports(vfsPath, content, nodeModulesDir, visited);
       }
 
+      // ── `mycastle/…` imports: resolve against the backend monorepo source ────
+      // The editor can't reach the monorepo filesystem, so we fetch source files
+      // from GET /api/mycastle-src and register them under
+      // file:///node_modules/mycastle/<repoRel> — that path lets TypeScript's node
+      // resolution satisfy `import 'mycastle/packages/…/index.ts'`.
+      const mcAuthHeaders = (): Record<string, string> => {
+        try {
+          const raw = localStorage.getItem('minis_current_user');
+          const token = raw ? (JSON.parse(raw) as { token?: string }).token : undefined;
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        } catch { return {}; }
+      };
+      const fetchMycastleSrc = async (repoRel: string): Promise<string | null> => {
+        try {
+          const u = new URL('/api/mycastle-src', window.location.origin);
+          u.searchParams.set('path', repoRel);
+          const r = await fetch(u.pathname + u.search, { headers: mcAuthHeaders() });
+          return r.ok ? await r.text() : null;
+        } catch { return null; }
+      };
+      const joinRepo = (dir: string, spec: string): string => {
+        const out: string[] = [];
+        for (const p of `${dir ? dir + '/' : ''}${spec}`.split('/')) {
+          if (p === '..') out.pop();
+          else if (p !== '.' && p !== '') out.push(p);
+        }
+        return out.join('/');
+      };
+      async function resolveMycastleFile(repoRel: string, visited: Set<string>): Promise<void> {
+        repoRel = repoRel.replace(/^\/+/, '');
+        const key = `mc:${repoRel}`;
+        if (visited.has(key)) return;
+        visited.add(key);
+        const hasExt = /\.(d\.ts|ts|tsx|js|jsx|mts|cts|json)$/i.test(repoRel);
+        const candidates = hasExt
+          ? [repoRel]
+          : [`${repoRel}.ts`, `${repoRel}.tsx`, `${repoRel}/index.ts`, `${repoRel}/index.tsx`, `${repoRel}.d.ts`, `${repoRel}.js`];
+        for (const c of candidates) {
+          const content = await fetchMycastleSrc(c);
+          if (content === null) continue;
+          const modelUri = `file:///node_modules/mycastle/${c}`;
+          if (c.endsWith('.d.ts')) registerDtsLib(modelUri, content);
+          else registerLib(modelUri, content);
+          const dir = c.split('/').slice(0, -1).join('/');
+          await Promise.allSettled(extractSpecifiers(content).map(async (spec) => {
+            if (spec.startsWith('.')) await resolveMycastleFile(joinRepo(dir, spec), visited);
+            else if (spec.startsWith('mycastle/')) await resolveMycastleFile(spec.slice('mycastle/'.length), visited);
+          }));
+          return;
+        }
+      }
+
       /** Resolve all imports found in a file (receives VFS path). */
       async function resolveImports(
         currentVfsPath: string,
@@ -780,6 +833,9 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
                 break;
               }
             }
+          } else if (spec === 'mycastle' || spec.startsWith('mycastle/')) {
+            // MyCastle monorepo source (fetched from the backend).
+            await resolveMycastleFile(spec.replace(/^mycastle\/?/, ''), visited);
           } else if (!spec.startsWith('node:') && !spec.startsWith('bun:')) {
             // npm package
             await resolvePackage(pkgNameFrom(spec), nodeModulesDir);

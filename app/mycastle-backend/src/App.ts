@@ -64,7 +64,9 @@ export class App {
   readonly secretsService: SecretsService;
   readonly gitService: GitService;
   private _mqttServer!: MqttServer;
-  serverLogic!: IotServer;
+  // Only set when SERVER_LOGIC_AUTOSTART=true. Otherwise the server-logic layer
+  // is expected to be started from a user backend script.
+  serverLogic?: IotServer;
   private terminalService!: TerminalService;
   private lspProxyService!: LspProxyService;
   private jwtService: JwtService;
@@ -287,22 +289,30 @@ export class App {
     });
     console.log('IoT service started (SQLite + MQTT)');
 
-    // Wire the server-logic layer (server/user/client MQTT control plane).
-    const serverLogicTransport: IMqttTransport = {
-      publish: (topic, payload) => this._mqttServer.publishMessage(topic, payload),
-      subscribe: (handler) => this._mqttServer.onMessage(handler),
-    };
-    this.serverLogic = new IotServer({
-      transport: serverLogicTransport,
-      staleClientMs: 60_000,
-      cronScheduler: { schedule: (expr, fn) => cron.schedule(expr, () => void fn()) },
-      // Stream log/activity/clients on the server outbox for the Server Logic page.
-      broadcastLog: true,
-      broadcastActivity: true,
-      broadcastClients: true,
-    });
-    this.serverLogic.start();
-    console.log('Server logic started (server/user/client MQTT topics)');
+    // Server-logic layer (server/user/client MQTT control plane).
+    // Auto-start is OFF by default — run it yourself from a backend script
+    // (`import 'mycastle/packages/server-logic/src/index.ts'`). The Server Logic
+    // client page stays available regardless; it just shows data once some
+    // IotServer instance is publishing on the MQTT bus.
+    if (process.env.SERVER_LOGIC_AUTOSTART === 'true') {
+      const serverLogicTransport: IMqttTransport = {
+        publish: (topic, payload) => this._mqttServer.publishMessage(topic, payload),
+        subscribe: (handler) => this._mqttServer.onMessage(handler),
+      };
+      this.serverLogic = new IotServer({
+        transport: serverLogicTransport,
+        staleClientMs: 60_000,
+        cronScheduler: { schedule: (expr, fn) => cron.schedule(expr, () => void fn()) },
+        // Stream log/activity/clients on the server outbox for the Server Logic page.
+        broadcastLog: true,
+        broadcastActivity: true,
+        broadcastClients: true,
+      });
+      this.serverLogic.start();
+      console.log('Server logic started (server/user/client MQTT topics)');
+    } else {
+      console.log('Server logic auto-start disabled (set SERVER_LOGIC_AUTOSTART=true to enable) — start it from a backend script instead');
+    }
 
     // Load user backend plugins (build + activate; routes dispatched by the HTTP server)
     try {
