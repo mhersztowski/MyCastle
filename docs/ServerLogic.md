@@ -151,8 +151,11 @@ Outbox: /server/outbox
 
 Topic w mqtt **clienta**
 Inbox: /UserName/DeviceClientType/id/inbox
+
 Outbox: /UserName/DeviceClientType/id/outbox
+
 Services: /UserName/DeviceClientType/id/service-list MqttList<services>
+
 Devices: /UserName/DeviceClientType/id/device-list MqttList<devices>
 
 client-> server (Inbox)
