@@ -159,7 +159,8 @@ Services: /UserName/DeviceClientType/id/service-list MqttList<services>
 Devices: /UserName/DeviceClientType/id/device-list MqttList<devices>
 
 client-> server (Inbox)
-client-new { userName, id } rejestrowanie nowego
+client-new { userName, id } rejestrowanie nowego clienta
+
 
 
 Pakiety:
