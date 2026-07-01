@@ -1,14 +1,14 @@
 /**
  * Core identity & enumerations for the server-logic layer.
  *
- * A client is identified by (UserName, Device, ClientType, Id) — see ServerLogic.md.
+ * A client is identified by (UserName, ClientType, ClientMajorType, Id) — see ServerLogic.md.
  */
 
 /** Rendering kind of a client connection. */
-export type ClientType = 'web' | 'native';
+export type ClientMajorType = 'web' | 'native';
 
-/** Physical/logical device class behind a connection. */
-export type DeviceKind =
+/** Kind of client behind a connection. */
+export type ClientType =
   | 'server'
   | 'desktop'
   | 'mobile'
@@ -23,8 +23,8 @@ export type DeviceKind =
 /** Fully-qualified client identity. */
 export interface ClientId {
   userName: string;
-  device: DeviceKind;
-  clientType: ClientType;
+  device: ClientType;
+  clientType: ClientMajorType;
   id: string;
 }
 
@@ -44,8 +44,8 @@ export function parseDeviceClientSegment(
 ): Pick<ClientId, 'device' | 'clientType'> | null {
   const dash = seg.lastIndexOf('-');
   if (dash <= 0) return null;
-  const device = seg.slice(0, dash) as DeviceKind;
-  const clientType = seg.slice(dash + 1) as ClientType;
+  const device = seg.slice(0, dash) as ClientType;
+  const clientType = seg.slice(dash + 1) as ClientMajorType;
   if (clientType !== 'web' && clientType !== 'native') return null;
   return { device, clientType };
 }

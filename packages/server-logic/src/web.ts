@@ -31,7 +31,7 @@ export type { TopicScope, TopicDirection, ClassifiedTopic } from './topics';
 
 // Identity (no minislib)
 export { deviceClientSegment, clientKey, parseDeviceClientSegment } from './types';
-export type { ClientType, DeviceKind, ClientId } from './types';
+export type { ClientType, ClientMajorType, ClientId } from './types';
 
 // Messages & UI events (no minislib)
 export {

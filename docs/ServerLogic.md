@@ -112,10 +112,10 @@ Client identyfikowany jest przez
 UserName, Device, clientType, Id
 
 
-Device: desktop, mobile, watch, tv, car, vr, iot
+Device (ClientType): server, desktop, mobile, watch, tv, car, vr, iot, cli, game
 
 
-ClientType: web, native
+clientType (ClientMajorType): web, native
 
 
 
@@ -170,8 +170,9 @@ interface Envelope<T = unknown> {
 ```
 
 **Identity (zaimplementowane):**
-`DeviceKind = server | desktop | mobile | tv | watch | car | vr | iot | cli | game`,
-`ClientType = web | native`. Segment topiku: `{device}-{clientType}`.
+`ClientType = server | desktop | mobile | tv | watch | car | vr | iot | cli | game`
+(pole `device`), `ClientMajorType = web | native` (pole `clientType`).
+Segment topiku: `{device}-{clientType}` (np. `desktop-native`).
 
 
 
@@ -313,7 +314,11 @@ Function log(msg : ILogMessage)
   - `messages.ts` — `Envelope`, `UiEvent`, `RegisteredEntity`, `CLIENT_MESSAGE_TYPES`
   - `ClientRegistry.ts` — `ClientPresence` (+ services/devices), add/remove entity
   - `devices/` — `ClientEntity`/`Device`/`Service`, `Virtual*`, services, `catalog.ts`
-  - `web.ts` — browser-safe barrel (uzywany przez `mycastle-web`)
+  - `web.ts` — browser-safe barrel (uzywany przez `mycastle-web` i `web-server-logic`)
+- `packages/web-server-logic/` — **klient przegladarki** (na bazie `server-logic/web`):
+  `WebServerLogicClient` (login/logout, register device/service, routing komend +
+  heartbeat) przez wstrzykiwany `ClientTransport` (np. `mqttClient` z web-client),
+  encje browserowe `BrowserDisplay`/`BrowserNotification`
 - `app/mycastle-web/src/pages/programming/ServerLogicPage.tsx` — UI (m.in. zakladka
   Devices/Services: drzewko client→devices/services + panel akcji z `actionsForKind`)
 - `app/client/apps/client_desktop*.py` — natywny klient (Python/PySide6): loguje sie

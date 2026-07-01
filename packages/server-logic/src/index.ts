@@ -3,7 +3,7 @@ export { IotServer } from './IotServer';
 export type { IotServerOptions } from './IotServer';
 
 // ── Identity & topics ─────────────────────────────────────────────────────────
-export type { ClientType, DeviceKind, ClientId } from './types';
+export type { ClientType, ClientMajorType, ClientId } from './types';
 export { deviceClientSegment, clientKey, parseDeviceClientSegment } from './types';
 export {
   SERVER_INBOX,
