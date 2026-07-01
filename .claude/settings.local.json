@@ -87,7 +87,9 @@
       "Bash(ls /home/mhersztowski/.claude/projects/-home-mhersztowski-myprojects-claude-MyCastle/memory/)",
       "Bash(grep -rl \"texteditor\\\\|build:backend\" /home/mhersztowski/.claude/projects/-home-mhersztowski-myprojects-claude-MyCastle/memory/)",
       "Bash(git log *)",
-      "Bash(python3 -)"
+      "Bash(python3 -)",
+      "Bash(chmod +x run_watchtower.sh)",
+      "Bash(awk '{print $1, $NF}')"
     ]
   }
 }
