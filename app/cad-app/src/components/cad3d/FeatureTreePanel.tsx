@@ -18,6 +18,10 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import LayersIcon from '@mui/icons-material/Layers';
 import GestureIcon from '@mui/icons-material/Gesture';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import TimelineIcon from '@mui/icons-material/Timeline';
+import CropSquareIcon from '@mui/icons-material/CropSquare';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import type { Feature } from '../../cad3d/types';
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -34,6 +38,10 @@ const ICONS: Record<string, React.ReactNode> = {
   sweep:      <GestureIcon fontSize="small" />,
   sweep_cut:  <GestureIcon fontSize="small" />,
   helix:   <AutorenewIcon fontSize="small" />,
+  datum_point: <FiberManualRecordIcon fontSize="small" />,
+  datum_line:  <TimelineIcon fontSize="small" />,
+  datum_plane: <CropSquareIcon fontSize="small" />,
+  datum_cs:    <GpsFixedIcon fontSize="small" />,
 };
 
 interface Props {

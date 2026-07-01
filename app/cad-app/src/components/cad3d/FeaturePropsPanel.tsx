@@ -3,7 +3,7 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import type { Feature, ExtrudeFeature, ExtrudeType, ExtrudeDirection, GrooveFeature, HelixFeature, HelixMode, HelixAxis, HoleFeature, HoleDepthType, HoleDrillPoint, HoleCounterType, LoftCutFeature, LoftFeature, LoftSection, MirrorFeature, PocketFeature, RevolveFeature, RevolveType, RevolveAxis, ShellFeature, SketchFeature, SweepCutFeature, SweepFeature, SweepCornerStyle, SweepOrientationMode, SweepTransformMode } from '../../cad3d/types';
+import type { Feature, ExtrudeFeature, ExtrudeType, ExtrudeDirection, GrooveFeature, HelixFeature, HelixMode, HelixAxis, HoleFeature, HoleDepthType, HoleDrillPoint, HoleCounterType, LoftCutFeature, LoftFeature, LoftSection, MirrorFeature, PocketFeature, RevolveFeature, RevolveType, RevolveAxis, ShellFeature, SketchFeature, SweepCutFeature, SweepFeature, SweepCornerStyle, SweepOrientationMode, SweepTransformMode, DatumPointFeature, DatumLineFeature, DatumPlaneFeature, DatumCsFeature, Vec3 } from '../../cad3d/types';
 
 interface Props {
   feature: Feature | null;
@@ -23,6 +23,70 @@ function NumField({ label, value, onChange, min, max, step = 1 }: {
       onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) onChange(v); }}
       sx={{ mb: 1.5 }}
     />
+  );
+}
+
+function Vec3Field({ label, value, onChange }: { label: string; value: Vec3; onChange: (v: Vec3) => void }) {
+  const set = (i: number, raw: string) => {
+    const n = parseFloat(raw); if (isNaN(n)) return;
+    const next: Vec3 = [...value]; next[i] = n; onChange(next);
+  };
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>{label}</Typography>
+      <Box sx={{ display: 'flex', gap: 0.5 }}>
+        {(['X', 'Y', 'Z'] as const).map((ax, i) => (
+          <TextField key={ax} label={ax} type="number" size="small" value={value[i]}
+            inputProps={{ step: 1 }} onChange={e => set(i, e.target.value)} sx={{ flex: 1 }} />
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function DatumPointProps({ f, onUpdate }: { f: DatumPointFeature; onUpdate: (p: Partial<Feature>) => void }) {
+  return <Vec3Field label="Pozycja" value={f.position} onChange={v => onUpdate({ position: v })} />;
+}
+function DatumLineProps({ f, onUpdate }: { f: DatumLineFeature; onUpdate: (p: Partial<Feature>) => void }) {
+  return (
+    <>
+      <Vec3Field label="Punkt początkowy" value={f.position} onChange={v => onUpdate({ position: v })} />
+      <Vec3Field label="Kierunek" value={f.direction} onChange={v => onUpdate({ direction: v })} />
+      <NumField label="Długość" value={f.length} onChange={v => onUpdate({ length: Math.max(0.1, v) })} min={0.1} step={5} />
+    </>
+  );
+}
+function DatumPlaneProps({ f, onUpdate }: { f: DatumPlaneFeature; onUpdate: (p: Partial<Feature>) => void }) {
+  const setNormal = (n: Vec3) => onUpdate({ normal: n });
+  return (
+    <>
+      <Vec3Field label="Pozycja" value={f.position} onChange={v => onUpdate({ position: v })} />
+      <TextField label="Orientacja" select size="small" fullWidth value={presetOf(f.normal)}
+        onChange={e => { const p = e.target.value; if (p === 'XY') setNormal([0, 0, 1]); else if (p === 'XZ') setNormal([0, 1, 0]); else if (p === 'YZ') setNormal([1, 0, 0]); }}
+        sx={{ mb: 1.5 }}>
+        <MenuItem value="XY">XY (normalna Z)</MenuItem>
+        <MenuItem value="XZ">XZ (normalna Y)</MenuItem>
+        <MenuItem value="YZ">YZ (normalna X)</MenuItem>
+        <MenuItem value="custom">Własna…</MenuItem>
+      </TextField>
+      <Vec3Field label="Normalna" value={f.normal} onChange={setNormal} />
+      <NumField label="Rozmiar" value={f.size} onChange={v => onUpdate({ size: Math.max(1, v) })} min={1} step={5} />
+    </>
+  );
+}
+function presetOf(n: Vec3): string {
+  if (n[0] === 0 && n[1] === 0 && n[2] !== 0) return 'XY';
+  if (n[0] === 0 && n[2] === 0 && n[1] !== 0) return 'XZ';
+  if (n[1] === 0 && n[2] === 0 && n[0] !== 0) return 'YZ';
+  return 'custom';
+}
+function DatumCsProps({ f, onUpdate }: { f: DatumCsFeature; onUpdate: (p: Partial<Feature>) => void }) {
+  return (
+    <>
+      <Vec3Field label="Pozycja" value={f.position} onChange={v => onUpdate({ position: v })} />
+      <Vec3Field label="Obrót (°)" value={f.rotation} onChange={v => onUpdate({ rotation: v })} />
+      <NumField label="Długość osi" value={f.size} onChange={v => onUpdate({ size: Math.max(1, v) })} min={1} step={5} />
+    </>
   );
 }
 
@@ -507,6 +571,10 @@ export function FeaturePropsPanel({ feature, features, onUpdate, onEditSketch }:
         {feature.type === 'sweep'     && <SweepProps    f={feature as SweepFeature}    features={features} onUpdate={up} />}
         {feature.type === 'sweep_cut' && <SweepCutProps f={feature as SweepCutFeature} features={features} onUpdate={up} />}
         {feature.type === 'helix'   && <HelixProps   f={feature as HelixFeature}   features={features} onUpdate={up} />}
+        {feature.type === 'datum_point' && <DatumPointProps f={feature as DatumPointFeature} onUpdate={up} />}
+        {feature.type === 'datum_line'  && <DatumLineProps  f={feature as DatumLineFeature}  onUpdate={up} />}
+        {feature.type === 'datum_plane' && <DatumPlaneProps f={feature as DatumPlaneFeature} onUpdate={up} />}
+        {feature.type === 'datum_cs'    && <DatumCsProps    f={feature as DatumCsFeature}    onUpdate={up} />}
       </Box>
     </Box>
   );

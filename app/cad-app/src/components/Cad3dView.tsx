@@ -20,6 +20,7 @@ import NearMeIcon from '@mui/icons-material/NearMe';
 import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import type { Project } from '@mhersztowski/core-cad';
 import { useCad3d } from '../cad3d/useCad3d';
 import { Cad3dViewport } from './cad3d/Cad3dViewport';
@@ -80,11 +81,13 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
     addSketch, startEditSketch, exitSketch, getSketchProject,
     addExtrude, addPocket, addHole, addGroove,
     addMirror, addRevolve, addShell, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
+    addDatumPoint, addDatumLine, addDatumPlane, addDatumCs,
     removeFeature, updateFeature, toggleFeature, moveFeature,
     selectFeature, clearTree,
   } = useCad3d();
 
   const [sketchMenuAnchor, setSketchMenuAnchor] = useState<null | HTMLElement>(null);
+  const [datumMenuAnchor, setDatumMenuAnchor] = useState<null | HTMLElement>(null);
   const [sceneRoot, setSceneRoot] = useState<THREE.Object3D | null>(null);
   const [subSelectMode, setSubSelectMode] = useState<SubSelectMode>('object');
   const [subHit, setSubHit] = useState<SubHit | null>(null);
@@ -227,6 +230,22 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
             <Button startIcon={<AutorenewIcon />} onClick={() => addHelix()}>Helix</Button>
           </Tooltip>
         </ButtonGroup>
+
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+
+        {/* Odniesienia (datum) — punkt / linia / płaszczyzna / układ współrzędnych */}
+        <Tooltip title="Odniesienia: punkt, linia, płaszczyzna, układ współrzędnych">
+          <Button size="small" variant="outlined" startIcon={<GpsFixedIcon />} endIcon={<ArrowDropDownIcon />}
+            onClick={e => setDatumMenuAnchor(e.currentTarget)}>
+            Odniesienia
+          </Button>
+        </Tooltip>
+        <Menu anchorEl={datumMenuAnchor} open={Boolean(datumMenuAnchor)} onClose={() => setDatumMenuAnchor(null)}>
+          <MenuItem onClick={() => { setDatumMenuAnchor(null); addDatumPoint(); }}>Punkt odniesienia</MenuItem>
+          <MenuItem onClick={() => { setDatumMenuAnchor(null); addDatumLine(); }}>Linia odniesienia</MenuItem>
+          <MenuItem onClick={() => { setDatumMenuAnchor(null); addDatumPlane(); }}>Płaszczyzna odniesienia</MenuItem>
+          <MenuItem onClick={() => { setDatumMenuAnchor(null); addDatumCs(); }}>Układ współrzędnych</MenuItem>
+        </Menu>
 
         <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { Project } from '@mhersztowski/core-cad';
 import type { Feature, FeatureTree, SketchFeature, SketchPlane } from './types';
-import { defaultExtrude, defaultGroove, defaultHelix, defaultHole, defaultLoft, defaultLoftCut, defaultMirror, defaultPocket, defaultRevolve, defaultShell, defaultSketch, defaultSweep, defaultSweepCut } from './types';
+import { defaultDatumCs, defaultDatumLine, defaultDatumPlane, defaultDatumPoint, defaultExtrude, defaultGroove, defaultHelix, defaultHole, defaultLoft, defaultLoftCut, defaultMirror, defaultPocket, defaultRevolve, defaultShell, defaultSketch, defaultSweep, defaultSweepCut } from './types';
 
 const STORAGE_KEY = 'cad3d-feature-tree';
 
@@ -38,6 +38,10 @@ export interface Cad3dState {
   addSweep: () => void;
   addSweepCut: () => void;
   addHelix: () => void;
+  addDatumPoint: () => void;
+  addDatumLine: () => void;
+  addDatumPlane: () => void;
+  addDatumCs: () => void;
   removeFeature: (id: string) => void;
   updateFeature: (id: string, patch: Partial<Feature>) => void;
   toggleFeature: (id: string) => void;
@@ -193,6 +197,15 @@ export function useCad3d(): Cad3dState {
     setSelectedId(f.id);
   }, []);
 
+  const addDatum = useCallback((f: Feature) => {
+    setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
+    setSelectedId(f.id);
+  }, []);
+  const addDatumPoint = useCallback(() => addDatum(defaultDatumPoint()), [addDatum]);
+  const addDatumLine = useCallback(() => addDatum(defaultDatumLine()), [addDatum]);
+  const addDatumPlane = useCallback(() => addDatum(defaultDatumPlane()), [addDatum]);
+  const addDatumCs = useCallback(() => addDatum(defaultDatumCs()), [addDatum]);
+
   const removeFeature = useCallback((id: string) => {
     sketchProjectsRef.current.delete(id);
     setTree(prev => { const next = { ...prev, features: prev.features.filter(f => f.id !== id) }; save(next); return next; });
@@ -268,6 +281,7 @@ export function useCad3d(): Cad3dState {
     mergeFeatures,
     addSketch, startEditSketch, exitSketch, getSketchProject,
     addExtrude, addPocket, addHole, addGroove, addMirror, addRevolve, addShell, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
+    addDatumPoint, addDatumLine, addDatumPlane, addDatumCs,
     removeFeature, updateFeature, toggleFeature, moveFeature,
     selectFeature, clearTree,
   };

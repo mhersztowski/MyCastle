@@ -227,6 +227,12 @@ interface SetPropObject {
   y: number;
 }
 
+/** Wbudowane biblioteki sandboxu (ujednolicone z automatyzacją Markdown). */
+interface DashLibs {
+  three?: boolean;
+  lit?: boolean;
+}
+
 interface DashScene {
   type: 'dash-scene';
   version: 1;
@@ -240,6 +246,8 @@ interface DashScene {
   setProps?: SetPropObject[];
   fcEdges?: FcEdge[];
   objects: DashObject[];
+  /** Wbudowane biblioteki włączone dla sandboxu tej dashboard (Three.js / Lit). */
+  libs?: DashLibs;
 }
 
 interface UmlMember { id: string; kind: 'field' | 'method'; text: string; }
@@ -284,6 +292,7 @@ interface DashObjectNodeData extends Record<string, unknown> {
 import { useNotification } from '../../modules/notification';
 import { useAlliApi } from '../../modules/automate/engine/useAlliApi';
 import type { AutomateSystemApiInterface } from '../../modules/automate/engine/AutomateSystemApi';
+import { loadLibrary } from '../../components/mdeditor/extensions/automateLibraries';
 
 interface ConsoleEntry {
   id: string;
@@ -3463,6 +3472,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [umlSources, setUmlSources] = useState<UmlSource[]>([]);
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [importPathLoading, setImportPathLoading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceEntry[]>([]);
@@ -3786,6 +3796,16 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       const thisValue: unknown = thisEdge ? resolveSource(thisEdge, sceneRef.current) : undefined;
 
       const text = await vfsRead(userName, ds.filePath);
+      // Ujednolicone z automatyzacją Markdown: wstrzyknij wbudowane biblioteki
+      // (Three.js / Lit) zgodnie z ustawieniami tej dashboard, zanim skrypt ruszy.
+      // Klient MQTT jest już dostępny w skrypcie przez `api.mqtt`.
+      try {
+        const libs = sceneRef.current.libs;
+        if (libs?.three) await loadLibrary('three');
+        if (libs?.lit) await loadLibrary('lit');
+      } catch (e) {
+        notify(`Library preload failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      }
       const prevNotifLen = alliApi.notifications.length;
       const prevLogLen = alliApi.logs.length;
       // Intercept console.* during script execution
@@ -4871,6 +4891,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             )}
           </IconButton>
         </Tooltip>
+        <Tooltip title="Ustawienia (wbudowane biblioteki sandboxu)">
+          <IconButton size="small" onClick={() => setShowSettings(true)} sx={{ p: 0.5 }}>
+            <SettingsIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
         <Button size="small" variant="outlined" onClick={() => { setImportError(null); setShowImportDialog(true); }}
           sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Import UML</Button>
         <Button size="small" variant="outlined" onClick={saveNow}
@@ -5284,6 +5309,43 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         )}
 
       </Box>
+
+      {/* ── Ustawienia: wbudowane biblioteki sandboxu ── */}
+      {showSettings && (
+        <Dialog open onClose={() => setShowSettings(false)} maxWidth="xs" fullWidth>
+          <DialogTitle sx={{ fontSize: 14, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SettingsIcon sx={{ fontSize: 18 }} /> Ustawienia sandboxu
+          </DialogTitle>
+          <DialogContent sx={{ pt: '8px !important' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              Wbudowane biblioteki dostępne w skryptach JS tej dashboard — tak samo jak w skryptach
+              automatyzacji w edytorze Markdown. Klient MQTT jest zawsze dostępny przez <code>api.mqtt</code>.
+            </Typography>
+            {([
+              { key: 'three' as const, label: 'Three.js', hint: 'globalThis.THREE · api.three' },
+              { key: 'lit' as const, label: 'Lit', hint: 'globalThis.Lit · api.lit' },
+            ]).map(({ key, label, hint }) => (
+              <Box key={key} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.5 }}>
+                <Box>
+                  <Typography variant="body2">{label}</Typography>
+                  <Typography variant="caption" color="text.secondary">{hint}</Typography>
+                </Box>
+                <Switch
+                  checked={!!scene.libs?.[key]}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    updateScene((p) => ({ ...p, libs: { ...p.libs, [key]: on } }));
+                    if (on) loadLibrary(key).catch(() => { /* preload best-effort */ });
+                  }}
+                />
+              </Box>
+            ))}
+          </DialogContent>
+          <DialogActions sx={{ px: 2, pb: 1.5 }}>
+            <Button size="small" onClick={() => setShowSettings(false)}>Zamknij</Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
       {/* ── Console ── */}
       {consoleOpen && (

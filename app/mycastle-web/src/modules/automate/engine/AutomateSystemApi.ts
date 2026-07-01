@@ -74,6 +74,15 @@ export interface AutomateSystemApiInterface {
   /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
   secrets: CredentialsApi;
 
+  /** Klient MQTT — ten sam singleton, co w całej aplikacji (publish/subscribe,
+   *  request-response, operacje plikowe). Ujednolicone między sandboxem skryptów
+   *  automatyzacji (edytor Markdown) a panelem *.dash.json. */
+  mqtt: typeof mqttClient;
+  /** Wbudowana biblioteka Three.js (globalThis.THREE) — dostępna gdy załadowana. */
+  three: unknown;
+  /** Wbudowana biblioteka Lit (globalThis.Lit) — dostępna gdy załadowana. */
+  lit: unknown;
+
   /** Authenticated HTTP client — identical to `http` in Plugin Script.
    *  Automatically adds `Authorization: Bearer` (unless `auth:false`). */
   http: {
@@ -317,6 +326,12 @@ export interface NotificationEntry {
 }
 
 export class AutomateSystemApi implements AutomateSystemApiInterface {
+  /** Klient MQTT wystawiony skryptom (ten sam singleton co wewnętrzne operacje plikowe). */
+  readonly mqtt = mqttClient;
+  /** Wbudowane biblioteki — czytane leniwie z globalThis (ustawiane przez preload). */
+  get three(): unknown { return (globalThis as Record<string, unknown>)['THREE']; }
+  get lit(): unknown { return (globalThis as Record<string, unknown>)['Lit']; }
+
   private _variables: Record<string, unknown>;
   private _dataSource: DataSource;
   private _logs: LogEntry[] = [];

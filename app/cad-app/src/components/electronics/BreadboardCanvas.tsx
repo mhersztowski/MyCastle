@@ -20,6 +20,7 @@ import { ServerFileBrowser } from '../ServerFileBrowser';
 import { ElectronicsPropertiesPanel } from './ElectronicsPropertiesPanel';
 import { ELEC_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../../vfs/cadProjectApi';
 import { useRegisterFileOps } from '../../fileops/FileOpsContext';
+import { serializeSvgElement, rasterizeSvg, exportCanvasPng, exportCanvasPdf, downloadText } from '../../io/exportGraphics';
 import type { ActiveTemplate } from '../RepositoryPanel';
 
 // ── Part renderer ─────────────────────────────────────────────────────────────
@@ -1177,6 +1178,21 @@ export function BreadboardCanvas({
     setWireJunctions([]);
   }, []);
 
+  // Eksport schematu do SVG (wektor) / PNG / PDF z żywego <svg>.
+  const exportSchematic = useCallback(async (fmt: 'svg' | 'png' | 'pdf') => {
+    const svg = svgRef.current; if (!svg) return;
+    const r = svg.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+    const str = serializeSvgElement(svg, w, h, '#ffffff');
+    const base = currentFile?.name?.replace(/\.[^.]+$/, '') || 'schematic';
+    try {
+      if (fmt === 'svg') { downloadText(str, `${base}.svg`); return; }
+      const c = await rasterizeSvg(str, w, h, 2);
+      if (fmt === 'png') await exportCanvasPng(c, `${base}.png`);
+      else exportCanvasPdf(c, `${base}.pdf`);
+    } catch (e) { console.error('Schematic export failed', e); }
+  }, [currentFile]);
+
   // Register file operations with the unified top-bar File menu.
   useRegisterFileOps('electronics', {
     currentName: currentFile?.name ?? null,
@@ -1186,9 +1202,14 @@ export function BreadboardCanvas({
       { label: 'Save Schematic to Server…', run: () => setServerBrowser('save') },
     ],
     importItems: [{ label: 'Open local file…', run: handleLoad }],
-    exportItems: [{ label: 'Save local file', run: handleSave }],
+    exportItems: [
+      { label: 'Save local file', run: handleSave },
+      { label: 'Export PNG', run: () => exportSchematic('png') },
+      { label: 'Export SVG', run: () => exportSchematic('svg') },
+      { label: 'Export PDF', run: () => exportSchematic('pdf') },
+    ],
     viewerUrl,
-  }, [currentFile, viewerUrl, handleLoad, handleSave, handleClear]);
+  }, [currentFile, viewerUrl, handleLoad, handleSave, handleClear, exportSchematic]);
 
   // ── Server (VFS) Save / Load ──────────────────────────────────────────────────
 

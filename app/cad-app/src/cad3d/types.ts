@@ -1,5 +1,8 @@
 export type SketchPlane = 'XY' | 'XZ' | 'YZ' | 'face';
-export type FeatureType = 'sketch' | 'extrude' | 'pocket' | 'hole' | 'groove' | 'loft_cut' | 'sweep_cut' | 'mirror' | 'revolve' | 'shell' | 'loft' | 'sweep' | 'helix';
+export type FeatureType = 'sketch' | 'extrude' | 'pocket' | 'hole' | 'groove' | 'loft_cut' | 'sweep_cut' | 'mirror' | 'revolve' | 'shell' | 'loft' | 'sweep' | 'helix' | 'datum_point' | 'datum_line' | 'datum_plane' | 'datum_cs';
+/** Typy konstrukcyjne „datum" (odniesienia) — nie tworzą bryły, tylko pomoc geometryczną. */
+export const DATUM_TYPES: ReadonlySet<FeatureType> = new Set<FeatureType>(['datum_point', 'datum_line', 'datum_plane', 'datum_cs']);
+export type Vec3 = [number, number, number];
 export type HoleDepthType  = 'dimension' | 'through_all';
 export type HoleDrillPoint = 'flat' | 'angled';
 export type HoleCounterType = 'none' | 'countersink' | 'counterbore';
@@ -155,7 +158,32 @@ export interface SweepCutFeature extends BaseFeature {
   transformMode: SweepTransformMode;
 }
 
-export type Feature = SketchFeature | ExtrudeFeature | PocketFeature | HoleFeature | GrooveFeature | LoftCutFeature | SweepCutFeature | MirrorFeature | RevolveFeature | ShellFeature | LoftFeature | SweepFeature | HelixFeature;
+// ── Datum / odniesienia (FreeCAD-like) ──────────────────────────────────────────
+
+export interface DatumPointFeature extends BaseFeature {
+  type: 'datum_point';
+  position: Vec3;
+}
+export interface DatumLineFeature extends BaseFeature {
+  type: 'datum_line';
+  position: Vec3;            // punkt początkowy
+  direction: Vec3;          // kierunek (zostanie znormalizowany przy renderze)
+  length: number;
+}
+export interface DatumPlaneFeature extends BaseFeature {
+  type: 'datum_plane';
+  position: Vec3;
+  normal: Vec3;             // wektor normalny płaszczyzny
+  size: number;            // bok kwadratu wizualizacji
+}
+export interface DatumCsFeature extends BaseFeature {
+  type: 'datum_cs';
+  position: Vec3;
+  rotation: Vec3;          // Euler w stopniach (XYZ)
+  size: number;            // długość osi
+}
+
+export type Feature = SketchFeature | ExtrudeFeature | PocketFeature | HoleFeature | GrooveFeature | LoftCutFeature | SweepCutFeature | MirrorFeature | RevolveFeature | ShellFeature | LoftFeature | SweepFeature | HelixFeature | DatumPointFeature | DatumLineFeature | DatumPlaneFeature | DatumCsFeature;
 
 export interface FeatureTree {
   version: 1;
@@ -296,6 +324,19 @@ export function defaultHelix(): HelixFeature {
     leftHanded: false,
     reversed: false,
   };
+}
+
+export function defaultDatumPoint(): DatumPointFeature {
+  return { id: makeId(), type: 'datum_point', name: 'Punkt odniesienia', enabled: true, position: [0, 0, 0] };
+}
+export function defaultDatumLine(): DatumLineFeature {
+  return { id: makeId(), type: 'datum_line', name: 'Linia odniesienia', enabled: true, position: [0, 0, 0], direction: [1, 0, 0], length: 100 };
+}
+export function defaultDatumPlane(): DatumPlaneFeature {
+  return { id: makeId(), type: 'datum_plane', name: 'Płaszczyzna odniesienia', enabled: true, position: [0, 0, 0], normal: [0, 0, 1], size: 100 };
+}
+export function defaultDatumCs(): DatumCsFeature {
+  return { id: makeId(), type: 'datum_cs', name: 'Układ współrzędnych', enabled: true, position: [0, 0, 0], rotation: [0, 0, 0], size: 60 };
 }
 
 export const EMPTY_TREE: FeatureTree = { version: 1, features: [] };

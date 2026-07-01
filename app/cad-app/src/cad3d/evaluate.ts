@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Project } from '@mhersztowski/core-cad';
-import type { FeatureTree, SketchFeature } from './types';
+import type { DatumCsFeature, DatumLineFeature, DatumPlaneFeature, DatumPointFeature, FeatureTree, SketchFeature } from './types';
 import { evaluateFeatureTreeOcc } from './occ/occEvaluate';
 import { preloadOcc } from './occ/occLoader';
 
@@ -106,6 +106,103 @@ function applySketch(feature: SketchFeature): THREE.Object3D {
   return group;
 }
 
+// ── Datum / odniesienia (pomoc geometryczna, czyste Three.js — bez OCC) ──────────
+
+const DATUM_COLOR = new THREE.Color('#ffce54'); // żółty (FreeCAD-like)
+
+function buildDatumPoint(f: DatumPointFeature): THREE.Object3D {
+  const g = new THREE.Group();
+  g.userData['featureId'] = f.id;
+  const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(3, 16, 12),
+    new THREE.MeshBasicMaterial({ color: DATUM_COLOR }),
+  );
+  g.add(sphere);
+  // Krzyżyk dla czytelności w rzutach.
+  const k = 8;
+  const pts = [
+    new THREE.Vector3(-k, 0, 0), new THREE.Vector3(k, 0, 0),
+    new THREE.Vector3(0, -k, 0), new THREE.Vector3(0, k, 0),
+    new THREE.Vector3(0, 0, -k), new THREE.Vector3(0, 0, k),
+  ];
+  const mat = new THREE.LineBasicMaterial({ color: DATUM_COLOR });
+  for (let i = 0; i < pts.length; i += 2) {
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([pts[i], pts[i + 1]]), mat));
+  }
+  g.position.set(...f.position);
+  return g;
+}
+
+function buildDatumLine(f: DatumLineFeature): THREE.Object3D {
+  const g = new THREE.Group();
+  g.userData['featureId'] = f.id;
+  const dir = new THREE.Vector3(...f.direction);
+  if (dir.lengthSq() === 0) dir.set(1, 0, 0);
+  dir.normalize().multiplyScalar(f.length);
+  const a = new THREE.Vector3(...f.position);
+  const b = a.clone().add(dir);
+  const mat = new THREE.LineBasicMaterial({ color: DATUM_COLOR });
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), mat));
+  // Końce.
+  for (const p of [a, b]) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(2, 10, 8), new THREE.MeshBasicMaterial({ color: DATUM_COLOR }));
+    s.position.copy(p);
+    g.add(s);
+  }
+  return g;
+}
+
+function buildDatumPlane(f: DatumPlaneFeature): THREE.Object3D {
+  const g = new THREE.Group();
+  g.userData['featureId'] = f.id;
+  const s = Math.max(1, f.size);
+  const planeGeo = new THREE.PlaneGeometry(s, s);
+  g.add(new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({
+    color: DATUM_COLOR, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false,
+  })));
+  // Obrys + normalna.
+  const h = s / 2;
+  const border = [
+    new THREE.Vector3(-h, -h, 0), new THREE.Vector3(h, -h, 0),
+    new THREE.Vector3(h, h, 0), new THREE.Vector3(-h, h, 0), new THREE.Vector3(-h, -h, 0),
+  ];
+  const mat = new THREE.LineBasicMaterial({ color: DATUM_COLOR, transparent: true, opacity: 0.8 });
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(border), mat));
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, s * 0.25)]), mat));
+  // Orientacja: domyślna normalna płaszczyzny to +Z; obróć do żądanej.
+  const n = new THREE.Vector3(...f.normal);
+  if (n.lengthSq() === 0) n.set(0, 0, 1);
+  g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n.normalize());
+  g.position.set(...f.position);
+  return g;
+}
+
+function buildDatumCs(f: DatumCsFeature): THREE.Object3D {
+  const g = new THREE.Group();
+  g.userData['featureId'] = f.id;
+  g.add(new THREE.AxesHelper(Math.max(1, f.size)));
+  const o = new THREE.Mesh(new THREE.SphereGeometry(2, 10, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+  g.add(o);
+  const d2r = Math.PI / 180;
+  g.rotation.set(f.rotation[0] * d2r, f.rotation[1] * d2r, f.rotation[2] * d2r);
+  g.position.set(...f.position);
+  return g;
+}
+
+/** Buduje obiekty pomocnicze „datum" (odniesienia) dla całego drzewa (sync, Three.js). */
+export function buildDatumHelpers(tree: FeatureTree): THREE.Object3D {
+  const root = new THREE.Group();
+  root.name = 'datum-helpers';
+  for (const f of tree.features) {
+    if (!f.enabled) continue;
+    if (f.type === 'datum_point') root.add(buildDatumPoint(f as DatumPointFeature));
+    else if (f.type === 'datum_line') root.add(buildDatumLine(f as DatumLineFeature));
+    else if (f.type === 'datum_plane') root.add(buildDatumPlane(f as DatumPlaneFeature));
+    else if (f.type === 'datum_cs') root.add(buildDatumCs(f as DatumCsFeature));
+  }
+  return root;
+}
+
 /** Builds sketch wireframe objects for all sketches in the tree (sync, instant). */
 export function buildSketchWireframes(tree: FeatureTree): THREE.Object3D {
   const root = new THREE.Group();
@@ -127,5 +224,7 @@ export async function evaluateFeatureTreeAsync(
   project: Project,
 ): Promise<THREE.Object3D> {
   const sketches = buildSketchWireframes(tree);
-  return evaluateFeatureTreeOcc(tree, project, sketches);
+  const root = await evaluateFeatureTreeOcc(tree, project, sketches);
+  root.add(buildDatumHelpers(tree));
+  return root;
 }

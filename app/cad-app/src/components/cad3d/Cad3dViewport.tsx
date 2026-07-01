@@ -74,6 +74,7 @@ function drawAxesGizmo(canvas: HTMLCanvasElement | null, camera: THREE.Camera): 
 }
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { FeatureTree } from '../../cad3d/types';
+import { DATUM_TYPES } from '../../cad3d/types';
 import { evaluateFeatureTreeAsync } from '../../cad3d/evaluate';
 import type { Project } from '@mhersztowski/core-cad';
 import {
@@ -232,7 +233,7 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
     s.hoverGroup.clear();
     s.selectGroup.clear();
 
-    const hasSolids = tree.features.some(f => f.enabled && f.type !== 'sketch');
+    const hasSolids = tree.features.some(f => f.enabled && f.type !== 'sketch' && !DATUM_TYPES.has(f.type));
 
     setOccLoading(hasSolids);
 

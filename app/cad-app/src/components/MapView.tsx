@@ -27,6 +27,7 @@ import { useMapLayers } from '../map/useMapLayers'
 import { renderMapNode } from '../map/renderMapNode'
 import { fetchRoute, TRAVEL_MODES, formatDistance, formatDuration } from '../map/routing'
 import { useRegisterFileOps } from '../fileops/FileOpsContext'
+import { captureLeafletCanvas, exportCanvasPng, exportCanvasSvg, exportCanvasPdf } from '../io/exportGraphics'
 import type { MapNode, RoutePoint, TravelMode } from '../map/types'
 
 // ── serialization ─────────────────────────────────────────────────────────────
@@ -317,6 +318,22 @@ export function MapView() {
     addSibling(splitNode.id, newNode)
   }, [splitNode, addSibling])
 
+  // Eksport mapy (kafelki + nakładka wektorowa) do PNG/SVG/PDF — best-effort.
+  const exportMap = useCallback(async (fmt: 'png' | 'svg' | 'pdf') => {
+    const container = mapRef.current?.getContainer?.()
+    if (!container) return
+    const base = currentName?.replace(/\.[^.]+$/, '') || 'map'
+    try {
+      const c = await captureLeafletCanvas(container, 2)
+      if (fmt === 'png') await exportCanvasPng(c, `${base}.png`)
+      else if (fmt === 'svg') exportCanvasSvg(c, `${base}.svg`)
+      else exportCanvasPdf(c, `${base}.pdf`)
+    } catch (e) {
+      console.error('Map export failed', e)
+      alert('Eksport mapy nie powiódł się — kafelki mogą blokować zapis (CORS).')
+    }
+  }, [currentName])
+
   // Register file operations with the unified top-bar File menu.
   useRegisterFileOps('map', {
     currentName,
@@ -327,8 +344,13 @@ export function MapView() {
     importItems: [
       { label: 'Overpass Query…', secondary: 'Import OSM features', run: () => setOverpassOpen(true) },
     ],
+    exportItems: [
+      { label: 'Export PNG', run: () => exportMap('png') },
+      { label: 'Export SVG', run: () => exportMap('svg') },
+      { label: 'Export PDF', run: () => exportMap('pdf') },
+    ],
     viewerUrl,
-  }, [currentName, viewerUrl])
+  }, [currentName, viewerUrl, exportMap])
 
   return (
     <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
