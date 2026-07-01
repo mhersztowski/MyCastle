@@ -44,6 +44,9 @@ export type { Identifiable, MqttListBinding } from './MqttList';
 export { ClientRegistry } from './ClientRegistry';
 export type { ClientPresence } from './ClientRegistry';
 
+// ── Device & service model (base classes + built-in virtual entities) ─────────
+export * from './devices';
+
 // ── Services ──────────────────────────────────────────────────────────────────
 export { Service } from './services/Service';
 export { LogService, EnumLogKind } from './services/LogService';

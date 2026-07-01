@@ -13,10 +13,11 @@ import {
   SERVER_INBOX, SERVER_OUTBOX,
   userInbox, userOutbox, clientInbox, clientOutbox,
   deviceInbox, deviceOutbox, serviceInbox, serviceOutbox, clientKey,
+  actionsForKind, defaultPayload,
   classifyTopic, parseEnvelope, stringifyEnvelope,
   EnumLogKind,
   type Envelope, type ILogMessage, type ActivityEntry, type ClientPresence, type ClientId,
-  type RegisteredEntity,
+  type RegisteredEntity, type ActionDef,
 } from '@mhersztowski/server-logic/web';
 import { useAuth } from '@modules/auth';
 
@@ -373,20 +374,9 @@ function Empty({ text }: { text: string }) {
 }
 
 // ── Devices / Services tab ──────────────────────────────────────────────────────
-
-/** Prefilled payload templates for the common device/service commands. */
-const CMD_TEMPLATES: Record<string, string> = {
-  move: '{\n  "x": 200,\n  "y": 200\n}',
-  move_rel: '{\n  "dx": 20,\n  "dy": 0\n}',
-  click: '{\n  "button": "left"\n}',
-  scroll: '{\n  "dy": 3\n}',
-  press: '{\n  "button": "left"\n}',
-  release: '{\n  "button": "left"\n}',
-  type_text: '{\n  "text": "hello"\n}',
-  key_press: '{\n  "key": "enter",\n  "modifiers": []\n}',
-  hotkey: '{\n  "keys": ["ctrl", "c"]\n}',
-  show_text: '{\n  "text": "Hello",\n  "color": "#e0e0e0",\n  "background": "#101418"\n}',
-};
+//
+// Action schemas come from the device/service classes in @mhersztowski/server-logic
+// (VirtualMouse, VirtualKeyboard, …) via actionsForKind() — this page only renders.
 
 interface Selection {
   client: ClientId;
@@ -435,9 +425,17 @@ function DevicesServicesPanel({
     return unsub;
   }, [outboxTopic]);
 
-  const pickCommand = useCallback((cap: string) => {
-    setCmdType(cap);
-    setCmdPayload(CMD_TEMPLATES[cap] ?? '{}');
+  // Actions come from the entity's server-logic class; fall back to the bare
+  // capability names a client advertised if the kind isn't in the catalog.
+  const actions: ActionDef[] = useMemo(() => {
+    if (!selection) return [];
+    const fromCatalog = selection.entity.kind ? actionsForKind(selection.entity.kind) : null;
+    return fromCatalog ?? (selection.entity.capabilities ?? []).map((name) => ({ name }));
+  }, [selection]);
+
+  const pickAction = useCallback((a: ActionDef) => {
+    setCmdType(a.name);
+    setCmdPayload(JSON.stringify(defaultPayload(a), null, 2));
   }, []);
 
   const send = useCallback(() => {
@@ -497,13 +495,15 @@ function DevicesServicesPanel({
               inbox: <code>{inboxTopic}</code>
             </Typography>
 
-            {(selection.entity.capabilities?.length ?? 0) > 0 && (
+            {actions.length > 0 && (
               <Box>
                 <Typography variant="subtitle2" gutterBottom>Actions</Typography>
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                  {selection.entity.capabilities!.map((cap) => (
-                    <Button key={cap} size="small" variant={cmdType === cap ? 'contained' : 'outlined'}
-                      onClick={() => pickCommand(cap)}>{cap}</Button>
+                  {actions.map((a) => (
+                    <Tooltip key={a.name} title={a.description ?? ''} disableHoverListener={!a.description}>
+                      <Button size="small" variant={cmdType === a.name ? 'contained' : 'outlined'}
+                        onClick={() => pickAction(a)}>{a.label ?? a.name}</Button>
+                    </Tooltip>
                   ))}
                 </Stack>
               </Box>

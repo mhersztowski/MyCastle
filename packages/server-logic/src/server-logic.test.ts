@@ -7,6 +7,7 @@ import {
 } from './topics';
 import { MqttList } from './MqttList';
 import type { ClientId } from './types';
+import { VirtualMouse, actionsForKind, defaultPayload, createEntity, categoryForKind } from './devices';
 
 const alice: ClientId = { userName: 'alice', device: 'desktop', clientType: 'native', id: 'c1' };
 
@@ -95,5 +96,27 @@ describe('MqttList', () => {
 
     t.inject('list/req', JSON.stringify({ type: 'remove', payload: { id: '1' } }));
     expect(list.size).toBe(0);
+  });
+});
+
+describe('devices', () => {
+  it('exposes actions and registers as a device entity', () => {
+    const m = new VirtualMouse('vmouse', 'Mouse');
+    expect(m.category).toBe('device');
+    expect(m.capabilities()).toContain('move');
+    expect(m.toRegisteredEntity()).toMatchObject({ id: 'vmouse', name: 'Mouse', kind: 'virtual-mouse' });
+  });
+
+  it('resolves action schemas + default payloads by kind', () => {
+    const actions = actionsForKind('virtual-mouse')!;
+    const move = actions.find((a) => a.name === 'move')!;
+    expect(defaultPayload(move)).toEqual({ x: 200, y: 200 });
+    expect(categoryForKind('vfs')).toBe('service');
+    expect(actionsForKind('does-not-exist')).toBeNull();
+  });
+
+  it('createEntity resolves known kinds only', () => {
+    expect(createEntity('virtual-keyboard', 'kb')?.kind).toBe('virtual-keyboard');
+    expect(createEntity('unknown', 'x')).toBeNull();
   });
 });

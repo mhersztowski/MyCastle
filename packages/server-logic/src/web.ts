@@ -50,3 +50,6 @@ export type { ILogMessage } from './log-types';
 // Type-only (erased at build — no runtime import of the minislib-using modules)
 export type { ActivityEntry } from './services/ActivityService';
 export type { ClientPresence } from './ClientRegistry';
+
+// Device & service model — base classes + built-in virtual entities (no minislib)
+export * from './devices';
