@@ -12,6 +12,8 @@ import {
   stringifyEnvelope,
   isUiEvent,
   type UiEvent,
+  type RegisteredEntity,
+  type ClientEntityPayload,
 } from './messages';
 import type { ClientId } from './types';
 import { ClientRegistry } from './ClientRegistry';
@@ -51,6 +53,10 @@ export class IotServer extends MObject {
   readonly onServerMessage = new Signal<[Envelope]>();
   /** UI/form events relayed by clients. */
   readonly onUiEvent = new Signal<[ClientId, UiEvent]>();
+  /** Messages sent by a client's service (client, serviceId, envelope). */
+  readonly onServiceMessage = new Signal<[ClientId, string, Envelope]>();
+  /** Messages sent by a client's device (client, deviceId, envelope). */
+  readonly onDeviceMessage = new Signal<[ClientId, string, Envelope]>();
 
   private readonly transport: IMqttTransport;
   private readonly staleClientMs: number;
@@ -140,6 +146,10 @@ export class IotServer extends MObject {
       this.handleUserOutbox(cls.userName, payload);
     } else if (cls.scope === 'client' && cls.direction === 'outbox' && cls.client) {
       this.handleClientOutbox(cls.client, payload);
+    } else if (cls.scope === 'service' && cls.direction === 'outbox' && cls.client && cls.serviceId) {
+      this.handleServiceOutbox(cls.client, cls.serviceId, payload);
+    } else if (cls.scope === 'device' && cls.direction === 'outbox' && cls.client && cls.deviceId) {
+      this.handleDeviceOutbox(cls.client, cls.deviceId, payload);
     }
   }
 
@@ -206,15 +216,50 @@ export class IotServer extends MObject {
     const env = parseEnvelope(payload);
     if (!env) return;
 
-    if (env.type === 'hello') {
-      this.clients.register(client);
-      this.activity.record('client.connected', 'client hello', client);
-      return;
-    }
-    if (env.type === 'bye') {
-      this.clients.unregister(client);
-      this.activity.record('client.disconnected', 'client bye', client);
-      return;
+    switch (env.type) {
+      case 'client-login':
+        this.clients.register(client);
+        this.activity.record('client.connected', 'client-login', client);
+        return;
+      case 'client-logout':
+        this.clients.unregister(client);
+        this.activity.record('client.disconnected', 'client-logout', client);
+        return;
+      case 'client-service-new': {
+        const entity = entityOf(env);
+        if (entity) {
+          this.clients.addService(client, entity);
+          this.activity.record('service.registered', entity.id, client);
+        }
+        return;
+      }
+      case 'client-service-remove': {
+        const entity = entityOf(env);
+        if (entity) {
+          this.clients.removeService(client, entity.id);
+          this.activity.record('service.removed', entity.id, client);
+        }
+        return;
+      }
+      case 'client-device-new': {
+        const entity = entityOf(env);
+        if (entity) {
+          this.clients.addDevice(client, entity);
+          this.activity.record('device.registered', entity.id, client);
+        }
+        return;
+      }
+      case 'client-device-remove': {
+        const entity = entityOf(env);
+        if (entity) {
+          this.clients.removeDevice(client, entity.id);
+          this.activity.record('device.removed', entity.id, client);
+        }
+        return;
+      }
+      case 'heartbeat':
+        this.clients.touch(client);
+        return;
     }
 
     this.clients.touch(client);
@@ -225,4 +270,26 @@ export class IotServer extends MObject {
       this.activity.record('client.message', env.type, client);
     }
   }
+
+  private handleServiceOutbox(client: ClientId, serviceId: string, payload: string): void {
+    const env = parseEnvelope(payload);
+    if (!env) return;
+    this.clients.touch(client);
+    this.onServiceMessage.emit(client, serviceId, env);
+    this.activity.record('service.message', `${serviceId}: ${env.type}`, client);
+  }
+
+  private handleDeviceOutbox(client: ClientId, deviceId: string, payload: string): void {
+    const env = parseEnvelope(payload);
+    if (!env) return;
+    this.clients.touch(client);
+    this.onDeviceMessage.emit(client, deviceId, env);
+    this.activity.record('device.message', `${deviceId}: ${env.type}`, client);
+  }
+}
+
+/** Extract a RegisteredEntity from a client-*-new/remove envelope payload. */
+function entityOf(env: Envelope): RegisteredEntity | null {
+  const entity = (env.payload as ClientEntityPayload | undefined)?.entity;
+  return entity && typeof entity.id === 'string' ? entity : null;
 }

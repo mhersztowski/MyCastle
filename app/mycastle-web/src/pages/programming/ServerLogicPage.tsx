@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import {
   Box, Paper, Tabs, Tab, Typography, Button, TextField, Chip, Stack,
   MenuItem, Table, TableBody, TableCell, TableHead, TableRow, Divider,
-  List, ListItem, ListItemText, IconButton, Tooltip,
+  List, ListItem, ListItemText, ListItemButton, Collapse, IconButton, Tooltip,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
@@ -12,9 +12,11 @@ import { mqttClient } from '@mhersztowski/web-client';
 import {
   SERVER_INBOX, SERVER_OUTBOX,
   userInbox, userOutbox, clientInbox, clientOutbox,
+  deviceInbox, deviceOutbox, serviceInbox, serviceOutbox, clientKey,
   classifyTopic, parseEnvelope, stringifyEnvelope,
   EnumLogKind,
   type Envelope, type ILogMessage, type ActivityEntry, type ClientPresence, type ClientId,
+  type RegisteredEntity,
 } from '@mhersztowski/server-logic/web';
 import { useAuth } from '@modules/auth';
 
@@ -162,6 +164,7 @@ export default function ServerLogicPage() {
           <Tab label={`Log (${logs.length})`} />
           <Tab label={`Activity (${activity.length})`} />
           <Tab label={`Clients (${clients.length})`} />
+          <Tab label={`Devices/Services (${clients.reduce((n, c) => n + (c.devices?.length ?? 0) + (c.services?.length ?? 0), 0)})`} />
           <Tab label="Topics & Playground" />
         </Tabs>
         <Divider />
@@ -262,8 +265,14 @@ export default function ServerLogicPage() {
           </Box>
         )}
 
-        {/* ── Topics & Playground ────────────────────────────────────── */}
+        {/* ── Devices / Services ─────────────────────────────────────── */}
         {tab === 4 && (
+          <DevicesServicesPanel clients={clients} userName={userName}
+            onReload={() => publish({ type: 'clients.list' })} />
+        )}
+
+        {/* ── Topics & Playground ────────────────────────────────────── */}
+        {tab === 5 && (
           <Box sx={{ p: 2 }}>
             <Typography variant="subtitle2" gutterBottom>Topic scheme (for {userName})</Typography>
             <Table size="small" sx={{ mb: 2 }}>
@@ -361,4 +370,204 @@ function TopicRow({ label, topic }: { label: string; topic: string }) {
 
 function Empty({ text }: { text: string }) {
   return <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>{text}</Typography>;
+}
+
+// ── Devices / Services tab ──────────────────────────────────────────────────────
+
+/** Prefilled payload templates for the common device/service commands. */
+const CMD_TEMPLATES: Record<string, string> = {
+  move: '{\n  "x": 200,\n  "y": 200\n}',
+  move_rel: '{\n  "dx": 20,\n  "dy": 0\n}',
+  click: '{\n  "button": "left"\n}',
+  scroll: '{\n  "dy": 3\n}',
+  press: '{\n  "button": "left"\n}',
+  release: '{\n  "button": "left"\n}',
+  type_text: '{\n  "text": "hello"\n}',
+  key_press: '{\n  "key": "enter",\n  "modifiers": []\n}',
+  hotkey: '{\n  "keys": ["ctrl", "c"]\n}',
+  show_text: '{\n  "text": "Hello",\n  "color": "#e0e0e0",\n  "background": "#101418"\n}',
+};
+
+interface Selection {
+  client: ClientId;
+  kind: 'device' | 'service';
+  entity: RegisteredEntity;
+}
+
+function DevicesServicesPanel({
+  clients, userName, onReload,
+}: { clients: ClientPresence[]; userName: string; onReload: () => void }) {
+  const [selKey, setSelKey] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [cmdType, setCmdType] = useState('');
+  const [cmdPayload, setCmdPayload] = useState('{}');
+  const [responses, setResponses] = useState<FeedItem[]>([]);
+
+  const selection = useMemo<Selection | null>(() => {
+    if (!selKey) return null;
+    for (const c of clients) {
+      const ck = clientKey(c.client);
+      for (const d of c.devices ?? []) if (`${ck}|device|${d.id}` === selKey) return { client: c.client, kind: 'device', entity: d };
+      for (const s of c.services ?? []) if (`${ck}|service|${s.id}` === selKey) return { client: c.client, kind: 'service', entity: s };
+    }
+    return null;
+  }, [selKey, clients]);
+
+  const inboxTopic = selection
+    ? (selection.kind === 'device'
+        ? deviceInbox(selection.client, selection.entity.id)
+        : serviceInbox(selection.client, selection.entity.id))
+    : '';
+  const outboxTopic = selection
+    ? (selection.kind === 'device'
+        ? deviceOutbox(selection.client, selection.entity.id)
+        : serviceOutbox(selection.client, selection.entity.id))
+    : '';
+
+  // Live-tail the selected entity's outbox so responses show up on the right.
+  useEffect(() => {
+    if (!outboxTopic) return;
+    setResponses([]);
+    const unsub = mqttClient.rawSubscribe(outboxTopic, (payload) => {
+      const env = parseEnvelope(payload);
+      setResponses((r) => [{ ts: Date.now(), type: env?.type ?? '?', raw: payload }, ...r].slice(0, 100));
+    });
+    return unsub;
+  }, [outboxTopic]);
+
+  const pickCommand = useCallback((cap: string) => {
+    setCmdType(cap);
+    setCmdPayload(CMD_TEMPLATES[cap] ?? '{}');
+  }, []);
+
+  const send = useCallback(() => {
+    if (!selection || !cmdType.trim()) return;
+    let payload: unknown = {};
+    try { payload = cmdPayload.trim() ? JSON.parse(cmdPayload) : {}; }
+    catch { return; } // invalid JSON — do nothing (button stays enabled to retry)
+    mqttClient.rawPublish(inboxTopic, stringifyEnvelope({
+      type: cmdType.trim(),
+      reqId: crypto.randomUUID(),
+      from: `${userName}/admin-web/server-logic-page`,
+      ts: Date.now(),
+      payload,
+    }));
+  }, [selection, cmdType, cmdPayload, inboxTopic, userName]);
+
+  let jsonValid = true;
+  try { if (cmdPayload.trim()) JSON.parse(cmdPayload); } catch { jsonValid = false; }
+
+  return (
+    <Box sx={{ display: 'flex', minHeight: 460 }}>
+      {/* LEFT: client → devices/services tree */}
+      <Box sx={{ width: 320, borderRight: 1, borderColor: 'divider', overflow: 'auto', maxHeight: 620 }}>
+        <Box sx={{ px: 1, py: 0.5 }}><Toolbar onReload={onReload} /></Box>
+        {clients.length === 0 && <Empty text="No clients yet." />}
+        {clients.map((c) => {
+          const ck = clientKey(c.client);
+          const open = expanded[ck] ?? true;
+          return (
+            <Box key={ck}>
+              <ListItemButton dense onClick={() => setExpanded((e) => ({ ...e, [ck]: !open }))}>
+                <Typography sx={{ fontWeight: 600, fontSize: 13, wordBreak: 'break-all' }}>
+                  {open ? '▾' : '▸'} {c.client.userName}/{c.client.device}-{c.client.clientType}/{c.client.id}
+                </Typography>
+              </ListItemButton>
+              <Collapse in={open} timeout="auto" unmountOnExit>
+                <EntityGroup title="Devices" kind="device" ck={ck} entities={c.devices ?? []} selKey={selKey} onSelect={setSelKey} />
+                <EntityGroup title="Services" kind="service" ck={ck} entities={c.services ?? []} selKey={selKey} onSelect={setSelKey} />
+              </Collapse>
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* RIGHT: actions for the selected entity */}
+      <Box sx={{ flex: 1, p: 2, minWidth: 0 }}>
+        {!selection ? (
+          <Empty text="Select (activate) a device or service on the left to see its actions." />
+        ) : (
+          <Stack spacing={1.5}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Chip size="small" color={selection.kind === 'device' ? 'primary' : 'secondary'} label={selection.kind} />
+              <Typography variant="h6">{selection.entity.name ?? selection.entity.id}</Typography>
+              {selection.entity.kind && <Chip size="small" variant="outlined" label={selection.entity.kind} />}
+            </Stack>
+            <Typography variant="body2" color="text.secondary">
+              inbox: <code>{inboxTopic}</code>
+            </Typography>
+
+            {(selection.entity.capabilities?.length ?? 0) > 0 && (
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>Actions</Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {selection.entity.capabilities!.map((cap) => (
+                    <Button key={cap} size="small" variant={cmdType === cap ? 'contained' : 'outlined'}
+                      onClick={() => pickCommand(cap)}>{cap}</Button>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+
+            <TextField size="small" label="Command type" value={cmdType}
+              onChange={(e) => setCmdType(e.target.value)} />
+            <TextField size="small" label="Payload (JSON)" multiline minRows={4}
+              value={cmdPayload} onChange={(e) => setCmdPayload(e.target.value)}
+              error={!jsonValid} helperText={jsonValid ? ' ' : 'Invalid JSON'}
+              sx={{ '& textarea': { fontFamily: 'monospace', fontSize: 13 } }} />
+            <Box>
+              <Button variant="contained" startIcon={<SendIcon />} onClick={send}
+                disabled={!cmdType.trim() || !jsonValid}>Send to inbox</Button>
+            </Box>
+
+            <Divider />
+            <Typography variant="subtitle2">Responses <code>{outboxTopic}</code></Typography>
+            <List dense sx={{ maxHeight: 240, overflow: 'auto', bgcolor: 'action.hover', borderRadius: 1 }}>
+              {responses.length === 0 && <Empty text="No responses yet." />}
+              {responses.map((m, i) => (
+                <ListItem key={i} divider>
+                  <Chip size="small" sx={{ mr: 1 }} label={m.type} />
+                  <ListItemText
+                    primaryTypographyProps={{ sx: { fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' } }}
+                    primary={m.raw} secondary={fmtTime(m.ts)} />
+                </ListItem>
+              ))}
+            </List>
+          </Stack>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function EntityGroup({
+  title, kind, ck, entities, selKey, onSelect,
+}: {
+  title: string; kind: 'device' | 'service'; ck: string;
+  entities: RegisteredEntity[]; selKey: string | null; onSelect: (k: string) => void;
+}) {
+  return (
+    <>
+      <Typography variant="caption" sx={{ pl: 3, pt: 0.5, display: 'block', color: 'text.secondary' }}>
+        {title} ({entities.length})
+      </Typography>
+      {entities.map((e) => {
+        const key = `${ck}|${kind}|${e.id}`;
+        return (
+          <ListItemButton key={key} dense selected={selKey === key} sx={{ pl: 4 }}
+            onClick={() => onSelect(key)}>
+            <ListItemText
+              primary={e.name ?? e.id}
+              secondary={e.kind}
+              primaryTypographyProps={{ fontSize: 13 }}
+              secondaryTypographyProps={{ fontSize: 11 }}
+            />
+          </ListItemButton>
+        );
+      })}
+      {entities.length === 0 && (
+        <Typography variant="caption" sx={{ pl: 4, color: 'text.disabled', display: 'block' }}>—</Typography>
+      )}
+    </>
+  );
 }

@@ -33,6 +33,50 @@ export function stringifyEnvelope(env: Envelope): string {
   return JSON.stringify(env);
 }
 
+// ── Client lifecycle vocabulary (client → server, on the client outbox) ───────
+//
+// A client logs in, then registers its services and devices as sub-entities.
+// See ServerLogic.md → "client-> server (Inbox)".
+
+/** A service or device advertised by a client. */
+export interface RegisteredEntity {
+  /** Stable id, unique within the client (used in service/device topics). */
+  id: string;
+  /** Human-readable label. */
+  name?: string;
+  /** Capability tag, e.g. `virtual-mouse`, `vfs`, `display`. */
+  kind?: string;
+  /** Command types the entity understands. */
+  capabilities?: string[];
+}
+
+export const CLIENT_MESSAGE_TYPES = [
+  'client-login',
+  'client-logout',
+  'client-service-new',
+  'client-service-remove',
+  'client-device-new',
+  'client-device-remove',
+  'heartbeat',
+] as const;
+
+export type ClientMessageType = (typeof CLIENT_MESSAGE_TYPES)[number];
+
+export function isClientMessage(type: string): boolean {
+  return (CLIENT_MESSAGE_TYPES as readonly string[]).includes(type);
+}
+
+/** Payload of `client-login` / `client-logout`. Identity also comes from the topic. */
+export interface ClientLoginPayload {
+  client: import('./types').ClientId;
+  name?: string;
+}
+
+/** Payload of `client-service-new` / `client-device-new` (entity in `entity`). */
+export interface ClientEntityPayload {
+  entity: RegisteredEntity;
+}
+
 // ── UI events (DOM-like form events relayed over MQTT) ────────────────────────
 
 export type UiEvent =

@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { IotServer } from './IotServer';
 import { InMemoryTransport } from './transport';
-import { clientOutbox, userOutbox, SERVER_INBOX, SERVER_OUTBOX } from './topics';
-import { classifyTopic } from './topics';
+import {
+  clientOutbox, userOutbox, SERVER_INBOX, SERVER_OUTBOX,
+  deviceOutbox, serviceInbox, classifyTopic,
+} from './topics';
 import { MqttList } from './MqttList';
 import type { ClientId } from './types';
 
@@ -18,6 +20,15 @@ describe('topics', () => {
       client: alice,
     });
     expect(classifyTopic('minis/alice/dev/hello').scope).toBe('unknown');
+  });
+
+  it('classifies service/device sub-entity topics', () => {
+    expect(classifyTopic(serviceInbox(alice, 'vfs'))).toMatchObject({
+      scope: 'service', direction: 'inbox', client: alice, serviceId: 'vfs',
+    });
+    expect(classifyTopic(deviceOutbox(alice, 'vmouse'))).toMatchObject({
+      scope: 'device', direction: 'outbox', client: alice, deviceId: 'vmouse',
+    });
   });
 });
 
@@ -43,6 +54,30 @@ describe('IotServer', () => {
 
     t.inject(clientOutbox(alice), JSON.stringify({ type: 'click', field: 'submitButton' }));
     expect(seen).toContain('alice:click');
+  });
+
+  it('handles the client-login → device-new lifecycle and device outbox', () => {
+    const t = new InMemoryTransport();
+    const server = new IotServer({ transport: t });
+    const deviceMsgs: string[] = [];
+    server.onDeviceMessage.connect((c, id, e) => deviceMsgs.push(`${c.id}/${id}:${e.type}`));
+    server.start();
+
+    t.inject(clientOutbox(alice), JSON.stringify({ type: 'client-login', payload: { client: alice } }));
+    expect(server.clients.byUser('alice')).toHaveLength(1);
+
+    t.inject(clientOutbox(alice), JSON.stringify({
+      type: 'client-device-new',
+      payload: { entity: { id: 'vmouse', name: 'Virtual Mouse', kind: 'virtual-mouse' } },
+    }));
+    const presence = server.clients.byUser('alice')[0];
+    expect(presence.devices.map((d) => d.id)).toContain('vmouse');
+
+    t.inject(deviceOutbox(alice, 'vmouse'), JSON.stringify({ type: 'move.ok' }));
+    expect(deviceMsgs).toContain('c1/vmouse:move.ok');
+
+    t.inject(clientOutbox(alice), JSON.stringify({ type: 'client-logout', payload: { client: alice } }));
+    expect(server.clients.byUser('alice')).toHaveLength(0);
   });
 });
 

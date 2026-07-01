@@ -19,6 +19,12 @@ export {
   userOutbox,
   clientInbox,
   clientOutbox,
+  clientServiceList,
+  clientDeviceList,
+  serviceInbox,
+  serviceOutbox,
+  deviceInbox,
+  deviceOutbox,
   classifyTopic,
 } from './topics';
 export type { TopicScope, TopicDirection, ClassifiedTopic } from './topics';
@@ -28,8 +34,14 @@ export { deviceClientSegment, clientKey, parseDeviceClientSegment } from './type
 export type { ClientType, DeviceKind, ClientId } from './types';
 
 // Messages & UI events (no minislib)
-export { parseEnvelope, stringifyEnvelope, isUiEvent, UI_EVENT_TYPES } from './messages';
-export type { Envelope, UiEvent } from './messages';
+export {
+  parseEnvelope, stringifyEnvelope, isUiEvent, UI_EVENT_TYPES,
+  isClientMessage, CLIENT_MESSAGE_TYPES,
+} from './messages';
+export type {
+  Envelope, UiEvent, RegisteredEntity, ClientMessageType,
+  ClientLoginPayload, ClientEntityPayload,
+} from './messages';
 
 // Log value types (no minislib)
 export { EnumLogKind } from './log-types';

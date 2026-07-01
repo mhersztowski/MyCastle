@@ -12,6 +12,12 @@ export {
   userOutbox,
   clientInbox,
   clientOutbox,
+  clientServiceList,
+  clientDeviceList,
+  serviceInbox,
+  serviceOutbox,
+  deviceInbox,
+  deviceOutbox,
   classifyTopic,
 } from './topics';
 export type { TopicScope, TopicDirection, ClassifiedTopic } from './topics';
@@ -21,8 +27,14 @@ export type { IMqttTransport, MqttMessageHandler } from './transport';
 export { InMemoryTransport } from './transport';
 
 // ── Messages & UI events ──────────────────────────────────────────────────────
-export type { Envelope, UiEvent } from './messages';
-export { parseEnvelope, stringifyEnvelope, isUiEvent, UI_EVENT_TYPES } from './messages';
+export type {
+  Envelope, UiEvent, RegisteredEntity, ClientMessageType,
+  ClientLoginPayload, ClientEntityPayload,
+} from './messages';
+export {
+  parseEnvelope, stringifyEnvelope, isUiEvent, UI_EVENT_TYPES,
+  isClientMessage, CLIENT_MESSAGE_TYPES,
+} from './messages';
 
 // ── Collections ───────────────────────────────────────────────────────────────
 export { MqttList } from './MqttList';
