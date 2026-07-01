@@ -152,7 +152,11 @@ Outbox: /server/outbox
 Topic w mqtt **clienta**
 Inbox: /UserName/DeviceClientType/id/inbox
 Outbox: /UserName/DeviceClientType/id/outbox
-Funkcjonalnosc: zarzadzanie **service**, **device**
+Services: /UserName/DeviceClientType/id/service-list MqttList<services>
+Devices: /UserName/DeviceClientType/id/device-list MqttList<devices>
+
+client-> server (Inbox)
+client-new { userName, id } rejestrowanie nowego
 
 
 Pakiety:
