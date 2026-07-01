@@ -140,7 +140,7 @@ class IotServer {
 
 ```
 Globalne
-MqttList<type> crud do type
+MqttList<type> crud do type bazujacy na id
 ```
 
 
@@ -159,8 +159,22 @@ Services: /UserName/DeviceClientType/id/service-list MqttList<services>
 Devices: /UserName/DeviceClientType/id/device-list MqttList<devices>
 
 client-> server (Inbox)
-client-new { userName, id } rejestrowanie nowego clienta
+client-login { userName, id } rejestrowanie nowego clienta, po tym nastepuje wymiana client-server
+client-logout { userName, id}
+client-service-new { userName, id, id-service} rejestrowanie nowego service
+client-device-new { userNamr, id, id-device} rejestrowanie nowego device
 
+Topic w mqtt service
+
+Inbox: /UserName/DeviceClientType/id/service/id-service/inbox
+
+Outbox: /UserName/DeviceClientType/id/service/id-service/outbox
+
+Topic w mqtt device
+
+Inbox: /UserName/DeviceClientType/id/device/id-device/inbox
+
+Outbox: /UserName/DeviceClientType/id/device/id-device/outbox
 
 
 Pakiety:
