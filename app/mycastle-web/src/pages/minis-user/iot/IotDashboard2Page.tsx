@@ -260,16 +260,22 @@ function IotDashboard2Page() {
     if (!userName) return;
     setLoading(true);
     try {
-      const [allDevices, iotStatuses, sharedDevices] = await Promise.all([
+      // allSettled — a single failing/slow endpoint must NOT blank the dashboard.
+      const [devicesR, statusesR, sharedR] = await Promise.allSettled([
         minisApi.getUserDevices(userName),
         minisApi.getIotDevices(userName),
         minisApi.getSharedDevices(userName),
       ]);
+      const allDevices = devicesR.status === 'fulfilled' ? devicesR.value : [];
+      const iotStatuses = (statusesR.status === 'fulfilled' ? statusesR.value : []) as any[];
+      const sharedDevices = sharedR.status === 'fulfilled' ? sharedR.value : [];
       const iotDevices = allDevices.filter((d: any) => d.isIot);
 
       const newMap = new Map<string, DeviceData>();
 
-      await Promise.all([
+      // Per-device fetches are independent — one failing/slow device is skipped,
+      // the rest of the dashboard still renders (allSettled, not all).
+      await Promise.allSettled([
         ...iotDevices.map(async (device: any) => {
           const [config, latestRaw] = await Promise.all([
             minisApi.getIotConfig(userName, device.name),
@@ -302,10 +308,11 @@ function IotDashboard2Page() {
       ]);
 
       setDeviceDataMap(newMap);
-      const online = (iotStatuses as any[]).filter((s) => s.status === 'ONLINE').length;
+      const online = iotStatuses.filter((s) => s.status === 'ONLINE').length;
       setOnlineCount(online);
       setTotalCount(iotDevices.length);
-      setError(null);
+      const topFailed = [devicesR, statusesR, sharedR].filter((r) => r.status === 'rejected').length;
+      setError(topFailed ? 'Część danych IoT jest chwilowo niedostępna — pokazuję to, co się udało.' : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {

@@ -14,7 +14,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import { EditorState as PmEditorState } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
-import Link from '@tiptap/extension-link';
+import { WikiLink } from './extensions/WikiLinkExtension';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Highlight from '@tiptap/extension-highlight';
@@ -25,7 +25,14 @@ import { Table, TableRow } from '@tiptap/extension-table';
 import { CustomTableCell } from './extensions/CustomTableCell';
 import { CustomTableHeader } from './extensions/CustomTableHeader';
 import { common, createLowlight } from 'lowlight';
-import { Box, IconButton, Paper, Divider, Popper, Popover, TextField, Tooltip, Fab, Collapse, List, ListItemButton, ListItemText, ListItemIcon, Menu, MenuItem, Typography, useMediaQuery, useTheme } from '@mui/material';
+import { Box, IconButton, Paper, Divider, Popper, Popover, TextField, Tooltip, Fab, Collapse, List, ListItemButton, ListItemText, ListItemIcon, Menu, MenuItem, Typography, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, Button, Checkbox } from '@mui/material';
+import { type Node as PmNode } from '@tiptap/pm/model';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ContentCutIcon from '@mui/icons-material/ContentCut';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import SelectAllIcon from '@mui/icons-material/SelectAll';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import CheckIcon from '@mui/icons-material/Check';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import EditIcon from '@mui/icons-material/Edit';
@@ -99,12 +106,16 @@ import { WebEmbed } from './extensions/WebEmbedExtension';
 import { AutomateScriptBlock } from './extensions/AutomateScriptExtension';
 import { InfoMark, INFO_MARK_EDIT_EVENT, type InfoMarkEditEventDetail } from './extensions/InfoMarkExtension';
 import InfoMarkDialog from './extensions/InfoMarkDialog';
+import MdFileTreePickerDialog from './extensions/MdFileTreePickerDialog';
 import { SpellCheckExtension, type SpellMatch } from './extensions/SpellCheckExtension';
 import { AutomateDocumentProvider } from './extensions/AutomateDocumentContext';
 import { PluginScriptBlock } from './extensions/PluginScriptExtension';
 import { BlockActionMenu } from './BlockActionMenu';
 import { BlockIdExtension } from './extensions/BlockIdExtension';
+import { HeadingFold } from './extensions/HeadingFoldExtension';
+import { MdEmbed, MD_EMBED_EDIT_EVENT, type MdEmbedEditEventDetail } from './extensions/EmbedExtension';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
+import { copyBlocks, readBlocksForPaste } from './utils/blockClipboard';
 import 'katex/dist/katex.min.css';
 import './MdEditor.css';
 
@@ -215,7 +226,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
   );
 
   // Block action menu — one button per block
-  const [blockPositions, setBlockPositions] = useState<Array<{ el: HTMLElement; top: number; left: number }>>([]);
+  const [blockPositions, setBlockPositions] = useState<Array<{ el: HTMLElement; top: number; left: number; pos: number }>>([]);
+  // Block group-selection mode: checkboxes in the gutter + a floating bulk-action
+  // bar. Selection is keyed by stable blockId (positions shift on edits).
+  const [groupMode, setGroupMode] = useState(false);
+  const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set());
   const blockMenuOpenRef = useRef(false);
   useEffect(() => { onCreatePageRef.current = onCreatePage; }, [onCreatePage]);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
@@ -330,10 +345,15 @@ const MdEditor: React.FC<MdEditorProps> = ({
         placeholder,
         showOnlyWhenEditable: true,
       }),
-      Link.configure({
+      WikiLink.configure({
         openOnClick: false,
         autolink: true,
         linkOnPaste: true,
+        // Keep internal workspace links working: TipTap otherwise strips any href
+        // whose scheme isn't in its allow-list (http/https/…), which blanks the
+        // href of relative internal paths like `drive/notatka.md`. We allow every
+        // URI except the dangerous script-y schemes.
+        isAllowedUri: (uri: string) => !/^\s*(javascript|data|vbscript):/i.test(uri),
         HTMLAttributes: {
           class: 'md-editor-link',
           target: null,
@@ -394,6 +414,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
       // Getter callbacks read from refs (synced from React state in the
       // useEffect below) so a language switch / on-off toggle takes
       // effect on the next debounce cycle without remounting the editor.
+      HeadingFold,
+      MdEmbed,
       SpellCheckExtension.configure({
         getLanguage: () => spellOptionsRef.current.language,
         getEnabled: () => false,
@@ -750,21 +772,79 @@ const MdEditor: React.FC<MdEditorProps> = ({
     const handler = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null;
       if (!anchor || !editorDom.contains(anchor)) return;
-      const resolved = anchor.href;
-      if (!resolved || resolved.startsWith('mailto:')) return;
-      // Prevent default immediately for all non-mailto links inside editor
+      // Use the RAW href attribute, not anchor.href (the DOM resolves it against
+      // the current page — which differs between Drive and the full-page
+      // /editor/md/… route and would mangle a relative workspace path).
+      const rawHref = anchor.getAttribute('href') || '';
+      if (!rawHref || rawHref.startsWith('mailto:')) return;
       e.preventDefault();
       e.stopPropagation();
-      try {
-        const url = new URL(resolved);
-        if (url.origin !== window.location.origin) {
-          window.open(resolved, '_blank', 'noopener,noreferrer');
-          return;
-        }
-        if (onLinkClickRef.current) onLinkClickRef.current(url.pathname);
-      } catch {
-        if (onLinkClickRef.current) onLinkClickRef.current(resolved);
+      // Absolute URL with a scheme (http:, https:, …) → external / same-origin.
+      if (/^[a-z][a-z0-9+.-]*:/i.test(rawHref)) {
+        try {
+          const url = new URL(rawHref);
+          if (url.origin !== window.location.origin) { window.open(rawHref, '_blank', 'noopener,noreferrer'); return; }
+          if (onLinkClickRef.current) onLinkClickRef.current(url.pathname + url.hash);
+        } catch { window.open(rawHref, '_blank', 'noopener,noreferrer'); }
+        return;
       }
+      // Same-document anchor: scroll within THIS editor. IMPORTANT: re-query the
+      // target on every attempt — ProseMirror re-renders the doc shortly after the
+      // click (block-id sync, decorations) and REPLACES the DOM node, so a captured
+      // reference goes stale/detached. A getter keeps us pointed at the live node.
+      // A heading's text as the reader sees it — WITHOUT the fold chevron widget
+      // (`.md-fold-toggle`), which is a child node and would otherwise pollute the
+      // comparison (e.g. "▾Nagłówek" !== "Nagłówek").
+      const headingText = (h: Element): string =>
+        Array.from(h.childNodes)
+          .filter((n) => !(n.nodeType === 1 && (n as HTMLElement).classList?.contains('md-fold-toggle')))
+          .map((n) => n.textContent || '')
+          .join('')
+          .trim();
+      const findTarget: () => HTMLElement | null = rawHref.startsWith('#^')
+        ? () => (Array.from(editorDom.querySelectorAll(`[data-block-id="${CSS.escape(rawHref.slice(2).trim())}"]`))
+            .find((el) => !el.closest('.md-embed')) as HTMLElement | undefined) ?? null
+        : () => {
+            const anchorText = rawHref.slice(1).trim();
+            return (Array.from(editorDom.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+              .filter((h) => !h.closest('.md-embed'))            // ignore embedded-content headings
+              .find((h) => headingText(h) === anchorText) as HTMLElement | undefined) ?? null;
+          };
+      if (rawHref.startsWith('#')) {
+        if (!findTarget()) return; // nothing to jump to
+        // Bring the target into the editor's OWN scroll container. We use the
+        // scroll-independent offsetTop chain (getBoundingClientRect is read
+        // mid-layout) and re-run the jump a few times while the target is still
+        // off-screen — the doc reflows for a few hundred ms after the click, so a
+        // single scroll can miss. Once it's comfortably visible we stop (no yank).
+        const ensureVisible = () => {
+          const tgt = findTarget();
+          const container = contentWrapperRef.current;
+          if (!tgt) return;
+          if (!container || !container.contains(tgt)) { tgt.scrollIntoView({ block: 'start' }); return; }
+          const rel = tgt.getBoundingClientRect().top - container.getBoundingClientRect().top;
+          if (rel >= 0 && rel < container.clientHeight - 8) return; // already visible
+          let y = 0;
+          let n: HTMLElement | null = tgt;
+          while (n && n !== container) { y += n.offsetTop; n = n.offsetParent as HTMLElement | null; }
+          if (n === container) container.scrollTo({ top: Math.max(0, y - 12), behavior: 'auto' });
+          else tgt.scrollIntoView({ block: 'start' });
+        };
+        ensureVisible();
+        [80, 200, 400, 800, 1400].forEach((d) => setTimeout(ensureVisible, d));
+        // Brief highlight so the user sees where they landed (re-query — the node
+        // may have been swapped since the click).
+        setTimeout(() => {
+          const tgt = findTarget();
+          if (!tgt) return;
+          tgt.classList.add('md-anchor-flash');
+          setTimeout(() => tgt.classList.remove('md-anchor-flash'), 1200);
+        }, 220);
+        return;
+      }
+      // Relative / internal workspace link (e.g. `drive/notatka.md#…`): hand the
+      // RAW href to the host so it can open the file regardless of page base.
+      if (onLinkClickRef.current) onLinkClickRef.current(rawHref);
     };
     document.addEventListener('click', handler, true);
     return () => document.removeEventListener('click', handler, true);
@@ -779,21 +859,22 @@ const MdEditor: React.FC<MdEditorProps> = ({
     const containerBr = container.getBoundingClientRect();
     const children = Array.from(prosemirror.children) as HTMLElement[];
 
-    // Sync blockId from ProseMirror node attrs to DOM so getBlockId() can find it
-    // (needed for NodeView-based blocks like automateScriptBlock where renderHTML ≠ actual DOM)
+    // Pair each top-level DOM child with its ProseMirror node + document position.
+    // `offset` (position before the node) lets the block menu run cut/copy/delete
+    // deterministically. Also sync blockId to the DOM so getBlockId() can find it
+    // (NodeView-based blocks like automateScriptBlock render differently).
+    const positions: Array<{ el: HTMLElement; top: number; left: number; pos: number }> = [];
     let idx = 0;
-    editor.state.doc.forEach((node) => {
+    editor.state.doc.forEach((node, offset) => {
       const el = children[idx++];
-      if (el && node.attrs.blockId && !el.getAttribute('data-block-id')) {
+      if (!el) return;
+      if (node.attrs.blockId && !el.getAttribute('data-block-id')) {
         el.setAttribute('data-block-id', node.attrs.blockId);
       }
+      positions.push({ el, top: el.getBoundingClientRect().top, left: containerBr.left + 4, pos: offset });
     });
 
-    setBlockPositions(children.map(el => ({
-      el,
-      top: el.getBoundingClientRect().top,
-      left: containerBr.left + 4,
-    })));
+    setBlockPositions(positions);
   }, [editable, editor]);
 
   const handleSave = useCallback(() => {
@@ -804,6 +885,252 @@ const MdEditor: React.FC<MdEditorProps> = ({
       Promise.resolve(onSave(markdown)).finally(() => setSaveStatus('saved'));
     }
   }, [editor, onSave]);
+
+  // ── Block group operations (checkbox mode + bulk Cut/Copy/Delete) ───────────
+  const toggleGroupMode = useCallback(() => {
+    setGroupMode((m) => { if (m) setSelectedBlockIds(new Set()); return !m; });
+  }, []);
+
+  const toggleBlockSelected = useCallback((id: string) => {
+    setSelectedBlockIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Selection key for a top-level block: its stable blockId when it has one,
+  // otherwise a position-based fallback (`@<pos>`). Many block types — embeds,
+  // task lists, horizontal rules, images, custom NodeViews — carry NO blockId,
+  // so keying purely on blockId would leave them unselectable (and thus never
+  // copied). Positions are stable while selecting (no text edits happen then).
+  const blockKey = (blockId: string | null | undefined, pos: number): string => blockId ?? `@${pos}`;
+
+  // Selected top-level blocks with their live positions, in document order.
+  const groupSelectedNodes = useCallback((): { pos: number; node: PmNode }[] => {
+    if (!editor) return [];
+    const out: { pos: number; node: PmNode }[] = [];
+    editor.state.doc.forEach((node, offset) => {
+      if (selectedBlockIds.has(blockKey(node.attrs.blockId as string | undefined, offset))) out.push({ pos: offset, node });
+    });
+    return out;
+  }, [editor, selectedBlockIds]);
+
+  const groupSelectAll = useCallback(() => {
+    if (!editor) return;
+    const keys = new Set<string>();
+    editor.state.doc.forEach((node, offset) => { keys.add(blockKey(node.attrs.blockId as string | undefined, offset)); });
+    setSelectedBlockIds(keys);
+  }, [editor]);
+
+  // Copy the selected blocks to the in-app clipboard (mobile-safe) + best-effort
+  // system clipboard, so both the group "Wklej" and the per-block ⋮ "Wklej" work.
+  const groupCopy = useCallback(async () => {
+    if (!editor) return;
+    const nodes = groupSelectedNodes().map((n) => n.node);
+    if (nodes.length) await copyBlocks(editor, nodes);
+  }, [editor, groupSelectedNodes]);
+
+  const groupDelete = useCallback(() => {
+    if (!editor) return;
+    const nodes = groupSelectedNodes();
+    if (!nodes.length) return;
+    const tr = editor.state.tr;
+    // Delete high→low so earlier positions stay valid without mapping.
+    nodes.sort((a, b) => b.pos - a.pos).forEach(({ pos, node }) => tr.delete(pos, pos + node.nodeSize));
+    editor.view.dispatch(tr);
+    setSelectedBlockIds(new Set());
+  }, [editor, groupSelectedNodes]);
+
+  const groupCut = useCallback(async () => {
+    await groupCopy();
+    groupDelete();
+  }, [groupCopy, groupDelete]);
+
+  // Paste clipboard blocks AFTER the top-level block that currently holds the
+  // cursor. Reads the in-app clipboard first (mobile-safe), then the system one.
+  const groupPaste = useCallback(async () => {
+    if (!editor) return;
+    const content = await readBlocksForPaste();
+    if (!content) return;
+    const { $from } = editor.state.selection;
+    // Position just after the cursor's top-level block → new blocks land next.
+    const insertPos = $from.depth >= 1 ? $from.after(1) : editor.state.doc.content.size;
+    editor.chain().focus().insertContentAt(insertPos, content).run();
+  }, [editor]);
+
+  // ── Internal link (Obsidian-style) ─────────────────────────────────────────
+  // Pick a .md file from a tree; insert a link whose visible text stays editable
+  // on the page. Uses the standard Link mark so it round-trips as [text](path)
+  // with no extra converter rules.
+  const [internalLinkOpen, setInternalLinkOpen] = useState(false);
+  // Current document's headings — the "Nagłówek" tab shows them as a table of
+  // contents so the user can link to a heading in THIS file (`[[#Nagłówek]]`).
+  const [currentHeadings, setCurrentHeadings] = useState<{ level: number; text: string }[]>([]);
+  const openInternalLinkDialog = useCallback(() => {
+    const hs: { level: number; text: string }[] = [];
+    if (editor) {
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === 'heading') hs.push({ level: (node.attrs.level as number) ?? 1, text: node.textContent });
+      });
+    }
+    setCurrentHeadings(hs);
+    setInternalLinkOpen(true);
+  }, [editor]);
+  const handleInsertInternalLink = useCallback((target: { path?: string; anchor?: string; anchorType?: 'heading' | 'block' }) => {
+    if (!editor) return;
+    const { path, anchor, anchorType } = target;
+    // Obsidian anchors: `#heading` for a heading, `#^blockid` for a block.
+    const anchorSuffix = anchor ? (anchorType === 'block' ? `#^${anchor}` : `#${anchor}`) : '';
+    // With a file → link to it (+.md path kept for navigation). Without a file →
+    // an anchor in the CURRENT document: [[#heading]] / [[#^block]].
+    const href = path ? `${path}${anchorSuffix}` : anchorSuffix;
+    const label = path
+      ? `${path.replace(/^drive\//, '').replace(/\.md$/i, '')}${anchorSuffix}`
+      : anchorSuffix;
+    if (!href) return;
+    const attrs = { href, wikilink: true };
+    if (editor.state.selection.empty) {
+      editor.chain().focus()
+        .insertContent({ type: 'text', text: label, marks: [{ type: 'link', attrs }] })
+        .run();
+    } else {
+      editor.chain().focus().extendMarkRange('link').setLink(attrs).run();
+    }
+  }, [editor]);
+
+  // ── Obsidian embed ![[…]] ──────────────────────────────────────────────────
+  // Same picker as the internal link, but inserts a transclusion node. `pos`
+  // is set when editing an existing embed (double-click / pencil).
+  const [embedDialog, setEmbedDialog] = useState<{ open: boolean; pos?: number }>({ open: false });
+
+  const openEmbedDialog = useCallback(() => {
+    const hs: { level: number; text: string }[] = [];
+    if (editor) {
+      editor.state.doc.descendants((n) => {
+        if (n.type.name === 'heading') hs.push({ level: (n.attrs.level as number) ?? 1, text: n.textContent });
+      });
+    }
+    setCurrentHeadings(hs);
+    setEmbedDialog({ open: true });
+  }, [editor]);
+
+  // Build the Obsidian target inner (`file`, `file#head`, `file#^block`,
+  // `#head`, `#^block`) from the picker's result.
+  const embedTargetFrom = useCallback((target: { path?: string; anchor?: string; anchorType?: 'heading' | 'block' }) => {
+    const { path, anchor, anchorType } = target;
+    const anchorSuffix = anchor ? (anchorType === 'block' ? `#^${anchor}` : `#${anchor}`) : '';
+    const filePart = path ? path.replace(/^drive\//, '').replace(/\.md$/i, '') : '';
+    return `${filePart}${anchorSuffix}`;
+  }, []);
+
+  const handleInsertEmbed = useCallback((target: { path?: string; anchor?: string; anchorType?: 'heading' | 'block' }) => {
+    if (!editor) return;
+    const inner = embedTargetFrom(target);
+    if (!inner) return;
+    const pos = embedDialog.pos;
+    if (typeof pos === 'number') {
+      editor.chain().focus().command(({ tr }) => { tr.setNodeAttribute(pos, 'target', inner); return true; }).run();
+    } else {
+      editor.chain().focus().insertContent({ type: 'mdEmbed', attrs: { target: inner } }).run();
+    }
+    setEmbedDialog({ open: false });
+  }, [editor, embedDialog.pos, embedTargetFrom]);
+
+  // Double-click / pencil on an embed opens the picker in edit mode for its pos.
+  useEffect(() => {
+    const onEdit = (e: Event) => {
+      const detail = (e as CustomEvent<MdEmbedEditEventDetail>).detail;
+      if (!detail) return;
+      const hs: { level: number; text: string }[] = [];
+      if (editor) {
+        editor.state.doc.descendants((n) => {
+          if (n.type.name === 'heading') hs.push({ level: (n.attrs.level as number) ?? 1, text: n.textContent });
+        });
+      }
+      setCurrentHeadings(hs);
+      setEmbedDialog({ open: true, pos: detail.pos });
+    };
+    window.addEventListener(MD_EMBED_EDIT_EVENT, onEdit);
+    return () => window.removeEventListener(MD_EMBED_EDIT_EVENT, onEdit);
+  }, [editor]);
+
+  // ── Export to clean markdown ───────────────────────────────────────────────
+  // Serializes the current document to plain markdown (same serializer as save)
+  // and shows it in a dialog with copy-to-clipboard / download actions.
+  const [exportMd, setExportMd] = useState<string | null>(null);
+  const [exportCopied, setExportCopied] = useState(false);
+  const [exportManualHint, setExportManualHint] = useState(false);
+  const exportInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const handleExportMarkdown = useCallback(() => {
+    if (!editor) return;
+    setExportCopied(false);
+    setExportManualHint(false);
+    const raw = htmlToMarkdown(editor.getHTML());
+    // "Clean" = strip MyCastle-internal noise so the result is portable markdown:
+    // block-id anchors (`<!-- bid:… -->`) are editor bookkeeping, not content.
+    const cleaned = raw
+      .replace(/^[ \t]*<!--\s*bid:[0-9a-fA-F-]+\s*-->[ \t]*$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\n+/, '')
+      .trimEnd() + '\n';
+    setExportMd(cleaned);
+  }, [editor]);
+
+  const exportFileName = useMemo(() => {
+    const base = (filePath || '').split('/').pop() || 'export.md';
+    return /\.md$/i.test(base) ? base : `${base}.md`;
+  }, [filePath]);
+
+  const markCopied = useCallback(() => {
+    setExportManualHint(false);
+    setExportCopied(true);
+    setTimeout(() => setExportCopied(false), 1500);
+  }, []);
+
+  const handleCopyExport = useCallback(async () => {
+    if (exportMd == null) return;
+    // 1) Modern Clipboard API — ONLY in a secure context (HTTPS/localhost). Over
+    //    plain HTTP (typical on a phone hitting the LAN address) isSecureContext
+    //    is false, so we skip it entirely — calling it there can hang/reject and
+    //    would block the reliable fallback below.
+    try {
+      if (window.isSecureContext && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(exportMd);
+        markCopied();
+        return;
+      }
+    } catch { /* fall through — permission denied / not focused */ }
+    // 2) Legacy copy from the VISIBLE, focused textarea. This is the reliable
+    //    path on Android over HTTP (and in WebViews): the field is on-screen and
+    //    selected within the tap gesture, which browsers require for execCommand.
+    const ta = exportInputRef.current;
+    if (ta) {
+      try {
+        ta.focus();
+        ta.setSelectionRange(0, ta.value.length);
+        if (document.execCommand('copy')) { markCopied(); return; }
+      } catch { /* fall through */ }
+      // 3) Couldn't copy programmatically (some Android WebViews block it) —
+      //    leave the text selected so the user can long-press → Kopiuj by hand.
+      try { ta.focus(); ta.select(); } catch { /* ignore */ }
+    }
+    setExportManualHint(true);
+  }, [exportMd, markCopied]);
+
+  const handleDownloadExport = useCallback(() => {
+    if (exportMd == null) return;
+    const blob = new Blob([exportMd], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportFileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [exportMd, exportFileName]);
 
   // Autosave on content change
   useEffect(() => {
@@ -950,26 +1277,27 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   const handleOpenLink = useCallback(() => {
     if (!linkUrl) return;
-
-    try {
-      const url = new URL(linkUrl, window.location.href);
-      if (url.protocol === 'mailto:') {
-        window.open(linkUrl, '_blank', 'noopener,noreferrer');
-      } else if (url.origin === window.location.origin) {
-        // Same-origin: route internally
-        if (onLinkClick) {
-          onLinkClick(url.pathname);
+    // Absolute URL with a scheme → external / same-origin route.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(linkUrl)) {
+      try {
+        const url = new URL(linkUrl);
+        if (url.protocol === 'mailto:') { window.open(linkUrl, '_blank', 'noopener,noreferrer'); return; }
+        if (url.origin === window.location.origin) {
+          if (onLinkClick) onLinkClick(url.pathname + url.hash);
+          else window.open(url.pathname, '_self');
         } else {
-          window.open(url.pathname, '_self');
+          window.open(linkUrl, '_blank', 'noopener,noreferrer');
         }
-      } else {
+      } catch {
         window.open(linkUrl, '_blank', 'noopener,noreferrer');
       }
-    } catch {
-      if (onLinkClick) {
-        onLinkClick(linkUrl);
-      }
+      return;
     }
+    // Relative / internal workspace link (e.g. `drive/notatka.md#…`): hand the RAW
+    // href to the host. Resolving it here would mangle it — the base URL differs
+    // per page (Drive vs the full-page /editor/md/… route).
+    if (onLinkClick) onLinkClick(linkUrl);
+    else window.open(linkUrl, '_self');
   }, [linkUrl, onLinkClick]);
 
   // Handle mouse over links - show popup after delay
@@ -1182,6 +1510,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
             onSave={handleSave}
             saveDisabled={saveStatus === 'saved'}
             onInsertInfoMark={openInsertInfoMarkDialog}
+            onInsertInternalLink={openInternalLinkDialog}
+            onInsertEmbed={openEmbedDialog}
+            onToggleGroupMode={toggleGroupMode}
+            groupModeActive={groupMode}
+            onExportMarkdown={handleExportMarkdown}
             spellLanguage={spellLanguage}
             spellEnabled={spellEnabled}
             onSpellLanguageChange={setSpellLanguage}
@@ -1189,6 +1522,45 @@ const MdEditor: React.FC<MdEditorProps> = ({
           />
         </Collapse>
       )}
+
+      {/* Export-to-clean-markdown dialog */}
+      <Dialog open={exportMd !== null} onClose={() => setExportMd(null)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
+          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>Czysty Markdown</Typography>
+          <Button
+            size="small"
+            startIcon={exportCopied ? <CheckIcon /> : <ContentCopyIcon />}
+            color={exportCopied ? 'success' : 'primary'}
+            onClick={() => void handleCopyExport()}
+          >
+            {exportCopied ? 'Skopiowano' : 'Kopiuj do schowka'}
+          </Button>
+          <Button size="small" variant="contained" startIcon={<FileDownloadIcon />} onClick={handleDownloadExport}>
+            Pobierz
+          </Button>
+          <IconButton size="small" onClick={() => setExportMd(null)}><CloseIcon fontSize="small" /></IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          <TextField
+            value={exportMd ?? ''}
+            multiline
+            fullWidth
+            minRows={16}
+            maxRows={28}
+            inputRef={exportInputRef}
+            InputProps={{ readOnly: true, sx: { fontFamily: 'monospace', fontSize: 13, alignItems: 'flex-start' } }}
+            onFocus={(e) => e.currentTarget.querySelector('textarea')?.select?.()}
+          />
+          {exportManualHint && (
+            <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
+              Nie udało się skopiować automatycznie. Tekst został zaznaczony — przytrzymaj i wybierz „Kopiuj".
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExportMd(null)}>Zamknij</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* FAB to show toolbar when hidden on mobile */}
       {isMobile && !toolbarVisible && (
@@ -1671,18 +2043,72 @@ const MdEditor: React.FC<MdEditorProps> = ({
       </Popover>
     )}
 
-    {editable && blockPositions.length > 0 && ReactDOM.createPortal(
+    {editable && blockPositions.length > 0 && !groupMode && ReactDOM.createPortal(
       <>
-        {blockPositions.map(({ el, top, left }, i) => (
+        {blockPositions.map(({ el, top, left, pos }, i) => (
           <BlockActionMenu
             key={i}
             viewportTop={top}
             viewportLeft={left}
             blockEl={el}
+            blockPos={pos}
+            editor={editor}
             onMenuOpenChange={(open) => { blockMenuOpenRef.current = open; }}
           />
         ))}
       </>,
+      document.body,
+    )}
+
+    {/* Group mode: a checkbox in the gutter of every block, replacing the ⋮ menu. */}
+    {editable && groupMode && blockPositions.length > 0 && ReactDOM.createPortal(
+      <>
+        {blockPositions.map(({ top, left, pos }, i) => {
+          // Derive the key from the NODE (not the DOM) so it matches groupSelectedNodes exactly.
+          const key = (editor?.state.doc.nodeAt(pos)?.attrs.blockId as string | undefined) ?? `@${pos}`;
+          return (
+            <Checkbox
+              key={i}
+              size="small"
+              checked={selectedBlockIds.has(key)}
+              onChange={() => toggleBlockSelected(key)}
+              sx={{ position: 'fixed', top: top - 4, left: left - 4, zIndex: 1200, p: 0.25, bgcolor: 'background.paper', borderRadius: 1 }}
+            />
+          );
+        })}
+      </>,
+      document.body,
+    )}
+
+    {/* Group-mode bulk action bar (bubble). */}
+    {editable && groupMode && ReactDOM.createPortal(
+      <Paper
+        elevation={6}
+        sx={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 1300, display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, borderRadius: 3,
+        }}
+      >
+        <Typography variant="body2" sx={{ px: 1, whiteSpace: 'nowrap' }}>
+          Zaznaczono: <b>{selectedBlockIds.size}</b>
+        </Typography>
+        <Divider orientation="vertical" flexItem />
+        <Tooltip title="Kopiuj zaznaczone">
+          <span><IconButton size="small" disabled={selectedBlockIds.size === 0} onClick={() => void groupCopy()}><ContentCopyIcon fontSize="small" /></IconButton></span>
+        </Tooltip>
+        <Tooltip title="Wytnij zaznaczone">
+          <span><IconButton size="small" disabled={selectedBlockIds.size === 0} onClick={() => void groupCut()}><ContentCutIcon fontSize="small" /></IconButton></span>
+        </Tooltip>
+        <Tooltip title="Wklej za blokiem z kursorem">
+          <IconButton size="small" onClick={() => void groupPaste()}><ContentPasteIcon fontSize="small" /></IconButton>
+        </Tooltip>
+        <Tooltip title="Usuń zaznaczone">
+          <span><IconButton size="small" color="error" disabled={selectedBlockIds.size === 0} onClick={groupDelete}><DeleteOutlineIcon fontSize="small" /></IconButton></span>
+        </Tooltip>
+        <Divider orientation="vertical" flexItem />
+        <Tooltip title="Zaznacz wszystko"><IconButton size="small" onClick={groupSelectAll}><SelectAllIcon fontSize="small" /></IconButton></Tooltip>
+        <Button size="small" onClick={toggleGroupMode}>Gotowe</Button>
+      </Paper>,
       document.body,
     )}
 
@@ -1705,6 +2131,23 @@ const MdEditor: React.FC<MdEditorProps> = ({
         }}
       />
     )}
+
+    {/* Internal-link picker — tree of .md files. Picking one inserts an editable
+        link ([text](path)) at the cursor (or wraps the current selection). */}
+    <MdFileTreePickerDialog
+      open={internalLinkOpen}
+      headings={currentHeadings}
+      onClose={() => setInternalLinkOpen(false)}
+      onSelect={handleInsertInternalLink}
+    />
+
+    <MdFileTreePickerDialog
+      open={embedDialog.open}
+      headings={currentHeadings}
+      title="Osadź zawartość"
+      onClose={() => setEmbedDialog({ open: false })}
+      onSelect={handleInsertEmbed}
+    />
 
     {/* Event-from-task dialog — opened by the `/event` slash command.
         Inserts the resulting markdown blockquote at the captured range,

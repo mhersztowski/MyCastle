@@ -10,6 +10,11 @@ static const uint8_t MBC_MAGIC1 = 0x43;   // 'C'
 static const uint8_t MBC_VERSION = 0x01;
 static const uint16_t FRAME_SENTINEL = 0xFFFF; // marks top-level main frame
 
+// Points at the VM whose run() is on the stack, so free-function natives (which
+// only receive Value* args) can resolve string refs via activeStr(). Embedded
+// targets run a single VM; nested/reentrant execution is not supported.
+static MinisVM* s_activeVM = nullptr;
+
 // ─── Constructor / Reset ─────────────────────────────────────────────────────
 
 MinisVM::MinisVM() {
@@ -171,6 +176,11 @@ const char* MinisVM::get_str(Value v) const {
     return str_const[v.ref];
 }
 
+const char* MinisVM::activeStr(Value v) {
+    if (!s_activeVM || v.type != T_STRING) return "";
+    return s_activeVM->get_str(v);
+}
+
 uint8_t MinisVM::alloc_rt_str() {
     for (uint8_t i = 0; i < MINIS_STR_RT_MAX; i++) {
         if (!str_rt_used[i]) { str_rt_used[i] = true; str_rt[i][0] = '\0'; return i; }
@@ -247,14 +257,19 @@ MinisVM::Result MinisVM::return_from(bool has_val) {
 
 MinisVM::Result MinisVM::run(uint32_t max_cycles) {
     if (!prog || has_error) return Result::ERROR;
+    MinisVM* prev = s_activeVM;   // so natives can resolve string args via activeStr()
+    s_activeVM = this;
     uint32_t n = 0;
+    Result result;
     while (true) {
-        if (has_error)     return Result::ERROR;
-        if (pc >= prog_len){ vm_abort("pc out of bounds"); return Result::ERROR; }
+        if (has_error)     { result = Result::ERROR; break; }
+        if (pc >= prog_len){ vm_abort("pc out of bounds"); result = Result::ERROR; break; }
         Result r = exec_one();
-        if (r != Result::RUNNING) return r;
-        if (max_cycles && ++n >= max_cycles) return Result::RUNNING;
+        if (r != Result::RUNNING)          { result = r; break; }
+        if (max_cycles && ++n >= max_cycles){ result = Result::RUNNING; break; }
     }
+    s_activeVM = prev;
+    return result;
 }
 
 // ─── Single instruction ───────────────────────────────────────────────────────

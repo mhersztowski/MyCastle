@@ -28,17 +28,21 @@ function IotDevicesPage() {
     if (!userName) return;
     setLoading(true);
     try {
-      const [allDevices, defs, iotStatuses, sharedDevices] = await Promise.all([
+      // allSettled — one failing/slow endpoint (e.g. IoT status backed by a
+      // stuck device) must NOT blank the whole page. Update state only from the
+      // requests that succeeded; keep prior data for the rest and warn softly.
+      const [devicesR, defsR, statusesR, sharedR] = await Promise.allSettled([
         minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(userName),
         minisApi.getIotDevices(userName),
         minisApi.getSharedDevices(userName),
       ]);
-      setDevices(allDevices.filter((d) => d.isIot));
-      setDeviceDefs(defs);
-      setStatuses(iotStatuses);
-      setSharedWithMe(sharedDevices);
-      setError(null);
+      if (devicesR.status === 'fulfilled') setDevices(devicesR.value.filter((d) => d.isIot));
+      if (defsR.status === 'fulfilled') setDeviceDefs(defsR.value);
+      if (statusesR.status === 'fulfilled') setStatuses(statusesR.value);
+      if (sharedR.status === 'fulfilled') setSharedWithMe(sharedR.value);
+      const failed = [devicesR, defsR, statusesR, sharedR].filter((r) => r.status === 'rejected').length;
+      setError(failed ? `Część danych IoT jest chwilowo niedostępna (${failed}/4 żądań) — pokazuję to, co się udało.` : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {

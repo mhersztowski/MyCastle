@@ -202,6 +202,15 @@ const WorkspaceMdPage: React.FC = () => {
   };
 
   const handleLinkClick = useCallback((pathname: string) => {
+    // Internal drive link (raw href `drive/<rel>.md[#…]`) → open in DRIVE with the
+    // right-panel markdown editor, per the "Open in editor" behaviour.
+    const driveM = pathname.replace(/^\/+/, '').match(/^drive\/(.+?\.md)(?:#.*)?$/i);
+    const user = currentUser?.name;
+    if (driveM && user) {
+      navigate(`/user/${encodeURIComponent(user)}/pim/drive?open=${encodeURIComponent(decodeURIComponent(driveM[1]))}`);
+      return;
+    }
+    // Otherwise keep the workspace-internal behaviour.
     const WORKSPACE_PREFIX = '/workspace/md/';
     let path: string;
     if (pathname.startsWith(WORKSPACE_PREFIX)) {
@@ -212,7 +221,7 @@ const WorkspaceMdPage: React.FC = () => {
       path = pathname;
     }
     navigate(`/workspace/md/${path}`);
-  }, [navigate]);
+  }, [navigate, currentUser]);
 
   const sortedFiles = [...files].sort((a, b) => a.name.localeCompare(b.name));
   const favoriteFiles = favorites.map(path => {

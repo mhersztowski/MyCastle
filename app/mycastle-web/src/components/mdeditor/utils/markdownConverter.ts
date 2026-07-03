@@ -453,18 +453,56 @@ const turndownService = new TurndownService({
   bulletListMarker: '-',
   emDelimiter: '*',
   strongDelimiter: '**',
+  // Markdown collapses consecutive blank lines, so an intentionally-empty
+  // paragraph (user pressed Enter for vertical spacing) would vanish on reload.
+  // Emit a non-breaking-space paragraph for empty <p> so the blank line survives
+  // the round-trip. Other blank blocks keep the default behaviour.
+  blankReplacement: (_content, node) =>
+    (node as unknown as Node).nodeName === 'P' ? '\n\n&nbsp;\n\n' : ((node as { isBlock?: boolean }).isBlock ? '\n\n' : ''),
 });
 
 // Preserve relative hrefs — DOMParser resolves relative URLs to absolute,
 // but getAttribute('href') returns the original attribute value.
 // We use it explicitly to avoid losing relative workspace links.
 turndownService.addRule('links', {
-  filter: (node) => node.nodeName === 'A' && !!(node as HTMLAnchorElement).getAttribute('href'),
+  filter: (node) => node.nodeName === 'A'
+    && !!(node as HTMLAnchorElement).getAttribute('href')
+    && (node as HTMLElement).getAttribute('data-wikilink') !== 'true',   // wikilinks handled below
   replacement: (content, node) => {
     const href = (node as HTMLAnchorElement).getAttribute('href') ?? '';
     const title = (node as HTMLAnchorElement).getAttribute('title');
     const titlePart = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
     return `[${content}](${href}${titlePart})`;
+  },
+});
+
+// Internal (Obsidian-style) links: <a data-wikilink href="drive/notatka.md#…"> →
+// [[notatka#…]] (or [[notatka#…|label]] when the visible text was edited). The
+// href keeps the full workspace path for navigation; we strip it to the short
+// `[[…]]` target here and rebuild it on the way back (see escapeWikiLinksForHtml).
+turndownService.addRule('wikiLink', {
+  filter: (node) => node.nodeName === 'A' && (node as HTMLElement).getAttribute('data-wikilink') === 'true',
+  replacement: (_content, node) => {
+    const el = node as HTMLElement;
+    const href = el.getAttribute('href') ?? '';
+    const hashIdx = href.indexOf('#');
+    const filePart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+    const anchorPart = hashIdx >= 0 ? href.slice(hashIdx) : '';
+    const target = filePart.replace(/^drive\//, '').replace(/\.md$/i, '') + anchorPart;
+    // Use the RAW text (not turndown's escaped `content`, which would turn e.g.
+    // `wl_target` into `wl\_target` and look "edited"). Only emit an alias when
+    // the user actually changed the visible text.
+    const text = (el.textContent ?? '').trim();
+    return text && text !== target ? `[[${target}|${text}]]` : `[[${target}]]`;
+  },
+});
+
+// Obsidian embed node (<div data-type="md-embed" data-target="…">) → ![[target]]
+turndownService.addRule('mdEmbed', {
+  filter: (node) => node.nodeName === 'DIV' && (node as HTMLElement).getAttribute('data-type') === 'md-embed',
+  replacement: (_content, node) => {
+    const target = (node as HTMLElement).getAttribute('data-target') ?? '';
+    return target ? `\n\n![[${target}]]\n\n` : '';
   },
 });
 
@@ -1251,6 +1289,61 @@ function processColumnLayouts(html: string): string {
   return container.innerHTML;
 }
 
+// Obsidian wikilinks: [[target]] / [[target|label]] are pulled out before
+// showdown and re-emitted as <a data-wikilink href="drive/<file>.md#anchor">.
+// The short `target` (drive-relative, no .md) is expanded to the full workspace
+// path so the link navigates; htmlToMarkdown's wikiLink rule reverses this.
+// Obsidian embeds `![[target]]` (content transclusion). Escaped BEFORE wikilinks
+// so the inner `[[…]]` isn't mistaken for a plain link. Restored as a block
+// <div data-type="md-embed"> that the MdEmbed NodeView renders.
+function escapeEmbedsForHtml(content: string): { result: string; embeds: string[] } {
+  const embeds: string[] = [];
+  const result = content.replace(/!\[\[([^\]\n|]+?)\]\]/g, (_m, target: string) => {
+    embeds.push(String(target).trim());
+    return `%%MDEMBED${embeds.length - 1}%%`;
+  });
+  return { result, embeds };
+}
+
+function restoreEmbedsToHtml(html: string, embeds: string[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  embeds.forEach((target, i) => {
+    const div = `<div data-type="md-embed" data-target="${enc(target)}"></div>`;
+    // Showdown wraps the lone placeholder in a paragraph — unwrap it (block node).
+    result = result
+      .split(`<p>%%MDEMBED${i}%%</p>`).join(div)
+      .split(`%%MDEMBED${i}%%`).join(div);
+  });
+  return result;
+}
+
+function escapeWikiLinksForHtml(content: string): { result: string; wikiLinks: { href: string; label: string }[] } {
+  const wikiLinks: { href: string; label: string }[] = [];
+  const result = content.replace(/\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]/g, (_m, target: string, label?: string) => {
+    const t = String(target).trim();
+    const hashIdx = t.indexOf('#');
+    const filePart = (hashIdx >= 0 ? t.slice(0, hashIdx) : t).replace(/^\/+/, '');
+    const anchorPart = hashIdx >= 0 ? t.slice(hashIdx) : '';
+    // No file part → a same-document anchor ([[#heading]]); otherwise a link to
+    // another note (drive/<file>.md#…).
+    const href = filePart ? `drive/${filePart}.md${anchorPart}` : anchorPart;
+    wikiLinks.push({ href, label: (label ?? t).trim() });
+    return `%%WIKILINK${wikiLinks.length - 1}%%`;
+  });
+  return { result, wikiLinks };
+}
+
+function restoreWikiLinksToHtml(html: string, wikiLinks: { href: string; label: string }[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  wikiLinks.forEach((l, i) => {
+    const tag = `<a href="${enc(l.href)}" data-wikilink="true" class="md-editor-link">${enc(l.label)}</a>`;
+    result = result.split(`%%WIKILINK${i}%%`).join(tag);
+  });
+  return result;
+}
+
 export function markdownToHtml(markdown: string): string {
   if (!markdown || markdown.trim() === '') {
     return '';
@@ -1320,8 +1413,14 @@ export function markdownToHtml(markdown: string): string {
   const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutInfoMarks);
   const { result: markdownWithoutComponents, componentEmbeds } = JSON.parse(componentDataStr);
 
+  // Protect Obsidian embeds ![[…]] BEFORE wikilinks (they share [[…]] syntax)
+  const { result: markdownWithoutEmbeds, embeds } = escapeEmbedsForHtml(markdownWithoutComponents);
+
+  // Protect Obsidian wikilinks [[…]] from showdown
+  const { result: markdownWithoutWikiLinks, wikiLinks } = escapeWikiLinksForHtml(markdownWithoutEmbeds);
+
   // Then, protect math content from showdown processing
-  const mathDataStr = escapeMathForHtml(markdownWithoutComponents);
+  const mathDataStr = escapeMathForHtml(markdownWithoutWikiLinks);
   const { result: escapedMarkdown, mathBlocks, mathInlines } = JSON.parse(mathDataStr);
 
   let html = showdownConverter.makeHtml(escapedMarkdown);
@@ -1334,6 +1433,12 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore component embeds
   html = restoreComponentEmbedsFromHtml(html, componentEmbeds);
+
+  // Restore Obsidian wikilinks
+  html = restoreWikiLinksToHtml(html, wikiLinks);
+
+  // Restore Obsidian embeds ![[…]]
+  html = restoreEmbedsToHtml(html, embeds);
 
   // Restore UI form embeds
   html = restoreUIFormsFromHtml(html, uiForms);
@@ -1407,6 +1512,25 @@ export function htmlToMarkdown(html: string): string {
         doc.body.insertBefore(marker, el);
       }
     });
+    // Preserve "extra" whitespace that Markdown would otherwise collapse: leading
+    // spaces, trailing spaces and interior runs of 2+ spaces become non-breaking
+    // spaces ( ), which Turndown/Markdown keep verbatim. Single interior
+    // spaces stay normal so ordinary prose remains clean Markdown. Skip code/pre
+    // (their whitespace is already fenced and significant).
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const textNodes: Text[] = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const parentTag = (n.parentElement?.closest('pre, code'));
+      if (!parentTag) textNodes.push(n as Text);
+    }
+    for (const t of textNodes) {
+      const v = t.nodeValue ?? '';
+      if (!/ {2,}| $|^ /.test(v)) continue;
+      t.nodeValue = v
+        .replace(/^ +/, (m) => ' '.repeat(m.length))          // leading run
+        .replace(/ +$/, (m) => ' '.repeat(m.length))          // trailing run
+        .replace(/ {2,}/g, (m) => ' ' + ' '.repeat(m.length - 1)); // interior run: keep 1 space, pad rest
+    }
     return doc.body.innerHTML;
   })();
 
@@ -1427,6 +1551,19 @@ export function htmlToMarkdown(html: string): string {
     (_, encodedInline) => {
       uiForms.push({ id: '', inline: decodeURIComponent(encodedInline) });
       return `##UIFORMEMBED${uiForms.length - 1}##`;
+    }
+  );
+
+  // Pre-process: Obsidian embeds. Turndown drops EMPTY <div>s (isBlank check) so
+  // the mdEmbed rule never fires — swap them for a text placeholder now and
+  // restore `![[target]]` after turndown (matches the event-block approach).
+  const mdEmbedTargets: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="md-embed"[^>]*><\/div>/gi,
+    (m) => {
+      const t = m.match(/data-target="([^"]*)"/i);
+      mdEmbedTargets.push(t ? t[1] : '');
+      return `<p>##MDEMBEDOUT${mdEmbedTargets.length - 1}##</p>`;
     }
   );
 
@@ -1564,6 +1701,33 @@ export function htmlToMarkdown(html: string): string {
     }
   );
 
+  // Pre-process: Replace event blocks with placeholders before Turndown.
+  // EventBlock renders as an EMPTY <div data-type="event-block" data-…>, and
+  // Turndown drops empty (isBlank) divs before any custom rule can run — so
+  // without this escape the event silently disappears on save. Restored to a
+  // ```event fence after Turndown (see below).
+  const eventBlocks: EventBlockEscaped[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="event-block"[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const dec = (name: string) => {
+        const m = match.match(new RegExp(`${name}="([^"]*)"`));
+        if (!m) return '';
+        try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+      };
+      eventBlocks.push({
+        eventName:   dec('data-event-name'),
+        start:       dec('data-start'),
+        end:         dec('data-end'),
+        description: dec('data-description'),
+        taskId:      dec('data-task-id'),
+        taskName:    dec('data-task-name'),
+        projectName: dec('data-project-name'),
+      });
+      return `##EVENTBLOCK${eventBlocks.length - 1}##`;
+    }
+  );
+
   // Pre-process: Replace component embeds with placeholders before Turndown
   // This ensures they survive Turndown processing
   // Using placeholder without underscores to avoid Turndown escaping them
@@ -1596,6 +1760,12 @@ export function htmlToMarkdown(html: string): string {
   // Post-process: replace %%BID:id%% text placeholders with <!-- bid:id --> comments
   // Accept any ID format (UUID or legacy slug) so old documents round-trip correctly
   markdown = markdown.replace(/%%BID:([^%\n]+)%%/g, (_, id) => `<!-- bid:${id} -->`);
+
+  // Post-process: Restore Obsidian embeds as ![[target]]
+  mdEmbedTargets.forEach((target, index) => {
+    const dec = target.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    markdown = markdown.split(`##MDEMBEDOUT${index}##`).join(dec ? `![[${dec}]]` : '');
+  });
 
   // Post-process: Restore UI form embeds as @[uiform:...] syntax
   uiForms.forEach((form, index) => {
@@ -1677,6 +1847,14 @@ export function htmlToMarkdown(html: string): string {
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
     const langTag = parts.join(':');
     const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore event blocks as ```event JSON fences (parsed back on
+  // load by escapeEventBlocksForHtml — same shape as EventBlockEscaped).
+  eventBlocks.forEach((ev, index) => {
+    const placeholder = `##EVENTBLOCK${index}##`;
+    const replacement = `\n\`\`\`event\n${JSON.stringify(ev, null, 2)}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 

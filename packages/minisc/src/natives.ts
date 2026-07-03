@@ -28,6 +28,9 @@ export const NATIVES: NativeInfo[] = [
     { name: 'mqtt_pub_int', argc: 2, retType: 'void'  },  // 14  topic(str), value(int)
     { name: 'mqtt_pub_flt', argc: 2, retType: 'void'  },  // 15  topic(str), value(float)
     { name: 'mqtt_pub_str', argc: 2, retType: 'void'  },  // 16  topic(str), value(str)
+    // Appended at index 17 to keep indices 0–16 backward-compatible with
+    // already-deployed sketches (native index = bytecode operand).
+    { name: 'print_str',    argc: 1, retType: 'void'  },  // 17  Serial.print(const char*)
 ];
 
 export function buildNativeMap(): Map<string, { idx: number; info: NativeInfo }> {

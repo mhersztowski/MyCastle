@@ -305,9 +305,15 @@ export class IotService {
     const deviceName = parts[2];
     const msgType = parts.slice(3).join('/');
 
-    // Rate limit device → server traffic (not server → client)
-    const isDeviceMsg = ['telemetry', 'heartbeat', 'hello', 'command/ack'].includes(msgType) || msgType.startsWith('ext/') || msgType === 'twin/reported';
-    if (isDeviceMsg && !this.rateLimiter.allow(deviceName)) return;
+    // Rate-limit only UNSOLICITED, device-initiated state traffic (telemetry /
+    // heartbeat / hello / twin). SOLICITED responses — extension replies
+    // (`ext/*/res`) and command acks — are bounded by the server's own request
+    // rate, so limiting them is wrong: it drops legitimate request-response
+    // traffic (e.g. a VFS folder read answering N requests), which makes MqttFS
+    // time out (15 s), the HTTP call hang, the client retry, and the whole thing
+    // snowball into a readfile storm. Never rate-limit `ext/*` or `command/ack`.
+    const isUnsolicited = ['telemetry', 'heartbeat', 'hello'].includes(msgType) || msgType === 'twin/reported';
+    if (isUnsolicited && !this.rateLimiter.allow(deviceName)) return;
 
     let raw: unknown;
     try {

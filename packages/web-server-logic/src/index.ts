@@ -15,9 +15,10 @@ export {
   type CommandEvent,
 } from './WebServerLogicClient';
 
-// Browser-side entity implementations.
+// Browser-side entity implementations (klasowe — dziedzicz po Device/Service).
 export { BrowserDisplay, type DisplayContent } from './entities/BrowserDisplay';
 export { BrowserNotification } from './entities/BrowserNotification';
 
-// Re-export the shared model so consumers need a single import.
+// Re-export wspólnego modelu — bazy klasowe (ClientEntity/Device/Service),
+// katalog i typy — żeby konsument budował client/service/device z jednego importu.
 export * from '@mhersztowski/server-logic/web';

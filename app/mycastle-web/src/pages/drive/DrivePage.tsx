@@ -11,8 +11,9 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
+import { QtUiSceneEditor, type QtUiFs } from '../../modules/qtui/QtUiSceneEditor';
 import { useMqtt } from '../../modules/mqttclient';
 import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
@@ -751,6 +752,7 @@ export default function DrivePage(): React.JSX.Element {
   const userName = params.userName || currentUser?.name || '';
   const { openNav } = useLayoutChrome();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [cwd, setCwd] = useState('');                       // relative under /drive/
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -797,6 +799,10 @@ export default function DrivePage(): React.JSX.Element {
   // open MdEditor in a new tab via `/editor/md/{path}` for simplicity.
   const [mdEditing, setMdEditing] = useState<{
     entry: VfsEntry; rel: string; initialContent: string; saving: boolean;
+    // When set, the file lives OUTSIDE the drive subtree (e.g. a Notes file at
+    // `md/rome.md`). It is user-root-relative (`/data/Minis/Users/{u}/{pimRel}`)
+    // and read/write bypass the drive-scoped helpers. `rel` mirrors it for UI.
+    pimRel?: string;
   } | null>(null);
   // MJD editor — opens in the same right-side preview slot as MdEditor.
   //   mode='def'  → MjdVfsLoader edits the .mjd schema (data path omitted)
@@ -808,6 +814,9 @@ export default function DrivePage(): React.JSX.Element {
   } | null>(null);
   // `.myschema.json` graphical editor (GlobalJsonLoader). path = full backend path.
   const [globalEditing, setGlobalEditing] = useState<{ entry: VfsEntry; rel: string; path: string } | null>(null);
+  // `*.qtui.json` → MinisQt UI scene designer (same editor as Arduino "UI Scene",
+  // rendered inline in the right panel; no WASM build — Drive has no project context).
+  const [qtuiEditing, setQtuiEditing] = useState<{ entry: VfsEntry; rel: string } | null>(null);
   // Singleton RemoteFS — MjdVfsLoader expects a FileSystemProvider. Token
   // updates propagate via setToken below so logout/login doesn't strand
   // the editor on a stale credential.
@@ -817,6 +826,30 @@ export default function DrivePage(): React.JSX.Element {
     [],
   );
   useEffect(() => { mjdFs.setToken(token ?? undefined); }, [token, mjdFs]);
+
+  // Minimal FS the QtUiSceneEditor needs, wired to the SAME user-scoped VFS
+  // endpoints Drive uses for its own files — so a *.qtui.json path resolves
+  // exactly as the user sees it. Stable per user (editor reloads only on file
+  // change via `key`). Base64 <-> bytes is byte-exact (UTF-8 safe).
+  const qtuiFs = useMemo<QtUiFs>(() => ({
+    async readFile(p: string): Promise<Uint8Array> {
+      const rel = p.replace(/^\/+/, '');
+      const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+      if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+      const json = await r.json() as { data?: string };
+      const bin = atob(json.data ?? '');
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    },
+    async writeFile(p: string, content: Uint8Array): Promise<void> {
+      const rel = p.replace(/^\/+/, '');
+      let binary = '';
+      for (let i = 0; i < content.length; i++) binary += String.fromCharCode(content[i]);
+      await vfsWriteFile(userName, rel, btoa(binary));
+    },
+    async refresh(): Promise<void> { /* overwriting an existing file doesn't change the listing */ },
+  }), [userName]);
 
   // ── Right-panel code editor: full workspace ──────────────────────────────
   // Config / source files open in the same full editor as Electronics → Editor
@@ -1218,7 +1251,7 @@ export default function DrivePage(): React.JSX.Element {
   const runAbortRef = useRef<AbortController | null>(null);
   // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
   const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
-  const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || globalEditing || running || logsView);
+  const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || globalEditing || qtuiEditing || running || logsView);
 
   // Exactly ONE right-side panel may be open at a time. Every opener calls this
   // first, so a new panel never renders stacked next to a stale one (the bug
@@ -1231,6 +1264,7 @@ export default function DrivePage(): React.JSX.Element {
     setMdEditing(null);
     setMjdEditing(null);
     setGlobalEditing(null);
+    setQtuiEditing(null);
     runAbortRef.current?.abort();
     setRunning(null);
     setLogsView(null);
@@ -1505,6 +1539,13 @@ export default function DrivePage(): React.JSX.Element {
       setRepoViewing({ entry, path: rel });
       return;
     }
+    // `*.qtui.json` → MinisQt UI scene designer in the right panel (no WASM).
+    if (entry.name.endsWith('.qtui.json')) {
+      const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+      resetPanels();
+      setQtuiEditing({ entry, rel });
+      return;
+    }
 
     // Other files → preview / Monaco editor (matches OS file managers more
     // closely than auto-download; user can still hit "Pobierz" from the menu).
@@ -1685,6 +1726,75 @@ export default function DrivePage(): React.JSX.Element {
     }
   }, [userName, cwd, isWide, toast, resetPanels]);
 
+  // Open a markdown file that lives OUTSIDE the drive subtree (user-root-relative,
+  // e.g. a Notes file `md/rome.md` → `/data/Minis/Users/{u}/md/rome.md`) in the
+  // same right-hand editor panel. Mirrors `openInMdEditor` but reads/writes the
+  // absolute user-root path instead of the drive-scoped one.
+  const openPimMdInPanel = useCallback(async (pimRel: string) => {
+    const name = pimRel.split('/').pop() as string;
+    const fullPath = `/data/Minis/Users/${userName}/${pimRel}`;
+    if (!isWide) {
+      const encoded = fullPath.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+      window.open(`/editor/md/${encoded}`, '_blank');
+      return;
+    }
+    try {
+      const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/readFile`, window.location.origin);
+      u.searchParams.set('path', fullPath);
+      const r = await fetch(u.pathname + u.search, { headers: authHeaders() });
+      if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+      const json = await r.json() as { data?: string };
+      const content = base64ToText(json.data ?? '');
+      resetPanels();
+      setMdEditing({ entry: { name, type: FILE_TYPE }, rel: pimRel, pimRel, initialContent: content, saving: false });
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }, [userName, isWide, toast, resetPanels]);
+
+  // Clicking a link inside the Drive markdown editor ("Open in editor"): open the
+  // TARGET in this same right-hand editor panel (stay in Drive) instead of
+  // navigating away. Internal hrefs resolve under `/user/{u}/pim/…`:
+  //   • `drive/notatka.md` → drive-relative  → openInMdEditor
+  //   • `md/rome.md`        → user-root file  → openPimMdInPanel
+  const handleMdLinkClick = useCallback((href: string) => {
+    let pathname = href;
+    try {
+      const u = new URL(href, window.location.href);
+      if (u.origin !== window.location.origin) {
+        window.open(href, '_blank', 'noopener,noreferrer');   // external → new tab
+        return;
+      }
+      pathname = u.pathname;
+    } catch { /* unparseable — treat href as a bare path */ }
+    const m = pathname.replace(/^\/+/, '').match(/^user\/[^/]+\/pim\/(.+\.md)$/i);
+    if (!m) {
+      window.open(pathname, '_self');   // not a pim .md → default navigation
+      return;
+    }
+    const pimRel = decodeURIComponent(m[1]);
+    if (/^drive\//i.test(pimRel)) {
+      const rel = pimRel.replace(/^drive\//i, '');
+      void openInMdEditor({ name: rel.split('/').pop() as string, type: FILE_TYPE }, rel);
+    } else {
+      void openPimMdInPanel(pimRel);
+    }
+  }, [openInMdEditor, openPimMdInPanel]);
+
+  // Deep-link: `/user/{u}/pim/drive?open=<drive-rel>.md` opens that file straight
+  // in the right-hand markdown editor. Used by "Open in editor" clicked from the
+  // full-page /editor/md/… view so it lands in Drive with the file open. The
+  // param is cleared afterwards so it doesn't re-open on later navigation.
+  useEffect(() => {
+    const openRel = searchParams.get('open');
+    if (!openRel) return;
+    void openInMdEditor({ name: openRel.split('/').pop() as string, type: FILE_TYPE }, openRel);
+    const next = new URLSearchParams(searchParams);
+    next.delete('open');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   /** Drive-relative → backend full path (`/data/Minis/Users/{u}/drive/...`).
    *  RemoteFS wants the absolute form; the URL bar shows the relative one. */
   const driveToFullPath = useCallback((rel: string) => {
@@ -1815,7 +1925,19 @@ export default function DrivePage(): React.JSX.Element {
     const snapshot = mdEditing;
     if (!snapshot) return;
     try {
-      await vfsWriteFile(userName, snapshot.rel, textToBase64(markdown));
+      if (snapshot.pimRel) {
+        // File outside drive — write to its absolute user-root path.
+        const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/writeFile`, window.location.origin);
+        u.searchParams.set('path', `/data/Minis/Users/${userName}/${snapshot.pimRel}`);
+        const r = await fetch(u.pathname + u.search, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ data: textToBase64(markdown), options: { create: true, overwrite: true } }),
+        });
+        if (!r.ok) throw new Error(`writeFile failed: ${r.status}`);
+      } else {
+        await vfsWriteFile(userName, snapshot.rel, textToBase64(markdown));
+      }
       toast(`Zapisano "${snapshot.entry.name}"`, 'success');
     } catch (err) {
       toast(`Nie zapisano: ${(err as Error).message}`, 'error');
@@ -3017,8 +3139,9 @@ export default function DrivePage(): React.JSX.Element {
                   key={mdEditing.rel}              /* remount on different file */
                   initialContent={mdEditing.initialContent}
                   onSave={saveMdContent}
+                  onLinkClick={handleMdLinkClick}  /* internal .md links open in THIS panel */
                   autoSaveDelay={2000}              /* faster than the default 30s */
-                  filePath={`drive/${mdEditing.rel}`}  /* prefixed so api.file (userBase-relative) and api.scripts.runInParentsByTag find the same file */
+                  filePath={mdEditing.pimRel ?? `drive/${mdEditing.rel}`}  /* userBase-relative; pim files (e.g. md/rome.md) sit outside drive/ */
                 />
               </Box>
             )}
@@ -3041,6 +3164,20 @@ export default function DrivePage(): React.JSX.Element {
                   key={globalEditing.rel}
                   provider={mjdFs}
                   path={globalEditing.path}
+                />
+              </Box>
+            )}
+            {qtuiEditing && (
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <QtUiSceneEditor
+                  key={qtuiEditing.rel}     /* remount on different file */
+                  open
+                  embedded
+                  onClose={resetPanels}
+                  fs={qtuiFs}
+                  path={qtuiEditing.rel}
+                  userName={userName}
+                  onSaved={() => { void refresh(); }}
                 />
               </Box>
             )}
@@ -3191,16 +3328,6 @@ export default function DrivePage(): React.JSX.Element {
           }}>
             <ListItemIcon><ArticleIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Otwórz w Viewer</ListItemText>
-          </MenuItem>
-        )}
-        {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (
-          <MenuItem onClick={() => {
-            const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
-            void runScript(rel);
-            setMenuFor(null);
-          }}>
-            <ListItemIcon><PlayArrowIcon fontSize="small" sx={{ color: 'success.main' }} /></ListItemIcon>
-            <ListItemText primary="Run" secondary="Uruchom na backendzie (node)" />
           </MenuItem>
         )}
         {menuFor && menuFor.entry.type === FILE_TYPE && isRunnable(menuFor.entry.name) && (

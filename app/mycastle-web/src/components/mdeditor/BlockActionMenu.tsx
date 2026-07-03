@@ -1,7 +1,16 @@
 import React, { useCallback, useState } from 'react';
-import { Menu, MenuItem, ListItemIcon, ListItemText, IconButton } from '@mui/material';
+import { Menu, MenuItem, ListItemIcon, ListItemText, IconButton, Divider } from '@mui/material';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ContentCutIcon from '@mui/icons-material/ContentCut';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import TagIcon from '@mui/icons-material/Tag';
+import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
+import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import type { Editor } from '@tiptap/react';
+import { toggleHeadingFold, isHeadingCollapsed } from './extensions/HeadingFoldExtension';
+import { copyBlocks, readBlocksForPaste } from './utils/blockClipboard';
 
 export function getBlockId(el: HTMLElement): string | null {
   return (
@@ -15,6 +24,9 @@ interface BlockActionMenuProps {
   viewportTop: number;
   viewportLeft: number;
   blockEl: HTMLElement;
+  /** Document position of the top-level block (from MdEditor's block map). */
+  blockPos?: number;
+  editor?: Editor | null;
   onMenuOpenChange: (open: boolean) => void;
 }
 
@@ -22,6 +34,8 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
   viewportTop,
   viewportLeft,
   blockEl,
+  blockPos,
+  editor,
   onMenuOpenChange,
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
@@ -37,13 +51,69 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
     onMenuOpenChange(false);
   }, [onMenuOpenChange]);
 
+  // Resolve the block's live range [from, to). Recomputed on demand so it stays
+  // valid even though `blockPos` was captured when the menu opened.
+  const nodeRange = useCallback(() => {
+    if (!editor || typeof blockPos !== 'number') return null;
+    const node = editor.state.doc.nodeAt(blockPos);
+    if (!node) return null;
+    return { from: blockPos, to: blockPos + node.nodeSize };
+  }, [editor, blockPos]);
+
+  const handleCopy = useCallback(() => {
+    const r = nodeRange();
+    closeMenu();
+    if (!editor || !r) return;
+    const node = editor.state.doc.nodeAt(r.from);
+    if (node) void copyBlocks(editor, [node]);
+  }, [editor, nodeRange, closeMenu]);
+
+  const handleCut = useCallback(() => {
+    const r = nodeRange();
+    closeMenu();
+    if (!editor || !r) return;
+    const node = editor.state.doc.nodeAt(r.from);
+    if (node) void copyBlocks(editor, [node]);
+    editor.chain().focus().deleteRange(r).run();
+  }, [editor, nodeRange, closeMenu]);
+
+  const handleDelete = useCallback(() => {
+    if (!editor) return closeMenu();
+    const r = nodeRange();
+    if (r) editor.chain().focus().deleteRange(r).run();
+    closeMenu();
+  }, [editor, nodeRange, closeMenu]);
+
+  const handlePaste = useCallback(() => {
+    const r = nodeRange();
+    closeMenu();                       // close first — a system clipboard read may prompt for permission
+    if (!editor || !r) return;
+    void (async () => {
+      const content = await readBlocksForPaste();   // in-app clipboard first (mobile-safe)
+      if (!content) return;
+      // Re-resolve the range — the doc may have changed while the async read ran.
+      const node = editor.state.doc.nodeAt(r.from);
+      const to = node ? r.from + node.nodeSize : r.to;
+      editor.chain().focus().insertContentAt(to, content).run();
+    })();
+  }, [editor, nodeRange, closeMenu]);
+
   const handleCopyId = useCallback(() => {
     const id = getBlockId(blockEl);
-    if (id) navigator.clipboard.writeText(`#${id}`).catch(console.error);
+    if (id) navigator.clipboard?.writeText(`#${id}`).catch(() => { /* ignore */ });
     closeMenu();
   }, [blockEl, closeMenu]);
 
   const blockId = menuAnchor ? getBlockId(blockEl) : null;
+  const canEditBlock = !!(editor && typeof blockPos === 'number');
+  // Fold action only makes sense on headings — the section fold hangs off them.
+  const isHeading = /^H[1-6]$/.test(blockEl.tagName);
+  const collapsed = !!(isHeading && blockId && editor && isHeadingCollapsed(editor.state, blockId));
+
+  const handleToggleFold = useCallback(() => {
+    if (editor && blockId) toggleHeadingFold(editor.view, blockId);
+    closeMenu();
+  }, [editor, blockId, closeMenu]);
 
   return (
     <>
@@ -72,11 +142,43 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
       >
+        {canEditBlock && (
+          <MenuItem onClick={handleCopy} dense>
+            <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Kopiuj" />
+          </MenuItem>
+        )}
+        {canEditBlock && (
+          <MenuItem onClick={handleCut} dense>
+            <ListItemIcon><ContentCutIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Wytnij" />
+          </MenuItem>
+        )}
+        {canEditBlock && (
+          <MenuItem onClick={handlePaste} dense>
+            <ListItemIcon><ContentPasteIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Wklej" secondary="pod blokiem" />
+          </MenuItem>
+        )}
+        {canEditBlock && (
+          <MenuItem onClick={handleDelete} dense sx={{ color: 'error.main' }}>
+            <ListItemIcon><DeleteOutlineIcon fontSize="small" color="error" /></ListItemIcon>
+            <ListItemText primary="Usuń" />
+          </MenuItem>
+        )}
+        {canEditBlock && <Divider />}
+
+        {isHeading && editor && blockId && (
+          <MenuItem onClick={handleToggleFold} dense>
+            <ListItemIcon>{collapsed ? <UnfoldMoreIcon fontSize="small" /> : <UnfoldLessIcon fontSize="small" />}</ListItemIcon>
+            <ListItemText primary={collapsed ? 'Rozwiń sekcję' : 'Zwiń sekcję'} />
+          </MenuItem>
+        )}
         <MenuItem onClick={handleCopyId} dense disabled={!blockId} title={blockId ?? undefined}>
-          <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
+          <ListItemIcon><TagIcon fontSize="small" /></ListItemIcon>
           <ListItemText
-            primary="Copy Id"
-            secondary={blockId ? blockId.slice(0, 8) + '…' : 'no id yet'}
+            primary="Kopiuj Id"
+            secondary={blockId ? blockId.slice(0, 8) + '…' : 'brak id'}
           />
         </MenuItem>
       </Menu>

@@ -7,13 +7,18 @@ współpracować z backendem MyCastle (moduł `iot`) i być sterowalne ze strony
 Pokrywa:
 
 - cykl życia urządzenia (`hello` / `heartbeat` / `telemetry` / `command`),
-- **automatyczną rejestrację urządzeń** (urządzenie samo się ogłasza, backend je zapisuje),
+- **encje** (`sensor` / `binary_sensor` / `switch` / `number` / `button` / `select`) — deklaracja,
+  raport stanu i komendy (§3.5),
+- **automatyczną rejestrację urządzeń** (urządzenie samo się ogłasza, backend je zapisuje) —
+  wraz z ważnym rozróżnieniem: rejestracja w telemetrii/presence vs widoczność na **liście** urządzeń (§4),
 - generyczny protokół **rozszerzeń** (`ext/{type}/req` ↔ `ext/{type}/res`),
 - konkretne rozszerzenia: **VFS**, **virtual keyboard (vkbd)**, **virtual mouse (vmouse)**,
   **virtual display (display)** oraz pokrewny **smart-display**.
 
 Źródło prawdy (zweryfikowane w kodzie): [`packages/core/src/mqtt/topics.ts`](../packages/core/src/mqtt/topics.ts)
-(rejestr topików Zod), [`packages/core/src/iot/device/`](../packages/core/src/iot/device/) (klocki device-side),
+(rejestr topików Zod), [`packages/core/src/iot/device/`](../packages/core/src/iot/device/) (klocki device-side, TS),
+[`packages/core/browser/iot-client/`](../packages/core/browser/iot-client/) (device-side w **vanilla JS**,
+static-first — `IotDevice` / `IotEntity` / `IotExtension`; działa w Drive/WebEmbed/Node),
 [`app/client/`](../app/client/) (referencyjny klient Python, paho-mqtt),
 [`app/mycastle-backend/src/modules/iot/`](../app/mycastle-backend/src/modules/iot/) (strona serwera).
 
@@ -159,7 +164,135 @@ dozwolone wartości to **`ACKNOWLEDGED`** lub **`FAILED`**:
 ```
 
 Komendy encji (przełączenie `switch`, ustawienie `number`/`select`) przychodzą tą samą drogą —
-`name` = id encji lub nazwa komendy, `payload` zależny od typu.
+`name` = id encji lub nazwa komendy, `payload` zależny od typu (pełny opis w §3.5).
+
+---
+
+## 3.5 Encje (entities) — deklaracja, stan i komendy
+
+**Encja** = pojedynczy „byt" urządzenia, którym UI potrafi wyświetlić lub sterować: sensor, przełącznik,
+przycisk, liczba, wybór. Encje **nie mają własnych topików** — jadą po trzech istniejących kanałach:
+
+| Faza | Topic | Kierunek | Nośnik |
+|---|---|---|---|
+| **Deklaracja** (co urządzenie ma) | `hello` | device → server | tablica `entities[]` |
+| **Raport stanu** (bieżąca wartość) | `telemetry` | device → server | `metrics[]`, gdzie `key` = `entity.id` |
+| **Sterowanie** (zmiana z UI) | `command` + `command/ack` | server ↔ device | `command.name` = `entity.id` |
+
+> **Reguła spójności (kluczowa):** `entity.id` **=** `telemetry.metrics[].key` **=** `command.name`.
+> Ten sam identyfikator łączy deklarację, odczyty i komendy. Bez tego backend nie skojarzy
+> telemetrii/komendy z encją.
+
+### 3.5.1 Typy encji
+
+Pole `type` (enum walidowany Zod w `hello`): `sensor | binary_sensor | switch | number | button | select`.
+Pola **wspólne** dla każdej encji: `id` (wymagane), `type` (wymagane), `name`, `icon?`, `deviceClass?`
+(styl Home Assistant, np. `temperature`, `humidity`, `power`).
+
+| `type` | Dodatkowe pola w `hello` | Zapisywalny? | Payload komendy (server → device) | Wartość w `telemetry` |
+|---|---|---|---|---|
+| `sensor` | `unit` | nie (read-only) | — | `number \| string` |
+| `binary_sensor` | `onLabel?`, `offLabel?` | nie (read-only) | — | `boolean` |
+| `switch` | — | **tak** | `{ "state": true }` | `boolean` |
+| `number` | `min`, `max`, `step`, `unit?` | **tak** | `{ "value": 42 }` | `number` |
+| `button` | — | **tak** (chwilowy) | `{}` (bez pól) | — (encja bezstanowa) |
+| `select` | `options: string[]` | **tak** | `{ "value": "auto" }` | `string` (jedna z `options`) |
+
+- **read-only** (`sensor`, `binary_sensor`) — tylko raportują stan przez telemetrię.
+- **zapisywalne** (`switch`, `number`, `button`, `select`) — dodatkowo odbierają komendy z UI.
+- `button` **nie** ma stanu → nie występuje w `telemetry` (nic nie raportuje).
+
+### 3.5.2 Deklaracja w `hello`
+
+Urządzenie ogłasza swoje encje w tablicy `entities[]` wiadomości `hello` (§3.1):
+
+```jsonc
+{
+  "entities": [
+    { "id": "temp",   "type": "sensor",        "name": "Temperatura", "unit": "°C", "deviceClass": "temperature" },
+    { "id": "online", "type": "binary_sensor", "name": "Połączenie",  "onLabel": "Online", "offLabel": "Offline" },
+    { "id": "pump",   "type": "switch",        "name": "Pompa",       "icon": "mdi:water-pump" },
+    { "id": "bright", "type": "number",        "name": "Jasność",     "min": 0, "max": 100, "step": 5, "unit": "%" },
+    { "id": "reboot", "type": "button",        "name": "Restart" },
+    { "id": "mode",   "type": "select",        "name": "Tryb",        "options": ["auto", "manual", "off"] }
+  ]
+}
+```
+
+Deklaracja jest **idempotentna** — po reconnect wyślij `hello` ponownie; backend scala `entities[]`
+z istniejącą konfiguracją (`iot_device_config`, kolumna `entities` jako JSON).
+
+### 3.5.3 Raport stanu (`telemetry`)
+
+Bieżące wartości encji publikujesz jako metryki, gdzie **`key` = `entity.id`**:
+
+```jsonc
+// minis/{userName}/{deviceName}/telemetry
+{
+  "metrics": [
+    { "key": "temp",   "value": 22.5,  "unit": "°C" },   // sensor
+    { "key": "online", "value": true },                    // binary_sensor
+    { "key": "pump",   "value": false },                   // switch (stan po komendzie)
+    { "key": "bright", "value": 40, "unit": "%" },         // number
+    { "key": "mode",   "value": "auto" }                   // select
+    // "reboot" (button) — pomijamy, nie ma stanu
+  ],
+  "timestamp": 1717076640000
+}
+```
+
+Możesz raportować **reaktywnie** (od razu po zmianie stanu, np. po komendzie) i/lub **cyklicznie**
+(np. co 15 s). Telemetria odświeża też presence (ONLINE), więc częsta telemetria zastępuje heartbeat.
+
+### 3.5.4 Komendy encji (`command` → device, `command/ack` → server)
+
+UI zmienia encję zapisywalną, wysyłając na `command` z `name` = `entity.id`. Urządzenie wykonuje zmianę
+i **musi** odesłać `command/ack` z tym samym `id`. Zaleca się też natychmiastowy raport nowego stanu na
+`telemetry` (żeby UI od razu zobaczyło potwierdzoną wartość).
+
+```jsonc
+// switch — włącz pompę
+// → command
+{ "id": "c1", "name": "pump", "payload": { "state": true } }
+// ← command/ack
+{ "id": "c1", "status": "ACKNOWLEDGED" }
+
+// number — ustaw jasność (urządzenie POWINNO przyciąć do [min,max] i uszanować step)
+// → command
+{ "id": "c2", "name": "bright", "payload": { "value": 75 } }
+// ← command/ack
+{ "id": "c2", "status": "ACKNOWLEDGED" }
+
+// select — wybierz tryb (urządzenie POWINNO odrzucić wartość spoza options → FAILED)
+// → command
+{ "id": "c3", "name": "mode", "payload": { "value": "manual" } }
+// ← command/ack
+{ "id": "c3", "status": "ACKNOWLEDGED" }
+
+// button — chwilowy wyzwalacz, payload pusty
+// → command
+{ "id": "c4", "name": "reboot", "payload": {} }
+// ← command/ack
+{ "id": "c4", "status": "ACKNOWLEDGED" }
+```
+
+Walidacja po stronie urządzenia (dobre praktyki):
+
+- `number` — przytnij `value` do `[min, max]`; jeśli nie da się wykonać → `FAILED` z `reason`.
+- `select` — sprawdź, czy `value ∈ options`; jeśli nie → `FAILED`.
+- `switch` — potraktuj `payload.state` jako `boolean`.
+- Nieznana encja (`name` bez odpowiadającej encji) → backend sam odpowie `FAILED`; urządzenie może
+  po prostu zignorować.
+
+### 3.5.5 Gotowe klocki device-side
+
+Zamiast ręcznie składać payloady, możesz użyć gotowych klas (obie mapują 1:1 kontrakt z tej sekcji):
+
+- **Vanilla JS (static-first):** [`packages/core/browser/iot-client/`](../packages/core/browser/iot-client/) —
+  `IotEntity.sensor/binarySensor/switch/number/button/select(...)`, sygnały `commanded` / `pressed`,
+  a `IotDevice` sam buduje `hello`, wysyła telemetrię reaktywnie i routuje komendy → `command/ack`.
+- **Python (referencyjny klient):** [`app/client/entities/`](../app/client/entities/) — klasy
+  `SensorEntity` / `SwitchEntity` / `NumberEntity` / `ButtonEntity` / `SelectEntity` z `to_dict()` + `handle_command()`.
 
 ---
 
@@ -182,8 +315,26 @@ Komendy encji (przełączenie `switch`, ustawienie `number`/`select`) przychodz�
    `statusChange` (republikowany na `status`).
 7. **Twin** — jeśli istnieje pożądany stan (desired twin), serwer wypycha go na `twin/desired`.
 
-Od tej chwili urządzenie jest widoczne na liście IoT, a `IotDevicePage` pokazuje przyciski rozszerzeń
-zależnie od zadeklarowanych `extensions[]`.
+Od tej chwili urządzenie jest **śledzone** (presence ONLINE, telemetria, konfiguracja encji/rozszerzeń),
+a strona **szczegółów** [`IotDevicePage`](../app/mycastle-web/src/pages/minis-user/iot/IotDevicePage.tsx)
+(`/user/{u}/iot/device/{d}`) pokazuje encje, telemetrię i przyciski rozszerzeń zależnie od `extensions[]`.
+
+> **⚠️ Ważne rozróżnienie: „śledzone" ≠ „na liście".**
+> `hello` zapisuje urządzenie do **presence** (`DevicePresence`, in-memory) i do **`iot_device_config`**
+> (SQLite) — to zasila stronę szczegółów, telemetrię i statusy. **NIE** tworzy natomiast wpisu w
+> **rejestrze urządzeń użytkownika** (`GET /api/users/{u}/devices`, plik per-user).
+>
+> Strona **listy** [`IotDevicesPage`](../app/mycastle-web/src/pages/minis-user/iot/IotDevicesPage.tsx)
+> (`/user/{u}/iot/devices`) renderuje **wyłącznie** urządzenia z tego rejestru mające `isIot: true`
+> (`getUserDevices().filter(d => d.isIot)`); presence służy tam tylko do pokolorowania statusu
+> ONLINE/OFFLINE. Dlatego samo `hello` **nie sprawi**, że urządzenie pojawi się na liście.
+>
+> Aby urządzenie było na liście, zarejestruj je raz — nazwa **musi = `deviceName`** ze skryptu/firmware:
+> - **UI:** *Devices → Add Device* → Name = `deviceName`, włącz przełącznik **IoT Device**;
+> - **API:** `POST /api/users/{u}/devices` z body `{ "name": "<deviceName>", "isIot": true }`.
+>
+> `DevicePresence` jest **in-memory** → po restarcie backendu lista statusów się zeruje; urządzenie
+> wraca do ONLINE dopiero po kolejnym `hello`/`heartbeat`/`telemetry`.
 
 > **Heartbeat też synchronizuje rozszerzenia** — `handleHeartbeat()` woła `extensions.syncFromConfig(config)`,
 > więc serwerowe rozszerzenia są odtwarzane także po restarcie backendu, gdy tylko przyjdzie heartbeat.
@@ -433,10 +584,14 @@ IotDevicePage  ──HTTP POST /ext/{type}──►  MycastleHttpServer.handleVi
 
 1. Połącz się z brokerem MQTT (TCP na skonfigurowanym porcie lub WS `/mqtt` na 1894); **unikalne `clientId`**
    (np. `minis-{deviceName}`). Zaimplementuj reconnect z backoffem.
-2. Opublikuj **`hello`** z `extensions[]` (i opcjonalnie `entities[]`) — to rejestruje urządzenie (§4).
+2. Opublikuj **`hello`** z `extensions[]` (i opcjonalnie `entities[]`) — to włącza śledzenie
+   (presence + `iot_device_config`) i stronę szczegółów. **Uwaga:** samo `hello` **nie** dodaje urządzenia
+   do listy w UI — patrz krok 8 i §4.
 3. Wysyłaj **`heartbeat`** cyklicznie (≤ `heartbeatIntervalSec`), inaczej zostaniesz OFFLINE.
-4. Wysyłaj **`telemetry`** z odczytami sensorów (jeśli są). `key` bez spacji/polskich znaków; QoS 1.
-5. Subskrybuj **`command`** → wykonuj i odsyłaj **`command/ack`** (`ACKNOWLEDGED` / `FAILED`) z tym samym `id`.
+4. Wysyłaj **`telemetry`** z bieżącymi wartościami encji (jeśli są) — `metrics[].key` = `entity.id` (§3.5).
+   `key` bez spacji/polskich znaków; QoS 1.
+5. Subskrybuj **`command`** → wykonuj (dla encji: `name` = `entity.id`, payload zależny od typu — §3.5.4)
+   i odsyłaj **`command/ack`** (`ACKNOWLEDGED` / `FAILED`) z tym samym `id`.
 6. Dla każdego zadeklarowanego rozszerzenia subskrybuj **`ext/{type}/req`** i odpowiadaj na
    **`ext/{type}/res`** kopertą `{ id, ok, data?, error? }`:
    - `vfs` — operacje plikowe (base64),
@@ -444,9 +599,16 @@ IotDevicePage  ──HTTP POST /ext/{type}──►  MycastleHttpServer.handleVi
    - `display` — odpowiadaj na `get_config` **oraz** wypychaj ramki `{ op:"frame", n, w, h, fmt, data }`,
    - `smart-display` — obsłuż `update` / `clear`.
 7. Po reconnect publikuj `hello` ponownie (deklaracja encji/rozszerzeń jest idempotentna — backend scala).
+8. **Zarejestruj urządzenie na liście** (jednorazowo): *Devices → Add Device* z Name = `deviceName` i
+   włączonym **IoT Device**, albo `POST /api/users/{u}/devices { "name": "<deviceName>", "isIot": true }`.
+   Bez tego kroku urządzenie działa i jest ONLINE, ale nie pokaże się na `/user/{u}/iot/devices` (§4).
 
-Referencyjna, kompletna implementacja device-side: [`app/client/`](../app/client/) (Python, paho-mqtt).
-Framework-agnostyczne klocki TypeScript: [`packages/core/src/iot/device/`](../packages/core/src/iot/device/).
+Implementacje device-side (wszystkie mapują ten sam kontrakt):
+
+- Vanilla JS, static-first: [`packages/core/browser/iot-client/`](../packages/core/browser/iot-client/)
+  (`IotDevice` / `IotEntity` / `IotExtension`) — patrz `iot-client.example.js` i `iot-client-backend.example.js`.
+- Referencyjny, kompletny klient Python (paho-mqtt): [`app/client/`](../app/client/).
+- Framework-agnostyczne klocki TypeScript: [`packages/core/src/iot/device/`](../packages/core/src/iot/device/).
 
 ---
 

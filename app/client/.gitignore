@@ -1,5 +1,6 @@
 .venv/
 .venv-win/
+.venv-mac/
 .env
 .env.watchtower
 .env.smart-display

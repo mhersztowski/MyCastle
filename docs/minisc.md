@@ -182,6 +182,27 @@ Registered in `setup_vm()` of the Arduino sketch. **Order must match `natives.ts
 | 14    | `mqtt_pub_int`        | `(string topic, int v) → void`       | publish int telemetry             |
 | 15    | `mqtt_pub_flt`        | `(string topic, float v) → void`     | publish float telemetry           |
 | 16    | `mqtt_pub_str`        | `(string topic, string v) → void`    | publish string message            |
+| 17    | `print_str`           | `(string v) → void`                  | Serial.print(const char*)         |
+
+> `print_str` is appended at index 17 (not grouped with `print_int`/`print_float`)
+> so indices 0–16 stay backward-compatible with already-deployed sketches — the
+> native index is baked into the bytecode operand.
+
+Reference C++ implementation for `setup_vm()`:
+
+```cpp
+Value native_print_str(Value* args, uint8_t argc) {
+    // String args arrive as pool refs — resolve via activeStr(), not args[0].ref.
+    Serial.print(MinisVM::activeStr(args[0]));
+    return Value::makeNull();
+}
+// ...register in the SAME order as natives.ts (index 17):
+vm.registerNative("print_str", native_print_str, 1, T_NULL);
+```
+
+> The same `MinisVM::activeStr(args[i])` call is how any string-consuming native
+> (e.g. `mqtt_pub_str`) must read its string arguments — native functions receive
+> only pool refs, never `char*`.
 
 ---
 

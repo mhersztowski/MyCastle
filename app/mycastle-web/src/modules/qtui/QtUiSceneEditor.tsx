@@ -24,25 +24,40 @@ import {
 } from './QtUiTypes';
 import { findNode, findParent, patchNode, removeNode, insertChild } from './qtTree';
 import { QtUiCanvas } from './QtUiCanvas';
-import type { ProjectAssetFs } from './ProjectAssetFs';
+import { QtUiLiveCanvas } from './QtUiLiveCanvas';
 
 const PREVIEW_SKETCH = '__qtui_preview';
 const dec = new TextDecoder();
 
+/**
+ * Minimal filesystem the editor needs. Satisfied structurally by ProjectAssetFs
+ * (Arduino project asset package) and by a thin Drive VFS adapter — so the same
+ * editor works both inside a project and standalone on any *.qtui.json in Drive.
+ */
+export interface QtUiFs {
+  readFile(path: string): Promise<Uint8Array>;
+  writeFile(path: string, content: Uint8Array): Promise<void>;
+  refresh(): Promise<void>;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
-  fs: ProjectAssetFs;
+  fs: QtUiFs;
   path: string;
   userName: string;
-  projectId: string;
+  /** Present only in a project context — enables the "Build & Run (WASM)" preview. */
+  projectId?: string;
+  /** Render inline (no Dialog chrome), e.g. inside the Drive right panel. */
+  embedded?: boolean;
   onSaved?: () => void;
 }
 
 const ALIGNMENTS: QtAlignment[] = ['AlignLeft', 'AlignHCenter', 'AlignCenter', 'AlignRight', 'AlignVCenter'];
 
-export function QtUiSceneEditor({ open, onClose, fs, path, userName, projectId, onSaved }: Props) {
+export function QtUiSceneEditor({ open, onClose, fs, path, userName, projectId, embedded, onSaved }: Props) {
   const { token } = useAuth();
+  const enableWasm = !!projectId;   // WASM preview only makes sense inside a project
   const [scene, setScene] = useState<QtUiScene | null>(null);
   const [selectedId, setSelectedId] = useState<string>('root');
   const [dirty, setDirty] = useState(false);
@@ -112,7 +127,7 @@ export function QtUiSceneEditor({ open, onClose, fs, path, userName, projectId, 
   };
 
   const handleBuildRun = async () => {
-    if (!scene) return;
+    if (!scene || !projectId) return;
     setBusy(true); setError(null);
     try {
       // Persist the scene, then drop a self-contained MinisQt sketch into a
@@ -140,76 +155,92 @@ export function QtUiSceneEditor({ open, onClose, fs, path, userName, projectId, 
   const selAbsolute = !!selected && !!scene && selected.id !== scene.root.id
     && (!selParent?.layout || selParent.layout === 'none');
 
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: '88vh' } }}>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
-        <Typography variant="subtitle1" sx={{ flexGrow: 0, mr: 1 }}>UI Scene</Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>
-          {path}{dirty ? ' •' : ''}
-        </Typography>
-        <Button size="small" startIcon={busy ? <CircularProgress size={14} /> : <Save />} onClick={() => void handleSave()} disabled={busy || !scene || !dirty}>
-          Save
-        </Button>
+  const toolbarInner = (
+    <>
+      <Typography variant="subtitle1" sx={{ flexGrow: 0, mr: 1 }}>UI Scene</Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>
+        {path}{dirty ? ' •' : ''}
+      </Typography>
+      <Button size="small" startIcon={busy ? <CircularProgress size={14} /> : <Save />} onClick={() => void handleSave()} disabled={busy || !scene || !dirty}>
+        Save
+      </Button>
+      {enableWasm && (
         <Button size="small" variant="contained" startIcon={<Build />} onClick={() => void handleBuildRun()} disabled={busy || !scene}>
           Build &amp; Run (WASM)
         </Button>
-        <IconButton size="small" onClick={onClose}><Close /></IconButton>
-      </DialogTitle>
+      )}
+      {!embedded && <IconButton size="small" onClick={onClose}><Close /></IconButton>}
+    </>
+  );
 
-      {error && <Alert severity="error" onClose={() => setError(null)} sx={{ mx: 2, mb: 1 }}>{error}</Alert>}
+  const sceneBody = !scene ? (
+    <Box sx={{ p: 4, display: 'flex', alignItems: 'center', gap: 1 }}><CircularProgress size={18} /> Loading…</Box>
+  ) : (
+    <>
+      {/* Left: scene settings + widget tree */}
+      <Box sx={{ width: 240, flexShrink: 0, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Box sx={{ p: 1.5 }}>
+          <Typography variant="overline" color="text.secondary">Scene</Typography>
+          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+            <NumField label="Width" value={scene.width} onChange={(v) => updateScene({ width: v })} />
+            <NumField label="Height" value={scene.height} onChange={(v) => updateScene({ height: v })} />
+          </Box>
+          <ColorField label="Background" value={scene.background ?? '#181c20'} onChange={(v) => updateScene({ background: v })} sx={{ mt: 1 }} />
+        </Box>
+        <Divider />
+        <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5 }}>
+          <Typography variant="overline" color="text.secondary" sx={{ flexGrow: 1 }}>Widgets</Typography>
+        </Box>
+        <Box sx={{ flexGrow: 1, overflow: 'auto', px: 0.5, pb: 1 }}>
+          <TreeRow
+            node={scene.root} depth={0} selectedId={selectedId} rootId={scene.root.id}
+            onSelect={setSelectedId}
+            onAdd={(el, parentId) => setAddAnchor({ el, parentId })}
+            onDelete={handleDelete}
+          />
+        </Box>
+      </Box>
 
-      <DialogContent dividers sx={{ p: 0, display: 'flex', overflow: 'hidden' }}>
-        {!scene ? (
-          <Box sx={{ p: 4, display: 'flex', alignItems: 'center', gap: 1 }}><CircularProgress size={18} /> Loading…</Box>
-        ) : (
-          <>
-            {/* Left: scene settings + widget tree */}
-            <Box sx={{ width: 240, flexShrink: 0, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <Box sx={{ p: 1.5 }}>
-                <Typography variant="overline" color="text.secondary">Scene</Typography>
-                <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
-                  <NumField label="Width" value={scene.width} onChange={(v) => updateScene({ width: v })} />
-                  <NumField label="Height" value={scene.height} onChange={(v) => updateScene({ height: v })} />
-                </Box>
-                <ColorField label="Background" value={scene.background ?? '#181c20'} onChange={(v) => updateScene({ background: v })} sx={{ mt: 1 }} />
-              </Box>
-              <Divider />
-              <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.5 }}>
-                <Typography variant="overline" color="text.secondary" sx={{ flexGrow: 1 }}>Widgets</Typography>
-              </Box>
-              <Box sx={{ flexGrow: 1, overflow: 'auto', px: 0.5, pb: 1 }}>
-                <TreeRow
-                  node={scene.root} depth={0} selectedId={selectedId} rootId={scene.root.id}
-                  onSelect={setSelectedId}
-                  onAdd={(el, parentId) => setAddAnchor({ el, parentId })}
-                  onDelete={handleDelete}
-                />
-              </Box>
-            </Box>
-
-            {/* Center: drag-and-drop canvas designer */}
-            <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Center: designer canvas. In Drive (embedded) the DISPLAY is drawn by the
+          real MinisQt library (packages/core/browser/qt); it falls back to the
+          classic 2D canvas if the library can't load. In a project we keep the
+          classic drag-and-drop canvas. */}
+      <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {embedded ? (
+          <QtUiLiveCanvas
+            scene={scene}
+            fallback={
               <QtUiCanvas
                 scene={scene}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onChange={(s) => { setScene(s); setDirty(true); }}
               />
-            </Box>
-
-            {/* Right: properties of the selected widget */}
-            <Box sx={{ width: 320, flexShrink: 0, borderLeft: 1, borderColor: 'divider', overflow: 'auto', p: 2 }}>
-              {selected ? (
-                <PropertyPanel node={selected} onChange={update} showGeometry={selAbsolute} />
-              ) : (
-                <Typography color="text.secondary">Select a widget.</Typography>
-              )}
-            </Box>
-          </>
+            }
+          />
+        ) : (
+          <QtUiCanvas
+            scene={scene}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onChange={(s) => { setScene(s); setDirty(true); }}
+          />
         )}
-      </DialogContent>
+      </Box>
 
+      {/* Right: properties of the selected widget */}
+      <Box sx={{ width: 320, flexShrink: 0, borderLeft: 1, borderColor: 'divider', overflow: 'auto', p: 2 }}>
+        {selected ? (
+          <PropertyPanel node={selected} onChange={update} showGeometry={selAbsolute} />
+        ) : (
+          <Typography color="text.secondary">Select a widget.</Typography>
+        )}
+      </Box>
+    </>
+  );
+
+  const overlays = (
+    <>
       {/* Add-widget menu */}
       <Menu open={!!addAnchor} anchorEl={addAnchor?.el} onClose={() => setAddAnchor(null)}>
         {ADDABLE_WIDGETS.map((w) => (
@@ -219,8 +250,8 @@ export function QtUiSceneEditor({ open, onClose, fs, path, userName, projectId, 
         ))}
       </Menu>
 
-      {/* Faithful WASM preview — compiles MinisQt + this scene */}
-      {previewOpen && previewUrls && (
+      {/* Faithful WASM preview — compiles MinisQt + this scene (project context only) */}
+      {enableWasm && previewOpen && previewUrls && (
         <CppWasmRuntime
           open={previewOpen}
           onClose={() => setPreviewOpen(false)}
@@ -230,6 +261,39 @@ export function QtUiSceneEditor({ open, onClose, fs, path, userName, projectId, 
           token={token}
         />
       )}
+    </>
+  );
+
+  // Embedded (Drive right panel): no Dialog chrome, fills its container.
+  if (embedded) {
+    return (
+      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+          {toolbarInner}
+        </Box>
+        {error && <Alert severity="error" onClose={() => setError(null)} sx={{ mx: 2, my: 1 }}>{error}</Alert>}
+        <Box sx={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+          {sceneBody}
+        </Box>
+        {overlays}
+      </Box>
+    );
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth
+      PaperProps={{ sx: { height: '88vh' } }}>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
+        {toolbarInner}
+      </DialogTitle>
+
+      {error && <Alert severity="error" onClose={() => setError(null)} sx={{ mx: 2, mb: 1 }}>{error}</Alert>}
+
+      <DialogContent dividers sx={{ p: 0, display: 'flex', overflow: 'hidden' }}>
+        {sceneBody}
+      </DialogContent>
+
+      {overlays}
     </Dialog>
   );
 }

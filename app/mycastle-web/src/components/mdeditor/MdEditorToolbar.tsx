@@ -40,6 +40,9 @@ import HighlightIcon from '@mui/icons-material/Highlight';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import SaveIcon from '@mui/icons-material/Save';
+import TextSnippetIcon from '@mui/icons-material/TextSnippet';
+import AddLinkIcon from '@mui/icons-material/AddLink';
+import PostAddIcon from '@mui/icons-material/PostAdd';
 import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import DictationDialog from './DictationDialog';
@@ -62,10 +65,20 @@ interface MdEditorToolbarProps {
   editor: Editor;
   onSave?: () => void;
   saveDisabled?: boolean;
+  /** Optional — wired by MdEditor to open the "export to clean markdown" dialog. */
+  onExportMarkdown?: () => void;
   /** Optional — wired by MdEditor so the "Info" toolbar button can pop the
    *  InfoMark insertion dialog. Left optional so toolbars used in contexts
    *  without the InfoMark extension (rare) still render. */
   onInsertInfoMark?: () => void;
+  /** Optional — opens the internal-link picker (tree of .md files). */
+  onInsertInternalLink?: () => void;
+  /** Optional — opens the embed picker, inserts an Obsidian `![[…]]` transclusion. */
+  onInsertEmbed?: () => void;
+  /** Optional — toggles block group-selection mode (checkboxes + bulk actions). */
+  onToggleGroupMode?: () => void;
+  /** Whether group-selection mode is currently active (highlights the button). */
+  groupModeActive?: boolean;
   /** Spellcheck language code (ISO 639-1, e.g. 'pl', 'en'). Used as the
    *  `lang` attribute on the contenteditable, which switches the browser's
    *  native spelling dictionary. */
@@ -117,7 +130,7 @@ function detectBrowser(): 'chrome' | 'safari' | 'firefox' | 'edge' | 'other' {
 }
 
 const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
-  editor, onSave, saveDisabled, onInsertInfoMark,
+  editor, onSave, saveDisabled, onInsertInfoMark, onInsertInternalLink, onInsertEmbed, onToggleGroupMode, groupModeActive, onExportMarkdown,
   spellLanguage, spellEnabled, onSpellLanguageChange, onSpellEnabledChange,
 }) => {
   const [spellMenuAnchor, setSpellMenuAnchor] = useState<null | HTMLElement>(null);
@@ -433,6 +446,32 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
           </IconButton>
         </Tooltip>
       )}
+      {onInsertInternalLink && (
+        <Tooltip title="Link wewnętrzny (plik / nagłówek / blok)">
+          <IconButton size="small" onClick={onInsertInternalLink}>
+            <AddLinkIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {onInsertEmbed && (
+        <Tooltip title="Osadź zawartość ![[…]] (plik / nagłówek / blok)">
+          <IconButton size="small" onClick={onInsertEmbed}>
+            <PostAddIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {onToggleGroupMode && (
+        <Tooltip title="Operacje grupowe na blokach (zaznacz i wykonaj Cut/Copy/Delete)">
+          <IconButton
+            size="small"
+            onClick={onToggleGroupMode}
+            color={groupModeActive ? 'primary' : 'default'}
+            sx={groupModeActive ? { bgcolor: 'action.selected' } : undefined}
+          >
+            <ChecklistIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       {/* Spellcheck control — only rendered when the host (MdEditor) has
           wired the callbacks, so other toolbar uses don't show a control
           they can't act on. Icon button opens a small menu with the
@@ -733,6 +772,15 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
           <RecordVoiceOverIcon fontSize="small" />
         </IconButton>
       </Tooltip>
+
+      {/* Export to clean markdown */}
+      {onExportMarkdown && (
+        <Tooltip title="Eksportuj do czystego markdown">
+          <IconButton size="small" onClick={onExportMarkdown}>
+            <TextSnippetIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
 
       {/* Save button */}
       {onSave && (

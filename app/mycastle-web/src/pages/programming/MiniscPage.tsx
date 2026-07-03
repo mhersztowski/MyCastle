@@ -12,15 +12,16 @@ const EXAMPLE = `// MinisC example
 int counter = 0;
 
 void greet(string name) {
-    print("Hello, ");
-    print(name);
-    print("!\\n");
+    print_str("Hello, ");
+    print_str(name);
+    print_str("!\\n");
 }
 
 int main() {
     counter = 1;
     while (counter <= 5) {
         greet("World");
+        print_int(counter);
         counter = counter + 1;
     }
     return 0;

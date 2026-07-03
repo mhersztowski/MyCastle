@@ -43,6 +43,8 @@ import PolylineIcon from '@mui/icons-material/Polyline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import LinkIcon from '@mui/icons-material/Link';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
+import MyLocationIcon from '@mui/icons-material/MyLocation';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import EditIcon from '@mui/icons-material/Edit';
 import FlipToFrontIcon from '@mui/icons-material/FlipToFront';
@@ -54,6 +56,9 @@ import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft';
 import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
 import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
 import Button from '@mui/material/Button';
+import List from '@mui/material/List';
+import ListItemButton from '@mui/material/ListItemButton';
+import ListItemText from '@mui/material/ListItemText';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
@@ -73,6 +78,7 @@ import { ServerFileBrowser } from './ServerFileBrowser';
 import { NOTES_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../vfs/cadProjectApi';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
 import { exportCanvasPng, exportCanvasSvg, exportCanvasPdf } from '../io/exportGraphics';
+import { renderMarkdown } from '../map/markdown';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -165,6 +171,10 @@ interface NoteShape {
   rotation?: number; // radiany, obrót wokół środka bbox
   groupId?: string;
   link?: string;
+  /** Powiązanie z innym obiektem sceny (id) — klik ikony przenosi widok do celu. */
+  linkTo?: string;
+  /** Opis w formacie Markdown — klik ikony pokazuje popup z sformatowaną treścią. */
+  infoMd?: string;
 }
 
 type NoteElement = NoteStroke | NoteText | NoteImage | NoteShape | NoteGroup;
@@ -579,6 +589,15 @@ let _imgRedrawCb: (() => void) | null = null;
 let noteClipboard: NoteElement[] = [];
 
 const SHAPE_LABEL: Record<ShapeKind, string> = { rect: 'Prostokąt', diamond: 'Romb', circle: 'Koło', line: 'Linia', arrow: 'Strzałka' };
+
+/** Czytelna etykieta obiektu sceny (do listy wyboru LinkTo / drzewa Scene). */
+function nodeLabel(el: NoteElement): string {
+  if (el.kind === 'group') return el.name || 'Grupa';
+  if (el.kind === 'text') return el.text?.trim().slice(0, 28) || 'Tekst';
+  if (el.kind === 'image') return 'Obraz';
+  if (el.kind === 'stroke') return el.tool === 'marker' ? 'Marker' : 'Pióro';
+  return el.label?.trim().slice(0, 28) || SHAPE_LABEL[el.shape] || 'Figura';
+}
 
 function elLabel(el: NoteElement): string {
   if (el.kind === 'group') return el.name || 'Grupa';
@@ -1223,6 +1242,12 @@ export function SpenNotesView() {
   const [linkDialog, setLinkDialog] = useState<{ id: string; url: string } | null>(null);
   // Popup linku przy obiekcie (overlay): { id, anchor }.
   const [linkPopup, setLinkPopup] = useState<{ id: string; anchor: HTMLElement } | null>(null);
+  // Dialog wyboru celu LinkTo dla kształtu: id kształtu, którego LinkTo edytujemy.
+  const [linkToPicker, setLinkToPicker] = useState<string | null>(null);
+  // Dialog edycji opisu Markdown (InfoMd): { id, text }.
+  const [infoMdDialog, setInfoMdDialog] = useState<{ id: string; text: string } | null>(null);
+  // Popup wyświetlający sformatowany opis Markdown przy obiekcie: { id, anchor }.
+  const [infoMdPopup, setInfoMdPopup] = useState<{ id: string; anchor: HTMLElement } | null>(null);
   // Ostatni tap (czas+pozycja) do wykrycia podwójnego kliknięcia (drill-in do grupy).
   const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
   const [propElId, setPropElId] = useState<string | null>(null);
@@ -1630,7 +1655,7 @@ export function SpenNotesView() {
     setSelectedIds(new Set(pasted.map(el => el.id)));
   }, [commitElements, pushUndo]);
 
-  const updatePropEl = useCallback((patch: Partial<NoteStroke> | Partial<NoteText> | Partial<NoteImage>) => {
+  const updatePropEl = useCallback((patch: Partial<NoteStroke> | Partial<NoteText> | Partial<NoteImage> | Partial<NoteShape>) => {
     if (!propElId) return;
     const next = elementsRef.current.map(el => el.id === propElId ? { ...el, ...patch } as NoteElement : el);
     commitElements(next, { thumbnail: false });
@@ -2782,6 +2807,27 @@ export function SpenNotesView() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Przesuwa widok tak, by obiekt `id` znalazł się w lewym górnym rogu (z marginesem),
+   *  przy bieżącym zoomie; dodatkowo zaznacza cel. */
+  const panToElement = useCallback((id: string) => {
+    const el = elementsRef.current.find(e => e.id === id);
+    const c = canvasRef.current;
+    if (!el || el.kind === 'group' || !c) return;
+    const b = elementBBox(el);
+    const z = zoomRef.current || 1;
+    const marginBuf = 48 * (c.width / (c.getBoundingClientRect().width || 1)); // ~48 css px w px bufora
+    panPxRef.current = {
+      x: marginBuf - (b.x / CANVAS_W) * c.width * z,
+      y: marginBuf - (b.y / CANVAS_H) * c.height * z,
+    };
+    const ids = new Set([id]); setSelectedIds(ids); selectedRef.current = ids;
+    setPropElId(id);
+    setSelectedImgId(el.kind === 'image' ? id : null);
+    selectedGroupRef.current = null;
+    requestAnimationFrame(() => redraw());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Drag-to-reorder pages
   const onDragStart = (idx: number) => setDragSrc(idx);
   const onDragOver = (e: React.DragEvent, idx: number) => { e.preventDefault(); setDragOver(idx); };
@@ -3808,6 +3854,77 @@ export function SpenNotesView() {
             });
           })()}
 
+          {/* Ikony LinkTo — dla kształtów wskazujących na obiekt sceny. Klik → przenieś widok. */}
+          {(() => {
+            void zoomPct; void imgDragVer;
+            const cv = canvasRef.current;
+            if (!cv) return null;
+            const z = zoomRef.current; const { x: panX, y: panY } = panPxRef.current;
+            const linked = elementsRef.current.filter(el => el.kind === 'shape' && el.linkTo) as NoteShape[];
+            if (!linked.length) return null;
+            return linked.map(el => {
+              const b = elementBBox(el);
+              // narożnik lewy-górny obiektu (odróżnia od ikony URL-linku w prawym-górnym)
+              const bufX = b.x / CANVAS_W * cv.width * z + panX;
+              const bufY = b.y / CANVAS_H * cv.height * z + panY;
+              const leftPct = bufX / cv.width * 100, topPct = bufY / cv.height * 100;
+              const tgt = elementsRef.current.find(e => e.id === el.linkTo);
+              return (
+                <Box
+                  key={`linkto-${el.id}`}
+                  onClick={(e) => { e.stopPropagation(); panToElement(el.linkTo!); }}
+                  title={tgt ? `Przejdź do: ${nodeLabel(tgt)}` : 'Cel nie istnieje'}
+                  sx={{
+                    position: 'absolute', left: `${leftPct}%`, top: `${topPct}%`,
+                    transform: 'translate(-50%, -50%)', zIndex: 22, cursor: 'pointer',
+                    width: 22, height: 22, borderRadius: '50%',
+                    bgcolor: 'rgba(22,163,74,0.92)', color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    border: '2px solid #fff', boxShadow: 1,
+                    '&:hover': { bgcolor: '#16a34a' },
+                  }}
+                >
+                  <MyLocationIcon sx={{ fontSize: 13 }} />
+                </Box>
+              );
+            });
+          })()}
+
+          {/* Ikony InfoMd — dla kształtów z opisem Markdown. Klik → popup z treścią. */}
+          {(() => {
+            void zoomPct; void imgDragVer;
+            const cv = canvasRef.current;
+            if (!cv) return null;
+            const z = zoomRef.current; const { x: panX, y: panY } = panPxRef.current;
+            const withInfo = elementsRef.current.filter(el => el.kind === 'shape' && el.infoMd?.trim()) as NoteShape[];
+            if (!withInfo.length) return null;
+            return withInfo.map(el => {
+              const b = elementBBox(el);
+              // narożnik lewy-dolny (odróżnia od LinkTo w lewym-górnym i URL-linku w prawym-górnym)
+              const bufX = b.x / CANVAS_W * cv.width * z + panX;
+              const bufY = (b.y + b.h) / CANVAS_H * cv.height * z + panY;
+              const leftPct = bufX / cv.width * 100, topPct = bufY / cv.height * 100;
+              return (
+                <Box
+                  key={`info-${el.id}`}
+                  onClick={(e) => { e.stopPropagation(); setInfoMdPopup({ id: el.id, anchor: e.currentTarget as HTMLElement }); }}
+                  title="Pokaż opis"
+                  sx={{
+                    position: 'absolute', left: `${leftPct}%`, top: `${topPct}%`,
+                    transform: 'translate(-50%, -50%)', zIndex: 22, cursor: 'pointer',
+                    width: 22, height: 22, borderRadius: '50%',
+                    bgcolor: 'rgba(217,119,6,0.92)', color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    border: '2px solid #fff', boxShadow: 1,
+                    '&:hover': { bgcolor: '#d97706' },
+                  }}
+                >
+                  <InfoOutlinedIcon sx={{ fontSize: 14 }} />
+                </Box>
+              );
+            });
+          })()}
+
           {/* Zoom controls */}
           <Box sx={{
             position: 'absolute', bottom: 10, right: 10, zIndex: 20,
@@ -4283,6 +4400,58 @@ export function SpenNotesView() {
                   )}
                 </Box>
               )}
+
+              {propEl?.kind === 'shape' && (() => {
+                const target = propEl.linkTo ? elementsRef.current.find(e => e.id === propEl.linkTo) : null;
+                return (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>LinkTo (obiekt sceny)</Typography>
+                    <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                      <Button size="small" variant="outlined" onClick={() => setLinkToPicker(propEl.id)}
+                        sx={{ flex: 1, minWidth: 0, textTransform: 'none', justifyContent: 'flex-start', fontSize: 12 }}>
+                        {target ? nodeLabel(target) : 'Wybierz…'}
+                      </Button>
+                      {propEl.linkTo && (
+                        <>
+                          <Tooltip title="Przejdź do obiektu">
+                            <IconButton size="small" onClick={() => panToElement(propEl.linkTo!)}>
+                              <MyLocationIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Usuń powiązanie">
+                            <IconButton size="small" onClick={() => updatePropEl({ linkTo: undefined })}>
+                              <LinkOffIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                        </>
+                      )}
+                    </Box>
+                    {target === null && propEl.linkTo && (
+                      <Typography variant="caption" sx={{ color: 'warning.main' }}>Cel nie istnieje (usunięty)</Typography>
+                    )}
+                  </Box>
+                );
+              })()}
+
+              {propEl?.kind === 'shape' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 1 }}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>InfoMd (opis Markdown)</Typography>
+                  <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                    <Button size="small" variant="outlined"
+                      onClick={() => setInfoMdDialog({ id: propEl.id, text: propEl.infoMd ?? '' })}
+                      sx={{ flex: 1, minWidth: 0, textTransform: 'none', justifyContent: 'flex-start', fontSize: 12 }}>
+                      {propEl.infoMd?.trim() ? 'Edytuj opis…' : 'Dodaj opis…'}
+                    </Button>
+                    {propEl.infoMd?.trim() && (
+                      <Tooltip title="Usuń opis">
+                        <IconButton size="small" onClick={() => updatePropEl({ infoMd: undefined })}>
+                          <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                </Box>
+              )}
             </Box>
 
           </Box>
@@ -4351,6 +4520,103 @@ export function SpenNotesView() {
           <Button variant="contained" onClick={() => { if (linkDialog) { setElementLink(linkDialog.id, linkDialog.url); setLinkDialog(null); } }}>Zapisz</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Wybór celu LinkTo — lista obiektów sceny z bieżącej strony */}
+      <Dialog open={Boolean(linkToPicker)} onClose={() => setLinkToPicker(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>LinkTo — wybierz obiekt sceny</DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          {(() => {
+            const els = elementsRef.current.filter(e => e.id !== linkToPicker && e.kind !== 'group');
+            if (!els.length) return <Typography variant="body2" sx={{ p: 2, color: 'text.secondary' }}>Brak innych obiektów na tej stronie.</Typography>;
+            return (
+              <List dense disablePadding>
+                {els.slice().reverse().map(e => (
+                  <ListItemButton key={e.id}
+                    onClick={() => {
+                      const target = linkToPicker;
+                      if (target) {
+                        commitElements(elementsRef.current.map(x => x.id === target && x.kind === 'shape' ? { ...x, linkTo: e.id } : x), { thumbnail: false });
+                        redraw();
+                      }
+                      setLinkToPicker(null);
+                    }}>
+                    <ListItemText
+                      primary={nodeLabel(e)}
+                      secondary={e.kind}
+                      primaryTypographyProps={{ fontSize: 13 }}
+                      secondaryTypographyProps={{ fontSize: 11 }}
+                    />
+                  </ListItemButton>
+                ))}
+              </List>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLinkToPicker(null)}>Anuluj</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edycja opisu Markdown (InfoMd) */}
+      <Dialog open={Boolean(infoMdDialog)} onClose={() => setInfoMdDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>InfoMd — opis (Markdown)</DialogTitle>
+        <DialogContent dividers>
+          <TextField
+            autoFocus fullWidth multiline minRows={6} maxRows={16} size="small"
+            placeholder="# Tytuł&#10;&#10;Opis w **Markdown**, listy, `kod`, [linki](https://…)…"
+            value={infoMdDialog?.text ?? ''}
+            onChange={e => setInfoMdDialog(d => d ? { ...d, text: e.target.value } : d)}
+            sx={{ '& textarea': { fontFamily: 'monospace', fontSize: 13 } }}
+          />
+          {infoMdDialog?.text.trim() && (
+            <>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1.5, mb: 0.5 }}>Podgląd</Typography>
+              <Box sx={{ p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider', maxHeight: 200, overflowY: 'auto', fontSize: 13, '& p': { my: 0.5 }, '& h1,& h2,& h3': { my: 0.5 }, '& code': { bgcolor: 'action.selected', px: 0.5, borderRadius: 0.5 } }}
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(infoMdDialog.text) }} />
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {infoMdDialog && (
+            <Button color="error" onClick={() => {
+              const id = infoMdDialog.id;
+              commitElements(elementsRef.current.map(x => x.id === id && x.kind === 'shape' ? { ...x, infoMd: undefined } : x), { thumbnail: false });
+              redraw(); setInfoMdDialog(null);
+            }}>Usuń</Button>
+          )}
+          <Box sx={{ flex: 1 }} />
+          <Button onClick={() => setInfoMdDialog(null)}>Anuluj</Button>
+          <Button variant="contained" onClick={() => {
+            if (!infoMdDialog) return;
+            const { id, text } = infoMdDialog;
+            const val = text.trim() ? text : undefined;
+            commitElements(elementsRef.current.map(x => x.id === id && x.kind === 'shape' ? { ...x, infoMd: val } : x), { thumbnail: false });
+            redraw(); setInfoMdDialog(null);
+          }}>Zapisz</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Popup wyświetlający sformatowany opis Markdown przy obiekcie */}
+      <Popover
+        open={Boolean(infoMdPopup)} anchorEl={infoMdPopup?.anchor}
+        onClose={() => setInfoMdPopup(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        {infoMdPopup && (() => {
+          const el = elementsRef.current.find(e => e.id === infoMdPopup.id);
+          const md = el && el.kind === 'shape' ? el.infoMd ?? '' : '';
+          return (
+            <Box sx={{
+              p: 1.5, maxWidth: 360, maxHeight: 320, overflowY: 'auto', fontSize: 13,
+              '& p': { my: 0.5 }, '& h1': { fontSize: 18, my: 0.5 }, '& h2': { fontSize: 16, my: 0.5 }, '& h3': { fontSize: 14, my: 0.5 },
+              '& ul,& ol': { my: 0.5, pl: 2.5 }, '& code': { bgcolor: 'action.selected', px: 0.5, borderRadius: 0.5, fontFamily: 'monospace' },
+              '& a': { color: 'primary.main' }, '& img': { maxWidth: '100%' },
+            }}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(md) }} />
+          );
+        })()}
+      </Popover>
 
       <Snackbar
         open={notesToast !== null}

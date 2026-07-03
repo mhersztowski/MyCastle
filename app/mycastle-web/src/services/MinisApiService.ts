@@ -138,11 +138,25 @@ class MinisApiService {
     const headers: Record<string, string> = { ...this.getAuthHeaders() };
     if (body) headers['Content-Type'] = 'application/json';
 
-    const res = await fetch(`${this.getBaseUrl()}/api${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    // Bounded timeout so a slow/hung endpoint (e.g. a device-VFS-backed request
+    // waiting on MqttFS) fails fast instead of leaving the caller — and the page —
+    // hanging forever. 20 s > MqttFS's 15 s device timeout, so legitimate slow
+    // reads still complete.
+    let res: Response;
+    try {
+      res = await fetch(`${this.getBaseUrl()}/api${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (e) {
+      const name = (e as { name?: string })?.name;
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        throw new Error(`Request timeout (20s): ${method} ${path}`);
+      }
+      throw e; // network error ("Failed to fetch") — propagate for the caller to handle
+    }
 
     if (res.status === 401) {
       window.dispatchEvent(new Event('minis:session-expired'));

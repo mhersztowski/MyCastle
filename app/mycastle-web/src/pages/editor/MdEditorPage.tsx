@@ -84,6 +84,26 @@ const MdEditorPage: React.FC = () => {
     navigate(-1);
   }, [navigate]);
 
+  // Clicking an internal link ("Open in editor" in the link popup) opens the
+  // target in DRIVE with the right-panel markdown editor. The raw href looks
+  // like `drive/<rel>.md[#…]`; the target user comes from this file's path
+  // (data/Minis/Users/<user>/drive/…). Navigates to the Drive deep-link.
+  const handleLinkClick = useCallback((href: string) => {
+    const m = href.replace(/^\/+/, '').match(/^drive\/(.+?\.md)(?:#.*)?$/i);
+    const um = filePath.match(/Minis\/Users\/([^/]+)\//);
+    const user = um ? um[1] : '';
+    if (m && user) {
+      navigate(`/user/${encodeURIComponent(user)}/pim/drive?open=${encodeURIComponent(decodeURIComponent(m[1]))}`);
+      return;
+    }
+    // Non-drive / external → best-effort default handling.
+    try {
+      const u = new URL(href, window.location.href);
+      if (u.origin === window.location.origin) window.location.assign(u.pathname + u.hash);
+      else window.open(href, '_blank', 'noopener,noreferrer');
+    } catch { window.open(href, '_self'); }
+  }, [filePath, navigate]);
+
   if (isConnecting) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
@@ -184,6 +204,7 @@ const MdEditorPage: React.FC = () => {
             <MdEditor
               initialContent={initialContent}
               onSave={handleSave}
+              onLinkClick={handleLinkClick}
               placeholder="Start writing... Type '/' for commands"
               autoFocus
               filePath={filePath}

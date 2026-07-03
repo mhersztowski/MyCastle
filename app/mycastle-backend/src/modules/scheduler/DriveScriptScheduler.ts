@@ -25,6 +25,9 @@ export class DriveScriptScheduler {
   private jobs = new Map<string, cron.ScheduledTask>();
   /** key = `${user}:${rel}` → currently running child process (for Restart/Stop). */
   private running = new Map<string, ChildProcess>();
+  /** key = `${user}:${rel}` → tail of the serialized log-append chain (keeps live
+   *  output in order and stops chunk writes from racing the size-trim). */
+  private appendChains = new Map<string, Promise<void>>();
 
   constructor(private readonly rootDir: string) {}
 
@@ -59,6 +62,17 @@ export class DriveScriptScheduler {
     } catch (err) {
       console.warn(`DriveScriptScheduler: failed to write log for ${user}/${rel}:`, (err as Error).message);
     }
+  }
+
+  /**
+   * Serialized wrapper over appendLog: chains writes per script so live output
+   * lands in order and never races the size-trim read-modify-write. Fire-and-forget.
+   */
+  private enqueueAppend(user: string, rel: string, text: string): void {
+    const key = `${user}:${rel}`;
+    const prev = this.appendChains.get(key) ?? Promise.resolve();
+    const next = prev.then(() => this.appendLog(user, rel, text)).catch(() => { /* appendLog already logs failures */ });
+    this.appendChains.set(key, next);
   }
 
   private async listUsers(): Promise<string[]> {
@@ -137,15 +151,16 @@ export class DriveScriptScheduler {
     console.log(`DriveScriptScheduler: running ${user}/${rel} (${source})`);
     const key = `${user}:${rel}`;
     const tag = `[${source} ${user}/${rel}]`;
-    let buf = `\n===== ${new Date().toISOString()} (${source}) =====\n`;
+    // Flush the header immediately and stream output per-chunk so a long-running
+    // daemon's logs are visible while it's alive (not buffered until it exits).
+    this.enqueueAppend(user, rel, `\n===== ${new Date().toISOString()} (${source}) =====\n`);
 
     let prepared: Awaited<ReturnType<typeof prepareRunnableScript>>;
     try {
       prepared = await prepareRunnableScript(file); // transpiles .ts (bundles local imports)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      buf += `\n[transpile error] ${msg}\n`;
-      void this.appendLog(user, rel, buf);
+      this.enqueueAppend(user, rel, `\n[transpile error] ${msg}\n`);
       console.warn(`DriveScriptScheduler: ${user}/${rel} transpile error: ${msg}`);
       return;
     }
@@ -155,19 +170,19 @@ export class DriveScriptScheduler {
     // Only clear the map entry if it's still THIS process (a Restart may have
     // already replaced it with a newer one).
     const untrack = () => { if (this.running.get(key) === proc) this.running.delete(key); };
-    proc.stdout.on('data', (c: Buffer) => { buf += c.toString(); process.stdout.write(`${tag} ${c}`); });
-    proc.stderr.on('data', (c: Buffer) => { buf += c.toString(); process.stderr.write(`${tag} ${c}`); });
-    proc.on('close', (code) => {
+    proc.stdout.on('data', (c: Buffer) => { const s = c.toString(); this.enqueueAppend(user, rel, s); process.stdout.write(`${tag} ${s}`); });
+    proc.stderr.on('data', (c: Buffer) => { const s = c.toString(); this.enqueueAppend(user, rel, s); process.stderr.write(`${tag} ${s}`); });
+    proc.on('close', (code, signal) => {
       untrack();
-      buf += `\n[exit ${code}]\n`;
-      void this.appendLog(user, rel, buf);
+      // code === null → terminated by a signal (SIGTERM from Restart/Stop or backend
+      // shutdown) — that's an expected stop, not a crash.
+      this.enqueueAppend(user, rel, code === null ? `\n[stopped by ${signal ?? 'signal'}]\n` : `\n[exit ${code}]\n`);
       void prepared.cleanup();
-      console.log(`DriveScriptScheduler: ${user}/${rel} exited code=${code}`);
+      console.log(`DriveScriptScheduler: ${user}/${rel} exited code=${code} signal=${signal}`);
     });
     proc.on('error', (err) => {
       untrack();
-      buf += `\n[error] ${err.message}\n`;
-      void this.appendLog(user, rel, buf);
+      this.enqueueAppend(user, rel, `\n[error] ${err.message}\n`);
       void prepared.cleanup();
       console.warn(`DriveScriptScheduler: ${user}/${rel} error: ${err.message}`);
     });
@@ -190,7 +205,7 @@ export class DriveScriptScheduler {
     if (existing) {
       this.running.delete(key); // detach so its close handler won't clobber the new proc
       try { existing.kill('SIGTERM'); } catch { /* already gone */ }
-      void this.appendLog(user, rel, `\n===== ${new Date().toISOString()} (restart — stopping previous) =====\n`);
+      this.enqueueAppend(user, rel, `\n===== ${new Date().toISOString()} (restart — stopping previous) =====\n`);
     }
     void this.run(user, rel, file, 'manual');
     return { ok: true };

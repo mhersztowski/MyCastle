@@ -61,6 +61,12 @@ public:
     bool        isLoaded()   const { return prog != nullptr; }
     const char* lastError()  const { return err_buf; }
 
+    // Resolve a T_STRING argument to a C string from inside a native function.
+    // String args arrive as pool refs (not char*), so a native must call this
+    // to read them — e.g. print_str / mqtt_pub_str. Valid only during a native
+    // call (points into the currently-running VM); returns "" for non-strings.
+    static const char* activeStr(Value v);
+
 #ifdef Arduino_h
     void dumpStack(Stream& out)   const;
     void dumpGlobals(Stream& out) const;
