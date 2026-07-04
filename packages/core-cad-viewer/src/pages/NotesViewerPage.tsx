@@ -8,6 +8,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import { NOTES_EXT, readFileAt } from '../vfs'
 import { drawPage, CANVAS_W, CANVAS_H, type NotePage } from '../notes/renderNotes'
+import { PanZoom } from '../components/PanZoom'
 
 interface Props { vfsPath: string }
 
@@ -47,55 +48,52 @@ export function NotesViewerPage({ vfsPath }: Props) {
     return () => cancelAnimationFrame(raf)
   }, [pages, index])
 
-  const label = vfsPath.split('/').pop() ?? vfsPath
-
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-        <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary' }}>NOTES</Typography>
-        <Typography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: '#4fc3f7' }}>{label}</Typography>
-        <Box sx={{ flex: 1 }} />
-        {pages && pages.length > 1 && (
-          <>
-            <Tooltip title="Previous page">
-              <span>
-                <IconButton size="small" disabled={index === 0} onClick={() => setIndex(i => Math.max(0, i - 1))}>
-                  <ChevronLeftIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary', minWidth: 54, textAlign: 'center' }}>
-              {index + 1} / {pages.length}
-            </Typography>
-            <Tooltip title="Next page">
-              <span>
-                <IconButton size="small" disabled={index === pages.length - 1} onClick={() => setIndex(i => Math.min(pages.length - 1, i + 1))}>
-                  <ChevronRightIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </>
-        )}
-      </Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#1a1a1a', color: '#fff' }}>
+      {/* page nav only (title removed — the markdown embed shows mode + name) */}
+      {pages && pages.length > 1 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Previous page">
+            <span>
+              <IconButton size="small" disabled={index === 0} onClick={() => setIndex(i => Math.max(0, i - 1))}>
+                <ChevronLeftIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary', minWidth: 54, textAlign: 'center' }}>
+            {index + 1} / {pages.length}
+          </Typography>
+          <Tooltip title="Next page">
+            <span>
+              <IconButton size="small" disabled={index === pages.length - 1} onClick={() => setIndex(i => Math.min(pages.length - 1, i + 1))}>
+                <ChevronRightIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+      )}
 
-      <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
+      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}>
         {error ? (
-          <Typography sx={{ color: 'error.main', fontSize: 14 }}>Failed to load: {error}</Typography>
+          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Typography sx={{ color: 'error.main', fontSize: 14 }}>Failed to load: {error}</Typography>
+          </Box>
         ) : !pages ? (
-          <CircularProgress size={32} />
+          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={32} /></Box>
         ) : pages.length === 0 ? (
-          <Typography sx={{ color: 'text.disabled', fontSize: 14 }}>This notebook has no pages.</Typography>
+          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Typography sx={{ color: 'text.disabled', fontSize: 14 }}>This notebook has no pages.</Typography>
+          </Box>
         ) : (
-          <canvas
-            ref={canvasRef}
-            width={CANVAS_W}
-            height={CANVAS_H}
-            style={{
-              maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto',
-              aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
-              borderRadius: 6, boxShadow: '0 2px 20px rgba(0,0,0,0.6)',
-            }}
-          />
+          <PanZoom contentWidth={CANVAS_W} contentHeight={CANVAS_H}>
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_W}
+              height={CANVAS_H}
+              style={{ display: 'block', width: `${CANVAS_W}px`, height: `${CANVAS_H}px`, borderRadius: 6, boxShadow: '0 2px 20px rgba(0,0,0,0.6)' }}
+            />
+          </PanZoom>
         )}
       </Box>
     </Box>

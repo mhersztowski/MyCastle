@@ -24,14 +24,17 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "gen:api": "tsx scripts/gen-api.ts"
   },
   "dependencies": {
     "dayjs": "^1.11.19",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "ts-json-schema-generator": "^2.3.0",
     "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

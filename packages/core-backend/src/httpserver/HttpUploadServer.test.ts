@@ -73,9 +73,10 @@ describe('HttpUploadServer', () => {
 
   describe('GET /files/', () => {
     it('serves files from data/public/', async () => {
-      // Create a file in data/public/
+      // The FileSystem root IS the data/ dir; the /files/ handler strips the
+      // leading data/ prefix, so the file must live at public/hello.txt on disk.
       await fileSystem.writeBinaryFile(
-        'data/public/hello.txt',
+        'public/hello.txt',
         Buffer.from('hello world').toString('base64'),
         'text/plain'
       );

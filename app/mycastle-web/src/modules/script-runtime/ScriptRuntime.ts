@@ -11,7 +11,13 @@ import {
 import { pluginRegistry } from '../web-plugins';
 import { makeCredentialsApi } from '../../services/credentialsApi';
 
-export function buildScriptContext(auth: ScriptAuth): ScriptContext {
+/** Read-only access to the document env vars (loaded by File components). */
+export interface ScriptEnv {
+  get: (name: string) => unknown;
+  all: () => Record<string, unknown>;
+}
+
+export function buildScriptContext(auth: ScriptAuth, env?: ScriptEnv): ScriptContext {
   const defaultHeaders = (opts?: HttpOptions): Record<string, string> => ({
     'Content-Type': 'application/json',
     ...(opts?.auth !== false && auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
@@ -72,8 +78,14 @@ export function buildScriptContext(auth: ScriptAuth): ScriptContext {
 
   const secrets = makeCredentialsApi(() => auth.currentUser);
 
+  // Document env vars (populated by File components). `get(name)` / `all()`.
+  const envApi = {
+    get: (name: string) => env?.get(name),
+    all: () => env?.all() ?? {},
+  };
+
   // Spread registered plugin namespaces (iot, map, timeline, flow …) into context
-  return { auth, http, secrets, md, table, reactive, ...pluginRegistry.buildContext() };
+  return { auth, http, secrets, md, table, reactive, env: envApi, ...pluginRegistry.buildContext() };
 }
 
 // AsyncFunction constructor — lets scripts use await at top level

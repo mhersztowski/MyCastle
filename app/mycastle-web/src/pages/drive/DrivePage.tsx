@@ -40,6 +40,9 @@ import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DownloadIcon from '@mui/icons-material/Download';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import DynamicFormIcon from '@mui/icons-material/DynamicForm';
+import SchemaIcon from '@mui/icons-material/Schema';
 import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove';
 import DriveFolderUploadIcon from '@mui/icons-material/DriveFolderUpload';
 import EditIcon from '@mui/icons-material/Edit';
@@ -83,6 +86,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import DriveSearchDialog from './DriveSearchDialog';
 import GitRepoPanel from './GitRepoPanel';
 import DashEditorPanel from './DashEditorPanel';
+import { JsonSchemaFormPanel, SchemaPickerDialog, schemaRefOf } from './JsonSchemaEditor';
 import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearchTypes';
 
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
@@ -784,6 +788,14 @@ export default function DrivePage(): React.JSX.Element {
   // .repo.json path relative to the user's drive root (e.g. `myrepo/.repo.json`).
   const [repoViewing, setRepoViewing] = useState<{ entry: VfsEntry; path: string } | null>(null);
   const [dashEditing, setDashEditing] = useState<{ entry: VfsEntry; path: string } | null>(null);
+  // Graphical (schema form) editor for a `.json` file. `rel` is drive-relative.
+  const [jsonFormEditing, setJsonFormEditing] = useState<{ entry: VfsEntry; rel: string } | null>(null);
+  // "Zmień schema" dialog — bound to the json file at `rel`; `current` is its
+  // existing $schema binding (or null).
+  const [schemaDialog, setSchemaDialog] = useState<{ rel: string; entry: VfsEntry; current: string | null } | null>(null);
+  // When a file is opened by clicking an embedded File component, remember the
+  // source markdown so the opened editor can offer a "← back to markdown" button.
+  const [returnToMd, setReturnToMd] = useState<{ rel: string; pimRel?: string; label: string } | null>(null);
   // "New empty file" dialog. Just a name field — content is empty bytes.
   const [newFileDialog, setNewFileDialog] = useState<{ name: string; presetKey: string } | null>(null);
   // "Create from clipboard" dialog. `kind` distinguishes between system clipboard text
@@ -1251,7 +1263,7 @@ export default function DrivePage(): React.JSX.Element {
   const runAbortRef = useRef<AbortController | null>(null);
   // Read-only log viewer (Drive → Logs). Shows drive/.logs/{rel}.log content.
   const [logsView, setLogsView] = useState<{ rel: string; content: string } | null>(null);
-  const panelOpen = !!(viewing || repoViewing || dashEditing || mdEditing || mjdEditing || globalEditing || qtuiEditing || running || logsView);
+  const panelOpen = !!(viewing || repoViewing || dashEditing || jsonFormEditing || mdEditing || mjdEditing || globalEditing || qtuiEditing || running || logsView);
 
   // Exactly ONE right-side panel may be open at a time. Every opener calls this
   // first, so a new panel never renders stacked next to a stale one (the bug
@@ -1261,6 +1273,8 @@ export default function DrivePage(): React.JSX.Element {
     setViewing(null);
     setRepoViewing(null);
     setDashEditing(null);
+    setJsonFormEditing(null);
+    setReturnToMd(null);
     setMdEditing(null);
     setMjdEditing(null);
     setGlobalEditing(null);
@@ -1499,6 +1513,14 @@ export default function DrivePage(): React.JSX.Element {
   }, [newFolderDialog, renameDialog, menuFor, viewing, newFileDialog, clipboardCreateDialog]);
 
   // ── Operations ──────────────────────────────────────────────────────────
+  // Open a `.json` file in the graphical schema form editor (right panel).
+  // Declared before onOpen so onOpen can reference it without a TDZ cycle.
+  const openJsonForm = useCallback((entry: VfsEntry, relOverride?: string) => {
+    const rel = relOverride ?? (cwd ? `${cwd}/${entry.name}` : entry.name);
+    resetPanels();
+    setJsonFormEditing({ entry, rel });
+  }, [cwd, resetPanels]);
+
   const onOpen = useCallback((entry: VfsEntry) => {
     if (entry.type === DIR_TYPE) {
       setCwd((p) => (p ? `${p}/${entry.name}` : entry.name));
@@ -1560,13 +1582,19 @@ export default function DrivePage(): React.JSX.Element {
         // See goToFavorite — same routing rule (code-like extensions get
         // decoded so the Monaco editor can highlight them).
         const textContent = isEditableTextFile(entry.name, mime) ? base64ToText(data) : undefined;
+        // `.json` with a drive-relative `$schema` binding → graphical form editor.
+        if (textContent !== undefined && /\.json$/i.test(entry.name)) {
+          try {
+            if (schemaRefOf(JSON.parse(textContent)) !== null) { openJsonForm(entry, rel); return; }
+          } catch { /* not valid JSON — fall through to text editor */ }
+        }
         resetPanels();
         setViewing({ entry, mime, dataB64: data, textContent });
       } catch (e) {
         toast((e as Error).message, 'error');
       }
     })();
-  }, [userName, cwd, toast, resetPanels]);
+  }, [userName, cwd, toast, resetPanels, openJsonForm]);
 
   const onDownload = useCallback(async (entry: VfsEntry) => {
     try {
@@ -1676,10 +1704,10 @@ export default function DrivePage(): React.JSX.Element {
 
   // ── View / Open / Create ────────────────────────────────────────────────
 
-  const viewFile = useCallback(async (entry: VfsEntry) => {
+  const viewFile = useCallback(async (entry: VfsEntry, relOverride?: string) => {
     if (entry.type !== FILE_TYPE) return;
     try {
-      const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
+      const rel = relOverride ?? (cwd ? `${cwd}/${entry.name}` : entry.name);
       const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
       if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
       const json = await r.json() as { data?: string };
@@ -1695,6 +1723,38 @@ export default function DrivePage(): React.JSX.Element {
       toast((err as Error).message, 'error');
     }
   }, [userName, cwd, toast, resetPanels]);
+
+  // Write (or clear) the `$schema` binding on a json file, then re-open it in
+  // the form editor (bind) or as text (unbind). Used by the "Zmień schema" dialog.
+  const applySchemaBinding = useCallback(async (rel: string, entry: VfsEntry, schemaRel: string | null) => {
+    try {
+      const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+      if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
+      const j = await r.json() as { data?: string };
+      const parsed = JSON.parse(base64ToText(j.data ?? 'null')) ?? {};
+      const body: Record<string, unknown> = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+        ? parsed as Record<string, unknown> : { value: parsed };
+      const { $schema: _drop, ...rest } = body;
+      const next = schemaRel ? { $schema: schemaRel, ...rest } : rest;
+      await vfsWriteFile(userName, rel, textToBase64(JSON.stringify(next, null, 2) + '\n'));
+      setSchemaDialog(null);
+      if (schemaRel) openJsonForm(entry, rel);
+      else void viewFile(entry, rel);   // unbound → back to text editor
+      toast(schemaRel ? 'Zapisano schemat w pliku' : 'Usunięto powiązanie ze schematem');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  }, [userName, openJsonForm, viewFile, toast]);
+
+  // Open the "Zmień schema" dialog, pre-selecting the file's current binding.
+  const openSchemaDialog = useCallback(async (entry: VfsEntry, rel: string) => {
+    let current: string | null = null;
+    try {
+      const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+      if (r.ok) { const j = await r.json() as { data?: string }; current = schemaRefOf(JSON.parse(base64ToText(j.data ?? 'null'))); }
+    } catch { /* new/invalid file — no current binding */ }
+    setSchemaDialog({ rel, entry, current });
+  }, [userName]);
 
   // Open .md in MdEditor.
   //   - Tablet portrait + desktop (≥sm): inline split-view inside DrivePage —
@@ -1757,7 +1817,13 @@ export default function DrivePage(): React.JSX.Element {
   // navigating away. Internal hrefs resolve under `/user/{u}/pim/…`:
   //   • `drive/notatka.md` → drive-relative  → openInMdEditor
   //   • `md/rome.md`        → user-root file  → openPimMdInPanel
-  const handleMdLinkClick = useCallback((href: string) => {
+  const handleMdLinkClick = useCallback((href: string, opts?: { fromFileRef?: boolean }) => {
+    // Capture the markdown we're leaving BEFORE the opener resets panels, so a
+    // File-component click can offer a "← back to markdown" button afterwards.
+    const backSrc = opts?.fromFileRef && mdEditing
+      ? { rel: mdEditing.rel, pimRel: mdEditing.pimRel, label: mdEditing.entry.name }
+      : null;
+    const applyBack = () => { if (backSrc) setReturnToMd(backSrc); };
     let pathname = href;
     try {
       const u = new URL(href, window.location.href);
@@ -1767,19 +1833,38 @@ export default function DrivePage(): React.JSX.Element {
       }
       pathname = u.pathname;
     } catch { /* unparseable — treat href as a bare path */ }
-    const m = pathname.replace(/^\/+/, '').match(/^user\/[^/]+\/pim\/(.+\.md)$/i);
-    if (!m) {
-      window.open(pathname, '_self');   // not a pim .md → default navigation
+    const anyFile = pathname.replace(/^\/+/, '').match(/^user\/[^/]+\/pim\/(.+)$/i);
+    if (!anyFile) {
+      window.open(pathname, '_self');   // not a pim path → default navigation
       return;
     }
-    const pimRel = decodeURIComponent(m[1]);
-    if (/^drive\//i.test(pimRel)) {
+    const pimRel = decodeURIComponent(anyFile[1]);
+    const isMd = /\.md$/i.test(pimRel);
+    const isDrive = /^drive\//i.test(pimRel);
+    // Openers reset panels asynchronously (after their fetch), which clears
+    // returnToMd — so set it AFTER they finish, via `.then(applyBack)`.
+    if (isMd && isDrive) {
       const rel = pimRel.replace(/^drive\//i, '');
-      void openInMdEditor({ name: rel.split('/').pop() as string, type: FILE_TYPE }, rel);
+      void openInMdEditor({ name: rel.split('/').pop() as string, type: FILE_TYPE }, rel).then(applyBack);
+    } else if (isMd) {
+      void openPimMdInPanel(pimRel).then(applyBack);
+    } else if (isDrive) {
+      // Non-markdown drive file → open it in the panel like activating it in Drive.
+      const rel = pimRel.replace(/^drive\//i, '');
+      void viewFile({ name: rel.split('/').pop() as string, type: FILE_TYPE }, rel).then(applyBack);
     } else {
-      void openPimMdInPanel(pimRel);
+      window.open(pathname, '_self');
     }
-  }, [openInMdEditor, openPimMdInPanel]);
+  }, [openInMdEditor, openPimMdInPanel, viewFile, mdEditing]);
+
+  // "← back to markdown" — reopen the markdown doc the File component was in.
+  const goBackToMd = useCallback(() => {
+    if (!returnToMd) return;
+    const { rel, pimRel } = returnToMd;
+    setReturnToMd(null);
+    if (pimRel) void openPimMdInPanel(pimRel);
+    else void openInMdEditor({ name: rel.split('/').pop() as string, type: FILE_TYPE }, rel);
+  }, [returnToMd, openInMdEditor, openPimMdInPanel]);
 
   // Deep-link: `/user/{u}/pim/drive?open=<drive-rel>.md` opens that file straight
   // in the right-hand markdown editor. Used by "Open in editor" clicked from the
@@ -2914,6 +2999,21 @@ export default function DrivePage(): React.JSX.Element {
             borderBottom: '1px solid', borderColor: 'divider',
             bgcolor: 'background.paper',
           }}>
+            {returnToMd && (
+              <Tooltip title={`Wróć do dokumentu markdown: ${returnToMd.label}`}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<ArrowBackIcon fontSize="small" />}
+                  onClick={goBackToMd}
+                  sx={{ mr: 0.5, flexShrink: 0, maxWidth: 220, textTransform: 'none', '& .MuiButton-startIcon': { mr: 0.5 } }}
+                >
+                  <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {returnToMd.label}
+                  </Box>
+                </Button>
+              </Tooltip>
+            )}
             {viewing && (
               <>
                 <Tooltip title={hasPrev ? 'Poprzedni plik (←)' : 'To jest pierwszy plik'}>
@@ -2944,7 +3044,12 @@ export default function DrivePage(): React.JSX.Element {
               flex: 1, minWidth: 0,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? repoViewing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name ?? globalEditing?.entry.name}
+              {running?.rel ?? (logsView ? `${logsView.rel} · logi` : undefined) ?? viewing?.entry.name ?? repoViewing?.entry.name ?? jsonFormEditing?.entry.name ?? mdEditing?.entry.name ?? mjdEditing?.entry.name ?? globalEditing?.entry.name}
+              {jsonFormEditing && (
+                <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                  · formularz
+                </Typography>
+              )}
               {mjdEditing && (
                 <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                   · {mjdEditing.mode === 'def' ? 'schemat MJD' : 'dane MJD'}
@@ -3033,6 +3138,36 @@ export default function DrivePage(): React.JSX.Element {
                   <DashboardIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
+            )}
+            {/* JSON files: change bound schema + switch to graphical form editor. */}
+            {viewing && viewing.textContent !== undefined && /\.json$/i.test(viewing.entry.name) && (
+              <>
+                <Tooltip title="Zmień schema (wybierz i zapisz $schema w pliku)">
+                  <IconButton size="small" onClick={() => void openSchemaDialog(viewing.entry, viewingRel)}>
+                    <SchemaIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Edytuj graficznie (formularz wg schematu)">
+                  <IconButton size="small" onClick={() => openJsonForm(viewing.entry, viewingRel)}>
+                    <DynamicFormIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+            {/* Graphical JSON form editor: change schema + switch back to text. */}
+            {jsonFormEditing && (
+              <>
+                <Tooltip title="Zmień schema">
+                  <IconButton size="small" onClick={() => void openSchemaDialog(jsonFormEditing.entry, jsonFormEditing.rel)}>
+                    <SchemaIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Edytuj jako tekst (Monaco)">
+                  <IconButton size="small" onClick={() => void viewFile(jsonFormEditing.entry, jsonFormEditing.rel)}>
+                    <CodeIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
             )}
             {viewing && !isCompact && (
               <Tooltip title="Pobierz">
@@ -3131,6 +3266,11 @@ export default function DrivePage(): React.JSX.Element {
             {dashEditing && (
               <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <DashEditorPanel key={dashEditing.path} userName={userName} filePath={dashEditing.path} />
+              </Box>
+            )}
+            {jsonFormEditing && (
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <JsonSchemaFormPanel key={jsonFormEditing.rel} userName={userName} rel={jsonFormEditing.rel} />
               </Box>
             )}
             {mdEditing && (
@@ -3467,6 +3607,15 @@ export default function DrivePage(): React.JSX.Element {
           }
           setSearchOpen(false);
         }}
+      />
+
+      {/* ── Schema picker ("Zmień schema") ────────────────────────────── */}
+      <SchemaPickerDialog
+        open={!!schemaDialog}
+        userName={userName}
+        current={schemaDialog?.current ?? null}
+        onClose={() => setSchemaDialog(null)}
+        onSelect={(schemaRel) => { if (schemaDialog) void applySchemaBinding(schemaDialog.rel, schemaDialog.entry, schemaRel); }}
       />
 
       {/* ── Properties dialog (tags + future per-file metadata) ───────── */}

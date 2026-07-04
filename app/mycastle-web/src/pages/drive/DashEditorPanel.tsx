@@ -5120,8 +5120,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             connectionRadius={20}
             autoPanOnNodeDrag
             nodeExtent={[[-20000, -20000], [20000, 20000]]}
-            selectionOnDrag={canvasMode === 'select'}
-            panOnDrag={isMobile ? false : (canvasMode === 'select' ? [1] : true)}
+            selectionOnDrag={canvasMode === 'select' && !isMobile}
+            // Mobile: one-finger drag pans the canvas (node drag still works on
+            // nodes), pinch zooms. Rect-select stays desktop-only. Previously
+            // panOnDrag was disabled on mobile, which left no way to pan.
+            panOnDrag={canvasMode === 'select' && !isMobile ? [1] : true}
+            zoomOnPinch
+            panOnScroll={false}
             selectionMode={SelectionMode.Partial}
             isValidConnection={(c) => {
               const srcExec = c.sourceHandle === 'exec_out';

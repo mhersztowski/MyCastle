@@ -275,25 +275,27 @@ function restoreUIFormsFromHtml(html: string, uiForms: { id: string; inline?: st
   return result;
 }
 
-// Helper to escape CAD view embeds (@[cad:mode:https://server/viewer/...]) from showdown.
-// Format: @[cad:{mode}:{fullViewerUrl}] — split only on first colon after mode.
+// Helper to escape CAD view embeds (@[cad:{mode}:{value}]) from showdown.
+// `value` is the vfs path for native embeds, or a legacy full viewer URL —
+// distinguished on restore by the `http(s)://` prefix.
 function escapeCadViewEmbedsForHtml(content: string): string {
-  const cadViews: { mode: string; url: string }[] = [];
+  const cadViews: { mode: string; value: string }[] = [];
   const result = content.replace(/@\[cad:([^\]]+)\]/g, (_, params) => {
     const firstColon = params.indexOf(':');
-    const mode = firstColon >= 0 ? params.slice(0, firstColon) : params;
-    const url  = firstColon >= 0 ? params.slice(firstColon + 1) : '';
-    cadViews.push({ mode: mode || 'scene3d', url });
+    const mode  = firstColon >= 0 ? params.slice(0, firstColon) : params;
+    const value = firstColon >= 0 ? params.slice(firstColon + 1) : '';
+    cadViews.push({ mode: mode || 'scene3d', value });
     return `%%CADVIEW_${cadViews.length - 1}%%`;
   });
   return JSON.stringify({ result, cadViews });
 }
 
 // Helper to restore CAD view embeds after showdown conversion
-function restoreCadViewEmbedsFromHtml(html: string, cadViews: { mode: string; url: string }[]): string {
+function restoreCadViewEmbedsFromHtml(html: string, cadViews: { mode: string; value: string }[]): string {
   let result = html;
   cadViews.forEach((v, i) => {
-    const tag = `<div data-type="cad-view-embed" data-mode="${v.mode}" data-url="${v.url}"></div>`;
+    const attr = /^https?:\/\//i.test(v.value) ? `data-url="${v.value}"` : `data-path="${v.value}"`;
+    const tag = `<div data-type="cad-view-embed" data-mode="${v.mode}" ${attr}></div>`;
     const ph = `%%CADVIEW_${i}%%`;
     result = result.replace(`<p>${ph}</p>`, tag);
     result = result.split(ph).join(tag);
@@ -322,6 +324,56 @@ function restoreWebEmbedsFromHtml(html: string, webEmbeds: { mode: string; value
     const ph = `%%WEBEMBED_${i}%%`;
     result = result.replace(`<p>${ph}</p>`, tag);
     result = result.split(ph).join(tag);
+  });
+  return result;
+}
+
+// Gallery embeds: @[gallery:{provider}:{source}] — provider is immich|gphotos,
+// source is the public share URL (may contain ':' and '/', so split once).
+function escapeGalleriesForHtml(content: string): { result: string; galleries: { provider: string; source: string; selected: string }[] } {
+  const galleries: { provider: string; source: string; selected: string }[] = [];
+  const result = content.replace(/@\[gallery:([^\]]+)\]/g, (_m, params: string) => {
+    const firstColon = params.indexOf(':');
+    const provider = firstColon >= 0 ? params.slice(0, firstColon) : params;
+    const rest = firstColon >= 0 ? params.slice(firstColon + 1) : '';
+    // Optional `|selectedKeys` after the source (URLs never contain a raw '|').
+    const pipeIdx = rest.indexOf('|');
+    const source = pipeIdx >= 0 ? rest.slice(0, pipeIdx) : rest;
+    const selected = pipeIdx >= 0 ? rest.slice(pipeIdx + 1) : '';
+    galleries.push({ provider, source, selected });
+    return `%%GALLERY_${galleries.length - 1}%%`;
+  });
+  return { result, galleries };
+}
+
+function restoreGalleriesFromHtml(html: string, galleries: { provider: string; source: string; selected: string }[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  galleries.forEach((g, i) => {
+    const selAttr = g.selected ? ` data-selected="${enc(g.selected)}"` : '';
+    const tag = `<div data-type="gallery-embed" data-provider="${enc(g.provider)}" data-source="${enc(g.source)}"${selAttr}></div>`;
+    result = result.split(`<p>%%GALLERY_${i}%%</p>`).join(tag).split(`%%GALLERY_${i}%%`).join(tag);
+  });
+  return result;
+}
+
+// TableView blocks: @[tableview:<encodeURIComponent(JSON)>] — config already
+// URI-encoded so it never contains a raw ']'.
+function escapeTableViewsForHtml(content: string): { result: string; tables: string[] } {
+  const tables: string[] = [];
+  const result = content.replace(/@\[tableview:([^\]]+)\]/g, (_m, cfg: string) => {
+    tables.push(cfg);
+    return `%%TABLEVIEW_${tables.length - 1}%%`;
+  });
+  return { result, tables };
+}
+
+function restoreTableViewsFromHtml(html: string, tables: string[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  tables.forEach((cfg, i) => {
+    const tag = `<div data-type="table-view" data-config="${enc(cfg)}"></div>`;
+    result = result.split(`<p>%%TABLEVIEW_${i}%%</p>`).join(tag).split(`%%TABLEVIEW_${i}%%`).join(tag);
   });
   return result;
 }
@@ -376,6 +428,45 @@ function restoreInfoMarksFromHtml(
     // InfoMark is INLINE — no `<p>${ph}</p>` wrapping cleanup needed; just
     // splice the raw placeholder wherever showdown left it inside <p>/<li>.
     result = result.split(ph).join(tag);
+  });
+  return result;
+}
+
+// File chips: @[file:path|env|format] (inline span). Path may contain '/' and ':'
+// so segments are split on '|' (never URL-safe in a path).
+function escapeFileRefsForHtml(content: string): { result: string; files: { path: string; env: string; format: string }[] } {
+  const files: { path: string; env: string; format: string }[] = [];
+  const result = content.replace(/@\[file:([^\]]+)\]/g, (_m, params: string) => {
+    const [path = '', env = '', format = ''] = params.split('|');
+    files.push({ path, env, format });
+    return `%%FILEREF_${files.length - 1}%%`;
+  });
+  return { result, files };
+}
+function restoreFileRefsFromHtml(html: string, files: { path: string; env: string; format: string }[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  files.forEach((f, i) => {
+    const tag = `<span data-type="file-ref" data-path="${enc(f.path)}"${f.env ? ` data-env="${enc(f.env)}"` : ''}${f.format ? ` data-format="${enc(f.format)}"` : ''}></span>`;
+    result = result.split(`%%FILEREF_${i}%%`).join(tag);
+  });
+  return result;
+}
+
+// Env-value markers: {{env:name}} (inline span).
+function escapeEnvValuesForHtml(content: string): { result: string; envs: string[] } {
+  const envs: string[] = [];
+  const result = content.replace(/\{\{env:([^}]+)\}\}/g, (_m, name: string) => {
+    envs.push(name.trim());
+    return `%%ENVVAL_${envs.length - 1}%%`;
+  });
+  return { result, envs };
+}
+function restoreEnvValuesFromHtml(html: string, envs: string[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  envs.forEach((name, i) => {
+    result = result.split(`%%ENVVAL_${i}%%`).join(`<span data-type="env-value" data-name="${enc(name)}"></span>`);
   });
   return result;
 }
@@ -1398,8 +1489,14 @@ export function markdownToHtml(markdown: string): string {
     webEmbeds: { mode: string; value: string }[];
   };
 
+  // Protect gallery embeds (Immich / Google Photos) from showdown processing
+  const { result: markdownWithoutGalleries, galleries } = escapeGalleriesForHtml(markdownWithoutWebEmbeds);
+
+  // Protect TableView blocks from showdown processing
+  const { result: markdownWithoutTableViews, tables: tableViews } = escapeTableViewsForHtml(markdownWithoutGalleries);
+
   // Protect form-engine embeds from showdown processing
-  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutWebEmbeds);
+  const formEngineDataStr = escapeFormEngineEmbedsForHtml(markdownWithoutTableViews);
   const { result: markdownWithoutFormEngine, formEmbeds } = JSON.parse(formEngineDataStr);
 
   // Protect InfoMark inline embeds from showdown processing
@@ -1409,8 +1506,12 @@ export function markdownToHtml(markdown: string): string {
     infoMarks: { text: string; title: string; body: string; bodyPath: string }[];
   };
 
+  // Protect File chips @[file:…] and env-value markers {{env:…}} from showdown
+  const { result: markdownWithoutFiles, files } = escapeFileRefsForHtml(markdownWithoutInfoMarks);
+  const { result: markdownWithoutEnvVals, envs } = escapeEnvValuesForHtml(markdownWithoutFiles);
+
   // Then, protect component embeds from showdown processing
-  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutInfoMarks);
+  const componentDataStr = escapeComponentEmbedsForHtml(markdownWithoutEnvVals);
   const { result: markdownWithoutComponents, componentEmbeds } = JSON.parse(componentDataStr);
 
   // Protect Obsidian embeds ![[…]] BEFORE wikilinks (they share [[…]] syntax)
@@ -1447,11 +1548,19 @@ export function markdownToHtml(markdown: string): string {
   html = restoreCadViewEmbedsFromHtml(html, cadViews);
   html = restoreWebEmbedsFromHtml(html, webEmbeds);
 
+  // Restore gallery embeds
+  html = restoreGalleriesFromHtml(html, galleries);
+  html = restoreTableViewsFromHtml(html, tableViews);
+
   // Restore form-engine embeds
   html = restoreFormEngineEmbedsFromHtml(html, formEmbeds);
 
   // Restore InfoMark inline embeds
   html = restoreInfoMarksFromHtml(html, infoMarks);
+
+  // Restore File chips + env-value markers
+  html = restoreFileRefsFromHtml(html, files);
+  html = restoreEnvValuesFromHtml(html, envs);
 
   // Restore automate flow embeds
   html = restoreAutomateFlowsFromHtml(html, automateFlows);
@@ -1554,6 +1663,20 @@ export function htmlToMarkdown(html: string): string {
     }
   );
 
+  // Pre-process: raw-markdown-block "source view". The block carries its markdown
+  // verbatim in data-source; emit that source directly (its block-id marker is
+  // already produced by the generic bid handling above), so the raw view is a
+  // transient display state that saves back to plain markdown.
+  const rawMdBlocks: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="raw-markdown-block"[^>]*>(?:[\s\S]*?<\/div>)?/gi,
+    (m) => {
+      const s = m.match(/data-source="([^"]*)"/i);
+      rawMdBlocks.push(s ? decodeURIComponent(s[1]) : '');
+      return `<p>##RAWMDBLOCK${rawMdBlocks.length - 1}##</p>`;
+    },
+  );
+
   // Pre-process: Obsidian embeds. Turndown drops EMPTY <div>s (isBlank check) so
   // the mdEmbed rule never fires — swap them for a text placeholder now and
   // restore `![[target]]` after turndown (matches the event-block approach).
@@ -1587,14 +1710,18 @@ export function htmlToMarkdown(html: string): string {
     },
   );
 
-  // Pre-process: Replace CAD view embeds with placeholders before Turndown
-  const cadViews: { mode: string; url: string }[] = [];
+  // Pre-process: Replace CAD view embeds with placeholders before Turndown.
+  // Prefer the FULL url (it carries the CAD backend origin, so the embed renders
+  // on other devices / after reload — the bare path would fall back to the
+  // per-browser localStorage base, which is unreachable on e.g. mobile).
+  const cadViews: { mode: string; value: string }[] = [];
   processedHtml = processedHtml.replace(
-    /<div[^>]*data-type="cad-view-embed"[^>]*>[\s\S]*?<\/div>/gi,
+    /<div[^>]*data-type="cad-view-embed"[^>]*>(?:[\s\S]*?<\/div>)?/gi,
     (match) => {
       const modeM = match.match(/data-mode="([^"]*)"/);
+      const pathM = match.match(/data-path="([^"]*)"/);
       const urlM  = match.match(/data-url="([^"]*)"/);
-      cadViews.push({ mode: modeM?.[1] || 'scene3d', url: urlM?.[1] || '' });
+      cadViews.push({ mode: modeM?.[1] || 'scene3d', value: urlM?.[1] || pathM?.[1] || '' });
       return `##CADVIEW${cadViews.length - 1}##`;
     },
   );
@@ -1608,6 +1735,31 @@ export function htmlToMarkdown(html: string): string {
       const valM  = match.match(/data-value="([^"]*)"/);
       webEmbeds.push({ mode: modeM?.[1] || 'url', value: valM?.[1] || '' });
       return `##WEBEMBED${webEmbeds.length - 1}##`;
+    },
+  );
+
+  // Pre-process: Replace gallery embeds (empty <div>, dropped by Turndown as blank)
+  const galleries: { provider: string; source: string; selected: string }[] = [];
+  const decodeAttr = (s: string) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="gallery-embed"[^>]*>(?:[\s\S]*?<\/div>)?/gi,
+    (match) => {
+      const provM = match.match(/data-provider="([^"]*)"/);
+      const srcM = match.match(/data-source="([^"]*)"/);
+      const selM = match.match(/data-selected="([^"]*)"/);
+      galleries.push({ provider: provM?.[1] || 'immich', source: decodeAttr(srcM?.[1] || ''), selected: decodeAttr(selM?.[1] || '') });
+      return `<p>##GALLERY${galleries.length - 1}##</p>`;
+    },
+  );
+
+  // Pre-process: Replace TableView blocks (empty <div>, dropped by Turndown as blank)
+  const tableViews: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="table-view"[^>]*>(?:[\s\S]*?<\/div>)?/gi,
+    (match) => {
+      const cfgM = match.match(/data-config="([^"]*)"/);
+      tableViews.push(decodeAttr(cfgM?.[1] || ''));
+      return `<p>##TABLEVIEW${tableViews.length - 1}##</p>`;
     },
   );
 
@@ -1634,6 +1786,31 @@ export function htmlToMarkdown(html: string): string {
         bodyPath: dec(pathM?.[1]),
       });
       return `##INFOMARK${infoMarks.length - 1}##`;
+    },
+  );
+
+  // Pre-process: File chips (inline span) → placeholder → @[file:path|env|format]
+  const fileRefs: { path: string; env: string; format: string }[] = [];
+  const decAttr = (s: string) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  processedHtml = processedHtml.replace(
+    /<span[^>]*data-type="file-ref"[^>]*>(?:[\s\S]*?<\/span>)?/gi,
+    (match) => {
+      const pathM = match.match(/data-path="([^"]*)"/);
+      const envM = match.match(/data-env="([^"]*)"/);
+      const fmtM = match.match(/data-format="([^"]*)"/);
+      fileRefs.push({ path: decAttr(pathM?.[1] || ''), env: decAttr(envM?.[1] || ''), format: decAttr(fmtM?.[1] || '') });
+      return `##FILEREF${fileRefs.length - 1}##`;
+    },
+  );
+
+  // Pre-process: env-value markers (inline span) → placeholder → {{env:name}}
+  const envValues: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<span[^>]*data-type="env-value"[^>]*>(?:[\s\S]*?<\/span>)?/gi,
+    (match) => {
+      const nameM = match.match(/data-name="([^"]*)"/);
+      envValues.push(decAttr(nameM?.[1] || ''));
+      return `##ENVVAL${envValues.length - 1}##`;
     },
   );
 
@@ -1761,6 +1938,11 @@ export function htmlToMarkdown(html: string): string {
   // Accept any ID format (UUID or legacy slug) so old documents round-trip correctly
   markdown = markdown.replace(/%%BID:([^%\n]+)%%/g, (_, id) => `<!-- bid:${id} -->`);
 
+  // Post-process: Restore raw-markdown blocks — inject the stored source verbatim.
+  rawMdBlocks.forEach((src, index) => {
+    markdown = markdown.split(`##RAWMDBLOCK${index}##`).join(src);
+  });
+
   // Post-process: Restore Obsidian embeds as ![[target]]
   mdEmbedTargets.forEach((target, index) => {
     const dec = target.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -1799,10 +1981,10 @@ export function htmlToMarkdown(html: string): string {
     markdown = markdown.split(placeholder).join(replacement);
   });
 
-  // Post-process: Restore CAD view embeds as @[cad:mode:https://server/viewer/...]
+  // Post-process: Restore CAD view embeds as @[cad:{mode}:{path|url}]
   cadViews.forEach((v, index) => {
     const placeholder = `##CADVIEW${index}##`;
-    const replacement = `@[cad:${v.mode}:${v.url}]`;
+    const replacement = `@[cad:${v.mode}:${v.value}]`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 
@@ -1813,9 +1995,29 @@ export function htmlToMarkdown(html: string): string {
     markdown = markdown.split(placeholder).join(replacement);
   });
 
+  // Post-process: Restore gallery embeds as @[gallery:provider:source[|selected]]
+  galleries.forEach((g, index) => {
+    const tail = g.selected ? `|${g.selected}` : '';
+    markdown = markdown.split(`##GALLERY${index}##`).join(`@[gallery:${g.provider}:${g.source}${tail}]`);
+  });
+
+  // Post-process: Restore TableView blocks as @[tableview:<encoded>]
+  tableViews.forEach((cfg, index) => {
+    markdown = markdown.split(`##TABLEVIEW${index}##`).join(`@[tableview:${cfg}]`);
+  });
+
   // Post-process: Restore InfoMark inline embeds as
   // @[info:text:title:body:bodyPath], each segment URL-encoded so colons /
   // brackets / newlines / slashes don't collide with the @[…] bracket parser.
+  // Restore File chips + env-value markers
+  fileRefs.forEach((f, index) => {
+    const tail = `${f.env || f.format ? '|' + f.env : ''}${f.format ? '|' + f.format : ''}`;
+    markdown = markdown.split(`##FILEREF${index}##`).join(`@[file:${f.path}${tail}]`);
+  });
+  envValues.forEach((name, index) => {
+    markdown = markdown.split(`##ENVVAL${index}##`).join(`{{env:${name}}}`);
+  });
+
   infoMarks.forEach((m, index) => {
     const placeholder = `##INFOMARK${index}##`;
     const enc = (s: string) => encodeURIComponent(s);

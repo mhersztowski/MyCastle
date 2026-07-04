@@ -4,42 +4,46 @@ import { CameraNode } from './CameraNode';
 describe('CameraNode', () => {
   // ─── Defaults ─────────────────────────────────────────────
 
-  it('defaults to fov 75, near 0.1, far 1000', () => {
+  it('defaults to fov 50, near 0.1, far 2000', () => {
     const cam = new CameraNode();
-    expect(cam.fov).toBe(75);
+    expect(cam.fov).toBe(50);
     expect(cam.near).toBeCloseTo(0.1);
-    expect(cam.far).toBe(1000);
+    expect(cam.far).toBe(2000);
     expect(cam.type).toBe('camera');
   });
 
-  // ─── Setters ──────────────────────────────────────────────
+  it('defaults cameraType to perspective', () => {
+    expect(new CameraNode().cameraType).toBe('perspective');
+  });
 
-  it('setFov updates fov and notifies', () => {
+  // ─── Setters (via setProperty) ────────────────────────────
+
+  it('setProperty camera.fov updates fov and notifies', () => {
     const cam = new CameraNode();
     const spy = vi.fn();
     cam._onChange = spy;
 
-    cam.setFov(90);
+    expect(cam.setProperty('camera.fov', 90)).toBe(true);
     expect(cam.fov).toBe(90);
     expect(spy).toHaveBeenCalled();
   });
 
-  it('setNear updates near and notifies', () => {
+  it('setProperty camera.near updates near and notifies', () => {
     const cam = new CameraNode();
     const spy = vi.fn();
     cam._onChange = spy;
 
-    cam.setNear(0.01);
+    expect(cam.setProperty('camera.near', 0.01)).toBe(true);
     expect(cam.near).toBeCloseTo(0.01);
     expect(spy).toHaveBeenCalled();
   });
 
-  it('setFar updates far and notifies', () => {
+  it('setProperty camera.far updates far and notifies', () => {
     const cam = new CameraNode();
     const spy = vi.fn();
     cam._onChange = spy;
 
-    cam.setFar(5000);
+    expect(cam.setProperty('camera.far', 5000)).toBe(true);
     expect(cam.far).toBe(5000);
     expect(spy).toHaveBeenCalled();
   });

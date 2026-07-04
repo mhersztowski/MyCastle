@@ -1,0 +1,1236 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/ProjectData",
+  "definitions": {
+    "ProjectData": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "settings": {
+          "$ref": "#/definitions/ProjectSettings"
+        },
+        "layers": {
+          "type": "object",
+          "properties": {
+            "layers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Layer"
+              }
+            },
+            "activeId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "layers",
+            "activeId"
+          ],
+          "additionalProperties": false
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Entity"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "settings",
+        "layers",
+        "entities"
+      ],
+      "additionalProperties": false
+    },
+    "ProjectSettings": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "units": {
+          "$ref": "#/definitions/Units"
+        },
+        "gridSize": {
+          "type": "number"
+        },
+        "precision": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "units",
+        "gridSize",
+        "precision"
+      ],
+      "additionalProperties": false
+    },
+    "Units": {
+      "type": "string",
+      "enum": [
+        "mm",
+        "cm",
+        "m",
+        "in"
+      ]
+    },
+    "Layer": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "$ref": "#/definitions/LineType"
+        },
+        "lineWidth": {
+          "type": "number"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "color",
+        "lineType",
+        "lineWidth",
+        "visible",
+        "locked"
+      ],
+      "additionalProperties": false
+    },
+    "LineType": {
+      "type": "string",
+      "enum": [
+        "solid",
+        "dashed",
+        "dotted",
+        "dashdot"
+      ]
+    },
+    "Entity": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LineEntity"
+        },
+        {
+          "$ref": "#/definitions/CircleEntity"
+        },
+        {
+          "$ref": "#/definitions/PolylineEntity"
+        },
+        {
+          "$ref": "#/definitions/RectEntity"
+        },
+        {
+          "$ref": "#/definitions/ArcEntity"
+        },
+        {
+          "$ref": "#/definitions/TextEntity"
+        },
+        {
+          "$ref": "#/definitions/ImageEntity"
+        },
+        {
+          "$ref": "#/definitions/FreehandEntity"
+        },
+        {
+          "$ref": "#/definitions/DimensionEntity"
+        },
+        {
+          "$ref": "#/definitions/Box3dEntity"
+        },
+        {
+          "$ref": "#/definitions/Cylinder3dEntity"
+        },
+        {
+          "$ref": "#/definitions/Sphere3dEntity"
+        }
+      ]
+    },
+    "LineEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "line"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        },
+        "x2": {
+          "type": "number"
+        },
+        "y2": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "type",
+        "visible",
+        "x1",
+        "x2",
+        "y1",
+        "y2"
+      ],
+      "additionalProperties": false
+    },
+    "BoundingBox2D": {
+      "type": "object",
+      "properties": {
+        "minX": {
+          "type": "number"
+        },
+        "minY": {
+          "type": "number"
+        },
+        "maxX": {
+          "type": "number"
+        },
+        "maxY": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "minX",
+        "minY",
+        "maxX",
+        "maxY"
+      ],
+      "additionalProperties": false
+    },
+    "CircleEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "circle"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "radius": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "cx",
+        "cy",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "radius",
+        "type",
+        "visible"
+      ],
+      "additionalProperties": false
+    },
+    "PolylineEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "polyline"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Point2D"
+          }
+        },
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "closed",
+        "color",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "points",
+        "type",
+        "visible"
+      ],
+      "additionalProperties": false
+    },
+    "Point2D": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "RectEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "rect"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "extrudeHeight",
+        "height",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "type",
+        "visible",
+        "width",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "ArcEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "arc"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "radius": {
+          "type": "number"
+        },
+        "startAngle": {
+          "type": "number"
+        },
+        "endAngle": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "cx",
+        "cy",
+        "endAngle",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "radius",
+        "startAngle",
+        "type",
+        "visible"
+      ],
+      "additionalProperties": false
+    },
+    "TextEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "text"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        },
+        "fontSize": {
+          "type": "number"
+        },
+        "fontFamily": {
+          "type": "string"
+        },
+        "angle": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "angle",
+        "boundingBox",
+        "color",
+        "content",
+        "extrudeHeight",
+        "fontFamily",
+        "fontSize",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "type",
+        "visible",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "ImageEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "image"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "src": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "extrudeHeight",
+        "height",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "src",
+        "type",
+        "visible",
+        "width",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "FreehandEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "freehand"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Point2D"
+          }
+        },
+        "strokeWidth": {
+          "type": "number"
+        },
+        "smooth": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "points",
+        "smooth",
+        "strokeWidth",
+        "type",
+        "visible"
+      ],
+      "additionalProperties": false
+    },
+    "DimensionEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "dimension"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        },
+        "x2": {
+          "type": "number"
+        },
+        "y2": {
+          "type": "number"
+        },
+        "offset": {
+          "type": "number"
+        },
+        "anchor1": {
+          "$ref": "#/definitions/DimAnchor",
+          "description": "When set, x1,y1 are resolved live from this anchor (follows the shape)."
+        },
+        "anchor2": {
+          "$ref": "#/definitions/DimAnchor",
+          "description": "When set, x2,y2 are resolved live from this anchor (follows the shape)."
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "offset",
+        "type",
+        "visible",
+        "x1",
+        "x2",
+        "y1",
+        "y2"
+      ],
+      "additionalProperties": false
+    },
+    "DimAnchor": {
+      "type": "object",
+      "properties": {
+        "entityId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "endpoint",
+            "midpoint",
+            "center",
+            "point-on"
+          ]
+        },
+        "index": {
+          "type": "number",
+          "description": "endpoint/midpoint index, or polyline segment, or rect edge (0..3)."
+        },
+        "t": {
+          "type": "number",
+          "description": "parameter [0..1] along a segment/edge (point-on line/polyline/rect)."
+        },
+        "angle": {
+          "type": "number",
+          "description": "radians on a circle/arc (point-on circle/arc)."
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "When true the anchor is kept but ignored — the endpoint behaves as a literal point."
+        }
+      },
+      "required": [
+        "entityId",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "Anchors a dimension endpoint to a feature of another entity so it follows that entity when the shape moves or is reshaped (\"intelligent dimension\"). `point-on` lets the endpoint ride any point along an edge (param t / angle)."
+    },
+    "Box3dEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "box3d"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "depth": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "cx",
+        "cy",
+        "depth",
+        "extrudeHeight",
+        "height",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "type",
+        "visible",
+        "width"
+      ],
+      "additionalProperties": false
+    },
+    "Cylinder3dEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "cylinder3d"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "radius": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "cx",
+        "cy",
+        "extrudeHeight",
+        "height",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "radius",
+        "type",
+        "visible"
+      ],
+      "additionalProperties": false
+    },
+    "Sphere3dEntity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "sphere3d"
+        },
+        "layerId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "lineType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineType"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "lineWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "bylayer"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "extrudeHeight": {
+          "type": "number"
+        },
+        "boundingBox": {
+          "$ref": "#/definitions/BoundingBox2D"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "radius": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "boundingBox",
+        "color",
+        "cx",
+        "cy",
+        "extrudeHeight",
+        "id",
+        "layerId",
+        "lineType",
+        "lineWidth",
+        "locked",
+        "radius",
+        "type",
+        "visible"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

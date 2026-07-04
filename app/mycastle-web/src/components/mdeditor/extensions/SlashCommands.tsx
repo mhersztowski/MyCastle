@@ -28,6 +28,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import LanguageIcon from '@mui/icons-material/Language';
 import TableChartIcon from '@mui/icons-material/TableChart';
+import GridOnIcon from '@mui/icons-material/GridOn';
 import ImageIcon from '@mui/icons-material/Image';
 import AudiotrackIcon from '@mui/icons-material/Audiotrack';
 import VideocamIcon from '@mui/icons-material/Videocam';
@@ -213,6 +214,14 @@ const commands: CommandItem[] = [
         .deleteRange(range)
         .insertTable({ rows: 5, cols: 5, withHeaderRow: true })
         .run();
+    },
+  },
+  {
+    title: 'Table View',
+    description: 'Zaawansowana tabela z danych env (kolumny, szerokości, wysokość wiersza)',
+    icon: <GridOnIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).insertContent({ type: 'tableView' }).run();
     },
   },
   {

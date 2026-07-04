@@ -8,9 +8,12 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import TagIcon from '@mui/icons-material/Tag';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import CodeIcon from '@mui/icons-material/Code';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import type { Editor } from '@tiptap/react';
 import { toggleHeadingFold, isHeadingCollapsed } from './extensions/HeadingFoldExtension';
 import { copyBlocks, readBlocksForPaste } from './utils/blockClipboard';
+import { blockToRaw, rawToRendered, isRawMarkdownBlock } from './extensions/RawMarkdownBlockExtension';
 
 export function getBlockId(el: HTMLElement): string | null {
   return (
@@ -98,6 +101,13 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
     })();
   }, [editor, nodeRange, closeMenu]);
 
+  const handleToggleRaw = useCallback(() => {
+    closeMenu();
+    if (!editor || typeof blockPos !== 'number') return;
+    if (isRawMarkdownBlock(editor, blockPos)) rawToRendered(editor, blockPos);
+    else blockToRaw(editor, blockPos);
+  }, [editor, blockPos, closeMenu]);
+
   const handleCopyId = useCallback(() => {
     const id = getBlockId(blockEl);
     if (id) navigator.clipboard?.writeText(`#${id}`).catch(() => { /* ignore */ });
@@ -106,6 +116,7 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
 
   const blockId = menuAnchor ? getBlockId(blockEl) : null;
   const canEditBlock = !!(editor && typeof blockPos === 'number');
+  const isRaw = !!(menuAnchor && editor && typeof blockPos === 'number' && isRawMarkdownBlock(editor, blockPos));
   // Fold action only makes sense on headings — the section fold hangs off them.
   const isHeading = /^H[1-6]$/.test(blockEl.tagName);
   const collapsed = !!(isHeading && blockId && editor && isHeadingCollapsed(editor.state, blockId));
@@ -164,6 +175,12 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
           <MenuItem onClick={handleDelete} dense sx={{ color: 'error.main' }}>
             <ListItemIcon><DeleteOutlineIcon fontSize="small" color="error" /></ListItemIcon>
             <ListItemText primary="Usuń" />
+          </MenuItem>
+        )}
+        {canEditBlock && (
+          <MenuItem onClick={handleToggleRaw} dense>
+            <ListItemIcon>{isRaw ? <VisibilityIcon fontSize="small" /> : <CodeIcon fontSize="small" />}</ListItemIcon>
+            <ListItemText primary={isRaw ? 'Pokaż jako podgląd' : 'Pokaż jako markdown'} />
           </MenuItem>
         )}
         {canEditBlock && <Divider />}

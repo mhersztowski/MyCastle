@@ -114,6 +114,12 @@ import { BlockActionMenu } from './BlockActionMenu';
 import { BlockIdExtension } from './extensions/BlockIdExtension';
 import { HeadingFold } from './extensions/HeadingFoldExtension';
 import { MdEmbed, MD_EMBED_EDIT_EVENT, type MdEmbedEditEventDetail } from './extensions/EmbedExtension';
+import { GalleryEmbed, GalleryDialog, GALLERY_EDIT_EVENT, type GalleryEditEventDetail, type GalleryProvider } from './extensions/GalleryEmbedExtension';
+import { FileRef } from './extensions/FileRefExtension';
+import { EnvValue } from './extensions/EnvValueExtension';
+import { RawMarkdownBlock } from './extensions/RawMarkdownBlockExtension';
+import { TableView } from './extensions/TableViewExtension';
+import { MdEnvProvider } from './extensions/MdEnvContext';
 import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
 import { copyBlocks, readBlocksForPaste } from './utils/blockClipboard';
 import 'katex/dist/katex.min.css';
@@ -124,7 +130,7 @@ const lowlight = createLowlight(common);
 export interface MdEditorProps {
   initialContent?: string;
   onSave?: (markdown: string) => void;
-  onLinkClick?: (href: string) => void;
+  onLinkClick?: (href: string, opts?: { fromFileRef?: boolean }) => void;
   onCreatePage?: (path: string) => Promise<void>;
   placeholder?: string;
   editable?: boolean;
@@ -416,6 +422,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
       // effect on the next debounce cycle without remounting the editor.
       HeadingFold,
       MdEmbed,
+      GalleryEmbed,
+      FileRef,
+      EnvValue,
+      RawMarkdownBlock,
+      TableView,
       SpellCheckExtension.configure({
         getLanguage: () => spellOptionsRef.current.language,
         getEnabled: () => false,
@@ -779,12 +790,15 @@ const MdEditor: React.FC<MdEditorProps> = ({
       if (!rawHref || rawHref.startsWith('mailto:')) return;
       e.preventDefault();
       e.stopPropagation();
+      // Clicks originating from an embedded File component let the host show a
+      // "back to markdown" affordance on the opened file editor.
+      const fromFileRef = !!anchor.closest('.md-fileref');
       // Absolute URL with a scheme (http:, https:, …) → external / same-origin.
       if (/^[a-z][a-z0-9+.-]*:/i.test(rawHref)) {
         try {
           const url = new URL(rawHref);
           if (url.origin !== window.location.origin) { window.open(rawHref, '_blank', 'noopener,noreferrer'); return; }
-          if (onLinkClickRef.current) onLinkClickRef.current(url.pathname + url.hash);
+          if (onLinkClickRef.current) onLinkClickRef.current(url.pathname + url.hash, { fromFileRef });
         } catch { window.open(rawHref, '_blank', 'noopener,noreferrer'); }
         return;
       }
@@ -844,7 +858,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       }
       // Relative / internal workspace link (e.g. `drive/notatka.md#…`): hand the
       // RAW href to the host so it can open the file regardless of page base.
-      if (onLinkClickRef.current) onLinkClickRef.current(rawHref);
+      if (onLinkClickRef.current) onLinkClickRef.current(rawHref, { fromFileRef });
     };
     document.addEventListener('click', handler, true);
     return () => document.removeEventListener('click', handler, true);
@@ -1054,6 +1068,54 @@ const MdEditor: React.FC<MdEditorProps> = ({
     window.addEventListener(MD_EMBED_EDIT_EVENT, onEdit);
     return () => window.removeEventListener(MD_EMBED_EDIT_EVENT, onEdit);
   }, [editor]);
+
+  // ── Gallery embed (Immich / Google Photos) ─────────────────────────────────
+  const [galleryDialog, setGalleryDialog] = useState<{ open: boolean; pos?: number; initial?: { provider: string; source: string; selected?: string } }>({ open: false });
+
+  const openGalleryDialog = useCallback(() => setGalleryDialog({ open: true }), []);
+
+  // ── File chip + env-value marker ───────────────────────────────────────────
+  const [fileDialog, setFileDialog] = useState<{ open: boolean; path: string }>({ open: false, path: '' });
+  const [envDialog, setEnvDialog] = useState<{ open: boolean; name: string }>({ open: false, name: '' });
+  const openFileDialog = useCallback(() => setFileDialog({ open: true, path: '' }), []);
+  const openEnvDialog = useCallback(() => setEnvDialog({ open: true, name: '' }), []);
+  const insertFileRef = useCallback(() => {
+    const path = fileDialog.path.trim().replace(/^\/+/, '');
+    if (editor && path) {
+      editor.chain().focus().insertContent({ type: 'fileRef', attrs: { path, format: /\.json$/i.test(path) ? 'json' : 'auto' } }).run();
+    }
+    setFileDialog({ open: false, path: '' });
+  }, [editor, fileDialog.path]);
+  const insertEnvValue = useCallback(() => {
+    const name = envDialog.name.trim().replace(/[^\w]/g, '');
+    if (editor && name) editor.chain().focus().insertContent({ type: 'envValue', attrs: { name } }).run();
+    setEnvDialog({ open: false, name: '' });
+  }, [editor, envDialog.name]);
+
+  const handleInsertGallery = useCallback((v: { provider: GalleryProvider; source: string; selected: string }) => {
+    if (!editor) { setGalleryDialog({ open: false }); return; }
+    const pos = galleryDialog.pos;
+    if (typeof pos === 'number') {
+      editor.chain().focus().command(({ tr }) => {
+        tr.setNodeAttribute(pos, 'provider', v.provider);
+        tr.setNodeAttribute(pos, 'source', v.source);
+        tr.setNodeAttribute(pos, 'selected', v.selected);
+        return true;
+      }).run();
+    } else {
+      editor.chain().focus().insertContent({ type: 'galleryEmbed', attrs: { provider: v.provider, source: v.source, selected: v.selected } }).run();
+    }
+    setGalleryDialog({ open: false });
+  }, [editor, galleryDialog.pos]);
+
+  useEffect(() => {
+    const onEdit = (e: Event) => {
+      const d = (e as CustomEvent<GalleryEditEventDetail>).detail;
+      if (d) setGalleryDialog({ open: true, pos: d.pos, initial: { provider: d.provider, source: d.source, selected: d.selected } });
+    };
+    window.addEventListener(GALLERY_EDIT_EVENT, onEdit);
+    return () => window.removeEventListener(GALLERY_EDIT_EVENT, onEdit);
+  }, []);
 
   // ── Export to clean markdown ───────────────────────────────────────────────
   // Serializes the current document to plain markdown (same serializer as save)
@@ -1500,6 +1562,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   return (
     <>
+    <MdEnvProvider>
     <AutomateDocumentProvider documentPath={filePath}>
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Editing toolbar — hidden in read-only (viewer) mode */}
@@ -1512,6 +1575,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
             onInsertInfoMark={openInsertInfoMarkDialog}
             onInsertInternalLink={openInternalLinkDialog}
             onInsertEmbed={openEmbedDialog}
+            onInsertGallery={openGalleryDialog}
+            onInsertFile={openFileDialog}
+            onInsertEnvValue={openEnvDialog}
             onToggleGroupMode={toggleGroupMode}
             groupModeActive={groupMode}
             onExportMarkdown={handleExportMarkdown}
@@ -1984,6 +2050,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       </Box>
     </Box>
     </AutomateDocumentProvider>
+    </MdEnvProvider>
 
     {/* ── Spellcheck suggestions popover ─────────────────────────────────
         Mounted at the top level so it can render outside the
@@ -2148,6 +2215,49 @@ const MdEditor: React.FC<MdEditorProps> = ({
       onClose={() => setEmbedDialog({ open: false })}
       onSelect={handleInsertEmbed}
     />
+
+    <GalleryDialog
+      open={galleryDialog.open}
+      initial={galleryDialog.initial}
+      onClose={() => setGalleryDialog({ open: false })}
+      onSubmit={handleInsertGallery}
+    />
+
+    <Dialog open={fileDialog.open} onClose={() => setFileDialog({ open: false, path: '' })} maxWidth="sm" fullWidth>
+      <DialogTitle>Wstaw plik</DialogTitle>
+      <DialogContent>
+        <TextField
+          fullWidth autoFocus size="small" sx={{ mt: 1 }} label="Ścieżka pliku"
+          placeholder="np. drive/config.json"
+          value={fileDialog.path}
+          onChange={(e) => setFileDialog((s) => ({ ...s, path: e.target.value }))}
+          onKeyDown={(e) => { if (e.key === 'Enter') insertFileRef(); }}
+          helperText="Dla plików .json ustaw potem (Opcje na komponencie) nazwę zmiennej env do wczytania danych."
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setFileDialog({ open: false, path: '' })}>Anuluj</Button>
+        <Button variant="contained" onClick={insertFileRef} disabled={!fileDialog.path.trim()}>Wstaw</Button>
+      </DialogActions>
+    </Dialog>
+
+    <Dialog open={envDialog.open} onClose={() => setEnvDialog({ open: false, name: '' })} maxWidth="xs" fullWidth>
+      <DialogTitle>Wstaw wartość zmiennej env</DialogTitle>
+      <DialogContent>
+        <TextField
+          fullWidth autoFocus size="small" sx={{ mt: 1 }} label="Nazwa zmiennej env"
+          placeholder="np. config"
+          value={envDialog.name}
+          onChange={(e) => setEnvDialog((s) => ({ ...s, name: e.target.value }))}
+          onKeyDown={(e) => { if (e.key === 'Enter') insertEnvValue(); }}
+          helperText="Wstawi tekst z wartością tej zmiennej ({{env:nazwa}})."
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setEnvDialog({ open: false, name: '' })}>Anuluj</Button>
+        <Button variant="contained" onClick={insertEnvValue} disabled={!envDialog.name.trim()}>Wstaw</Button>
+      </DialogActions>
+    </Dialog>
 
     {/* Event-from-task dialog — opened by the `/event` slash command.
         Inserts the resulting markdown blockquote at the captured range,

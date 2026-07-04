@@ -66,9 +66,23 @@ const CRUD_CONFIGS: Record<string, CrudConfig> = {
  */
 const DRIVE_MIME: Record<string, string> = {
   '.html': 'text/html', '.htm': 'text/html',
-  '.css': 'text/css', '.js': 'application/javascript', '.mjs': 'application/javascript',
+  // `.js`/`.mjs` use `text/javascript` (WHATWG-recommended) rather than
+  // `application/javascript` — Android's MimeTypeMap resolves the former back to
+  // a `.js` extension, so downloads keep their name instead of becoming `.bin`.
+  '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.json': 'application/json', '.xml': 'application/xml', '.csv': 'text/csv',
   '.txt': 'text/plain', '.md': 'text/markdown',
+  // Common code/text files → text/plain so a download keeps its extension
+  // (octet-stream would make Android's downloader append `.bin`).
+  '.ts': 'text/plain', '.tsx': 'text/plain', '.jsx': 'text/plain',
+  '.py': 'text/plain', '.rb': 'text/plain', '.php': 'text/plain', '.lua': 'text/plain',
+  '.sh': 'text/plain', '.bash': 'text/plain', '.zsh': 'text/plain',
+  '.c': 'text/plain', '.h': 'text/plain', '.cpp': 'text/plain', '.cc': 'text/plain',
+  '.hpp': 'text/plain', '.hh': 'text/plain', '.java': 'text/plain', '.kt': 'text/plain',
+  '.rs': 'text/plain', '.go': 'text/plain', '.cs': 'text/plain', '.swift': 'text/plain',
+  '.yml': 'text/plain', '.yaml': 'text/plain', '.toml': 'text/plain',
+  '.ini': 'text/plain', '.cfg': 'text/plain', '.conf': 'text/plain',
+  '.sql': 'text/plain', '.env': 'text/plain', '.log': 'text/plain',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.avif': 'image/avif', '.ico': 'image/x-icon', '.bmp': 'image/bmp',
@@ -104,6 +118,8 @@ export class MycastleHttpServer extends HttpUploadServer {
   // shareUrl → { assets (id+description), baseUrl, key, cachedAt }
   private immichAlbumCache = new Map<string, { assets: { id: string; description: string }[]; baseUrl: string; key: string; cachedAt: number }>();
   private static readonly IMMICH_CACHE_TTL = 3_600_000; // 1 hour
+  // Public Google Photos shared-album image URLs, scraped from the share page.
+  private gphotosAlbumCache = new Map<string, { images: string[]; cachedAt: number }>();
 
   // "lat,lon" → { data, cachedAt }
   private weatherCache = new Map<string, { data: OpenMeteoResponse; cachedAt: number }>();
@@ -374,6 +390,46 @@ export class MycastleHttpServer extends HttpUploadServer {
     return { status: 502, data: { error: `Immich proxy failed: ${lastError}` } };
   }
 
+  /** Resolve + cache the image assets of an Immich SHARED album (public link). */
+  private async getImmichSharedAlbum(shareUrl: string): Promise<{ assets: { id: string; description: string }[]; baseUrl: string; key: string }> {
+    let cached = this.immichAlbumCache.get(shareUrl);
+    if (!cached || Date.now() - cached.cachedAt > MycastleHttpServer.IMMICH_CACHE_TTL) {
+      const parsed = new URL(shareUrl);
+      const baseUrl = `${parsed.protocol}//${parsed.host}`;
+      const key = parsed.pathname.split('/').pop()!;
+      const slResp = await fetch(`${baseUrl}/api/shared-links/me?key=${encodeURIComponent(key)}`);
+      if (!slResp.ok) throw new Error(`Immich shared-links ${slResp.status}`);
+      const slData = await slResp.json() as { album?: { id?: string } };
+      const albumId = slData.album?.id;
+      if (!albumId) throw new Error('No albumId in shared link');
+      const albumResp = await fetch(`${baseUrl}/api/albums/${albumId}?key=${encodeURIComponent(key)}`);
+      if (!albumResp.ok) throw new Error(`Album fetch ${albumResp.status}`);
+      const albumData = await albumResp.json() as { assets?: { id: string; type: string; description?: string }[] };
+      const assets = (albumData.assets ?? [])
+        .filter((a) => a.type === 'IMAGE')
+        .map((a) => ({ id: a.id, description: a.description ?? '' }));
+      cached = { assets, baseUrl, key, cachedAt: Date.now() };
+      this.immichAlbumCache.set(shareUrl, cached);
+    }
+    return cached;
+  }
+
+  /** Extract distinct photo base URLs from a public Google Photos album page. The
+   *  share page embeds them as lh3.googleusercontent.com links inside its bootstrap
+   *  data; we strip any size suffix so the client can request its own size. */
+  private extractGooglePhotosImageUrls(html: string): string[] {
+    const seen = new Set<string>();
+    const re = /https:\/\/lh3\.googleusercontent\.com\/[^\s"'\\=]+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const base = m[0];
+      // Skip avatar/profile images (heuristic: they use the `/a/` or `/a-/` path).
+      if (/\/a[-/]/.test(base)) continue;
+      seen.add(base);
+    }
+    return Array.from(seen);
+  }
+
   private async handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const fullApiPath = req.url!.replace(/^\/api/, '');
     const apiPath = fullApiPath.split('?')[0];
@@ -557,6 +613,94 @@ export class MycastleHttpServer extends HttpUploadServer {
         });
         const buffer = Buffer.from(await imgResp.arrayBuffer());
         res.writeHead(imgResp.status, {
+          'Content-Type': imgResp.headers.get('content-type') ?? 'image/jpeg',
+          'Cache-Control': 'public, max-age=3600',
+        });
+        res.end(buffer);
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/immich/album-assets?shareUrl=...  — list of image asset ids in a shared album (gallery block)
+    if (apiPath === '/immich/album-assets' && method === 'GET') {
+      try {
+        const shareUrl = new URL(req.url!, 'http://localhost').searchParams.get('shareUrl') ?? '';
+        if (!shareUrl) { this.sendJsonResponse(res, 400, { error: 'Missing shareUrl' }); return; }
+        const cached = await this.getImmichSharedAlbum(shareUrl);
+        this.sendJsonResponse(res, 200, { assets: cached.assets });
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/immich/shared-thumbnail?shareUrl=...&assetId=...&size=thumbnail|preview
+    // Proxies one thumbnail from a shared album (uses the cached share key).
+    if (apiPath === '/immich/shared-thumbnail' && method === 'GET') {
+      try {
+        const p = new URL(req.url!, 'http://localhost').searchParams;
+        const shareUrl = p.get('shareUrl') ?? '';
+        const assetId = p.get('assetId') ?? '';
+        const size = p.get('size') === 'preview' ? 'preview' : 'thumbnail';
+        if (!shareUrl || !assetId) { this.sendJsonResponse(res, 400, { error: 'Missing shareUrl/assetId' }); return; }
+        const cached = await this.getImmichSharedAlbum(shareUrl);
+        const imgResp = await fetch(`${cached.baseUrl}/api/assets/${assetId}/thumbnail?size=${size}&key=${encodeURIComponent(cached.key)}`);
+        if (!imgResp.ok) { this.sendJsonResponse(res, 502, { error: `Thumbnail ${imgResp.status}` }); return; }
+        const buffer = Buffer.from(await imgResp.arrayBuffer());
+        res.writeHead(200, {
+          'Content-Type': imgResp.headers.get('content-type') ?? 'image/jpeg',
+          'Cache-Control': 'public, max-age=3600',
+        });
+        res.end(buffer);
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/gphotos/album?shareUrl=...  — scrape a PUBLIC Google Photos shared album for image URLs
+    if (apiPath === '/gphotos/album' && method === 'GET') {
+      try {
+        const shareUrl = new URL(req.url!, 'http://localhost').searchParams.get('shareUrl') ?? '';
+        if (!shareUrl) { this.sendJsonResponse(res, 400, { error: 'Missing shareUrl' }); return; }
+        let cached = this.gphotosAlbumCache.get(shareUrl);
+        if (!cached || Date.now() - cached.cachedAt > MycastleHttpServer.IMMICH_CACHE_TTL) {
+          const resp = await fetch(shareUrl, {
+            // A real browser UA — Google serves a stripped page (no image data) to bots.
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36' },
+            redirect: 'follow',
+          });
+          if (!resp.ok) { this.sendJsonResponse(res, 502, { error: `Google Photos fetch ${resp.status}` }); return; }
+          const html = await resp.text();
+          const images = this.extractGooglePhotosImageUrls(html);
+          cached = { images, cachedAt: Date.now() };
+          this.gphotosAlbumCache.set(shareUrl, cached);
+        }
+        this.sendJsonResponse(res, 200, { images: cached.images });
+      } catch (e) {
+        this.sendJsonResponse(res, 500, { error: e instanceof Error ? e.message : 'Scrape error' });
+      }
+      return;
+    }
+
+    // GET /api/gphotos/image?url=<lh3 base>&size=w320-h320  — proxy a Google Photos
+    // image. Loading lh3.googleusercontent.com directly from the browser often fails
+    // (referer/hotlink restrictions), so we fetch it server-side like Immich does.
+    if (apiPath === '/gphotos/image' && method === 'GET') {
+      try {
+        const p = new URL(req.url!, 'http://localhost').searchParams;
+        const base = p.get('url') ?? '';
+        const size = (p.get('size') ?? 'w512-h512').replace(/[^\w-]/g, '');
+        // SSRF guard — only proxy Google's photo CDN.
+        if (!/^https:\/\/lh3\.googleusercontent\.com\//.test(base)) { this.sendJsonResponse(res, 400, { error: 'Invalid url' }); return; }
+        const imgResp = await fetch(`${base}=${size}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://photos.google.com/' },
+        });
+        if (!imgResp.ok) { this.sendJsonResponse(res, 502, { error: `Image ${imgResp.status}` }); return; }
+        const buffer = Buffer.from(await imgResp.arrayBuffer());
+        res.writeHead(200, {
           'Content-Type': imgResp.headers.get('content-type') ?? 'image/jpeg',
           'Cache-Control': 'public, max-age=3600',
         });
@@ -3207,8 +3351,13 @@ export class MycastleHttpServer extends HttpUploadServer {
             const filename = pathStr.split('/').filter(Boolean).pop() || 'file';
             // RFC 5987 filename* for non-ASCII names + plain ASCII fallback.
             const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+            // Send the REAL content type (not octet-stream): `attachment` already
+            // forces the save, and a matching MIME stops Android's downloader from
+            // renaming e.g. `foo.js` → `foo.bin`.
+            const dlExt = filename.includes('.') ? '.' + filename.split('.').pop()!.toLowerCase() : '';
+            const dlMime = DRIVE_MIME[dlExt] ?? 'application/octet-stream';
             res.writeHead(200, {
-              'Content-Type': 'application/octet-stream',
+              'Content-Type': dlMime,
               'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
               'Content-Length': String(data.length),
               'Cache-Control': 'no-store',

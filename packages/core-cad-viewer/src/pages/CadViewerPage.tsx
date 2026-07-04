@@ -7,6 +7,7 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import { Project } from '@mhersztowski/core-cad';
 import { CAD_EXT, readFileAt } from '../vfs';
 import { loadProjectFromText, buildSVGString } from '../cad/buildSvg';
+import { PanZoom } from '../components/PanZoom';
 
 interface Props { vfsPath: string }
 
@@ -33,19 +34,22 @@ export function CadViewerPage({ vfsPath }: Props) {
     return () => { cancelled = true; };
   }, [vfsPath]);
 
-  const label = vfsPath.split('/').pop() ?? vfsPath;
-
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-        <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary' }}>CAD 2D</Typography>
-        <Typography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: '#4fc3f7' }}>{label}</Typography>
-      </Box>
-      <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
-        {!svg && !error && <CircularProgress size={32} />}
-        {error && <Typography sx={{ color: 'error.main', fontSize: 14 }}>Failed to load: {error}</Typography>}
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#1a1a1a', color: '#fff' }}>
+      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}>
+        {!svg && !error && (
+          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={32} /></Box>
+        )}
+        {error && (
+          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Typography sx={{ color: 'error.main', fontSize: 14 }}>Failed to load: {error}</Typography>
+          </Box>
+        )}
         {svg && (
-          <Box dangerouslySetInnerHTML={{ __html: svg }} sx={{ width: '100%', height: '100%', '& svg': { display: 'block' } }} />
+          <PanZoom>
+            <Box dangerouslySetInnerHTML={{ __html: svg }}
+              sx={{ width: '100%', height: '100%', '& svg': { display: 'block', width: '100%', height: '100%' } }} />
+          </PanZoom>
         )}
       </Box>
     </Box>

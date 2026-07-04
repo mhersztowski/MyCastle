@@ -47,6 +47,7 @@ import Editor from '@monaco-editor/react';
 const MdScriptHelpDialog = lazy(() => import('./MdScriptHelpDialog'));
 
 import { useAuth } from '../../../modules/auth/AuthContext';
+import { useMdEnv } from './MdEnvContext';
 import { usePlugins } from '../../../modules/web-plugins';
 import { editorOverlay } from '../editorOverlayState';
 import {
@@ -164,6 +165,7 @@ type RunStatus = 'idle' | 'running' | 'completed' | 'error';
 
 const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
   const { currentUser, token, isAdmin } = useAuth();
+  const mdEnv = useMdEnv();
   const { pluginsVersion } = usePlugins();
 
   const blockId = useRef(node.attrs.blockId || crypto.randomUUID?.() || Math.random().toString(36).slice(2));
@@ -220,7 +222,7 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
       currentUser: (currentUser as { name?: string } | null)?.name ?? null,
       token: token ?? null,
       isAdmin,
-    });
+    }, { get: (name: string) => mdEnv.get(name), all: () => mdEnv.all() });
     const display = makeDisplayApi(pushDisplay);
 
     try {
@@ -232,7 +234,7 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
       setError(err instanceof Error ? err.message : String(err));
       setStatus('error');
     }
-  }, [status, code, currentUser, token, isAdmin, pushDisplay]);
+  }, [status, code, currentUser, token, isAdmin, pushDisplay, mdEnv]);
 
   // Auto-run on mount when mode === 'auto'
   useEffect(() => {

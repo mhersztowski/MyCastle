@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/TaskModel",
+  "definitions": {
+    "TaskModel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "task"
+        },
+        "id": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskComponentModel"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "TaskComponentModel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

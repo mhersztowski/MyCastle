@@ -5,7 +5,7 @@ import { Plugin } from '@tiptap/pm/state';
 const STANDARD_BLOCK_TYPES = ['heading', 'paragraph', 'blockquote', 'bulletList', 'orderedList', 'codeBlock', 'table'];
 
 // Additional custom node types that manage their own blockId attr but still need auto-UUID assignment
-const CUSTOM_BLOCK_TYPES = ['automateScriptBlock'];
+const CUSTOM_BLOCK_TYPES = ['automateScriptBlock', 'rawMarkdownBlock', 'tableView'];
 
 const ALL_BLOCK_TYPES = [...STANDARD_BLOCK_TYPES, ...CUSTOM_BLOCK_TYPES];
 

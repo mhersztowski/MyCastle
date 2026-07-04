@@ -5,4 +5,4 @@ export { ElectronicsViewerPage } from './pages/ElectronicsViewerPage';
 export { MapViewerPage } from './pages/MapViewerPage';
 export { NotesViewerPage } from './pages/NotesViewerPage';
 
-export { setViewerUserId } from './vfs';
+export { setViewerUserId, setViewerApiBase } from './vfs';

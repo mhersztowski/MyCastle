@@ -274,14 +274,11 @@ export function MapViewerPage({ vfsPath }: Props) {
 
   const described = useMemo(() => (nodes ? collectDescribed(nodes) : []), [nodes])
   const infoNode = nodes && infoId ? findNode(nodes, infoId) : null
-  const label = vfsPath.split('/').pop() ?? vfsPath
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>
-      {/* top bar */}
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#1a1a1a', color: '#fff' }}>
+      {/* control bar (title removed — the markdown embed shows mode + name) */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-        <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary' }}>MAP</Typography>
-        <Typography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: '#4fc3f7' }}>{label}</Typography>
         <Box sx={{ flex: 1 }} />
         <Tooltip title={showHierarchy ? 'Hide hierarchy' : 'Show hierarchy'}>
           <IconButton

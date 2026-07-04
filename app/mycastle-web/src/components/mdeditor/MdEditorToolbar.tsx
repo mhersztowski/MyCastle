@@ -43,6 +43,9 @@ import SaveIcon from '@mui/icons-material/Save';
 import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import AddLinkIcon from '@mui/icons-material/AddLink';
 import PostAddIcon from '@mui/icons-material/PostAdd';
+import CollectionsIcon from '@mui/icons-material/Collections';
+import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
+import DataObjectIcon from '@mui/icons-material/DataObject';
 import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import DictationDialog from './DictationDialog';
@@ -75,6 +78,12 @@ interface MdEditorToolbarProps {
   onInsertInternalLink?: () => void;
   /** Optional — opens the embed picker, inserts an Obsidian `![[…]]` transclusion. */
   onInsertEmbed?: () => void;
+  /** Optional — opens the photo-gallery picker (Immich / Google Photos). */
+  onInsertGallery?: () => void;
+  /** Optional — inserts a File chip (icon + name + Open/Options). */
+  onInsertFile?: () => void;
+  /** Optional — inserts an env-value marker {{env:name}}. */
+  onInsertEnvValue?: () => void;
   /** Optional — toggles block group-selection mode (checkboxes + bulk actions). */
   onToggleGroupMode?: () => void;
   /** Whether group-selection mode is currently active (highlights the button). */
@@ -130,7 +139,7 @@ function detectBrowser(): 'chrome' | 'safari' | 'firefox' | 'edge' | 'other' {
 }
 
 const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
-  editor, onSave, saveDisabled, onInsertInfoMark, onInsertInternalLink, onInsertEmbed, onToggleGroupMode, groupModeActive, onExportMarkdown,
+  editor, onSave, saveDisabled, onInsertInfoMark, onInsertInternalLink, onInsertEmbed, onInsertGallery, onInsertFile, onInsertEnvValue, onToggleGroupMode, groupModeActive, onExportMarkdown,
   spellLanguage, spellEnabled, onSpellLanguageChange, onSpellEnabledChange,
 }) => {
   const [spellMenuAnchor, setSpellMenuAnchor] = useState<null | HTMLElement>(null);
@@ -457,6 +466,27 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
         <Tooltip title="Osadź zawartość ![[…]] (plik / nagłówek / blok)">
           <IconButton size="small" onClick={onInsertEmbed}>
             <PostAddIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {onInsertGallery && (
+        <Tooltip title="Galeria zdjęć (Immich / Google Photos)">
+          <IconButton size="small" onClick={onInsertGallery}>
+            <CollectionsIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {onInsertFile && (
+        <Tooltip title="Wstaw plik (Otwórz / Opcje — env dla JSON)">
+          <IconButton size="small" onClick={onInsertFile}>
+            <InsertDriveFileOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {onInsertEnvValue && (
+        <Tooltip title="Wstaw wartość zmiennej env ({{env:…}})">
+          <IconButton size="small" onClick={onInsertEnvValue}>
+            <DataObjectIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       )}

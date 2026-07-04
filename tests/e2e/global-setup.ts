@@ -1,8 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
-const FIXTURES_DIR = path.resolve(__dirname, 'fixtures/data');
-const TEST_DATA_DIR = path.resolve(__dirname, '../../data-test');
+// Root package is ESM ("type":"module") so `__dirname` is undefined — derive it.
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const FIXTURES_DIR = path.resolve(dirname, 'fixtures/data');
+const TEST_DATA_DIR = path.resolve(dirname, '../../data-test');
 
 function copyDirSync(src: string, dest: string) {
   fs.mkdirSync(dest, { recursive: true });

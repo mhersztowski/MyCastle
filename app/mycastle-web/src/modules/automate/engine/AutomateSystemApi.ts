@@ -14,6 +14,33 @@ import type { AiChatMessage, AiChatResponse } from '../../ai';
 import { speechService } from '../../speech';
 import { makeCredentialsApi, type CredentialsApi } from '../../../services/credentialsApi';
 
+/** Dostawca zmiennych env dokumentu markdown (implementowany przez MdEnvContext). */
+export interface EnvProvider {
+  get(name: string): unknown;
+  all(): Record<string, unknown>;
+}
+
+const NOOP_ENV_PROVIDER: EnvProvider = { get: () => undefined, all: () => ({}) };
+
+/**
+ * Rozwiązuje (potencjalnie kropkowaną) nazwę względem płaskiego obiektu env.
+ * Dokładny klucz ma pierwszeństwo; inaczej pierwszy segment to zmienna, a reszta
+ * to ścieżka w wartości (`podroz.meta.nazwa`, `podroz.budzet.pozycje.0.kwota`).
+ */
+function resolveEnvPath(store: Record<string, unknown>, name: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(store, name)) return store[name];
+  const dot = name.indexOf('.');
+  if (dot === -1) return store[name];
+  const root = name.slice(0, dot);
+  if (!Object.prototype.hasOwnProperty.call(store, root)) return undefined;
+  let cur: unknown = store[root];
+  for (const seg of name.slice(dot + 1).split('.')) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
 // Names match what the IntelliSense stub exposes to script authors as
 // `FileStat` / `FileEntry`. Kept un-exported to avoid colliding with the
 // VFS `FileStat` type re-exported by the automate barrel (different shape,
@@ -161,6 +188,13 @@ export interface AutomateSystemApiInterface {
     get(name: string): unknown;
     set(name: string, value: unknown): void;
     getAll(): Record<string, unknown>;
+  };
+
+  /** Zmienne środowiskowe dokumentu markdown (ładowane przez komponent File /
+   *  znacznik `{{env:…}}`). Obsługuje ścieżki: `api.env.get('podroz.meta.nazwa')`. */
+  env: {
+    get(name: string): unknown;
+    all(): Record<string, unknown>;
   };
 
   log: {
@@ -438,6 +472,7 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
    *  (api lives outside MdEditor — flow/designer surfaces). */
   private _getDocumentPath: () => string | undefined;
   private _getToken: () => string | null;
+  private _getEnv: () => EnvProvider;
 
   /** Zaszyfrowane credentiale użytkownika (Settings → Sekrety). */
   secrets: CredentialsApi;
@@ -448,11 +483,15 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
     getDocumentPath: () => string | undefined = () => undefined,
     getUserName: () => string | null = () => null,
     getToken: () => string | null = () => null,
+    /** Dostawca env dokumentu markdown; czytany leniwie, więc api-singleton
+     *  zawsze widzi aktualny store (jak getDocumentPath). */
+    getEnv: () => EnvProvider = () => NOOP_ENV_PROVIDER,
   ) {
     this._dataSource = dataSource;
     this._variables = variables;
     this._getDocumentPath = getDocumentPath;
     this._getToken = getToken;
+    this._getEnv = getEnv;
     this.secrets = makeCredentialsApi(getUserName);
   }
 
@@ -735,6 +774,14 @@ export class AutomateSystemApi implements AutomateSystemApiInterface {
     getAll: (): Record<string, unknown> => {
       return { ...this._variables };
     },
+  };
+
+  env = {
+    /** Wartość zmiennej env; obsługuje ścieżki (`podroz.meta.nazwa`,
+     *  `podroz.budzet.pozycje.0.kwota`). Zwraca undefined gdy brak. */
+    get: (name: string): unknown => resolveEnvPath(this._getEnv().all(), name),
+    /** Wszystkie zmienne env dokumentu jako płaski obiekt. */
+    all: (): Record<string, unknown> => ({ ...this._getEnv().all() }),
   };
 
   private _stringify(value: unknown): string {

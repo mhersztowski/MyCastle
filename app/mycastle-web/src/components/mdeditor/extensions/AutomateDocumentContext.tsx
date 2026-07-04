@@ -10,6 +10,8 @@ import { preloadLibrariesForCode } from './automateLibraries';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
 import { useAuth } from '../../../modules/auth';
+import { useMdEnv } from './MdEnvContext';
+import { setAutomateEnvProvider } from '../../../modules/automate/designer/automateMonacoSetup';
 
 // Typy danych wyjsciowych display
 //
@@ -164,6 +166,14 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
   const tokenRef = useRef<string | null>(token ?? null);
   useEffect(() => { userNameRef.current = currentUser?.name ?? null; }, [currentUser]);
   useEffect(() => { tokenRef.current = token ?? null; }, [token]);
+  // Md env store (File component / `{{env:…}}`) exposed to scripts as `api.env`.
+  // Held in a ref so the api singleton reads the latest values lazily.
+  const mdEnv = useMdEnv();
+  const mdEnvRef = useRef(mdEnv);
+  useEffect(() => { mdEnvRef.current = mdEnv; }, [mdEnv]);
+  // Publish this document's env to the Monaco completion provider so typing
+  // inside `api.env.get('…')` suggests the actually-loaded paths.
+  useEffect(() => { setAutomateEnvProvider(() => mdEnvRef.current.all()); }, []);
   const variablesRef = useRef<Record<string, unknown>>({});
   const [blocks, setBlocks] = useState<Map<string, ScriptBlockState>>(new Map());
   const blockOrderRef = useRef<string[]>([]);
@@ -189,6 +199,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         () => documentPathRef.current,
         () => userNameRef.current,
         () => tokenRef.current,
+        () => mdEnvRef.current,
       );
     }
     return apiRef.current;

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, type MutableRefObject } from 'react'
+import { useState, useCallback, useRef, useMemo, type MutableRefObject, type ChangeEvent } from 'react'
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
@@ -18,6 +18,8 @@ import { MapPropertiesPanel } from './MapPropertiesPanel'
 import { MapDrawingLayer, MapDrawingToolbar, haversineM, type DrawTool } from './MapDrawing'
 import { MapEditLayer } from './MapEditLayer'
 import { OverpassDialog } from './OverpassDialog'
+import { parseGeoFile } from '../map/geoImporter'
+import { GeoExportDialog } from './GeoExportDialog'
 import { SplitPathDialog } from './SplitPathDialog'
 import { ServerFileBrowser } from './ServerFileBrowser'
 import { RouteDialog, type RouteDraft } from './RouteDialog'
@@ -173,6 +175,7 @@ export function MapView() {
   }, [currentDir, currentName])
 
   const [overpassOpen, setOverpassOpen] = useState(false)
+  const [geoExportOpen, setGeoExportOpen] = useState(false)
   const [splitNode, setSplitNode] = useState<MapNode | null>(null)
 
   // Node whose info/description is currently displayed (lookup keeps it live while editing).
@@ -293,6 +296,20 @@ export function MapView() {
     importAsGroup(`Overpass ${time}`, importedNodes)
   }, [importAsGroup])
 
+  // Local GPX / GeoJSON import — read the picked file, parse to MapNodes, add as a group.
+  const geoInputRef = useRef<HTMLInputElement>(null)
+  const handleGeoFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-picking the same file
+    if (!file) return
+    try {
+      const nodes = parseGeoFile(await file.text(), file.name)
+      importAsGroup(file.name.replace(/\.[^.]+$/, '') || 'Import', nodes)
+    } catch (err) {
+      alert('Import nie powiódł się: ' + ((err as Error).message || 'nieznany błąd'))
+    }
+  }, [importAsGroup])
+
   const handleSplitOpen = useCallback((id: string) => {
     const found = findNode(nodes, id)
     if (!found) return
@@ -343,8 +360,10 @@ export function MapView() {
     ],
     importItems: [
       { label: 'Overpass Query…', secondary: 'Import OSM features', run: () => setOverpassOpen(true) },
+      { label: 'Import GPX / GeoJSON…', secondary: 'Pliki lokalne', run: () => geoInputRef.current?.click() },
     ],
     exportItems: [
+      { label: 'Export GPX / GeoJSON…', secondary: 'Wybierz elementy', run: () => setGeoExportOpen(true) },
       { label: 'Export PNG', run: () => exportMap('png') },
       { label: 'Export SVG', run: () => exportMap('svg') },
       { label: 'Export PDF', run: () => exportMap('pdf') },
@@ -466,6 +485,21 @@ export function MapView() {
       </Box>
 
       {/* Overpass fullscreen dialog */}
+      <input
+        ref={geoInputRef}
+        type="file"
+        accept=".gpx,.geojson,.json,application/gpx+xml,application/geo+json"
+        style={{ display: 'none' }}
+        onChange={handleGeoFile}
+      />
+
+      <GeoExportDialog
+        open={geoExportOpen}
+        nodes={nodes}
+        currentName={currentName ?? undefined}
+        onClose={() => setGeoExportOpen(false)}
+      />
+
       <OverpassDialog
         open={overpassOpen}
         onClose={() => setOverpassOpen(false)}

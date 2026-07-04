@@ -99,6 +99,8 @@ export interface ScriptContext {
   md: typeof md;
   table: typeof table;
   reactive: typeof reactive;
+  /** Document env vars loaded by File components. `env.get('name')` / `env.all()`. */
+  env: { get: (name: string) => unknown; all: () => Record<string, unknown> };
   // plugin namespaces (e.g. iot, map, timeline, flow) injected at runtime
   [key: string]: unknown;
 }

@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/ProjectModel",
+  "definitions": {
+    "ProjectModel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "project"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProjectModel"
+          }
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskModel"
+          }
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProjectComponentModel"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "TaskModel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "task"
+        },
+        "id": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskComponentModel"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "TaskComponentModel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "ProjectComponentModel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

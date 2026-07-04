@@ -27,16 +27,25 @@ import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined';
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
+import {
+  CadViewerPage, Cad3dViewerPage, Scene3dViewerPage, ElectronicsViewerPage,
+  MapViewerPage, NotesViewerPage,
+  setViewerApiBase, setViewerUserId,
+} from '@mhersztowski/core-cad-viewer';
+import MapIcon from '@mui/icons-material/Map';
+import GestureIcon from '@mui/icons-material/Gesture';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type CadViewMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics';
+export type CadViewMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'map' | 'notes';
 
 const MODE_LABELS: Record<CadViewMode, string> = {
   cad: 'CAD 2D',
   cad3d: 'CAD 3D',
   scene3d: 'Scene 3D',
   electronics: 'Electronics',
+  map: 'Map',
+  notes: 'Notes',
 };
 
 const MODE_ICONS: Record<CadViewMode, React.ReactNode> = {
@@ -44,6 +53,8 @@ const MODE_ICONS: Record<CadViewMode, React.ReactNode> = {
   cad3d: <ViewInArOutlinedIcon sx={{ fontSize: 16 }} />,
   scene3d: <ViewInArIcon sx={{ fontSize: 16 }} />,
   electronics: <ElectricalServicesIcon sx={{ fontSize: 16 }} />,
+  map: <MapIcon sx={{ fontSize: 16 }} />,
+  notes: <GestureIcon sx={{ fontSize: 16 }} />,
 };
 
 // ── Global CAD base URL (configured once, persisted in localStorage) ─────────
@@ -52,7 +63,14 @@ const CAD_URL_KEY = 'cad_base_url';
 const DEFAULT_CAD_URL = 'http://localhost:1898';
 
 function getCadBaseUrl(): string {
-  return localStorage.getItem(CAD_URL_KEY) || DEFAULT_CAD_URL;
+  const stored = localStorage.getItem(CAD_URL_KEY);
+  if (stored) return stored;
+  // On a real deployment `localhost:1898` is unreachable (esp. on mobile), so
+  // default to the app's own origin — at least reachable, and works if the CAD
+  // API is proxied there. Local dev keeps the explicit cad-app dev port.
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') return DEFAULT_CAD_URL;
+  return window.location.origin;
 }
 
 function setCadBaseUrl(url: string) {
@@ -66,8 +84,15 @@ interface ProjectEntry {
   path: string;   // full VFS path (without extension) — stored in embed attrs
 }
 
-const ELEC_EXT = '.elec.json';
-const CAD_EXT  = '.cad.json';
+const ELEC_EXT  = '.elec.json';
+const CAD_EXT   = '.cad.json';
+const MAP_EXT   = '.map.json';
+const NOTES_EXT = '.notes.json';
+
+// Non-scene3d modes read `/users/{user}/projects` filtered by this extension.
+const EXT_BY_MODE: Partial<Record<CadViewMode, string>> = {
+  cad: CAD_EXT, cad3d: CAD_EXT, electronics: ELEC_EXT, map: MAP_EXT, notes: NOTES_EXT,
+};
 
 async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
   const base = getCadBaseUrl().replace(/\/$/, '');
@@ -95,7 +120,7 @@ async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
       }));
       return entries;
     } else {
-      const ext = mode === 'electronics' ? ELEC_EXT : CAD_EXT;
+      const ext = EXT_BY_MODE[mode] ?? CAD_EXT;
       const res = await fetch(`${base}/api/vfs/readdir?path=/users/${userId}/projects`, { signal: AbortSignal.timeout(4000) });
       if (!res.ok) return [];
       const data = (await res.json()) as { entries: { name: string; type: number }[] };
@@ -150,13 +175,13 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose(): void }) {
 interface PickerProps {
   open: boolean;
   initialMode: CadViewMode;
-  initialUrl: string;
+  initialPath: string;
   onClose(): void;
-  /** url is the full viewer URL (includes server+port) */
-  onConfirm(mode: CadViewMode, url: string): void;
+  /** vfsPath (without extension) of the selected project */
+  onConfirm(mode: CadViewMode, vfsPath: string): void;
 }
 
-function ProjectPickerDialog({ open, initialMode, initialUrl, onClose, onConfirm }: PickerProps) {
+function ProjectPickerDialog({ open, initialMode, initialPath, onClose, onConfirm }: PickerProps) {
   const [mode, setMode] = useState<CadViewMode>(initialMode);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -210,19 +235,16 @@ function ProjectPickerDialog({ open, initialMode, initialUrl, onClose, onConfirm
                 <ListItemButton disabled>
                   <ListItemText primary="No projects found" secondary="Check the CAD app URL in settings" />
                 </ListItemButton>
-              ) : projects.map(p => {
-                const url = buildViewerUrl(mode, p.path);
-                return (
-                  <ListItemButton
-                    key={p.path}
-                    selected={url === initialUrl}
-                    onClick={() => { onConfirm(mode, url); onClose(); }}
-                  >
-                    <ListItemIcon sx={{ minWidth: 32 }}>{MODE_ICONS[mode]}</ListItemIcon>
-                    <ListItemText primary={p.name} secondary={url} secondaryTypographyProps={{ sx: { fontSize: 9, opacity: 0.5 } }} />
-                  </ListItemButton>
-                );
-              })}
+              ) : projects.map(p => (
+                <ListItemButton
+                  key={p.path}
+                  selected={p.path === initialPath}
+                  onClick={() => { onConfirm(mode, p.path); onClose(); }}
+                >
+                  <ListItemIcon sx={{ minWidth: 32 }}>{MODE_ICONS[mode]}</ListItemIcon>
+                  <ListItemText primary={p.name} secondary={p.path} secondaryTypographyProps={{ sx: { fontSize: 9, opacity: 0.5 } }} />
+                </ListItemButton>
+              ))}
             </List>
           )}
         </DialogContent>
@@ -232,18 +254,60 @@ function ProjectPickerDialog({ open, initialMode, initialUrl, onClose, onConfirm
   );
 }
 
+// ── Native viewer (core-cad-viewer) ───────────────────────────────────────────
+
+// Recover the vfs path from a legacy `{base}/viewer/{mode}/{vfsPath}` url so old
+// embeds keep working after the switch from iframe to native rendering.
+function vfsPathFromUrl(url: string): string {
+  const m = url.match(/\/viewer\/[^/]+\/(.+)$/);
+  return m ? m[1] : '';
+}
+
+// The CAD backend origin baked into the embed's url (`{base}/viewer/…`). Using
+// it (rather than the per-browser localStorage default) makes the embed
+// self-contained, so it works on other devices — e.g. mobile, where the
+// `http://localhost:1898` default is unreachable ("failed to fetch").
+function baseFromUrl(url: string): string {
+  const i = url.indexOf('/viewer/');
+  return i > 0 ? url.slice(0, i) : '';
+}
+
+/** Renders the appropriate core-cad-viewer page for `mode`, reading scenes from
+ *  the CAD backend origin (cross-origin — needs CORS on the backend). */
+function NativeCadViewer({ mode, vfsPath, apiBase }: { mode: CadViewMode; vfsPath: string; apiBase: string }) {
+  // Point the viewer's VFS client at the CAD backend before it fetches.
+  setViewerApiBase(apiBase);
+  setViewerUserId('default');
+  const common = { vfsPath };
+  switch (mode) {
+    case 'cad':         return <CadViewerPage {...common} />;
+    case 'cad3d':       return <Cad3dViewerPage {...common} />;
+    case 'electronics': return <ElectronicsViewerPage {...common} />;
+    case 'map':         return <MapViewerPage {...common} />;
+    case 'notes':       return <NotesViewerPage {...common} />;
+    case 'scene3d':
+    default:            return <Scene3dViewerPage {...common} />;
+  }
+}
+
 // ── Node view ────────────────────────────────────────────────────────────────
 
 function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
   const mode = (node.attrs.mode as CadViewMode) || 'scene3d';
   const url: string = node.attrs.url || '';
-  const [pickerOpen, setPickerOpen] = useState(!url);
+  const vfsPath: string = (node.attrs.path as string) || vfsPathFromUrl(url);
+  const [pickerOpen, setPickerOpen] = useState(!vfsPath);
 
-  // Display name: last path segment of the viewer URL
-  const label = url ? decodeURIComponent(url.split('/').pop() ?? url) : '';
+  // Display name: last path segment of the vfs path.
+  const label = vfsPath ? decodeURIComponent(vfsPath.split('/').pop() ?? vfsPath) : '';
+  // API base: prefer the origin baked into the embed's url (works cross-device),
+  // fall back to the per-browser configured base.
+  const apiBase = baseFromUrl(url) || getCadBaseUrl();
+  // External "open in CAD app" link — use the embed's own base when present.
+  const externalUrl = vfsPath ? `${apiBase.replace(/\/$/, '')}/viewer/${mode}/${vfsPath}` : '';
 
-  const handleConfirm = useCallback((m: CadViewMode, viewerUrl: string) => {
-    updateAttributes({ mode: m, url: viewerUrl });
+  const handleConfirm = useCallback((m: CadViewMode, path: string) => {
+    updateAttributes({ mode: m, path, url: buildViewerUrl(m, path) });
   }, [updateAttributes]);
 
   const isEditable = editor.isEditable;
@@ -268,18 +332,20 @@ function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
               </IconButton>
             </Tooltip>
           )}
-          {url && (
+          {externalUrl && (
             <Tooltip title="Open in CAD app">
-              <IconButton size="small" component="a" href={url} target="_blank" rel="noopener noreferrer">
+              <IconButton size="small" component="a" href={externalUrl} target="_blank" rel="noopener noreferrer">
                 <OpenInNewIcon sx={{ fontSize: 14 }} />
               </IconButton>
             </Tooltip>
           )}
         </Box>
 
-        {/* Content */}
-        {url ? (
-          <Box component="iframe" src={url} sx={{ display: 'block', width: '100%', height: 360, border: 'none' }} title={`${MODE_LABELS[mode]}: ${label}`} />
+        {/* Content — native core-cad-viewer render (no iframe). */}
+        {vfsPath ? (
+          <Box sx={{ position: 'relative', width: '100%', height: 360 }}>
+            <NativeCadViewer key={`${apiBase}:${mode}:${vfsPath}`} mode={mode} vfsPath={vfsPath} apiBase={apiBase} />
+          </Box>
         ) : (
           <Box sx={{ px: 2, py: 1.5 }}>
             <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
@@ -292,7 +358,7 @@ function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
       <ProjectPickerDialog
         open={pickerOpen}
         initialMode={mode}
-        initialUrl={url}
+        initialPath={vfsPath}
         onClose={() => setPickerOpen(false)}
         onConfirm={handleConfirm}
       />
@@ -310,6 +376,9 @@ export const CadViewEmbed = Node.create({
   addAttributes() {
     return {
       mode: { default: 'scene3d' },
+      // `path` is the vfs path (native render). `url` kept for the external
+      // "open in CAD app" link + backward-compat with pre-native embeds.
+      path: { default: '' },
       url:  { default: '' },
     };
   },
@@ -322,6 +391,7 @@ export const CadViewEmbed = Node.create({
         const el = node as HTMLElement;
         return {
           mode: el.getAttribute('data-mode') || 'scene3d',
+          path: el.getAttribute('data-path') || '',
           url:  el.getAttribute('data-url')  || '',
         };
       },
@@ -329,7 +399,12 @@ export const CadViewEmbed = Node.create({
   },
 
   renderHTML({ node }) {
-    return ['div', { 'data-type': 'cad-view-embed', 'data-mode': node.attrs.mode, 'data-url': node.attrs.url }];
+    return ['div', {
+      'data-type': 'cad-view-embed',
+      'data-mode': node.attrs.mode,
+      'data-path': node.attrs.path,
+      'data-url': node.attrs.url,
+    }];
   },
 
   addNodeView() {
@@ -338,8 +413,8 @@ export const CadViewEmbed = Node.create({
 
   addCommands() {
     return {
-      insertCadView: (mode: CadViewMode = 'scene3d', url = '') => ({ commands }) =>
-        commands.insertContent({ type: this.name, attrs: { mode, url } }),
+      insertCadView: (mode: CadViewMode = 'scene3d', path = '') => ({ commands }) =>
+        commands.insertContent({ type: this.name, attrs: { mode, path, url: path ? buildViewerUrl(mode, path) : '' } }),
     };
   },
 });

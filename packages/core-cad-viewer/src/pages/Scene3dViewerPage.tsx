@@ -37,12 +37,8 @@ export function Scene3dViewerPage({ vfsPath }: Props) {
   const label = projectName ? `${projectName} / ${file}` : file;
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-        <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary' }}>Scene 3D</Typography>
-        <Typography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: '#4fc3f7' }}>{label}</Typography>
-      </Box>
-      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#1a1a1a', color: '#fff' }}>
+      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}>
         {!sceneGraph && !error && (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2 }}>
             <CircularProgress size={32} />

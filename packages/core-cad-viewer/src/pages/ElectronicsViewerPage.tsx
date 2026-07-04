@@ -31,14 +31,8 @@ export function ElectronicsViewerPage({ vfsPath }: Props) {
     return () => { cancelled = true; };
   }, [vfsPath]);
 
-  const label = vfsPath.split('/').pop() ?? vfsPath;
-
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: '#1a1a1a', color: '#fff' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, height: 36, bgcolor: '#252526', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-        <Typography variant="caption" sx={{ fontSize: 12, color: 'text.secondary' }}>Electronics</Typography>
-        <Typography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: '#4fc3f7' }}>{label}</Typography>
-      </Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#1a1a1a', color: '#fff' }}>
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', minHeight: 0 }}>
         {error ? (
           <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

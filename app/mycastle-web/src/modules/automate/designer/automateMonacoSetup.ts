@@ -498,6 +498,28 @@ interface VariablesApi {
   getAll(): Record<string, any>;
 }
 
+interface EnvApi {
+  /**
+   * Odczytaj zmienną środowiskową dokumentu markdown (ładowaną przez komponent
+   * File lub znacznik {{env:…}}). Obsługuje ścieżki kropkowane.
+   * @param name - Nazwa zmiennej lub ścieżka, np. 'podroz' albo 'podroz.meta.nazwa'
+   * @returns Wartość (obiekt/tablica/prymityw) lub undefined jeśli nie istnieje
+   * @example
+   * const nazwa = api.env.get('podroz.meta.nazwa');
+   * const kwota = api.env.get('podroz.budzet.pozycje.0.kwota');
+   * api.log.info('Wyjazd: ' + api.env.get('podroz.meta.nazwa'));
+   */
+  get(name: string): any;
+
+  /**
+   * Pobierz wszystkie zmienne env dokumentu jako obiekt.
+   * @example
+   * const all = api.env.all();
+   * api.log.info(JSON.stringify(all));
+   */
+  all(): Record<string, any>;
+}
+
 /**
  * Logowanie wiadomości.
  * Wiadomości są widoczne w panelu execution log na dole designera.
@@ -678,6 +700,8 @@ interface SystemApi {
   data: DataApi;
   /** Zarządzanie zmiennymi flow (get, set, getAll) */
   variables: VariablesApi;
+  /** Zmienne env dokumentu markdown (File / {{env:…}}), z obsługą ścieżek (get, all) */
+  env: EnvApi;
   /** Logowanie wiadomości do execution log (info, warn, error, debug) */
   log: LogApi;
 
@@ -1152,8 +1176,85 @@ export function applyScriptDefaults(monaco: Monaco): void {
   }
 }
 
+// ─── Dynamic env completions ────────────────────────────────────────────────
+// The md editor feeds the live env store here so that typing inside
+// `api.env.get('…')` suggests the actual loaded paths (e.g. `podroz.meta.nazwa`).
+let _envProvider: () => Record<string, unknown> = () => ({});
+let _envCompletionRegistered = false;
+
+/** Called by the md editor (AutomateDocumentContext) to publish the current env. */
+export function setAutomateEnvProvider(fn: () => Record<string, unknown>): void {
+  _envProvider = fn;
+}
+
+/** Flatten an env object into dotted paths (intermediate + leaf), bounded. */
+function flattenEnvPaths(obj: Record<string, unknown>): { path: string; value: unknown }[] {
+  const out: { path: string; value: unknown }[] = [];
+  const MAX = 800, MAX_DEPTH = 6;
+  const walk = (val: unknown, prefix: string, depth: number) => {
+    if (out.length >= MAX) return;
+    if (val == null || typeof val !== 'object' || depth > MAX_DEPTH) return;
+    const entries = Array.isArray(val)
+      ? val.map((v, i) => [String(i), v] as const)
+      : Object.entries(val as Record<string, unknown>);
+    for (const [k, v] of entries) {
+      if (out.length >= MAX) return;
+      const path = prefix ? `${prefix}.${k}` : k;
+      out.push({ path, value: v });
+      if (v && typeof v === 'object') walk(v, path, depth + 1);
+    }
+  };
+  walk(obj, '', 0);
+  return out;
+}
+
+/** Short one-line preview of a value for the completion detail column. */
+function previewEnvValue(v: unknown): string {
+  if (v == null) return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === 'object') return `{${Object.keys(v as object).length}}`;
+  const s = String(v);
+  return s.length > 60 ? s.slice(0, 57) + '…' : s;
+}
+
+function registerEnvCompletions(monaco: Monaco): void {
+  if (_envCompletionRegistered) return;
+  _envCompletionRegistered = true;
+  monaco.languages.registerCompletionItemProvider(['javascript', 'typescript'], {
+    triggerCharacters: ["'", '"', '.'],
+    provideCompletionItems(model, position) {
+      const upto = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+      // inside the string argument of `…env.get('` / `…env.get("`
+      const m = upto.match(/\benv\.get\(\s*(['"])([^'"]*)$/);
+      if (!m) return { suggestions: [] };
+      const typed = m[2];
+      const env = _envProvider();
+      const paths = flattenEnvPaths(env);
+      if (!paths.length) return { suggestions: [] };
+      // Replace the whole path string typed so far (dots included).
+      const startCol = position.column - typed.length;
+      const range = new monaco.Range(position.lineNumber, startCol, position.lineNumber, position.column);
+      const isObj = (v: unknown) => v != null && typeof v === 'object';
+      const K = monaco.languages.CompletionItemKind;
+      return {
+        suggestions: paths.map(({ path, value }) => ({
+          label: path,
+          kind: isObj(value) ? K.Module : K.Field,
+          insertText: path,
+          range,
+          detail: previewEnvValue(value),
+          documentation: { value: '```json\n' + previewEnvValue(value) + '\n```' },
+          // keep original env order rather than alnum sort
+          sortText: String(paths.findIndex((p) => p.path === path)).padStart(5, '0'),
+        })),
+      };
+    },
+  });
+}
+
 export function setupAutomateMonaco(monaco: Monaco): void {
   applyScriptDefaults(monaco);
+  registerEnvCompletions(monaco);
 
   // file:// prefix is the conventional virtual URI for Monaco extra libs —
   // matches what TypeScriptIntelliSensePlugin uses, so the TS worker treats

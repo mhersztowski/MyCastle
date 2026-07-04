@@ -12,6 +12,16 @@ const REQUEST_TIMEOUT_MS = 12000;
 let currentUserId = 'default';
 export function setViewerUserId(id: string): void { currentUserId = id; }
 
+// Base origin for the CAD backend. Empty → origin-relative (viewer served BY the
+// cad-backend). Set to an absolute origin (e.g. https://cad.hersztowski.org) to
+// let the viewer run embedded elsewhere and fetch scenes cross-origin (requires
+// CORS on the cad-backend).
+let apiBaseOrigin = '';
+export function setViewerApiBase(origin: string): void {
+  apiBaseOrigin = (origin || '').replace(/\/+$/, '');
+}
+function apiOrigin(): string { return apiBaseOrigin || window.location.origin; }
+
 // ── file extensions ───────────────────────────────────────────────────────────
 
 export const CAD_EXT = '.cad.json';
@@ -58,7 +68,7 @@ function base64ToText(b64: string): string {
 }
 
 async function vfsGet<T>(op: string, path?: string): Promise<T> {
-  const url = new URL(BASE + op, window.location.origin);
+  const url = new URL(BASE + op, apiOrigin());
   if (path) url.searchParams.set('path', path);
   const res = await vfsFetch(url.toString());
   const data = await res.json() as { error?: string; code?: string } & T;
@@ -75,7 +85,7 @@ export async function readFileAt(dir: string, name: string, extension: string): 
 // ── scene3d API ─────────────────────────────────────────────────────────────
 
 function scene3dUrl(path: string): string {
-  const url = new URL(`${SCENE3D_BASE}${path}`, window.location.origin);
+  const url = new URL(`${SCENE3D_BASE}${path}`, apiOrigin());
   url.searchParams.set('user', currentUserId);
   return url.toString();
 }
