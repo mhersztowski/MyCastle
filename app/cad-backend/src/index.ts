@@ -5,6 +5,8 @@ import { dirname, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { NodeFS, VfsError } from '@mhersztowski/core';
 import { JwtService, checkAuth } from '@mhersztowski/core-backend';
 
@@ -13,6 +15,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.CAD_DATA_DIR ?? resolve(__dirname, '../data');
 const PORT = parseInt(process.env.CAD_BACKEND_PORT ?? '1897', 10);
 const PUBLIC_DIR = resolve(__dirname, '../public');
+// LDraw official parts library, served to the Lego page's LDrawLoader. Populated
+// once via POST /api/ldraw/install (downloads + extracts complete.zip → <dir>/ldraw).
+const LDRAW_DIR = process.env.LDRAW_DIR ?? resolve(DATA_DIR, 'ldraw');
+const LDRAW_ZIP_URL = process.env.LDRAW_ZIP_URL ?? 'https://library.ldraw.org/library/updates/complete.zip';
 // Allow any origin in dev; in production set CAD_CORS_ORIGIN explicitly
 const CORS_ORIGIN = process.env.CAD_CORS_ORIGIN ?? '*';
 // Shared JWT secret with mycastle-backend — set the same JWT_SECRET env var in both services
@@ -447,6 +453,223 @@ const STREAM_MIME: Record<string, string> = {
   glb: 'model/gltf-binary', gltf: 'model/gltf+json',
 };
 
+// ── LDraw parts library ──────────────────────────────────────────────────────
+// A small curated set surfaced by default in the Lego palette (part number →
+// human label). Any other part is reachable through ?search on parts.lst.
+const LDRAW_COMMON: { file: string; desc: string }[] = [
+  { file: '3005.dat', desc: 'Brick 1 x 1' },
+  { file: '3004.dat', desc: 'Brick 1 x 2' },
+  { file: '3622.dat', desc: 'Brick 1 x 3' },
+  { file: '3010.dat', desc: 'Brick 1 x 4' },
+  { file: '3009.dat', desc: 'Brick 1 x 6' },
+  { file: '3008.dat', desc: 'Brick 1 x 8' },
+  { file: '3003.dat', desc: 'Brick 2 x 2' },
+  { file: '3002.dat', desc: 'Brick 2 x 3' },
+  { file: '3001.dat', desc: 'Brick 2 x 4' },
+  { file: '2456.dat', desc: 'Brick 2 x 6' },
+  { file: '3007.dat', desc: 'Brick 2 x 8' },
+  { file: '3024.dat', desc: 'Plate 1 x 1' },
+  { file: '3023.dat', desc: 'Plate 1 x 2' },
+  { file: '3623.dat', desc: 'Plate 1 x 3' },
+  { file: '3710.dat', desc: 'Plate 1 x 4' },
+  { file: '3666.dat', desc: 'Plate 1 x 6' },
+  { file: '3460.dat', desc: 'Plate 1 x 8' },
+  { file: '3022.dat', desc: 'Plate 2 x 2' },
+  { file: '3021.dat', desc: 'Plate 2 x 3' },
+  { file: '3020.dat', desc: 'Plate 2 x 4' },
+  { file: '3795.dat', desc: 'Plate 2 x 6' },
+  { file: '3034.dat', desc: 'Plate 2 x 8' },
+  { file: '3068b.dat', desc: 'Tile 2 x 2' },
+  { file: '3069b.dat', desc: 'Tile 1 x 2' },
+  { file: '3070b.dat', desc: 'Tile 1 x 1' },
+  { file: '3062b.dat', desc: 'Round Brick 1 x 1' },
+  { file: '4073.dat', desc: 'Round Plate 1 x 1' },
+  { file: '3040.dat', desc: 'Slope 45 2 x 1' },
+  { file: '3039.dat', desc: 'Slope 45 2 x 2' },
+  { file: '3298.dat', desc: 'Slope 33 3 x 2' },
+  { file: '3665.dat', desc: 'Slope Inverted 45 2 x 1' },
+  { file: '3660.dat', desc: 'Slope Inverted 45 2 x 2' },
+  { file: '3700.dat', desc: 'Technic Brick 1 x 2 (Hole)' },
+  { file: '3701.dat', desc: 'Technic Brick 1 x 4 (Holes)' },
+  { file: '3894.dat', desc: 'Technic Brick 1 x 6 (Holes)' },
+  { file: '3937.dat', desc: 'Hinge 1 x 2 Base' },
+  { file: '3941.dat', desc: 'Brick 2 x 2 Round' },
+  { file: '4150.dat', desc: 'Tile 2 x 2 Round' },
+  { file: '6091.dat', desc: 'Brick 1 x 2 x 1.333 Curved Top' },
+];
+
+function ldrawInstalled(): boolean {
+  return fs.existsSync(resolve(LDRAW_DIR, 'parts')) && fs.existsSync(resolve(LDRAW_DIR, 'LDConfig.ldr'));
+}
+
+/** Serve a file from the LDraw library tree; 404 on miss so LDrawLoader falls
+ *  through to its next candidate location (parts/ → p/ → models/ → …). */
+function serveLdrawFile(res: http.ServerResponse, rel: string): void {
+  const clean = decodeURIComponent(rel).replace(/\\/g, '/');
+  const filePath = resolve(LDRAW_DIR, '.' + (clean.startsWith('/') ? clean : '/' + clean));
+  if (!filePath.startsWith(LDRAW_DIR) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    res.writeHead(404); res.end(); return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+  fs.createReadStream(filePath).pipe(res);
+}
+
+// ── LDraw parts index (file + description + category), built from the part files ──
+// The official complete.zip ships no parts.lst, so we derive the catalog by reading
+// each part file's title line. Built once (a few seconds), then cached to disk.
+interface LdrawEntry { file: string; desc: string; cat: string }
+let ldrawIndex: LdrawEntry[] | null = null;
+const LDRAW_INDEX_CACHE = () => resolve(DATA_DIR, 'ldraw-index.json');
+
+/** LDraw category = first word of the title, minus obsolete/alias markers. */
+function ldrawCategoryOf(desc: string): string {
+  const s = desc.replace(/^[~=_|]+/, '').trim();
+  const m = s.match(/^([A-Za-z][A-Za-z0-9-]*)/);
+  return m ? m[1] : 'Other';
+}
+
+function buildLdrawIndex(): LdrawEntry[] {
+  const dir = resolve(LDRAW_DIR, 'parts');
+  const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.dat'));
+  const buf = Buffer.alloc(256);
+  const out: LdrawEntry[] = [];
+  for (const file of files) {
+    let desc = '';
+    try {
+      const fd = fs.openSync(resolve(dir, file), 'r');
+      const n = fs.readSync(fd, buf, 0, 256, 0);
+      fs.closeSync(fd);
+      desc = buf.toString('utf8', 0, n).split(/\r?\n/)[0].replace(/^0\s+/, '').trim();
+    } catch { /* unreadable — keep empty desc */ }
+    if (!desc) desc = file;
+    out.push({ file, desc, cat: ldrawCategoryOf(desc) });
+  }
+  out.sort((a, b) => a.desc.localeCompare(b.desc));
+  return out;
+}
+
+function ldrawGetIndex(): LdrawEntry[] {
+  if (ldrawIndex) return ldrawIndex;
+  const cache = LDRAW_INDEX_CACHE();
+  try {
+    if (fs.existsSync(cache)) { ldrawIndex = JSON.parse(fs.readFileSync(cache, 'utf-8')); return ldrawIndex!; }
+  } catch { /* rebuild below */ }
+  console.log('[LDraw] budowanie indeksu części…');
+  ldrawIndex = buildLdrawIndex();
+  try { fs.writeFileSync(cache, JSON.stringify(ldrawIndex)); } catch { /* non-fatal */ }
+  console.log(`[LDraw] indeks gotowy: ${ldrawIndex.length} części`);
+  return ldrawIndex;
+}
+
+/** Categories with part counts, sorted (biggest first). */
+function ldrawCategories(): { name: string; count: number }[] {
+  const idx = ldrawGetIndex();
+  const counts = new Map<string, number>();
+  for (const e of idx) counts.set(e.cat, (counts.get(e.cat) ?? 0) + 1);
+  return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** Catalog: filter the full index by search term and/or category. No filters →
+ *  curated common set (a small default before a category is picked). */
+function ldrawCatalog(search: string, category: string, limit: number): { file: string; desc: string }[] {
+  // Normalise whitespace — LDraw titles use double spaces ("Brick  2 x  4").
+  const term = search.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!term && !category) return LDRAW_COMMON;
+  if (!ldrawInstalled()) return LDRAW_COMMON.filter((p) => !term || p.desc.toLowerCase().replace(/\s+/g, ' ').includes(term));
+  const idx = ldrawGetIndex();
+  const out: { file: string; desc: string }[] = [];
+  for (const e of idx) {
+    if (category && e.cat !== category) continue;
+    if (term && !(e.desc.toLowerCase().replace(/\s+/g, ' ').includes(term) || e.file.toLowerCase().includes(term))) continue;
+    out.push({ file: e.file, desc: e.desc });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+// Favourite parts (persisted on the backend as {file, desc} pairs).
+const LDRAW_FAV_FILE = () => resolve(DATA_DIR, 'ldraw-favorites.json');
+function ldrawFavorites(): { file: string; desc: string }[] {
+  try { const v = JSON.parse(fs.readFileSync(LDRAW_FAV_FILE(), 'utf-8')); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function saveLdrawFavorites(favs: { file: string; desc: string }[]): void {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(LDRAW_FAV_FILE(), JSON.stringify(favs));
+}
+
+let ldrawInstalling = false;
+async function ldrawInstall(res: http.ServerResponse): Promise<void> {
+  if (ldrawInstalled()) { json(res, { ok: true, installed: true, alreadyInstalled: true }); return; }
+  if (ldrawInstalling) { json(res, { error: 'Instalacja już trwa' }, 409); return; }
+  ldrawInstalling = true;
+  const zipPath = resolve(DATA_DIR, 'ldraw-complete.zip');
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log(`[LDraw] pobieranie ${LDRAW_ZIP_URL} …`);
+    const resp = await fetch(LDRAW_ZIP_URL);
+    if (!resp.ok || !resp.body) throw new Error(`download HTTP ${resp.status}`);
+    await pipeline(Readable.fromWeb(resp.body as never), fs.createWriteStream(zipPath));
+    console.log(`[LDraw] rozpakowywanie → ${DATA_DIR}`);
+    await new Promise<void>((ok, fail) => {
+      const p = spawn('unzip', ['-o', '-q', zipPath, '-d', DATA_DIR], { stdio: 'inherit' });
+      p.on('error', fail);
+      p.on('exit', (code) => (code === 0 ? ok() : fail(new Error(`unzip exited ${code}`))));
+    });
+    fs.rmSync(zipPath, { force: true });
+    if (!ldrawInstalled()) throw new Error('rozpakowano, ale brak parts/ lub LDConfig.ldr');
+    console.log('[LDraw] gotowe');
+    json(res, { ok: true, installed: true });
+  } catch (err) {
+    fs.rmSync(zipPath, { force: true });
+    console.error('[LDraw] instalacja nieudana:', err);
+    json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+  } finally {
+    ldrawInstalling = false;
+  }
+}
+
+async function handleLdraw(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const p = url.pathname;
+  if (!p.startsWith('/api/ldraw')) return false;
+  if (p === '/api/ldraw/status' && req.method === 'GET') {
+    json(res, { installed: ldrawInstalled(), installing: ldrawInstalling, base: '/api/ldraw/lib/' });
+    return true;
+  }
+  if (p === '/api/ldraw/install' && req.method === 'POST') {
+    await ldrawInstall(res);
+    return true;
+  }
+  if (p === '/api/ldraw/categories' && req.method === 'GET') {
+    if (!ldrawInstalled()) { json(res, { categories: [], installed: false }); return true; }
+    json(res, { categories: ldrawCategories(), installed: true });
+    return true;
+  }
+  if (p === '/api/ldraw/favorites' && req.method === 'GET') {
+    json(res, { favorites: ldrawFavorites() });
+    return true;
+  }
+  if (p === '/api/ldraw/favorites' && req.method === 'POST') {
+    const body = await readBody(req);
+    const favs = Array.isArray(body.favorites) ? (body.favorites as { file: string; desc: string }[]) : [];
+    saveLdrawFavorites(favs.filter((f) => f && typeof f.file === 'string'));
+    json(res, { ok: true });
+    return true;
+  }
+  if (p === '/api/ldraw/parts' && req.method === 'GET') {
+    const search = url.searchParams.get('search') ?? '';
+    const category = url.searchParams.get('category') ?? '';
+    const limit = Math.min(3000, parseInt(url.searchParams.get('limit') ?? '2000', 10) || 2000);
+    json(res, { parts: ldrawCatalog(search, category, limit), installed: ldrawInstalled() });
+    return true;
+  }
+  const libMatch = p.match(/^\/api\/ldraw\/lib\/(.+)$/);
+  if (libMatch && req.method === 'GET') {
+    serveLdrawFile(res, libMatch[1]);
+    return true;
+  }
+  return false;
+}
+
 function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   if (!fs.existsSync(PUBLIC_DIR)) return false;
   const url = new URL(req.url!, `http://localhost`);
@@ -510,6 +733,9 @@ const server = http.createServer(async (req, res) => {
     );
     return;
   }
+
+  // ── LDraw parts library (Lego page) ───────────────────────────────────────
+  if (await handleLdraw(req, res, url)) return;
 
   // ── Scene3D project API ───────────────────────────────────────────────────
   if (await handleScene3d(req, res, url.pathname)) return;

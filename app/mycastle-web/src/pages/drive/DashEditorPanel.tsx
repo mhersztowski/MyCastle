@@ -74,6 +74,8 @@ import HomeIcon from '@mui/icons-material/Home';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
 import GroupIcon from '@mui/icons-material/Group';
+import WidgetsIcon from '@mui/icons-material/Widgets';
+import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import StarIcon from '@mui/icons-material/Star';
 import NotificationsIcon from '@mui/icons-material/Notifications';
@@ -152,8 +154,10 @@ interface DashObject {
   showDetails?: boolean;
   showHeader?: boolean;
   zIndex?: number;
-  /** 'group' renders a labeled container box that moves its children with it. */
-  kind?: 'group';
+  /** 'group' renders a labeled container box that moves its children with it.
+   *  'qt-widget' is a MinisQt (core/browser/qt) widget rendered on the Render panel;
+   *  `className` holds the widget type (e.g. 'QPushButton'). */
+  kind?: 'group' | 'qt-widget';
   /** Id of the Group this object belongs to (children are tracked by parentId). */
   parentId?: string;
 }
@@ -293,6 +297,35 @@ import { useNotification } from '../../modules/notification';
 import { useAlliApi } from '../../modules/automate/engine/useAlliApi';
 import type { AutomateSystemApiInterface } from '../../modules/automate/engine/AutomateSystemApi';
 import { loadLibrary } from '../../components/mdeditor/extensions/automateLibraries';
+import { DashQtRender, type QtRenderObject } from './DashQtRender';
+import { DashJsonPanel } from './DashJsonPanel';
+
+// MinisQt (core/browser/qt) widget types offered in Scene → New → Qt Widget.
+// Each entry seeds a `qt-widget` DashObject with a sensible default size + props.
+const QT_WIDGETS: { type: string; w: number; h: number; props: Record<string, DashValue> }[] = [
+  { type: 'QPushButton',    w: 120, h: 32,  props: { text: 'Button' } },
+  { type: 'QToolButton',    w: 40,  h: 40,  props: { text: '…' } },
+  { type: 'QRadioButton',   w: 120, h: 24,  props: { text: 'Radio', checked: false } },
+  { type: 'QCheckBox',      w: 120, h: 24,  props: { text: 'CheckBox', checked: false } },
+  { type: 'QLabel',         w: 100, h: 24,  props: { text: 'Label' } },
+  { type: 'QLineEdit',      w: 160, h: 28,  props: { text: '' } },
+  { type: 'QTextEdit',      w: 200, h: 120, props: {} },
+  { type: 'QComboBox',      w: 140, h: 28,  props: {} },
+  { type: 'QSlider',        w: 160, h: 28,  props: { min: 0, max: 100, value: 50 } },
+  { type: 'QDial',          w: 80,  h: 80,  props: { min: 0, max: 100, value: 30 } },
+  { type: 'QScrollBar',     w: 160, h: 16,  props: { min: 0, max: 100, value: 0 } },
+  { type: 'QSpinBox',       w: 100, h: 28,  props: { min: 0, max: 100, value: 0 } },
+  { type: 'QDoubleSpinBox', w: 110, h: 28,  props: { min: 0, max: 100, value: 0 } },
+  { type: 'QProgressBar',   w: 180, h: 22,  props: { min: 0, max: 100, value: 60 } },
+  { type: 'QGroupBox',      w: 200, h: 140, props: { text: 'Group' } },
+  { type: 'QFrame',         w: 160, h: 100, props: {} },
+  { type: 'QListWidget',    w: 160, h: 140, props: {} },
+  { type: 'QTabWidget',     w: 220, h: 160, props: {} },
+  { type: 'QStackedWidget', w: 220, h: 160, props: {} },
+  { type: 'QScrollArea',    w: 200, h: 160, props: {} },
+  { type: 'QInkCanvas',     w: 220, h: 160, props: {} },
+  { type: 'QWidget',        w: 160, h: 120, props: {} },
+];
 
 interface ConsoleEntry {
   id: string;
@@ -3484,6 +3517,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [selectedField, setSelectedField] = useState<{ objId: string; fieldName: string } | null>(null);
   const [clipboard, setClipboard] = useState<{ objects: DashObject[] } | null>(null);
   const [newMenuAnchor, setNewMenuAnchor] = useState<HTMLElement | null>(null);
+  const [qtMenuAnchor, setQtMenuAnchor] = useState<HTMLElement | null>(null);
   const [sceneCtxMenu, setSceneCtxMenu] = useState<{ mouseX: number; mouseY: number; objId: string | null } | null>(null);
 
   const openSceneCtx = useCallback((e: React.MouseEvent, objId: string | null) => {
@@ -4147,6 +4181,25 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     setSelectedIds(new Set([group.id]));
   }, [updateScene]);
 
+  // ── Qt widgets (MinisQt / core/browser/qt) ────────────────────────────────
+  const createQtWidget = useCallback((type: string, _x: number, _y: number) => {
+    const def = QT_WIDGETS.find((w) => w.type === type) ?? { type, w: 120, h: 40, props: {} };
+    const count = sceneRef.current.objects.filter((o) => o.kind === 'qt-widget').length;
+    const base = type.replace(/^Q/, '');
+    // Spawn on the visible Render surface with a cascade — the scene-panel menu
+    // position maps through the ReactFlow viewport and can land off-canvas.
+    const sx = 40 + (count % 8) * 28;
+    const sy = 40 + (count % 6) * 28;
+    const obj: DashObject = {
+      id: makeId(), className: type, kind: 'qt-widget',
+      objectName: `${base.charAt(0).toLowerCase()}${base.slice(1)}${count}`,
+      transform: { x: sx, y: sy, rot: 0, scale: 1, width: def.w, height: def.h },
+      properties: { ...def.props },
+    };
+    updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
+    setSelectedIds(new Set([obj.id]));
+  }, [updateScene]);
+
   // Wrap the selected (non-group) objects in a new Group covering their bbox.
   const groupSelection = useCallback(() => {
     const sel = sceneRef.current.objects.filter((o) => selectedIds.has(o.id) && o.kind !== 'group');
@@ -4395,6 +4448,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         return {
           id: obj.id, type: 'group',
           position: { x: t.x, y: t.y },
+          // Give ReactFlow the node's real size so its selection/interaction box
+          // matches the visual group box — otherwise a resize grows the inner box
+          // while the cached DOM-measured bbox (and selection outline) lag behind.
+          style: { width: t.width > 0 ? t.width : 320, height: t.height > 0 ? t.height : 240 },
           selected: selectedIds.has(obj.id),
           zIndex: obj.zIndex ?? -10,   // behind regular objects
           data: {
@@ -4835,6 +4892,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const showScene = visiblePanels.includes('scene');
   const showProperties = visiblePanels.includes('properties');
   const showDataSource = visiblePanels.includes('data');
+  const showRender = visiblePanels.includes('render');
+  const showJson = visiblePanels.includes('json');
 
   if (loading) return <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><CircularProgress size={28} /></Box>;
 
@@ -4859,6 +4918,14 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           <ToggleButton value="properties" sx={{ px: 1, py: 0.25, gap: 0.5, fontSize: 11 }}>
             <TuneIcon sx={{ fontSize: 16 }} />
             Properties
+          </ToggleButton>
+          <ToggleButton value="render" sx={{ px: 1, py: 0.25, gap: 0.5, fontSize: 11 }}>
+            <WidgetsIcon sx={{ fontSize: 16 }} />
+            Render
+          </ToggleButton>
+          <ToggleButton value="json" sx={{ px: 1, py: 0.25, gap: 0.5, fontSize: 11 }}>
+            <CodeIcon sx={{ fontSize: 16 }} />
+            JSON
           </ToggleButton>
         </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />
@@ -5039,7 +5106,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                     onClick={(e) => toggleSelect(obj.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
                     onDoubleClick={() => flyTo(obj.id)}
                     onContextMenu={(e) => openSceneCtx(e, obj.id)}
-                    sx={{ py: 0.5, pr: 1, pl: (canvasMode === 'select' ? 0.5 : 1.5) + depth * 2,
+                    sx={{ minHeight: 24, py: 0.125, pr: 1, pl: (canvasMode === 'select' ? 0.5 : 1.5) + depth * 2,
                       ...(isDropTarget ? { outline: '2px solid #7c4dff', outlineOffset: '-2px', bgcolor: '#7c4dff22' } : {}),
                       '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText' }, '&.Mui-selected:hover': { bgcolor: 'primary.dark' } }}>
                     {canvasMode === 'select' && (
@@ -5053,7 +5120,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                       </Box>
                     )}
                     {isGroup && <GroupIcon sx={{ fontSize: 14, color: selectedIds.has(obj.id) ? 'inherit' : '#7c4dff', mr: 0.5, flexShrink: 0 }} />}
-                    <ListItemText
+                    <ListItemText sx={{ my: 0 }}
                       primary={<Typography component="span" sx={{ fontSize: 12 }}>
                         <strong>{obj.objectName}</strong>
                         {isGroup
@@ -5067,12 +5134,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                 {(scene.functionCalls ?? []).map((fc) => (
                   <ListItemButton key={fc.id} selected={selectedIds.has(fc.id)}
                     onClick={(e) => toggleSelect(fc.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
-                    sx={{ py: 0.5, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#7c4dff', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#6939e0' } }}>
+                    sx={{ minHeight: 24, py: 0.125, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#7c4dff', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#6939e0' } }}>
                     {canvasMode === 'select' && (
                       <Checkbox size="small" checked={selectedIds.has(fc.id)} tabIndex={-1} disableRipple
                         sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: '#fff' } }} />
                     )}
-                    <ListItemText
+                    <ListItemText sx={{ my: 0 }}
                       primary={<Typography component="span" sx={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <CodeIcon sx={{ fontSize: 13, color: selectedIds.has(fc.id) ? '#fff' : '#ce93d8' }} />
                         <strong>{fc.symbolPath.split('.').pop()}()</strong>
@@ -5084,12 +5151,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                 {(scene.vars ?? []).map((v) => (
                   <ListItemButton key={v.id} selected={selectedIds.has(v.id)}
                     onClick={(e) => toggleSelect(v.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
-                    sx={{ py: 0.5, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#388e3c', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#2e7d32' } }}>
+                    sx={{ minHeight: 24, py: 0.125, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#388e3c', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#2e7d32' } }}>
                     {canvasMode === 'select' && (
                       <Checkbox size="small" checked={selectedIds.has(v.id)} tabIndex={-1} disableRipple
                         sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: '#fff' } }} />
                     )}
-                    <ListItemText
+                    <ListItemText sx={{ my: 0 }}
                       primary={<Typography component="span" sx={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <StorageIcon sx={{ fontSize: 13, color: selectedIds.has(v.id) ? '#fff' : '#81c784' }} />
                         <strong>{v.varName}</strong>
@@ -5145,6 +5212,38 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             {!isMobile && <MiniMap />}
           </ReactFlow>
         </Box>
+
+        {/* ── Render (MinisQt widgets on a live qt-canvas + move/resize handles) ── */}
+        {showRender && (
+          <Box sx={{ flex: 1, minWidth: 0, height: '100%', borderLeft: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column' }}
+            onPointerDown={(e) => e.stopPropagation()}>
+            <DashQtRender
+              objects={scene.objects.filter((o) => o.kind === 'qt-widget').map<QtRenderObject>((o) => ({
+                id: o.id, className: o.className, transform: getTransform(o), properties: o.properties,
+              }))}
+              selectedIds={selectedIds}
+              onSelect={(id, additive) => {
+                if (!id) { setSelectedIds(new Set()); return; }
+                setSelectedIds((prev) => {
+                  if (additive) { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; }
+                  return new Set([id]);
+                });
+              }}
+              onTransform={(id, patch) => updateScene((prev) => ({
+                ...prev,
+                objects: prev.objects.map((o) => o.id === id ? { ...o, transform: { ...getTransform(o), ...patch } } : o),
+              }))}
+            />
+          </Box>
+        )}
+
+        {/* ── JSON source (drive text editor) — right-side toggleable split ── */}
+        {showJson && (
+          <Box sx={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}
+            onPointerDown={(e) => e.stopPropagation()}>
+            <DashJsonPanel scene={scene} onApply={(parsed) => updateScene(() => parsed as DashScene)} />
+          </Box>
+        )}
 
         {/* ── Properties ── */}
         {showProperties && (
@@ -5432,6 +5531,27 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         }} sx={{ fontSize: 13, gap: 1 }}>
           <GroupIcon sx={{ fontSize: 16, color: '#7c4dff' }} />Group
         </MenuItem>
+        <Divider />
+        <MenuItem onClick={(e) => setQtMenuAnchor(e.currentTarget)} sx={{ fontSize: 13, gap: 1 }}>
+          <WidgetsIcon sx={{ fontSize: 16, color: '#26c6da' }} />Qt Widget
+          <ChevronRightIcon sx={{ fontSize: 16, ml: 'auto', opacity: 0.6 }} />
+        </MenuItem>
+      </Menu>
+
+      {/* Qt widget submenu — all MinisQt widget types */}
+      <Menu anchorEl={qtMenuAnchor} open={Boolean(qtMenuAnchor)} onClose={() => setQtMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        MenuListProps={{ dense: true, sx: { maxHeight: 380 } }}>
+        {QT_WIDGETS.map((w) => (
+          <MenuItem key={w.type} sx={{ fontSize: 13, gap: 1 }}
+            onClick={() => {
+              const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 40, y: 40 };
+              createQtWidget(w.type, pos.x, pos.y);
+              setQtMenuAnchor(null); setNewMenuAnchor(null); closeSceneCtx();
+            }}>
+            <WidgetsOutlinedIcon sx={{ fontSize: 15, color: '#26c6da' }} />{w.type}
+          </MenuItem>
+        ))}
       </Menu>
 
       {/* Scene context menu */}

@@ -1,6 +1,6 @@
 import { useRef, useMemo, useEffect, useCallback, useState, MutableRefObject, useLayoutEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment, Html } from '@react-three/drei';
+import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, GizmoViewcube, Edges, PerspectiveCamera as DreiPerspectiveCamera, OrthographicCamera as DreiOrthographicCamera, Environment, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { SceneGraph } from '../scene/SceneGraph';
 import type { SceneNode } from '../scene/SceneNode';
@@ -286,6 +286,9 @@ export interface SimpleViewerProps {
   version?: number;
   showGrid?: boolean;
   selectedNodeId?: string | null;
+  /** Additional highlighted node IDs (multi-selection). A highlighted group also
+   *  highlights its descendant meshes. The gizmo still targets `selectedNodeId`. */
+  selectedNodeIds?: string[];
   transformMode?: 'translate' | 'rotate' | 'scale';
   cameraPreset?: CameraPresetName;
   onNodeSelect?: (nodeId: string | null) => void;
@@ -304,6 +307,24 @@ export interface SimpleViewerProps {
   activeCameraNodeId?: string | null;
   /** Viewport shading mode. Default 'realistic'. */
   renderMode?: SceneRenderMode;
+  /** Draw crisp edge outlines on each mesh (LeoCAD-style). Skipped for nodes under
+   *  a group flagged `metadata.floor`. Default false. */
+  edges?: boolean;
+  /** Uniform ambient/hemisphere lighting (each face lit independently) instead of
+   *  the default directional key light. Default false. */
+  flatLighting?: boolean;
+  /** Show a clickable orientation view-cube (Top/Front/Left/…) instead of the axes
+   *  gizmo. Default false. */
+  viewCube?: boolean;
+  /** Live grid snap for the translate gizmo, in world units (null/0 = off). */
+  translationSnap?: number | null;
+  /** Live angle snap for the rotate gizmo, in radians (null/0 = off). */
+  rotationSnap?: number | null;
+  /** Extra THREE objects rendered as-is inside the scene (e.g. a line-grid floor).
+   *  Not selectable / not part of the scene graph. */
+  extraObjects?: THREE.Object3D | THREE.Object3D[];
+  /** Draw a wireframe bounding box around the selected node(s). Default false. */
+  showBoundingBox?: boolean;
   /** Scene-level settings: background, environment, fog. */
   sceneSettings?: SceneSettings;
   /** Called when the user clicks on the Y=0 floor plane (for template placement). wx/wz = world X/Z coordinates. */
@@ -327,12 +348,14 @@ function SelectableMesh({
   node,
   meshNode,
   isSelected,  renderMode = 'realistic',
+  edges = false,
 }: {
   node: SceneNode;
   meshNode: MeshNode;
   isSelected: boolean;
   onSelect?: (nodeId: string) => void;
   renderMode?: SceneRenderMode;
+  edges?: boolean;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
 
@@ -363,24 +386,77 @@ function SelectableMesh({
       {(renderMode === 'realistic' || renderMode == null) && (
         <RealisticMaterial mat={meshNode.material} isSelected={isSelected} />
       )}
+      {edges && <Edges threshold={20} color={isSelected ? '#4fc3f7' : '#0b0b0b'} />}
     </mesh>
   );
 }
 
 
+/** Wireframe bounding box(es) around the selected node(s), kept in sync each frame
+ *  (so it follows a gizmo drag). Resolves objects by node id from the live scene. */
+function SelectionBoxes({ ids, color = 0x4fc3f7 }: { ids: string[]; color?: number }) {
+  const { scene } = useThree();
+  const groupRef = useRef<THREE.Group>(null);
+  const helpersRef = useRef<Map<string, THREE.BoxHelper>>(new Map());
+  const idsKey = ids.join(',');
+
+  useEffect(() => {
+    const g = groupRef.current;
+    if (!g) return;
+    const map = helpersRef.current;
+    for (const [id, h] of map) {
+      if (!ids.includes(id)) { g.remove(h); h.geometry.dispose(); (h.material as THREE.Material).dispose(); map.delete(id); }
+    }
+    for (const id of ids) {
+      if (map.has(id)) continue;
+      const obj = scene.getObjectByName(id);
+      if (!obj) continue;
+      const h = new THREE.BoxHelper(obj, color);
+      (h.material as THREE.LineBasicMaterial).depthTest = false;
+      h.renderOrder = 999;
+      map.set(id, h);
+      g.add(h);
+    }
+    return () => { /* helpers cleaned on id change above / unmount below */ };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey, scene, color]);
+
+  // Dispose everything on unmount.
+  useEffect(() => () => {
+    const g = groupRef.current;
+    for (const h of helpersRef.current.values()) { g?.remove(h); h.geometry.dispose(); (h.material as THREE.Material).dispose(); }
+    helpersRef.current.clear();
+  }, []);
+
+  useFrame(() => {
+    for (const [id, h] of helpersRef.current) {
+      const obj = scene.getObjectByName(id);
+      if (obj) h.setFromObject(obj);
+    }
+  });
+
+  return <group ref={groupRef} />;
+}
+
 function GizmoControls({
   sceneGraph,
   selectedNodeId,
+  version,
   transformMode,
   onObjectChange,
   onTransformEnd,
   isDraggingGizmoRef,
   addLog,
   gizmoSize = 0.7,
+  translationSnap = null,
+  rotationSnap = null,
 }: {
   sceneGraph: SceneGraph;
   selectedNodeId: string;
+  version?: number;
   transformMode: 'translate' | 'rotate' | 'scale';
+  translationSnap?: number | null;
+  rotationSnap?: number | null;
   onObjectChange?: (obj: THREE.Object3D) => void;
   onTransformEnd?: (nodeId: string, mode: 'translate' | 'rotate' | 'scale', value: [number, number, number]) => void;
   isDraggingGizmoRef?: MutableRefObject<boolean>;
@@ -398,14 +474,18 @@ function GizmoControls({
   useEffect(() => {
     let raf = 0;
     const resolve = () => {
+      // Prefer the object actually in the scene (getObjectByName) — a node's cached
+      // _threeObject can be stale/detached after a reparent, which makes
+      // TransformControls throw "must be part of the scene graph" every frame.
       const node = sceneGraph.findNode(selectedNodeId);
-      const obj = (node?._threeObject as THREE.Object3D | null) ?? scene.getObjectByName(selectedNodeId) ?? null;
-      setTargetObject(obj);
+      const obj = scene.getObjectByName(selectedNodeId) ?? (node?._threeObject as THREE.Object3D | null) ?? null;
+      setTargetObject((prev) => (prev === obj ? prev : obj));
       if (!obj) raf = requestAnimationFrame(resolve);
     };
     resolve();
     return () => cancelAnimationFrame(raf);
-  }, [scene, sceneGraph, selectedNodeId]);
+    // Re-resolve on scene changes (version) too, so reparents don't leave a stale target.
+  }, [scene, sceneGraph, selectedNodeId, version]);
 
   const handleDragEnd = useCallback(() => {
     if (!targetObject) return;
@@ -455,6 +535,19 @@ function GizmoControls({
       controls.mode = transformMode;
     }
   }, [transformMode]);
+
+  // Live grid/angle snapping while dragging the gizmo (LeoCAD-style). Re-applied
+  // when the gizmo re-attaches to a new target.
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const t = translationSnap && translationSnap > 0 ? translationSnap : null;
+    const r = rotationSnap && rotationSnap > 0 ? rotationSnap : null;
+    if (typeof controls.setTranslationSnap === 'function') controls.setTranslationSnap(t);
+    else controls.translationSnap = t;
+    if (typeof controls.setRotationSnap === 'function') controls.setRotationSnap(r);
+    else controls.rotationSnap = r;
+  }, [translationSnap, rotationSnap, targetObject, transformMode]);
 
   useEffect(() => {
     const controls = controlsRef.current;
@@ -1422,34 +1515,45 @@ function GeometryAngleObj({
 
 type RenderCtx = {
   selectedNodeId?: string | null;
+  selectedIds?: Set<string>;
+  forceSelected?: boolean;
   onNodeSelect?: (id: string) => void;
   renderMode?: SceneRenderMode;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  edges?: boolean;
 };
 
 function renderSceneNode(node: SceneNode, ctx: RenderCtx): ReactElement | null {
   if (!node.visible) return null;
 
   if (node.type === 'group') {
+    const grpSel = ctx.selectedIds?.has(node.id) ?? false;
+    let childCtx = ctx;
+    // A "floor" group (e.g. the Lego baseplate) opts its subtree out of edge outlines.
+    if (node.metadata?.floor) childCtx = { ...childCtx, edges: false };
+    // A highlighted group propagates the highlight to its descendant meshes.
+    if (grpSel) childCtx = { ...childCtx, forceSelected: true };
     const children = node.children
-      .map(child => renderSceneNode(child, ctx))
+      .map(child => renderSceneNode(child, childCtx))
       .filter((el): el is ReactElement => el !== null);
     return (
-      <SceneGroup key={node.id} node={node} isSelected={node.id === ctx.selectedNodeId} onSelect={ctx.onNodeSelect}>
+      <SceneGroup key={node.id} node={node} isSelected={node.id === ctx.selectedNodeId || grpSel} onSelect={ctx.onNodeSelect}>
         {children}
       </SceneGroup>
     );
   }
 
   if (node.type === 'mesh') {
+    const sel = node.id === ctx.selectedNodeId || (ctx.forceSelected ?? false) || (ctx.selectedIds?.has(node.id) ?? false);
     return (
       <SelectableMesh
         key={node.id}
         node={node}
         meshNode={node as unknown as MeshNode}
-        isSelected={node.id === ctx.selectedNodeId}
+        isSelected={sel}
         onSelect={ctx.onNodeSelect}
         renderMode={ctx.renderMode}
+        edges={ctx.edges}
       />
     );
   }
@@ -1517,25 +1621,31 @@ function SceneRenderer({
   sceneGraph,
   version,
   selectedNodeId,
+  selectedNodeIds,
   onNodeSelect,
   renderMode = 'realistic',
   resolveAudioSrc,
+  edges = false,
 }: {
   sceneGraph?: SceneGraph;
   version?: number;
   selectedNodeId?: string | null;
+  selectedNodeIds?: string[];
   onNodeSelect?: (nodeId: string) => void;
   renderMode?: SceneRenderMode;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  edges?: boolean;
 }) {
+  const idsKey = (selectedNodeIds ?? []).join(',');
   const objects = useMemo(() => {
     if (!sceneGraph) return [];
-    const ctx: RenderCtx = { selectedNodeId, onNodeSelect, renderMode, resolveAudioSrc };
+    const selectedIds = selectedNodeIds && selectedNodeIds.length ? new Set(selectedNodeIds) : undefined;
+    const ctx: RenderCtx = { selectedNodeId, selectedIds, onNodeSelect, renderMode, resolveAudioSrc, edges };
     return sceneGraph.root.children
       .map(child => renderSceneNode(child, ctx))
       .filter((el): el is ReactElement => el !== null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneGraph, version, selectedNodeId, onNodeSelect, renderMode, resolveAudioSrc]);
+  }, [sceneGraph, version, selectedNodeId, idsKey, onNodeSelect, renderMode, resolveAudioSrc, edges]);
 
   return <group>{objects}</group>;
 }
@@ -1661,7 +1771,7 @@ function FitCameraEffect({
     const box = new THREE.Box3();
     let hasMesh = false;
     scene.traverse(obj => {
-      if (obj instanceof THREE.Mesh && !obj.userData.__geoHelper) {
+      if ((obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.Line) && !obj.userData.__geoHelper) {
         // ensure world matrices are up to date
         obj.updateWorldMatrix(true, false);
         obj.geometry.computeBoundingBox();
@@ -1908,6 +2018,7 @@ function SceneContent({
   version,
   showGrid,
   selectedNodeId,
+  selectedNodeIds,
   transformMode,
   cameraPreset = 'standard',
   onNodeSelect,
@@ -1916,6 +2027,13 @@ function SceneContent({
   showAxesGizmo,
   activeCameraNodeId,
   renderMode = 'realistic',
+  edges = false,
+  flatLighting = false,
+  viewCube = false,
+  translationSnap = null,
+  rotationSnap = null,
+  extraObjects,
+  showBoundingBox = false,
   sceneSettings,
   onObjectChange,
   onTransformEnd,
@@ -1931,6 +2049,7 @@ function SceneContent({
   version?: number;
   showGrid: boolean;
   selectedNodeId?: string | null;
+  selectedNodeIds?: string[];
   transformMode: 'translate' | 'rotate' | 'scale';
   cameraPreset?: CameraPresetName;
   onNodeSelect?: (nodeId: string | null) => void;
@@ -1939,6 +2058,13 @@ function SceneContent({
   showAxesGizmo?: boolean;
   activeCameraNodeId?: string | null;
   renderMode?: SceneRenderMode;
+  edges?: boolean;
+  flatLighting?: boolean;
+  viewCube?: boolean;
+  translationSnap?: number | null;
+  rotationSnap?: number | null;
+  extraObjects?: THREE.Object3D | THREE.Object3D[];
+  showBoundingBox?: boolean;
   sceneSettings?: SceneSettings;
   onObjectChange?: (obj: THREE.Object3D) => void;
   onTransformEnd?: (nodeId: string, mode: 'translate' | 'rotate' | 'scale', value: [number, number, number]) => void;
@@ -1987,16 +2113,34 @@ function SceneContent({
         <Environment preset={sceneSettings.environmentPreset as any} />
       )}
       <AudioListenerEffect />
-      <ambientLight intensity={0.3} />
-      <directionalLight position={[10, 10, 5]} intensity={0.7} />
+      {flatLighting ? (
+        // Uniform lighting: every face lit independently of view direction (LeoCAD-like).
+        <>
+          <ambientLight intensity={0.9} />
+          <hemisphereLight args={['#ffffff', '#8a8a8a', 0.6]} />
+        </>
+      ) : (
+        <>
+          <ambientLight intensity={0.3} />
+          <directionalLight position={[10, 10, 5]} intensity={0.7} />
+        </>
+      )}
       {showGrid && <gridHelper args={[20, 20, '#444444', '#333333']} />}
+      {(Array.isArray(extraObjects) ? extraObjects : extraObjects ? [extraObjects] : []).map((o) => (
+        <primitive key={o.uuid} object={o} />
+      ))}
+      {showBoundingBox && (selectedNodeId || (selectedNodeIds?.length ?? 0) > 0) && (
+        <SelectionBoxes ids={Array.from(new Set([...(selectedNodeId ? [selectedNodeId] : []), ...(selectedNodeIds ?? [])]))} />
+      )}
       <SceneRenderer
         sceneGraph={sceneGraph}
         version={version}
         selectedNodeId={selectedNodeId}
+        selectedNodeIds={selectedNodeIds}
         onNodeSelect={onNodeSelect}
         renderMode={renderMode}
         resolveAudioSrc={resolveAudioSrc}
+        edges={edges}
       />
       <GpuPicker onPick={onNodeSelect} />
       {pointEditActive && sceneGraph && geoPointEdit ? (
@@ -2012,7 +2156,10 @@ function SceneContent({
         <GizmoControls
           sceneGraph={sceneGraph}
           selectedNodeId={selectedNodeId}
+          version={version}
           transformMode={transformMode}
+          translationSnap={translationSnap}
+          rotationSnap={rotationSnap}
           onObjectChange={onObjectChange}
           onTransformEnd={onTransformEnd}
           isDraggingGizmoRef={isDraggingGizmoRef}
@@ -2023,14 +2170,22 @@ function SceneContent({
       <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
       <Scene3dDebugProbe />
       {onPlaneClick && <PlacementPlane onPlaneClick={onPlaneClick} />}
-      {showAxesGizmo !== false && (
+      {viewCube ? (
+        <GizmoHelper alignment="top-right" margin={[68, 68]}>
+          <GizmoViewcube
+            font="16px Inter, sans-serif"
+            faces={['Right', 'Left', 'Top', 'Bottom', 'Front', 'Back']}
+            color="#3a3f45" hoverColor="#4fc3f7" textColor="#e8e8e8" strokeColor="#22262b"
+          />
+        </GizmoHelper>
+      ) : showAxesGizmo !== false ? (
         <GizmoHelper alignment="bottom-left" margin={[72, 72]}>
           <GizmoViewport
             axisColors={['#e05555', '#55cc55', '#4488ff']}
             labelColor="white"
           />
         </GizmoHelper>
-      )}
+      ) : null}
     </>
   );
 }
@@ -2040,6 +2195,7 @@ export function SimpleViewer({
   version,
   showGrid = true,
   selectedNodeId,
+  selectedNodeIds,
   transformMode = 'translate',
   cameraPreset = 'standard',
   onNodeSelect,
@@ -2053,6 +2209,13 @@ export function SimpleViewer({
   showAxesGizmo,
   activeCameraNodeId,
   renderMode = 'realistic',
+  edges = false,
+  flatLighting = false,
+  viewCube = false,
+  translationSnap = null,
+  rotationSnap = null,
+  extraObjects,
+  showBoundingBox = false,
   sceneSettings,
   onPlaneClick,
   debugLog = false,
@@ -2271,6 +2434,7 @@ export function SimpleViewer({
           version={version}
           showGrid={showGrid}
           selectedNodeId={selectedNodeId}
+          selectedNodeIds={selectedNodeIds}
           transformMode={transformMode}
           cameraPreset={cameraPreset}
           onNodeSelect={onNodeSelect}
@@ -2279,6 +2443,13 @@ export function SimpleViewer({
           showAxesGizmo={showAxesGizmo}
           activeCameraNodeId={activeCameraNodeId}
           renderMode={renderMode}
+          edges={edges}
+          flatLighting={flatLighting}
+          viewCube={viewCube}
+          translationSnap={translationSnap}
+          rotationSnap={rotationSnap}
+          extraObjects={extraObjects}
+          showBoundingBox={showBoundingBox}
           sceneSettings={sceneSettings}
           onObjectChange={handleLiveTransform}
           onTransformEnd={onGizmoTransformEnd}

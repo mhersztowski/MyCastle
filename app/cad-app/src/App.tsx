@@ -31,6 +31,7 @@ import { FileOpsProvider } from './fileops/FileOpsContext';
 import { LayerPanel } from './components/LayerPanel';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Scene3DView } from './components/Scene3DView';
+import { LegoView } from './components/LegoView';
 import { StatusBar } from './components/StatusBar';
 import { ActionBar } from './components/ActionBar';
 import { Toolbar } from './components/Toolbar';
@@ -55,7 +56,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'map' | 'audio' | 'repository' | 'notes';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'map' | 'audio' | 'repository' | 'notes';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -346,6 +347,12 @@ export default function App() {
             iconPosition="start"
           />
           <Tab
+            value="lego"
+            label="Lego"
+            icon={<ViewInArIcon sx={{ fontSize: 16, color: '#f2cd37' }} />}
+            iconPosition="start"
+          />
+          <Tab
             value="electronics"
             label="Electronics"
             icon={<ElectricalServicesIcon sx={{ fontSize: 16 }} />}
@@ -572,6 +579,11 @@ export default function App() {
         </Box>
         <TemplatesPanel mode="scene3d" templates={activeTemplates.filter(t => t.mode === 'scene3d')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
         <FileSystemPanel rootPath={`/users/${getCurrentUserId()}`} title="Project Files" />
+      </Box>
+
+      {/* Lego panel — parametric Lego-set designer (scene tree + viewport + properties) */}
+      <Box sx={{ flex: 1, display: mode === 'lego' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        {mode === 'lego' && <LegoView />}
       </Box>
 
       {/* Electronics panel */}
