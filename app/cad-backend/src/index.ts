@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import yauzl from 'yauzl';
 import { NodeFS, VfsError } from '@mhersztowski/core';
 import { JwtService, checkAuth } from '@mhersztowski/core-backend';
 
@@ -597,6 +598,33 @@ function saveLdrawFavorites(favs: { file: string; desc: string }[]): void {
   fs.writeFileSync(LDRAW_FAV_FILE(), JSON.stringify(favs));
 }
 
+/** Extract a zip in pure JS (yauzl) — no system `unzip` needed (the production
+ *  node:20-slim image has none). Streams entries one by one to keep memory low. */
+function extractZip(zipPath: string, destDir: string): Promise<void> {
+  const root = resolve(destDir);
+  return new Promise((ok, fail) => {
+    yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
+      if (err || !zip) return fail(err ?? new Error('cannot open zip'));
+      zip.on('error', fail);
+      zip.on('end', () => ok());
+      zip.on('entry', (entry) => {
+        const outPath = resolve(root, entry.fileName);
+        if (!outPath.startsWith(root)) { zip.readEntry(); return; } // zip-slip guard
+        if (entry.fileName.endsWith('/')) { fs.mkdirSync(outPath, { recursive: true }); zip.readEntry(); return; }
+        fs.mkdirSync(dirname(outPath), { recursive: true });
+        zip.openReadStream(entry, (e, rs) => {
+          if (e || !rs) return fail(e ?? new Error('cannot read zip entry'));
+          const ws = fs.createWriteStream(outPath);
+          rs.on('error', fail); ws.on('error', fail);
+          ws.on('close', () => zip.readEntry());
+          rs.pipe(ws);
+        });
+      });
+      zip.readEntry();
+    });
+  });
+}
+
 let ldrawInstalling = false;
 async function ldrawInstall(res: http.ServerResponse): Promise<void> {
   if (ldrawInstalled()) { json(res, { ok: true, installed: true, alreadyInstalled: true }); return; }
@@ -610,11 +638,7 @@ async function ldrawInstall(res: http.ServerResponse): Promise<void> {
     if (!resp.ok || !resp.body) throw new Error(`download HTTP ${resp.status}`);
     await pipeline(Readable.fromWeb(resp.body as never), fs.createWriteStream(zipPath));
     console.log(`[LDraw] rozpakowywanie → ${DATA_DIR}`);
-    await new Promise<void>((ok, fail) => {
-      const p = spawn('unzip', ['-o', '-q', zipPath, '-d', DATA_DIR], { stdio: 'inherit' });
-      p.on('error', fail);
-      p.on('exit', (code) => (code === 0 ? ok() : fail(new Error(`unzip exited ${code}`))));
-    });
+    await extractZip(zipPath, DATA_DIR);
     fs.rmSync(zipPath, { force: true });
     if (!ldrawInstalled()) throw new Error('rozpakowano, ale brak parts/ lub LDConfig.ldr');
     console.log('[LDraw] gotowe');
