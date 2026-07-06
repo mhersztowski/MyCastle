@@ -27,6 +27,33 @@ const TYPE_DEFAULTS: Record<MapNodeType, Partial<MapNode>> = {
   route: { color: '#42a5f5', weight: 4 },
 }
 
+/** Current map viewport, used to spawn new objects where the user is looking
+ *  (centre + degree spans of the visible area) instead of a fixed Warsaw default. */
+export type ViewAt = { lat: number; lng: number; latSpan: number; lngSpan: number }
+
+/** Geometry positioned at the current view centre, sized relative to the visible
+ *  area so a fresh shape is always on-screen and reasonably sized at any zoom. */
+function geomAt(type: MapNodeType, at: ViewAt): Partial<MapNode> {
+  const { lat, lng, latSpan, lngSpan } = at
+  const dh = latSpan * 0.15
+  const dw = lngSpan * 0.15
+  switch (type) {
+    case 'marker':
+      return { lat, lng }
+    case 'circle': {
+      // ~metres per degree latitude ≈ 111320; make the circle span ~30% of the view.
+      const radius = Math.max(20, Math.round(latSpan * 111320 * 0.15))
+      return { lat, lng, radius }
+    }
+    case 'polygon':
+      return { positions: [[lat + dh, lng - dw], [lat + dh, lng + dw], [lat - dh, lng + dw], [lat - dh, lng - dw]] }
+    case 'polyline':
+      return { positions: [[lat - dh, lng - dw], [lat + dh, lng + dw]] }
+    default:
+      return {}
+  }
+}
+
 const INITIAL_NODES: MapNode[] = [
   { id: 'osm', name: 'OpenStreetMap', type: 'tile-layer', visible: true, ...TYPE_DEFAULTS['tile-layer'] },
   { id: 'root-group', name: 'Layers', type: 'group', visible: true, children: [] },
@@ -126,7 +153,7 @@ export function useMapLayers() {
     }
   }, [])
 
-  const addLayer = useCallback((type: MapNodeType, parentId?: string | null) => {
+  const addLayer = useCallback((type: MapNodeType, parentId?: string | null, at?: ViewAt) => {
     const baseName = type.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
     const node: MapNode = {
       id: uid(),
@@ -134,6 +161,8 @@ export function useMapLayers() {
       type,
       visible: true,
       ...TYPE_DEFAULTS[type],
+      // Spawn geometry at the current camera view instead of the fixed default.
+      ...(at ? geomAt(type, at) : {}),
     }
     setNodes(prev => parentId ? insertUnder(prev, parentId, node) : [...prev, node])
     setSelectedId(node.id)

@@ -30,7 +30,7 @@ import { renderMapNode } from '../map/renderMapNode'
 import { fetchRoute, TRAVEL_MODES, formatDistance, formatDuration } from '../map/routing'
 import { useRegisterFileOps } from '../fileops/FileOpsContext'
 import { captureLeafletCanvas, exportCanvasPng, exportCanvasSvg, exportCanvasPdf } from '../io/exportGraphics'
-import type { MapNode, RoutePoint, TravelMode } from '../map/types'
+import type { MapNode, MapNodeType, RoutePoint, TravelMode } from '../map/types'
 
 // ── serialization ─────────────────────────────────────────────────────────────
 
@@ -138,6 +138,21 @@ export function MapView() {
     const bounds = L.latLngBounds(pts)
     if (bounds.isValid()) map.flyToBounds(bounds.pad(0.2), { animate: true, duration: 0.5 })
   }, [])
+
+  // Add a layer at the current camera view (centre + visible span) so new objects
+  // spawn where the user is looking instead of at a fixed default location.
+  const handleAdd = useCallback((type: MapNodeType, parentId?: string | null) => {
+    const map = mapRef.current
+    if (!map) return addLayer(type, parentId)
+    const c = map.getCenter()
+    const b = map.getBounds()
+    return addLayer(type, parentId, {
+      lat: c.lat,
+      lng: c.lng,
+      latSpan: b.getNorth() - b.getSouth(),
+      lngSpan: b.getEast() - b.getWest(),
+    })
+  }, [addLayer])
 
   // Hierarchy activation: select the node AND zoom the map to it.
   const handleHierarchySelect = useCallback((id: string, multi: boolean) => {
@@ -382,7 +397,7 @@ export function MapView() {
         onToggleVisibility={toggleVisibility}
         onRename={renameLayer}
         onDelete={deleteLayer}
-        onAdd={addLayer}
+        onAdd={handleAdd}
         onAddRoute={openRouteDialog}
         onSplit={handleSplitOpen}
         onMove={moveNode}

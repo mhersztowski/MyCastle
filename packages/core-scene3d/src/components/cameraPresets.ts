@@ -30,10 +30,13 @@ export const CAMERA_PRESETS: Record<CameraPresetName, CameraPresetConfig> = {
     },
   },
   cad: {
+    // LEFT rotates so single-pointer devices (pen / stylus on mobile, which the
+    // browser routes through the mouse-LEFT path) can orbit the camera; a click
+    // still selects (GpuPicker ignores drags). Right also rotates, middle pans.
     label: 'CAD',
-    description: 'Middle=Pan, Right=Rotate',
+    description: 'Left/Right=Rotate, Middle=Pan',
     mouseButtons: {
-      LEFT: null,
+      LEFT: MOUSE.ROTATE,
       MIDDLE: MOUSE.PAN,
       RIGHT: MOUSE.ROTATE,
     },

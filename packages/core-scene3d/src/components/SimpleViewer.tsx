@@ -301,6 +301,9 @@ export interface SimpleViewerProps {
   autoFit?: boolean;
   /** Pass a ref; its `.current` will be set to a `fitScene()` function for imperative triggering. */
   fitSceneRef?: MutableRefObject<(() => void) | null>;
+  /** Pass a ref; its `.current` will be set to a function returning the world-space
+   *  bounding-box size [x,y,z] (scene units) of a node's subtree, or null if not found. */
+  boundsRef?: MutableRefObject<((nodeId: string) => [number, number, number] | null) | null>;
   /** Show orientation gizmo in the bottom-left corner. Default true. */
   showAxesGizmo?: boolean;
   /** ID of a scene CameraNode to use as the viewport camera; null = editor camera. */
@@ -1760,12 +1763,41 @@ function FitCameraEffect({
   sceneGraph,
   autoFit,
   fitSceneRef,
+  boundsRef,
 }: {
   sceneGraph?: SceneGraph;
   autoFit?: boolean;
   fitSceneRef?: MutableRefObject<(() => void) | null>;
+  boundsRef?: MutableRefObject<((nodeId: string) => [number, number, number] | null) | null>;
 }) {
   const { camera, controls, scene } = useThree();
+
+  // World-space bounding-box size of a node's subtree, resolved from the live
+  // three object (accurate for baked/custom LDraw meshes too). __geoHelper meshes
+  // are transient editing proxies and must not inflate the box.
+  const getBounds = useCallback((nodeId: string): [number, number, number] | null => {
+    const obj = scene.getObjectByName(nodeId);
+    if (!obj) return null;
+    obj.updateWorldMatrix(true, true);
+    const box = new THREE.Box3();
+    obj.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      // Skip helpers and invisible meshes — notably a group's invisible origin
+      // hit-target sphere, which would otherwise stretch the box to the pivot.
+      if (!mesh.isMesh || !mesh.visible || mesh.userData?.__geoHelper) return;
+      mesh.geometry.computeBoundingBox();
+      if (mesh.geometry.boundingBox) box.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+    });
+    if (box.isEmpty()) return null;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    return [size.x, size.y, size.z];
+  }, [scene]);
+
+  useEffect(() => {
+    if (boundsRef) boundsRef.current = getBounds;
+    return () => { if (boundsRef) boundsRef.current = null; };
+  }, [boundsRef, getBounds]);
 
   const doFit = useCallback(() => {
     const box = new THREE.Box3();
@@ -2024,6 +2056,7 @@ function SceneContent({
   onNodeSelect,
   autoFit,
   fitSceneRef,
+  boundsRef,
   showAxesGizmo,
   activeCameraNodeId,
   renderMode = 'realistic',
@@ -2055,6 +2088,7 @@ function SceneContent({
   onNodeSelect?: (nodeId: string | null) => void;
   autoFit?: boolean;
   fitSceneRef?: MutableRefObject<(() => void) | null>;
+  boundsRef?: MutableRefObject<((nodeId: string) => [number, number, number] | null) | null>;
   showAxesGizmo?: boolean;
   activeCameraNodeId?: string | null;
   renderMode?: SceneRenderMode;
@@ -2167,7 +2201,7 @@ function SceneContent({
           gizmoSize={gizmoSize}
         />
       )}
-      <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} />
+      <FitCameraEffect sceneGraph={sceneGraph} autoFit={autoFit} fitSceneRef={fitSceneRef} boundsRef={boundsRef} />
       <Scene3dDebugProbe />
       {onPlaneClick && <PlacementPlane onPlaneClick={onPlaneClick} />}
       {viewCube ? (
@@ -2206,6 +2240,7 @@ export function SimpleViewer({
   style,
   autoFit,
   fitSceneRef,
+  boundsRef,
   showAxesGizmo,
   activeCameraNodeId,
   renderMode = 'realistic',
@@ -2279,8 +2314,21 @@ export function SimpleViewer({
   const [glInstance, setGlInstance] = useState<THREE.WebGLRenderer | null>(null);
   // Pen hover events are logged only to the on-screen overlay (not sent to server) to avoid flooding the buffer
   const hoverBlockCountRef = useRef(0);
+  // Pointers currently in contact (between pointerdown and pointerup/cancel).
+  // A pointer in this set is dragging and its moves must NEVER be filtered.
+  const activePointerDownRef = useRef<Set<number>>(new Set());
   const filterPenHover = useCallback((e: PointerEvent) => {
-    if (e.pointerType === 'pen' && e.buttons === 0 && !isDraggingGizmoRef.current) {
+    // Never touch a pointer that is currently down — that's a drag, not hover.
+    // This is the authoritative guard; buttons/pressure are only a fallback for
+    // the very first move that may arrive before our pointerdown tracker, since
+    // some digitizers report a tip-down drag as buttons===0 AND pressure===0.
+    if (activePointerDownRef.current.has(e.pointerId)) return;
+    // True hover = tip NOT touching the surface. Some digitizers report a
+    // tip-down drag as buttons===0 with pressure>0 (buttons is unreliable for
+    // pens), so requiring pressure===0 as well is essential — otherwise this
+    // filter stopImmediatePropagation()s every move during a pen drag and
+    // OrbitControls never sees it (camera rotation silently dies with a pen).
+    if (e.pointerType === 'pen' && e.buttons === 0 && e.pressure === 0 && !isDraggingGizmoRef.current) {
       hoverBlockCountRef.current++;
       // Only show every 20th hover-blocked event in the overlay, never send to server
       if (debugLog && hoverBlockCountRef.current % 20 === 1) {
@@ -2379,6 +2427,29 @@ export function SimpleViewer({
     };
   }, [glInstance, debugLog, addLog]);
 
+  // Track in-contact pointers so filterPenHover can tell a drag from a hover
+  // regardless of unreliable buttons/pressure reporting. Capture phase + set
+  // updated on pointerdown guarantees the flag is live before the first move.
+  useEffect(() => {
+    if (!glInstance) return;
+    const el = glInstance.domElement;
+    const set = activePointerDownRef.current;
+    const onDown = (e: PointerEvent) => { set.add(e.pointerId); };
+    const onUp = (e: PointerEvent) => { set.delete(e.pointerId); };
+    el.addEventListener('pointerdown', onDown, { capture: true });
+    el.addEventListener('pointerup', onUp, { capture: true });
+    el.addEventListener('pointercancel', onUp, { capture: true });
+    window.addEventListener('pointerup', onUp, { capture: true });
+    window.addEventListener('pointercancel', onUp, { capture: true });
+    return () => {
+      el.removeEventListener('pointerdown', onDown, { capture: true });
+      el.removeEventListener('pointerup', onUp, { capture: true });
+      el.removeEventListener('pointercancel', onUp, { capture: true });
+      window.removeEventListener('pointerup', onUp, { capture: true });
+      window.removeEventListener('pointercancel', onUp, { capture: true });
+    };
+  }, [glInstance]);
+
   useEffect(() => {
     if (!glInstance) return;
     const el = glInstance.domElement;
@@ -2445,6 +2516,7 @@ export function SimpleViewer({
           onNodeSelect={onNodeSelect}
           autoFit={autoFit}
           fitSceneRef={fitSceneRef}
+          boundsRef={boundsRef}
           showAxesGizmo={showAxesGizmo}
           activeCameraNodeId={activeCameraNodeId}
           renderMode={renderMode}

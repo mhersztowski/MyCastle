@@ -24,6 +24,7 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import CheckIcon from '@mui/icons-material/Check';
 import Rotate90DegreesCwIcon from '@mui/icons-material/Rotate90DegreesCw';
 import HighlightAltIcon from '@mui/icons-material/HighlightAlt';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -49,6 +50,10 @@ const LEGO_EXT = '.lego.json';
 // Lego units (scene = 1 unit per stud pitch). 1 plate = "flat" height.
 const U = 1;          // stud pitch (X/Z)
 const PLATE = 0.4;    // one plate height
+// Real-world scale: 1 stud pitch = 8 mm = 0.8 cm. Used to report brick/group
+// bounding-box dimensions in centimetres.
+const CM_PER_UNIT = 0.8;
+const toCm = (u: number) => u * CM_PER_UNIT;
 
 const COLORS = ['#d01012', '#0055bf', '#f2cd37', '#237841', '#ffffff', '#1b2a34', '#a0a5a9', '#fe8a18', '#901f76', '#582a12'];
 
@@ -138,6 +143,11 @@ export function LegoView() {
   // One-shot "frame the baseplate" on mount (and after loading a file) — we avoid
   // SimpleViewer's autoFit because it re-frames on every brick add/remove.
   const fitRef = useRef<(() => void) | null>(null);
+  // Imperative handle to read the selected node's world bounding-box size (units).
+  const boundsRef = useRef<((nodeId: string) => [number, number, number] | null) | null>(null);
+  // Selected brick/group size in cm (width X, height Y, depth Z), recomputed after
+  // selection/transform once three has applied the new matrices.
+  const [boundsCm, setBoundsCm] = useState<{ w: number; h: number; d: number } | null>(null);
   // Retry a few times — the fit handle and merged baseplate geometry aren't ready
   // on the first frame.
   const fitSoon = useCallback(() => {
@@ -157,6 +167,36 @@ export function LegoView() {
   const baseGrid = useMemo(() => buildBaseplateLines(baseplateStuds), [baseplateStuds]);
   useEffect(() => () => disposeBaseplateLines(baseGrid), [baseGrid]);
   const selected = useMemo(() => (primaryId ? (graph.findNode(primaryId) as SceneNode | null) : null), [graph, primaryId, version]);
+
+  // Recompute the selected node's size after three has committed the new matrices
+  // (one animation frame later). Cleared when nothing is selected.
+  useEffect(() => {
+    if (!primaryId) { setBoundsCm(null); return; }
+    let raf = 0;
+    let tries = 0;
+    const tick = () => {
+      const s = boundsRef.current?.(primaryId);
+      if (s) { setBoundsCm({ w: toCm(s[0]), h: toCm(s[1]), d: toCm(s[2]) }); return; }
+      if (tries++ < 10) raf = requestAnimationFrame(tick); // retry until geometry is ready
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [primaryId, version]);
+
+  // "Center to nearest stud": snap every selected node onto the whole-stud grid
+  // in X/Z (the horizontal baseplate grid). Y (height) is left untouched.
+  const centerToStud = useCallback(() => {
+    if (!selectedIds.length) return;
+    for (const id of selectedIds) {
+      const n = graph.findNode(id);
+      if (!n) continue;
+      const p = [...n.position] as [number, number, number];
+      p[0] = Math.round(p[0] / U) * U;
+      p[2] = Math.round(p[2] / U) * U;
+      n.position = p;
+    }
+    bump();
+  }, [selectedIds, graph, bump]);
 
   // Shift+click in the Scene list selects a contiguous range from the primary.
   const rangeSelect = useCallback((id: string) => {
@@ -732,6 +772,15 @@ export function LegoView() {
             <ToggleButton value="rotate" sx={{ p: 0.5 }}><Tooltip title="Rotate"><RotateRightIcon sx={{ fontSize: 16 }} /></Tooltip></ToggleButton>
             <ToggleButton value="scale" sx={{ p: 0.5 }}><Tooltip title="Scale"><HeightIcon sx={{ fontSize: 16 }} /></Tooltip></ToggleButton>
           </ToggleButtonGroup>
+          <Tooltip title="Centruj zaznaczone do najbliższego studa (X/Z)">
+            <span>
+              <Button size="small" startIcon={<GpsFixedIcon sx={{ fontSize: 16 }} />} disabled={!selectedIds.length}
+                onClick={centerToStud}
+                sx={{ px: 0.75, py: 0.25, fontSize: 12, textTransform: 'none', color: 'text.secondary' }}>
+                Stud
+              </Button>
+            </span>
+          </Tooltip>
           <Tooltip title="Snap Move Options">
             <Button size="small" startIcon={<GridOnIcon sx={{ fontSize: 16 }} />}
               onClick={(e) => setSnapMenu(e.currentTarget)}
@@ -772,6 +821,7 @@ export function LegoView() {
             showBoundingBox
             gizmoSize={1.5}
             fitSceneRef={fitRef}
+            boundsRef={boundsRef}
             cameraPreset="cad"
             style={{ width: '100%', height: '100%' }}
           />
@@ -824,6 +874,22 @@ export function LegoView() {
                 </Box>
               </Box>
             ))}
+            <Divider />
+            <Box>
+              <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>Bounding box (cm)</Typography>
+              {boundsCm ? (
+                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                  {([['W', boundsCm.w], ['H', boundsCm.h], ['D', boundsCm.d]] as const).map(([lbl, v]) => (
+                    <Box key={lbl} sx={{ flex: 1, textAlign: 'center', border: '1px solid', borderColor: 'divider', borderRadius: '4px', py: 0.5 }}>
+                      <Typography sx={{ fontSize: 9, color: 'text.disabled', lineHeight: 1 }}>{lbl}</Typography>
+                      <Typography sx={{ fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{v.toFixed(2)}</Typography>
+                    </Box>
+                  ))}
+                </Box>
+              ) : (
+                <Typography sx={{ fontSize: 11, color: 'text.disabled', fontStyle: 'italic' }}>—</Typography>
+              )}
+            </Box>
             <Divider />
             <Box>
               <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>Kolor</Typography>
