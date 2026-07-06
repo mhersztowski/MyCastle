@@ -31,6 +31,7 @@ COPY packages/web-client/package.json packages/web-client/
 COPY packages/ui-core/package.json packages/ui-core/
 COPY packages/core-scene3d/package.json packages/core-scene3d/
 COPY packages/core-cad/package.json packages/core-cad/
+COPY packages/core-cad-viewer/package.json packages/core-cad-viewer/
 COPY packages/ui-components-scene3d/package.json packages/ui-components-scene3d/
 COPY packages/devtools/package.json packages/devtools/
 COPY packages/minislib/package.json packages/minislib/
@@ -59,6 +60,13 @@ COPY packages/minisc/ packages/minisc/
 COPY packages/texteditor/ packages/texteditor/
 COPY packages/web-client/ packages/web-client/
 COPY packages/web-cpp/ packages/web-cpp/
+# CAD viewer chain — mycastle-web imports @mhersztowski/core-cad-viewer
+# (CadViewExtension). It needs core-cad + core-scene3d (peer deps), and
+# core-scene3d needs ui-core.
+COPY packages/ui-core/ packages/ui-core/
+COPY packages/core-cad/ packages/core-cad/
+COPY packages/core-scene3d/ packages/core-scene3d/
+COPY packages/core-cad-viewer/ packages/core-cad-viewer/
 COPY app/mycastle-backend/ app/mycastle-backend/
 COPY app/mycastle-web/ app/mycastle-web/
 COPY docs/ docs/
@@ -71,6 +79,11 @@ RUN pnpm --filter @mhersztowski/minisc build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 RUN pnpm --filter @mhersztowski/web-cpp build --silent
+# CAD viewer chain (order: ui-core → core-scene3d, core-cad → core-cad-viewer)
+RUN pnpm --filter @mhersztowski/ui-core build --silent
+RUN pnpm --filter @mhersztowski/core-cad build --silent
+RUN pnpm --filter @mhersztowski/core-scene3d build --silent
+RUN pnpm --filter @mhersztowski/core-cad-viewer build --silent
 RUN pnpm --filter mycastle-backend build --silent
 RUN pnpm --filter mycastle-web build
 
