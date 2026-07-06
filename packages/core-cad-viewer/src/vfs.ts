@@ -29,6 +29,7 @@ export const SCENE_EXT = '.scene.json';
 export const ELEC_EXT = '.elec.json';
 export const MAP_EXT = '.map.json';
 export const NOTES_EXT = '.notes.json';
+export const LEGO_EXT = '.lego.json';
 
 class VfsNetworkError extends Error {
   readonly code = 'NETWORK';

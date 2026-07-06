@@ -785,6 +785,11 @@ const MdEditor: React.FC<MdEditorProps> = ({
     const handler = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null;
       if (!anchor || !editorDom.contains(anchor)) return;
+      // Anchors inside interactive embeds are the embed's own controls, not
+      // document links — e.g. a Leaflet map's zoom buttons / attribution are
+      // <a href="#">. Intercepting them (preventDefault/stopPropagation) breaks
+      // zoom and pops the link editor. Let the embed handle its own clicks.
+      if (anchor.closest('.leaflet-container') || anchor.closest('.md-cadview-embed')) return;
       // Use the RAW href attribute, not anchor.href (the DOM resolves it against
       // the current page — which differs between Drive and the full-page
       // /editor/md/… route and would mangle a relative workspace path).
@@ -1391,8 +1396,12 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // Handle mouse over links - show popup after delay
   const handleEditorMouseOver = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    // Match any <a> element inside ProseMirror editor
-    const linkElement = target.closest('.ProseMirror a') as HTMLAnchorElement | null;
+    // Match any <a> element inside ProseMirror editor, but ignore anchors that
+    // belong to interactive embeds (Leaflet zoom/attribution, CAD viewers) —
+    // otherwise hovering a map's zoom button pops the link editor.
+    const rawLink = target.closest('.ProseMirror a') as HTMLAnchorElement | null;
+    const linkElement = rawLink && !rawLink.closest('.leaflet-container') && !rawLink.closest('.md-cadview-embed')
+      ? rawLink : null;
 
     if (linkElement && linkElement.hasAttribute('href') && editor) {
       // Cancel any pending hide timeout when returning to a link

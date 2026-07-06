@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
 import {
@@ -18,7 +18,12 @@ import {
   TextField,
   Tooltip,
   Typography,
+  Collapse,
 } from '@mui/material';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FolderIcon from '@mui/icons-material/Folder';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import EditIcon from '@mui/icons-material/Edit';
 import CloseIcon from '@mui/icons-material/Close';
@@ -29,15 +34,16 @@ import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
 import {
   CadViewerPage, Cad3dViewerPage, Scene3dViewerPage, ElectronicsViewerPage,
-  MapViewerPage, NotesViewerPage,
+  MapViewerPage, NotesViewerPage, LegoViewerPage,
   setViewerApiBase, setViewerUserId,
 } from '@mhersztowski/core-cad-viewer';
 import MapIcon from '@mui/icons-material/Map';
 import GestureIcon from '@mui/icons-material/Gesture';
+import WidgetsIcon from '@mui/icons-material/Widgets';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type CadViewMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'map' | 'notes';
+export type CadViewMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'map' | 'notes' | 'lego';
 
 const MODE_LABELS: Record<CadViewMode, string> = {
   cad: 'CAD 2D',
@@ -46,6 +52,7 @@ const MODE_LABELS: Record<CadViewMode, string> = {
   electronics: 'Electronics',
   map: 'Map',
   notes: 'Notes',
+  lego: 'Lego',
 };
 
 const MODE_ICONS: Record<CadViewMode, React.ReactNode> = {
@@ -55,6 +62,7 @@ const MODE_ICONS: Record<CadViewMode, React.ReactNode> = {
   electronics: <ElectricalServicesIcon sx={{ fontSize: 16 }} />,
   map: <MapIcon sx={{ fontSize: 16 }} />,
   notes: <GestureIcon sx={{ fontSize: 16 }} />,
+  lego: <WidgetsIcon sx={{ fontSize: 16 }} />,
 };
 
 // ── Global CAD base URL (configured once, persisted in localStorage) ─────────
@@ -88,10 +96,11 @@ const ELEC_EXT  = '.elec.json';
 const CAD_EXT   = '.cad.json';
 const MAP_EXT   = '.map.json';
 const NOTES_EXT = '.notes.json';
+const LEGO_EXT  = '.lego.json';
 
 // Non-scene3d modes read `/users/{user}/projects` filtered by this extension.
 const EXT_BY_MODE: Partial<Record<CadViewMode, string>> = {
-  cad: CAD_EXT, cad3d: CAD_EXT, electronics: ELEC_EXT, map: MAP_EXT, notes: NOTES_EXT,
+  cad: CAD_EXT, cad3d: CAD_EXT, electronics: ELEC_EXT, map: MAP_EXT, notes: NOTES_EXT, lego: LEGO_EXT,
 };
 
 async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
@@ -112,7 +121,7 @@ async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
           const fileData = (await fileRes.json()) as { files?: { name: string }[] };
           for (const f of fileData.files ?? []) {
             entries.push({
-              name: `${proj.name} / ${f.name}`,
+              name: `${proj.name}/${f.name}`,
               path: `users/${userId}/scene3d/${proj.name}/${f.name}`,
             });
           }
@@ -120,13 +129,33 @@ async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
       }));
       return entries;
     } else {
+      // Walk `/users/{user}/projects` recursively so files nested in subfolders
+      // are found too (the flat readdir only saw the top level). `name` is the
+      // path relative to the projects root — the picker splits it into a tree.
       const ext = EXT_BY_MODE[mode] ?? CAD_EXT;
-      const res = await fetch(`${base}/api/vfs/readdir?path=/users/${userId}/projects`, { signal: AbortSignal.timeout(4000) });
-      if (!res.ok) return [];
-      const data = (await res.json()) as { entries: { name: string; type: number }[] };
-      return (data.entries ?? [])
-        .filter(e => e.name.endsWith(ext))
-        .map(e => ({ name: e.name.slice(0, -ext.length), path: `users/${userId}/projects/${e.name.slice(0, -ext.length)}` }));
+      const root = `/users/${userId}/projects`;
+      const out: ProjectEntry[] = [];
+      const walk = async (dirPath: string, rel: string, depth: number): Promise<void> => {
+        if (depth > 8) return;
+        const res = await fetch(`${base}/api/vfs/readdir?path=${encodeURIComponent(dirPath)}`, { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) return;
+        const data = (await res.json()) as { entries: { name: string; type: number }[] };
+        const dirs = (data.entries ?? []).filter(e => e.type === 2);
+        for (const e of data.entries ?? []) {
+          if (e.type !== 2 && e.name.endsWith(ext)) {
+            const bare = e.name.slice(0, -ext.length);
+            const relName = rel ? `${rel}/${bare}` : bare;
+            out.push({ name: relName, path: `users/${userId}/projects/${relName}` });
+          }
+        }
+        // Recurse into subfolders (sequential keeps request count sane).
+        for (const d of dirs) {
+          await walk(`${dirPath}/${d.name}`, rel ? `${rel}/${d.name}` : d.name, depth + 1);
+        }
+      };
+      await walk(root, '', 0);
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      return out;
     }
   } catch {
     return [];
@@ -172,6 +201,60 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose(): void }) {
 
 // ── Project picker dialog ────────────────────────────────────────────────────
 
+// ── Project tree (folders → files) ────────────────────────────────────────────
+
+interface TreeNode { name: string; entry?: ProjectEntry; children: TreeNode[] }
+
+/** Build a folder tree from entries whose `name` is a `/`-separated path. */
+function buildProjectTree(entries: ProjectEntry[]): TreeNode {
+  const root: TreeNode = { name: '', children: [] };
+  for (const entry of entries) {
+    const segs = entry.name.split('/');
+    let cur = root;
+    segs.forEach((seg, i) => {
+      const leaf = i === segs.length - 1;
+      let child = cur.children.find(c => c.name === seg && !!c.entry === leaf);
+      if (!child) { child = { name: seg, children: [] }; cur.children.push(child); }
+      if (leaf) child.entry = entry;
+      cur = child;
+    });
+  }
+  const sortRec = (n: TreeNode) => {
+    n.children.sort((a, b) => (a.entry ? 1 : 0) - (b.entry ? 1 : 0) || a.name.localeCompare(b.name));
+    n.children.forEach(sortRec);
+  };
+  sortRec(root);
+  return root;
+}
+
+function TreeRow({ node, depth, icon, selectedPath, onPick }: {
+  node: TreeNode; depth: number; icon: React.ReactNode; selectedPath: string; onPick: (e: ProjectEntry) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  if (node.entry) {
+    return (
+      <ListItemButton dense selected={node.entry.path === selectedPath} onClick={() => onPick(node.entry!)} sx={{ pl: 1 + depth * 1.5, py: 0.25 }}>
+        <ListItemIcon sx={{ minWidth: 28 }}>{icon}</ListItemIcon>
+        <ListItemText primary={node.name} primaryTypographyProps={{ fontSize: 12 }} />
+      </ListItemButton>
+    );
+  }
+  return (
+    <>
+      <ListItemButton dense onClick={() => setOpen(o => !o)} sx={{ pl: 1 + depth * 1.5, py: 0.25 }}>
+        <ListItemIcon sx={{ minWidth: 22 }}>{open ? <ExpandMoreIcon sx={{ fontSize: 18 }} /> : <ChevronRightIcon sx={{ fontSize: 18 }} />}</ListItemIcon>
+        <FolderIcon sx={{ fontSize: 16, mr: 0.75, color: 'warning.light', flexShrink: 0 }} />
+        <ListItemText primary={node.name} primaryTypographyProps={{ fontSize: 12, fontWeight: 600 }} />
+      </ListItemButton>
+      <Collapse in={open} unmountOnExit>
+        {node.children.map((c, i) => (
+          <TreeRow key={`${c.name}-${i}`} node={c} depth={depth + 1} icon={icon} selectedPath={selectedPath} onPick={onPick} />
+        ))}
+      </Collapse>
+    </>
+  );
+}
+
 interface PickerProps {
   open: boolean;
   initialMode: CadViewMode;
@@ -186,6 +269,7 @@ function ProjectPickerDialog({ open, initialMode, initialPath, onClose, onConfir
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const projectTree = useMemo(() => buildProjectTree(projects), [projects]);
 
   useEffect(() => {
     if (!open) return;
@@ -217,8 +301,10 @@ function ProjectPickerDialog({ open, initialMode, initialPath, onClose, onConfir
           <Tabs
             value={mode}
             onChange={(_, v: CadViewMode) => setMode(v)}
-            variant="fullWidth"
-            sx={{ mb: 1.5, '& .MuiTab-root': { minHeight: 32, fontSize: 11, px: 0.5 } }}
+            variant="scrollable"
+            scrollButtons="auto"
+            allowScrollButtonsMobile
+            sx={{ mb: 1.5, '& .MuiTab-root': { minHeight: 32, fontSize: 11, px: 0.75, minWidth: 'auto' } }}
           >
             {(Object.keys(MODE_LABELS) as CadViewMode[]).map(m => (
               <Tab key={m} value={m} label={MODE_LABELS[m]} icon={MODE_ICONS[m] as React.ReactElement} iconPosition="start" />
@@ -230,20 +316,20 @@ function ProjectPickerDialog({ open, initialMode, initialPath, onClose, onConfir
               <CircularProgress size={24} />
             </Box>
           ) : (
-            <List dense sx={{ maxHeight: 220, overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+            <List dense sx={{ maxHeight: 260, overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
               {projects.length === 0 ? (
                 <ListItemButton disabled>
                   <ListItemText primary="No projects found" secondary="Check the CAD app URL in settings" />
                 </ListItemButton>
-              ) : projects.map(p => (
-                <ListItemButton
-                  key={p.path}
-                  selected={p.path === initialPath}
-                  onClick={() => { onConfirm(mode, p.path); onClose(); }}
-                >
-                  <ListItemIcon sx={{ minWidth: 32 }}>{MODE_ICONS[mode]}</ListItemIcon>
-                  <ListItemText primary={p.name} secondary={p.path} secondaryTypographyProps={{ sx: { fontSize: 9, opacity: 0.5 } }} />
-                </ListItemButton>
+              ) : projectTree.children.map((c, i) => (
+                <TreeRow
+                  key={`${c.name}-${i}`}
+                  node={c}
+                  depth={0}
+                  icon={MODE_ICONS[mode]}
+                  selectedPath={initialPath}
+                  onPick={(e) => { onConfirm(mode, e.path); onClose(); }}
+                />
               ))}
             </List>
           )}
@@ -272,6 +358,12 @@ function baseFromUrl(url: string): string {
   return i > 0 ? url.slice(0, i) : '';
 }
 
+// The viewer pages use hardcoded dark panels but pull TEXT colours from the MUI
+// theme (`text.secondary`, `divider`, …). Embedded in the light-themed editor
+// those tokens turn dark → dark-on-dark, "colours blend". Forcing a dark theme
+// around the embed makes the tokens resolve light again (fixes every mode).
+const viewerDarkTheme = createTheme({ palette: { mode: 'dark' } });
+
 /** Renders the appropriate core-cad-viewer page for `mode`, reading scenes from
  *  the CAD backend origin (cross-origin — needs CORS on the backend). */
 function NativeCadViewer({ mode, vfsPath, apiBase }: { mode: CadViewMode; vfsPath: string; apiBase: string }) {
@@ -285,6 +377,7 @@ function NativeCadViewer({ mode, vfsPath, apiBase }: { mode: CadViewMode; vfsPat
     case 'electronics': return <ElectronicsViewerPage {...common} />;
     case 'map':         return <MapViewerPage {...common} />;
     case 'notes':       return <NotesViewerPage {...common} />;
+    case 'lego':        return <LegoViewerPage {...common} />;
     case 'scene3d':
     default:            return <Scene3dViewerPage {...common} />;
   }
@@ -315,6 +408,7 @@ function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
   return (
     <NodeViewWrapper>
       <Box
+        className="md-cadview-embed"
         contentEditable={false}
         sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden', my: 1, bgcolor: 'background.paper' }}
       >
@@ -344,7 +438,9 @@ function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
         {/* Content — native core-cad-viewer render (no iframe). */}
         {vfsPath ? (
           <Box sx={{ position: 'relative', width: '100%', height: 360 }}>
-            <NativeCadViewer key={`${apiBase}:${mode}:${vfsPath}`} mode={mode} vfsPath={vfsPath} apiBase={apiBase} />
+            <ThemeProvider theme={viewerDarkTheme}>
+              <NativeCadViewer key={`${apiBase}:${mode}:${vfsPath}`} mode={mode} vfsPath={vfsPath} apiBase={apiBase} />
+            </ThemeProvider>
           </Box>
         ) : (
           <Box sx={{ px: 2, py: 1.5 }}>

@@ -12,6 +12,7 @@ import {
   ElectronicsViewerPage,
   MapViewerPage,
   NotesViewerPage,
+  LegoViewerPage,
 } from '@mhersztowski/core-cad-viewer';
 import 'allotment/dist/style.css';
 import '@mhersztowski/ui-components-scene3d/styles.css';
@@ -50,6 +51,7 @@ const cad3dMatch       = /^\/viewer\/cad3d\/(.+)$/.exec(path);
 const electronicsMatch = /^\/viewer\/electronics\/(.+)$/.exec(path);
 const mapMatch         = /^\/viewer\/map\/(.+)$/.exec(path);
 const notesMatch       = /^\/viewer\/notes\/(.+)$/.exec(path);
+const legoMatch        = /^\/viewer\/lego\/(.+)$/.exec(path);
 const sceneMatch       = /^\/viewer\/scene\/(.+)$/.exec(path);
 const vrMatch          = /^\/viewer\/vr\/(.+)$/.exec(path);
 const viewerDir        = new URLSearchParams(window.location.search).get('dir') ?? undefined;
@@ -61,6 +63,7 @@ function Root() {
   if (electronicsMatch) return <ElectronicsViewerPage  vfsPath={decodeURIComponent(electronicsMatch[1])} />;
   if (mapMatch)         return <MapViewerPage          vfsPath={decodeURIComponent(mapMatch[1])} />;
   if (notesMatch)       return <NotesViewerPage        vfsPath={decodeURIComponent(notesMatch[1])} />;
+  if (legoMatch)        return <LegoViewerPage         vfsPath={decodeURIComponent(legoMatch[1])} />;
   if (sceneMatch)       return <SceneViewerPage projectName={decodeURIComponent(sceneMatch[1])} dir={viewerDir} />;
   if (vrMatch)          return <VrViewerPage    projectName={decodeURIComponent(vrMatch[1])} dir={viewerDir} />;
   return <App />;

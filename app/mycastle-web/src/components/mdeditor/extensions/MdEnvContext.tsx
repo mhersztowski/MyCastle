@@ -14,6 +14,10 @@ export interface MdEnvApi {
   set: (name: string, value: unknown) => void;
   /** Bumps on every write — consumers list it as a hook dep to re-render. */
   version: number;
+  /** Subscribe to writes. Returns an unsubscribe fn. Used by consumers rendered
+   *  inside TipTap node-view portals, where plain React-context updates don't
+   *  reliably re-render them in production builds — so they use useSyncExternalStore. */
+  subscribe: (cb: () => void) => () => void;
 }
 
 const MdEnvContext = createContext<MdEnvApi | null>(null);
@@ -40,6 +44,7 @@ function resolveEnvName(store: Map<string, unknown>, name: string): unknown {
 
 export const MdEnvProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const storeRef = useRef<Map<string, unknown>>(new Map());
+  const subsRef = useRef<Set<() => void>>(new Set());
   const [version, setVersion] = useState(0);
 
   const set = useCallback((name: string, value: unknown) => {
@@ -48,6 +53,15 @@ export const MdEnvProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (prev === value) return;
     storeRef.current.set(name, value);
     setVersion((v) => v + 1);
+    // Notify external-store subscribers (TipTap node views) directly — they
+    // can't rely on React-context propagation through the editor's portals.
+    subsRef.current.forEach((cb) => cb());
+  }, []);
+
+  // Stable across renders so useSyncExternalStore doesn't resubscribe each time.
+  const subscribe = useCallback((cb: () => void) => {
+    subsRef.current.add(cb);
+    return () => { subsRef.current.delete(cb); };
   }, []);
 
   const api = useMemo<MdEnvApi>(() => ({
@@ -55,7 +69,8 @@ export const MdEnvProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     all: () => Object.fromEntries(storeRef.current),
     set,
     version,
-  }), [set, version]);
+    subscribe,
+  }), [set, subscribe, version]);
 
   return <MdEnvContext.Provider value={api}>{children}</MdEnvContext.Provider>;
 };
@@ -66,4 +81,4 @@ export function useMdEnv(): MdEnvApi {
   return ctx ?? NOOP_ENV;
 }
 
-const NOOP_ENV: MdEnvApi = { get: () => undefined, all: () => ({}), set: () => {}, version: 0 };
+const NOOP_ENV: MdEnvApi = { get: () => undefined, all: () => ({}), set: () => {}, version: 0, subscribe: () => () => {} };

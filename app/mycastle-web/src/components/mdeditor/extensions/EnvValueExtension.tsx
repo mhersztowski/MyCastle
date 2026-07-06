@@ -2,7 +2,7 @@
  * EnvValue — a short inline marker that renders the current value of a document
  * env variable as text. Written in markdown as `{{env:name}}`.
  */
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { Node, mergeAttributes } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
 import { useMdEnv } from './MdEnvContext';
@@ -16,7 +16,13 @@ function renderValue(v: unknown): string {
 const EnvValueNodeView: React.FC<NodeViewProps> = ({ node, editor }) => {
   const name = (node.attrs.name as string) || '';
   const env = useMdEnv();
-  const value = renderValue(env.get(name)); // re-renders via env.version dependency in the context value
+  // Subscribe to the env store directly. A File chip fills the value AFTER this
+  // node first renders (async read); React context alone doesn't reliably
+  // re-render node views living in TipTap's portals in a production build, so
+  // without this the value would arrive but the marker would stay literal — the
+  // "works in dev, shows {{env:…}} on prod" symptom. useSyncExternalStore forces
+  // the re-render off the store's own subscription.
+  const value = useSyncExternalStore(env.subscribe, () => renderValue(env.get(name)));
   return (
     <NodeViewWrapper as="span" className="md-envvalue" title={editor.isEditable ? `env: ${name}` : undefined}>
       {value !== '' ? value : <span className="md-envvalue-empty" contentEditable={false}>{`{{env:${name}}}`}</span>}

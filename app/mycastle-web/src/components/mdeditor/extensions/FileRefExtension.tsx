@@ -37,8 +37,11 @@ const FileNodeView: React.FC<NodeViewProps> = ({ node, editor, updateAttributes 
         const res = await readFile(path);
         const parsed = JSON.parse(res?.content ?? 'null');
         if (alive) mdEnv.set(env, parsed);
-      } catch {
-        /* leave env unset on read/parse failure */
+      } catch (e) {
+        // Leave env unset, but log so a prod failure (missing file / read error)
+        // is diagnosable instead of silently rendering a literal {{env:…}} marker.
+        // eslint-disable-next-line no-console
+        console.warn(`[mdenv] failed to load env "${env}" from "${path}":`, e);
       }
     })();
     return () => { alive = false; };

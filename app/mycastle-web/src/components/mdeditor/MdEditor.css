@@ -85,6 +85,28 @@
   border-radius: 2px;
 }
 
+/* Anchors INSIDE viewer embeds are the embed's own controls, not document links.
+   The rules above turned Leaflet's zoom +/- (which are <a> elements) into blue
+   underlined links that went washed-out on hover. Reset them across every viewer
+   (Map, Photo Map, all CAD View modes). */
+.md-editor-content .ProseMirror .leaflet-container a,
+.md-editor-content .ProseMirror .md-cadview-embed a {
+  text-decoration: none;
+}
+.md-editor-content .ProseMirror .leaflet-container a:hover,
+.md-editor-content .ProseMirror .md-cadview-embed a:hover {
+  text-decoration: none;
+  background-color: transparent;
+}
+/* Leaflet zoom buttons: restore Leaflet's dark glyphs + light-grey hover. */
+.md-editor-content .ProseMirror .leaflet-bar a {
+  color: #333;
+}
+.md-editor-content .ProseMirror .leaflet-bar a:hover {
+  color: #000;
+  background-color: #f4f4f4;
+}
+
 /* File chip (inline): icon + filename + Open/Options. */
 .md-editor-content .md-fileref { white-space: nowrap; }
 .md-editor-content .md-fileref-chip {
