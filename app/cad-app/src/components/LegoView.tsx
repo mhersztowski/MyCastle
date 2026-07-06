@@ -488,24 +488,43 @@ export function LegoView() {
     canvas.dispatchEvent(new (n.constructor as typeof Event as any)(n.type, n));
   }, []);
 
+  // Marquee (rubber-band) select — pointer-capture based so move/up are delivered
+  // to the overlay itself, which works reliably for mouse, pen AND touch.
+  const marqueeRef = useRef<{ x0: number; y0: number; additive: boolean; pointerId: number } | null>(null);
+
   const onMarqueeDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) { forwardToCanvas(e); return; } // middle/right → orbit/pan
+    // Mouse middle/right → OrbitControls pan/orbit; secondary touch (2nd finger) →
+    // forward for pinch/pan. Primary mouse/pen/touch → start the marquee.
+    if ((e.pointerType === 'mouse' && e.button !== 0) || (e.pointerType !== 'mouse' && !e.isPrimary)) {
+      forwardToCanvas(e); return;
+    }
     const vp = viewportRef.current; if (!vp) return;
     const r = vp.getBoundingClientRect();
     const x0 = e.clientX - r.left, y0 = e.clientY - r.top;
-    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    marqueeRef.current = { x0, y0, additive: e.shiftKey || e.ctrlKey || e.metaKey, pointerId: e.pointerId };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     setMarquee({ x0, y0, x1: x0, y1: y0 });
-    const move = (ev: PointerEvent) => setMarquee({ x0, y0, x1: ev.clientX - r.left, y1: ev.clientY - r.top });
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      const x1 = ev.clientX - r.left, y1 = ev.clientY - r.top;
-      if (Math.abs(x1 - x0) < 5 && Math.abs(y1 - y0) < 5) clickSelectAt(x0, y0, additive);
-      else selectInRect(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), additive);
-      setMarquee(null);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+  }, [forwardToCanvas]);
+
+  const onMarqueeMove = useCallback((e: React.PointerEvent) => {
+    const st = marqueeRef.current; if (!st || e.pointerId !== st.pointerId) return;
+    const vp = viewportRef.current; if (!vp) return;
+    const r = vp.getBoundingClientRect();
+    setMarquee({ x0: st.x0, y0: st.y0, x1: e.clientX - r.left, y1: e.clientY - r.top });
+  }, []);
+
+  const onMarqueeUp = useCallback((e: React.PointerEvent) => {
+    const st = marqueeRef.current; if (!st || e.pointerId !== st.pointerId) return;
+    marqueeRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    const vp = viewportRef.current;
+    if (vp) {
+      const r = vp.getBoundingClientRect();
+      const x1 = e.clientX - r.left, y1 = e.clientY - r.top;
+      if (Math.abs(x1 - st.x0) < 5 && Math.abs(y1 - st.y0) < 5) clickSelectAt(st.x0, st.y0, st.additive);
+      else selectInRect(Math.min(st.x0, x1), Math.min(st.y0, y1), Math.max(st.x0, x1), Math.max(st.y0, y1), st.additive);
+    }
+    setMarquee(null);
   }, [clickSelectAt, selectInRect]);
 
   const setVec = (axis: 0 | 1 | 2, kind: 'position' | 'rotation' | 'scale', v: number) => {
@@ -751,14 +770,16 @@ export function LegoView() {
             rotationSnap={rotSnapEnabled && rotSnapDeg > 0 ? (rotSnapDeg * Math.PI) / 180 : null}
             extraObjects={baseGrid}
             showBoundingBox
+            gizmoSize={1.5}
             fitSceneRef={fitRef}
             cameraPreset="cad"
             style={{ width: '100%', height: '100%' }}
           />
           {/* Select tool: transparent overlay captures drags for rubber-band select. */}
           {selectMode && (
-            <Box onPointerDown={onMarqueeDown} onWheel={forwardToCanvas} onContextMenu={(e) => e.preventDefault()}
-              sx={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'crosshair' }}>
+            <Box onPointerDown={onMarqueeDown} onPointerMove={onMarqueeMove} onPointerUp={onMarqueeUp} onPointerCancel={onMarqueeUp}
+              onWheel={forwardToCanvas} onContextMenu={(e) => e.preventDefault()}
+              sx={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'crosshair', touchAction: 'none' }}>
               {marquee && (
                 <Box sx={{
                   position: 'absolute', pointerEvents: 'none',

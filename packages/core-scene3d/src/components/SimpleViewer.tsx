@@ -2272,14 +2272,15 @@ export function SimpleViewer({
   // Gizmo drag guard — prevents onPointerMissed from deselecting while dragging a gizmo handle
   const isDraggingGizmoRef = useRef(false);
 
-  // Pen/stylus hover filter — block pointer events where pointerType='pen' but pressure=0
-  // (stylus near screen but not touching). Skipped during an active gizmo drag so that
-  // the zero-pressure event after a brief lift doesn't drop the drag track.
+  // Pen/stylus hover filter — block pointer *hover* events only (no button held).
+  // Uses `buttons === 0` rather than `pressure === 0`: many pens/styluses report
+  // pressure 0 even while touching, and keying on pressure would wrongly swallow
+  // move events during a drag, breaking orbit/pan/gizmo with those pens.
   const [glInstance, setGlInstance] = useState<THREE.WebGLRenderer | null>(null);
   // Pen hover events are logged only to the on-screen overlay (not sent to server) to avoid flooding the buffer
   const hoverBlockCountRef = useRef(0);
   const filterPenHover = useCallback((e: PointerEvent) => {
-    if (e.pointerType === 'pen' && e.pressure === 0 && !isDraggingGizmoRef.current) {
+    if (e.pointerType === 'pen' && e.buttons === 0 && !isDraggingGizmoRef.current) {
       hoverBlockCountRef.current++;
       // Only show every 20th hover-blocked event in the overlay, never send to server
       if (debugLog && hoverBlockCountRef.current % 20 === 1) {
@@ -2427,7 +2428,11 @@ export function SimpleViewer({
           // eslint-disable-next-line no-console
           console.log(`[GEO] pointerMissed type=${type} client=(${(e as unknown as MouseEvent).clientX},${(e as unknown as MouseEvent).clientY}) drag=${drag}`);
         }}
-        onCreated={({ gl }) => setGlInstance(gl)}
+        onCreated={({ gl }) => {
+          // Stop the browser turning pen/touch drags into scroll/zoom gestures.
+          gl.domElement.style.touchAction = 'none';
+          setGlInstance(gl);
+        }}
       >
         <SceneContent
           sceneGraph={sceneGraph}
