@@ -28,6 +28,7 @@ import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutli
 import ContentCutIcon from '@mui/icons-material/ContentCut'
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator'
 import RouteIcon from '@mui/icons-material/Route'
+import TextFieldsIcon from '@mui/icons-material/TextFields'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { MapNode, MapNodeType } from '../map/types'
 import type { DropPosition } from '../map/useMapLayers'
@@ -43,6 +44,7 @@ function getNodeIcon(type: MapNodeType) {
     case 'circle':     return <RadioButtonUncheckedIcon sx={{ fontSize: 14, color: '#ce93d8' }} />
     case 'group':      return <FolderIcon sx={{ fontSize: 14, color: '#78909c' }} />
     case 'route':      return <RouteIcon sx={{ fontSize: 14, color: '#42a5f5' }} />
+    case 'label':      return <TextFieldsIcon sx={{ fontSize: 14, color: '#ffd54f' }} />
   }
 }
 
@@ -56,6 +58,7 @@ const ADD_ITEMS: Array<{ type: MapNodeType; label: string } | 'divider'> = [
   { type: 'polygon',    label: 'Polygon' },
   { type: 'polyline',   label: 'Polyline' },
   { type: 'circle',     label: 'Circle' },
+  { type: 'label',      label: 'Label' },
 ]
 
 // ── helpers ───────────────────────────────────────────────────────────────────

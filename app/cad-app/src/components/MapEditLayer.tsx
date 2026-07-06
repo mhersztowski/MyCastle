@@ -48,7 +48,7 @@ export function MapEditLayer({ node, onUpdate }: Props) {
     if (node.type === 'polyline' || node.type === 'polygon') {
       setLivePts((node.positions ?? []) as LatLng[])
     }
-    if (node.type === 'marker' || node.type === 'circle') {
+    if (node.type === 'marker' || node.type === 'circle' || node.type === 'label') {
       if (node.lat != null && node.lng != null) setLiveXY([node.lat, node.lng])
     }
     if (node.type === 'circle' && node.radius != null) setLiveR(node.radius)
@@ -104,7 +104,7 @@ export function MapEditLayer({ node, onUpdate }: Props) {
 
   // ── Marker ────────────────────────────────────────────────────────────────
 
-  if (node.type === 'marker' && liveXY) {
+  if ((node.type === 'marker' || node.type === 'label') && liveXY) {
     return (
       <CircleMarker
         center={liveXY}

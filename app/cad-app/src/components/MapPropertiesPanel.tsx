@@ -23,6 +23,7 @@ const TYPE_COLOR: Record<MapNodeType, string> = {
   circle:       '#ce93d8',
   group:        '#78909c',
   route:        '#42a5f5',
+  label:        '#ffd54f',
 }
 
 // ── small building blocks ─────────────────────────────────────────────────────
@@ -422,6 +423,34 @@ export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany
             <Box sx={{ px: 1.5, pb: 1 }}>
               <TextInput value={node.popup} multiline rows={4} onChange={v => upd({ popup: v || undefined })} />
             </Box>
+          </>)}
+
+          {/* ── label (markdown text on the map) ─────────── */}
+          {node.type === 'label' && (<>
+            <SectionLabel>Position</SectionLabel>
+            <Row label="Latitude">
+              <NumberInput value={node.lat} step={0.000001} onChange={v => upd({ lat: v })} />
+            </Row>
+            <Row label="Longitude">
+              <NumberInput value={node.lng} step={0.000001} onChange={v => upd({ lng: v })} />
+            </Row>
+            <SectionLabel>Text (Markdown)</SectionLabel>
+            <Box sx={{ px: 1.5, pb: 1 }}>
+              <TextInput
+                value={node.text}
+                multiline
+                rows={5}
+                placeholder="# Title&#10;**bold**, *italic*, `code`, [link](https://…)"
+                onChange={v => upd({ text: v })}
+              />
+            </Box>
+            <SectionLabel>Appearance</SectionLabel>
+            <Row label="Color">
+              <ColorPicker value={node.color} fallback="#ffffff" onChange={v => upd({ color: v })} />
+            </Row>
+            <Row label="Font size">
+              <NumberInput value={node.fontSize} placeholder={14} min={6} step={1} onChange={v => upd({ fontSize: v })} />
+            </Row>
           </>)}
 
           {/* ── polyline ─────────────────────────────────── */}

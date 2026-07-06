@@ -25,6 +25,7 @@ const TYPE_DEFAULTS: Record<MapNodeType, Partial<MapNode>> = {
   circle: { lat: 52.2297, lng: 21.0122, radius: 800, color: '#66bb6a', fillOpacity: 0.3, weight: 2 },
   group: { children: [] },
   route: { color: '#42a5f5', weight: 4 },
+  label: { lat: 52.2297, lng: 21.0122, text: '**Label**', color: '#ffffff', fontSize: 14 },
 }
 
 /** Current map viewport, used to spawn new objects where the user is looking
@@ -39,6 +40,7 @@ function geomAt(type: MapNodeType, at: ViewAt): Partial<MapNode> {
   const dw = lngSpan * 0.15
   switch (type) {
     case 'marker':
+    case 'label':
       return { lat, lng }
     case 'circle': {
       // ~metres per degree latitude ≈ 111320; make the circle span ~30% of the view.

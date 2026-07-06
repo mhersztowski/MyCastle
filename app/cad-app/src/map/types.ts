@@ -1,4 +1,4 @@
-export type MapNodeType = 'tile-layer' | 'marker' | 'polygon' | 'polyline' | 'circle' | 'group' | 'route'
+export type MapNodeType = 'tile-layer' | 'marker' | 'polygon' | 'polyline' | 'circle' | 'group' | 'route' | 'label'
 
 /** Mode of travel for a route between two points. */
 export type TravelMode = 'foot' | 'bike' | 'car' | 'train' | 'bus' | 'plane'
@@ -39,6 +39,9 @@ export interface MapNode {
   showInfo?: 'compact' | 'fullscreen'
   // popup
   popup?: string
+  // label (markdown text rendered directly on the map at lat/lng)
+  text?: string
+  fontSize?: number
   // style
   color?: string
   fillOpacity?: number

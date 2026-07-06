@@ -1,8 +1,33 @@
 import type { ReactNode } from 'react'
 import {
-  TileLayer, CircleMarker, Popup, Polygon, Polyline, Circle, LayerGroup,
+  TileLayer, CircleMarker, Popup, Polygon, Polyline, Circle, LayerGroup, Marker,
 } from 'react-leaflet'
+import L from 'leaflet'
 import type { MapNode } from './types'
+import { renderMarkdown } from './markdown'
+
+// One-time stylesheet for markdown labels drawn directly on the map. Injected
+// lazily so both the editor and the read-only viewer get the same look.
+const LABEL_CSS = `
+.map-label-box{display:inline-block;width:max-content;max-width:260px;transform:translate(-50%,-100%);background:rgba(28,28,30,.88);color:#fff;padding:5px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.45);line-height:1.35;pointer-events:auto;white-space:normal;font-family:system-ui,sans-serif}
+.map-label-box>*{margin:.15em 0}
+.map-label-box>*:first-child{margin-top:0}
+.map-label-box>*:last-child{margin-bottom:0}
+.map-label-box h1,.map-label-box h2,.map-label-box h3,.map-label-box h4{font-size:1.12em;margin:.2em 0}
+.map-label-box code{background:rgba(255,255,255,.15);padding:0 3px;border-radius:3px}
+.map-label-box pre{background:rgba(0,0,0,.35);padding:4px 6px;border-radius:4px;overflow:auto}
+.map-label-box a{color:#90caf9}
+.map-label-box img{max-width:100%}
+.map-label-box ul,.map-label-box ol{padding-left:1.2em;margin:.2em 0}
+`
+let labelCssInjected = false
+function ensureLabelCss(): void {
+  if (labelCssInjected || typeof document === 'undefined') return
+  labelCssInjected = true
+  const el = document.createElement('style')
+  el.textContent = LABEL_CSS
+  document.head.appendChild(el)
+}
 
 export interface RenderNodeOpts {
   /** When set, interactive shapes call this on click (used by the viewer). */
@@ -40,6 +65,25 @@ export function renderMapNode(node: MapNode, opts: RenderNodeOpts = {}): ReactNo
           {node.popup ? <Popup><pre style={{ margin: 0, fontSize: '0.72rem' }}>{node.popup}</pre></Popup> : null}
         </CircleMarker>
       )
+    case 'label': {
+      if (node.lat == null || node.lng == null) return null
+      ensureLabelCss()
+      const color = node.color ?? '#ffffff'
+      const fs = node.fontSize ?? 14
+      const html = `<div class="map-label-box" style="color:${color};font-size:${fs}px">${renderMarkdown(node.text ?? '')}</div>`
+      // 0×0 icon anchored exactly at the coordinate; the box positions itself via
+      // its CSS transform so its bottom-centre sits on the point.
+      const icon = L.divIcon({ className: 'map-label-icon', html, iconSize: [0, 0], iconAnchor: [0, 0] })
+      return (
+        <Marker
+          key={node.id}
+          position={[node.lat, node.lng]}
+          icon={icon}
+          interactive={!!opts.onClick}
+          eventHandlers={handlers}
+        />
+      )
+    }
     case 'polygon':
       if (!node.positions?.length) return null
       return (
