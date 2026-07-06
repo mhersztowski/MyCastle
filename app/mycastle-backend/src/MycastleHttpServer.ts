@@ -116,7 +116,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
   // shareUrl → { assets (id+description), baseUrl, key, cachedAt }
-  private immichAlbumCache = new Map<string, { assets: { id: string; description: string }[]; baseUrl: string; key: string; cachedAt: number }>();
+  private immichAlbumCache = new Map<string, { assets: { id: string; description: string; lat?: number; lng?: number }[]; baseUrl: string; key: string; cachedAt: number }>();
   private static readonly IMMICH_CACHE_TTL = 3_600_000; // 1 hour
   // Public Google Photos shared-album image URLs, scraped from the share page.
   private gphotosAlbumCache = new Map<string, { images: string[]; cachedAt: number }>();
@@ -391,7 +391,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   }
 
   /** Resolve + cache the image assets of an Immich SHARED album (public link). */
-  private async getImmichSharedAlbum(shareUrl: string): Promise<{ assets: { id: string; description: string }[]; baseUrl: string; key: string }> {
+  private async getImmichSharedAlbum(shareUrl: string): Promise<{ assets: { id: string; description: string; lat?: number; lng?: number }[]; baseUrl: string; key: string }> {
     let cached = this.immichAlbumCache.get(shareUrl);
     if (!cached || Date.now() - cached.cachedAt > MycastleHttpServer.IMMICH_CACHE_TTL) {
       const parsed = new URL(shareUrl);
@@ -404,10 +404,20 @@ export class MycastleHttpServer extends HttpUploadServer {
       if (!albumId) throw new Error('No albumId in shared link');
       const albumResp = await fetch(`${baseUrl}/api/albums/${albumId}?key=${encodeURIComponent(key)}`);
       if (!albumResp.ok) throw new Error(`Album fetch ${albumResp.status}`);
-      const albumData = await albumResp.json() as { assets?: { id: string; type: string; description?: string }[] };
+      const albumData = await albumResp.json() as { assets?: { id: string; type: string; description?: string; exifInfo?: { latitude?: number | null; longitude?: number | null } }[] };
       const assets = (albumData.assets ?? [])
         .filter((a) => a.type === 'IMAGE')
-        .map((a) => ({ id: a.id, description: a.description ?? '' }));
+        .map((a) => {
+          // Immich exposes EXIF GPS via exifInfo.latitude/longitude (null when the
+          // photo has no geotag). Surfacing it lets the Photo Map block auto-place pins.
+          const lat = a.exifInfo?.latitude;
+          const lng = a.exifInfo?.longitude;
+          return {
+            id: a.id,
+            description: a.description ?? '',
+            ...(typeof lat === 'number' && typeof lng === 'number' ? { lat, lng } : {}),
+          };
+        });
       cached = { assets, baseUrl, key, cachedAt: Date.now() };
       this.immichAlbumCache.set(shareUrl, cached);
     }

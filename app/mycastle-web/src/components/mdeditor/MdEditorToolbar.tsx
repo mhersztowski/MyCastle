@@ -44,6 +44,7 @@ import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import AddLinkIcon from '@mui/icons-material/AddLink';
 import PostAddIcon from '@mui/icons-material/PostAdd';
 import CollectionsIcon from '@mui/icons-material/Collections';
+import MapIcon from '@mui/icons-material/Map';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import DataObjectIcon from '@mui/icons-material/DataObject';
 import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
@@ -80,6 +81,8 @@ interface MdEditorToolbarProps {
   onInsertEmbed?: () => void;
   /** Optional — opens the photo-gallery picker (Immich / Google Photos). */
   onInsertGallery?: () => void;
+  /** Optional — opens the photo-map picker (photos pinned on a Leaflet map). */
+  onInsertPhotoMap?: () => void;
   /** Optional — inserts a File chip (icon + name + Open/Options). */
   onInsertFile?: () => void;
   /** Optional — inserts an env-value marker {{env:name}}. */
@@ -139,7 +142,7 @@ function detectBrowser(): 'chrome' | 'safari' | 'firefox' | 'edge' | 'other' {
 }
 
 const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
-  editor, onSave, saveDisabled, onInsertInfoMark, onInsertInternalLink, onInsertEmbed, onInsertGallery, onInsertFile, onInsertEnvValue, onToggleGroupMode, groupModeActive, onExportMarkdown,
+  editor, onSave, saveDisabled, onInsertInfoMark, onInsertInternalLink, onInsertEmbed, onInsertGallery, onInsertPhotoMap, onInsertFile, onInsertEnvValue, onToggleGroupMode, groupModeActive, onExportMarkdown,
   spellLanguage, spellEnabled, onSpellLanguageChange, onSpellEnabledChange,
 }) => {
   const [spellMenuAnchor, setSpellMenuAnchor] = useState<null | HTMLElement>(null);
@@ -473,6 +476,13 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
         <Tooltip title="Galeria zdjęć (Immich / Google Photos)">
           <IconButton size="small" onClick={onInsertGallery}>
             <CollectionsIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {onInsertPhotoMap && (
+        <Tooltip title="Mapa zdjęć (Immich / Google Photos na mapie)">
+          <IconButton size="small" onClick={onInsertPhotoMap}>
+            <MapIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       )}

@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CAD Editor</title>
+    <!-- Standalone viewer pages (/viewer/*) size themselves with height:100%,
+         which collapses to 0 unless the mount chain has a concrete height.
+         The editor uses 100dvh so it worked regardless; the viewers did not. -->
+    <style>
+      html, body, #root { height: 100%; margin: 0; }
+      /* ConfigProvider (ui-core) wraps the app in a bare div carrying its CSS
+         custom properties; without a height it collapses and the viewers'
+         height:100% resolves to 0. */
+      #root > div { height: 100%; }
+    </style>
     <!-- Polyfill crypto.randomUUID — dostępne natywnie tylko w bezpiecznym
          kontekście (HTTPS lub localhost). Przy dostępie przez LAN po zwykłym
          HTTP (np. z telefonu: http://192.168.x.x:1898) jest undefined, co

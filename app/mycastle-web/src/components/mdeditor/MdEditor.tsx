@@ -115,6 +115,7 @@ import { BlockIdExtension } from './extensions/BlockIdExtension';
 import { HeadingFold } from './extensions/HeadingFoldExtension';
 import { MdEmbed, MD_EMBED_EDIT_EVENT, type MdEmbedEditEventDetail } from './extensions/EmbedExtension';
 import { GalleryEmbed, GalleryDialog, GALLERY_EDIT_EVENT, type GalleryEditEventDetail, type GalleryProvider } from './extensions/GalleryEmbedExtension';
+import { PhotoMap, PhotoMapDialog, PHOTOMAP_EDIT_EVENT, type PhotoMapEditEventDetail } from './extensions/PhotoMapExtension';
 import { FileRef } from './extensions/FileRefExtension';
 import { EnvValue } from './extensions/EnvValueExtension';
 import { RawMarkdownBlock } from './extensions/RawMarkdownBlockExtension';
@@ -423,6 +424,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       HeadingFold,
       MdEmbed,
       GalleryEmbed,
+      PhotoMap,
       FileRef,
       EnvValue,
       RawMarkdownBlock,
@@ -1117,6 +1119,30 @@ const MdEditor: React.FC<MdEditorProps> = ({
     return () => window.removeEventListener(GALLERY_EDIT_EVENT, onEdit);
   }, []);
 
+  // ── Photo map (photos pinned on a Leaflet map) ─────────────────────────────
+  const [photoMapDialog, setPhotoMapDialog] = useState<{ open: boolean; pos?: number; initial?: { config: string } }>({ open: false });
+  const openPhotoMapDialog = useCallback(() => setPhotoMapDialog({ open: true }), []);
+
+  const handleInsertPhotoMap = useCallback((config: string) => {
+    if (!editor) { setPhotoMapDialog({ open: false }); return; }
+    const pos = photoMapDialog.pos;
+    if (typeof pos === 'number') {
+      editor.chain().focus().command(({ tr }) => { tr.setNodeAttribute(pos, 'config', config); return true; }).run();
+    } else {
+      editor.chain().focus().insertContent({ type: 'photoMap', attrs: { config } }).run();
+    }
+    setPhotoMapDialog({ open: false });
+  }, [editor, photoMapDialog.pos]);
+
+  useEffect(() => {
+    const onEdit = (e: Event) => {
+      const d = (e as CustomEvent<PhotoMapEditEventDetail>).detail;
+      if (d) setPhotoMapDialog({ open: true, pos: d.pos, initial: { config: d.config } });
+    };
+    window.addEventListener(PHOTOMAP_EDIT_EVENT, onEdit);
+    return () => window.removeEventListener(PHOTOMAP_EDIT_EVENT, onEdit);
+  }, []);
+
   // ── Export to clean markdown ───────────────────────────────────────────────
   // Serializes the current document to plain markdown (same serializer as save)
   // and shows it in a dialog with copy-to-clipboard / download actions.
@@ -1576,6 +1602,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
             onInsertInternalLink={openInternalLinkDialog}
             onInsertEmbed={openEmbedDialog}
             onInsertGallery={openGalleryDialog}
+            onInsertPhotoMap={openPhotoMapDialog}
             onInsertFile={openFileDialog}
             onInsertEnvValue={openEnvDialog}
             onToggleGroupMode={toggleGroupMode}
@@ -2221,6 +2248,13 @@ const MdEditor: React.FC<MdEditorProps> = ({
       initial={galleryDialog.initial}
       onClose={() => setGalleryDialog({ open: false })}
       onSubmit={handleInsertGallery}
+    />
+
+    <PhotoMapDialog
+      open={photoMapDialog.open}
+      initial={photoMapDialog.initial}
+      onClose={() => setPhotoMapDialog({ open: false })}
+      onSubmit={handleInsertPhotoMap}
     />
 
     <Dialog open={fileDialog.open} onClose={() => setFileDialog({ open: false, path: '' })} maxWidth="sm" fullWidth>

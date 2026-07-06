@@ -202,6 +202,30 @@ function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): 
   return result;
 }
 
+// ─── PhotoMap fence ───────────────────────────────────────────────────────────
+// ```photomap {…json config…}``` ⇄ <div data-type="photo-map" data-config="…">
+// so the TipTap PhotoMap node round-trips its whole state through markdown.
+
+function escapePhotoMapsForHtml(content: string): { result: string; photoMaps: string[] } {
+  const photoMaps: string[] = [];
+  const result = content.replace(/```photomap\s*\n([\s\S]*?)```/g, (_, json: string) => {
+    photoMaps.push(json.trim());
+    return `%%PHOTOMAP_${photoMaps.length - 1}%%`;
+  });
+  return { result, photoMaps };
+}
+
+function restorePhotoMapsFromHtml(html: string, photoMaps: string[]): string {
+  let result = html;
+  photoMaps.forEach((cfg, index) => {
+    const htmlTag = `<div data-type="photo-map" data-config="${encodeURIComponent(cfg)}"></div>`;
+    const placeholder = `%%PHOTOMAP_${index}%%`;
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    result = result.split(placeholder).join(htmlTag);
+  });
+  return result;
+}
+
 // Helper to restore automate script blocks after showdown conversion
 function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null; umlProjects?: string[]; scenePath?: string }[]): string {
   let result = html;
@@ -1466,8 +1490,11 @@ export function markdownToHtml(markdown: string): string {
   const { result: markdownWithoutEvents, events: eventBlocks } =
     escapeEventBlocksForHtml(markdownWithoutPluginScripts);
 
+  // Protect photo-map blocks (```photomap {…json…}``` fences) from showdown.
+  const { result: markdownWithoutPhotoMaps, photoMaps } = escapePhotoMapsForHtml(markdownWithoutEvents);
+
   // Protect automate script blocks (code fences) from showdown processing
-  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithoutEvents);
+  const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithoutPhotoMaps);
   const { result: markdownWithoutScripts, automateScripts } = JSON.parse(automateScriptDataStr);
 
   // Protect automate flow embeds from showdown processing
@@ -1570,6 +1597,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore event blocks (insert <div data-type="event-block" data-…>)
   html = restoreEventBlocksFromHtml(html, eventBlocks);
+
+  // Restore photo-map blocks (insert <div data-type="photo-map" data-config="…">)
+  html = restorePhotoMapsFromHtml(html, photoMaps);
 
   // Restore plugin script blocks
   html = restorePluginScriptsFromHtml(html, pluginScripts);
@@ -1905,6 +1935,20 @@ export function htmlToMarkdown(html: string): string {
     }
   );
 
+  // Pre-process: Replace photo-map blocks with placeholders before Turndown
+  // (empty <div data-type="photo-map"> would otherwise be dropped as blank).
+  const photoMaps: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="photo-map"[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const m = match.match(/data-config="([^"]*)"/);
+      let cfg = '';
+      if (m) { try { cfg = decodeURIComponent(m[1]); } catch { cfg = m[1]; } }
+      photoMaps.push(cfg);
+      return `##PHOTOMAP${photoMaps.length - 1}##`;
+    }
+  );
+
   // Pre-process: Replace component embeds with placeholders before Turndown
   // This ensures they survive Turndown processing
   // Using placeholder without underscores to avoid Turndown escaping them
@@ -2057,6 +2101,13 @@ export function htmlToMarkdown(html: string): string {
   eventBlocks.forEach((ev, index) => {
     const placeholder = `##EVENTBLOCK${index}##`;
     const replacement = `\n\`\`\`event\n${JSON.stringify(ev, null, 2)}\n\`\`\`\n`;
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: Restore photo-map blocks as ```photomap JSON fences.
+  photoMaps.forEach((cfg, index) => {
+    const placeholder = `##PHOTOMAP${index}##`;
+    const replacement = `\n\`\`\`photomap\n${cfg}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 
