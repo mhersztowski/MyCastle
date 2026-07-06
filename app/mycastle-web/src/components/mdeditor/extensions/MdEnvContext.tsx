@@ -18,6 +18,9 @@ export interface MdEnvApi {
    *  inside TipTap node-view portals, where plain React-context updates don't
    *  reliably re-render them in production builds — so they use useSyncExternalStore. */
   subscribe: (cb: () => void) => () => void;
+  /** Path of the document being edited (if known) — lets File chips resolve a
+   *  co-located data file when their stored absolute path is stale (doc moved). */
+  docPath?: string;
 }
 
 const MdEnvContext = createContext<MdEnvApi | null>(null);
@@ -42,7 +45,7 @@ function resolveEnvName(store: Map<string, unknown>, name: string): unknown {
   return cur;
 }
 
-export const MdEnvProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const MdEnvProvider: React.FC<{ children: React.ReactNode; docPath?: string }> = ({ children, docPath }) => {
   const storeRef = useRef<Map<string, unknown>>(new Map());
   const subsRef = useRef<Set<() => void>>(new Set());
   const [version, setVersion] = useState(0);
@@ -70,7 +73,8 @@ export const MdEnvProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     set,
     version,
     subscribe,
-  }), [set, subscribe, version]);
+    docPath,
+  }), [set, subscribe, version, docPath]);
 
   return <MdEnvContext.Provider value={api}>{children}</MdEnvContext.Provider>;
 };

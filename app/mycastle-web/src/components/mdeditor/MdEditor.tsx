@@ -1597,7 +1597,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   return (
     <>
-    <MdEnvProvider>
+    <MdEnvProvider docPath={filePath}>
     <AutomateDocumentProvider documentPath={filePath}>
     <Box className="md-editor-container" sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Editing toolbar — hidden in read-only (viewer) mode */}

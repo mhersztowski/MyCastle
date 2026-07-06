@@ -33,16 +33,34 @@ const FileNodeView: React.FC<NodeViewProps> = ({ node, editor, updateAttributes 
     if (!path || format !== 'json' || !env) return;
     let alive = true;
     (async () => {
-      try {
-        const res = await readFile(path);
-        const parsed = JSON.parse(res?.content ?? 'null');
-        if (alive) mdEnv.set(env, parsed);
-      } catch (e) {
-        // Leave env unset, but log so a prod failure (missing file / read error)
-        // is diagnosable instead of silently rendering a literal {{env:…}} marker.
-        // eslint-disable-next-line no-console
-        console.warn(`[mdenv] failed to load env "${env}" from "${path}":`, e);
+      // Try the stored path first, then the same-named file NEXT TO the document.
+      // A fileRef path is absolute (drive-relative); if the doc is later moved or
+      // copied to another folder the stored path goes stale and the read fails —
+      // the exact "works locally, {{env:…}} literal on prod" symptom. Resolving
+      // the basename against the doc's own folder recovers the co-located data.
+      const candidates = [path];
+      const docPath = mdEnv.docPath;
+      if (docPath) {
+        const dir = docPath.split('/').slice(0, -1).join('/');
+        const sibling = dir ? `${dir}/${basename(path)}` : basename(path);
+        if (sibling !== path) candidates.push(sibling);
       }
+      let lastErr: unknown = null;
+      for (const p of candidates) {
+        try {
+          const res = await readFile(p);
+          if (res && typeof res.content === 'string') {
+            if (alive) {
+              try { mdEnv.set(env, JSON.parse(res.content)); }
+              catch (pe) { console.warn(`[mdenv] env "${env}": "${p}" is not valid JSON:`, pe); }
+            }
+            return; // file existed & was read — don't fall through to the sibling
+          }
+        } catch (e) { lastErr = e; }
+      }
+      // Nothing readable at any candidate — leave env unset but log for diagnosis.
+      // eslint-disable-next-line no-console
+      console.warn(`[mdenv] failed to load env "${env}" from ${candidates.map(c => `"${c}"`).join(' / ')}:`, lastErr);
     })();
     return () => { alive = false; };
   }, [path, env, format, readFile, mdEnv]);
