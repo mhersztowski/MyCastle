@@ -11,6 +11,7 @@ import {
   ConnectionMode,
   SelectionMode,
   useReactFlow,
+  useStoreApi,
   type Node,
   type Edge,
   type NodeChange,
@@ -94,6 +95,8 @@ import BuildIcon from '@mui/icons-material/Build';
 import InfoIcon from '@mui/icons-material/Info';
 import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import LinkIcon from '@mui/icons-material/Link';
+import BoltIcon from '@mui/icons-material/Bolt';
 import StorageIcon from '@mui/icons-material/Storage';
 import LockIcon from '@mui/icons-material/Lock';
 import PhoneIcon from '@mui/icons-material/Phone';
@@ -109,165 +112,28 @@ import SyncIcon from '@mui/icons-material/Sync';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import PanToolIcon from '@mui/icons-material/PanTool';
 import FitScreenIcon from '@mui/icons-material/FitScreen';
+import GridViewIcon from '@mui/icons-material/GridView';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
 import ReactMarkdown from 'react-markdown';
+import { PyodideRuntime, emptyPyodideConfig, type PyodideProgress } from '../../modules/pyodide/PyodideRuntime';
+import { PyodideLoadingOverlay } from '../../modules/pyodide/PyodideLoadingOverlay';
+import { PYODIDE_BUILTIN_PACKAGES } from '../../modules/pyodide/builtinPackages';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type DashValue =
-  | string
-  | number
-  | boolean
-  | null
-  | DashValue[]
-  | { [k: string]: DashValue };
-
-type QFieldType = 'QIcon' | 'QImage' | 'QString' | 'QNumber' | 'QArray' | 'QMap' | 'QObjectRef' | 'QChildsObjectRef' | 'QFilePath';
+// Modele danych bloczków sceny dash przeniesione do @mhersztowski/core (core/models/DashModel).
+import type {
+  DashValue, QFieldType, QObjectRefValue, FieldDef, DashTransform, DashObject,
+  HandlerFn, LegacyDashObject, DataSourceEntry, FunctionCallObject, VarObject,
+  FcEdge, ClassObjItem, GetPropObject, SetPropObject, DashScene,
+  UmlMember, UmlClassDef, UmlSource,
+} from '@mhersztowski/core';
 
 const FIELD_TYPES: QFieldType[] = ['QString', 'QNumber', 'QFilePath', 'QObjectRef', 'QChildsObjectRef', 'QIcon', 'QImage', 'QArray', 'QMap'];
 
-interface QObjectRefValue { filePath: string; objectPath: string; [k: string]: DashValue; }
 const isObjectRef = (v: DashValue): v is QObjectRefValue =>
   typeof v === 'object' && v !== null && !Array.isArray(v) && 'filePath' in v && 'objectPath' in v;
-
-interface FieldDef { name: string; type: string; }
-
-// Base transform — every DashObject has this (like Qt's QWidget geometry)
-interface DashTransform {
-  x: number;
-  y: number;
-  rot: number;
-  scale: number;
-  width: number;
-  height: number;
-}
-
-interface DashObject {
-  id: string;
-  className: string;
-  objectName: string;
-  transform: DashTransform;
-  customFields?: FieldDef[];
-  properties: Record<string, DashValue>;
-  showPins?: boolean;
-  showDetails?: boolean;
-  showHeader?: boolean;
-  zIndex?: number;
-  /** 'group' renders a labeled container box that moves its children with it.
-   *  'qt-widget' is a MinisQt (core/browser/qt) widget rendered on the Render panel;
-   *  `className` holds the widget type (e.g. 'QPushButton'). */
-  kind?: 'group' | 'qt-widget';
-  /** Id of the Group this object belongs to (children are tracked by parentId). */
-  parentId?: string;
-}
-
-// Used only when parsing old scenes that stored x/y directly (no transform)
-type LegacyDashObject = Omit<DashObject, 'transform'> & { transform?: DashTransform; x?: number; y?: number };
-
-interface DataSourceEntry {
-  id: string;
-  name: string;
-  filePath: string;
-  fileType: 'json' | 'js';
-}
-
-interface FunctionCallObject {
-  id: string;
-  sourceId: string;       // DataSourceEntry.id
-  symbolPath: string;     // e.g. "ClassName.methodName" or "functionName"
-  paramNames: string[];
-  argOverrides: Record<number, string>;  // manual arg values when no Var connected
-  result: string | null;  // JSON-serialized last result
-  error: string | null;
-  x: number;
-  y: number;
-  pinsFlipped?: boolean;  // when true: arg handles on right, return on right
-}
-
-interface VarObject {
-  id: string;
-  varName: string;
-  varValue: string | null;  // JSON-serialized value
-  x: number;
-  y: number;
-  pinsFlipped?: boolean;  // when true: both pins on right side
-}
-
-interface FcEdge {
-  id: string;
-  source: string;
-  sourceHandle: string;   // 'return' on FunctionCall, 'value_out' on Var, 'get_X'/'instance_out' on ClassObj
-  target: string;
-  targetHandle: string;   // 'arg_N'/'this' on FunctionCall, 'value_in' on Var, 'set_X'/'instance_in' on ClassObj
-}
-
-interface ClassObjItem {
-  id: string;
-  sourceId: string;
-  className: string;
-  fieldNames: string[];       // ordered list of field/getter names
-  instanceValue: string | null; // JSON-serialized current instance
-  x: number;
-  y: number;
-  pinsFlipped?: boolean;      // when true: SET pins on right, GET pins on left
-}
-
-interface GetPropObject {
-  id: string;
-  propNameOverride: string;   // inline fallback when propname_in not connected
-  result: string | null;
-  error: string | null;
-  x: number;
-  y: number;
-}
-
-interface SetPropObject {
-  id: string;
-  propNameOverride: string;
-  result: string | null;
-  error: string | null;
-  x: number;
-  y: number;
-}
-
-/** Wbudowane biblioteki sandboxu (ujednolicone z automatyzacją Markdown). */
-interface DashLibs {
-  three?: boolean;
-  lit?: boolean;
-}
-
-interface DashScene {
-  type: 'dash-scene';
-  version: 1;
-  umlProjectPath?: string;
-  umlSources?: Array<{ id: string; path: string }>;
-  dataSources?: DataSourceEntry[];
-  functionCalls?: FunctionCallObject[];
-  vars?: VarObject[];
-  classObjs?: ClassObjItem[];
-  getProps?: GetPropObject[];
-  setProps?: SetPropObject[];
-  fcEdges?: FcEdge[];
-  objects: DashObject[];
-  /** Wbudowane biblioteki włączone dla sandboxu tej dashboard (Three.js / Lit). */
-  libs?: DashLibs;
-}
-
-interface UmlMember { id: string; kind: 'field' | 'method'; text: string; }
-
-interface UmlClassDef {
-  name: string;
-  kind: 'class' | 'abstract' | 'interface' | 'enum';
-  fields: FieldDef[];
-}
-
-interface UmlSource {
-  id: string;
-  path: string;
-  name: string;
-  classes: UmlClassDef[];
-}
 
 interface DashObjectNodeData extends Record<string, unknown> {
   objectId: string;
@@ -297,8 +163,9 @@ import { useNotification } from '../../modules/notification';
 import { useAlliApi } from '../../modules/automate/engine/useAlliApi';
 import type { AutomateSystemApiInterface } from '../../modules/automate/engine/AutomateSystemApi';
 import { loadLibrary } from '../../components/mdeditor/extensions/automateLibraries';
-import { DashQtRender, type QtRenderObject } from './DashQtRender';
 import { DashJsonPanel } from './DashJsonPanel';
+import { ensureQtLib, buildQtWidget } from '../../modules/qtui/qtLib';
+import type { QtUiScene, QtWidgetNode as QtUiWidgetNode } from '../../modules/qtui/QtUiTypes';
 
 // MinisQt (core/browser/qt) widget types offered in Scene → New → Qt Widget.
 // Each entry seeds a `qt-widget` DashObject with a sensible default size + props.
@@ -1595,6 +1462,131 @@ const TransformField: React.FC<{ label: string; value: number; step?: number; on
   );
 };
 
+// A single editable row for a MinisQt Q_PROPERTY (enumerated via
+// QObject.metaProperties). Read-only props (no setter, e.g. `count`) are disabled.
+// Złożone typy Qt → rodzaj strukturalnego edytora w popupie.
+const QT_COMPLEX: Record<string, 'color' | 'rect' | 'size' | 'point' | 'margins' | 'font'> = {
+  color: 'color', qcolor: 'color',
+  qrect: 'rect', qrectf: 'rect',
+  qsize: 'size', qsizef: 'size',
+  qpoint: 'point', qpointf: 'point',
+  qmargins: 'margins', qmarginsf: 'margins',
+  qfont: 'font',
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const parseQtObj = (v: unknown): Record<string, any> => {
+  if (v == null) return {};
+  if (typeof v === 'string') { try { const p = JSON.parse(v); return p && typeof p === 'object' ? p : {}; } catch { return {}; } }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (typeof v === 'object') return v as any;
+  return {};
+};
+const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n || 0))).toString(16).padStart(2, '0');
+
+// Strukturalny edytor złożonego typu Qt (zawartość popupu).
+const QtComplexEditor: React.FC<{
+  kind: 'color' | 'rect' | 'size' | 'point' | 'margins' | 'font';
+  value: DashValue | undefined;
+  onChange: (v: DashValue) => void;
+}> = ({ kind, value, onChange }) => {
+  const obj = parseQtObj(value);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const set = (patch: Record<string, any>) => onChange({ ...obj, ...patch } as DashValue);
+  const numRow = (label: string, key: string) => (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+      <Typography sx={{ fontSize: 11, width: 70, color: 'text.secondary', fontFamily: 'monospace' }}>{label}</Typography>
+      <TextField size="small" variant="standard" type="number" value={obj[key] ?? 0}
+        onChange={(e) => set({ [key]: e.target.value === '' ? 0 : Number(e.target.value) })}
+        inputProps={{ style: { fontSize: 12, width: 96 } }} />
+    </Box>
+  );
+
+  if (kind === 'color') {
+    const hex = typeof value === 'string' && value ? value
+      : (obj._r != null ? `#${toHex(obj._r)}${toHex(obj._g)}${toHex(obj._b)}` : '');
+    const safe = /^#[0-9a-f]{6}$/i.test(hex) ? hex : '#888888';
+    return (
+      <Box sx={{ p: 1.5, minWidth: 200 }}>
+        <Typography sx={{ fontSize: 11, fontWeight: 700, mb: 1 }}>Kolor</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <input type="color" value={safe} onChange={(e) => onChange(e.target.value)}
+            style={{ width: 44, height: 34, border: 'none', background: 'none', padding: 0, cursor: 'pointer' }} />
+          <TextField size="small" variant="standard" placeholder="#rrggbb lub nazwa" value={hex}
+            onChange={(e) => onChange(e.target.value)} inputProps={{ style: { fontSize: 12, fontFamily: 'monospace', width: 120 } }} />
+        </Box>
+        <Button size="small" onClick={() => onChange('')} sx={{ fontSize: 10, mt: 1, textTransform: 'none' }}>Wyczyść (domyślny)</Button>
+      </Box>
+    );
+  }
+  if (kind === 'rect') return <Box sx={{ p: 1.5, minWidth: 190 }}><Typography sx={{ fontSize: 11, fontWeight: 700, mb: 1 }}>QRect</Typography>{numRow('x', '_x')}{numRow('y', '_y')}{numRow('width', '_w')}{numRow('height', '_h')}</Box>;
+  if (kind === 'size') return <Box sx={{ p: 1.5, minWidth: 190 }}><Typography sx={{ fontSize: 11, fontWeight: 700, mb: 1 }}>QSize</Typography>{numRow('width', '_w')}{numRow('height', '_h')}</Box>;
+  if (kind === 'point') return <Box sx={{ p: 1.5, minWidth: 190 }}><Typography sx={{ fontSize: 11, fontWeight: 700, mb: 1 }}>QPoint</Typography>{numRow('x', '_x')}{numRow('y', '_y')}</Box>;
+  if (kind === 'margins') return <Box sx={{ p: 1.5, minWidth: 190 }}><Typography sx={{ fontSize: 11, fontWeight: 700, mb: 1 }}>QMargins</Typography>{numRow('left', '_l')}{numRow('top', '_t')}{numRow('right', '_r')}{numRow('bottom', '_b')}</Box>;
+  // font
+  return (
+    <Box sx={{ p: 1.5, minWidth: 220 }}>
+      <Typography sx={{ fontSize: 11, fontWeight: 700, mb: 1 }}>QFont</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 11, width: 70, color: 'text.secondary', fontFamily: 'monospace' }}>family</Typography>
+        <TextField size="small" variant="standard" value={obj._family ?? ''} onChange={(e) => set({ _family: e.target.value })} inputProps={{ style: { fontSize: 12, width: 130 } }} />
+      </Box>
+      {numRow('size', '_size')}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}><Switch size="small" checked={(obj._weight ?? 400) >= 600} onChange={(_, c) => set({ _weight: c ? 700 : 400 })} /><Typography sx={{ fontSize: 11 }}>bold</Typography></Box>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}><Switch size="small" checked={!!obj._italic} onChange={(_, c) => set({ _italic: c })} /><Typography sx={{ fontSize: 11 }}>italic</Typography></Box>
+      </Box>
+    </Box>
+  );
+};
+
+const QtPropertyField: React.FC<{
+  name: string; type: string; settable: boolean;
+  value: DashValue | undefined; dflt: unknown;
+  onChange: (v: DashValue) => void;
+}> = ({ name, type, settable, value, dflt, onChange }) => {
+  const effective = value !== undefined ? value : (dflt as DashValue | undefined);
+  const t = (type || '').toLowerCase();
+  const complex = QT_COMPLEX[t];
+  const isBool = !complex && (t === 'bool' || t === 'boolean' || typeof effective === 'boolean');
+  const isNum = !isBool && !complex && (t === 'number' || t === 'int' || t === 'double' || t === 'float' || typeof effective === 'number');
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const summary = effective == null ? '' : (typeof effective === 'object' ? JSON.stringify(effective) : String(effective));
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, opacity: settable ? 1 : 0.55 }}>
+      <Typography sx={{ fontSize: 10, fontFamily: 'monospace', color: '#26c6da', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        title={`${name}: ${type}${settable ? '' : ' (read-only)'}`}>{name}</Typography>
+      {isBool ? (
+        <Switch size="small" checked={!!effective} disabled={!settable} onChange={(_, c) => onChange(c)} />
+      ) : isNum ? (
+        <TextField size="small" variant="standard" type="number" disabled={!settable}
+          value={effective ?? ''} onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+          inputProps={{ style: { fontSize: 11, width: 66, textAlign: 'right', fontFamily: 'monospace' } }} />
+      ) : (
+        <>
+          {complex === 'color' && /^#[0-9a-f]{6}$/i.test(summary) && (
+            <Box sx={{ width: 14, height: 14, borderRadius: '3px', bgcolor: summary, border: '1px solid rgba(255,255,255,0.3)', flexShrink: 0 }} />
+          )}
+          <TextField size="small" variant="standard" disabled={!settable}
+            value={summary} onChange={(e) => onChange(e.target.value)}
+            inputProps={{ style: { fontSize: 11, width: complex ? 68 : 90, fontFamily: 'monospace' } }} />
+          {complex && settable && (
+            <IconButton size="small" onClick={(e) => setAnchor(e.currentTarget)} sx={{ p: 0.25 }} title={`Edytuj ${type}…`}>
+              <TuneIcon sx={{ fontSize: 15, color: '#26c6da' }} />
+            </IconButton>
+          )}
+        </>
+      )}
+      {complex && (
+        <Popover open={Boolean(anchor)} anchorEl={anchor} onClose={() => setAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}>
+          <QtComplexEditor kind={complex} value={effective} onChange={onChange} />
+        </Popover>
+      )}
+    </Box>
+  );
+};
+
 const PropertiesPanel: React.FC<{
   object: DashObject | null;
   fields: FieldDef[];
@@ -1709,6 +1701,14 @@ const PropertiesPanel: React.FC<{
         <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Show field types</Typography>
         <Switch size="small" checked={showDetails} onChange={onToggleShowDetails} />
       </Box>
+      {object.kind === 'group' && (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.25 }}>
+          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Show frame</Typography>
+          <Switch size="small" checked={object.properties.showFrame !== false}
+            onChange={(_, checked) => onPropertyChange(object.id, 'showFrame', checked)}
+            sx={{ '& .MuiSwitch-thumb': { bgcolor: '#7c4dff' }, '& .Mui-checked + .MuiSwitch-track': { bgcolor: '#7c4dff60' } }} />
+        </Box>
+      )}
       {object?.className === 'ObjectRef' && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.25 }}>
           <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Show pins</Typography>
@@ -1905,8 +1905,87 @@ const parseJsSource = (code: string): CodeSymbol[] => {
   return symbols;
 };
 
-const loadDataSourceContent = (content: string, fileType: 'json' | 'js'): JsonNode => {
+/** Top-level Python functions from a `.py` source (draggable → PyFunctionCall). */
+const parsePythonSource = (code: string): CodeSymbol[] => {
+  const syms: CodeSymbol[] = [];
+  const seen = new Set<string>();
+  // A top-level def has `def`/`async def` at column 0 (no indentation → excludes
+  // class methods and nested defs). Single-line parameter list.
+  const re = /^(async[ \t]+)?def[ \t]+([A-Za-z_]\w*)[ \t]*\(([^)]*)\)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const [, asyncKw, name, params] = m;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    syms.push({ kind: 'function', name, mods: asyncKw ? ['async'] : [], params: params.trim(), children: [] });
+  }
+  return syms;
+};
+
+// Liczba parametrów z tekstu (np. "a: number, b = 1") — dzieli po przecinkach
+// na poziomie 0 (ignoruje zagnieżdżone <>, (), [], {}). Pomija `self`/`cls` (Python).
+const countTopLevelParams = (params: string, isPython?: boolean): number => {
+  const p = (params || '').trim();
+  if (!p) return 0;
+  let depth = 0; const parts: string[] = []; let cur = '';
+  for (const ch of p) {
+    if ('<([{'.includes(ch)) depth++;
+    else if ('>)]}'.includes(ch)) depth--;
+    if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; } else cur += ch;
+  }
+  if (cur.trim()) parts.push(cur);
+  let names = parts.map((s) => s.trim()).filter(Boolean);
+  if (isPython) names = names.filter((n) => !/^(self|cls)\b/.test(n));
+  return names.length;
+};
+
+// Spłaszcza symbole data source do listy wywoływalnych funkcji (top-level + metody klas).
+const flattenHandlerFns = (
+  symbols: CodeSymbol[] | undefined, src: DataSourceEntry, parent?: string,
+): HandlerFn[] => {
+  const out: HandlerFn[] = [];
+  for (const s of symbols || []) {
+    const path = parent ? `${parent}.${s.name}` : s.name;
+    if (s.kind === 'function' || s.kind === 'arrow' || s.kind === 'method') {
+      out.push({
+        sourceId: src.id, sourceName: src.name, fileType: src.fileType, symbolPath: path,
+        params: s.params || '', paramCount: countTopLevelParams(s.params || '', src.fileType === 'python'),
+        ...(src.fileType === 'python' ? { lang: 'python' as const } : {}),
+      });
+    }
+    if (s.children && s.children.length) out.push(...flattenHandlerFns(s.children, src, path));
+  }
+  return out;
+};
+
+// Lazily-loaded TypeScript compiler — strips types from `.ts` data sources
+// before they run in `new Function()`. Loaded from a CDN on first use (same
+// approach as Pyodide) so the ~8 MB compiler never bloats the app bundle.
+interface TsCompilerLike {
+  transpileModule(input: string, opts: { compilerOptions: Record<string, unknown> }): { outputText: string };
+  ScriptTarget: Record<string, number>;
+  ModuleKind: Record<string, number>;
+}
+let _tsCompiler: TsCompilerLike | null = null;
+const transpileTs = async (source: string): Promise<string> => {
+  if (!_tsCompiler) {
+    const cdnUrl = 'https://esm.sh/typescript@5.3.3';
+    const mod = await import(/* @vite-ignore */ cdnUrl) as { default?: TsCompilerLike } & TsCompilerLike;
+    _tsCompiler = mod.default ?? mod;
+  }
+  const ts = _tsCompiler;
+  return ts.transpileModule(source, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2020,
+      module: ts.ModuleKind.ESNext,
+      isolatedModules: true,
+    },
+  }).outputText;
+};
+
+const loadDataSourceContent = (content: string, fileType: 'json' | 'js' | 'python' | 'ts'): JsonNode => {
   if (fileType === 'json') return JSON.parse(content) as JsonNode;
+  if (fileType === 'python') return parsePythonSource(content) as unknown as JsonNode;
   return parseJsSource(content) as unknown as JsonNode;
 };
 
@@ -2133,7 +2212,7 @@ const DataSourcePanel: React.FC<{
                 {expanded
                   ? <ExpandMoreIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0 }} />
                   : <ChevronRightIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0 }} />}
-                <StorageIcon sx={{ fontSize: 12, color: src.fileType === 'json' ? '#81c784' : '#ffb74d', flexShrink: 0 }} />
+                <StorageIcon sx={{ fontSize: 12, color: src.fileType === 'json' ? '#81c784' : src.fileType === 'python' ? '#4fc3f7' : src.fileType === 'ts' ? '#3178c6' : '#ffb74d', flexShrink: 0 }} />
                 <Typography sx={{ fontSize: 11, fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {src.name}
                 </Typography>
@@ -2161,7 +2240,7 @@ const DataSourcePanel: React.FC<{
                     </Box>
                   ) : data === null ? (
                     <Typography sx={{ fontSize: 10, color: 'error.light', fontStyle: 'italic' }}>Failed to load</Typography>
-                  ) : src.fileType === 'js' ? (
+                  ) : src.fileType === 'js' || src.fileType === 'python' || src.fileType === 'ts' ? (
                     <SourceTreeView symbols={data as unknown as CodeSymbol[]} sourceId={src.id} />
                   ) : (
                     <JsonTreeNode value={data} sourceId={src.id} filePath={src.filePath} />
@@ -2638,6 +2717,7 @@ interface FcNodeData extends Record<string, unknown> {
   connectedThisValue: unknown | undefined;
   selected: boolean;
   pinsFlipped: boolean;
+  lang?: 'python';
   onCall: () => void;
   onArgOverrideChange: (index: number, value: string) => void;
 }
@@ -2679,10 +2759,13 @@ const FunctionCallNode: React.FC<NodeProps<Node<FcNodeData>>> = ({ data }) => {
       {/* Header — also serves as drag handle */}
       <Box className="dash-drag-handle" sx={{ px: 1, py: 0.75, borderBottom: '1px solid #7c4dff44', bgcolor: '#7c4dff18', cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <CodeIcon sx={{ fontSize: 13, color: '#ce93d8', flexShrink: 0 }} />
+          <CodeIcon sx={{ fontSize: 13, color: data.lang === 'python' ? '#4fc3f7' : '#ce93d8', flexShrink: 0 }} />
+          {data.lang === 'python' && (
+            <Box component="span" sx={{ fontSize: 8, fontWeight: 700, letterSpacing: 0.5, color: '#0d0d0d', bgcolor: '#4fc3f7', borderRadius: 0.5, px: 0.4, py: '1px', flexShrink: 0 }}>PY</Box>
+          )}
           <Box sx={{ flex: 1, overflow: 'hidden' }}>
             {scope && <Typography component="div" sx={{ fontSize: 9, color: '#ce93d866', fontFamily: 'monospace', lineHeight: 1 }}>{scope}</Typography>}
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#ce93d8', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fn}()</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: data.lang === 'python' ? '#4fc3f7' : '#ce93d8', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fn}()</Typography>
           </Box>
           <Tooltip title={data.running ? 'Running…' : 'Call function'}>
             <span className="nodrag">
@@ -2835,7 +2918,8 @@ const ValuePreviewButton: React.FC<{
   jsonValue: string | null;
   accentColor?: string;
   label?: string;
-}> = ({ jsonValue, accentColor = '#81c784', label = 'Value' }) => {
+  onEdit?: () => void;   // gdy podane → w popupie pojawia się przycisk „Edytuj…"
+}> = ({ jsonValue, accentColor = '#81c784', label = 'Value', onEdit }) => {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const hasValue = jsonValue !== null && jsonValue !== undefined;
 
@@ -2897,6 +2981,13 @@ const ValuePreviewButton: React.FC<{
             {label}
           </Typography>
           <ValuePreview jsonValue={jsonValue} accentColor={accentColor} expanded />
+          {onEdit && (
+            <Button size="small" variant="outlined" fullWidth startIcon={<EditIcon sx={{ fontSize: 14 }} />}
+              onClick={() => { setAnchorEl(null); onEdit(); }}
+              sx={{ mt: 1.5, fontSize: 11, py: 0.25, textTransform: 'none', borderColor: accentColor + '66', color: accentColor, '&:hover': { borderColor: accentColor, bgcolor: accentColor + '11' } }}>
+              Edytuj wartość…
+            </Button>
+          )}
         </Box>
       </Popover>
     </>
@@ -2912,6 +3003,7 @@ interface VarNodeData extends Record<string, unknown> {
   selected: boolean;
   pinsFlipped: boolean;
   onNameChange: (name: string) => void;
+  onEditValue: () => void;   // otwiera edytor wartości (VarInitDialog)
 }
 
 const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
@@ -2964,8 +3056,8 @@ const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
           style={{ position: 'absolute', [pinSide]: -5, top: '50%', transform: 'translateY(-50%)', width: 10, height: 10, background: '#4db6ac', border: '1.5px solid #001a0d', borderRadius: 2, pointerEvents: 'all' }} />
         <Typography sx={{ fontSize: 9, color: '#4db6ac', fontFamily: 'monospace', letterSpacing: 0.5, textTransform: 'uppercase' }}>Set</Typography>
       </Box>
-      {/* Value preview */}
-      <ValuePreviewButton jsonValue={data.varValue} accentColor="#81c784" label="Value" />
+      {/* Value preview + edycja (przycisk „Edytuj…" w popupie → VarInitDialog) */}
+      <ValuePreviewButton jsonValue={data.varValue} accentColor="#81c784" label="Value" onEdit={data.onEditValue} />
       {/* Get row (value_out) */}
       <Box className="nodrag" sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: '2px', minHeight: 22, position: 'relative', borderTop: '1px solid #81c78411',
         justifyContent: flipped ? 'flex-start' : 'flex-end', borderBottom: fieldKeys.length > 0 ? '2px solid #81c78422' : 'none' }}>
@@ -3283,6 +3375,7 @@ interface GroupNodeData extends Record<string, unknown> {
   transform: DashTransform;
   selected: boolean;
   childCount: number;
+  showFrame: boolean;   // pokazuje/ukrywa wizualną ramkę grupy (border + tło)
   onObjectNameChange: (name: string) => void;
   onResizeDrag: (width: number, height: number) => void;
 }
@@ -3318,19 +3411,24 @@ const GroupNode: React.FC<NodeProps<Node<GroupNodeData>>> = ({ data }) => {
 
   const commitName = () => { setEditingName(false); if (nameVal.trim() && nameVal !== data.objectName) data.onObjectNameChange(nameVal.trim()); };
 
+  // „Show frame" wyłączony → grupa jest CAŁKOWICIE niewidzialna (bez ramki, tła,
+  // cienia, nagłówka i uchwytu) — czysto logiczne grupowanie. Nadal działa: przesuwa
+  // dzieci i da się ją zaznaczyć (na scenie lub w drzewie SCENE, potem włączyć ramkę).
+  const showVisual = data.showFrame;
+
   return (
     <Box sx={{
       width: w, height: h, position: 'relative',
-      border: '2px dashed', borderColor: data.selected ? '#4fc3f7' : '#7c4dff77',
-      borderRadius: 1.5, bgcolor: data.selected ? '#4fc3f70d' : '#7c4dff0a',
-      boxShadow: data.selected ? '0 0 0 2px #4fc3f755' : 'none',
+      border: '2px dashed', borderColor: !showVisual ? 'transparent' : (data.selected ? '#4fc3f7' : '#7c4dff77'),
+      borderRadius: 1.5, bgcolor: !showVisual ? 'transparent' : (data.selected ? '#4fc3f70d' : '#7c4dff0a'),
+      boxShadow: (showVisual && data.selected) ? '0 0 0 2px #4fc3f755' : 'none',
       cursor: 'grab', '&:active': { cursor: 'grabbing' }, userSelect: 'none',
       ...(t.rot !== 0 || t.scale !== 1
         ? { transform: `${t.rot !== 0 ? `rotate(${t.rot}deg) ` : ''}${t.scale !== 1 ? `scale(${t.scale})` : ''}`.trim() }
         : {}),
     }}>
       {/* Header label (sits just above the box) */}
-      <Box sx={{
+      {showVisual && <Box sx={{
         position: 'absolute', top: 0, left: -2, transform: 'translateY(-100%)',
         display: 'flex', alignItems: 'center', gap: 0.5, px: 0.75, py: 0.25,
         bgcolor: data.selected ? '#4fc3f7' : '#7c4dff', color: '#fff',
@@ -3347,17 +3445,412 @@ const GroupNode: React.FC<NodeProps<Node<GroupNodeData>>> = ({ data }) => {
               {data.objectName}
             </Typography>}
         <Typography sx={{ fontSize: 10, opacity: 0.8 }}>· {data.childCount}</Typography>
-      </Box>
-      {/* Resize handle (bottom-right corner) */}
-      <div onPointerDown={onResizePointerDown} style={{
+      </Box>}
+      {/* Resize handle (bottom-right corner) — tylko gdy ramka widoczna/zaznaczona */}
+      {showVisual && <div onPointerDown={onResizePointerDown} style={{
         position: 'absolute', width: 12, height: 12, bottom: -6, right: -6,
         cursor: 'se-resize', background: data.selected ? '#4fc3f7' : '#7c4dff', borderRadius: 2,
-      }} />
+      }} />}
     </Box>
   );
 };
 
-const NODE_TYPES = { dashObject: DashObjectNode, group: GroupNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
+// ─── QtWidgetNode ─────────────────────────────────────────────────────────────
+// A live MinisQt (core/browser/qt) widget rendered directly on the flow canvas —
+// the same surface as Var/GetProp/FunctionCall. A parent widget renders its
+// qt-widget children *nested inside* it (real Qt parent/child), and an edge/
+// corner gizmo resizes the widget graphically (writes back to its transform).
+interface QtWidgetSpec {
+  id: string;
+  className: string;
+  properties: Record<string, unknown>;
+  transform: DashTransform;
+  parentId?: string;
+}
+
+interface QtWidgetNodeData extends Record<string, unknown> {
+  objectId: string;
+  objectName: string;
+  className: string;
+  spec: QtWidgetSpec;         // the root widget of this node
+  children: QtWidgetSpec[];   // qt-widget descendants (BFS order: parents first)
+  transform: DashTransform;
+  selected: boolean;
+  selectMode?: boolean;                // "Select QT" mode active → click selects nested widgets
+  selectedDescendants?: string[];      // ids of this subtree's selected children (for highlight)
+  onSelectWidget?: (id: string, additive: boolean) => void;
+  onResizeDrag: (width: number, height: number) => void;
+  actionMode?: boolean;                // "Action" mode → widget is live, native clicks fire signals
+  signalHandlersMap?: Record<string, Record<string, { sourceId: string; symbolPath: string }>>;
+  onSignal?: (sceneId: string, signal: string, args: unknown[]) => void;
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Odtwarza właściwą instancję typu Qt z zapisanej wartości (JSON `{_x,..}` / hex),
+// by generyczny setter (def.set) dostał to, czego oczekuje.
+function reviveQtValue(g: any, type: string, val: any): any {
+  const t = (type || '').toLowerCase();
+  if (val == null) return val;
+  const o = (typeof val === 'string') ? (() => { try { return JSON.parse(val); } catch { return null; } })() : val;
+  if (t === 'qcolor' || t === 'color') {
+    if (typeof val === 'string') return val;                          // setter przyjmuje hex/nazwę
+    if (o && o._r != null && g.QColor) return g.QColor.fromRgb(o._r, o._g, o._b, o._a ?? 255);
+    return val;
+  }
+  if ((t === 'qrect' || t === 'qrectf') && o && g.QRect) return new g.QRect(o._x || 0, o._y || 0, o._w || 0, o._h || 0);
+  if ((t === 'qsize' || t === 'qsizef') && o && g.QSize) return new g.QSize(o._w || 0, o._h || 0);
+  if ((t === 'qpoint' || t === 'qpointf') && o && g.QPoint) return new g.QPoint(o._x || 0, o._y || 0);
+  if ((t === 'qmargins' || t === 'qmarginsf') && o && g.QMargins) return new g.QMargins(o._l || 0, o._t || 0, o._r || 0, o._b || 0);
+  if (t === 'qfont' && o && g.QFont) {
+    const f = new g.QFont(o._family || undefined, o._size || 14, o._weight || 400);
+    if (o._italic != null && typeof f.setItalic === 'function') f.setItalic(!!o._italic);
+    if (o._underline != null && typeof f.setUnderline === 'function') f.setUnderline(!!o._underline);
+    return f;
+  }
+  return val;
+}
+
+// Reflection-based widget builder. `geom` (when given) overrides the widget's own
+// transform — used so the root fills the node's canvas while children keep their
+// own geometry (relative to their Qt parent).
+// Grupuje meta-właściwości/sygnały klasy Qt wg klasy, która je DEKLARUJE (jak w Qt
+// Designer). Zwraca grupy od najbardziej pochodnej klasy do bazowej; każda nazwa
+// trafia do pierwszej (najbardziej pochodnej) klasy, która ją deklaruje.
+function qtMetaGroups(Cls: any, kind: 'properties' | 'signals'): Array<{ className: string; own: Record<string, any>; names: string[] }> {
+  const chain: any[] = [];
+  let c = Cls;
+  while (typeof c === 'function' && c !== Object && c !== Function.prototype) {
+    chain.push(c);
+    c = Object.getPrototypeOf(c);
+  }
+  const claimed = new Set<string>();
+  const groups: Array<{ className: string; own: Record<string, any>; names: string[] }> = [];
+  for (const k of chain) {  // od najbardziej pochodnej do bazowej
+    const own = Object.prototype.hasOwnProperty.call(k, kind) ? k[kind] : null;
+    if (!own || typeof own !== 'object') continue;
+    const names = Object.keys(own).filter((n) => !claimed.has(n));
+    if (!names.length) continue;
+    names.forEach((n) => claimed.add(n));
+    groups.push({ className: k.name || '?', own, names });
+  }
+  return groups;
+}
+
+function buildQtInstance(spec: QtWidgetSpec, g: any, geom: { x: number; y: number; w: number; h: number } | null): any {
+  const Cls = g[spec.className];
+  if (typeof Cls !== 'function') return null;
+  const p = (spec.properties ?? {}) as Record<string, any>;
+  const hasText = /Button|Label|CheckBox|GroupBox/.test(spec.className);
+  let w: any;
+  try { w = hasText && p.text != null ? new Cls(String(p.text)) : new Cls(); }
+  catch { try { w = new Cls(); } catch { return null; } }
+  const call = (m: string, ...a: any[]) => { if (typeof w[m] === 'function') { try { w[m](...a); } catch { /* best-effort */ } } };
+  call('setObjectName', spec.id);
+  if (p.text != null) call('setText', String(p.text));
+  if (p.min != null) call('setMinimum', Number(p.min));
+  if (p.max != null) call('setMaximum', Number(p.max));
+  if (p.value != null) call('setValue', Number(p.value));
+  if (p.checked != null) call('setChecked', !!p.checked);
+  // Generycznie aplikuj pozostałe zadeklarowane Q_PROPERTY (color, font, alignment,
+  // frameShape, toolTip, contentsMargins…) — pomijając te sterowane transformem node'a.
+  try {
+    const meta = g.QObject?.metaProperties?.(Cls) || {};
+    const skip = new Set(['objectName', 'geometry', 'pos', 'size', 'x', 'y', 'width', 'height', 'text', 'value', 'minimum', 'maximum', 'checked', 'min', 'max']);
+    for (const key of Object.keys(p)) {
+      if (skip.has(key)) continue;
+      const def = meta[key];
+      if (!def || typeof def.set !== 'function') continue;
+      const raw = p[key];
+      if (raw === undefined || raw === null || raw === '') continue;
+      try { def.set(w, reviveQtValue(g, def.type, raw)); } catch { /* best-effort */ }
+    }
+  } catch { /* ignore */ }
+  const t = spec.transform;
+  const gx = geom ? geom.x : t.x, gy = geom ? geom.y : t.y;
+  const gw = geom ? geom.w : t.width, gh = geom ? geom.h : t.height;
+  call('setGeometry', Math.round(gx), Math.round(gy), Math.max(8, Math.round(gw)), Math.max(8, Math.round(gh)));
+  return w;
+}
+
+// Mapuje właściwości węzła .qtui.json na `properties` DashObjectu (klucze zgodne z
+// buildQtInstance / panelem Properties: text/checked/min/max/value/color/…).
+function qtuiNodeToDashProps(node: QtUiWidgetNode, g: any): Record<string, DashValue> {
+  const p: Record<string, DashValue> = {};
+  if (node.text != null) p.text = node.text;
+  if (node.checked != null) p.checked = node.checked;
+  if (node.min != null) p.min = node.min;
+  if (node.max != null) p.max = node.max;
+  if (node.value != null) p.value = node.value;
+  if (node.textVisible != null) p.textVisible = node.textVisible;
+  // qtui `color`: dla QPushButton to kolor tła, dla reszty (QLabel…) kolor tekstu.
+  if (node.color != null) { if (node.class === 'QPushButton') p.backgroundColor = node.color; else p.color = node.color; }
+  if (node.background != null) p.backgroundColor = node.background;
+  if (node.font) p.font = { _family: 'system-ui, sans-serif', _size: node.font.pixelSize ?? 14, _weight: node.font.bold ? 700 : 400, _italic: false, _underline: false } as unknown as DashValue;
+  if (node.alignment && g?.Qt && typeof g.Qt[node.alignment] === 'number') p.alignment = g.Qt[node.alignment] as number;
+  return p;
+}
+
+// Konwertuje scenę .qtui.json na poddrzewo DashObjectów (qt-widget). Buduje scenę na
+// żywo (buildQtWidget) i ustawia geometrię roota — layouty liczą się synchronicznie
+// (setGeometry → _relayout), więc odczytujemy policzoną geometrię każdego widgetu
+// (względem rodzica) i spłaszczamy drzewo do DashObjectów. Root ląduje na (spawnX,
+// spawnY); dzieci zachowują geometrię względną → renderują się w JEDNYM node'u.
+function qtuiSceneToDashObjects(scene: QtUiScene, g: any, spawnX: number, spawnY: number): DashObject[] {
+  const W = scene.width || 320, H = scene.height || 240;
+  // 1) Zbuduj żywe drzewo i policz geometrię.
+  const geomById = new Map<string, { x: number; y: number; w: number; h: number }>();
+  try {
+    const root = buildQtWidget(scene.root, g);
+    if (root && typeof root.setGeometry === 'function') {
+      try { root.setGeometry(0, 0, W, H); } catch { /* ignore */ }
+      const collect = (wdg: any) => {
+        if (!wdg) return;
+        const name = typeof wdg.objectName === 'function' ? wdg.objectName() : null;
+        const gm = typeof wdg.geometry === 'function' ? wdg.geometry() : null;
+        if (name && gm) geomById.set(name, { x: gm.x(), y: gm.y(), w: gm.width(), h: gm.height() });
+        for (const c of (wdg._children || [])) collect(c);
+      };
+      collect(root);
+    }
+  } catch { /* fallback: użyjemy node.geometry */ }
+
+  // 2) Spłaszcz drzewo QtWidgetNode → DashObject[] (BFS: rodzice przed dziećmi).
+  const out: DashObject[] = [];
+  const walk = (node: QtUiWidgetNode, parentId: string | null, isRoot: boolean) => {
+    const measured = geomById.get(node.id);
+    const geo = node.geometry;
+    const rel = isRoot
+      ? { x: spawnX, y: spawnY, w: W, h: H }
+      : measured ?? (geo ? { x: geo[0], y: geo[1], w: geo[2], h: geo[3] } : { x: 8, y: 8, w: 120, h: 28 });
+    const id = makeId();
+    out.push({
+      id, className: node.class, kind: 'qt-widget',
+      objectName: node.id || node.class.replace(/^Q/, ''),
+      transform: { x: Math.round(rel.x), y: Math.round(rel.y), rot: 0, scale: 1, width: Math.max(8, Math.round(rel.w)), height: Math.max(8, Math.round(rel.h)) },
+      properties: qtuiNodeToDashProps(node, g),
+      ...(parentId ? { parentId } : {}),
+    });
+    for (const c of node.children ?? []) walk(c, id, false);
+  };
+  walk(scene.root, null, true);
+  return out;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+const QT_RESIZE_DIRS = ['e', 's', 'se'] as const;
+type QtResizeDir = typeof QT_RESIZE_DIRS[number];
+
+// Diagnostyka renderowania qt-widgetów (np. znikanie na mobile przy przesuwaniu).
+// Ustaw `window.__QT_DEBUG = false` w konsoli, by wyciszyć.
+const QT_DEBUG_DEFAULT = true;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const qlog = (...args: any[]) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const on = (globalThis as any).__QT_DEBUG;
+  if (on === false) return;
+  if (on === undefined && !QT_DEBUG_DEFAULT) return;
+  // Serializuj obiekty inline — mobilne konsole często nie rozwijają obiektów,
+  // więc treść musi być widoczna wprost na zrzucie ekranu.
+  const parts = args.map((a) => {
+    if (a === null || typeof a !== 'object') return String(a);
+    try { return JSON.stringify(a); } catch { return String(a); }
+  });
+  // eslint-disable-next-line no-console
+  console.log('[dash-qt] ' + parts.join(' '));
+};
+
+const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => {
+  const { getZoom, screenToFlowPosition } = useReactFlow();
+  const hostRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const gRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const canvasRef = useRef<any>(null);
+  const buildCountRef = useRef(0);
+  const [ready, setReady] = useState(false);
+  const t = data.transform;
+  const w = t.width > 0 ? t.width : 160;
+  const h = t.height > 0 ? t.height : 120;
+
+  useEffect(() => {
+    qlog('mount', data.objectId, { w, h, children: data.children.length });
+    return () => qlog('unmount', data.objectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    ensureQtLib().then((g) => { if (!cancelled) { gRef.current = g; setReady(true); qlog('qtlib ready', data.objectId); } }).catch((e) => qlog('qtlib ERROR', data.objectId, String(e)));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Content key that captures ONLY what affects the rendered widget subtree
+  // (class, properties, size, children geometry) — NOT the node's own x/y nor the
+  // `selected`/callback churn from rfNodesBase recomputes. This keeps the qt-canvas
+  // from rebuilding (and blanking) on every selection/drag re-render.
+  const specKey = useMemo(() => JSON.stringify({
+    c: data.spec.className, p: data.spec.properties, w, h,
+    ch: data.children.map((x) => ({ id: x.id, c: x.className, p: x.properties, t: x.transform, pid: x.parentId })),
+  }), [data.spec.className, data.spec.properties, data.children, w, h]);
+
+  // Klucz zależności do (re)podpięcia sygnałów: zmienia się gdy przełączamy tryb
+  // Action albo gdy zmienią się handlery tego poddrzewa (spec + dzieci).
+  const sigKey = useMemo(() => {
+    const ids = [data.spec.id, ...data.children.map((c) => c.id)];
+    const map = data.signalHandlersMap ?? {};
+    return JSON.stringify({ a: !!data.actionMode, h: ids.map((id) => [id, map[id] ?? null]) });
+  }, [data.spec.id, data.children, data.actionMode, data.signalHandlersMap]);
+
+  // (Re)build the whole widget subtree whenever geometry or the spec changes.
+  useEffect(() => {
+    if (!ready || !hostRef.current) { qlog('build skip', data.objectId, { ready, host: !!hostRef.current }); return; }
+    const g = gRef.current;
+    const tag: string = g.QtCanvas?.__tag ?? 'qt-canvas';
+    let canvas = canvasRef.current;
+    const canvasExisted = !!canvas;
+    if (!canvas) { canvas = document.createElement(tag); hostRef.current.innerHTML = ''; hostRef.current.appendChild(canvas); canvasRef.current = canvas; }
+    canvas.style.cssText = `width:${w}px;height:${h}px;display:block;`;
+    const n = ++buildCountRef.current;
+    qlog('build#' + n, data.objectId, { w, h, canvasExisted, attached: !!(canvas.isConnected), childrenSpecs: data.children.length });
+    const raf = requestAnimationFrame(() => {
+      const root = canvas.root;
+      if (!root) { qlog('build#' + n + ' NO ROOT (blank!)', data.objectId, { hasCanvas: !!canvas, connected: !!(canvas && canvas.isConnected), tag }); return; }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (canvas.__built) for (const wd of canvas.__built as any[]) { try { wd.setParent?.(null); } catch { /* ignore */ } }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const byId = new Map<string, any>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const built: any[] = [];
+      const rootW = buildQtInstance(data.spec, g, { x: 0, y: 0, w, h });
+      if (rootW) { try { rootW.setParent?.(root); } catch { /* ignore */ } byId.set(data.spec.id, rootW); built.push(rootW); }
+      for (const c of data.children) {
+        const cw = buildQtInstance(c, g, null);
+        if (!cw) continue;
+        const parent = (c.parentId && byId.get(c.parentId)) || rootW || root;
+        try { cw.setParent?.(parent); } catch { /* ignore */ }
+        byId.set(c.id, cw); built.push(cw);
+      }
+      canvas.__built = built;
+      canvas.__byId = byId;
+      // ── Tryb Action: podepnij sygnały żywych widgetów pod handlery z data source ──
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (canvas.__sigConns) for (const c of canvas.__sigConns as any[]) { try { c.disconnect?.(); } catch { /* ignore */ } }
+      canvas.__sigConns = [];
+      if (data.actionMode && data.onSignal) {
+        const map = data.signalHandlersMap ?? {};
+        for (const [sid, widget] of byId) {
+          const hs = map[sid];
+          if (!hs) continue;
+          for (const sigName of Object.keys(hs)) {
+            const sig = widget[sigName];
+            if (sig && typeof sig.connect === 'function') {
+              try { canvas.__sigConns.push(sig.connect((...sargs: unknown[]) => data.onSignal!(sid, sigName, sargs))); } catch { /* ignore */ }
+            }
+          }
+        }
+        qlog('build#' + n + ' action wired', data.objectId, { conns: canvas.__sigConns.length });
+      }
+      try { root.update?.(); } catch (e) { qlog('build#' + n + ' root.update ERROR', data.objectId, String(e)); }
+      qlog('build#' + n + ' done', data.objectId, { builtCount: built.length, rootChildren: (root.children && root.children.length) });
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, specKey, sigKey]);
+
+  const startResize = useCallback((dir: QtResizeDir) => (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation(); e.preventDefault(); e.nativeEvent.stopImmediatePropagation();
+    const el = e.currentTarget; el.setPointerCapture(e.pointerId);
+    const startX = e.clientX, startY = e.clientY, startW = w, startH = h;
+    const onMove = (me: PointerEvent) => {
+      const zoom = getZoom() || 1;
+      const nw = dir.includes('e') ? Math.max(16, Math.round(startW + (me.clientX - startX) / zoom)) : startW;
+      const nh = dir.includes('s') ? Math.max(16, Math.round(startH + (me.clientY - startY) / zoom)) : startH;
+      data.onResizeDrag(nw, nh);
+    };
+    const onUp = (me: PointerEvent) => { el.releasePointerCapture(me.pointerId); el.removeEventListener('pointermove', onMove); el.removeEventListener('pointerup', onUp); };
+    el.addEventListener('pointermove', onMove); el.addEventListener('pointerup', onUp);
+  }, [w, h, getZoom, data]);
+
+  // Absolute geometry (canvas-local) of every widget in this subtree — the root
+  // fills the node (0,0,w,h); each child accumulates its parent's origin. Used for
+  // both hit-testing (Select QT mode) and drawing selection highlights.
+  const absRects = useMemo(() => {
+    const map = new Map<string, { x: number; y: number; w: number; h: number; depth: number }>();
+    map.set(data.spec.id, { x: 0, y: 0, w, h, depth: 0 });
+    for (const c of data.children) {
+      const p = (c.parentId && map.get(c.parentId)) || map.get(data.spec.id)!;
+      map.set(c.id, { x: p.x + c.transform.x, y: p.y + c.transform.y, w: c.transform.width, h: c.transform.height, depth: p.depth + 1 });
+    }
+    return map;
+  }, [data.spec, data.children, w, h]);
+
+  const onSelectPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!data.selectMode || !data.onSelectWidget) return;
+    // Convert the click to node-local logical coords via ReactFlow's own
+    // screen→flow mapping (robust to any zoom/pan), then subtract the node's flow
+    // position. Falls back to a rect measurement if the helper is unavailable.
+    let px: number, py: number;
+    if (typeof screenToFlowPosition === 'function') {
+      const flow = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      px = flow.x - data.transform.x;
+      py = flow.y - data.transform.y;
+    } else if (hostRef.current) {
+      const rect = hostRef.current.getBoundingClientRect();
+      const zoom = getZoom() || 1;
+      px = (e.clientX - rect.left) / zoom;
+      py = (e.clientY - rect.top) / zoom;
+    } else return;
+    // Deepest widget whose rect contains the point wins (children render on top).
+    let hit: string | null = null; let bestDepth = -1;
+    for (const [id, r] of absRects) {
+      if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h && r.depth > bestDepth) { hit = id; bestDepth = r.depth; }
+    }
+    if (hit) { e.stopPropagation(); e.preventDefault(); data.onSelectWidget(hit, e.shiftKey || e.ctrlKey || e.metaKey); }
+  }, [data, getZoom, screenToFlowPosition, absRects]);
+
+  const selDesc = data.selectedDescendants ?? [];
+  return (
+    <Box sx={{ width: w, height: h, position: 'relative', userSelect: 'none',
+      border: '1px solid',
+      borderColor: data.actionMode ? '#66bb6a' : data.selected ? '#26c6da' : 'rgba(38,198,218,0.35)',
+      borderRadius: 0.5, boxShadow: data.actionMode ? '0 0 0 1px #66bb6a88' : data.selected ? '0 0 0 2px #26c6da88' : 'none',
+      cursor: data.actionMode ? 'pointer' : data.selectMode ? 'pointer' : 'grab',
+      '&:active': { cursor: data.actionMode ? 'pointer' : data.selectMode ? 'pointer' : 'grabbing' }, bgcolor: '#0d1416' }}>
+      {/* Label chip (sits just above the widget) */}
+      <Box sx={{ position: 'absolute', top: 0, left: -1, transform: 'translateY(-100%)',
+        display: 'flex', alignItems: 'center', gap: 0.5, px: 0.75, py: '1px', whiteSpace: 'nowrap',
+        bgcolor: data.actionMode ? '#66bb6a' : data.selected ? '#26c6da' : '#0d3d44', color: '#fff', borderRadius: '4px 4px 0 0' }}>
+        <WidgetsIcon sx={{ fontSize: 12 }} />
+        <Typography sx={{ fontSize: 10, fontWeight: 600 }}>{data.objectName}</Typography>
+        <Typography sx={{ fontSize: 9, opacity: 0.75 }}>:{data.className}</Typography>
+      </Box>
+      {/* Live qt-canvas — pointer-transparent normally (node stays draggable); in
+          Select QT mode it captures clicks to hit-test the nested widget; in Action
+          mode it goes fully live (native mouse events fire the widget's signals). */}
+      <Box ref={hostRef}
+        onPointerDown={data.selectMode ? onSelectPointerDown : data.actionMode ? ((e) => e.stopPropagation()) : undefined}
+        sx={{ position: 'absolute', inset: 0, pointerEvents: (data.selectMode || data.actionMode) ? 'auto' : 'none', overflow: 'hidden' }} />
+      {/* Selection highlights for nested child widgets (Select QT mode). */}
+      {selDesc.map((id) => {
+        const r = absRects.get(id);
+        if (!r) return null;
+        return <Box key={`sel-${id}`} sx={{ position: 'absolute', left: r.x, top: r.y, width: r.w, height: r.h,
+          border: '1.5px solid #ffab40', boxShadow: '0 0 0 1px #ffab4066', borderRadius: '2px', pointerEvents: 'none', zIndex: 4 }} />;
+      })}
+      {/* Resize gizmo (edge + corner handles, shown when selected). */}
+      {data.selected && QT_RESIZE_DIRS.map((dir) => {
+        const st: React.CSSProperties = { position: 'absolute', background: '#26c6da', border: '1px solid #fff', borderRadius: 2, pointerEvents: 'auto', zIndex: 5 };
+        if (dir === 'e') Object.assign(st, { right: -5, top: '50%', marginTop: -5, width: 9, height: 9, cursor: 'ew-resize' });
+        if (dir === 's') Object.assign(st, { bottom: -5, left: '50%', marginLeft: -5, width: 9, height: 9, cursor: 'ns-resize' });
+        if (dir === 'se') Object.assign(st, { right: -6, bottom: -6, width: 11, height: 11, cursor: 'nwse-resize' });
+        return <div key={dir} onPointerDown={startResize(dir)} style={st} />;
+      })}
+    </Box>
+  );
+};
+
+const NODE_TYPES = { dashObject: DashObjectNode, group: GroupNode, qtWidget: QtWidgetNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
 
 // ─── VarInitDialog ────────────────────────────────────────────────────────────
 
@@ -3498,7 +3991,59 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     }
   }, [consoleLogs]);
   const isMobile = useMediaQuery('(pointer: coarse)');
-  const { setCenter, screenToFlowPosition, fitView } = useReactFlow();
+  const { setCenter, screenToFlowPosition, setViewport, getViewport } = useReactFlow();
+  const rfStoreApi = useStoreApi();
+  const flowWrapRef = useRef<HTMLDivElement>(null);
+
+  // Niezawodny „fit" — liczony z DANYCH sceny + ustawiany RĘCZNIE przez setViewport
+  // (omija kaprysy RF fitView/fitBounds na mobile). Odrzuca skrajne outliery, żeby
+  // jeden „zbłąkany" (np. wyrzucony daleko) bloczek nie robił z reszty niewidocznej kropki.
+  const fitAllNodes = useCallback(() => {
+    const sc = sceneRef.current;
+    const rects: Array<{ x: number; y: number; w: number; h: number }> = [];
+    for (const o of sc.objects) { const t = getTransform(o); rects.push({ x: t.x, y: t.y, w: t.width > 0 ? t.width : 180, h: t.height > 0 ? t.height : 80 }); }
+    for (const f of sc.functionCalls ?? []) rects.push({ x: f.x, y: f.y, w: 220, h: 140 });
+    for (const v of sc.vars ?? []) rects.push({ x: v.x, y: v.y, w: 160, h: 90 });
+    for (const o of sc.classObjs ?? []) rects.push({ x: o.x, y: o.y, w: 200, h: 120 });
+    for (const n of sc.getProps ?? []) rects.push({ x: n.x, y: n.y, w: 170, h: 110 });
+    for (const n of sc.setProps ?? []) rects.push({ x: n.x, y: n.y, w: 170, h: 110 });
+    const valid = rects.filter((r) => Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.w) && Number.isFinite(r.h));
+    if (!valid.length) return;
+
+    // Odrzuć skrajne outliery: policz medianę środków i MAD odległości, zostaw tylko
+    // node'y w rozsądnym promieniu (albo wszystkie, gdy rozrzut jest równomierny).
+    const med = (a: number[]) => { const s = [...a].sort((p, q) => p - q); return s[Math.floor(s.length / 2)]; };
+    const cxAll = valid.map((r) => r.x + r.w / 2), cyAll = valid.map((r) => r.y + r.h / 2);
+    const mx = med(cxAll), my = med(cyAll);
+    const dists = valid.map((r) => Math.hypot(r.x + r.w / 2 - mx, r.y + r.h / 2 - my));
+    const medDist = med(dists) || 0;
+    const threshold = Math.max(medDist * 8, 3000);
+    let core = valid.filter((r) => Math.hypot(r.x + r.w / 2 - mx, r.y + r.h / 2 - my) <= threshold);
+    if (!core.length) core = valid;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const r of core) { minX = Math.min(minX, r.x); minY = Math.min(minY, r.y); maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h); }
+    // Wymiary panelu z WEWNĘTRZNEGO stanu ReactFlow (RF mierzy je ResizeObserverem —
+    // wiarygodniejsze niż odczyt clientWidth owijki, który na mobile bywał 108).
+    const st = rfStoreApi.getState() as unknown as { width?: number; height?: number };
+    const rfEl = (flowWrapRef.current?.querySelector('.react-flow') as HTMLElement | null);
+    const rfRect = rfEl?.getBoundingClientRect();
+    const cw = (st.width && st.width > 1) ? st.width : (rfRect && rfRect.width > 1 ? rfRect.width : (flowWrapRef.current?.clientWidth || 800));
+    const ch = (st.height && st.height > 1) ? st.height : (rfRect && rfRect.height > 1 ? rfRect.height : (flowWrapRef.current?.clientHeight || 600));
+    const pad = 60;
+    const bw = (maxX - minX) + pad * 2, bh = (maxY - minY) + pad * 2;
+    let zoom = Math.min(cw / bw, ch / bh);
+    if (!Number.isFinite(zoom) || zoom <= 0) zoom = 1;
+    zoom = Math.max(0.05, Math.min(zoom, 1.5));
+    const bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2;
+    const tx = cw / 2 - bcx * zoom, ty = ch / 2 - bcy * zoom;
+    // Instant (bez animacji — animowany setViewport na mobile bywa „zjadany" przez
+    // re-render po dragu). Ponawiamy w rAF, gdy RF się ustabilizuje.
+    const apply = () => { try { setViewport({ x: tx, y: ty, zoom }); } catch { /* ignore */ } };
+    apply();
+    requestAnimationFrame(apply);
+  }, [setViewport]);
+  const didFitRef = useRef(false);
   const [scene, setScene] = useState<DashScene>({ type: 'dash-scene', version: 1, objects: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -3506,6 +4051,39 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // Python runtime (Pyodide, in a Web Worker) — created lazily when enabled.
+  const pyodideRef = useRef<PyodideRuntime | null>(null);
+  const [pyodideProgress, setPyodideProgress] = useState<PyodideProgress>({ phase: 'idle', message: '' });
+  const getPyodide = useCallback((): PyodideRuntime => {
+    if (!pyodideRef.current) pyodideRef.current = new PyodideRuntime((p) => setPyodideProgress(p));
+    return pyodideRef.current;
+  }, []);
+  useEffect(() => () => { pyodideRef.current?.dispose(); pyodideRef.current = null; }, []);
+
+  // Auto-fit raz po załadowaniu sceny (zastępuje wbudowany `fitView` prop, który
+  // na mobile potrafi „nie zadziałać" gdy node'y są rozrzucone/poza ekranem).
+  useEffect(() => {
+    if (loading || didFitRef.current) return;
+    const sc = sceneRef.current;
+    const has = sc.objects.length || (sc.functionCalls?.length ?? 0) || (sc.vars?.length ?? 0) || (sc.classObjs?.length ?? 0) || (sc.getProps?.length ?? 0) || (sc.setProps?.length ?? 0);
+    if (!has) return;
+    didFitRef.current = true;
+    const id = setTimeout(() => fitAllNodes(), 200);
+    return () => clearTimeout(id);
+  }, [loading, fitAllNodes]);
+
+  // Parallel Python launch: when enabled, boot the worker and lazily preload the
+  // configured packages in the background (the overlay tracks progress). Skips
+  // packages already loaded, so tweaking the list only fetches the delta.
+  const pyodideKey = scene.pyodide?.enabled
+    ? `on|${(scene.pyodide.packages ?? []).join(',')}|${(scene.pyodide.pypi ?? []).join(',')}`
+    : 'off';
+  useEffect(() => {
+    const cfg = scene.pyodide;
+    if (!cfg?.enabled) return;
+    void getPyodide().loadPackages({ packages: cfg.packages, pypi: cfg.pypi }).catch(() => { /* overlay shows error */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pyodideKey, getPyodide]);
   const [importPathLoading, setImportPathLoading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceEntry[]>([]);
@@ -3514,10 +4092,23 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [sourceCtxMenu, setSourceCtxMenu] = useState<{ mouseX: number; mouseY: number; sourceId: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [canvasMode, setCanvasMode] = useState<'pan' | 'select'>('pan');
+  // "Select QT" mode: click inside a QtWidgetNode to select the nested child widget
+  // under the cursor (children have no ReactFlow node of their own).
+  const [qtSelectMode, setQtSelectMode] = useState(false);
+  // "Action" (runtime/preview) mode: pan/zoom on empty canvas, but clicking a block
+  // triggers its event handling — qt-widgets go live (native mouse events fire their
+  // signals, connected data-source handlers run: e.g. clicked → onClick()).
+  const [actionMode, setActionMode] = useState(false);
+  // The loaded MinisQt lib (globalThis-like) — used to enumerate Q_PROPERTY metadata
+  // (QObject.metaProperties) for the Properties panel of a selected qt-widget.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [qtLib, setQtLib] = useState<any>(null);
+  useEffect(() => { let c = false; ensureQtLib().then((g) => { if (!c) setQtLib(g); }).catch(() => {}); return () => { c = true; }; }, []);
   const [selectedField, setSelectedField] = useState<{ objId: string; fieldName: string } | null>(null);
   const [clipboard, setClipboard] = useState<{ objects: DashObject[] } | null>(null);
   const [newMenuAnchor, setNewMenuAnchor] = useState<HTMLElement | null>(null);
   const [qtMenuAnchor, setQtMenuAnchor] = useState<HTMLElement | null>(null);
+  const [qtuiPickerOpen, setQtuiPickerOpen] = useState(false);
   const [sceneCtxMenu, setSceneCtxMenu] = useState<{ mouseX: number; mouseY: number; objId: string | null } | null>(null);
 
   const openSceneCtx = useCallback((e: React.MouseEvent, objId: string | null) => {
@@ -3538,10 +4129,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [fcRunning, setFcRunning] = useState<Set<string>>(new Set());
   const [varInitDialogOpen, setVarInitDialogOpen] = useState(false);
   const [varInitTargetId, setVarInitTargetId] = useState<string | null>(null);
+  // Dialog wyboru handlera dla sygnału qt (który sygnał którego obiektu łączymy).
+  const [signalPicker, setSignalPicker] = useState<{ objId: string; signal: string; params: string[] } | null>(null);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   // Overlay for mid-drag positions — avoids writing scene during drag (prevents feedback loop/flying).
   const [dragNodePositions, setDragNodePositions] = useState<Map<string, { x: number; y: number }> | null>(null);
-  // Ref mirrors dragNodePositions for reading inside stable callbacks without stale closure.
   const dragNodePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3588,6 +4180,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             transform: o.transform ?? defaultTransform(o.x ?? 0, o.y ?? 0),
             ...(o.kind ? { kind: o.kind } : {}),
             ...(o.parentId ? { parentId: o.parentId } : {}),
+            ...(o.signalHandlers ? { signalHandlers: o.signalHandlers } : {}),
+            ...(o.zIndex !== undefined ? { zIndex: o.zIndex } : {}),
           })),
         };
         setScene(parsed);
@@ -3674,8 +4268,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const addDataSource = useCallback(async (filePath: string) => {
-    const name = filePath.split('/').pop()?.replace(/\.(json|js)$/, '') ?? filePath;
-    const fileType: 'json' | 'js' = filePath.endsWith('.js') ? 'js' : 'json';
+    const name = filePath.split('/').pop()?.replace(/\.(json|js|py|ts)$/, '') ?? filePath;
+    const fileType: 'json' | 'js' | 'python' | 'ts' =
+      filePath.endsWith('.py') ? 'python'
+      : filePath.endsWith('.ts') ? 'ts'
+      : filePath.endsWith('.js') ? 'js'
+      : 'json';
     const id = makeId();
     const entry: DataSourceEntry = { id, name, filePath, fileType };
     setDsData((prev) => ({ ...prev, [id]: undefined }));
@@ -3715,8 +4313,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
 
   // ─── FunctionCall + Var + ClassObj management ──────────────────────────────
 
-  const createFunctionCall = useCallback((x: number, y: number, sourceId: string, symbolPath: string, paramNames: string[]) => {
-    const newFc: FunctionCallObject = { id: makeId(), sourceId, symbolPath, paramNames, argOverrides: {}, result: null, error: null, x, y };
+  const createFunctionCall = useCallback((x: number, y: number, sourceId: string, symbolPath: string, paramNames: string[], lang?: 'python') => {
+    const newFc: FunctionCallObject = { id: makeId(), sourceId, symbolPath, paramNames, argOverrides: {}, result: null, error: null, x, y, ...(lang ? { lang } : {}) };
     updateScene((prev) => ({ ...prev, functionCalls: [...(prev.functionCalls ?? []), newFc] }));
     setSelectedIds(new Set([newFc.id]));
   }, [updateScene]);
@@ -3860,8 +4458,37 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       (console as unknown as Record<string, unknown>).info = makeCapture('info');
       (console as unknown as Record<string, unknown>).debug = makeCapture('debug');
       let result: unknown;
+      // Expose Python to scripts as `api.python` when Pyodide is enabled:
+      //   await api.python.run("import numpy as np; np.arange(5).sum()", { x: 1 })
+      const runApi = sceneRef.current.pyodide?.enabled
+        ? Object.assign(Object.create(alliApi as object), {
+            python: {
+              run: (code: string, globals?: Record<string, unknown>) => getPyodide().runPython(code, globals),
+              loadPackages: (p: { packages?: string[]; pypi?: string[] }) => getPyodide().loadPackages(p),
+            },
+          }) as typeof alliApi
+        : alliApi;
       try {
-        result = await executeFunctionFromSource(alliApi, text, fc.symbolPath, argValues, thisValue);
+        if (fc.lang === 'python') {
+          // Run the .py source in Pyodide (defines the functions), then call the
+          // target with the resolved args. Result is converted to JS and flows
+          // through the normal return edge → Var / GetProp / SetProp.
+          const rt = getPyodide();
+          const safeArgs = argValues.map((a) => (a === undefined ? null : a));
+          const fnName = fc.symbolPath.split('.').pop() || fc.symbolPath;
+          const pyCode = [
+            'import json as _dash_json',
+            '_dash_args = _dash_json.loads(_dash_args_json)',
+            text,
+            `_dash_result = ${fnName}(*_dash_args)`,
+            '_dash_result',
+          ].join('\n');
+          result = await rt.runPython(pyCode, { _dash_args_json: JSON.stringify(safeArgs) });
+        } else {
+          // .ts sources are stripped of types → JS before running in new Function().
+          const source = ds.fileType === 'ts' ? await transpileTs(text) : text;
+          result = await executeFunctionFromSource(runApi, source, fc.symbolPath, argValues, thisValue);
+        }
       } finally {
         // Restore console
         Object.assign(console, origConsole);
@@ -4092,7 +4719,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     if (mime === 'application/dash-function') {
       try {
         const { sourceId, symbolPath, paramNames } = JSON.parse(data) as { sourceId: string; symbolPath: string; paramNames: string[] };
-        createFunctionCall(pos.x, pos.y, sourceId, symbolPath, paramNames);
+        // A function from a Python (.py) data source becomes a PyFunctionCall
+        // (executed via Pyodide). Its result flows through the same edges → Var /
+        // GetProp / SetProp work unchanged.
+        const lang = sceneRef.current.dataSources?.find((s) => s.id === sourceId)?.fileType === 'python' ? 'python' : undefined;
+        createFunctionCall(pos.x, pos.y, sourceId, symbolPath, paramNames, lang);
       } catch { /* ignore bad drag data */ }
     } else if (mime === 'application/dash-class') {
       try {
@@ -4134,16 +4765,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const saveNow = useCallback(() => {
     if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
     void vfsWrite(userName, filePath, JSON.stringify(sceneRef.current, null, 2));
-  }, [userName, filePath]);
-
-  const saveRaw = useCallback(() => {
-    const raw = sceneRef.current.objects.map((obj) => ({
-      objectName: obj.objectName,
-      className: obj.className,
-      properties: obj.properties,
-    }));
-    const rawPath = toAbsVfsPath(userName, filePath).replace(/\.[^./]+$/, '') + '.data.json';
-    void vfsWrite(userName, rawPath, JSON.stringify(raw, null, 2));
   }, [userName, filePath]);
 
   const createObject = useCallback((cls: UmlClassDef) => {
@@ -4199,6 +4820,36 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
     setSelectedIds(new Set([obj.id]));
   }, [updateScene]);
+
+  // Osadza scenę .qtui.json jako poddrzewo qt-widgetów (jeden root-node z zagnieżdżonymi
+  // dziećmi). Zaznaczanie przez Select QT i podpinanie sygnałów działa jak dla natywnych
+  // qt-widgetów, bo to zwykłe DashObjecty.
+  const embedQtuiScene = useCallback(async (filePath: string) => {
+    try {
+      const text = (await vfsRead(userName, filePath)).trim();
+      // Pusty plik = scena jeszcze niezapisana na dysku. Edytor qtui po cichu
+      // pokazuje wtedy pustą scenę (defaultScene), więc „działa w panelu", ale tu
+      // JSON.parse('') rzuciłby „Unexpected end of JSON input".
+      if (!text) {
+        notify('Plik .qtui.json jest pusty. Otwórz go w edytorze qtui, dodaj widgety i zapisz (Ctrl+S), a potem spróbuj ponownie.', 'warning');
+        return;
+      }
+      let scene: QtUiScene;
+      try { scene = JSON.parse(text) as QtUiScene; }
+      catch { notify('Plik .qtui.json nie jest poprawnym JSON-em (uszkodzony lub niezapisany).', 'error'); return; }
+      if (!scene || scene.type !== 'qt_ui_scene' || !scene.root) { notify('To nie jest poprawna scena .qtui.json', 'error'); return; }
+      const g = await ensureQtLib();
+      const count = sceneRef.current.objects.filter((o) => o.kind === 'qt-widget' && !o.parentId).length;
+      const spawnX = 40 + (count % 5) * 32, spawnY = 40 + (count % 5) * 32;
+      const objs = qtuiSceneToDashObjects(scene, g, spawnX, spawnY);
+      if (!objs.length) { notify('Scena .qtui.json jest pusta', 'warning'); return; }
+      updateScene((prev) => ({ ...prev, objects: [...prev.objects, ...objs] }));
+      setSelectedIds(new Set([objs[0].id]));
+      notify(`Osadzono scenę: ${objs.length} widget(ów)`, 'success');
+    } catch (e) {
+      notify(`Nie udało się osadzić sceny: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }, [userName, updateScene, notify]);
 
   // Wrap the selected (non-group) objects in a new Group covering their bbox.
   const groupSelection = useCallback(() => {
@@ -4419,6 +5070,121 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return isCustom ? (selectedObject.customFields ?? []) : (classMap.get(selectedObject.className)?.fields ?? []);
   }, [selectedObject, classMap]);
 
+  // Registered Q_PROPERTY metadata for the selected qt-widget (enumerated from the
+  // MinisQt class via QObject.metaProperties — merges QObject/QWidget/subclass).
+  const selectedQtProps = useMemo((): Array<{ className: string; props: Array<{ name: string; type: string; settable: boolean; dflt: unknown }> }> | null => {
+    if (!selectedObject || selectedObject.kind !== 'qt-widget' || !qtLib) return null;
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    // Nieznana/własna klasa → i tak każdy qt-widget dziedziczy po QWidget, więc
+    // pokazujemy przynajmniej właściwości QWidget/QObject zamiast pustej listy.
+    const Cls = (typeof qtLib[selectedObject.className] === 'function') ? qtLib[selectedObject.className] : qtLib.QWidget;
+    if (typeof Cls !== 'function') return [];
+    let inst: any = null;
+    try { inst = new Cls(); } catch { inst = null; }
+    // Grupowanie wg klasy deklarującej (QPushButton / QAbstractButton / QWidget / QObject…).
+    return qtMetaGroups(Cls, 'properties').map((grp) => ({
+      className: grp.className,
+      props: grp.names.map((name) => {
+        const def = grp.own[name];
+        let dflt: unknown = undefined;
+        try { dflt = def && typeof def.get === 'function' && inst ? def.get(inst) : undefined; } catch { dflt = undefined; }
+        const type = (def && def.type) || (dflt === null || dflt === undefined ? 'string' : typeof dflt);
+        return { name, type, settable: !!(def && def.set), dflt };
+      }),
+    }));
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }, [selectedObject, qtLib]);
+
+  // Zadeklarowane sygnały qt zaznaczonego widgetu, pogrupowane wg klasy deklarującej.
+  const selectedQtSignals = useMemo((): Array<{ className: string; signals: Array<{ name: string; params: string[] }> }> | null => {
+    if (!selectedObject || selectedObject.kind !== 'qt-widget' || !qtLib) return null;
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const Cls = (typeof qtLib[selectedObject.className] === 'function') ? qtLib[selectedObject.className] : qtLib.QWidget;
+    if (typeof Cls !== 'function') return [];
+    return qtMetaGroups(Cls, 'signals').map((grp) => ({
+      className: grp.className,
+      signals: grp.names.map((name) => ({ name, params: (grp.own[name] && Array.isArray(grp.own[name].params)) ? grp.own[name].params : [] })),
+    }));
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }, [selectedObject, qtLib]);
+
+  // Wszystkie wywoływalne funkcje ze wszystkich data sources (do wyboru jako handler).
+  const connectableFunctions = useMemo((): HandlerFn[] => {
+    const out: HandlerFn[] = [];
+    for (const src of dataSources) {
+      if (src.fileType === 'json') continue;
+      const syms = dsData[src.id] as unknown as CodeSymbol[] | undefined;
+      if (Array.isArray(syms)) out.push(...flattenHandlerFns(syms, src));
+    }
+    return out;
+  }, [dataSources, dsData]);
+
+  const updateSignalHandler = useCallback((objId: string, signal: string, handler: { sourceId: string; symbolPath: string } | null) => {
+    updateScene((prev) => ({
+      ...prev,
+      objects: prev.objects.map((o) => {
+        if (o.id !== objId) return o;
+        const next = { ...(o.signalHandlers ?? {}) };
+        if (handler) next[signal] = handler; else delete next[signal];
+        return { ...o, signalHandlers: Object.keys(next).length ? next : undefined };
+      }),
+    }));
+  }, [updateScene]);
+
+  // Mapa scena-id → (sygnał → handler) dla trybu Action. Przekazywana do każdego
+  // qt-node, który po zbudowaniu żywych widgetów podpina sygnały pod runSignalHandler.
+  const signalHandlersMap = useMemo((): Record<string, Record<string, { sourceId: string; symbolPath: string }>> => {
+    const m: Record<string, Record<string, { sourceId: string; symbolPath: string }>> = {};
+    for (const o of scene.objects) if (o.signalHandlers && Object.keys(o.signalHandlers).length) m[o.id] = o.signalHandlers;
+    return m;
+  }, [scene.objects]);
+
+  // Runtime trybu Action: wywołanie sygnału qt-widgetu (np. clicked) uruchamia
+  // podłączoną funkcję z data source. Współdzieli console-capture i notyfikacje
+  // z callFunctionForNode, ale argumenty biorą się wprost z sygnału (nie z edge'y).
+  const runSignalHandler = useCallback(async (sceneId: string, signal: string, args: unknown[]) => {
+    const obj = sceneRef.current.objects.find((o) => o.id === sceneId);
+    const handler = obj?.signalHandlers?.[signal];
+    if (!handler) return;
+    const ds = (sceneRef.current.dataSources ?? dataSources).find((d) => d.id === handler.sourceId);
+    if (!ds) { notify(`Brak data source dla handlera „${handler.symbolPath}"`, 'warning'); return; }
+    // Sygnały qt niosą instancje QObject/klas Qt — nieserializowalne przez JSON i
+    // niepotrzebne skryptowi. Przekazujemy tylko wartości proste (np. checked:boolean).
+    const safeArgs = (args ?? []).filter((a) => a === null || typeof a !== 'object');
+    const label = `${obj?.objectName ?? sceneId}.${signal} → ${handler.symbolPath}`;
+    const prevNotifLen = alliApi.notifications.length;
+    const prevLogLen = alliApi.logs.length;
+    const captured: ConsoleEntry[] = [];
+    const origConsole = { log: console.log, warn: console.warn, error: console.error, info: console.info, debug: console.debug } as Record<string, (...a: unknown[]) => void>;
+    const makeCapture = (level: ConsoleEntry['level']) => (...a: unknown[]) => { captured.push({ id: makeId(), level, message: argsToStr(a), fcLabel: label, ts: Date.now() }); origConsole[level]?.(...a); };
+    (console as unknown as Record<string, unknown>).log = makeCapture('log');
+    (console as unknown as Record<string, unknown>).warn = makeCapture('warn');
+    (console as unknown as Record<string, unknown>).error = makeCapture('error');
+    (console as unknown as Record<string, unknown>).info = makeCapture('info');
+    (console as unknown as Record<string, unknown>).debug = makeCapture('debug');
+    try {
+      const text = await vfsRead(userName, ds.filePath);
+      if (ds.fileType === 'python') {
+        const rt = getPyodide();
+        const fnName = handler.symbolPath.split('.').pop() || handler.symbolPath;
+        const pyArgs = safeArgs.map((a) => (a === undefined ? null : a));
+        const pyCode = ['import json as _dash_json', '_dash_args = _dash_json.loads(_dash_args_json)', text, `_dash_result = ${fnName}(*_dash_args)`, '_dash_result'].join('\n');
+        await rt.runPython(pyCode, { _dash_args_json: JSON.stringify(pyArgs) });
+      } else {
+        const source = ds.fileType === 'ts' ? await transpileTs(text) : text;
+        await executeFunctionFromSource(alliApi, source, handler.symbolPath, safeArgs);
+      }
+    } catch (e) {
+      captured.push({ id: makeId(), level: 'error', message: e instanceof Error ? e.message : String(e), fcLabel: label, ts: Date.now() });
+      notify(`Handler „${handler.symbolPath}": ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      Object.assign(console, origConsole);
+      for (const l of alliApi.logs.slice(prevLogLen)) captured.push({ id: makeId(), level: l.level as ConsoleEntry['level'], message: l.message, fcLabel: label, ts: l.timestamp });
+      for (const n of alliApi.notifications.slice(prevNotifLen)) notify(n.message, n.severity as 'success' | 'info' | 'warning' | 'error' | undefined);
+      if (captured.length) { setConsoleLogs((prev) => [...prev, ...captured]); setConsoleOpen(true); }
+    }
+  }, [dataSources, userName, alliApi, notify, setConsoleLogs, setConsoleOpen]);
+
   useEffect(() => { setSelectedField(null); }, [selectedIds]);
 
   useEffect(() => {
@@ -4441,30 +5207,83 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [selectedField, selectedObject, selectedFields]);
 
   const rfNodesBase = useMemo((): Node[] => {
-    const dashNodes: Node[] = scene.objects.map((obj): Node => {
+    const dashNodes: Node[] = [];
+    for (const obj of scene.objects) {
       const t = getTransform(obj);
       if (obj.kind === 'group') {
         const childCount = scene.objects.filter((o) => o.parentId === obj.id).length;
-        return {
+        dashNodes.push({
           id: obj.id, type: 'group',
           position: { x: t.x, y: t.y },
           // Give ReactFlow the node's real size so its selection/interaction box
           // matches the visual group box — otherwise a resize grows the inner box
           // while the cached DOM-measured bbox (and selection outline) lag behind.
-          style: { width: t.width > 0 ? t.width : 320, height: t.height > 0 ? t.height : 240 },
+          // border/background:none — typ 'group' jest WBUDOWANY w ReactFlow i dokłada
+          // domyślny styl `.react-flow__node-group` (ciemny border + szare tło). Chcemy,
+          // by CAŁY wygląd (i „Show frame") kontrolował wyłącznie nasz GroupNode.
+          style: { width: t.width > 0 ? t.width : 320, height: t.height > 0 ? t.height : 240, border: 'none', background: 'transparent' },
           selected: selectedIds.has(obj.id),
           zIndex: obj.zIndex ?? -10,   // behind regular objects
           data: {
             objectId: obj.id, objectName: obj.objectName, transform: t,
             selected: selectedIds.has(obj.id), childCount,
+            showFrame: obj.properties?.showFrame !== false,
             onObjectNameChange: (name: string) => updateObjectName(obj.id, name),
             onResizeDrag: (width: number, height: number) => updateTransform(obj.id, { width, height }),
           } as GroupNodeData,
-        };
+        });
+        continue;
+      }
+      if (obj.kind === 'qt-widget') {
+        const parentObj = obj.parentId ? scene.objects.find((o) => o.id === obj.parentId) : undefined;
+        // A qt-widget nested under another qt-widget is drawn *inside* its parent
+        // node (real Qt parent/child) — it gets no top-level node of its own.
+        if (parentObj && parentObj.kind === 'qt-widget') continue;
+        // Gather qt-widget descendants (BFS → parents before children) so the node
+        // rebuilds the whole subtree with correct setParent() ordering.
+        const descendants: QtWidgetSpec[] = [];
+        const queue = scene.objects.filter((o) => o.parentId === obj.id && o.kind === 'qt-widget');
+        while (queue.length) {
+          const c = queue.shift()!;
+          descendants.push({ id: c.id, className: c.className, properties: c.properties, transform: getTransform(c), parentId: c.parentId });
+          for (const gc of scene.objects.filter((o) => o.parentId === c.id && o.kind === 'qt-widget')) queue.push(gc);
+        }
+        dashNodes.push({
+          id: obj.id, type: 'qtWidget',
+          position: { x: t.x, y: t.y },
+          style: { width: t.width > 0 ? t.width : 160, height: t.height > 0 ? t.height : 120 },
+          selected: selectedIds.has(obj.id),
+          // In Select QT / Action mode the node is not draggable — clicks select nested
+          // widgets (Select QT) or go live to the widget (Action). Both modes also disable
+          // RF node selection: in Select QT selection is driven manually via onSelectWidget
+          // (letting RF also fire a select change for the container node would add it to
+          // selectedIds → size 2 → Properties shows "No selection"); in Action a widget
+          // click must not select the RF node at all.
+          draggable: !qtSelectMode && !actionMode,
+          selectable: !actionMode && !qtSelectMode,
+          zIndex: obj.zIndex ?? 0,
+          data: {
+            objectId: obj.id, objectName: obj.objectName, className: obj.className,
+            spec: { id: obj.id, className: obj.className, properties: obj.properties, transform: t },
+            children: descendants,
+            transform: t, selected: selectedIds.has(obj.id),
+            selectMode: qtSelectMode,
+            actionMode,
+            signalHandlersMap,
+            onSignal: runSignalHandler,
+            selectedDescendants: descendants.filter((d) => selectedIds.has(d.id)).map((d) => d.id),
+            onSelectWidget: (id: string, additive: boolean) => setSelectedIds((prev) => {
+              if (additive) { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; }
+              return new Set([id]);
+            }),
+            onResizeDrag: (width: number, height: number) => updateTransform(obj.id, { width, height }),
+          } as QtWidgetNodeData,
+        });
+        continue;
       }
       const isCustom = obj.className === 'Unknown' || obj.customFields !== undefined;
       const fields: FieldDef[] = isCustom ? (obj.customFields ?? []) : (classMap.get(obj.className)?.fields ?? []);
-      return {
+      dashNodes.push({
         id: obj.id, type: 'dashObject',
         position: { x: t.x, y: t.y },
         selected: selectedIds.has(obj.id),
@@ -4486,8 +5305,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           selectedFieldName: selectedField?.objId === obj.id ? selectedField.fieldName : null,
           onFieldSelect: (fieldName: string | null) => setSelectedField(fieldName ? { objId: obj.id, fieldName } : null),
         },
-      };
-    });
+      });
+    }
 
     const fcNodes: Node<FcNodeData>[] = (functionCalls ?? []).map((fc) => {
       const connectedArgValues: Record<number, unknown> = {};
@@ -4533,6 +5352,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           running: fcRunning.has(fc.id), connectedArgValues, connectedThisValue,
           selected: selectedIds.has(fc.id),
           pinsFlipped: fc.pinsFlipped ?? false,
+          lang: fc.lang,
           onCall: () => { void callFunctionForNode(fc.id); },
           onArgOverrideChange: (idx: number, val: string) => updateFcArgOverride(fc.id, idx, val),
         } as FcNodeData,
@@ -4548,6 +5368,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         selected: selectedIds.has(v.id),
         pinsFlipped: v.pinsFlipped ?? false,
         onNameChange: (name: string) => updateVarName(v.id, name),
+        onEditValue: () => { setVarInitTargetId(v.id); setVarInitDialogOpen(true); },
       } as VarNodeData,
     }));
 
@@ -4608,13 +5429,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     }));
 
     return [...dashNodes, ...fcNodes, ...varNodes, ...classObjNodes, ...getPropNodes, ...setPropNodes];
-  }, [scene.objects, scene.fcEdges, scene.classObjs, scene.getProps, scene.setProps, classMap, selectedIds, selectedField, userName,
+  }, [scene.objects, scene.fcEdges, scene.classObjs, scene.getProps, scene.setProps, classMap, selectedIds, selectedField, userName, qtSelectMode,
+      actionMode, signalHandlersMap, runSignalHandler,
       updateProperty, updateObjectName, addCustomField, removeCustomField, changeCustomFieldType, renameCustomField, updateTransform,
       functionCalls, vars, fcRunning, callFunctionForNode, updateFcArgOverride, updateVarName,
       applyClassObj, flipClassObj, runGetProp, runSetProp, updateGetPropName, updateSetPropName]);
 
   // Overlay drag positions on top of base nodes without touching scene state.
-  // rfNodesBase stays stable during drag (no scene updates) → callbacks remain fresh.
   const rfNodes = useMemo((): Node[] => {
     if (!dragNodePositions) return rfNodesBase;
     return rfNodesBase.map((n) => {
@@ -4648,55 +5469,32 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return [...propEdges, ...flowEdges];
   }, [scene.objects, scene.fcEdges, objectIds, selectedEdgeIds]);
 
-  // Max canvas-unit delta per drag step. At minZoom=0.2 this equals 400px on screen per frame,
-  // which is physically impossible — so this only rejects ReactFlow's buggy mobile coordinates.
   const MAX_DRAG_STEP = 2000;
-
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    // Mid-drag: validate each step delta and update only the overlay Map.
+    // Mid-drag: aktualizuj tylko lekką nakładkę pozycji (ReactFlow w trybie
+    // controlled potrzebuje pozycji z propa, by node się przesuwał). Aby ograniczyć
+    // koszt na mobile, ciężkie panele są zmemoizowane (patrz useMemo niżej).
     const validMidDrag: Array<{ id: string; x: number; y: number }> = [];
     for (const c of changes) {
       if (c.type !== 'position' || !c.dragging || !c.position) continue;
       if (!Number.isFinite(c.position.x) || !Number.isFinite(c.position.y)) continue;
-
-      // Compare against last known position (from ref) or fall back to scene base.
       const lastKnown = dragNodePositionsRef.current.get(c.id);
       let baseX: number, baseY: number;
-      if (lastKnown) {
-        baseX = lastKnown.x; baseY = lastKnown.y;
-      } else {
+      if (lastKnown) { baseX = lastKnown.x; baseY = lastKnown.y; }
+      else {
         const sc = sceneRef.current;
         const obj = sc.objects.find((o) => o.id === c.id);
         if (obj) { const t = getTransform(obj); baseX = t.x; baseY = t.y; }
         else {
-          const fc = (sc.functionCalls ?? []).find((f) => f.id === c.id);
-          if (fc) { baseX = fc.x; baseY = fc.y; }
-          else {
-            const v = (sc.vars ?? []).find((v) => v.id === c.id);
-            if (v) { baseX = v.x; baseY = v.y; }
-            else {
-              const co = (sc.classObjs ?? []).find((o) => o.id === c.id);
-              if (co) { baseX = co.x; baseY = co.y; }
-              else {
-                const gp = (sc.getProps ?? []).find((n) => n.id === c.id);
-                if (gp) { baseX = gp.x; baseY = gp.y; }
-                else {
-                  const sp = (sc.setProps ?? []).find((n) => n.id === c.id);
-                  if (sp) { baseX = sp.x; baseY = sp.y; }
-                  else { baseX = c.position.x; baseY = c.position.y; } // unknown node, accept
-                }
-              }
-            }
-          }
+          const it = (sc.functionCalls ?? []).find((f) => f.id === c.id) || (sc.vars ?? []).find((v) => v.id === c.id)
+            || (sc.classObjs ?? []).find((o) => o.id === c.id) || (sc.getProps ?? []).find((n) => n.id === c.id) || (sc.setProps ?? []).find((n) => n.id === c.id);
+          if (it) { baseX = it.x; baseY = it.y; } else { baseX = c.position.x; baseY = c.position.y; }
         }
       }
-
       if (Math.abs(c.position.x - baseX) > MAX_DRAG_STEP || Math.abs(c.position.y - baseY) > MAX_DRAG_STEP) continue;
       validMidDrag.push({ id: c.id, x: c.position.x, y: c.position.y });
     }
-
-    // Live-follow: when a Group is dragged, move its children by the same delta
-    // (so children track the box during the drag, not just on release).
+    // Live-follow group children.
     if (validMidDrag.length > 0) {
       const sc = sceneRef.current;
       const dragged = new Set(validMidDrag.map((m) => m.id));
@@ -4714,17 +5512,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       }
       validMidDrag.push(...extra);
     }
-
     if (validMidDrag.length > 0) {
       for (const p of validMidDrag) dragNodePositionsRef.current.set(p.id, { x: p.x, y: p.y });
-      setDragNodePositions((prev) => {
-        const m = new Map(prev);
-        for (const p of validMidDrag) m.set(p.id, { x: p.x, y: p.y });
-        return m;
-      });
+      setDragNodePositions((prev) => { const m = new Map(prev); for (const p of validMidDrag) m.set(p.id, { x: p.x, y: p.y }); return m; });
     }
-
-    // Selection changes go straight through.
     const selChanges = changes.filter((c) => c.type === 'select');
     if (selChanges.length > 0) {
       setSelectedIds((prev) => {
@@ -4733,7 +5524,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         return next;
       });
     }
-    // Final positions are written in onNodeDragStop.
   }, []);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -4779,14 +5569,19 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const treeRows = useMemo((): Array<{ obj: DashObject; depth: number; childCount: number }> => {
     const present = new Set(filteredObjects.map((o) => o.id));
     const rows: Array<{ obj: DashObject; depth: number; childCount: number }> = [];
+    const childrenOf = (id: string) => filteredObjects.filter((c) => c.parentId === id);
+    // Groups and qt-widgets can both contain children (arbitrary nesting depth).
+    const emit = (obj: DashObject, depth: number) => {
+      const kids = childrenOf(obj.id);
+      rows.push({ obj, depth, childCount: kids.length });
+      const container = obj.kind === 'group' || obj.kind === 'qt-widget';
+      if (container && kids.length && !collapsedGroups.has(obj.id)) {
+        for (const c of kids) emit(c, depth + 1);
+      }
+    };
     for (const obj of filteredObjects) {
       const isRoot = !obj.parentId || !present.has(obj.parentId);
-      if (!isRoot) continue; // children are emitted under their group below
-      const children = obj.kind === 'group' ? filteredObjects.filter((c) => c.parentId === obj.id) : [];
-      rows.push({ obj, depth: 0, childCount: children.length });
-      if (obj.kind === 'group' && !collapsedGroups.has(obj.id)) {
-        for (const c of children) rows.push({ obj: c, depth: 1, childCount: 0 });
-      }
+      if (isRoot) emit(obj, 0);
     }
     return rows;
   }, [filteredObjects, collapsedGroups]);
@@ -4799,19 +5594,56 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, []);
 
   const flyTo = useCallback((objId: string) => {
-    const obj = sceneRef.current.objects.find((o) => o.id === objId);
-    if (!obj) return;
-    const t = getTransform(obj);
-    const cx = t.x + (t.width > 0 ? t.width / 2 : 100);
-    const cy = t.y + (t.height > 0 ? t.height / 2 : 60);
-    setCenter(cx, cy, { zoom: 1.2, duration: 450 });
+    const sc = sceneRef.current;
+    const obj = sc.objects.find((o) => o.id === objId);
+    let cx: number, cy: number;
+    if (obj) { const t = getTransform(obj); cx = t.x + (t.width > 0 ? t.width / 2 : 100); cy = t.y + (t.height > 0 ? t.height / 2 : 60); }
+    else {
+      const n = (sc.functionCalls ?? []).find((f) => f.id === objId) || (sc.vars ?? []).find((v) => v.id === objId)
+        || (sc.classObjs ?? []).find((o) => o.id === objId) || (sc.getProps ?? []).find((g) => g.id === objId) || (sc.setProps ?? []).find((s) => s.id === objId);
+      if (!n) return; cx = n.x + 100; cy = n.y + 60;
+    }
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+    setCenter(cx, cy, { zoom: 1, duration: 0 }); // instant (animowany bywa ignorowany na mobile)
   }, [setCenter]);
+
+  // Odzyskiwanie: układa WSZYSTKIE node'y (także te z zepsutą/skrajną pozycją) w
+  // czytelną siatkę i dopasowuje widok. Ratunek po „wyrzuceniu" bloczka poza kadr.
+  const gatherNodes = useCallback(() => {
+    updateScene((prev) => {
+      let i = 0;
+      const cols = 6, gapX = 240, gapY = 150, x0 = 40, y0 = 40;
+      const next = () => { const c = i % cols, r = Math.floor(i / cols); i++; return { x: x0 + c * gapX, y: y0 + r * gapY }; };
+      // Dzieci qt-widgetów pozycjonują się względem rodzica — ich nie ruszamy.
+      const qtChildIds = new Set(prev.objects.filter((o) => o.parentId && prev.objects.some((p) => p.id === o.parentId && p.kind === 'qt-widget')).map((o) => o.id));
+      return {
+        ...prev,
+        objects: prev.objects.map((o) => { if (qtChildIds.has(o.id)) return o; const p = next(); return { ...o, transform: { ...getTransform(o), x: p.x, y: p.y } }; }),
+        functionCalls: (prev.functionCalls ?? []).map((f) => { const p = next(); return { ...f, x: p.x, y: p.y }; }),
+        vars: (prev.vars ?? []).map((v) => { const p = next(); return { ...v, x: p.x, y: p.y }; }),
+        classObjs: (prev.classObjs ?? []).map((o) => { const p = next(); return { ...o, x: p.x, y: p.y }; }),
+        getProps: (prev.getProps ?? []).map((n) => { const p = next(); return { ...n, x: p.x, y: p.y }; }),
+        setProps: (prev.setProps ?? []).map((n) => { const p = next(); return { ...n, x: p.x, y: p.y }; }),
+      };
+    });
+    setTimeout(() => fitAllNodes(), 120);
+  }, [updateScene, fitAllNodes]);
 
   // Re-parent an object via the Scene tree (drag-and-drop). Groups can't nest.
   const reparentObject = useCallback((objId: string, newParentId: string | undefined) => {
     if (objId === newParentId) return;
-    const dragged = sceneRef.current.objects.find((o) => o.id === objId);
+    const objs = sceneRef.current.objects;
+    const dragged = objs.find((o) => o.id === objId);
     if (!dragged || dragged.kind === 'group') return;
+    // Guard against cycles: the new parent must not be a descendant of the dragged
+    // object (walk the parent chain up from newParent — must not hit objId).
+    if (newParentId) {
+      let cur: DashObject | undefined = objs.find((o) => o.id === newParentId);
+      while (cur) {
+        if (cur.id === objId) return;
+        cur = cur.parentId ? objs.find((o) => o.id === cur!.parentId) : undefined;
+      }
+    }
     updateScene((prev) => ({
       ...prev,
       objects: prev.objects.map((o) => o.id === objId ? { ...o, parentId: newParentId } : o),
@@ -4819,11 +5651,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const onNodeDragStop = useCallback((_evt: React.MouseEvent | React.TouchEvent, _node: Node, _draggedNodes: Node[]) => {
-    // Use our validated ref (not ReactFlow's draggedNodes — may have bad mobile coords).
+    // Użyj naszej zwalidowanej nakładki (nie draggedNodes RF — bywają złe na mobile).
     const finalPos = new Map(dragNodePositionsRef.current);
     dragNodePositionsRef.current.clear();
     setDragNodePositions(null);
-    if (finalPos.size === 0) return; // nothing moved (all positions were filtered)
+    if (finalPos.size === 0) return; // nothing moved
     updateScene((prev) => ({
       ...prev,
       objects: (() => {
@@ -4886,19 +5718,31 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         return p ? { ...sp, x: p.x, y: p.y } : sp;
       }),
     }));
-  }, [updateScene]);
+    // Po dragu mobilny GPU potrafi zostawić warstwę viewportu NIEPRZEMALOWANĄ
+    // (node'y są, ale niewidoczne — Fit je „odsłania" bo zmienia transform).
+    // Wymuszamy przemalowanie niewidocznym drgnięciem viewportu (x+1 → x).
+    try {
+      const v = getViewport();
+      if (v && Number.isFinite(v.x)) {
+        setViewport({ x: v.x + 1, y: v.y, zoom: v.zoom });
+        setTimeout(() => { try { setViewport({ x: v.x, y: v.y, zoom: v.zoom }); } catch { /* ignore */ } }, 60);
+      }
+    } catch { /* ignore */ }
+  }, [updateScene, getViewport, setViewport]);
 
   const showTypes = visiblePanels.includes('types');
   const showScene = visiblePanels.includes('scene');
   const showProperties = visiblePanels.includes('properties');
   const showDataSource = visiblePanels.includes('data');
-  const showRender = visiblePanels.includes('render');
   const showJson = visiblePanels.includes('json');
 
   if (loading) return <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><CircularProgress size={28} /></Box>;
 
+  const pyodideLoading = pyodideProgress.phase === 'runtime' || pyodideProgress.phase === 'packages';
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', position: 'relative' }}>
+      {pyodideLoading && <PyodideLoadingOverlay progress={pyodideProgress} />}
 
       {/* ── Toolbar ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0, bgcolor: 'background.paper' }}>
@@ -4919,10 +5763,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             <TuneIcon sx={{ fontSize: 16 }} />
             Properties
           </ToggleButton>
-          <ToggleButton value="render" sx={{ px: 1, py: 0.25, gap: 0.5, fontSize: 11 }}>
-            <WidgetsIcon sx={{ fontSize: 16 }} />
-            Render
-          </ToggleButton>
           <ToggleButton value="json" sx={{ px: 1, py: 0.25, gap: 0.5, fontSize: 11 }}>
             <CodeIcon sx={{ fontSize: 16 }} />
             JSON
@@ -4937,9 +5777,30 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             {canvasMode === 'select' ? <CropFreeIcon sx={{ fontSize: 18 }} /> : <PanToolIcon sx={{ fontSize: 18 }} />}
           </IconButton>
         </Tooltip>
+        <Tooltip title={qtSelectMode ? 'Select QT: ON — kliknij zagnieżdżony widget na scenie, by go zaznaczyć' : 'Select QT: kliknij, by zaznaczać dzieci widgetów Qt na scenie'}>
+          <IconButton
+            size="small"
+            onClick={() => setQtSelectMode((v) => { const nv = !v; if (nv) setActionMode(false); return nv; })}
+            sx={{ p: 0.5, bgcolor: qtSelectMode ? '#26c6da' : 'transparent', color: qtSelectMode ? '#04252b' : 'inherit', borderRadius: 1, '&:hover': { bgcolor: qtSelectMode ? '#1eb0c4' : 'action.hover' } }}>
+            <WidgetsIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={actionMode ? 'Action: ON — bloczki są żywe (qt: signal/slot np. clicked). Pan/zoom na pustym tle.' : 'Action: uruchom obsługę zdarzeń bloczków — qt-widgety żyją (clicked → handler). Pan/zoom po tle.'}>
+          <IconButton
+            size="small"
+            onClick={() => setActionMode((v) => { const nv = !v; if (nv) setQtSelectMode(false); return nv; })}
+            sx={{ p: 0.5, bgcolor: actionMode ? '#66bb6a' : 'transparent', color: actionMode ? '#0a2a12' : 'inherit', borderRadius: 1, '&:hover': { bgcolor: actionMode ? '#4fa254' : 'action.hover' } }}>
+            <PlayArrowIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Fit all nodes in view">
-          <IconButton size="small" onClick={() => fitView({ duration: 300 })} sx={{ p: 0.5 }}>
+          <IconButton size="small" onClick={() => fitAllNodes()} sx={{ p: 0.5 }}>
             <FitScreenIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Zbierz wszystkie bloczki w siatkę (ratunek gdy bloczek wypadł poza kadr)">
+          <IconButton size="small" onClick={gatherNodes} sx={{ p: 0.5 }}>
+            <GridViewIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
         {(selectedIds.size > 0 || selectedEdgeIds.size > 0) && (
@@ -4967,10 +5828,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Import UML</Button>
         <Button size="small" variant="outlined" onClick={saveNow}
           sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Save</Button>
-        <Tooltip title={`Saves only objects + properties to ${filePath.replace(/\.[^./]+$/, '')}.data.json`}>
-          <Button size="small" variant="outlined" onClick={saveRaw}
-            sx={{ fontSize: 11, py: 0.25, textTransform: 'none', color: 'text.secondary' }}>Save Raw</Button>
-        </Tooltip>
       </Box>
 
       {/* ── Main area ── */}
@@ -5093,16 +5950,18 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
               <List dense disablePadding>
                 {treeRows.map(({ obj, depth, childCount }) => {
                   const isGroup = obj.kind === 'group';
+                  const isQt = obj.kind === 'qt-widget';
+                  const isContainer = isGroup || isQt;
                   const collapsed = collapsedGroups.has(obj.id);
-                  const isDropTarget = isGroup && treeDragOverId === obj.id;
+                  const isDropTarget = isContainer && treeDragOverId === obj.id;
                   return (
                   <ListItemButton key={obj.id} selected={selectedIds.has(obj.id)}
                     draggable={!isGroup}
                     onDragStart={!isGroup ? (e) => { setTreeDragId(obj.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', obj.id); } : undefined}
                     onDragEnd={() => { setTreeDragId(null); setTreeDragOverId(null); }}
-                    onDragOver={isGroup ? (e) => { if (treeDragId && treeDragId !== obj.id) { e.preventDefault(); e.stopPropagation(); setTreeDragOverId(obj.id); } } : undefined}
-                    onDragLeave={isGroup ? () => setTreeDragOverId((cur) => cur === obj.id ? null : cur) : undefined}
-                    onDrop={isGroup ? (e) => { e.preventDefault(); e.stopPropagation(); if (treeDragId) reparentObject(treeDragId, obj.id); setTreeDragId(null); setTreeDragOverId(null); } : undefined}
+                    onDragOver={isContainer ? (e) => { if (treeDragId && treeDragId !== obj.id) { e.preventDefault(); e.stopPropagation(); setTreeDragOverId(obj.id); } } : undefined}
+                    onDragLeave={isContainer ? () => setTreeDragOverId((cur) => cur === obj.id ? null : cur) : undefined}
+                    onDrop={isContainer ? (e) => { e.preventDefault(); e.stopPropagation(); if (treeDragId) reparentObject(treeDragId, obj.id); setTreeDragId(null); setTreeDragOverId(null); } : undefined}
                     onClick={(e) => toggleSelect(obj.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
                     onDoubleClick={() => flyTo(obj.id)}
                     onContextMenu={(e) => openSceneCtx(e, obj.id)}
@@ -5113,19 +5972,22 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                       <Checkbox size="small" checked={selectedIds.has(obj.id)} tabIndex={-1} disableRipple
                         sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: 'primary.contrastText' } }} />
                     )}
-                    {isGroup && (
-                      <Box component="span" onClick={(e) => { e.stopPropagation(); setCollapsedGroups((prev) => { const n = new Set(prev); if (n.has(obj.id)) n.delete(obj.id); else n.add(obj.id); return n; }); }}
-                        sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer', mr: 0.25 }}>
-                        {collapsed ? <ChevronRightIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
-                      </Box>
-                    )}
+                    {/* Slot chevronu o STAŁEJ szerokości dla KAŻDego wiersza — także liści.
+                        Bez tego ikona liścia-dziecka wypadała na lewo od ikony rodzica
+                        (który ma chevron), przez co wcięcie hierarchii wyglądało źle. */}
+                    <Box component="span"
+                      onClick={isContainer && childCount > 0 ? (e) => { e.stopPropagation(); setCollapsedGroups((prev) => { const n = new Set(prev); if (n.has(obj.id)) n.delete(obj.id); else n.add(obj.id); return n; }); } : undefined}
+                      sx={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', mr: 0.25, cursor: isContainer && childCount > 0 ? 'pointer' : 'default' }}>
+                      {isContainer && childCount > 0 ? (collapsed ? <ChevronRightIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />) : null}
+                    </Box>
                     {isGroup && <GroupIcon sx={{ fontSize: 14, color: selectedIds.has(obj.id) ? 'inherit' : '#7c4dff', mr: 0.5, flexShrink: 0 }} />}
+                    {isQt && <WidgetsIcon sx={{ fontSize: 14, color: selectedIds.has(obj.id) ? 'inherit' : '#26c6da', mr: 0.5, flexShrink: 0 }} />}
                     <ListItemText sx={{ my: 0 }}
                       primary={<Typography component="span" sx={{ fontSize: 12 }}>
                         <strong>{obj.objectName}</strong>
                         {isGroup
                           ? <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.disabled' }}> · {childCount}</Typography>
-                          : <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.secondary' }}> :{obj.className}</Typography>}
+                          : <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.secondary' }}> :{obj.className}{isQt && childCount > 0 ? ` · ${childCount}` : ''}</Typography>}
                       </Typography>}
                     />
                   </ListItemButton>
@@ -5175,17 +6037,32 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             stopPropagation on pointerdown stops parent windows (GlobalWindow drag handler) from
             interfering with ReactFlow's pointer capture. */}
         <Box
-          sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', touchAction: 'none', userSelect: 'none' }}
+          ref={flowWrapRef}
+          sx={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', touchAction: 'none', userSelect: 'none',
+            // Mobile touch/pen: po ~0.5s przytrzymania przeglądarka odpala natywny
+            // long-press (callout „zapisz obraz" / natywny drag / zaznaczanie), co
+            // przejmowało i GASIŁO przeciągany bloczek. Wyłączamy to na node'ach.
+            WebkitTouchCallout: 'none',
+            // RF ustawia node'om `visibility:hidden` gdy uzna je za „niezmierzone"
+            // po odlocie poza ekran (na mobile ResizeObserver ich nie mierzy → zostają
+            // ukryte na stałe). Wymuszamy widoczność, by nie znikały (a jeśli odlecą,
+            // Fit je odzyska).
+            '& .react-flow__node': { visibility: 'visible !important' as unknown as 'visible' },
+            '& .react-flow__node, & .react-flow__node *': {
+              WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              WebkitUserDrag: 'none' as any, touchAction: 'none',
+            } }}
           onPointerDown={(e) => e.stopPropagation()}>
           {error && <Alert severity="error" onClose={() => setError(null)} sx={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 10 }}>{error}</Alert>}
           <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
             onNodeDragStop={onNodeDragStop}
-            fitView minZoom={0.2} maxZoom={3} style={{ width: '100%', height: '100%' }}
+            minZoom={0.05} maxZoom={3} style={{ width: '100%', height: '100%' }}
             connectionMode={ConnectionMode.Strict}
             deleteKeyCode={null}
             connectionRadius={20}
-            autoPanOnNodeDrag
+            autoPanOnNodeDrag={!isMobile}
             nodeExtent={[[-20000, -20000], [20000, 20000]]}
             selectionOnDrag={canvasMode === 'select' && !isMobile}
             // Mobile: one-finger drag pans the canvas (node drag still works on
@@ -5212,30 +6089,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             {!isMobile && <MiniMap />}
           </ReactFlow>
         </Box>
-
-        {/* ── Render (MinisQt widgets on a live qt-canvas + move/resize handles) ── */}
-        {showRender && (
-          <Box sx={{ flex: 1, minWidth: 0, height: '100%', borderLeft: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column' }}
-            onPointerDown={(e) => e.stopPropagation()}>
-            <DashQtRender
-              objects={scene.objects.filter((o) => o.kind === 'qt-widget').map<QtRenderObject>((o) => ({
-                id: o.id, className: o.className, transform: getTransform(o), properties: o.properties,
-              }))}
-              selectedIds={selectedIds}
-              onSelect={(id, additive) => {
-                if (!id) { setSelectedIds(new Set()); return; }
-                setSelectedIds((prev) => {
-                  if (additive) { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; }
-                  return new Set([id]);
-                });
-              }}
-              onTransform={(id, patch) => updateScene((prev) => ({
-                ...prev,
-                objects: prev.objects.map((o) => o.id === id ? { ...o, transform: { ...getTransform(o), ...patch } } : o),
-              }))}
-            />
-          </Box>
-        )}
 
         {/* ── JSON source (drive text editor) — right-side toggleable split ── */}
         {showJson && (
@@ -5387,6 +6240,102 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                     </>
                   )}
                 </Box>
+              ) : (selectedObject && selectedObject.kind === 'qt-widget') ? (
+                <Box sx={{ p: 1 }}>
+                  <Typography sx={{ fontSize: 9, color: '#26c6da', textTransform: 'uppercase', letterSpacing: 0.5, mb: 0.5 }}>«{selectedObject.className}»</Typography>
+                  <TextField size="small" variant="standard" fullWidth
+                    value={selectedObject.objectName}
+                    onChange={(e) => updateObjectName(selectedObject.id, e.target.value)}
+                    inputProps={{ style: { fontSize: 13, fontWeight: 700 } }} sx={{ mb: 1 }} />
+                  <Divider sx={{ mb: 1 }} />
+                  <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.75 }}>Geometry</Typography>
+                  <TransformField label="X" value={selectedObject.transform.x} onChange={(v) => updateTransform(selectedObject.id, { x: v })} />
+                  <TransformField label="Y" value={selectedObject.transform.y} onChange={(v) => updateTransform(selectedObject.id, { y: v })} />
+                  <TransformField label="W" value={selectedObject.transform.width} onChange={(v) => updateTransform(selectedObject.id, { width: v })} />
+                  <TransformField label="H" value={selectedObject.transform.height} onChange={(v) => updateTransform(selectedObject.id, { height: v })} />
+                  <Divider sx={{ my: 1 }} />
+                  <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.75 }}>Qt Properties</Typography>
+                  {!qtLib && <Typography sx={{ fontSize: 10, color: 'text.disabled', fontStyle: 'italic' }}>Ładowanie metadanych Qt…</Typography>}
+                  {selectedQtProps && selectedQtProps.every((g) => g.props.length === 0) && <Typography sx={{ fontSize: 10, color: 'text.disabled', fontStyle: 'italic' }}>Brak zarejestrowanych properties.</Typography>}
+                  {selectedQtProps && selectedQtProps.map((grp) => grp.props.length === 0 ? null : (
+                    <Box key={grp.className} sx={{ mb: 0.5 }}>
+                      <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#26c6da', letterSpacing: 0.4, mt: 0.5, mb: 0.25, opacity: 0.85, borderBottom: '1px solid rgba(38,198,218,0.18)', pb: 0.1 }}>« {grp.className} »</Typography>
+                      {grp.props.map((pr) => (
+                        <QtPropertyField key={pr.name} name={pr.name} type={pr.type} settable={pr.settable}
+                          value={selectedObject.properties[pr.name]} dflt={pr.dflt}
+                          onChange={(val) => updateProperty(selectedObject.id, pr.name, val)} />
+                      ))}
+                    </Box>
+                  ))}
+
+                  <Divider sx={{ my: 1 }} />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
+                    <BoltIcon sx={{ fontSize: 14, color: '#ffb74d' }} />
+                    <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>Signals</Typography>
+                  </Box>
+                  {/* Sloty odpalają się TYLKO w trybie Action — bez tego klik widgetu nic nie robi.
+                      Pokazujemy status/CTA, gdy widget ma podłączone handlery, by uniknąć „nic się nie dzieje". */}
+                  {selectedObject.signalHandlers && Object.keys(selectedObject.signalHandlers).length > 0 && (
+                    actionMode ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75, px: 0.75, py: 0.5, borderRadius: 1, bgcolor: 'rgba(102,187,106,0.1)', border: '1px solid rgba(102,187,106,0.3)' }}>
+                        <PlayArrowIcon sx={{ fontSize: 14, color: '#66bb6a' }} />
+                        <Typography sx={{ fontSize: 9.5, color: '#a5d6a7', lineHeight: 1.3 }}>Tryb Action włączony — kliknij widget na scenie, aby uruchomić sloty.</Typography>
+                      </Box>
+                    ) : (
+                      <Tooltip title="Sloty (np. clicked → funkcja) wykonują się tylko w trybie Action. Kliknij, aby włączyć.">
+                        <Box onClick={() => { setActionMode(true); setQtSelectMode(false); }}
+                          sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75, px: 0.75, py: 0.5, borderRadius: 1, cursor: 'pointer',
+                            bgcolor: 'rgba(255,183,77,0.08)', border: '1px solid rgba(255,183,77,0.3)', '&:hover': { bgcolor: 'rgba(255,183,77,0.16)' } }}>
+                          <PlayArrowIcon sx={{ fontSize: 15, color: '#ffb74d' }} />
+                          <Typography sx={{ fontSize: 9.5, color: '#ffcc80', lineHeight: 1.3 }}>Włącz tryb <b>Action</b>, aby uruchamiać sloty po kliknięciu widgetu.</Typography>
+                        </Box>
+                      </Tooltip>
+                    )
+                  )}
+                  {selectedQtSignals && selectedQtSignals.every((g) => g.signals.length === 0) && <Typography sx={{ fontSize: 10, color: 'text.disabled', fontStyle: 'italic' }}>Brak zarejestrowanych sygnałów.</Typography>}
+                  {selectedQtSignals && selectedQtSignals.map((grp) => grp.signals.length === 0 ? null : (
+                    <Box key={grp.className} sx={{ mb: 0.5 }}>
+                      <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#ffb74d', letterSpacing: 0.4, mt: 0.5, mb: 0.25, opacity: 0.85, borderBottom: '1px solid rgba(255,183,77,0.18)', pb: 0.1 }}>« {grp.className} »</Typography>
+                      {grp.signals.map((sig) => {
+                    const handler = selectedObject.signalHandlers?.[sig.name];
+                    const fn = handler ? connectableFunctions.find((f) => f.sourceId === handler.sourceId && f.symbolPath === handler.symbolPath) : undefined;
+                    const missing = !!handler && !fn;
+                    const argMismatch = !!fn && fn.paramCount > sig.params.length;
+                    return (
+                      <Box key={sig.name} sx={{ mb: 0.5, px: 0.75, py: 0.5, borderRadius: 1, bgcolor: 'rgba(255,183,77,0.05)', border: '1px solid rgba(255,183,77,0.15)' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <Typography sx={{ fontSize: 10, fontFamily: 'monospace', color: '#ffb74d', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={`${sig.name}(${sig.params.join(', ')})`}>{sig.name}({sig.params.join(', ')})</Typography>
+                          <Tooltip title={handler ? 'Zmień handler…' : 'Połącz z funkcją…'}>
+                            <IconButton size="small" onClick={() => setSignalPicker({ objId: selectedObject.id, signal: sig.name, params: sig.params })} sx={{ p: 0.25 }}>
+                              <LinkIcon sx={{ fontSize: 15, color: '#ffb74d' }} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        {handler ? (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 1, mt: 0.25 }}>
+                            {missing ? <WarningIcon sx={{ fontSize: 13, color: '#ef5350', flexShrink: 0 }} />
+                              : argMismatch ? <Tooltip title={`Funkcja oczekuje ${fn!.paramCount} arg, sygnał podaje ${sig.params.length}`}><WarningIcon sx={{ fontSize: 13, color: '#ffca28', flexShrink: 0 }} /></Tooltip>
+                              : <CheckCircleIcon sx={{ fontSize: 13, color: '#81c784', flexShrink: 0 }} />}
+                            <Typography sx={{ fontSize: 10, fontFamily: 'monospace', color: missing ? '#ef5350' : 'text.secondary', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                              title={fn ? `${fn.sourceName}: ${fn.symbolPath}(${fn.params})` : `${handler.symbolPath} — źródło/funkcja niedostępne`}>
+                              → {fn ? `${fn.sourceName}:` : ''}{handler.symbolPath}{fn ? ` (${fn.paramCount})` : ' (?)'}
+                            </Typography>
+                            <Tooltip title="Rozłącz">
+                              <IconButton size="small" onClick={() => updateSignalHandler(selectedObject.id, sig.name, null)} sx={{ p: 0.25 }}>
+                                <CloseIcon sx={{ fontSize: 13, color: 'text.disabled' }} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        ) : (
+                          <Typography sx={{ fontSize: 9, color: 'text.disabled', pl: 1, fontStyle: 'italic' }}>— nie połączony</Typography>
+                        )}
+                      </Box>
+                    );
+                  })}
+                    </Box>
+                  ))}
+                </Box>
               ) : (
                 <PropertiesPanel
                   object={selectedObject}
@@ -5413,6 +6362,58 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         )}
 
       </Box>
+
+      {/* ── Dialog: połącz sygnał qt z funkcją-handlerem z data source ── */}
+      {signalPicker && (
+        <Dialog open onClose={() => setSignalPicker(null)} maxWidth="xs" fullWidth>
+          <DialogTitle sx={{ fontSize: 14, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <BoltIcon sx={{ fontSize: 18, color: '#ffb74d' }} />
+            <Box>
+              <Box component="span">Połącz sygnał </Box>
+              <Box component="span" sx={{ fontFamily: 'monospace', color: '#ffb74d' }}>{signalPicker.signal}({signalPicker.params.join(', ')})</Box>
+            </Box>
+          </DialogTitle>
+          <DialogContent sx={{ pt: '4px !important' }}>
+            {connectableFunctions.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                Brak funkcji. Dodaj plik <code>.js</code> / <code>.ts</code> / <code>.py</code> w panelu <strong>DATA</strong> — jego funkcje pojawią się tutaj jako handlery.
+              </Typography>
+            ) : (
+              <>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                  Wybierz funkcję. Sygnał podaje <strong>{signalPicker.params.length}</strong> arg{signalPicker.params.length === 1 ? '' : ''} ({signalPicker.params.join(', ') || '—'}).
+                </Typography>
+                {Object.entries(connectableFunctions.reduce((acc, f) => { (acc[f.sourceName] ??= []).push(f); return acc; }, {} as Record<string, HandlerFn[]>)).map(([srcName, fns]) => (
+                  <Box key={srcName} sx={{ mb: 1 }}>
+                    <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#4fc3f7', textTransform: 'uppercase', letterSpacing: 0.5, mb: 0.25 }}>
+                      {srcName} <Box component="span" sx={{ color: 'text.disabled', fontWeight: 400 }}>· {fns[0].fileType}</Box>
+                    </Typography>
+                    {fns.map((f) => {
+                      const tooMany = f.paramCount > signalPicker.params.length;
+                      return (
+                        <Box key={f.symbolPath} onClick={() => { updateSignalHandler(signalPicker.objId, signalPicker.signal, { sourceId: f.sourceId, symbolPath: f.symbolPath }); setSignalPicker(null); }}
+                          sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 1, py: 0.5, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}>
+                          {tooMany ? <Tooltip title={`Funkcja oczekuje ${f.paramCount} arg — sygnał podaje tylko ${signalPicker.params.length}. Nadmiarowe będą undefined.`}><WarningIcon sx={{ fontSize: 15, color: '#ffca28', flexShrink: 0 }} /></Tooltip>
+                            : <CheckCircleIcon sx={{ fontSize: 15, color: '#81c784', flexShrink: 0 }} />}
+                          <Box sx={{ flex: 1, overflow: 'hidden' }}>
+                            <Typography sx={{ fontSize: 12, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {f.symbolPath}<Box component="span" sx={{ color: 'text.disabled' }}>({f.params})</Box>
+                            </Typography>
+                          </Box>
+                          <Box component="span" sx={{ fontSize: 10, color: tooMany ? '#ffca28' : 'text.disabled', fontFamily: 'monospace', flexShrink: 0 }}>{f.paramCount} arg</Box>
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                ))}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 2, pb: 1.5 }}>
+            <Button size="small" onClick={() => setSignalPicker(null)}>Anuluj</Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
       {/* ── Ustawienia: wbudowane biblioteki sandboxu ── */}
       {showSettings && (
@@ -5444,6 +6445,73 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                 />
               </Box>
             ))}
+
+            {/* ── Python (Pyodide) ── */}
+            <Box sx={{ mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Box>
+                  <Typography variant="body2">Python (Pyodide)</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    CPython w Web Workerze · <code>api.python.run(kod)</code>
+                  </Typography>
+                </Box>
+                <Switch
+                  checked={!!scene.pyodide?.enabled}
+                  onChange={(e) => updateScene((p) => ({
+                    ...p,
+                    pyodide: { ...(p.pyodide ?? emptyPyodideConfig()), enabled: e.target.checked },
+                  }))}
+                />
+              </Box>
+
+              {scene.pyodide?.enabled && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography sx={{ fontSize: 10, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: 0.5, mb: 0.25 }}>
+                    Pakiety wbudowane
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.25 }}>
+                    {PYODIDE_BUILTIN_PACKAGES.map((pkg) => {
+                      const sel = (scene.pyodide?.packages ?? []).includes(pkg.name);
+                      return (
+                        <Chip
+                          key={pkg.name}
+                          label={pkg.label}
+                          size="small"
+                          variant={sel ? 'filled' : 'outlined'}
+                          color={sel ? 'primary' : 'default'}
+                          onClick={() => updateScene((p) => {
+                            const cur = p.pyodide ?? emptyPyodideConfig();
+                            const has = cur.packages.includes(pkg.name);
+                            const packages = has ? cur.packages.filter((x) => x !== pkg.name) : [...cur.packages, pkg.name];
+                            return { ...p, pyodide: { ...cur, packages } };
+                          })}
+                          sx={{ fontSize: 10, height: 22 }}
+                        />
+                      );
+                    })}
+                  </Box>
+                  <Typography sx={{ fontSize: 10, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: 0.5, mt: 1.25, mb: 0.25 }}>
+                    Pakiety PyPI (micropip)
+                  </Typography>
+                  <TextField
+                    fullWidth size="small" placeholder="np. plotly, requests, rich"
+                    value={(scene.pyodide?.pypi ?? []).join(', ')}
+                    onChange={(e) => updateScene((p) => ({
+                      ...p,
+                      pyodide: {
+                        ...(p.pyodide ?? emptyPyodideConfig()),
+                        pypi: e.target.value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+                      },
+                    }))}
+                    inputProps={{ style: { fontSize: 12 } }}
+                  />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                    Pakiety ładują się <b>leniwie</b> — środowisko (~kilka MB) i wybrane paczki pobierają się w tle
+                    przy uruchomieniu, z ekranem ładowania.
+                  </Typography>
+                </Box>
+              )}
+            </Box>
           </DialogContent>
           <DialogActions sx={{ px: 2, pb: 1.5 }}>
             <Button size="small" onClick={() => setShowSettings(false)}>Zamknij</Button>
@@ -5542,6 +6610,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       <Menu anchorEl={qtMenuAnchor} open={Boolean(qtMenuAnchor)} onClose={() => setQtMenuAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         MenuListProps={{ dense: true, sx: { maxHeight: 380 } }}>
+        <MenuItem onClick={() => { setQtMenuAnchor(null); setNewMenuAnchor(null); closeSceneCtx(); setQtuiPickerOpen(true); }}
+          sx={{ fontSize: 13, gap: 1, color: '#66bb6a' }}>
+          <WidgetsIcon sx={{ fontSize: 15, color: '#66bb6a' }} />Osadź scenę .qtui.json…
+        </MenuItem>
+        <Divider />
         {QT_WIDGETS.map((w) => (
           <MenuItem key={w.type} sx={{ fontSize: 13, gap: 1 }}
             onClick={() => {
@@ -5553,6 +6626,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           </MenuItem>
         ))}
       </Menu>
+
+      {/* Osadzanie sceny .qtui.json jako poddrzewa qt-widgetów */}
+      <FilePickerDialog open={qtuiPickerOpen} onClose={() => setQtuiPickerOpen(false)}
+        userName={userName} currentPath="" filterExt=".qtui.json"
+        onSelect={(p) => { if (p) void embedQtuiScene(p); }} />
 
       {/* Scene context menu */}
       <Menu
@@ -5632,7 +6710,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       {dsPickerOpen && (
         <FilePickerDialog open onClose={() => setDsPickerOpen(false)}
           userName={userName} currentPath=""
-          filterExt=".json,.js"
+          filterExt=".json,.js,.py,.ts"
           onSelect={(p) => { void addDataSource(p); setDsPickerOpen(false); }} />
       )}
     </Box>

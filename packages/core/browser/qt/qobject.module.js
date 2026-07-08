@@ -202,6 +202,10 @@ class QObject {
   metaProperties() { return QObject.metaProperties(this); }
   /** Wszystkie nazwy właściwości (zadeklarowane + dynamiczne). */
   propertyNames() { return QObject.propertyNames(this); }
+  /** Scalona mapa zadeklarowanych sygnałów tego obiektu (łańcuch dziedziczenia). */
+  metaSignals() { return QObject.metaSignals(this); }
+  /** Nazwy zadeklarowanych sygnałów (np. 'clicked', 'valueChanged'). */
+  signalNames() { return QObject.metaSignalNames(this); }
 
   // ── drzewo (delegaty do statyków) ───────────────────────────────────────────
   parent() { return this._qparent; }
@@ -285,6 +289,33 @@ class QObject {
   }
   /** Nazwy zadeklarowanych (meta) właściwości. */
   static metaPropertyNames(target) { return Object.keys(QObject.metaProperties(target)); }
+
+  // ── System sygnałów (metadane, enumerowalne) ─────────────────────────────────
+  // Każda klasa deklaruje swoje sygnały w statycznym polu
+  // `static signals = { nazwa: { params: ['argName', …] } }`. To metadane do
+  // enumeracji/edytorów — faktyczne instancje Signal nadal żyją jako pola obiektu
+  // (tworzone w konstruktorze). metaSignals() scala deklaracje z łańcucha dziedziczenia.
+  static signals = {
+    destroyed: { params: [] },
+    objectNameChanged: { params: ['name'] },
+  };
+  /** Scalona mapa zadeklarowanych sygnałów obiektu lub klasy (łańcuch dziedziczenia). */
+  static metaSignals(target) {
+    const cls = (typeof target === 'function') ? target : (target && target.constructor);
+    if (!cls) return {};
+    const chain = [];
+    let c = cls;
+    while (c && c !== Object && c !== Function.prototype) { chain.unshift(c); c = Object.getPrototypeOf(c); }
+    const out = {};
+    for (const k of chain) {
+      if (Object.prototype.hasOwnProperty.call(k, 'signals') && k.signals && typeof k.signals === 'object') {
+        Object.assign(out, k.signals);
+      }
+    }
+    return out;
+  }
+  /** Nazwy zadeklarowanych (meta) sygnałów. */
+  static metaSignalNames(target) { return Object.keys(QObject.metaSignals(target)); }
 
   /** Odczyt właściwości: najpierw zadeklarowana (getter), potem dynamiczna. */
   static property(o, key) {

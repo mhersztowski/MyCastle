@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import type { MapNode, MapNodeType } from './types'
 
 /** Where a dragged node lands relative to the drop target. */
@@ -62,6 +62,13 @@ const INITIAL_NODES: MapNode[] = [
 ]
 
 // ── tree helpers ──────────────────────────────────────────────────────────────
+
+/** Depth-first list of node ids — matches the hierarchy's on-screen row order,
+ *  used to resolve a Shift+click range (block) selection. */
+function flattenIds(nodes: MapNode[], acc: string[] = []): string[] {
+  for (const n of nodes) { acc.push(n.id); if (n.children) flattenIds(n.children, acc) }
+  return acc
+}
 
 function findNode(nodes: MapNode[], id: string): MapNode | null {
   for (const n of nodes) {
@@ -135,23 +142,42 @@ export function useMapLayers() {
   const [nodes, setNodes] = useState<MapNode[]>(INITIAL_NODES)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Latest tree (for range resolution) + the anchor of the current selection.
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+  const anchorRef = useRef<string | null>(null)
 
-  // Toggle selection: multi=false → single select; multi=true → Ctrl-click add/remove
-  const toggleSelect = useCallback((id: string, multi: boolean) => {
+  // Selection: plain click → single; Ctrl/Cmd (multi) → toggle one; Shift (range)
+  // → select the whole block between the anchor and this row (Ctrl+Shift extends).
+  const toggleSelect = useCallback((id: string, multi: boolean, range = false) => {
+    if (range && anchorRef.current) {
+      const flat = flattenIds(nodesRef.current)
+      const a = flat.indexOf(anchorRef.current)
+      const b = flat.indexOf(id)
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a]
+        const block = flat.slice(lo, hi + 1)
+        setSelectedIds(prev => {
+          const next = multi ? new Set(prev) : new Set<string>()
+          block.forEach(x => next.add(x))
+          return next
+        })
+        setSelectedId(id) // keep the anchor so the block can be re-dragged
+        return
+      }
+    }
     if (multi) {
       setSelectedIds(prev => {
         const next = new Set(prev)
-        if (next.has(id)) {
-          next.delete(id)
-        } else {
-          next.add(id)
-        }
+        if (next.has(id)) next.delete(id); else next.add(id)
         return next
       })
       setSelectedId(id)
+      anchorRef.current = id
     } else {
       setSelectedIds(new Set([id]))
       setSelectedId(id)
+      anchorRef.current = id
     }
   }, [])
 

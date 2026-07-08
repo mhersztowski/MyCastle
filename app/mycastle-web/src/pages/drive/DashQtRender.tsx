@@ -61,13 +61,19 @@ function buildWidget(obj: QtRenderObject, g: any): any {
   return w;
 }
 
-export function DashQtRender({ objects, selectedIds, width = DEFAULT_W, height = DEFAULT_H, onSelect, onTransform }: Props) {
+export function DashQtRender({ objects, selectedIds, width, height, onSelect, onTransform }: Props) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const gRef = useRef<any>(null);
   const canvasRef = useRef<any>(null);
   const widgetsRef = useRef<Map<string, any>>(new Map());
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [err, setErr] = useState<string | null>(null);
+  // Design surface size — fills the whole Render panel (measured live). Props
+  // `width`/`height`, if given, override the measured size (fixed-canvas mode).
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: width ?? DEFAULT_W, h: height ?? DEFAULT_H });
+  const surfaceW = width ?? size.w;
+  const surfaceH = height ?? size.h;
   // Live overlay geometry during a drag (id → transform) so handles track smoothly.
   const [live, setLive] = useState<Record<string, QtTransform>>({});
   const drag = useRef<{ id: string; dir: HandleDir; sx: number; sy: number; t0: QtTransform } | null>(null);
@@ -80,6 +86,23 @@ export function DashQtRender({ objects, selectedIds, width = DEFAULT_W, height =
     return () => { cancelled = true; };
   }, []);
 
+  // Track the container size so the qt-canvas always fills the whole Render
+  // panel (unless fixed width/height props are supplied).
+  useEffect(() => {
+    if (width != null && height != null) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (!r) return;
+      const w = Math.max(1, Math.floor(r.width));
+      const h = Math.max(1, Math.floor(r.height));
+      setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [width, height]);
+
   // (Re)build the whole scene when objects change (not during a live drag — that
   // updates the single dragged widget's geometry directly for smoothness).
   useEffect(() => {
@@ -89,11 +112,12 @@ export function DashQtRender({ objects, selectedIds, width = DEFAULT_W, height =
     let canvas = canvasRef.current;
     if (!canvas) {
       canvas = document.createElement(tag);
-      canvas.style.cssText = `width:${width}px;height:${height}px;display:block;`;
       hostRef.current.innerHTML = '';
       hostRef.current.appendChild(canvas);
       canvasRef.current = canvas;
     }
+    // Keep the qt-canvas pixel size in sync with the design surface.
+    canvas.style.cssText = `width:${surfaceW}px;height:${surfaceH}px;display:block;`;
     const raf = requestAnimationFrame(() => {
       const root = canvas.root;
       if (!root) return;
@@ -109,7 +133,7 @@ export function DashQtRender({ objects, selectedIds, width = DEFAULT_W, height =
       try { root.update?.(); } catch { /* ignore */ }
     });
     return () => cancelAnimationFrame(raf);
-  }, [status, objects, width, height]);
+  }, [status, objects, surfaceW, surfaceH]);
 
   const geomOf = useCallback((o: QtRenderObject): QtTransform => live[o.id] ?? o.transform, [live]);
 
@@ -161,15 +185,17 @@ export function DashQtRender({ objects, selectedIds, width = DEFAULT_W, height =
     return <Box sx={{ p: 2 }}><Typography variant="caption" color="error">Nie udało się załadować renderera Qt: {err}</Typography></Box>;
   }
 
+  const isFixed = width != null && height != null;
   return (
-    <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto', bgcolor: '#181c20', position: 'relative' }}>
+    <Box ref={wrapRef} sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: isFixed ? 'auto' : 'hidden', bgcolor: '#181c20', position: 'relative' }}>
       {status === 'loading' && (
         <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 2 }}>
           <CircularProgress size={16} /><Typography variant="caption" color="text.secondary">Ładowanie renderera Qt…</Typography>
         </Box>
       )}
-      {/* Design surface: qt-canvas + absolutely-positioned handle overlay (1:1 px). */}
-      <Box sx={{ position: 'relative', width, height, m: 2, boxShadow: '0 0 0 1px rgba(255,255,255,0.12)' }}
+      {/* Design surface: qt-canvas + absolutely-positioned handle overlay (1:1 px).
+          Fills the whole Render panel unless fixed width/height props are given. */}
+      <Box sx={{ position: isFixed ? 'relative' : 'absolute', inset: isFixed ? 'auto' : 0, width: surfaceW, height: surfaceH, m: isFixed ? 2 : 0 }}
         onPointerDown={(e) => { if (e.target === e.currentTarget) onSelect('', false); }}>
         <Box ref={hostRef} sx={{ position: 'absolute', inset: 0 }} />
         {/* Handles overlay */}

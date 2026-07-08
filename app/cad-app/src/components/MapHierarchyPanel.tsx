@@ -89,7 +89,7 @@ interface TreeNodeProps {
   expandedIds: Set<string>
   renamingId: string | null
   renameValue: string
-  onSelect: (id: string, multi: boolean) => void
+  onSelect: (id: string, multi: boolean, range?: boolean) => void
   onToggleExpand: (id: string) => void
   onToggleVisibility: (id: string) => void
   onContextMenu: (e: React.MouseEvent, id: string) => void
@@ -126,7 +126,7 @@ function TreeNode({
       <ListItemButton
         selected={isSelected}
         data-node-id={node.id}
-        onClick={e => onSelect(node.id, e.ctrlKey || e.metaKey)}
+        onClick={e => onSelect(node.id, e.ctrlKey || e.metaKey, e.shiftKey)}
         onDoubleClick={() => {
           // trigger rename via parent — fired via context-menu handler
         }}
@@ -322,7 +322,7 @@ interface Props {
   nodes: MapNode[]
   selectedId: string | null
   selectedIds: Set<string>
-  onSelect: (id: string, multi: boolean) => void
+  onSelect: (id: string, multi: boolean, range?: boolean) => void
   onToggleVisibility: (id: string) => void
   onRename: (id: string, name: string) => void
   onDelete: (id: string) => void

@@ -711,9 +711,14 @@ class QWidget extends QObject {
     this._minSize = new QSize(0, 0); this._maxSize = new QSize(16777215, 16777215);
     this._sizePolicy = new QSizePolicy();
     this._toolTip = ''; this._cursor = Qt.ArrowCursor; this._mouseTracking = false; this._focusPolicy = Qt.NoFocus;
+    this._bgColor = null; this._fgColor = null;   // per-widget color overrides (null → paleta)
+    this.clicked = new Signal('clicked', this);   // generyczny sygnał kliknięcia (każdy widget)
     if (parent) parent._addChild(this);
   }
   static create(parent) { return new QWidget(parent); }
+  static signals = {
+    clicked: { params: [] },
+  };
   static properties = {
     geometry: { get: (o) => o.geometry(), set: (o, v) => o.setGeometry(v), type: 'QRect' },
     pos: { get: (o) => o.pos(), set: (o, v) => o.move(v), type: 'QPoint' },
@@ -729,7 +734,17 @@ class QWidget extends QObject {
     cursor: { get: (o) => o.cursor(), set: (o, v) => o.setCursor(v), type: 'string' },
     focus: { get: (o) => o.hasFocus(), type: 'bool' },
     mouseTracking: { get: (o) => o.hasMouseTracking(), set: (o, v) => o.setMouseTracking(v), type: 'bool' },
+    backgroundColor: { get: (o) => o.backgroundColor(), set: (o, v) => o.setBackgroundColor(v), type: 'color' },
+    color: { get: (o) => o.color(), set: (o, v) => o.setColor(v), type: 'color' },
   };
+
+  // ── kolory (override palety; wartość jako string hex, '' = brak override) ─────
+  backgroundColor() { return this._bgColor ? this._bgColor.name() : ''; }
+  setBackgroundColor(v) { this._bgColor = (v == null || v === '') ? null : (v instanceof QColor ? v : QColor.fromString(v)); this.update(); return this; }
+  color() { return this._fgColor ? this._fgColor.name() : ''; }
+  setColor(v) { this._fgColor = (v == null || v === '') ? null : (v instanceof QColor ? v : QColor.fromString(v)); this.update(); return this; }
+  /** Efektywny kolor tekstu/pierwszego planu (override albo domyślny z palety). */
+  _fg(fallback) { return this._fgColor || fallback; }
 
   geometry() { return this._geom; }
   setGeometry(r) { const old = this._geom.size(); this._geom = r instanceof QRect ? r : QRect.of(...arguments); this._relayout(); if (old.width() !== this._geom.width() || old.height() !== this._geom.height()) this.resizeEvent(new QResizeEvent(this._geom.size(), old)); this.update(); return this; }
@@ -784,10 +799,10 @@ class QWidget extends QObject {
   }
   minimumSizeHint() { return this.sizeHint(); }
 
-  paintEvent(_p) {}
+  paintEvent(p) { if (this._bgColor) { p.setBrush(new QBrush(this._bgColor)); p.setPen(QPen.of(Qt.transparent, 0)); p.drawRect(this.rect()); } }
   resizeEvent(_e) {}
-  mousePressEvent(e) { e.ignore && e.ignore(); }
-  mouseReleaseEvent(e) { e.ignore && e.ignore(); }
+  mousePressEvent(e) { this._pressed = true; e.ignore && e.ignore(); }
+  mouseReleaseEvent(e) { const was = this._pressed; this._pressed = false; if (was && this.clicked && this.rect().contains(e.pos())) this.clicked.emit(); e.ignore && e.ignore(); }
   mouseMoveEvent(e) { e.ignore && e.ignore(); }
   mouseDoubleClickEvent(e) { e.ignore && e.ignore(); }
   wheelEvent(e) { e.ignore && e.ignore(); }
@@ -863,6 +878,10 @@ class QWidget extends QObject {
   static cursor(self) { return self.cursor(); }
   static setMouseTracking(self, b) { return self.setMouseTracking(b); }
   static hasMouseTracking(self) { return self.hasMouseTracking(); }
+  static backgroundColor(self) { return self.backgroundColor(); }
+  static setBackgroundColor(self, v) { return self.setBackgroundColor(v); }
+  static color(self) { return self.color(); }
+  static setColor(self, v) { return self.setColor(v); }
   static setSizePolicy(self, h, v) { return self.setSizePolicy(h, v); }
   static sizePolicy(self) { return self.sizePolicy(); }
   static setFocusPolicy(self, p) { return self.setFocusPolicy(p); }
@@ -906,10 +925,11 @@ class QFrame extends QWidget {
   setLineWidth(w) { this._lineWidth = w; this.update(); return this; }
   paintEvent(p) {
     const Pal = QApplication.palette();
-    if (this._frameShape === QFrame.HLine) { p.setPen(QPen.of(Pal.border.lighter(140), this._lineWidth)); p.drawLine(0, this.height() / 2, this.width(), this.height() / 2); return; }
-    if (this._frameShape === QFrame.VLine) { p.setPen(QPen.of(Pal.border.lighter(140), this._lineWidth)); p.drawLine(this.width() / 2, 0, this.width() / 2, this.height()); return; }
-    if (this._frameShape === QFrame.NoFrame) return;
-    p.setBrush(Pal.base.lighter(105)); p.setPen(QPen.of(Pal.border.lighter(140), this._lineWidth)); p.drawRoundedRect(this.rect().adjusted(0, 0, -1, -1), 6);
+    const fillBg = () => { if (this._bgColor) { p.setBrush(new QBrush(this._bgColor)); p.setPen(QPen.of(Qt.transparent, 0)); p.drawRect(this.rect()); } };
+    if (this._frameShape === QFrame.HLine) { fillBg(); p.setPen(QPen.of(Pal.border.lighter(140), this._lineWidth)); p.drawLine(0, this.height() / 2, this.width(), this.height() / 2); return; }
+    if (this._frameShape === QFrame.VLine) { fillBg(); p.setPen(QPen.of(Pal.border.lighter(140), this._lineWidth)); p.drawLine(this.width() / 2, 0, this.width() / 2, this.height()); return; }
+    if (this._frameShape === QFrame.NoFrame) { fillBg(); return; }
+    p.setBrush(this._bgColor || Pal.base.lighter(105)); p.setPen(QPen.of(Pal.border.lighter(140), this._lineWidth)); p.drawRoundedRect(this.rect().adjusted(0, 0, -1, -1), 6);
   }
 
   // ── Statyczne odpowiedniki metod instancji (autocomplete: QFrame.foo(self, …)) ──
@@ -929,6 +949,10 @@ class QSpacerItem { constructor(w, h, hPolicy = QSizePolicy.Expanding, vPolicy =
 class QLayout extends QObject {
   constructor(parentWidget = null) { super(); this._items = []; this._parentWidget = null; this._spacing = 6; this._margins = new QMargins(9, 9, 9, 9); if (parentWidget) parentWidget.setLayout(this); }
   static create(parentWidget = null) { return new QLayout(parentWidget); }
+  static properties = {
+    spacing: { get: (o) => o.spacing(), set: (o, v) => o.setSpacing(v), type: 'number' },
+    contentsMargins: { get: (o) => o.contentsMargins(), set: (o, v) => o.setContentsMargins(v), type: 'QMargins' },
+  };
   setSpacing(s) { this._spacing = s; this._reactivate(); return this; } spacing() { return this._spacing; }
   setContentsMargins(l, t, r, b) { this._margins = l instanceof QMargins ? l : new QMargins(l, t, r, b); this._reactivate(); return this; } contentsMargins() { return this._margins; }
   addWidget(w) { w.setParent(this._parentWidget); this._items.push({ widget: w, stretch: 0 }); this._reactivate(); return this; }
@@ -1095,7 +1119,7 @@ class QLabel extends QFrame {
   setTextElide(mode) { this._elide = mode; this.update(); return this; }
   sizeHint() { const fm = new QFontMetrics(this._font); return new QSize(Math.ceil(fm.horizontalAdvance(this._text)) + 4, fm.height() + 6); }
   paintEvent(p) {
-    super.paintEvent(p); p.setFont(this._font); const Pal = QApplication.palette(); p.setPen(this._enabled ? Pal.text : Pal.disabled);
+    super.paintEvent(p); p.setFont(this._font); const Pal = QApplication.palette(); p.setPen(this._enabled ? this._fg(Pal.text) : Pal.disabled);
     const r = this.rect().adjusted(2, 0, -2, 0); const fm = new QFontMetrics(this._font);
     if (this._wordWrap) { this._paintWrapped(p, r, fm); return; }
     const t = this._elide !== Qt.ElideNone ? fm.elidedText(this._text, this._elide, r.width()) : this._text;
@@ -1125,6 +1149,12 @@ class QLabel extends QFrame {
 class QAbstractButton extends QWidget {
   constructor(text = '', parent = null) { super(parent); this._text = text; this._checkable = false; this._checked = false; this._down = false; this._focusPolicy = Qt.StrongFocus; this.clicked = new Signal(); this.toggled = new Signal(); this.pressed = new Signal(); this.released = new Signal(); }
   static create(text = '', parent = null) { return new QAbstractButton(text, parent); }
+  static signals = {
+    clicked: { params: ['checked'] },
+    toggled: { params: ['checked'] },
+    pressed: { params: [] },
+    released: { params: [] },
+  };
   static properties = {
     text: { get: (o) => o.text(), set: (o, v) => o.setText(v), type: 'string' },
     checkable: { get: (o) => o.isCheckable(), set: (o, v) => o.setCheckable(v), type: 'bool' },
@@ -1156,16 +1186,21 @@ class QAbstractButton extends QWidget {
 class QPushButton extends QAbstractButton {
   constructor(text = '', parent = null) { super(text, parent); this._cursor = Qt.PointingHandCursor; this._flat = false; this._default = false; }
   static create(text, onClick = null, parent = null) { const b = new QPushButton(text, parent); if (onClick) b.clicked.connect(onClick); return b; }
+  static properties = {
+    flat: { get: (o) => o._flat, set: (o, v) => o.setFlat(v), type: 'bool' },
+    default: { get: (o) => o._default, set: (o, v) => o.setDefault(v), type: 'bool' },
+  };
   setFlat(b) { this._flat = !!b; this.update(); return this; } setDefault(b) { this._default = !!b; this.update(); return this; }
   sizeHint() { const fm = new QFontMetrics(this._font); return new QSize(Math.ceil(fm.horizontalAdvance(this._text)) + 36, Math.max(34, this._font.pixelSize() + 18)); }
   paintEvent(p) {
     const Pal = QApplication.palette(); const r = this.rect().adjusted(1, 1, -1, -1);
     let bg = !this._enabled ? Pal.button.darker(120) : this._down ? Pal.buttonDown : this._hovered ? Pal.buttonHover : Pal.button;
     if (this._checkable && this._checked) bg = Pal.highlight; if (this._default && !this._checkable) bg = Pal.highlight;
-    if (this._flat && !this._down && !this._hovered) { p.setBrush(Qt.transparent); p.setPen(QPen.of(Qt.transparent, 0)); }
+    if (this._bgColor) bg = this._down ? this._bgColor.darker(115) : this._hovered ? this._bgColor.lighter(112) : this._bgColor;
+    if (this._flat && !this._down && !this._hovered && !this._bgColor) { p.setBrush(Qt.transparent); p.setPen(QPen.of(Qt.transparent, 0)); }
     else { const grad = QLinearGradient.of(0, r.top(), 0, r.bottom()).setColorAt(0, bg.lighter(108)).setColorAt(1, bg); p.setBrush(new QBrush(grad)); p.setPen(QPen.of(this._focus ? Pal.highlight : Pal.border, this._focus ? 2 : 1)); }
     p.drawRoundedRect(r, 7);
-    p.setFont(this._font); p.setPen(this._enabled ? (this._checked || this._default ? Pal.highlightedText : Pal.text) : Pal.disabled);
+    p.setFont(this._font); p.setPen(this._enabled ? this._fg(this._checked || this._default ? Pal.highlightedText : Pal.text) : Pal.disabled);
     p.drawText(this.rect(), Qt.AlignCenter, this._text);
   }
 
@@ -1186,13 +1221,16 @@ class QToolButton extends QPushButton {
 class QCheckBox extends QAbstractButton {
   constructor(text = '', parent = null) { super(text, parent); this._checkable = true; this._tristate = false; this._cursor = Qt.PointingHandCursor; }
   static create(text, onToggled = null, parent = null) { const c = new QCheckBox(text, parent); if (onToggled) c.toggled.connect(onToggled); return c; }
+  static properties = {
+    tristate: { get: (o) => o._tristate, set: (o, v) => o.setTristate(v), type: 'bool' },
+  };
   setTristate(b) { this._tristate = !!b; return this; }
   sizeHint() { const fm = new QFontMetrics(this._font); return new QSize(Math.ceil(fm.horizontalAdvance(this._text)) + 30, Math.max(24, this._font.pixelSize() + 10)); }
   paintEvent(p) {
     const Pal = QApplication.palette(); const s = 18, y = (this.height() - s) / 2, box = QRect.of(1, y, s, s);
     p.setBrush(this._checked ? Pal.highlight : Pal.base); p.setPen(QPen.of(this._hovered ? Pal.highlight : Pal.border.lighter(160), 1.5)); p.drawRoundedRect(box, 4);
     if (this._checked) { p.setPen(QPen.of(Pal.highlightedText, 2.2)); p.drawLine(box.left() + 4, box.center().y(), box.center().x() - 1, box.bottom() - 5); p.drawLine(box.center().x() - 1, box.bottom() - 5, box.right() - 4, box.top() + 4); }
-    p.setFont(this._font); p.setPen(this._enabled ? Pal.text : Pal.disabled);
+    p.setFont(this._font); p.setPen(this._enabled ? this._fg(Pal.text) : Pal.disabled);
     p.drawText(QRect.of(s + 10, 0, this.width() - s - 10, this.height()), Qt.AlignLeft | Qt.AlignVCenter, this._text);
   }
 
@@ -1210,7 +1248,7 @@ class QRadioButton extends QAbstractButton {
     const Pal = QApplication.palette(); const s = 18, y = (this.height() - s) / 2, box = QRect.of(1, y, s, s);
     p.setBrush(Pal.base); p.setPen(QPen.of(this._hovered ? Pal.highlight : Pal.border.lighter(160), 1.5)); p.drawEllipse(box);
     if (this._checked) { p.setBrush(Pal.highlight); p.setPen(QPen.of(Qt.transparent, 0)); p.drawEllipse(box.adjusted(4, 4, -4, -4)); }
-    p.setFont(this._font); p.setPen(this._enabled ? Pal.text : Pal.disabled);
+    p.setFont(this._font); p.setPen(this._enabled ? this._fg(Pal.text) : Pal.disabled);
     p.drawText(QRect.of(s + 10, 0, this.width() - s - 10, this.height()), Qt.AlignLeft | Qt.AlignVCenter, this._text);
   }
 
@@ -1226,6 +1264,10 @@ class QRadioButton extends QAbstractButton {
 class QAbstractSlider extends QWidget {
   constructor(orientation = Qt.Horizontal, parent = null) { super(parent); this._orientation = orientation; this._min = 0; this._max = 100; this._value = 0; this._step = 1; this._pageStep = 10; this._focusPolicy = Qt.StrongFocus; this.valueChanged = new Signal(); this.sliderMoved = new Signal(); }
   static create(orientation = Qt.Horizontal, parent = null) { return new QAbstractSlider(orientation, parent); }
+  static signals = {
+    valueChanged: { params: ['value'] },
+    sliderMoved: { params: ['value'] },
+  };
   static properties = {
     orientation: { get: (o) => o.orientation(), set: (o, v) => o.setOrientation(v), type: 'number' },
     minimum: { get: (o) => o.minimum(), set: (o, v) => o.setMinimum(v), type: 'number' },
@@ -1376,6 +1418,9 @@ class QProgressBar extends QWidget {
 class QSpinBox extends QWidget {
   constructor(parent = null) { super(parent); this._min = 0; this._max = 99; this._value = 0; this._step = 1; this._prefix = ''; this._suffix = ''; this._decimals = 0; this._focusPolicy = Qt.StrongFocus; this.valueChanged = new Signal(); }
   static create(min = 0, max = 99, value = 0) { const s = new QSpinBox(); s.setRange(min, max); s.setValue(value); return s; }
+  static signals = {
+    valueChanged: { params: ['value'] },
+  };
   static properties = {
     minimum: { get: (o) => o.minimum(), type: 'number' },
     maximum: { get: (o) => o.maximum(), type: 'number' },
@@ -1424,7 +1469,7 @@ class QSpinBox extends QWidget {
   static keyPressEvent(self, e) { return self.keyPressEvent(e); }
   static paintEvent(self, p) { return self.paintEvent(p); }
 }
-class QDoubleSpinBox extends QSpinBox { constructor(parent = null) { super(parent); this._decimals = 2; this._step = 0.1; this._max = 99.99; } static create(min = 0, max = 99.99, value = 0) { const s = new QDoubleSpinBox(); s.setRange(min, max); s.setValue(value); return s; } setValue(v) { const nv = clamp(v, this._min, this._max); if (nv !== this._value) { this._value = nv; this.valueChanged.emit(nv); } this.update(); return this; } 
+class QDoubleSpinBox extends QSpinBox { constructor(parent = null) { super(parent); this._decimals = 2; this._step = 0.1; this._max = 99.99; } static create(min = 0, max = 99.99, value = 0) { const s = new QDoubleSpinBox(); s.setRange(min, max); s.setValue(value); return s; } static properties = { decimals: { get: (o) => o._decimals, set: (o, v) => o.setDecimals(v), type: 'number' } }; setValue(v) { const nv = clamp(v, this._min, this._max); if (nv !== this._value) { this._value = nv; this.valueChanged.emit(nv); } this.update(); return this; } 
   // ── Statyczne odpowiedniki metod instancji (autocomplete: QDoubleSpinBox.foo(self, …)) ──
   static setValue(self, v) { return self.setValue(v); }
 }
@@ -1436,6 +1481,12 @@ class QLineEdit extends QWidget {
   constructor(text = '', parent = null) { super(parent); this._text = text; this._caret = text.length; this._placeholder = ''; this._echoMode = 0; this._readOnly = false; this._maxLen = 32767; this._focusPolicy = Qt.StrongFocus; this._cursor = Qt.IBeamCursor; this.textChanged = new Signal(); this.textEdited = new Signal(); this.returnPressed = new Signal(); this.editingFinished = new Signal(); }
   static Normal = 0; static Password = 2; static NoEcho = 1;
   static create(text = '', parent = null) { return new QLineEdit(text, parent); }
+  static signals = {
+    textChanged: { params: ['text'] },
+    textEdited: { params: ['text'] },
+    returnPressed: { params: [] },
+    editingFinished: { params: [] },
+  };
   static properties = {
     text: { get: (o) => o.text(), set: (o, v) => o.setText(v), notify: 'textChanged', type: 'string' },
     placeholderText: { get: (o) => o.placeholderText(), set: (o, v) => o.setPlaceholderText(v), type: 'string' },
@@ -1491,6 +1542,9 @@ class QLineEdit extends QWidget {
 class QTextEdit extends QWidget {
   constructor(text = '', parent = null) { super(parent); this._lines = String(text).split('\n'); this._row = 0; this._col = 0; this._scroll = 0; this._readOnly = false; this._focusPolicy = Qt.StrongFocus; this._cursor = Qt.IBeamCursor; this.textChanged = new Signal(); }
   static create(text = '', parent = null) { return new QTextEdit(text, parent); }
+  static signals = {
+    textChanged: { params: [] },
+  };
   static properties = {
     plainText: { get: (o) => o.toPlainText(), set: (o, v) => o.setPlainText(v), notify: 'textChanged', type: 'string' },
     readOnly: { get: (o) => o._readOnly, set: (o, v) => o.setReadOnly(v), type: 'bool' },
@@ -1564,6 +1618,15 @@ class QListWidgetItem { constructor(text = '') { this._text = text; this._data =
 class QListWidget extends QWidget {
   constructor(parent = null) { super(parent); this._items = []; this._current = -1; this._scroll = 0; this._rowH = 30; this._focusPolicy = Qt.StrongFocus; this._scrollable = true; this.currentRowChanged = new Signal(); this.itemClicked = new Signal(); this.itemDoubleClicked = new Signal(); }
   static create(items = [], parent = null) { const l = new QListWidget(parent); items.forEach((t) => l.addItem(t)); return l; }
+  static signals = {
+    currentRowChanged: { params: ['row'] },
+    itemClicked: { params: ['item'] },
+    itemDoubleClicked: { params: ['item'] },
+  };
+  static properties = {
+    currentRow: { get: (o) => o.currentRow(), set: (o, v) => o.setCurrentRow(v), notify: 'currentRowChanged', type: 'number' },
+    count: { get: (o) => o.count(), type: 'number' },
+  };
   addItem(item) { this._items.push(item instanceof QListWidgetItem ? item : new QListWidgetItem(String(item))); this.update(); return this; }
   addItems(arr) { arr.forEach((t) => this.addItem(t)); return this; }
   clear() { this._items = []; this._current = -1; this._scroll = 0; this.update(); return this; }
@@ -1618,6 +1681,13 @@ class QListWidget extends QWidget {
 class QStackedWidget extends QWidget {
   constructor(parent = null) { super(parent); this._index = 0; this.currentChanged = new Signal(); }
   static create(parent = null) { return new QStackedWidget(parent); }
+  static signals = {
+    currentChanged: { params: ['index'] },
+  };
+  static properties = {
+    currentIndex: { get: (o) => o.currentIndex(), set: (o, v) => o.setCurrentIndex(v), notify: 'currentChanged', type: 'number' },
+    count: { get: (o) => o.count(), type: 'number' },
+  };
   addWidget(w) { w.setParent(this); this._updateVisibility(); this._relayout(); return this._children.length - 1; }
   count() { return this._children.length; } currentIndex() { return this._index; } currentWidget() { return this._children[this._index]; }
   setCurrentIndex(i) { i = clamp(i, 0, this._children.length - 1); if (i !== this._index) { this._index = i; this.currentChanged.emit(i); } this._updateVisibility(); this.update(); return this; }
@@ -1636,6 +1706,13 @@ class QStackedWidget extends QWidget {
 class QTabBar extends QWidget {
   constructor(parent = null) { super(parent); this._tabs = []; this._current = 0; this._focusPolicy = Qt.ClickFocus; this.currentChanged = new Signal(); }
   static create(parent = null) { return new QTabBar(parent); }
+  static signals = {
+    currentChanged: { params: ['index'] },
+  };
+  static properties = {
+    currentIndex: { get: (o) => o.currentIndex(), set: (o, v) => o.setCurrentIndex(v), notify: 'currentChanged', type: 'number' },
+    count: { get: (o) => o.count(), type: 'number' },
+  };
   addTab(text) { this._tabs.push(text); this.update(); return this._tabs.length - 1; }
   count() { return this._tabs.length; } currentIndex() { return this._current; }
   setCurrentIndex(i) { i = clamp(i, 0, this._tabs.length - 1); if (i !== this._current) { this._current = i; this.currentChanged.emit(i); } this.update(); return this; }
@@ -1666,6 +1743,12 @@ class QTabBar extends QWidget {
 class QTabWidget extends QWidget {
   constructor(parent = null) { super(parent); this._bar = new QTabBar(); this._bar.setParent(this); this._stack = new QStackedWidget(); this._stack.setParent(this); this._bar.currentChanged.connect((i) => this._stack.setCurrentIndex(i)); this.currentChanged = this._bar.currentChanged; }
   static create(parent = null) { return new QTabWidget(parent); }
+  static signals = {
+    currentChanged: { params: ['index'] },
+  };
+  static properties = {
+    currentIndex: { get: (o) => o.currentIndex(), set: (o, v) => o.setCurrentIndex(v), notify: 'currentChanged', type: 'number' },
+  };
   addTab(widget, label) { this._bar.addTab(label); this._stack.addWidget(widget); return this; }
   setCurrentIndex(i) { this._bar.setCurrentIndex(i); return this; } currentIndex() { return this._bar.currentIndex(); }
   _relayout() { const bh = 38; this._bar.setGeometry(QRect.of(0, 0, this.width(), bh)); this._stack.setGeometry(QRect.of(0, bh + 2, this.width(), this.height() - bh - 2)); }
@@ -1684,6 +1767,9 @@ class QTabWidget extends QWidget {
 class QScrollArea extends QWidget {
   constructor(parent = null) { super(parent); this._widget = null; this._sx = 0; this._sy = 0; this._scrollable = true; this.scrolled = new Signal(); }
   static create(parent = null) { return new QScrollArea(parent); }
+  static signals = {
+    scrolled: { params: ['x', 'y'] },
+  };
   setWidget(w) { if (this._widget) this._widget.setParent(null); this._widget = w; w.setParent(this); this._relayout(); return this; }
   widget() { return this._widget; }
   _maxScrollY() { return this._widget ? Math.max(0, this._widget.sizeHint().height() - this.height()) : 0; }
@@ -1722,6 +1808,10 @@ class QScrollArea extends QWidget {
 class QComboBox extends QWidget {
   constructor(parent = null) { super(parent); this._items = []; this._index = -1; this._focusPolicy = Qt.ClickFocus; this._cursor = Qt.PointingHandCursor; this._open = false; this.currentIndexChanged = new Signal(); this.activated = new Signal(); }
   static create(items = [], parent = null) { const c = new QComboBox(parent); c.addItems(items); return c; }
+  static signals = {
+    currentIndexChanged: { params: ['index'] },
+    activated: { params: ['index'] },
+  };
   static properties = {
     currentIndex: { get: (o) => o.currentIndex(), set: (o, v) => o.setCurrentIndex(v), notify: 'currentIndexChanged', type: 'number' },
     currentText: { get: (o) => o.currentText(), type: 'string' },
@@ -1770,6 +1860,16 @@ class QComboBox extends QWidget {
 class QAction extends QObject {
   constructor(text = '', parent = null) { super(parent); this._text = text; this._enabled = true; this._checkable = false; this._checked = false; this._separator = false; this.triggered = new Signal(); this.toggled = new Signal(); }
   static create(text, onTriggered = null) { const a = new QAction(text); if (onTriggered) a.triggered.connect(onTriggered); return a; }
+  static signals = {
+    triggered: { params: ['checked'] },
+    toggled: { params: ['checked'] },
+  };
+  static properties = {
+    text: { get: (o) => o.text(), set: (o, v) => o.setText(v), type: 'string' },
+    enabled: { get: (o) => o.isEnabled(), set: (o, v) => o.setEnabled(v), type: 'bool' },
+    checkable: { get: (o) => o.isCheckable(), set: (o, v) => o.setCheckable(v), type: 'bool' },
+    checked: { get: (o) => o.isChecked(), set: (o, v) => o.setChecked(v), notify: 'toggled', type: 'bool' },
+  };
   text() { return this._text; } setText(t) { this._text = t; return this; }
   isEnabled() { return this._enabled; } setEnabled(b) { this._enabled = !!b; return this; }
   setCheckable(b) { this._checkable = !!b; return this; } isCheckable() { return this._checkable; }
@@ -1790,6 +1890,9 @@ class QAction extends QObject {
 class QMenu extends QWidget {
   constructor(title = '', parent = null) { super(parent); this._title = title; this._actions = []; this._hoverIndex = -1; this._rowH = 30; this.aboutToHide = new Signal(); }
   static create() { return new QMenu(); }
+  static signals = {
+    aboutToHide: { params: [] },
+  };
   addAction(textOrAction, onTriggered = null) { const a = textOrAction instanceof QAction ? textOrAction : QAction.create(textOrAction, onTriggered); this._actions.push(a); return a; }
   addSeparator() { const a = new QAction(''); a._separator = true; this._actions.push(a); return a; }
   actions() { return this._actions; }
@@ -1844,6 +1947,10 @@ class QInkCanvas extends QWidget {
     this.strokeAdded = new Signal(); this.cleared = new Signal();
   }
   static create(parent = null) { return new QInkCanvas(parent); }
+  static signals = {
+    strokeAdded: { params: ['stroke'] },
+    cleared: { params: [] },
+  };
   setPenColor(c) { this._penColor = c instanceof QColor ? c : QColor.fromString(c); return this; } penColor() { return this._penColor; }
   setPenWidth(w) { this._penWidth = w; return this; } penWidth() { return this._penWidth; }
   setBackground(c) { this._bg = c instanceof QColor ? c : QColor.fromString(c); this.update(); return this; }

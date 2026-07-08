@@ -154,11 +154,14 @@ export function MapView() {
     })
   }, [addLayer])
 
-  // Hierarchy activation: select the node AND zoom the map to it.
-  const handleHierarchySelect = useCallback((id: string, multi: boolean) => {
-    toggleSelect(id, multi)
-    const node = findNode(nodes, id)
-    if (node) flyToNode(node)
+  // Hierarchy activation: select the node AND zoom the map to it. On a multi/range
+  // selection (Ctrl / Shift) don't fly — it would yank the view mid-selection.
+  const handleHierarchySelect = useCallback((id: string, multi: boolean, range = false) => {
+    toggleSelect(id, multi, range)
+    if (!multi && !range) {
+      const node = findNode(nodes, id)
+      if (node) flyToNode(node)
+    }
   }, [toggleSelect, nodes, flyToNode])
 
   // ── file state ─────────────────────────────────────────────────────────────
