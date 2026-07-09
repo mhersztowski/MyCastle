@@ -15,6 +15,8 @@ export default defineConfig({
       '@modules': path.resolve(__dirname, './src/modules'),
       '@components': path.resolve(__dirname, './src/components'),
       '@pages': path.resolve(__dirname, './src/pages'),
+      // djvu.js (DjVuPage) importuje pngjs tylko do eksportu PNG (nieużywane) — stub.
+      'pngjs/browser': path.resolve(__dirname, './src/stubs/pngjs-browser.ts'),
     },
     dedupe: ['react', 'react-dom', '@mui/material', 'dayjs', 'monaco-editor'],
   },

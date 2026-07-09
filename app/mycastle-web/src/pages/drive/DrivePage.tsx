@@ -11,6 +11,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PdfViewContent } from './PdfView';
+import { DjvuViewContent } from './DjvuView';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
 import { QtUiSceneEditor, type QtUiFs } from '../../modules/qtui/QtUiSceneEditor';
@@ -493,7 +495,7 @@ const MIME_BY_EXT: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
   gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
   avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon',
-  pdf: 'application/pdf',
+  pdf: 'application/pdf', djvu: 'image/vnd.djvu', djv: 'image/vnd.djvu',
   mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
   mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac',
 };
@@ -575,8 +577,24 @@ function applyExtension(name: string, ext: string): string {
   if (!ext) return name;
   return name.toLowerCase().endsWith(ext.toLowerCase()) ? name : name + ext;
 }
-const isImageMime = (m: string) => m.startsWith('image/') && m !== 'image/svg+xml';
+// DjVu ma mime `image/vnd.djvu` (zaczyna się od image/), ale NIE jest obrazkiem <img> —
+// wyklucz, by trafił do dedykowanego DocPreview (djvu), a nie do zepsutego <img>.
+const isImageMime = (m: string) => m.startsWith('image/') && m !== 'image/svg+xml' && m !== 'image/vnd.djvu' && m !== 'image/x-djvu';
 const isPdfMime = (m: string) => m === 'application/pdf';
+const isDjvuMime = (m: string) => m === 'image/vnd.djvu' || m === 'image/x-djvu';
+
+// Podgląd dokumentu PDF/DjVu w panelu Drive — renderuje pojedynczą stronę z paskiem
+// nawigacji (pierwsza/poprzednia/goto/następna/ostatnia). Reużywa komponentów sceny.
+const DocPreview: React.FC<{ userName: string; filePath: string; kind: 'pdf' | 'djvu' }> = ({ userName, filePath, kind }) => {
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [filePath]);
+  const props = { userName, filePath, page, showNavigation: true, onPageChange: setPage };
+  return (
+    <Box sx={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+      {kind === 'pdf' ? <PdfViewContent {...props} /> : <DjvuViewContent {...props} />}
+    </Box>
+  );
+};
 const isAudioMime = (m: string) => m.startsWith('audio/');
 const isVideoMime = (m: string) => m.startsWith('video/');
 
@@ -2568,10 +2586,9 @@ export default function DrivePage(): React.JSX.Element {
         />
       </Box>
     ) : isPdfMime(viewing.mime) ? (
-      <Box component="iframe"
-        src={`data:application/pdf;base64,${viewing.dataB64}`}
-        sx={{ width: '100%', height: '100%', border: 0 }}
-      />
+      <DocPreview userName={userName} filePath={viewingRel} kind="pdf" />
+    ) : isDjvuMime(viewing.mime) ? (
+      <DocPreview userName={userName} filePath={viewingRel} kind="djvu" />
     ) : isAudioMime(viewing.mime) ? (
       <Box sx={{ textAlign: 'center', py: 4, px: 2 }}>
         <Box component="audio" controls
@@ -3878,10 +3895,9 @@ export default function DrivePage(): React.JSX.Element {
                 />
               </Box>
             ) : isPdfMime(viewing.mime) ? (
-              <Box component="iframe"
-                src={`data:application/pdf;base64,${viewing.dataB64}`}
-                sx={{ width: '100%', height: '70vh', border: 0 }}
-              />
+              <Box sx={{ height: '70vh' }}><DocPreview userName={userName} filePath={viewingRel} kind="pdf" /></Box>
+            ) : isDjvuMime(viewing.mime) ? (
+              <Box sx={{ height: '70vh' }}><DocPreview userName={userName} filePath={viewingRel} kind="djvu" /></Box>
             ) : isAudioMime(viewing.mime) ? (
               <Box sx={{ textAlign: 'center', py: 4 }}>
                 <Box component="audio" controls

@@ -100,6 +100,7 @@ import LinkIcon from '@mui/icons-material/Link';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import BoltIcon from '@mui/icons-material/Bolt';
 import StorageIcon from '@mui/icons-material/Storage';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import LockIcon from '@mui/icons-material/Lock';
 import PhoneIcon from '@mui/icons-material/Phone';
 import MapIcon from '@mui/icons-material/Map';
@@ -121,6 +122,9 @@ import ClearAllIcon from '@mui/icons-material/ClearAll';
 // InfoMark, PluginScript, …) jest ciężki — ładujemy go leniwie, tylko gdy scena
 // faktycznie zawiera blok MarkdownView renderowany jako bogaty viewer.
 const MdEditor = React.lazy(() => import('../../components/mdeditor/MdEditor'));
+import { PdfViewContent, usePdfNumPages, invalidatePdfCache } from './PdfView';
+import { ShapeNode, defaultShapeTransform, defaultShapeProps, type ShapeType } from './ShapeNode';
+import { DjvuViewContent, useDjvuNumPages, invalidateDjvuCache } from './DjvuView';
 import { PyodideRuntime, emptyPyodideConfig, type PyodideProgress } from '../../modules/pyodide/PyodideRuntime';
 import { PyodideLoadingOverlay } from '../../modules/pyodide/PyodideLoadingOverlay';
 import { PYODIDE_BUILTIN_PACKAGES } from '../../modules/pyodide/builtinPackages';
@@ -230,7 +234,7 @@ interface UTreeItem {
   id: string;
   parentId?: string;
   type: UTreeItemType;
-  kind?: 'group' | 'qt-widget';   // tylko dla type==='object'
+  kind?: 'group' | 'qt-widget' | 'shape';   // tylko dla type==='object'
   name: string;
   sub?: string;                    // className / sufiks (fn/var/obj/get/set)
 }
@@ -1604,6 +1608,63 @@ const QtPropertyField: React.FC<{
   );
 };
 
+// Properties dla bloczka PdfView — wybór strony (bloczek renderuje TYLKO tę stronę).
+// Wspólne Properties dla dokumentów binarnych (PDF/DjVu): strona + ShowNavigation.
+const DocViewProperties: React.FC<{
+  filePath: string; page: number; numPages: number | null; label: string; accent: string;
+  onPageChange: (p: number) => void; showNavigation: boolean; onToggleNavigation: (v: boolean) => void;
+}> = ({ filePath, page, numPages, label, accent, onPageChange, showNavigation, onToggleNavigation }) => {
+  const fileName = filePath.split('/').filter(Boolean).pop() ?? filePath;
+  const cur = Math.min(Math.max(1, Math.floor(page) || 1), numPages ?? 9999);
+  const set = (p: number) => onPageChange(Math.min(Math.max(1, Math.floor(p) || 1), numPages ?? 9999));
+  return (
+    <>
+      <Divider sx={{ my: 1 }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
+        <ArticleIcon sx={{ fontSize: 14, color: accent }} />
+        <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>{label}</Typography>
+      </Box>
+      <Box title={filePath} sx={{ fontSize: 11, fontFamily: 'monospace', color: 'text.primary', bgcolor: 'action.hover',
+        borderRadius: 1, px: 0.75, py: 0.5, mb: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', border: '1px solid', borderColor: 'divider' }}>
+        {fileName}
+      </Box>
+      <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>Strona</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <IconButton size="small" disabled={cur <= 1} onClick={() => set(cur - 1)} sx={{ p: 0.5 }}>
+          <ChevronRightIcon sx={{ fontSize: 18, transform: 'rotate(180deg)' }} />
+        </IconButton>
+        <TextField size="small" type="number" variant="outlined" value={cur}
+          onChange={(e) => set(parseInt(e.target.value, 10))}
+          inputProps={{ min: 1, max: numPages ?? undefined, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 56 } }} />
+        <IconButton size="small" disabled={numPages != null && cur >= numPages} onClick={() => set(cur + 1)} sx={{ p: 0.5 }}>
+          <ChevronRightIcon sx={{ fontSize: 18 }} />
+        </IconButton>
+        <Typography sx={{ fontSize: 11, color: 'text.secondary', ml: 0.5 }}>
+          {numPages != null ? `z ${numPages}` : '…'}
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1 }}>
+        <Box>
+          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>ShowNavigation</Typography>
+          <Typography sx={{ fontSize: 9, color: 'text.disabled' }}>Przyciski nawigacji na canvasie</Typography>
+        </Box>
+        <Switch size="small" checked={showNavigation} onChange={(_, v) => onToggleNavigation(v)}
+          sx={{ '& .MuiSwitch-thumb': { bgcolor: accent }, '& .Mui-checked + .MuiSwitch-track': { bgcolor: `${accent}60` } }} />
+      </Box>
+    </>
+  );
+};
+
+const PdfViewProperties: React.FC<{
+  userName: string; filePath: string; page: number; onPageChange: (p: number) => void;
+  showNavigation: boolean; onToggleNavigation: (v: boolean) => void;
+}> = (p) => <DocViewProperties {...p} numPages={usePdfNumPages(p.userName, p.filePath)} label="Dokument PDF" accent="#ef5350" />;
+
+const DjvuViewProperties: React.FC<{
+  userName: string; filePath: string; page: number; onPageChange: (p: number) => void;
+  showNavigation: boolean; onToggleNavigation: (v: boolean) => void;
+}> = (p) => <DocViewProperties {...p} numPages={useDjvuNumPages(p.userName, p.filePath)} label="Dokument DjVu" accent="#7c4dff" />;
+
 const PropertiesPanel: React.FC<{
   object: DashObject | null;
   fields: FieldDef[];
@@ -1717,6 +1778,107 @@ const PropertiesPanel: React.FC<{
               filterExt=".md"
               onSelect={(p) => onPropertyChange(object.id, 'src', p)}
             />
+          </>
+        );
+      })()}
+
+      {object.className === 'PdfView' && (
+        <PdfViewProperties
+          userName={userName}
+          filePath={String(object.properties['filePath'] ?? '')}
+          page={Number(object.properties['page'] ?? 1)}
+          onPageChange={(p) => onPropertyChange(object.id, 'page', p)}
+          showNavigation={object.properties['showNavigation'] === true}
+          onToggleNavigation={(v) => onPropertyChange(object.id, 'showNavigation', v)}
+        />
+      )}
+
+      {object.className === 'DjvuView' && (
+        <DjvuViewProperties
+          userName={userName}
+          filePath={String(object.properties['filePath'] ?? '')}
+          page={Number(object.properties['page'] ?? 1)}
+          onPageChange={(p) => onPropertyChange(object.id, 'page', p)}
+          showNavigation={object.properties['showNavigation'] === true}
+          onToggleNavigation={(v) => onPropertyChange(object.id, 'showNavigation', v)}
+        />
+      )}
+
+      {object.kind === 'shape' && (() => {
+        const shp = String(object.properties['shape'] ?? 'rect');
+        const isLine = shp === 'line' || shp === 'arrow';
+        const isText = shp === 'text';
+        const fill = String(object.properties['fill'] ?? '#4fc3f7');
+        const stroke = String(object.properties['stroke'] ?? '#1976d2');
+        const sw = Number(object.properties['strokeWidth'] ?? 2);
+        const colorRow = (label: string, val: string, key: string) => (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: 'text.secondary', width: 74, flexShrink: 0 }}>{label}</Typography>
+            <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(val) ? val : '#000000'}
+              onChange={(e) => onPropertyChange(object.id, key, e.target.value)}
+              style={{ width: 28, height: 24, padding: 0, border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', background: 'none' }} />
+            <Typography sx={{ fontSize: 10, fontFamily: 'monospace', color: 'text.disabled' }}>{val}</Typography>
+          </Box>
+        );
+        return (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.75 }}>
+              Kształt: {shp}
+            </Typography>
+            {isText ? (
+              <>
+                <Typography sx={{ fontSize: 11, color: 'text.secondary', mb: 0.25 }}>Treść (markdown)</Typography>
+                <TextField size="small" fullWidth multiline minRows={4} maxRows={12}
+                  value={String(object.properties['text'] ?? '')}
+                  onChange={(e) => onPropertyChange(object.id, 'text', e.target.value)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  inputProps={{ style: { fontSize: 12, fontFamily: 'monospace', lineHeight: 1.4 } }}
+                  sx={{ mb: 1 }} />
+                {colorRow('Kolor', String(object.properties['color'] ?? '#1a1a1a'), 'color')}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary', width: 74, flexShrink: 0 }}>Rozmiar</Typography>
+                  <TextField size="small" type="number" variant="outlined" value={Number(object.properties['fontSize'] ?? 14)}
+                    onChange={(e) => onPropertyChange(object.id, 'fontSize', Math.max(6, Number(e.target.value) || 14))}
+                    inputProps={{ min: 6, max: 96, step: 1, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 52 } }} />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary', width: 74, flexShrink: 0 }}>Wyrównanie</Typography>
+                  <Select size="small" variant="outlined" value={String(object.properties['align'] ?? 'left')}
+                    onChange={(e) => onPropertyChange(object.id, 'align', e.target.value)}
+                    sx={{ fontSize: 12, '& .MuiSelect-select': { py: '4px' } }}>
+                    <MenuItem value="left" sx={{ fontSize: 12 }}>Do lewej</MenuItem>
+                    <MenuItem value="center" sx={{ fontSize: 12 }}>Wyśrodkuj</MenuItem>
+                    <MenuItem value="right" sx={{ fontSize: 12 }}>Do prawej</MenuItem>
+                  </Select>
+                </Box>
+              </>
+            ) : (
+              <>
+                {!isLine && colorRow('Wypełnienie', fill, 'fill')}
+                {colorRow(isLine ? 'Kolor' : 'Obrys', stroke, 'stroke')}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary', width: 74, flexShrink: 0 }}>Grubość</Typography>
+                  <TextField size="small" type="number" variant="outlined" value={sw}
+                    onChange={(e) => onPropertyChange(object.id, 'strokeWidth', Math.max(0, Number(e.target.value) || 0))}
+                    inputProps={{ min: 0, max: 40, step: 1, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 52 } }} />
+                </Box>
+                {shp === 'rect' && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+                    <Typography sx={{ fontSize: 11, color: 'text.secondary', width: 74, flexShrink: 0 }}>Zaokrąglenie</Typography>
+                    <TextField size="small" type="number" variant="outlined" value={Number(object.properties['radius'] ?? 0)}
+                      onChange={(e) => onPropertyChange(object.id, 'radius', Math.max(0, Number(e.target.value) || 0))}
+                      inputProps={{ min: 0, max: 60, step: 1, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 52 } }} />
+                  </Box>
+                )}
+                {isLine && (
+                  <Button size="small" variant="outlined" onClick={() => onPropertyChange(object.id, 'flipDiag', object.properties['flipDiag'] !== true)}
+                    sx={{ fontSize: 11, textTransform: 'none', mt: 0.5 }}>
+                    Zamień kierunek przekątnej
+                  </Button>
+                )}
+              </>
+            )}
           </>
         );
       })()}
@@ -2047,7 +2209,8 @@ const transpileTs = async (source: string): Promise<string> => {
   }).outputText;
 };
 
-const loadDataSourceContent = (content: string, fileType: 'json' | 'js' | 'python' | 'ts'): JsonNode => {
+const loadDataSourceContent = (content: string, fileType: DataSourceEntry['fileType']): JsonNode => {
+  if (fileType === 'pdf' || fileType === 'djvu') return { _binary: true } as unknown as JsonNode; // binarne — nieużywane (obsłużone wcześniej)
   if (fileType === 'json') return JSON.parse(content) as JsonNode;
   if (fileType === 'python') return parsePythonSource(content) as unknown as JsonNode;
   return parseJsSource(content) as unknown as JsonNode;
@@ -2305,6 +2468,51 @@ const TouchScrollbar: React.FC<{ children: React.ReactNode; maxHeight?: number |
   );
 };
 
+// Wiersz źródła PDF w panelu Data — przeciągnij na scenę, by utworzyć bloczek PdfView.
+// Ten sam datasource można przeciągnąć wiele razy (każdy PdfView = inna strona).
+const PdfSourceRow: React.FC<{ sourceId: string; filePath: string; name: string }> = ({ sourceId, filePath, name }) => {
+  const payload = () => ({ mime: 'application/dash-pdf-ref', data: JSON.stringify({ sourceId, filePath }), label: `PDF: ${name}` });
+  const dragRef = useMemo(() => makeDragRef(payload), [sourceId, filePath, name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData('application/dash-pdf-ref', JSON.stringify({ sourceId, filePath }));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+  return (
+    <Box ref={dragRef} draggable onDragStart={onDragStart}
+      sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.75, py: 0.5, cursor: 'grab', borderRadius: 0.5,
+        touchAction: 'none', '&:hover': { bgcolor: 'rgba(239,83,80,0.14)' }, '&:active': { cursor: 'grabbing' } }}>
+      <PictureAsPdfIcon sx={{ fontSize: 15, color: '#ef5350', flexShrink: 0 }} />
+      <Typography sx={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        Przeciągnij na scenę → PdfView
+      </Typography>
+      <Box sx={{ fontSize: 10, color: '#ef535088', pr: '2px', flexShrink: 0 }}>⠿</Box>
+    </Box>
+  );
+};
+
+// Wiersz źródła DjVu — jak PdfSourceRow, tworzy bloczek DjvuView.
+const DjvuSourceRow: React.FC<{ sourceId: string; filePath: string; name: string }> = ({ sourceId, filePath, name }) => {
+  const payload = () => ({ mime: 'application/dash-djvu-ref', data: JSON.stringify({ sourceId, filePath }), label: `DjVu: ${name}` });
+  const dragRef = useMemo(() => makeDragRef(payload), [sourceId, filePath, name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData('application/dash-djvu-ref', JSON.stringify({ sourceId, filePath }));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+  return (
+    <Box ref={dragRef} draggable onDragStart={onDragStart}
+      sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.75, py: 0.5, cursor: 'grab', borderRadius: 0.5,
+        touchAction: 'none', '&:hover': { bgcolor: 'rgba(124,77,255,0.14)' }, '&:active': { cursor: 'grabbing' } }}>
+      <ArticleIcon sx={{ fontSize: 15, color: '#7c4dff', flexShrink: 0 }} />
+      <Typography sx={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        Przeciągnij na scenę → DjvuView
+      </Typography>
+      <Box sx={{ fontSize: 10, color: '#7c4dff88', pr: '2px', flexShrink: 0 }}>⠿</Box>
+    </Box>
+  );
+};
+
 const DataSourcePanel: React.FC<{
   sources: DataSourceEntry[];
   loadedData: Record<string, JsonNode | null | undefined>;
@@ -2342,7 +2550,11 @@ const DataSourcePanel: React.FC<{
                 {expanded
                   ? <ExpandMoreIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0 }} />
                   : <ChevronRightIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0 }} />}
-                <StorageIcon sx={{ fontSize: 12, color: src.fileType === 'json' ? '#81c784' : src.fileType === 'python' ? '#4fc3f7' : src.fileType === 'ts' ? '#3178c6' : '#ffb74d', flexShrink: 0 }} />
+                {src.fileType === 'pdf'
+                  ? <PictureAsPdfIcon sx={{ fontSize: 13, color: '#ef5350', flexShrink: 0 }} />
+                  : src.fileType === 'djvu'
+                  ? <ArticleIcon sx={{ fontSize: 13, color: '#7c4dff', flexShrink: 0 }} />
+                  : <StorageIcon sx={{ fontSize: 12, color: src.fileType === 'json' ? '#81c784' : src.fileType === 'python' ? '#4fc3f7' : src.fileType === 'ts' ? '#3178c6' : '#ffb74d', flexShrink: 0 }} />}
                 <Typography sx={{ fontSize: 11, fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {src.name}
                 </Typography>
@@ -2372,6 +2584,10 @@ const DataSourcePanel: React.FC<{
                         </Box>
                       ) : data === null ? (
                         <Typography sx={{ fontSize: 10, color: 'error.light', fontStyle: 'italic' }}>Failed to load</Typography>
+                      ) : src.fileType === 'pdf' ? (
+                        <PdfSourceRow sourceId={src.id} filePath={src.filePath} name={src.name} />
+                      ) : src.fileType === 'djvu' ? (
+                        <DjvuSourceRow sourceId={src.id} filePath={src.filePath} name={src.name} />
                       ) : src.fileType === 'js' || src.fileType === 'python' || src.fileType === 'ts' ? (
                         <SourceTreeView symbols={data as unknown as CodeSymbol[]} sourceId={src.id} />
                       ) : (
@@ -2713,6 +2929,8 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
   useEffect(() => { setNameVal(data.objectName); }, [data.objectName]);
   const isUnknown = data.isCustom;
   const isMarkdownView = data.className === 'MarkdownView';
+  const isPdfView = data.className === 'PdfView';
+  const isDjvuView = data.className === 'DjvuView';
   const isObjectRefNode = data.className === 'ObjectRef';
   const t = data.transform;
   const visible = data.selected;
@@ -2835,6 +3053,8 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
             {isUnknown && <HelpOutlineIcon sx={{ fontSize: 11, color: 'text.disabled' }} />}
             {isMarkdownView && <ArticleIcon sx={{ fontSize: 11, color: '#4fc3f7' }} />}
+            {isPdfView && <PictureAsPdfIcon sx={{ fontSize: 11, color: '#ef5350' }} />}
+            {isDjvuView && <ArticleIcon sx={{ fontSize: 11, color: '#7c4dff' }} />}
             {isObjectRefNode && <AccountTreeIcon sx={{ fontSize: 11, color: '#7c4dff' }} />}
             <Typography sx={{ fontSize: 10, fontStyle: 'italic', color: 'text.secondary' }}>«{data.className}»</Typography>
           </Box>
@@ -2857,6 +3077,32 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
       {isObjectRefNode ? (
         <ObjectRefNodeContent userName={data.userName} properties={data.properties}
           onPropertyChange={data.onPropertyChange} height={t.height} />
+      ) : isPdfView ? (
+        // Renderuje jedną stronę PDF (numer z properties). Wiele PdfView = jeden datasource.
+        // key wymusza remount przy zmianie pliku/strony (nowy dokument/strona do renderu).
+        <Box onPointerDown={(e) => e.stopPropagation()}
+          sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', ...(t.height === 0 ? { height: 480 } : {}) }}>
+          <PdfViewContent
+            key={String(data.properties['filePath'] ?? '')}
+            userName={data.userName}
+            filePath={String(data.properties['filePath'] ?? '')}
+            page={Number(data.properties['page'] ?? 1)}
+            showNavigation={data.properties['showNavigation'] === true}
+            onPageChange={(p) => data.onPropertyChange('page', p)}
+          />
+        </Box>
+      ) : isDjvuView ? (
+        <Box onPointerDown={(e) => e.stopPropagation()}
+          sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', ...(t.height === 0 ? { height: 480 } : {}) }}>
+          <DjvuViewContent
+            key={String(data.properties['filePath'] ?? '')}
+            userName={data.userName}
+            filePath={String(data.properties['filePath'] ?? '')}
+            page={Number(data.properties['page'] ?? 1)}
+            showNavigation={data.properties['showNavigation'] === true}
+            onPageChange={(p) => data.onPropertyChange('page', p)}
+          />
+        </Box>
       ) : isMarkdownView ? (
         // Szeroki, mobilny scrollbar (TouchScrollbar) zamiast natywnego — spójny z panelem Data.
         // Węzeł ze stałą wysokością: scroll wypełnia bloczek (fill). Bez wysokości: cap 400px.
@@ -4101,7 +4347,7 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
   );
 };
 
-const NODE_TYPES = { dashObject: DashObjectNode, group: GroupNode, qtWidget: QtWidgetNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
+const NODE_TYPES = { dashObject: DashObjectNode, group: GroupNode, qtWidget: QtWidgetNode, shape: ShapeNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
 
 // ─── VarInitDialog ────────────────────────────────────────────────────────────
 
@@ -4379,6 +4625,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   // Własny rubber-band (prostokąt selekcji) dla mobile — RF selectionOnDrag nie
   // odpala się na dotyku. Prostokąt trzymany w współrzędnych względem flowWrapRef.
   const [rubberBand, setRubberBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // Po tym jak rubber-band ustawi zaznaczenie, ReactFlow potrafi odpalić 'select' change
+  // (pane-click deselect), który przez onNodesChange wyczyściłby NASZ wybór. Ta flaga
+  // każe onNodesChange zignorować sync 'select' przez krótkie okno po bandzie.
+  const rubberSuppressRef = useRef(false);
   // Podczas resize gizmo węzła wyłączamy drag/pan ReactFlow (na touch RF potrafił
   // mimo `nodrag` przesuwać bloczki — „pływanie"). Sygnał przez CustomEvent z node'ów.
   const [isResizing, setIsResizing] = useState(false);
@@ -4472,6 +4722,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           for (const ds of dsEntries) {
             const dsId = ds.id;
             const dsType = ds.fileType;
+            // PDF/DjVu binarne — nie czytamy jako tekst; ładuje bloczek PdfView/DjvuView (cache).
+            if (dsType === 'pdf' || dsType === 'djvu') { setDsData((prev) => ({ ...prev, [dsId]: { _binary: true } as unknown as JsonNode })); continue; }
             vfsRead(userName, ds.filePath)
               .then((text) => { setDsData((prev) => ({ ...prev, [dsId]: loadDataSourceContent(text, dsType) })); })
               .catch(() => setDsData((prev) => ({ ...prev, [dsId]: null })));
@@ -4530,20 +4782,28 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const addDataSource = useCallback(async (filePath: string) => {
-    const name = filePath.split('/').pop()?.replace(/\.(json|js|py|ts)$/, '') ?? filePath;
-    const fileType: 'json' | 'js' | 'python' | 'ts' =
+    const name = filePath.split('/').pop()?.replace(/\.(json|js|py|ts|pdf|djvu)$/i, '') ?? filePath;
+    const fileType: DataSourceEntry['fileType'] =
       filePath.endsWith('.py') ? 'python'
       : filePath.endsWith('.ts') ? 'ts'
       : filePath.endsWith('.js') ? 'js'
+      : /\.pdf$/i.test(filePath) ? 'pdf'
+      : /\.djvu$/i.test(filePath) ? 'djvu'
       : 'json';
     const id = makeId();
     const entry: DataSourceEntry = { id, name, filePath, fileType };
-    setDsData((prev) => ({ ...prev, [id]: undefined }));
-    try {
-      const text = await vfsRead(userName, filePath);
-      setDsData((prev) => ({ ...prev, [id]: loadDataSourceContent(text, fileType) }));
-    } catch (e) {
-      setDsData((prev) => ({ ...prev, [id]: { _error: (e as Error).message } as unknown as JsonNode }));
+    // PDF/DjVu są binarne — nie parsujemy ich jako tekst/JSON; ładuje je dopiero bloczek
+    // PdfView/DjvuView (przez cache). W panelu Data trzymamy tylko marker.
+    if (fileType === 'pdf' || fileType === 'djvu') {
+      setDsData((prev) => ({ ...prev, [id]: { _binary: true } as unknown as JsonNode }));
+    } else {
+      setDsData((prev) => ({ ...prev, [id]: undefined }));
+      try {
+        const text = await vfsRead(userName, filePath);
+        setDsData((prev) => ({ ...prev, [id]: loadDataSourceContent(text, fileType) }));
+      } catch (e) {
+        setDsData((prev) => ({ ...prev, [id]: { _error: (e as Error).message } as unknown as JsonNode }));
+      }
     }
     setDataSources((prev) => {
       const next = [...prev, entry];
@@ -4564,6 +4824,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const reloadDataSource = useCallback(async (id: string) => {
     const src = dataSources.find((s) => s.id === id);
     if (!src) return;
+    if (src.fileType === 'pdf' || src.fileType === 'djvu') {
+      // Zrzuć cache dokumentu — bloczki PdfView/DjvuView przeładują się.
+      if (src.fileType === 'pdf') invalidatePdfCache(userName, src.filePath);
+      else invalidateDjvuCache(userName, src.filePath);
+      setDsData((prev) => ({ ...prev, [id]: { _binary: true, _v: Date.now() } as unknown as JsonNode }));
+      return;
+    }
     setDsData((prev) => ({ ...prev, [id]: undefined }));
     try {
       const text = await vfsRead(userName, src.filePath);
@@ -5006,6 +5273,35 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
         setSelectedIds(new Set([obj.id]));
       } catch { /* ignore bad drag data */ }
+    } else if (mime === 'application/dash-pdf-ref') {
+      try {
+        const { sourceId, filePath: pdfPath } = JSON.parse(data) as { sourceId: string; filePath: string };
+        const count = sceneRef.current.objects.filter((o) => o.className === 'PdfView').length;
+        // Wiele PdfView może wskazywać JEDEN datasource (sourceId) — każdy z własną stroną.
+        const obj: DashObject = {
+          id: makeId(),
+          className: 'PdfView',
+          objectName: `pdfView${count + 1}`,
+          transform: { x: pos.x, y: pos.y, rot: 0, scale: 1, width: 420, height: 560 },
+          properties: { sourceId, filePath: pdfPath, page: 1 },
+        };
+        updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
+        setSelectedIds(new Set([obj.id]));
+      } catch { /* ignore bad drag data */ }
+    } else if (mime === 'application/dash-djvu-ref') {
+      try {
+        const { sourceId, filePath: djvuPath } = JSON.parse(data) as { sourceId: string; filePath: string };
+        const count = sceneRef.current.objects.filter((o) => o.className === 'DjvuView').length;
+        const obj: DashObject = {
+          id: makeId(),
+          className: 'DjvuView',
+          objectName: `djvuView${count + 1}`,
+          transform: { x: pos.x, y: pos.y, rot: 0, scale: 1, width: 420, height: 560 },
+          properties: { sourceId, filePath: djvuPath, page: 1 },
+        };
+        updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
+        setSelectedIds(new Set([obj.id]));
+      } catch { /* ignore bad drag data */ }
     }
   }, [screenToFlowPosition, createFunctionCall, createClassObj, updateScene]);
 
@@ -5028,8 +5324,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     const rawFn = e.dataTransfer.getData('application/dash-function');
     const rawCls = e.dataTransfer.getData('application/dash-class');
     const rawRef = e.dataTransfer.getData('application/dash-json-ref');
-    const mime = rawFn ? 'application/dash-function' : rawCls ? 'application/dash-class' : rawRef ? 'application/dash-json-ref' : '';
-    const data = rawFn || rawCls || rawRef;
+    const rawPdf = e.dataTransfer.getData('application/dash-pdf-ref');
+    const rawDjvu = e.dataTransfer.getData('application/dash-djvu-ref');
+    const mime = rawFn ? 'application/dash-function' : rawCls ? 'application/dash-class' : rawRef ? 'application/dash-json-ref' : rawPdf ? 'application/dash-pdf-ref' : rawDjvu ? 'application/dash-djvu-ref' : '';
+    const data = rawFn || rawCls || rawRef || rawPdf || rawDjvu;
     if (mime && data) processDropAt(e.clientX, e.clientY, mime, data);
   }, [processDropAt]);
 
@@ -5038,16 +5336,31 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     void vfsWrite(userName, filePath, JSON.stringify(sceneRef.current, null, 2));
   }, [userName, filePath]);
 
+  // Nowe elementy z Types (kształty / build-in) trafiają na ŚRODEK widocznego canvas
+  // (a nie w stały róg) — użytkownik dodaje je tam, gdzie aktualnie patrzy. Mały kaskadowy
+  // offset, by kolejne dodania się nie idealnie nakładały.
+  const centeredTransform = useCallback((width: number, height: number, count: number): DashTransform => {
+    const el = document.querySelector('.react-flow');
+    let cx = 200, cy = 160;
+    if (el && typeof screenToFlowPosition === 'function') {
+      const r = el.getBoundingClientRect();
+      const c = screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      cx = c.x; cy = c.y;
+    }
+    const cascade = (count % 6) * 22;
+    const w = width > 0 ? width : 220, h = height > 0 ? height : 140;
+    return { x: Math.round(cx - w / 2 + cascade), y: Math.round(cy - h / 2 + cascade), rot: 0, scale: 1, width, height };
+  }, [screenToFlowPosition]);
+
   const createObject = useCallback((cls: UmlClassDef) => {
     const count = sceneRef.current.objects.length;
     const isCustom = cls.name === 'Unknown';
     const props: Record<string, DashValue> = {};
     for (const f of cls.fields) props[f.name] = defaultForType(detectFieldType(f.type));
-    const base = autoTransform(count);
-    const transform: DashTransform =
-      cls.name === 'MarkdownView' ? { ...base, width: 320, height: 400 }
-      : cls.name === 'ObjectRef' ? { ...base, width: 280, height: 0 }
-      : base;
+    const size = cls.name === 'MarkdownView' ? { width: 320, height: 400 }
+      : cls.name === 'ObjectRef' ? { width: 280, height: 0 }
+      : { width: 0, height: 0 };
+    const transform: DashTransform = centeredTransform(size.width, size.height, count);
     const obj: DashObject = {
       id: makeId(),
       className: cls.name,
@@ -5058,7 +5371,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     };
     updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
     setSelectedIds(new Set([obj.id]));
-  }, [updateScene]);
+  }, [updateScene, centeredTransform]);
 
   // ── Groups ──────────────────────────────────────────────────────────────
   const createGroup = useCallback((x: number, y: number) => {
@@ -5072,6 +5385,21 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     updateScene((prev) => ({ ...prev, objects: [group, ...prev.objects] }));
     setSelectedIds(new Set([group.id]));
   }, [updateScene]);
+
+  // ── Kształty (rect/rhombus/ellipse/line/arrow) ────────────────────────────
+  const createShape = useCallback((shapeType: ShapeType) => {
+    const count = sceneRef.current.objects.filter((o) => o.kind === 'shape').length;
+    const def = defaultShapeTransform(shapeType, 0, 0);
+    const c = centeredTransform(def.width, def.height, count);
+    const shape: DashObject = {
+      id: makeId(), className: 'Shape', kind: 'shape',
+      objectName: `${shapeType}${count + 1}`,
+      transform: { ...def, x: c.x, y: c.y },
+      properties: { shape: shapeType, ...defaultShapeProps(shapeType) },
+    };
+    updateScene((prev) => ({ ...prev, objects: [...prev.objects, shape] }));
+    setSelectedIds(new Set([shape.id]));
+  }, [updateScene, centeredTransform]);
 
   // ── Qt widgets (MinisQt / core/browser/qt) ────────────────────────────────
   const createQtWidget = useCallback((type: string, _x: number, _y: number) => {
@@ -5505,6 +5833,24 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         });
         continue;
       }
+      if (obj.kind === 'shape') {
+        dashNodes.push({
+          id: obj.id, type: 'shape',
+          position: { x: t.x, y: t.y },
+          style: { width: t.width > 0 ? t.width : 120, height: t.height > 0 ? t.height : 80 },
+          selected: selectedIds.has(obj.id),
+          zIndex: obj.zIndex ?? 0,
+          data: {
+            objectId: obj.id, objectName: obj.objectName,
+            shapeType: (obj.properties?.shape as ShapeType) ?? 'rect',
+            transform: t, properties: obj.properties ?? {},
+            selected: selectedIds.has(obj.id),
+            onGizmo: (patch: Partial<DashTransform>) => updateTransform(obj.id, patch),
+            onFlipDiag: () => updateProperty(obj.id, 'flipDiag', obj.properties?.flipDiag !== true),
+          },
+        });
+        continue;
+      }
       if (obj.kind === 'qt-widget') {
         const parentObj = obj.parentId ? scene.objects.find((o) => o.id === obj.parentId) : undefined;
         // A qt-widget nested under another qt-widget is drawn *inside* its parent
@@ -5795,8 +6141,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       for (const p of validMidDrag) dragNodePositionsRef.current.set(p.id, { x: p.x, y: p.y });
       setDragNodePositions((prev) => { const m = new Map(prev); for (const p of validMidDrag) m.set(p.id, { x: p.x, y: p.y }); return m; });
     }
+    // Nie synchronizuj 'select' z ReactFlow, gdy rubber-band właśnie ustawił zaznaczenie —
+    // inaczej pane-click deselect ReactFlow wyczyściłby nasz wybór (band pokazywał
+    // selectedCount>0, ale wizualnie nic).
     const selChanges = changes.filter((c) => c.type === 'select');
-    if (selChanges.length > 0) {
+    if (selChanges.length > 0 && !rubberSuppressRef.current) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
         for (const c of selChanges) { if (c.type === 'select') { if (c.selected) next.add(c.id); else next.delete(c.id); } }
@@ -6020,7 +6369,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     e.stopPropagation();
     if (canvasMode !== 'select' || e.button !== 0) return;
     const target = e.target as HTMLElement;
-    if (target.closest('.react-flow__node') || target.closest('.react-flow__handle')) return;
+    // W trybie Rect Select rubber-band startuje TAKŻE nad obiektami (nie tylko z pustego
+    // miejsca) — inaczej w gęstej scenie nie sposób objąć wszystkich węzłów. Pomijamy tylko
+    // uchwyty połączeń (`react-flow__handle`) i gizmo/nav (`nodrag`), by nie kolidować z
+    // ich obsługą. UWAGA: klasy `nopan` NIE używamy — ReactFlow dodaje ją do KAŻDEGO węzła,
+    // więc blokowałaby band nad wszystkim; body węzła ma `nopan` ale nie `nodrag`.
+    if (target.closest('.react-flow__handle') || target.closest('.nodrag')) return;
     const wrap = flowWrapRef.current;
     if (!wrap) return;
     const wr = wrap.getBoundingClientRect();
@@ -6066,8 +6420,20 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     };
     const onUp = (ue: PointerEvent) => {
       const started = st.started;
+      // Nasze zaznaczenie jest autorytatywne — zablokuj sync 'select' z ReactFlow na krótko,
+      // by pane-click deselect ReactFlow (po pointerup) nie wyczyścił naszego wyboru.
+      rubberSuppressRef.current = true;
+      setTimeout(() => { rubberSuppressRef.current = false; }, 220);
       cleanup();
-      if (!started) return;
+      if (!started) {
+        // Klik bez przeciągnięcia: zaznacz pojedynczy węzeł pod kursorem (albo wyczyść).
+        // Band ma pointerEvents:none, więc elementFromPoint zwraca właściwy węzeł.
+        const el = document.elementFromPoint(ue.clientX, ue.clientY);
+        const nodeEl = el ? el.closest('.react-flow__node') : null;
+        const id = nodeEl ? nodeEl.getAttribute('data-id') : null;
+        setSelectedIds(id ? new Set([id]) : new Set());
+        return;
+      }
       const x0 = Math.min(st.startCX, ue.clientX), y0 = Math.min(st.startCY, ue.clientY);
       const x1 = Math.max(st.startCX, ue.clientX), y1 = Math.max(st.startCY, ue.clientY);
       const ids = new Set<string>();
@@ -6288,6 +6654,31 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
               <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>Types</Typography>
             </Box>
             <Box sx={{ flex: 1, overflow: 'auto' }}>
+              {/* Kształty — klik dodaje figurę na scenę (edytowalną gizmo/uchwytami). */}
+              <Box sx={{ px: 1, pt: 0.75, pb: 0.25 }}>
+                <Typography sx={{ fontSize: 9, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: 0.5 }}>Kształty</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, px: 1, pb: 0.75 }}>
+                {([
+                  { type: 'rect', label: 'Prostokąt', svg: <rect x="3" y="6" width="18" height="12" rx="1" /> },
+                  { type: 'rhombus', label: 'Romb', svg: <polygon points="12,3 21,12 12,21 3,12" /> },
+                  { type: 'ellipse', label: 'Koło', svg: <circle cx="12" cy="12" r="9" /> },
+                  { type: 'line', label: 'Linia', svg: <line x1="4" y1="20" x2="20" y2="4" stroke="#4fc3f7" strokeWidth="2.5" fill="none" /> },
+                  { type: 'arrow', label: 'Strzałka', svg: <g stroke="#4fc3f7" strokeWidth="2.5" fill="#4fc3f7"><line x1="4" y1="20" x2="17" y2="7" /><polygon points="14,4 21,4 21,11" stroke="none" /></g> },
+                  { type: 'text', label: 'Text', svg: <g stroke="none" fill="#4fc3f7"><rect x="4" y="5" width="16" height="2.4" rx="1" /><rect x="4" y="10" width="16" height="2.4" rx="1" /><rect x="4" y="15" width="10" height="2.4" rx="1" /></g> },
+                ] as { type: ShapeType; label: string; svg: React.ReactNode }[]).map((s) => (
+                  <Tooltip key={s.type} title={s.label} arrow>
+                    <Box component="button" onClick={() => createShape(s.type)}
+                      sx={{ width: 52, height: 44, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0.25,
+                        border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', cursor: 'pointer',
+                        '&:hover': { borderColor: '#4fc3f7', bgcolor: 'action.hover' } }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="#4fc3f7" stroke="#1976d2" strokeWidth="1">{s.svg}</svg>
+                      <Typography sx={{ fontSize: 7.5, color: 'text.secondary', lineHeight: 1 }}>{s.label}</Typography>
+                    </Box>
+                  </Tooltip>
+                ))}
+              </Box>
+
               {/* Built-in group */}
               <Box sx={{ px: 1, pt: 0.75, pb: 0.25 }}>
                 <Typography sx={{ fontSize: 9, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: 0.5 }}>Built-in</Typography>
@@ -6480,7 +6871,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             autoPanOnNodeDrag={!isMobile}
             nodeExtent={[[-20000, -20000], [20000, 20000]]}
             // W trakcie resize gizmo blokujemy drag/pan, by bloczki nie „pływały".
-            nodesDraggable={!isResizing}
+            // W trybie Rect Select wyłączamy przeciąganie węzłów — inaczej naciśnięcie węzła
+            // uruchamia d3-drag ReactFlow RÓWNOLEGLE z naszym rubber-bandem (konflikt: węzeł
+            // się przesuwa zamiast zaznaczać). Do przesuwania węzłów → tryb pan.
+            nodesDraggable={!isResizing && canvasMode !== 'select'}
             // Rect Select obsługuje NASZ rubber-band (onFlowPointerDown) — desktop I mobile
             // — z auto-panem przy krawędzi. Natywne selectionOnDrag RF wyłączone (nie
             // auto-panuje), a pan w trybie select wyłączony (drag = rysowanie prostokąta).
@@ -7141,7 +7535,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       {dsPickerOpen && (
         <FilePickerDialog open onClose={() => setDsPickerOpen(false)}
           userName={userName} currentPath=""
-          filterExt=".json,.js,.py,.ts"
+          filterExt=".json,.js,.py,.ts,.pdf,.djvu"
           onSelect={(p) => { void addDataSource(p); setDsPickerOpen(false); }} />
       )}
     </Box>

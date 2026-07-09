@@ -58,7 +58,7 @@ export interface DashObject {
   zIndex?: number;
   /** 'group' renderuje kontener przesuwający dzieci; 'qt-widget' to widget MinisQt
    *  (core/browser/qt) — `className` trzyma typ widgetu (np. 'QPushButton'). */
-  kind?: 'group' | 'qt-widget';
+  kind?: 'group' | 'qt-widget' | 'shape';
   /** Id grupy/rodzica (dzieci śledzone przez parentId). */
   parentId?: string;
   /** Połączenia sygnałów qt (nazwa sygnału → handler z data source). */
@@ -84,7 +84,7 @@ export interface DataSourceEntry {
   id: string;
   name: string;
   filePath: string;
-  fileType: 'json' | 'js' | 'python' | 'ts';
+  fileType: 'json' | 'js' | 'python' | 'ts' | 'pdf' | 'djvu';
 }
 
 /** Bloczek wywołania funkcji z data source. */
