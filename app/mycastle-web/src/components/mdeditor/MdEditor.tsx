@@ -100,6 +100,7 @@ import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
 import { ColumnLayout, Column } from './extensions/ColumnExtension';
 import { UIFormEmbed } from './extensions/UIFormExtension';
 import { FormEngineEmbed } from './extensions/FormEngineExtension';
+import { LineNavigation } from './extensions/LineNavigationExtension';
 import { AutomateFlowEmbed } from './extensions/AutomateFlowExtension';
 import { CadViewEmbed } from './extensions/CadViewExtension';
 import { WebEmbed } from './extensions/WebEmbedExtension';
@@ -344,6 +345,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   const editor = useEditor({
     extensions: [
+      // Home/End → początek/koniec wiersza (override macOS scroll-to-doc). Wcześnie
+      // na liście, by mieć pierwszeństwo nad ewentualnymi domyślnymi bindingami.
+      LineNavigation,
       StarterKit.configure({
         codeBlock: false,
         link: false,

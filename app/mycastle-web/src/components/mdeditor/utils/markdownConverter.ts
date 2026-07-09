@@ -1972,11 +1972,41 @@ export function htmlToMarkdown(html: string): string {
     }
   );
 
-  // Pre-process math blocks - turndown has issues with empty divs
-  // Convert math blocks to markdown syntax before turndown processes them
+  // Pre-process math → PLACEHOLDERY (nie tekst!). Puste math-divy turndown gubi
+  // (isBlank), więc nie można ich zostawić dla reguły. Ale gdybyśmy — jak wcześniej —
+  // wstawili tu surowy `$$latex$$` jako TEKST, turndown zescapowałby markdownowe znaki
+  // w LaTeX-u (`\Delta`→`\\Delta`, `x_{2}`→`x\_{2}`), psując wzór przy zapisie.
+  // Dlatego wyciągamy LaTeX do tokenów i przywracamy `$$…$$`/`$…$` DOPIERO po turndownie.
+  const mathBlockLatex: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="math-block"[^>]*>(?:[\s\S]*?<\/div>)?/gi,
+    (m) => {
+      const dl = m.match(/data-latex="([^"]*)"/i);
+      mathBlockLatex.push(dl ? decodeURIComponent(dl[1]) : '');
+      return `<p>##MATHBLOCK${mathBlockLatex.length - 1}##</p>`;
+    },
+  );
+  const mathInlineLatex: string[] = [];
+  processedHtml = processedHtml.replace(
+    /<span[^>]*data-type="inline-math"[^>]*>(?:[\s\S]*?<\/span>)?/gi,
+    (m) => {
+      const dl = m.match(/data-latex="([^"]*)"/i);
+      mathInlineLatex.push(dl ? decodeURIComponent(dl[1]) : '');
+      return `##MATHINLINE${mathInlineLatex.length - 1}##`;
+    },
+  );
+  // Kolumny (i inne osadzenia) — bez zmian. Math jest już w placeholderach.
   processedHtml = preprocessColumnContent(processedHtml);
 
   let markdown = turndownService.turndown(processedHtml);
+
+  // Post-process: przywróć równania (LaTeX verbatim, bez markdownowego escapowania).
+  mathBlockLatex.forEach((latex, i) => {
+    markdown = markdown.split(`##MATHBLOCK${i}##`).join(latex ? `$$${latex}$$` : '');
+  });
+  mathInlineLatex.forEach((latex, i) => {
+    markdown = markdown.split(`##MATHINLINE${i}##`).join(latex ? `$${latex}$` : '');
+  });
 
   // Post-process: replace %%BID:id%% text placeholders with <!-- bid:id --> comments
   // Accept any ID format (UUID or legacy slug) so old documents round-trip correctly
