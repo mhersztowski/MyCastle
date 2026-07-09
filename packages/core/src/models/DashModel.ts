@@ -84,7 +84,7 @@ export interface DataSourceEntry {
   id: string;
   name: string;
   filePath: string;
-  fileType: 'json' | 'js' | 'python' | 'ts' | 'pdf' | 'djvu';
+  fileType: 'json' | 'js' | 'python' | 'ts' | 'pdf' | 'djvu' | 'dash';
 }
 
 /** Bloczek wywołania funkcji z data source. */
@@ -177,7 +177,8 @@ export interface DashPyodideConfig {
 /** Cała scena edytora dash (*.dash.json). */
 export interface DashScene {
   type: 'dash-scene';
-  version: 1;
+  /** 1 = transformy globalne (legacy); 2 = transformy lokalne względem rodzica (parentId). */
+  version: 1 | 2;
   umlProjectPath?: string;
   umlSources?: Array<{ id: string; path: string }>;
   dataSources?: DataSourceEntry[];

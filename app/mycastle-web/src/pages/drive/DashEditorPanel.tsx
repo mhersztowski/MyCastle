@@ -24,6 +24,8 @@ import {
   Box,
   Divider,
   Typography,
+  Tabs,
+  Tab,
   IconButton,
   Tooltip,
   useMediaQuery,
@@ -122,7 +124,7 @@ import ClearAllIcon from '@mui/icons-material/ClearAll';
 // InfoMark, PluginScript, …) jest ciężki — ładujemy go leniwie, tylko gdy scena
 // faktycznie zawiera blok MarkdownView renderowany jako bogaty viewer.
 const MdEditor = React.lazy(() => import('../../components/mdeditor/MdEditor'));
-import { PdfViewContent, usePdfNumPages, invalidatePdfCache } from './PdfView';
+import { PdfViewContent, usePdfNumPages, invalidatePdfCache, type DocView } from './PdfView';
 import { ShapeNode, defaultShapeTransform, defaultShapeProps, type ShapeType } from './ShapeNode';
 import { DjvuViewContent, useDjvuNumPages, invalidateDjvuCache } from './DjvuView';
 import { PyodideRuntime, emptyPyodideConfig, type PyodideProgress } from '../../modules/pyodide/PyodideRuntime';
@@ -316,6 +318,170 @@ const autoTransform = (count: number): DashTransform => ({
   width: 0,
   height: 0,
 });
+
+// ─── Transformy lokalne (scene version 2) ─────────────────────────────────────
+// transform.{x,y} obiektu z parentId jest LOKALNY względem globalnej pozycji
+// rodzica. Global = suma pozycji łańcucha rodziców + lokalny transform.
+// Akumulujemy tylko x/y (bez dziedziczenia scale/rot rodzica — ograniczenie v1).
+// qt-widget jako rodzic renderuje dzieci we własnym reżimie (real Qt parent) —
+// tej gałęzi NIE akumulujemy (pozostaje jak dziś).
+const MAX_PARENT_DEPTH = 64; // bezpiecznik anti-cykl
+
+/** Globalna pozycja (x,y) rodzica o danym id — suma łańcucha do korzenia. */
+const getParentGlobal = (
+  objects: DashObject[],
+  parentId: string | undefined,
+): { x: number; y: number } => {
+  let x = 0, y = 0;
+  let cur = parentId;
+  let depth = 0;
+  while (cur && depth < MAX_PARENT_DEPTH) {
+    const p = objects.find((o) => o.id === cur);
+    if (!p || p.kind === 'qt-widget') break;
+    const t = getTransform(p);
+    x += t.x; y += t.y;
+    cur = p.parentId;
+    depth++;
+  }
+  return { x, y };
+};
+
+/** Globalna pozycja (x,y) obiektu DashObject = rodzic-global + lokalny transform. */
+const getGlobalXY = (
+  objects: DashObject[],
+  obj: DashObject & { x?: number; y?: number },
+): { x: number; y: number } => {
+  const t = getTransform(obj);
+  const g = getParentGlobal(objects, obj.parentId);
+  return { x: g.x + t.x, y: g.y + t.y };
+};
+
+/** Globalna pozycja (x,y) węzła płaskiego (fc/var/classObj/getProp/setProp). */
+const getFlatGlobalXY = (
+  objects: DashObject[],
+  node: { x: number; y: number; parentId?: string },
+): { x: number; y: number } => {
+  const g = getParentGlobal(objects, node.parentId);
+  return { x: g.x + node.x, y: g.y + node.y };
+};
+
+/** Konwersja pozycji GLOBALNEJ na LOKALNĄ względem rodzica o danym id. */
+const toLocalXY = (
+  objects: DashObject[],
+  parentId: string | undefined,
+  gx: number,
+  gy: number,
+): { x: number; y: number } => {
+  const g = getParentGlobal(objects, parentId);
+  return { x: gx - g.x, y: gy - g.y };
+};
+
+const STYLED_TAB_H = 30; // wysokość paska zakładek kontenera Tab
+
+/** Wynik layoutu grup stylizowanych (Tab/Table) — współdzielony przez builder RF
+ *  (nadpisania pozycji/hidden) i logikę dropu (hosty = panele, nie kontener). */
+interface StyledLayout {
+  styledPos: Map<string, { x: number; y: number }>;  // nadpisane pozycje (panele + poddrzewa)
+  styledHidden: Set<string>;                          // ukryte (nieaktywne zakładki / komórki poza siatką)
+  styledPanel: Set<string>;                           // grupy będące panelem (bez ramki/nagłówka)
+  containerIds: Set<string>;                          // grupy tab/table (nie są bezpośrednim hostem dropu)
+  panelOrigin: Map<string, { x: number; y: number }>; // wyświetlany origin panelu (global)
+  dropRects: Array<{ id: string; x: number; y: number; w: number; h: number }>; // regiony paneli do hit-testu dropu
+  clipBox: Map<string, { x: number; y: number; w: number; h: number }>; // prostokąt klipowania (global) dla dzieci grup z clip=true
+}
+
+/** Oblicz layout wszystkich grup stylizowanych (Tab/Table) w scenie. */
+const computeStyledLayout = (
+  objects: DashObject[],
+  flats: Array<{ id: string; x: number; y: number; parentId?: string }>,
+): StyledLayout => {
+  const styledPos = new Map<string, { x: number; y: number }>();
+  const styledHidden = new Set<string>();
+  const styledPanel = new Set<string>();
+  const containerIds = new Set<string>();
+  const panelOrigin = new Map<string, { x: number; y: number }>();
+  const dropRects: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
+
+  const globalOfId = (id: string): { x: number; y: number } => {
+    const o = objects.find((x) => x.id === id);
+    if (o) return getGlobalXY(objects, o);
+    const f = flats.find((x) => x.id === id);
+    return f ? getFlatGlobalXY(objects, f) : { x: 0, y: 0 };
+  };
+  const eachDescendant = (rootId: string, cb: (id: string) => void) => {
+    const stack = [rootId]; const visited = new Set<string>();
+    while (stack.length) {
+      const pid = stack.pop()!;
+      for (const o of objects) if (o.parentId === pid && !visited.has(o.id)) { visited.add(o.id); cb(o.id); stack.push(o.id); }
+      for (const f of flats) if (f.parentId === pid && !visited.has(f.id)) { visited.add(f.id); cb(f.id); }
+    }
+  };
+  const layoutPanel = (cg: DashObject, origin: { x: number; y: number }) => {
+    styledPanel.add(cg.id);
+    panelOrigin.set(cg.id, origin);
+    const cur = getGlobalXY(objects, cg);
+    const dx = origin.x - cur.x, dy = origin.y - cur.y;
+    styledPos.set(cg.id, origin);
+    eachDescendant(cg.id, (id) => { const gp = globalOfId(id); styledPos.set(id, { x: gp.x + dx, y: gp.y + dy }); });
+  };
+
+  for (const G of objects) {
+    if (G.kind !== 'group') continue;
+    const gStyle = (G.properties?.style as string) ?? 'normal';
+    if (gStyle !== 'tab' && gStyle !== 'table') continue;
+    containerIds.add(G.id);
+    const Gg = getGlobalXY(objects, G);
+    const gt = getTransform(G);
+    const W = gt.width > 0 ? gt.width : 320, H = gt.height > 0 ? gt.height : 240;
+    const cellGroups = objects.filter((o) => o.parentId === G.id && o.kind === 'group');
+    if (gStyle === 'tab') {
+      const active = Math.min(Math.max(0, Math.floor(Number(G.properties?.activeTab ?? 0))), Math.max(0, cellGroups.length - 1));
+      cellGroups.forEach((cg, i) => {
+        if (i !== active) { styledHidden.add(cg.id); eachDescendant(cg.id, (id) => styledHidden.add(id)); return; }
+        const origin = { x: Gg.x, y: Gg.y + STYLED_TAB_H };
+        layoutPanel(cg, origin);
+        dropRects.push({ id: cg.id, x: origin.x, y: origin.y, w: W, h: Math.max(0, H - STYLED_TAB_H) });
+      });
+    } else {
+      const cols = Math.max(1, Math.floor(Number(G.properties?.columns ?? 2)));
+      const rowsN = Math.max(1, Math.floor(Number(G.properties?.rows ?? 2)));
+      const cellW = W / cols, cellH = H / rowsN;
+      cellGroups.forEach((cg, k) => {
+        const col = k % cols, row = Math.floor(k / cols);
+        if (row >= rowsN) { styledHidden.add(cg.id); eachDescendant(cg.id, (id) => styledHidden.add(id)); return; }
+        const origin = { x: Gg.x + col * cellW, y: Gg.y + row * cellH };
+        layoutPanel(cg, origin);
+        dropRects.push({ id: cg.id, x: origin.x, y: origin.y, w: cellW, h: cellH });
+      });
+    }
+  }
+
+  // Klipowanie: dla każdego węzła znajdź NAJBLIŻSZĄ grupę-przodka z clip=true i przypisz
+  // prostokąt przycięcia (global). Dla kontenera Tab/Table clip = region panelu/komórki
+  // (dropRect grupy-dziecka na ścieżce); dla zwykłej grupy clip = prostokąt grupy.
+  const clipBox = new Map<string, { x: number; y: number; w: number; h: number }>();
+  if (objects.some((o) => o.kind === 'group' && o.properties?.clip === true)) {
+    const objById = new Map(objects.map((o) => [o.id, o]));
+    const dropRectById = new Map(dropRects.map((r) => [r.id, r]));
+    const rectOfGroup = (g: DashObject) => { const gg = getGlobalXY(objects, g); const t = getTransform(g); return { x: gg.x, y: gg.y, w: t.width > 0 ? t.width : 320, h: t.height > 0 ? t.height : 240 }; };
+    const allNodes: Array<{ id: string; parentId?: string }> = [...objects, ...flats];
+    for (const node of allNodes) {
+      let cur: { id: string; parentId?: string } = node;
+      let parent = node.parentId ? objById.get(node.parentId) : undefined;
+      let depth = 0;
+      while (parent && depth < MAX_PARENT_DEPTH) {
+        if (parent.kind === 'group' && parent.properties?.clip === true) {
+          const st = parent.properties?.style;
+          const dr = (st === 'tab' || st === 'table') ? dropRectById.get(cur.id) : undefined;
+          clipBox.set(node.id, dr ? { x: dr.x, y: dr.y, w: dr.w, h: dr.h } : rectOfGroup(parent));
+          break;
+        }
+        cur = parent; parent = parent.parentId ? objById.get(parent.parentId) : undefined; depth++;
+      }
+    }
+  }
+  return { styledPos, styledHidden, styledPanel, containerIds, panelOrigin, dropRects, clipBox };
+};
 
 // ─── Touch / pen drag-and-drop ────────────────────────────────────────────────
 // HTML5 DnD doesn't fire on touch/pen. We use touchstart/touchmove/touchend
@@ -650,7 +816,7 @@ const BUILT_IN_CLASSES: UmlClassDef[] = [
 
 const makeDemoScene = (): DashScene => ({
   type: 'dash-scene',
-  version: 1,
+  version: 2,
   objects: [
     {
       id: 'view1', className: 'View', objectName: 'mainView',
@@ -1613,7 +1779,9 @@ const QtPropertyField: React.FC<{
 const DocViewProperties: React.FC<{
   filePath: string; page: number; numPages: number | null; label: string; accent: string;
   onPageChange: (p: number) => void; showNavigation: boolean; onToggleNavigation: (v: boolean) => void;
-}> = ({ filePath, page, numPages, label, accent, onPageChange, showNavigation, onToggleNavigation }) => {
+  region: boolean; onToggleRegion: (v: boolean) => void; onResetView: () => void;
+  zoom: number; onZoomChange: (z: number) => void;
+}> = ({ filePath, page, numPages, label, accent, onPageChange, showNavigation, onToggleNavigation, region, onToggleRegion, onResetView, zoom, onZoomChange }) => {
   const fileName = filePath.split('/').filter(Boolean).pop() ?? filePath;
   const cur = Math.min(Math.max(1, Math.floor(page) || 1), numPages ?? 9999);
   const set = (p: number) => onPageChange(Math.min(Math.max(1, Math.floor(p) || 1), numPages ?? 9999));
@@ -1651,6 +1819,36 @@ const DocViewProperties: React.FC<{
         <Switch size="small" checked={showNavigation} onChange={(_, v) => onToggleNavigation(v)}
           sx={{ '& .MuiSwitch-thumb': { bgcolor: accent }, '& .Mui-checked + .MuiSwitch-track': { bgcolor: `${accent}60` } }} />
       </Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1 }}>
+        <Box>
+          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Tryb wyświetlania</Typography>
+          <Typography sx={{ fontSize: 9, color: 'text.disabled' }}>
+            {region ? 'Region: przeciągaj = przesuwasz widok; kółko = zoom' : 'Cała strona dopasowana do szerokości'}
+          </Typography>
+        </Box>
+        <Select size="small" variant="outlined" value={region ? 'region' : 'page'}
+          onChange={(e) => onToggleRegion(e.target.value === 'region')}
+          sx={{ fontSize: 12, height: 28, minWidth: 118, '& .MuiSelect-select': { py: 0.25 } }}>
+          <MenuItem value="page" sx={{ fontSize: 12 }}>Cała strona</MenuItem>
+          <MenuItem value="region" sx={{ fontSize: 12 }}>Region</MenuItem>
+        </Select>
+      </Box>
+      {region && (
+        <>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mt: 1 }}>
+            <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Zoom</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <TextField size="small" type="number" variant="outlined" value={Number(zoom.toFixed(2))}
+                onChange={(e) => { const z = Number(e.target.value); if (Number.isFinite(z)) onZoomChange(Math.min(8, Math.max(0.2, z))); }}
+                inputProps={{ min: 0.2, max: 8, step: 0.1, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 56 } }} />
+              <Typography sx={{ fontSize: 11, color: 'text.disabled' }}>×</Typography>
+            </Box>
+          </Box>
+          <Button size="small" variant="outlined" onClick={onResetView} sx={{ mt: 0.75, fontSize: 11, textTransform: 'none' }}>
+            Resetuj widok
+          </Button>
+        </>
+      )}
     </>
   );
 };
@@ -1658,11 +1856,15 @@ const DocViewProperties: React.FC<{
 const PdfViewProperties: React.FC<{
   userName: string; filePath: string; page: number; onPageChange: (p: number) => void;
   showNavigation: boolean; onToggleNavigation: (v: boolean) => void;
+  region: boolean; onToggleRegion: (v: boolean) => void; onResetView: () => void;
+  zoom: number; onZoomChange: (z: number) => void;
 }> = (p) => <DocViewProperties {...p} numPages={usePdfNumPages(p.userName, p.filePath)} label="Dokument PDF" accent="#ef5350" />;
 
 const DjvuViewProperties: React.FC<{
   userName: string; filePath: string; page: number; onPageChange: (p: number) => void;
   showNavigation: boolean; onToggleNavigation: (v: boolean) => void;
+  region: boolean; onToggleRegion: (v: boolean) => void; onResetView: () => void;
+  zoom: number; onZoomChange: (z: number) => void;
 }> = (p) => <DocViewProperties {...p} numPages={useDjvuNumPages(p.userName, p.filePath)} label="Dokument DjVu" accent="#7c4dff" />;
 
 const PropertiesPanel: React.FC<{
@@ -1790,6 +1992,11 @@ const PropertiesPanel: React.FC<{
           onPageChange={(p) => onPropertyChange(object.id, 'page', p)}
           showNavigation={object.properties['showNavigation'] === true}
           onToggleNavigation={(v) => onPropertyChange(object.id, 'showNavigation', v)}
+          region={object.properties['region'] === true}
+          onToggleRegion={(v) => onPropertyChange(object.id, 'region', v)}
+          onResetView={() => onPropertyChange(object.id, 'view', { x: 0, y: 0, zoom: 1 })}
+          zoom={Number((object.properties['view'] as { zoom?: number } | undefined)?.zoom ?? 1)}
+          onZoomChange={(z) => { const v = (object.properties['view'] as { x?: number; y?: number } | undefined) ?? {}; onPropertyChange(object.id, 'view', { x: v.x ?? 0, y: v.y ?? 0, zoom: z }); }}
         />
       )}
 
@@ -1801,6 +2008,11 @@ const PropertiesPanel: React.FC<{
           onPageChange={(p) => onPropertyChange(object.id, 'page', p)}
           showNavigation={object.properties['showNavigation'] === true}
           onToggleNavigation={(v) => onPropertyChange(object.id, 'showNavigation', v)}
+          region={object.properties['region'] === true}
+          onToggleRegion={(v) => onPropertyChange(object.id, 'region', v)}
+          onResetView={() => onPropertyChange(object.id, 'view', { x: 0, y: 0, zoom: 1 })}
+          zoom={Number((object.properties['view'] as { zoom?: number } | undefined)?.zoom ?? 1)}
+          onZoomChange={(z) => { const v = (object.properties['view'] as { x?: number; y?: number } | undefined) ?? {}; onPropertyChange(object.id, 'view', { x: v.x ?? 0, y: v.y ?? 0, zoom: z }); }}
         />
       )}
 
@@ -1935,6 +2147,45 @@ const PropertiesPanel: React.FC<{
             sx={{ '& .MuiSwitch-thumb': { bgcolor: '#7c4dff' }, '& .Mui-checked + .MuiSwitch-track': { bgcolor: '#7c4dff60' } }} />
         </Box>
       )}
+      {object.kind === 'group' && (() => {
+        const style = (object.properties.style as string) ?? 'normal';
+        return (
+          <>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.25 }}>
+              <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Style</Typography>
+              <Select size="small" variant="outlined" value={style}
+                onChange={(e) => onPropertyChange(object.id, 'style', e.target.value)}
+                sx={{ fontSize: 12, height: 28, minWidth: 100, '& .MuiSelect-select': { py: 0.25 } }}>
+                <MenuItem value="normal" sx={{ fontSize: 12 }}>Normal</MenuItem>
+                <MenuItem value="tab" sx={{ fontSize: 12 }}>Tab</MenuItem>
+                <MenuItem value="table" sx={{ fontSize: 12 }}>Table</MenuItem>
+              </Select>
+            </Box>
+            {style === 'table' && (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mt: 0.25 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Rows</Typography>
+                  <TextField size="small" type="number" variant="outlined" value={Number(object.properties.rows ?? 2)}
+                    onChange={(e) => onPropertyChange(object.id, 'rows', Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                    inputProps={{ min: 1, step: 1, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 40 } }} />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Columns</Typography>
+                  <TextField size="small" type="number" variant="outlined" value={Number(object.properties.columns ?? 2)}
+                    onChange={(e) => onPropertyChange(object.id, 'columns', Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                    inputProps={{ min: 1, step: 1, style: { textAlign: 'center', fontSize: 13, padding: '4px 6px', width: 40 } }} />
+                </Box>
+              </Box>
+            )}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.25 }}>
+              <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Clip content</Typography>
+              <Switch size="small" checked={object.properties.clip === true}
+                onChange={(_, checked) => onPropertyChange(object.id, 'clip', checked)}
+                sx={{ '& .MuiSwitch-thumb': { bgcolor: '#7c4dff' }, '& .Mui-checked + .MuiSwitch-track': { bgcolor: '#7c4dff60' } }} />
+            </Box>
+          </>
+        );
+      })()}
       {object?.className === 'ObjectRef' && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.25 }}>
           <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Show pins</Typography>
@@ -2210,7 +2461,7 @@ const transpileTs = async (source: string): Promise<string> => {
 };
 
 const loadDataSourceContent = (content: string, fileType: DataSourceEntry['fileType']): JsonNode => {
-  if (fileType === 'pdf' || fileType === 'djvu') return { _binary: true } as unknown as JsonNode; // binarne — nieużywane (obsłużone wcześniej)
+  if (fileType === 'pdf' || fileType === 'djvu' || fileType === 'dash') return { _binary: true } as unknown as JsonNode; // binarne/osobne — obsłużone gdzie indziej
   if (fileType === 'json') return JSON.parse(content) as JsonNode;
   if (fileType === 'python') return parsePythonSource(content) as unknown as JsonNode;
   return parseJsSource(content) as unknown as JsonNode;
@@ -2513,6 +2764,29 @@ const DjvuSourceRow: React.FC<{ sourceId: string; filePath: string; name: string
   );
 };
 
+// Wiersz źródła sceny *.dash.json — tworzy transparentny bloczek SceneEmbed renderujący
+// zawartość osadzonej sceny (read-only).
+const DashSourceRow: React.FC<{ sourceId: string; filePath: string; name: string }> = ({ sourceId, filePath, name }) => {
+  const payload = () => ({ mime: 'application/dash-scene-ref', data: JSON.stringify({ sourceId, filePath }), label: `Scena: ${name}` });
+  const dragRef = useMemo(() => makeDragRef(payload), [sourceId, filePath, name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData('application/dash-scene-ref', JSON.stringify({ sourceId, filePath }));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+  return (
+    <Box ref={dragRef} draggable onDragStart={onDragStart}
+      sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.75, py: 0.5, cursor: 'grab', borderRadius: 0.5,
+        touchAction: 'none', '&:hover': { bgcolor: 'rgba(77,182,172,0.14)' }, '&:active': { cursor: 'grabbing' } }}>
+      <AccountTreeIcon sx={{ fontSize: 15, color: '#4db6ac', flexShrink: 0 }} />
+      <Typography sx={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        Przeciągnij na scenę → SceneEmbed
+      </Typography>
+      <Box sx={{ fontSize: 10, color: '#4db6ac88', pr: '2px', flexShrink: 0 }}>⠿</Box>
+    </Box>
+  );
+};
+
 const DataSourcePanel: React.FC<{
   sources: DataSourceEntry[];
   loadedData: Record<string, JsonNode | null | undefined>;
@@ -2588,6 +2862,8 @@ const DataSourcePanel: React.FC<{
                         <PdfSourceRow sourceId={src.id} filePath={src.filePath} name={src.name} />
                       ) : src.fileType === 'djvu' ? (
                         <DjvuSourceRow sourceId={src.id} filePath={src.filePath} name={src.name} />
+                      ) : src.fileType === 'dash' ? (
+                        <DashSourceRow sourceId={src.id} filePath={src.filePath} name={src.name} />
                       ) : src.fileType === 'js' || src.fileType === 'python' || src.fileType === 'ts' ? (
                         <SourceTreeView symbols={data as unknown as CodeSymbol[]} sourceId={src.id} />
                       ) : (
@@ -3088,6 +3364,9 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
             filePath={String(data.properties['filePath'] ?? '')}
             page={Number(data.properties['page'] ?? 1)}
             showNavigation={data.properties['showNavigation'] === true}
+            region={data.properties['region'] === true}
+            view={(data.properties['view'] as unknown as DocView) ?? undefined}
+            onViewChange={(v) => data.onPropertyChange('view', v as unknown as DashValue)}
             onPageChange={(p) => data.onPropertyChange('page', p)}
           />
         </Box>
@@ -3100,6 +3379,9 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
             filePath={String(data.properties['filePath'] ?? '')}
             page={Number(data.properties['page'] ?? 1)}
             showNavigation={data.properties['showNavigation'] === true}
+            region={data.properties['region'] === true}
+            view={(data.properties['view'] as unknown as DocView) ?? undefined}
+            onViewChange={(v) => data.onPropertyChange('view', v as unknown as DashValue)}
             onPageChange={(p) => data.onPropertyChange('page', p)}
           />
         </Box>
@@ -3848,6 +4130,13 @@ interface GroupNodeData extends Record<string, unknown> {
   selected: boolean;
   childCount: number;
   showFrame: boolean;   // pokazuje/ukrywa wizualną ramkę grupy (border + tło)
+  style?: 'normal' | 'tab' | 'table';  // kontener: Normal | Tab (zakładki) | Table (siatka)
+  isPanel?: boolean;    // ta grupa jest aktywną zakładką/komórką rodzica-kontenera (bez ramki/nagłówka)
+  rows?: number;        // Table: liczba wierszy siatki
+  columns?: number;     // Table: liczba kolumn siatki
+  activeTab?: number;   // Tab: indeks aktywnej zakładki
+  tabCaptions?: string[]; // Tab/Table: podpisy zakładek/komórek (objectName grup-dzieci)
+  onActiveTabChange?: (i: number) => void;
   onObjectNameChange: (name: string) => void;
   onResizeDrag: (width: number, height: number) => void;
 }
@@ -3925,6 +4214,36 @@ const GroupNode: React.FC<NodeProps<Node<GroupNodeData>>> = ({ data }) => {
             </Typography>}
         <Typography sx={{ fontSize: 10, opacity: 0.8 }}>· {data.childCount}</Typography>
       </Box>}
+      {/* Tab: pasek zakładek u góry kontenera. Każda zakładka = bezpośrednia grupa-dziecko. */}
+      {data.style === 'tab' && !data.isPanel && (
+        <Box className="nodrag nopan" onPointerDown={(e) => e.stopPropagation()}
+          sx={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, borderBottom: '1px solid #7c4dff44',
+            bgcolor: 'rgba(30,30,34,0.6)', borderRadius: '4px 4px 0 0', overflow: 'hidden' }}>
+          {(data.tabCaptions?.length ?? 0) > 0 ? (
+            <Tabs value={Math.min(data.activeTab ?? 0, Math.max(0, (data.tabCaptions?.length ?? 1) - 1))}
+              onChange={(_, v) => data.onActiveTabChange?.(v as number)}
+              variant="scrollable" scrollButtons={false}
+              sx={{ minHeight: 30, '& .MuiTabs-indicator': { bgcolor: '#7c4dff' } }}>
+              {(data.tabCaptions ?? []).map((c, i) => (
+                <Tab key={i} label={c || `Tab ${i + 1}`}
+                  sx={{ minHeight: 30, py: 0, px: 1.25, fontSize: 11, textTransform: 'none', color: 'rgba(255,255,255,0.6)', '&.Mui-selected': { color: '#fff' } }} />
+              ))}
+            </Tabs>
+          ) : (
+            <Typography sx={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', px: 1, lineHeight: '30px' }}>
+              Dodaj grupy-dzieci jako zakładki
+            </Typography>
+          )}
+        </Box>
+      )}
+      {/* Table: linie siatki (rows × columns) jako tło — każda komórka = grupa-dziecko. */}
+      {data.style === 'table' && !data.isPanel && (() => {
+        const cols = Math.max(1, data.columns ?? 2), rowsN = Math.max(1, data.rows ?? 2);
+        const lines: React.ReactNode[] = [];
+        for (let c = 1; c < cols; c++) lines.push(<Box key={`v${c}`} sx={{ position: 'absolute', top: 0, bottom: 0, left: `${(c / cols) * 100}%`, width: '1px', bgcolor: '#7c4dff55', pointerEvents: 'none' }} />);
+        for (let r = 1; r < rowsN; r++) lines.push(<Box key={`h${r}`} sx={{ position: 'absolute', left: 0, right: 0, top: `${(r / rowsN) * 100}%`, height: '1px', bgcolor: '#7c4dff55', pointerEvents: 'none' }} />);
+        return <>{lines}</>;
+      })()}
       {/* Resize handle (bottom-right corner) — tylko gdy ramka widoczna/zaznaczona */}
       {showVisual && <div className="nodrag nopan" onPointerDown={onResizePointerDown} style={{
         position: 'absolute', width: 16, height: 16, bottom: -8, right: -8,
@@ -3954,6 +4273,8 @@ interface QtWidgetNodeData extends Record<string, unknown> {
   spec: QtWidgetSpec;         // the root widget of this node
   children: QtWidgetSpec[];   // qt-widget descendants (BFS order: parents first)
   transform: DashTransform;
+  nodeX: number;              // GLOBALNA pozycja węzła (akumulacja rodziców) — do hit-testu Select QT
+  nodeY: number;
   selected: boolean;
   selectMode?: boolean;                // "Select QT" mode active → click selects nested widgets
   selectedDescendants?: string[];      // ids of this subtree's selected children (for highlight)
@@ -4284,8 +4605,10 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
     let px: number, py: number;
     if (typeof screenToFlowPosition === 'function') {
       const flow = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      px = flow.x - data.transform.x;
-      py = flow.y - data.transform.y;
+      // Węzeł renderowany jest na pozycji GLOBALNEJ (nodeX/nodeY), nie na lokalnym
+      // transformie — dla widgetu w grupie transform jest lokalny.
+      px = flow.x - data.nodeX;
+      py = flow.y - data.nodeY;
     } else if (hostRef.current) {
       const rect = hostRef.current.getBoundingClientRect();
       const zoom = getZoom() || 1;
@@ -4325,8 +4648,10 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
         className={(data.selectMode || data.actionMode) ? 'nodrag nopan' : undefined}
         onPointerDown={data.selectMode ? onSelectPointerDown : data.actionMode ? ((e) => e.stopPropagation()) : undefined}
         sx={{ position: 'absolute', inset: 0, pointerEvents: (data.selectMode || data.actionMode) ? 'auto' : 'none', overflow: 'hidden' }} />
-      {/* Selection highlights for nested child widgets (Select QT mode). */}
-      {selDesc.map((id) => {
+      {/* Selection highlights for nested child widgets — tylko w trybie Select QT.
+          Po wyłączeniu trybu highlight znika (inaczej zaznaczony widget zostawał
+          podświetlony innym kolorem). */}
+      {data.selectMode && selDesc.map((id) => {
         const r = absRects.get(id);
         if (!r) return null;
         return <Box key={`sel-${id}`} sx={{ position: 'absolute', left: r.x, top: r.y, width: r.w, height: r.h,
@@ -4541,7 +4866,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     requestAnimationFrame(apply);
   }, [setViewport]);
   const didFitRef = useRef(false);
-  const [scene, setScene] = useState<DashScene>({ type: 'dash-scene', version: 1, objects: [] });
+  const [scene, setScene] = useState<DashScene>({ type: 'dash-scene', version: 2, objects: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [umlSources, setUmlSources] = useState<UmlSource[]>([]);
@@ -4585,6 +4910,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [importError, setImportError] = useState<string | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceEntry[]>([]);
   const [dsData, setDsData] = useState<Record<string, JsonNode | null | undefined>>({});
+  // Obiekty osadzonych scen (SceneEmbed) — read-only dzieci renderowane wewnątrz węzła.
+  // Nie należą do scene.objects (nie są zapisywane), ładowane z pliku ref na żywo.
+  const [externalObjects, setExternalObjects] = useState<DashObject[]>([]);
+  const [embedReload, setEmbedReload] = useState(0); // bump → przeładuj osadzone sceny (po edycji)
   const [dsPickerOpen, setDsPickerOpen] = useState(false);
   const [sourceCtxMenu, setSourceCtxMenu] = useState<{ mouseX: number; mouseY: number; sourceId: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -4648,8 +4977,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [dragNodePositions, setDragNodePositions] = useState<Map<string, { x: number; y: number }> | null>(null);
   const dragNodePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sceneRef = useRef<DashScene>({ type: 'dash-scene', version: 1, objects: [] });
+  const sceneRef = useRef<DashScene>({ type: 'dash-scene', version: 2, objects: [] });
+  const [dirty, setDirty] = useState(false); // niezapisane zmiany (auto-save wyłączony)
+  // Stos nawigacji do osadzonych scen (Otwórz → push, Zamknij → pop). Aktywny plik =
+  // wierzchołek stosu albo prop `filePath` (scena główna). Load/save operują na activeFilePath.
+  const [navStack, setNavStack] = useState<string[]>([]);
+  const activeFilePath = navStack.length ? navStack[navStack.length - 1] : filePath;
 
   const classes = useMemo<UmlClassDef[]>(() => {
     const allUser = umlSources.flatMap((s) => s.classes);
@@ -4666,23 +4999,32 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const functionCalls = useMemo(() => scene.functionCalls ?? [], [scene]);
   const vars = useMemo(() => scene.vars ?? [], [scene]);
 
-  const scheduleSave = useCallback((s: DashScene) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      vfsWrite(userName, filePath, JSON.stringify(s, null, 2))
-        .catch((e) => console.error('[DashEditor] save failed:', e));
-    }, 1500);
-  }, [userName, filePath]);
-
+  // AUTO-SAVE WYŁĄCZONY (na życzenie) — zapis wyłącznie przyciskiem „Save" (saveNow),
+  // do activeFilePath. Dzięki temu edycja osadzonej sceny (Otwórz) nigdy nie nadpisze
+  // sceny nadrzędnej „w tle". `dirty` = są niezapisane zmiany.
   const updateScene = useCallback((updater: (prev: DashScene) => DashScene) => {
-    setScene((prev) => { const next = updater(prev); sceneRef.current = next; scheduleSave(next); return next; });
-  }, [scheduleSave]);
+    setScene((prev) => { const next = updater(prev); sceneRef.current = next; setDirty(true); return next; });
+  }, []);
+
+  // Nawigacja do osadzonej sceny (edytowalnej) i powrót. Load effect reaguje na activeFilePath.
+  // Auto-save wyłączony → ostrzegamy przed utratą niezapisanych zmian przy przełączaniu.
+  const dirtyRef = useRef(false);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  const openEmbeddedScene = useCallback((path: string) => {
+    if (!path) return;
+    if (dirtyRef.current && !window.confirm('Masz niezapisane zmiany (auto-save wyłączony). Otworzyć osadzoną scenę bez zapisu?')) return;
+    setNavStack((s) => [...s, path]);
+  }, []);
+  const closeEmbeddedScene = useCallback(() => {
+    if (dirtyRef.current && !window.confirm('Masz niezapisane zmiany (auto-save wyłączony). Zamknąć bez zapisu?')) return;
+    setNavStack((s) => s.slice(0, -1)); setEmbedReload((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     void (async () => {
       setLoading(true);
       try {
-        const text = await vfsRead(userName, filePath);
+        const text = await vfsRead(userName, activeFilePath);
         const raw = JSON.parse(text) as Omit<DashScene, 'objects'> & { objects: LegacyDashObject[]; umlProjectPath?: string };
         const parsed: DashScene = {
           ...raw,
@@ -4696,8 +5038,37 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             ...(o.zIndex !== undefined ? { zIndex: o.zIndex } : {}),
           })),
         };
-        setScene(parsed);
-        sceneRef.current = parsed;
+        // Migracja transformów GLOBALNYCH (v1) → LOKALNYCH (v2). W v1 wszystkie
+        // transformy są globalne, więc lokalny dziecka = global dziecka − global
+        // BEZPOŚREDNIEGO rodzica (dla obiektów global == stored transform). Czytamy
+        // globalne pozycje rodziców ze stanu SPRZED konwersji (jeden przebieg).
+        const migrated: DashScene = ((raw.version ?? 1) === 2) ? parsed : (() => {
+          const legacyGlobalOfObj = new Map<string, { x: number; y: number }>();
+          for (const o of parsed.objects) legacyGlobalOfObj.set(o.id, { x: o.transform.x, y: o.transform.y });
+          const migrateFlat = <T extends { x: number; y: number; parentId?: string }>(n: T): T => {
+            if (!n.parentId) return n;
+            const pg = legacyGlobalOfObj.get(n.parentId);
+            return pg ? { ...n, x: n.x - pg.x, y: n.y - pg.y } : n;
+          };
+          return {
+            ...parsed,
+            version: 2 as const,
+            objects: parsed.objects.map((o) => {
+              if (!o.parentId) return o;
+              const parent = parsed.objects.find((x) => x.id === o.parentId);
+              if (parent?.kind === 'qt-widget') return o; // reżim Qt-lokalny — nie migrujemy
+              const pg = legacyGlobalOfObj.get(o.parentId);
+              return pg ? { ...o, transform: { ...o.transform, x: o.transform.x - pg.x, y: o.transform.y - pg.y } } : o;
+            }),
+            ...(parsed.functionCalls ? { functionCalls: parsed.functionCalls.map(migrateFlat) } : {}),
+            ...(parsed.vars ? { vars: parsed.vars.map(migrateFlat) } : {}),
+            ...(parsed.classObjs ? { classObjs: parsed.classObjs.map(migrateFlat) } : {}),
+            ...(parsed.getProps ? { getProps: parsed.getProps.map(migrateFlat) } : {}),
+            ...(parsed.setProps ? { setProps: parsed.setProps.map(migrateFlat) } : {}),
+          };
+        })();
+        setScene(migrated);
+        sceneRef.current = migrated;
         // Migrate old single-path format + load all sources
         const sourcePaths: Array<{ id: string; path: string }> =
           parsed.umlSources ??
@@ -4722,21 +5093,24 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           for (const ds of dsEntries) {
             const dsId = ds.id;
             const dsType = ds.fileType;
-            // PDF/DjVu binarne — nie czytamy jako tekst; ładuje bloczek PdfView/DjvuView (cache).
-            if (dsType === 'pdf' || dsType === 'djvu') { setDsData((prev) => ({ ...prev, [dsId]: { _binary: true } as unknown as JsonNode })); continue; }
+            // PDF/DjVu/Dash — nie parsujemy jako tekst; ładuje osobny mechanizm (bloczek/efekt).
+            if (dsType === 'pdf' || dsType === 'djvu' || dsType === 'dash') { setDsData((prev) => ({ ...prev, [dsId]: { _binary: true } as unknown as JsonNode })); continue; }
             vfsRead(userName, ds.filePath)
               .then((text) => { setDsData((prev) => ({ ...prev, [dsId]: loadDataSourceContent(text, dsType) })); })
               .catch(() => setDsData((prev) => ({ ...prev, [dsId]: null })));
           }
         }
+        setDirty(false); // świeżo wczytana scena = brak niezapisanych zmian
       } catch {
+        // Nowy/pusty plik → scena demo; zapisz od razu (jednorazowa inicjalizacja pliku).
         const demo = makeDemoScene();
-        setScene(demo); sceneRef.current = demo; scheduleSave(demo);
+        setScene(demo); sceneRef.current = demo; setDirty(false);
+        void vfsWrite(userName, activeFilePath, JSON.stringify(demo, null, 2)).catch(() => {});
       } finally {
         setLoading(false);
       }
     })();
-  }, [userName, filePath, scheduleSave]);
+  }, [userName, activeFilePath]);
 
   const importUmlSource = useCallback(async (path: string) => {
     const p = path.trim();
@@ -4782,9 +5156,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const addDataSource = useCallback(async (filePath: string) => {
-    const name = filePath.split('/').pop()?.replace(/\.(json|js|py|ts|pdf|djvu)$/i, '') ?? filePath;
+    const name = filePath.split('/').pop()?.replace(/\.(dash\.json|json|js|py|ts|pdf|djvu)$/i, '') ?? filePath;
     const fileType: DataSourceEntry['fileType'] =
-      filePath.endsWith('.py') ? 'python'
+      /\.dash\.json$/i.test(filePath) ? 'dash'   // osadzona scena — MUSI być przed .json
+      : filePath.endsWith('.py') ? 'python'
       : filePath.endsWith('.ts') ? 'ts'
       : filePath.endsWith('.js') ? 'js'
       : /\.pdf$/i.test(filePath) ? 'pdf'
@@ -4792,9 +5167,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       : 'json';
     const id = makeId();
     const entry: DataSourceEntry = { id, name, filePath, fileType };
-    // PDF/DjVu są binarne — nie parsujemy ich jako tekst/JSON; ładuje je dopiero bloczek
-    // PdfView/DjvuView (przez cache). W panelu Data trzymamy tylko marker.
-    if (fileType === 'pdf' || fileType === 'djvu') {
+    // PDF/DjVu/Dash są binarne/osobne — nie parsujemy ich jako tekst/JSON. Dash-scenę
+    // ładuje osobny efekt (external objects) po jej osadzeniu. W panelu Data trzymamy marker.
+    if (fileType === 'pdf' || fileType === 'djvu' || fileType === 'dash') {
       setDsData((prev) => ({ ...prev, [id]: { _binary: true } as unknown as JsonNode }));
     } else {
       setDsData((prev) => ({ ...prev, [id]: undefined }));
@@ -5302,6 +5677,23 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
         setSelectedIds(new Set([obj.id]));
       } catch { /* ignore bad drag data */ }
+    } else if (mime === 'application/dash-scene-ref') {
+      try {
+        const { sourceId, filePath: scenePath } = JSON.parse(data) as { sourceId: string; filePath: string };
+        const count = sceneRef.current.objects.filter((o) => o.className === 'SceneEmbed').length;
+        // Transparentny kontener-grupa: renderuje (read-only) zawartość osadzonej sceny jako
+        // swoje dzieci. Jako grupa uczestniczy w Tab/Table/clip/lokalnych transformach.
+        const obj: DashObject = {
+          id: makeId(),
+          className: 'SceneEmbed',
+          objectName: scenePath.split('/').pop()?.replace(/\.dash\.json$/i, '') ?? `scena${count + 1}`,
+          kind: 'group',
+          transform: { x: pos.x, y: pos.y, rot: 0, scale: 1, width: 360, height: 280 },
+          properties: { sourceId, filePath: scenePath, showFrame: false },
+        };
+        updateScene((prev) => ({ ...prev, objects: [...prev.objects, obj] }));
+        setSelectedIds(new Set([obj.id]));
+      } catch { /* ignore bad drag data */ }
     }
   }, [screenToFlowPosition, createFunctionCall, createClassObj, updateScene]);
 
@@ -5326,15 +5718,18 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     const rawRef = e.dataTransfer.getData('application/dash-json-ref');
     const rawPdf = e.dataTransfer.getData('application/dash-pdf-ref');
     const rawDjvu = e.dataTransfer.getData('application/dash-djvu-ref');
-    const mime = rawFn ? 'application/dash-function' : rawCls ? 'application/dash-class' : rawRef ? 'application/dash-json-ref' : rawPdf ? 'application/dash-pdf-ref' : rawDjvu ? 'application/dash-djvu-ref' : '';
-    const data = rawFn || rawCls || rawRef || rawPdf || rawDjvu;
+    const rawScene = e.dataTransfer.getData('application/dash-scene-ref');
+    const mime = rawFn ? 'application/dash-function' : rawCls ? 'application/dash-class' : rawRef ? 'application/dash-json-ref' : rawPdf ? 'application/dash-pdf-ref' : rawDjvu ? 'application/dash-djvu-ref' : rawScene ? 'application/dash-scene-ref' : '';
+    const data = rawFn || rawCls || rawRef || rawPdf || rawDjvu || rawScene;
     if (mime && data) processDropAt(e.clientX, e.clientY, mime, data);
   }, [processDropAt]);
 
   const saveNow = useCallback(() => {
-    if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
-    void vfsWrite(userName, filePath, JSON.stringify(sceneRef.current, null, 2));
-  }, [userName, filePath]);
+    // Zapisz AKTYWNY plik (scena główna LUB osadzona otwarta przez „Otwórz"), nie prop filePath.
+    void vfsWrite(userName, activeFilePath, JSON.stringify(sceneRef.current, null, 2))
+      .then(() => setDirty(false))
+      .catch((e) => console.error('[DashEditor] save failed:', e));
+  }, [userName, activeFilePath]);
 
   // Nowe elementy z Types (kształty / build-in) trafiają na ŚRODEK widocznego canvas
   // (a nie w stały róg) — użytkownik dodaje je tam, gdzie aktualnie patrzy. Mały kaskadowy
@@ -5503,27 +5898,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [updateScene]);
 
   const updateTransform = useCallback((objId: string, patch: Partial<DashTransform>) => {
-    updateScene((prev) => {
-      const target = prev.objects.find((o) => o.id === objId);
-      // Moving a Group via the properties panel offsets its children too.
-      if (target?.kind === 'group' && (patch.x !== undefined || patch.y !== undefined)) {
-        const t = getTransform(target);
-        const dx = patch.x !== undefined ? patch.x - t.x : 0;
-        const dy = patch.y !== undefined ? patch.y - t.y : 0;
-        return {
-          ...prev,
-          objects: prev.objects.map((o) => {
-            if (o.id === objId) return { ...o, transform: { ...getTransform(o), ...patch } };
-            if (o.parentId === objId && (dx !== 0 || dy !== 0)) {
-              const ct = getTransform(o);
-              return { ...o, transform: { ...ct, x: ct.x + dx, y: ct.y + dy } };
-            }
-            return o;
-          }),
-        };
-      }
-      return { ...prev, objects: prev.objects.map((o) => o.id === objId ? { ...o, transform: { ...getTransform(o), ...patch } } : o) };
-    });
+    // Model lokalny: ruch grupy zmienia tylko jej lokalny transform — dzieci (lokalne
+    // względem rodzica) NIE są offsetowane; podążają automatycznie przez akumulację.
+    updateScene((prev) => ({ ...prev, objects: prev.objects.map((o) => o.id === objId ? { ...o, transform: { ...getTransform(o), ...patch } } : o) }));
   }, [updateScene]);
 
   const addCustomField = useCallback((objId: string, name: string, type: string) => {
@@ -5805,28 +6182,106 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return selectedFields.find((f) => f.name === selectedField.fieldName) ?? null;
   }, [selectedField, selectedObject, selectedFields]);
 
+  // Ładowanie osadzonych scen (SceneEmbed): czyta plik ref, spłaszcza jego obiekty i
+  // wpina je jako read-only dzieci węzła SceneEmbed (id prefiksowane `${embedId}::`).
+  // Uwaga: brak rekurencji (osadzone sceny wewnątrz osadzonych są pomijane w v1).
+  const embedSig = JSON.stringify(scene.objects.filter((o) => o.className === 'SceneEmbed').map((o) => [o.id, o.properties?.filePath]));
+  useEffect(() => {
+    let alive = true;
+    const embeds = scene.objects.filter((o) => o.className === 'SceneEmbed' && o.properties?.filePath);
+    if (embeds.length === 0) { setExternalObjects((prev) => (prev.length ? [] : prev)); return; }
+    void (async () => {
+      const all: DashObject[] = [];
+      for (const embed of embeds) {
+        const path = String(embed.properties.filePath);
+        try {
+          const text = await vfsRead(userName, path);
+          const raw = JSON.parse(text) as { objects?: DashObject[] };
+          const objs = (raw.objects ?? []).filter((o) => o.className !== 'SceneEmbed');
+          if (!objs.length) continue;
+          const gmap = new Map<string, { x: number; y: number }>();
+          for (const o of objs) gmap.set(o.id, getGlobalXY(objs, o));
+          const minX = Math.min(...objs.map((o) => gmap.get(o.id)!.x));
+          const minY = Math.min(...objs.map((o) => gmap.get(o.id)!.y));
+          for (const o of objs) {
+            const gg = gmap.get(o.id)!;
+            all.push({ ...o, id: `${embed.id}::${o.id}`, parentId: embed.id,
+              transform: { ...getTransform(o), x: gg.x - minX, y: gg.y - minY } });
+          }
+        } catch { /* ignore missing/broken ref */ }
+      }
+      if (alive) setExternalObjects(all);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userName, embedReload, embedSig]);
+
+  // Lista obiektów do RENDEROWANIA = scena + osadzone (read-only). Edycje operują tylko na scene.objects.
+  const renderObjects = useMemo(() => (externalObjects.length ? [...scene.objects, ...externalObjects] : scene.objects), [scene.objects, externalObjects]);
+
   const rfNodesBase = useMemo((): Node[] => {
+    // ── Layout grup stylizowanych (Tab/Table) ────────────────────────────────
+    // Dla grupy G ze stylem tab/table każda bezpośrednia grupa-dziecko = zakładka/
+    // komórka (panel). Zawartość panelu = poddrzewo tej grupy. Ustalamy nadpisania
+    // pozycji (przeniesienie panelu + poddrzewa o deltę) i ukrycie (hidden) dla
+    // nieaktywnych zakładek / komórek poza siatką. Węzły to nadal edytowalne
+    // węzły RF — jedynie repozycjonowane/filtrowane.
+    const styledFlats: Array<{ id: string; x: number; y: number; parentId?: string }> = [
+      ...(scene.functionCalls ?? []), ...(vars ?? []), ...(scene.classObjs ?? []),
+      ...(scene.getProps ?? []), ...(scene.setProps ?? []),
+    ];
+    const { styledPos, styledHidden, styledPanel, clipBox } = computeStyledLayout(renderObjects, styledFlats);
+    // clip-path (polygon) w LOKALNYCH współrzędnych węzła — prostokąt widoczny = przecięcie
+    // z clipBox grupy z clip=true. NIEZALEŻNY od rozmiaru węzła (kluczowe dla węzłów
+    // auto-rozmiarowych: inset od prawej/dołu wymagałby znajomości rozmiaru → over-clip →
+    // węzeł znikał). Skaluje się z zoomem viewportu (jednostki flow).
+    const clipStyleFor = (id: string, px: number, py: number): { clipPath: string } | undefined => {
+      const cb = clipBox.get(id);
+      if (!cb) return undefined;
+      const L = cb.x - px, T = cb.y - py, R = cb.x + cb.w - px, B = cb.y + cb.h - py;
+      return { clipPath: `polygon(${L}px ${T}px, ${R}px ${T}px, ${R}px ${B}px, ${L}px ${B}px)` };
+    };
+
     const dashNodes: Node[] = [];
-    for (const obj of scene.objects) {
+    for (const obj of renderObjects) {
       const t = getTransform(obj);
+      const g = getGlobalXY(renderObjects, obj); // pozycja globalna z akumulacji łańcucha rodziców
+      const pos = styledPos.get(obj.id) ?? g;    // nadpisanie pozycji przez layout Tab/Table
+      const hidden = styledHidden.has(obj.id);   // ukrycie nieaktywnych zakładek/komórek
       if (obj.kind === 'group') {
-        const childCount = scene.objects.filter((o) => o.parentId === obj.id).length;
+        const childCount = renderObjects.filter((o) => o.parentId === obj.id).length;
+        const gStyle = ((obj.properties?.style as string) ?? 'normal') as 'normal' | 'tab' | 'table';
+        const isPanel = styledPanel.has(obj.id);
+        const cellGroups = (gStyle === 'tab' || gStyle === 'table')
+          ? renderObjects.filter((o) => o.parentId === obj.id && o.kind === 'group') : [];
+        const activeTab = Math.min(Math.max(0, Math.floor(Number(obj.properties?.activeTab ?? 0))), Math.max(0, cellGroups.length - 1));
+        // Głębokość w drzewie — grupa MUSI mieć NIŻSZY zIndex niż jej potomkowie (grupy i
+        // treść), by klik/drag bloczka WEWNĄTRZ Tab/Table/grupy trafiał w bloczek, nie w
+        // kontener. Deeper = wyżej; wszystkie grupy < treść (zIndex 0).
+        let gDepth = 0; { let pw = obj.parentId, dd = 0; while (pw && dd < MAX_PARENT_DEPTH) { const pp = scene.objects.find((o) => o.id === pw); if (!pp) break; gDepth++; pw = pp.parentId; dd++; } }
         dashNodes.push({
           id: obj.id, type: 'group',
-          position: { x: t.x, y: t.y },
+          position: pos,
+          hidden,
           // Give ReactFlow the node's real size so its selection/interaction box
           // matches the visual group box — otherwise a resize grows the inner box
           // while the cached DOM-measured bbox (and selection outline) lag behind.
           // border/background:none — typ 'group' jest WBUDOWANY w ReactFlow i dokłada
           // domyślny styl `.react-flow__node-group` (ciemny border + szare tło). Chcemy,
           // by CAŁY wygląd (i „Show frame") kontrolował wyłącznie nasz GroupNode.
-          style: { width: t.width > 0 ? t.width : 320, height: t.height > 0 ? t.height : 240, border: 'none', background: 'transparent' },
+          style: { width: t.width > 0 ? t.width : 320, height: t.height > 0 ? t.height : 240, border: 'none', background: 'transparent', ...clipStyleFor(obj.id, pos.x, pos.y) },
           selected: selectedIds.has(obj.id),
-          zIndex: obj.zIndex ?? -10,   // behind regular objects
+          zIndex: obj.zIndex ?? (-50 + gDepth),
           data: {
             objectId: obj.id, objectName: obj.objectName, transform: t,
             selected: selectedIds.has(obj.id), childCount,
-            showFrame: obj.properties?.showFrame !== false,
+            // Panel (aktywna zakładka/komórka) nie ma własnej ramki ani nagłówka.
+            showFrame: isPanel ? false : obj.properties?.showFrame !== false,
+            style: gStyle, isPanel,
+            rows: Math.max(1, Math.floor(Number(obj.properties?.rows ?? 2))),
+            columns: Math.max(1, Math.floor(Number(obj.properties?.columns ?? 2))),
+            activeTab, tabCaptions: cellGroups.map((c) => c.objectName),
+            onActiveTabChange: (i: number) => updateProperty(obj.id, 'activeTab', i),
             onObjectNameChange: (name: string) => updateObjectName(obj.id, name),
             onResizeDrag: (width: number, height: number) => updateTransform(obj.id, { width, height }),
           } as GroupNodeData,
@@ -5836,8 +6291,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       if (obj.kind === 'shape') {
         dashNodes.push({
           id: obj.id, type: 'shape',
-          position: { x: t.x, y: t.y },
-          style: { width: t.width > 0 ? t.width : 120, height: t.height > 0 ? t.height : 80 },
+          position: pos,
+          hidden,
+          style: { width: t.width > 0 ? t.width : 120, height: t.height > 0 ? t.height : 80, ...clipStyleFor(obj.id, pos.x, pos.y) },
           selected: selectedIds.has(obj.id),
           zIndex: obj.zIndex ?? 0,
           data: {
@@ -5867,8 +6323,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         }
         dashNodes.push({
           id: obj.id, type: 'qtWidget',
-          position: { x: t.x, y: t.y },
-          style: { width: t.width > 0 ? t.width : 160, height: t.height > 0 ? t.height : 120 },
+          position: pos,
+          hidden,
+          style: { width: t.width > 0 ? t.width : 160, height: t.height > 0 ? t.height : 120, ...clipStyleFor(obj.id, pos.x, pos.y) },
           selected: selectedIds.has(obj.id),
           // In Select QT / Action mode the node is not draggable — clicks select nested
           // widgets (Select QT) or go live to the widget (Action). Both modes also disable
@@ -5883,7 +6340,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             objectId: obj.id, objectName: obj.objectName, className: obj.className,
             spec: { id: obj.id, className: obj.className, properties: obj.properties, transform: t },
             children: descendants,
-            transform: t, selected: selectedIds.has(obj.id),
+            transform: t, nodeX: pos.x, nodeY: pos.y, selected: selectedIds.has(obj.id),
             selectMode: qtSelectMode,
             actionMode,
             signalHandlersMap,
@@ -5902,7 +6359,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       const fields: FieldDef[] = isCustom ? (obj.customFields ?? []) : (classMap.get(obj.className)?.fields ?? []);
       dashNodes.push({
         id: obj.id, type: 'dashObject',
-        position: { x: t.x, y: t.y },
+        position: pos,
+        hidden,
+        style: clipStyleFor(obj.id, pos.x, pos.y),
         selected: selectedIds.has(obj.id),
         zIndex: obj.zIndex ?? 0,
         data: {
@@ -5959,9 +6418,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           }
         }
       }
+      const fcP = styledPos.get(fc.id) ?? getFlatGlobalXY(scene.objects, fc);
       return {
         id: fc.id, type: 'fcNode',
-        position: { x: fc.x, y: fc.y },
+        position: fcP,
+        hidden: styledHidden.has(fc.id),
+        style: clipStyleFor(fc.id, fcP.x, fcP.y),
         selected: selectedIds.has(fc.id),
         data: {
           fcId: fc.id, symbolPath: fc.symbolPath, paramNames: fc.paramNames,
@@ -5976,9 +6438,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       };
     });
 
-    const varNodes: Node<VarNodeData>[] = vars.map((v) => ({
+    const varNodes: Node<VarNodeData>[] = vars.map((v) => {
+      const vP = styledPos.get(v.id) ?? getFlatGlobalXY(scene.objects, v);
+      return {
       id: v.id, type: 'varNode',
-      position: { x: v.x, y: v.y },
+      position: vP,
+      hidden: styledHidden.has(v.id),
+      style: clipStyleFor(v.id, vP.x, vP.y),
       selected: selectedIds.has(v.id),
       data: {
         varId: v.id, varName: v.varName, varValue: v.varValue,
@@ -5987,7 +6453,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         onNameChange: (name: string) => updateVarName(v.id, name),
         onEditValue: () => { setVarInitTargetId(v.id); setVarInitDialogOpen(true); },
       } as VarNodeData,
-    }));
+    }; });
 
     const classObjs = scene.classObjs ?? [];
     const classObjNodes: Node<ObjNodeData>[] = classObjs.map((obj) => {
@@ -6004,9 +6470,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           try { connectedSetValues[field] = JSON.parse(fcSrc.result); } catch { connectedSetValues[field] = fcSrc.result; }
         }
       }
+      const objP = styledPos.get(obj.id) ?? getFlatGlobalXY(scene.objects, obj);
       return {
         id: obj.id, type: 'objNode',
-        position: { x: obj.x, y: obj.y },
+        position: objP,
+        hidden: styledHidden.has(obj.id),
+        style: clipStyleFor(obj.id, objP.x, objP.y),
         selected: selectedIds.has(obj.id),
         data: {
           objId: obj.id, className: obj.className, fieldNames: obj.fieldNames,
@@ -6019,9 +6488,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       };
     });
 
-    const getPropNodes: Node<GetPropNodeData>[] = (scene.getProps ?? []).map((n) => ({
+    const getPropNodes: Node<GetPropNodeData>[] = (scene.getProps ?? []).map((n) => {
+      const nP = styledPos.get(n.id) ?? getFlatGlobalXY(scene.objects, n);
+      return {
       id: n.id, type: 'getPropNode',
-      position: { x: n.x, y: n.y },
+      position: nP,
+      hidden: styledHidden.has(n.id),
+      style: clipStyleFor(n.id, nP.x, nP.y),
       selected: selectedIds.has(n.id),
       data: {
         nodeId: n.id, propNameOverride: n.propNameOverride,
@@ -6030,11 +6503,15 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         onRun: () => { runGetProp(n.id); },
         onPropNameChange: (v: string) => { updateGetPropName(n.id, v); },
       } as GetPropNodeData,
-    }));
+    }; });
 
-    const setPropNodes: Node<SetPropNodeData>[] = (scene.setProps ?? []).map((n) => ({
+    const setPropNodes: Node<SetPropNodeData>[] = (scene.setProps ?? []).map((n) => {
+      const nP = styledPos.get(n.id) ?? getFlatGlobalXY(scene.objects, n);
+      return {
       id: n.id, type: 'setPropNode',
-      position: { x: n.x, y: n.y },
+      position: nP,
+      hidden: styledHidden.has(n.id),
+      style: clipStyleFor(n.id, nP.x, nP.y),
       selected: selectedIds.has(n.id),
       data: {
         nodeId: n.id, propNameOverride: n.propNameOverride,
@@ -6043,10 +6520,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         onRun: () => { runSetProp(n.id); },
         onPropNameChange: (v: string) => { updateSetPropName(n.id, v); },
       } as SetPropNodeData,
-    }));
+    }; });
 
-    return [...dashNodes, ...fcNodes, ...varNodes, ...classObjNodes, ...getPropNodes, ...setPropNodes];
-  }, [scene.objects, scene.fcEdges, scene.classObjs, scene.getProps, scene.setProps, classMap, selectedIds, selectedField, userName, qtSelectMode,
+    // Obiekty osadzonej sceny (id z `::`) są READ-ONLY: nie przeciągalne/zaznaczalne,
+    // by nie trafiały do edycji/zapisu głównej sceny.
+    const readonlyDash = dashNodes.map((n) => n.id.includes('::') ? { ...n, draggable: false, selectable: false } : n);
+    return [...readonlyDash, ...fcNodes, ...varNodes, ...classObjNodes, ...getPropNodes, ...setPropNodes];
+  }, [renderObjects, scene.objects, scene.fcEdges, scene.classObjs, scene.getProps, scene.setProps, classMap, selectedIds, selectedField, userName, qtSelectMode,
       actionMode, signalHandlersMap, runSignalHandler,
       updateProperty, updateObjectName, addCustomField, removeCustomField, changeCustomFieldType, renameCustomField, updateTransform,
       functionCalls, vars, fcRunning, callFunctionForNode, updateFcArgOverride, updateVarName,
@@ -6101,11 +6581,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       else {
         const sc = sceneRef.current;
         const obj = sc.objects.find((o) => o.id === c.id);
-        if (obj) { const t = getTransform(obj); baseX = t.x; baseY = t.y; }
+        if (obj) { const gp = getGlobalXY(sc.objects, obj); baseX = gp.x; baseY = gp.y; }
         else {
           const it = (sc.functionCalls ?? []).find((f) => f.id === c.id) || (sc.vars ?? []).find((v) => v.id === c.id)
             || (sc.classObjs ?? []).find((o) => o.id === c.id) || (sc.getProps ?? []).find((n) => n.id === c.id) || (sc.setProps ?? []).find((n) => n.id === c.id);
-          if (it) { baseX = it.x; baseY = it.y; } else { baseX = c.position.x; baseY = c.position.y; }
+          if (it) { const gp = getFlatGlobalXY(sc.objects, it); baseX = gp.x; baseY = gp.y; } else { baseX = c.position.x; baseY = c.position.y; }
         }
       }
       if (Math.abs(c.position.x - baseX) > MAX_DRAG_STEP || Math.abs(c.position.y - baseY) > MAX_DRAG_STEP) continue;
@@ -6117,22 +6597,28 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       const dragged = new Set(validMidDrag.map((m) => m.id));
       const others = [...(sc.functionCalls ?? []), ...(sc.vars ?? []), ...(sc.classObjs ?? []), ...(sc.getProps ?? []), ...(sc.setProps ?? [])];
       const extra: Array<{ id: string; x: number; y: number }> = [];
+      // Layout Tab/Table: dzieci-panele mają WYŚWIETLANĄ pozycję (styledPos), nie stored.
+      const layout = computeStyledLayout(sc.objects, others);
+      const dispG = (id: string, o: DashObject): { x: number; y: number } => layout.styledPos.get(id) ?? getGlobalXY(sc.objects, o);
+      const dispF = (id: string, f: { x: number; y: number; parentId?: string }): { x: number; y: number } => layout.styledPos.get(id) ?? getFlatGlobalXY(sc.objects, f);
+      // Overlay pozycji jest GLOBALNY: dziecko podąża o tę samą globalną deltę co grupa
+      // (bazując na pozycji WYŚWIETLANEJ; ukryte zakładki/komórki pomijamy).
       const follow = (groupId: string, dx: number, dy: number) => {
         for (const child of sc.objects) {
           if (child.parentId !== groupId) continue;
-          const ct = getTransform(child);
-          if (!dragged.has(child.id)) extra.push({ id: child.id, x: ct.x + dx, y: ct.y + dy });
+          if (!dragged.has(child.id) && !layout.styledHidden.has(child.id)) { const cg = dispG(child.id, child); extra.push({ id: child.id, x: cg.x + dx, y: cg.y + dy }); }
           if (child.kind === 'group') follow(child.id, dx, dy);   // zagnieżdżona grupa → jej dzieci też
         }
         for (const child of others) {
-          if (child.parentId !== groupId || dragged.has(child.id)) continue;
-          extra.push({ id: child.id, x: child.x + dx, y: child.y + dy });
+          if (child.parentId !== groupId || dragged.has(child.id) || layout.styledHidden.has(child.id)) continue;
+          const cg = dispF(child.id, child);
+          extra.push({ id: child.id, x: cg.x + dx, y: cg.y + dy });
         }
       };
       for (const m of validMidDrag) {
         const grp = sc.objects.find((o) => o.id === m.id && o.kind === 'group');
         if (!grp) continue;
-        const g0 = getTransform(grp);
+        const g0 = dispG(grp.id, grp);
         follow(grp.id, m.x - g0.x, m.y - g0.y);
       }
       validMidDrag.push(...extra);
@@ -6458,57 +6944,101 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     setDragNodePositions(null);
     if (finalPos.size === 0) return; // nothing moved
     updateScene((prev) => {
-      // Group boxes at their final positions — for drag-into/out detection.
-      const groupRects = prev.objects.filter((o) => o.kind === 'group').map((o) => {
+      // Layout grup stylizowanych (Tab/Table) — kontenery nie są bezpośrednim hostem
+      // dropu; ich widoczne panele (zakładka/komórka) są regionami dropu (dropRects).
+      const layoutFlats = [
+        ...(prev.functionCalls ?? []), ...(prev.vars ?? []), ...(prev.classObjs ?? []),
+        ...(prev.getProps ?? []), ...(prev.setProps ?? []),
+      ];
+      const { containerIds, panelOrigin, dropRects } = computeStyledLayout(prev.objects, layoutFlats);
+      // Group boxes at their final GLOBAL positions — for drag-into/out detection.
+      // finalPos jest globalny (overlay); grupy nieprzesunięte liczymy z akumulacji.
+      // Wykluczamy kontenery Tab/Table (host = ich panel, nie kontener) i same panele
+      // (są reprezentowane przez dropRects w ich WYŚWIETLANYM regionie).
+      const normalRects = prev.objects.filter((o) => o.kind === 'group' && !containerIds.has(o.id) && !panelOrigin.has(o.id)).map((o) => {
         const t = getTransform(o); const fp = finalPos.get(o.id);
-        return { id: o.id, x: fp ? fp.x : t.x, y: fp ? fp.y : t.y, w: t.width > 0 ? t.width : 320, h: t.height > 0 ? t.height : 240 };
+        const gp = fp ? { x: fp.x, y: fp.y } : getGlobalXY(prev.objects, o);
+        return { id: o.id, x: gp.x, y: gp.y, w: t.width > 0 ? t.width : 320, h: t.height > 0 ? t.height : 240 };
       });
-      // Delta of each moved group — to offset children not captured in finalPos.
-      const groupDelta = new Map<string, { dx: number; dy: number }>();
-      for (const o of prev.objects) {
-        if (o.kind !== 'group') continue;
-        const fp = finalPos.get(o.id);
-        if (fp) { const t = getTransform(o); groupDelta.set(o.id, { dx: fp.x - t.x, dy: fp.y - t.y }); }
-      }
+      // Panele (dropRects) mają pierwszeństwo — drop w widocznej zakładce/komórce trafia
+      // do grupy-panelu, nie do zewnętrznej grupy obejmującej kontener.
+      const groupRects = [...dropRects, ...normalRects];
       const hostGroupAt = (cx: number, cy: number) => groupRects.find((g) => cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h);
-      // Reposycjonowanie bloczka x/y (Var/FC/ClassObj/GetProp/SetProp): przesunięty
-      // → nowa pozycja + przypięcie do grupy pod środkiem; nieprzesunięty a rodzic-grupa
-      // się ruszył → offset (jedzie z grupą).
+      // Konwersja pozycji GLOBALNEJ na LOKALNĄ względem hosta. Dla panelu używamy jego
+      // WYŚWIETLANEGO origin (layout), nie stored transform — inaczej dziecko skoczyłoby.
+      const toLocalForHost = (hostId: string | undefined, gx: number, gy: number) => {
+        if (hostId && panelOrigin.has(hostId)) { const o = panelOrigin.get(hostId)!; return { x: gx - o.x, y: gy - o.y }; }
+        return toLocalXY(prev.objects, hostId, gx, gy);
+      };
+      // Czy któryś PRZODEK elementu został przesunięty w tym dragu? Jeśli tak, element
+      // został „zmieciony" razem z przodkiem — jego LOKALNY transform pozostaje bez zmian
+      // (finalPos zawiera jego nowy global tylko z powodu ruchu przodka).
+      const ancestorMoved = (parentId: string | undefined): boolean => {
+        let cur = parentId, depth = 0;
+        while (cur && depth < MAX_PARENT_DEPTH) {
+          if (finalPos.has(cur)) return true;
+          const p = prev.objects.find((o) => o.id === cur);
+          if (!p) break;
+          cur = p.parentId; depth++;
+        }
+        return false;
+      };
+      // Model lokalny: przesunięty bloczek → nowa pozycja LOKALNA względem grupy-hosta
+      // pod środkiem; zmieciony przez przodka lub nieprzesunięty → bez zmian.
       const repos = <T extends { id: string; x: number; y: number; parentId?: string }>(item: T): T => {
         const p = finalPos.get(item.id);
-        if (p) {
-          const host = hostGroupAt(p.x + 70, p.y + 25);
-          const next = { ...item, x: p.x, y: p.y } as T;
-          if (host) next.parentId = host.id; else delete next.parentId;
-          return next;
+        if (!p || ancestorMoved(item.parentId)) return item;
+        const host = hostGroupAt(p.x + 70, p.y + 25);
+        // Brak trafienia w grupę → ZACHOWAJ dotychczasowego rodzica (nie odłączaj przy
+        // wyciągnięciu poza ramkę). Odłączenie tylko przez menu „Odłącz od rodzica".
+        const targetParent = host ? host.id : item.parentId;
+        const local = toLocalForHost(targetParent, p.x, p.y);
+        const next = { ...item, x: local.x, y: local.y } as T;
+        if (targetParent) next.parentId = targetParent; else delete next.parentId;
+        return next;
+      };
+      // Czy candidateId jest potomkiem ancestorId (guard cyklu przy przypinaniu grupy do grupy).
+      const isDescendantOf = (candidateId: string, ancestorId: string): boolean => {
+        let cur: string | undefined = candidateId, depth = 0;
+        while (cur && depth < MAX_PARENT_DEPTH) {
+          if (cur === ancestorId) return true;
+          cur = prev.objects.find((o) => o.id === cur)?.parentId; depth++;
         }
-        if (item.parentId && groupDelta.has(item.parentId)) {
-          const d = groupDelta.get(item.parentId)!;
-          return { ...item, x: item.x + d.dx, y: item.y + d.dy };
-        }
-        return item;
+        return false;
       };
       return {
         ...prev,
         objects: prev.objects.map((obj) => {
           if (obj.kind === 'group') {
             const p = finalPos.get(obj.id);
-            return p ? { ...obj, transform: { ...getTransform(obj), x: p.x, y: p.y } } : obj;
-          }
-          const p = finalPos.get(obj.id);
-          if (p) {
+            if (!p || ancestorMoved(obj.parentId)) return obj; // nieprzesunięty lub zmieciony → lokalny bez zmian
             const t = getTransform(obj);
-            const w = t.width > 0 ? t.width : 200, h = t.height > 0 ? t.height : 120;
-            const next: DashObject = { ...obj, transform: { ...t, x: p.x, y: p.y } };
-            // qt-widget-dziecko qt-widgetu zostaje przy nim; inaczej logika box-grupy.
-            const parentObj = obj.parentId ? prev.objects.find((o) => o.id === obj.parentId) : undefined;
-            if (parentObj?.kind === 'qt-widget') { /* zachowaj parentId */ }
-            else { const host = hostGroupAt(p.x + w / 2, p.y + h / 2); if (host) next.parentId = host.id; else delete next.parentId; }
+            const w = t.width > 0 ? t.width : 320, h = t.height > 0 ? t.height : 240;
+            const host = hostGroupAt(p.x + w / 2, p.y + h / 2);
+            // guard: nie przypinaj do samej siebie ani do własnego potomka (cykl)
+            const valid = host && host.id !== obj.id && !isDescendantOf(host.id, obj.id);
+            // Brak poprawnego trafienia → zachowaj dotychczasowego rodzica (nie odłączaj).
+            const targetParent = valid ? host!.id : obj.parentId;
+            const local = toLocalForHost(targetParent, p.x, p.y);
+            const next: DashObject = { ...obj, transform: { ...t, x: local.x, y: local.y } };
+            if (targetParent) next.parentId = targetParent; else delete next.parentId;
             return next;
           }
-          if (obj.parentId && groupDelta.has(obj.parentId)) {
-            const d = groupDelta.get(obj.parentId)!; const t = getTransform(obj);
-            return { ...obj, transform: { ...t, x: t.x + d.dx, y: t.y + d.dy } };
+          const p = finalPos.get(obj.id);
+          if (p && !ancestorMoved(obj.parentId)) {
+            const t = getTransform(obj);
+            const w = t.width > 0 ? t.width : 200, h = t.height > 0 ? t.height : 120;
+            // qt-widget-dziecko qt-widgetu zostaje przy nim (real Qt parent) — pozycja lokalna surowa.
+            const parentObj = obj.parentId ? prev.objects.find((o) => o.id === obj.parentId) : undefined;
+            if (parentObj?.kind === 'qt-widget') return { ...obj, transform: { ...t, x: p.x, y: p.y } };
+            const host = hostGroupAt(p.x + w / 2, p.y + h / 2);
+            // Brak trafienia w grupę → zachowaj dotychczasowego rodzica (nie odłączaj przy
+            // wyciągnięciu poza ramkę). Odłączenie tylko przez menu „Odłącz od rodzica".
+            const targetParent = host ? host.id : obj.parentId;
+            const local = toLocalForHost(targetParent, p.x, p.y);
+            const next: DashObject = { ...obj, transform: { ...t, x: local.x, y: local.y } };
+            if (targetParent) next.parentId = targetParent; else delete next.parentId;
+            return next;
           }
           return obj;
         }),
@@ -6581,7 +7111,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         <Tooltip title={qtSelectMode ? 'Select QT: ON — kliknij zagnieżdżony widget na scenie, by go zaznaczyć' : 'Select QT: kliknij, by zaznaczać dzieci widgetów Qt na scenie'}>
           <IconButton
             size="small"
-            onClick={() => setQtSelectMode((v) => { const nv = !v; if (nv) setActionMode(false); return nv; })}
+            onClick={() => setQtSelectMode((v) => { const nv = !v; if (nv) setActionMode(false); else setSelectedIds(new Set()); return nv; })}
             sx={{ p: 0.5, bgcolor: qtSelectMode ? '#26c6da' : 'transparent', color: qtSelectMode ? '#04252b' : 'inherit', borderRadius: 1, '&:hover': { bgcolor: qtSelectMode ? '#1eb0c4' : 'action.hover' } }}>
             <WidgetsIcon sx={{ fontSize: 18 }} />
           </IconButton>
@@ -6625,10 +7155,23 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             <SettingsIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
+        {navStack.length > 0 && (
+          <>
+            <Typography sx={{ fontSize: 11, color: '#4db6ac', fontStyle: 'italic', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              ⤷ {activeFilePath.split('/').pop()}
+            </Typography>
+            <Tooltip title="Zamknij osadzoną scenę — wróć do sceny nadrzędnej">
+              <Button size="small" variant="contained" color="warning" onClick={closeEmbeddedScene}
+                startIcon={<CloseIcon sx={{ fontSize: 15 }} />} sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>
+                Zamknij scenę
+              </Button>
+            </Tooltip>
+          </>
+        )}
         <Button size="small" variant="outlined" onClick={() => { setImportError(null); setShowImportDialog(true); }}
           sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Import UML</Button>
-        <Button size="small" variant="outlined" onClick={saveNow}
-          sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Save</Button>
+        <Button size="small" variant={dirty ? 'contained' : 'outlined'} color={dirty ? 'primary' : 'inherit'} onClick={saveNow}
+          sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>{dirty ? '● Save' : 'Save'}</Button>
       </Box>
 
       {/* ── Main area ── */}
@@ -6869,6 +7412,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             deleteKeyCode={null}
             connectionRadius={20}
             autoPanOnNodeDrag={!isMobile}
+            // NIE podnoś zIndex zaznaczonego węzła (+1000). Nasze zIndexy są celowe:
+            // grupa/kontener MUSI zostać pod treścią. Elevacja zaznaczonego kontenera
+            // wynosiła go NAD osadzone bloczki → klik trafiał w kontener, nie w bloczek.
+            elevateNodesOnSelect={false}
             nodeExtent={[[-20000, -20000], [20000, 20000]]}
             // W trakcie resize gizmo blokujemy drag/pan, by bloczki nie „pływały".
             // W trybie Rect Select wyłączamy przeciąganie węzłów — inaczej naciśnięcie węzła
@@ -7451,6 +7998,16 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         anchorPosition={sceneCtxMenu ? { top: sceneCtxMenu.mouseY, left: sceneCtxMenu.mouseX } : undefined}
         MenuListProps={{ dense: true }}
       >
+        {(() => {
+          const obj = sceneCtxMenu?.objId ? scene.objects.find((o) => o.id === sceneCtxMenu.objId) : null;
+          if (!obj || obj.className !== 'SceneEmbed' || !obj.properties?.filePath) return null;
+          return [
+            <MenuItem key="open-scene" onClick={() => { openEmbeddedScene(String(obj.properties.filePath)); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1, color: '#4db6ac' }}>
+              <AccountTreeIcon fontSize="small" sx={{ color: '#4db6ac' }} />Otwórz scenę
+            </MenuItem>,
+            <Divider key="open-scene-div" />,
+          ];
+        })()}
         <MenuItem onClick={(e) => { setNewMenuAnchor(e.currentTarget); }} sx={{ fontSize: 13, gap: 1 }}>
           <AddIcon fontSize="small" />New…
         </MenuItem>
