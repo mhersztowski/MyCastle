@@ -101,6 +101,8 @@ export interface FunctionCallObject {
   pinsFlipped?: boolean;  // true: piny argów po prawej, return po prawej
   /** 'python' → uruchom funkcję przez Pyodide (source to .py). */
   lang?: 'python';
+  /** Id grupy, do której bloczek należy (grupowanie w drzewie SCENE). */
+  parentId?: string;
 }
 
 /** Bloczek zmiennej (Var). */
@@ -111,6 +113,7 @@ export interface VarObject {
   x: number;
   y: number;
   pinsFlipped?: boolean;  // true: oba piny po prawej
+  parentId?: string;
 }
 
 /** Połączenie (krawędź) między bloczkami. */
@@ -132,6 +135,7 @@ export interface ClassObjItem {
   x: number;
   y: number;
   pinsFlipped?: boolean;      // true: piny SET po prawej, GET po lewej
+  parentId?: string;
 }
 
 /** Bloczek odczytu property (GetProp). */
@@ -142,6 +146,7 @@ export interface GetPropObject {
   error: string | null;
   x: number;
   y: number;
+  parentId?: string;
 }
 
 /** Bloczek zapisu property (SetProp). */
@@ -152,6 +157,7 @@ export interface SetPropObject {
   error: string | null;
   x: number;
   y: number;
+  parentId?: string;
 }
 
 /** Wbudowane biblioteki sandboxu (ujednolicone z automatyzacją Markdown). */

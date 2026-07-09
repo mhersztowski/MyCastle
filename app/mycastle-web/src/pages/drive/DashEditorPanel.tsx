@@ -90,12 +90,14 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import MailIcon from '@mui/icons-material/Mail';
 import ShareIcon from '@mui/icons-material/Share';
 import EditIcon from '@mui/icons-material/Edit';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import DeleteIcon from '@mui/icons-material/Delete';
 import BuildIcon from '@mui/icons-material/Build';
 import InfoIcon from '@mui/icons-material/Info';
 import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LinkIcon from '@mui/icons-material/Link';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
 import BoltIcon from '@mui/icons-material/Bolt';
 import StorageIcon from '@mui/icons-material/Storage';
 import LockIcon from '@mui/icons-material/Lock';
@@ -115,7 +117,10 @@ import FitScreenIcon from '@mui/icons-material/FitScreen';
 import GridViewIcon from '@mui/icons-material/GridView';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
-import ReactMarkdown from 'react-markdown';
+// MdEditor (TipTap + wszystkie customowe rozszerzenia: CadViewEmbed, EventBlock,
+// InfoMark, PluginScript, …) jest ciężki — ładujemy go leniwie, tylko gdy scena
+// faktycznie zawiera blok MarkdownView renderowany jako bogaty viewer.
+const MdEditor = React.lazy(() => import('../../components/mdeditor/MdEditor'));
 import { PyodideRuntime, emptyPyodideConfig, type PyodideProgress } from '../../modules/pyodide/PyodideRuntime';
 import { PyodideLoadingOverlay } from '../../modules/pyodide/PyodideLoadingOverlay';
 import { PYODIDE_BUILTIN_PACKAGES } from '../../modules/pyodide/builtinPackages';
@@ -217,6 +222,18 @@ const argsToStr = (args: unknown[]): string =>
   }).join(' ');
 
 interface DashEditorPanelProps { userName: string; filePath: string; }
+
+// Jednolita pozycja drzewa SCENE — obejmuje WSZYSTKIE typy bloczków (object/var/fc/…),
+// dzięki czemu każdy da się zgrupować pod group (a grupy zagnieżdżać).
+type UTreeItemType = 'object' | 'var' | 'fc' | 'classObj' | 'getProp' | 'setProp';
+interface UTreeItem {
+  id: string;
+  parentId?: string;
+  type: UTreeItemType;
+  kind?: 'group' | 'qt-widget';   // tylko dla type==='object'
+  name: string;
+  sub?: string;                    // className / sufiks (fn/var/obj/get/set)
+}
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -1610,6 +1627,7 @@ const PropertiesPanel: React.FC<{
   const [nameDraft, setNameDraft] = useState('');
   const [refFilePickerOpen, setRefFilePickerOpen] = useState(false);
   const [refObjPathDraft, setRefObjPathDraft] = useState('');
+  const [mdPickerOpen, setMdPickerOpen] = useState(false);
 
   useEffect(() => { setEditingName(false); }, [object?.id]);
 
@@ -1656,6 +1674,52 @@ const PropertiesPanel: React.FC<{
       <TransformField label="Scale" value={t.scale} step={0.01} onChange={(v) => onTransformChange(object.id, { scale: v })} />
       <TransformField label="Width" value={t.width} onChange={(v) => onTransformChange(object.id, { width: v })} />
       <TransformField label="Height" value={t.height} onChange={(v) => onTransformChange(object.id, { height: v })} />
+
+      {/* Źródło Markdown — dedykowany wybór pliku .md z dysku usera (VFS). Ustawia
+          property `src` na ścieżkę VFS; scena renderuje go bogatym viewerem MdEditor. */}
+      {object.className === 'MarkdownView' && (() => {
+        const srcVal = String(object.properties['src'] ?? '');
+        const isFile = srcVal.trim().startsWith('/');
+        const fileName = isFile ? (srcVal.split('/').filter(Boolean).pop() ?? srcVal) : '';
+        return (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
+              <ArticleIcon sx={{ fontSize: 14, color: '#4fc3f7' }} />
+              <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>Plik Markdown</Typography>
+            </Box>
+            <Box title={srcVal || '(brak — wybierz plik .md)'} sx={{
+              fontSize: 11, fontFamily: 'monospace', color: isFile ? 'text.primary' : 'text.disabled',
+              bgcolor: 'action.hover', borderRadius: 1, px: 0.75, py: 0.5, mb: 0.75,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', border: '1px solid', borderColor: 'divider',
+            }}>
+              {isFile ? fileName : (srcVal ? '(treść inline)' : '(brak pliku)')}
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              <Button size="small" variant="contained" startIcon={<FolderOpenIcon sx={{ fontSize: 14 }} />}
+                onClick={() => setMdPickerOpen(true)}
+                sx={{ fontSize: 11, textTransform: 'none', flex: 1 }}>
+                Wybierz plik .md…
+              </Button>
+              {srcVal && (
+                <Tooltip title="Wyczyść źródło">
+                  <IconButton size="small" onClick={() => onPropertyChange(object.id, 'src', '')} sx={{ p: 0.5 }}>
+                    <CloseIcon sx={{ fontSize: 14, color: 'error.light' }} />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            <FilePickerDialog
+              open={mdPickerOpen}
+              onClose={() => setMdPickerOpen(false)}
+              userName={userName}
+              currentPath={srcVal}
+              filterExt=".md"
+              onSelect={(p) => onPropertyChange(object.id, 'src', p)}
+            />
+          </>
+        );
+      })()}
 
       {/* Fields */}
       {fields.length > 0 && (
@@ -2175,6 +2239,72 @@ const SourceTreeView: React.FC<{ symbols: CodeSymbol[]; sourceId: string }> = ({
 
 interface DsCtxState { x: number; y: number; id: string; }
 
+// Własny scrollbar (szeroki, dotykalny). Mobilne przeglądarki (Chromium/Samsung)
+// IGNORUJĄ `::-webkit-scrollbar { width }`, więc na dotyku pasek zawsze był cienki.
+// Tu chowamy natywny pasek i rysujemy własny 14px kciuk (przeciągalny palcem).
+const TouchScrollbar: React.FC<{ children: React.ReactNode; maxHeight?: number | string; fill?: boolean }> = ({ children, maxHeight, fill }) => {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
+  const recompute = useCallback(() => {
+    const el = scrollRef.current; if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    if (clientHeight === 0 || scrollHeight <= clientHeight + 2) { setThumb(null); return; }
+    const h = Math.max(28, (clientHeight / scrollHeight) * clientHeight);
+    const maxTop = clientHeight - h;
+    const top = (scrollHeight - clientHeight) > 0 ? maxTop * (scrollTop / (scrollHeight - clientHeight)) : 0;
+    setThumb({ top, height: h });
+  }, []);
+  useEffect(() => {
+    const el = scrollRef.current; if (!el) return;
+    recompute();
+    el.addEventListener('scroll', recompute, { passive: true });
+    const ro = new ResizeObserver(recompute); ro.observe(el);
+    const mo = new MutationObserver(recompute); mo.observe(el, { childList: true, subtree: true });
+    return () => { el.removeEventListener('scroll', recompute); ro.disconnect(); mo.disconnect(); };
+  }, [recompute]);
+  const onThumbDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation(); e.preventDefault();
+    const el = scrollRef.current; const th = thumb; if (!el || !th) return;
+    try { (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId); } catch { /* pointer nieaktywny (np. syntetyczny) */ }
+    const startY = e.clientY; const startScroll = el.scrollTop;
+    // Skala wizualna kontenera (np. zoom viewportu ReactFlow, gdzie scrollbar jest
+    // w skalowanym węźle): ruch kursora jest w pikselach EKRANU, a scrollTop/track
+    // w logicznych. Bez korekty o skalę thumb rozjeżdża się z kursorem przy zoom≠1.
+    const rect = el.getBoundingClientRect();
+    const scale = el.clientHeight > 0 ? rect.height / el.clientHeight : 1;
+    const track = el.clientHeight - th.height;
+    const ratio = track > 0 ? (el.scrollHeight - el.clientHeight) / track : 0;
+    const onMove = (me: PointerEvent) => { el.scrollTop = startScroll + ((me.clientY - startY) / (scale || 1)) * ratio; };
+    const onTouch = (te: TouchEvent) => { if (te.cancelable) te.preventDefault(); };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('touchmove', onTouch, { capture: true } as unknown as EventListenerOptions);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('touchmove', onTouch, { passive: false, capture: true });
+    window.addEventListener('pointerup', onUp);
+  }, [thumb]);
+  return (
+    <Box sx={{ position: 'relative', ...(fill ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } : {}) }}>
+      {/* nodrag nopan → gdy scrollbar żyje w węźle ReactFlow, dotyk/scroll treści nie
+          przeciąga węzła ani nie panuje canvasu (stopPropagation na React onPointerDown
+          nie zatrzymuje natywnego touchstart d3-drag). Poza ReactFlow klasy są no-op. */}
+      <Box ref={scrollRef} className="nodrag nopan" sx={{ overflow: 'auto',
+        ...(fill ? { flex: 1, minHeight: 0 } : { maxHeight }),
+        '&::-webkit-scrollbar': { display: 'none' }, scrollbarWidth: 'none' }}>
+        {children}
+      </Box>
+      {thumb && (
+        <Box className="nodrag nopan" onPointerDown={onThumbDown}
+          sx={{ position: 'absolute', right: 1, top: thumb.top, height: thumb.height, width: 14, borderRadius: 7,
+            bgcolor: 'rgba(150,150,160,0.7)', border: '3px solid transparent', backgroundClip: 'content-box',
+            touchAction: 'none', cursor: 'pointer', zIndex: 6, '&:active': { bgcolor: 'rgba(185,185,195,0.95)' } }} />
+      )}
+    </Box>
+  );
+};
+
 const DataSourcePanel: React.FC<{
   sources: DataSourceEntry[];
   loadedData: Record<string, JsonNode | null | undefined>;
@@ -2196,7 +2326,7 @@ const DataSourcePanel: React.FC<{
         </Tooltip>
       </Box>
 
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
+      <TouchScrollbar fill>
         {sources.length === 0 && (
           <Typography sx={{ fontSize: 11, color: 'text.disabled', p: 1.5, fontStyle: 'italic' }}>Click + to add a JSON/JS file</Typography>
         )}
@@ -2231,26 +2361,30 @@ const DataSourcePanel: React.FC<{
                 </Box>
               </ListItemButton>
               {expanded && (
-                <Box sx={{ mx: 1.25, mb: 0.5, px: 0.75, py: 0.5, bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 1,
-                  border: '1px solid', borderColor: 'divider', maxHeight: 280, overflow: 'auto' }}>
-                  {data === undefined ? (
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <CircularProgress size={10} />
-                      <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Loading…</Typography>
+                <Box sx={{ mx: 1.25, mb: 0.5, bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 1,
+                  border: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
+                  <TouchScrollbar maxHeight={280}>
+                    <Box sx={{ px: 0.75, py: 0.5 }}>
+                      {data === undefined ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <CircularProgress size={10} />
+                          <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Loading…</Typography>
+                        </Box>
+                      ) : data === null ? (
+                        <Typography sx={{ fontSize: 10, color: 'error.light', fontStyle: 'italic' }}>Failed to load</Typography>
+                      ) : src.fileType === 'js' || src.fileType === 'python' || src.fileType === 'ts' ? (
+                        <SourceTreeView symbols={data as unknown as CodeSymbol[]} sourceId={src.id} />
+                      ) : (
+                        <JsonTreeNode value={data} sourceId={src.id} filePath={src.filePath} />
+                      )}
                     </Box>
-                  ) : data === null ? (
-                    <Typography sx={{ fontSize: 10, color: 'error.light', fontStyle: 'italic' }}>Failed to load</Typography>
-                  ) : src.fileType === 'js' || src.fileType === 'python' || src.fileType === 'ts' ? (
-                    <SourceTreeView symbols={data as unknown as CodeSymbol[]} sourceId={src.id} />
-                  ) : (
-                    <JsonTreeNode value={data} sourceId={src.id} filePath={src.filePath} />
-                  )}
+                  </TouchScrollbar>
                 </Box>
               )}
             </Box>
           );
         })}
-      </Box>
+      </TouchScrollbar>
 
       <Menu open={Boolean(ctxMenu)} onClose={() => setCtxMenu(null)}
         anchorReference="anchorPosition"
@@ -2313,10 +2447,72 @@ const BoundFieldDisplay: React.FC<{ filePath: string; objPath: string; userName:
 
 // ─── Markdown viewer ──────────────────────────────────────────────────────────
 
-const MarkdownViewContent: React.FC<{ src: string; userName: string }> = ({ src, userName }) => {
+// Osadzony MdEditor renderuje treść pliku razem z customowymi rozszerzeniami
+// (CadViewEmbed, PluginScript, InfoMark…). Jeśli KTÓREKOLWIEK z nich rzuci przy
+// renderze/interakcji, a nie ma bariery, wyjątek leci do roota i rozmontowuje
+// CAŁĄ stronę Drive (objaw: „strona się resetuje"). Ta bariera izoluje krach do
+// jednego bloczka — reszta sceny działa dalej. `resetKey` (ścieżka+długość treści)
+// automatycznie kasuje stan błędu, gdy zmieni się źródło (np. wybór innego .md).
+const MD_MAX_AUTO_RETRY = 3;
+class MdRenderBoundary extends React.Component<
+  { resetKey: string; children: React.ReactNode },
+  { failed: boolean; retries: number }
+> {
+  state = { failed: false, retries: 0 };
+  private lastKey = this.props.resetKey;
+  private retryTimer = 0;
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: Error) {
+    // Błąd „editor view is not available" jest przejściowy (wyścig montażu TipTap w
+    // świeżo ułożonym węźle) — automatycznie remontujemy kilka razy, zwykle druga
+    // próba trafia w stabilny layout i renderuje poprawnie. Dopiero po wyczerpaniu
+    // limitu pokazujemy fallback (chroni przed pętlą przy trwale zepsutym bloku).
+    // eslint-disable-next-line no-console
+    console.error('[MarkdownView] render error (izolowany, strona działa dalej):', error);
+    if (this.state.retries < MD_MAX_AUTO_RETRY) {
+      this.retryTimer = window.setTimeout(
+        () => this.setState((s) => ({ failed: false, retries: s.retries + 1 })),
+        120,
+      );
+    }
+  }
+  componentWillUnmount() { if (this.retryTimer) clearTimeout(this.retryTimer); }
+  render() {
+    if (this.props.resetKey !== this.lastKey) {
+      this.lastKey = this.props.resetKey;
+      if (this.state.failed || this.state.retries) this.setState({ failed: false, retries: 0 });
+    }
+    if (this.state.failed) {
+      return (
+        <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 0.75, alignItems: 'flex-start' }}>
+          <Typography sx={{ fontSize: 11, color: 'error.main', fontWeight: 600 }}>Nie udało się wyrenderować markdown</Typography>
+          <Typography sx={{ fontSize: 10, color: 'text.secondary' }}>Plik zawiera blok, który rzucił wyjątek. Reszta sceny działa normalnie.</Typography>
+          <Button size="small" variant="outlined" sx={{ fontSize: 10, textTransform: 'none' }}
+            onClick={() => this.setState({ failed: false, retries: 0 })}>Spróbuj ponownie</Button>
+        </Box>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Memo: bloczek qt/dash re-renderuje się bardzo często (selekcja/drag ReactFlow).
+// Bez memo osadzony MdEditor (ciężki TipTap) re-renderowałby się przy każdej zmianie
+// propsów węzła — kosztownie i zwiększa ryzyko wyścigów init/destroy ProseMirror.
+const MarkdownViewContent = React.memo(({ src, userName }: { src: string; userName: string }) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Gate montażu: TipTap rzuca „editor view is not available", gdy montuje się do
+  // kontenera, którego ReactFlow jeszcze nie zmierzył/ułożył (świeżo dodany węzeł,
+  // node poza kadrem). Czekamy 2× rAF, aż węzeł ma stabilny layout, dopiero wtedy
+  // montujemy edytor — to eliminuje wyścig, zamiast tylko go łapać barierą.
+  const [layoutReady, setLayoutReady] = useState(false);
+  useEffect(() => {
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => setLayoutReady(true)); });
+    return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2); };
+  }, []);
 
   const trimmed = src.trim();
   const isPath = trimmed.startsWith('/');
@@ -2350,30 +2546,36 @@ const MarkdownViewContent: React.FC<{ src: string; userName: string }> = ({ src,
       </Typography>
     );
   }
+  if (!layoutReady) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 40 }}>
+        <CircularProgress size={16} />
+      </Box>
+    );
+  }
+  // Bogaty render: ten sam edytor markdown co reszta aplikacji, w trybie read-only
+  // (`editable={false}`) — dzięki temu w scenie działają WSZYSTKIE customowe
+  // rozszerzenia (CadViewEmbed, EventBlock, InfoMark, PluginScript, galerie, mapy…),
+  // czyli dokładnie to co widać w normalnym edytorze markdown. MdEditor zamraża
+  // `initialContent` przy montażu, więc remontujemy go przez `key`, gdy zmieni się
+  // źródło/treść. `filePath` przekazujemy tylko dla ścieżek VFS (kontekst dla /event).
   return (
-    <Box sx={{
-      fontSize: 13, lineHeight: 1.6, p: 1,
-      '& h1': { fontSize: 17, fontWeight: 700, m: 0, mb: 0.75 },
-      '& h2': { fontSize: 14, fontWeight: 700, m: 0, mt: 1.25, mb: 0.5 },
-      '& h3': { fontSize: 12, fontWeight: 700, m: 0, mt: 1, mb: 0.375 },
-      '& p': { m: 0, mb: 0.75 },
-      '& ul, & ol': { pl: 2.5, m: 0, mb: 0.75 },
-      '& li': { mb: 0.25 },
-      '& code': { fontSize: 11, fontFamily: 'monospace', bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5 },
-      '& pre': { bgcolor: 'action.hover', p: 1, borderRadius: 1, fontSize: 11, overflow: 'auto', m: 0, mb: 0.75 },
-      '& pre code': { bgcolor: 'transparent', p: 0 },
-      '& a': { color: '#4fc3f7', textDecoration: 'underline' },
-      '& blockquote': { borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, ml: 0, my: 0.5, color: 'text.secondary' },
-      '& hr': { border: 'none', borderTop: '1px solid', borderColor: 'divider', my: 1 },
-      '& table': { borderCollapse: 'collapse', width: '100%', mb: 0.75, fontSize: 12 },
-      '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.375 },
-      '& th': { bgcolor: 'action.hover', fontWeight: 700 },
-      '& img': { maxWidth: '100%' },
-    }}>
-      <ReactMarkdown>{content}</ReactMarkdown>
+    <Box sx={{ '& .ProseMirror': { outline: 'none' }, '& [contenteditable]': { cursor: 'default' } }}>
+      <MdRenderBoundary resetKey={`${trimmed}:${content.length}`}>
+        <React.Suspense fallback={<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}><CircularProgress size={16} /></Box>}>
+          <MdEditor
+            key={`${trimmed}:${content.length}`}
+            initialContent={content}
+            editable={false}
+            autoSaveDelay={0}
+            filePath={isPath ? trimmed : undefined}
+          />
+        </React.Suspense>
+      </MdRenderBoundary>
     </Box>
   );
-};
+});
+MarkdownViewContent.displayName = 'MarkdownViewContent';
 
 // ─── ObjectRef node content ───────────────────────────────────────────────────
 
@@ -2526,16 +2728,22 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
     const startY = e.clientY;
     const startW = t.width > 0 ? t.width : 200;
     const startH = t.height > 0 ? t.height : 0;
-
+    window.dispatchEvent(new CustomEvent('dash-resize-active', { detail: true }));
+    let raf = 0; let pending: { w: number; h: number } | null = null;
+    const flush = () => { raf = 0; if (pending) { data.onResizeDrag(pending.w, pending.h); pending = null; } };
     const onMove = (me: PointerEvent) => {
       const zoom = getZoom();
       const dw = (me.clientX - startX) / zoom;
       const dh = (me.clientY - startY) / zoom;
       const newW = Math.max(150, Math.round(startW + dw));
       const newH = startH > 0 ? Math.max(80, Math.round(startH + dh)) : Math.max(80, Math.round(dh));
-      data.onResizeDrag(newW, newH);
+      pending = { w: newW, h: newH };
+      if (!raf) raf = requestAnimationFrame(flush);
     };
     const onUp = (me: PointerEvent) => {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (pending) { data.onResizeDrag(pending.w, pending.h); pending = null; }
+      window.dispatchEvent(new CustomEvent('dash-resize-active', { detail: false }));
       el.releasePointerCapture(me.pointerId);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
@@ -2562,21 +2770,34 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
       ...(t.height > 0 ? { height: t.height } : {}),
       ...(t.rot !== 0 || t.scale !== 1 ? { transform: `${t.rot !== 0 ? `rotate(${t.rot}deg) ` : ''}${t.scale !== 1 ? `scale(${t.scale})` : ''}`.trim() } : {}),
     }}>
-      {/* Drag bar — always visible, used as ReactFlow dragHandle */}
-      <Box className="dash-drag-handle" title="Drag to move" sx={{
-        flexShrink: 0, height: 12, cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        bgcolor: data.selected ? '#4fc3f718' : 'action.hover',
+      {/* Drag bar — always visible, used as ReactFlow dragHandle.
+          touchAction:'none' → mobile nie interpretuje dotyku jako scroll, więc d3-drag
+          ReactFlow dostaje czysty gest przeciągania (inaczej węzeł „ciężko się rusza").
+          Dla MarkdownView pasek jest wyższy + z ikoną/etykietą, bo treść (edytor md) z
+          klasą nodrag zajmuje prawie cały węzeł — bez wyraźnego uchwytu trudno go złapać. */}
+      <Box className="dash-drag-handle" title="Przeciągnij, aby przesunąć" sx={{
+        flexShrink: 0, height: isMarkdownView ? 26 : 12, cursor: 'grab', touchAction: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5,
+        bgcolor: data.selected ? '#4fc3f728' : (isMarkdownView ? '#4fc3f712' : 'action.hover'),
         borderBottom: '1px solid', borderColor: 'divider',
         borderRadius: '2px 2px 0 0',
         '&:active': { cursor: 'grabbing' },
       }}>
-        <Box sx={{ display: 'flex', gap: '3px', opacity: 0.35 }}>
-          {[0,1,2,3,4].map((i) => <Box key={i} sx={{ width: 3, height: 3, bgcolor: 'text.primary', borderRadius: '50%' }} />)}
-        </Box>
+        {isMarkdownView ? (
+          <>
+            <DragIndicatorIcon sx={{ fontSize: 15, color: '#4fc3f7', opacity: 0.9 }} />
+            <Typography sx={{ fontSize: 10, fontWeight: 600, color: '#4fc3f7', letterSpacing: 0.3, userSelect: 'none' }}>Przeciągnij</Typography>
+          </>
+        ) : (
+          <Box sx={{ display: 'flex', gap: '3px', opacity: 0.35 }}>
+            {[0,1,2,3,4].map((i) => <Box key={i} sx={{ width: 3, height: 3, bgcolor: 'text.primary', borderRadius: '50%' }} />)}
+          </Box>
+        )}
       </Box>
 
       {/* Resize handle — bottom-right */}
       <div
+        className="nodrag nopan"
         onPointerDown={onResizePointerDown}
         title="Drag to resize"
         style={{
@@ -2637,11 +2858,16 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
         <ObjectRefNodeContent userName={data.userName} properties={data.properties}
           onPropertyChange={data.onPropertyChange} height={t.height} />
       ) : isMarkdownView ? (
-        <Box onPointerDown={(e) => e.stopPropagation()} sx={{ flex: 1, overflow: 'auto', touchAction: 'pan-y', ...(t.height === 0 ? { height: 400 } : {}) }}>
-          <MarkdownViewContent
-            src={String(data.properties['src'] ?? '')}
-            userName={data.userName}
-          />
+        // Szeroki, mobilny scrollbar (TouchScrollbar) zamiast natywnego — spójny z panelem Data.
+        // Węzeł ze stałą wysokością: scroll wypełnia bloczek (fill). Bez wysokości: cap 400px.
+        <Box onPointerDown={(e) => e.stopPropagation()}
+          sx={{ touchAction: 'pan-y', ...(t.height > 0 ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } : {}) }}>
+          <TouchScrollbar {...(t.height > 0 ? { fill: true } : { maxHeight: 400 })}>
+            <MarkdownViewContent
+              src={String(data.properties['src'] ?? '')}
+              userName={data.userName}
+            />
+          </TouchScrollbar>
         </Box>
       ) : (
         <Box onPointerDown={(e) => e.stopPropagation()} sx={{ px: 1, py: 0.25, flex: 1, overflow: 'auto', touchAction: 'pan-y', ...(t.height === 0 ? { maxHeight: 320 } : {}) }}>
@@ -3394,13 +3620,20 @@ const GroupNode: React.FC<NodeProps<Node<GroupNodeData>>> = ({ data }) => {
     const el = e.currentTarget; el.setPointerCapture(e.pointerId);
     const startX = e.clientX, startY = e.clientY;
     const startW = w, startH = h;
+    window.dispatchEvent(new CustomEvent('dash-resize-active', { detail: true }));
+    let raf = 0; let pending: { w: number; h: number } | null = null;
+    const flush = () => { raf = 0; if (pending) { data.onResizeDrag(pending.w, pending.h); pending = null; } };
     const onMove = (me: PointerEvent) => {
       const zoom = getZoom();
       const newW = Math.max(120, Math.round(startW + (me.clientX - startX) / zoom));
       const newH = Math.max(80, Math.round(startH + (me.clientY - startY) / zoom));
-      data.onResizeDrag(newW, newH);
+      pending = { w: newW, h: newH };
+      if (!raf) raf = requestAnimationFrame(flush);
     };
     const onUp = (me: PointerEvent) => {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (pending) { data.onResizeDrag(pending.w, pending.h); pending = null; }
+      window.dispatchEvent(new CustomEvent('dash-resize-active', { detail: false }));
       el.releasePointerCapture(me.pointerId);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
@@ -3447,9 +3680,9 @@ const GroupNode: React.FC<NodeProps<Node<GroupNodeData>>> = ({ data }) => {
         <Typography sx={{ fontSize: 10, opacity: 0.8 }}>· {data.childCount}</Typography>
       </Box>}
       {/* Resize handle (bottom-right corner) — tylko gdy ramka widoczna/zaznaczona */}
-      {showVisual && <div onPointerDown={onResizePointerDown} style={{
-        position: 'absolute', width: 12, height: 12, bottom: -6, right: -6,
-        cursor: 'se-resize', background: data.selected ? '#4fc3f7' : '#7c4dff', borderRadius: 2,
+      {showVisual && <div className="nodrag nopan" onPointerDown={onResizePointerDown} style={{
+        position: 'absolute', width: 16, height: 16, bottom: -8, right: -8,
+        cursor: 'se-resize', background: data.selected ? '#4fc3f7' : '#7c4dff', borderRadius: 2, touchAction: 'none',
       }} />}
     </Box>
   );
@@ -3762,13 +3995,25 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
     e.stopPropagation(); e.preventDefault(); e.nativeEvent.stopImmediatePropagation();
     const el = e.currentTarget; el.setPointerCapture(e.pointerId);
     const startX = e.clientX, startY = e.clientY, startW = w, startH = h;
+    // Sygnalizuj resize głównemu edytorowi → wyłącza drag/pan węzłów (na touch RF
+    // potrafił mimo to przesuwać bloczki). rAF-throttle: 1 update/klatkę (mniej
+    // przebudów qt-canvasu → brak „pływania"/jittera).
+    window.dispatchEvent(new CustomEvent('dash-resize-active', { detail: true }));
+    let raf = 0; let pending: { nw: number; nh: number } | null = null;
+    const flush = () => { raf = 0; if (pending) { data.onResizeDrag(pending.nw, pending.nh); pending = null; } };
     const onMove = (me: PointerEvent) => {
       const zoom = getZoom() || 1;
       const nw = dir.includes('e') ? Math.max(16, Math.round(startW + (me.clientX - startX) / zoom)) : startW;
       const nh = dir.includes('s') ? Math.max(16, Math.round(startH + (me.clientY - startY) / zoom)) : startH;
-      data.onResizeDrag(nw, nh);
+      pending = { nw, nh };
+      if (!raf) raf = requestAnimationFrame(flush);
     };
-    const onUp = (me: PointerEvent) => { el.releasePointerCapture(me.pointerId); el.removeEventListener('pointermove', onMove); el.removeEventListener('pointerup', onUp); };
+    const onUp = (me: PointerEvent) => {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (pending) { data.onResizeDrag(pending.nw, pending.nh); pending = null; }
+      window.dispatchEvent(new CustomEvent('dash-resize-active', { detail: false }));
+      el.releasePointerCapture(me.pointerId); el.removeEventListener('pointermove', onMove); el.removeEventListener('pointerup', onUp);
+    };
     el.addEventListener('pointermove', onMove); el.addEventListener('pointerup', onUp);
   }, [w, h, getZoom, data]);
 
@@ -3829,6 +4074,9 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
           Select QT mode it captures clicks to hit-test the nested widget; in Action
           mode it goes fully live (native mouse events fire the widget's signals). */}
       <Box ref={hostRef}
+        // nodrag nopan → ReactFlow nie przeciąga/panuje gdy dotykasz widgetu (Action:
+        // dotyk = eventy do widgetu; Select QT: klik = zaznaczenie zagnieżdżonego widgetu).
+        className={(data.selectMode || data.actionMode) ? 'nodrag nopan' : undefined}
         onPointerDown={data.selectMode ? onSelectPointerDown : data.actionMode ? ((e) => e.stopPropagation()) : undefined}
         sx={{ position: 'absolute', inset: 0, pointerEvents: (data.selectMode || data.actionMode) ? 'auto' : 'none', overflow: 'hidden' }} />
       {/* Selection highlights for nested child widgets (Select QT mode). */}
@@ -3840,11 +4088,14 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
       })}
       {/* Resize gizmo (edge + corner handles, shown when selected). */}
       {data.selected && QT_RESIZE_DIRS.map((dir) => {
-        const st: React.CSSProperties = { position: 'absolute', background: '#26c6da', border: '1px solid #fff', borderRadius: 2, pointerEvents: 'auto', zIndex: 5 };
-        if (dir === 'e') Object.assign(st, { right: -5, top: '50%', marginTop: -5, width: 9, height: 9, cursor: 'ew-resize' });
-        if (dir === 's') Object.assign(st, { bottom: -5, left: '50%', marginLeft: -5, width: 9, height: 9, cursor: 'ns-resize' });
-        if (dir === 'se') Object.assign(st, { right: -6, bottom: -6, width: 11, height: 11, cursor: 'nwse-resize' });
-        return <div key={dir} onPointerDown={startResize(dir)} style={st} />;
+        // touchAction:'none' → przeglądarka nie potraktuje dotyku jako scroll/pan, więc
+        // pointermove dochodzi do resize'u. className="nodrag nopan" → ReactFlow nie
+        // zacznie przeciągać węzła z uchwytu (na touch stopPropagation nie wystarcza).
+        const st: React.CSSProperties = { position: 'absolute', background: '#26c6da', border: '1px solid #fff', borderRadius: 2, pointerEvents: 'auto', zIndex: 5, touchAction: 'none' };
+        if (dir === 'e') Object.assign(st, { right: -7, top: '50%', marginTop: -7, width: 14, height: 14, cursor: 'ew-resize' });
+        if (dir === 's') Object.assign(st, { bottom: -7, left: '50%', marginLeft: -7, width: 14, height: 14, cursor: 'ns-resize' });
+        if (dir === 'se') Object.assign(st, { right: -8, bottom: -8, width: 16, height: 16, cursor: 'nwse-resize' });
+        return <div key={dir} className="nodrag nopan" onPointerDown={startResize(dir)} style={st} />;
       })}
     </Box>
   );
@@ -4125,6 +4376,17 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [treeDragId, setTreeDragId] = useState<string | null>(null);
   const [treeDragOverId, setTreeDragOverId] = useState<string | null>(null);
+  // Własny rubber-band (prostokąt selekcji) dla mobile — RF selectionOnDrag nie
+  // odpala się na dotyku. Prostokąt trzymany w współrzędnych względem flowWrapRef.
+  const [rubberBand, setRubberBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // Podczas resize gizmo węzła wyłączamy drag/pan ReactFlow (na touch RF potrafił
+  // mimo `nodrag` przesuwać bloczki — „pływanie"). Sygnał przez CustomEvent z node'ów.
+  const [isResizing, setIsResizing] = useState(false);
+  useEffect(() => {
+    const h = (e: Event) => setIsResizing(!!(e as CustomEvent).detail);
+    window.addEventListener('dash-resize-active', h as EventListener);
+    return () => window.removeEventListener('dash-resize-active', h as EventListener);
+  }, []);
   const [visiblePanels, setVisiblePanels] = useState<string[]>(['scene', 'properties']);
   const [fcRunning, setFcRunning] = useState<Set<string>>(new Set());
   const [varInitDialogOpen, setVarInitDialogOpen] = useState(false);
@@ -4748,7 +5010,16 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   }, [screenToFlowPosition, createFunctionCall, createClassObj, updateScene]);
 
   useEffect(() => {
-    _touchDropCb = (cx, cy, payload) => processDropAt(cx, cy, payload.mime, payload.data);
+    _touchDropCb = (cx, cy, payload) => {
+      // Touch/pen DnD dostarcza drop bezwarunkowo (w przeciwieństwie do HTML5 onDrop
+      // podpiętego tylko na ReactFlow). Panele Data/Types/Properties są flex-siblingami
+      // POZA `.react-flow`, więc puszczenie symbolu NAD panelem Data nie może dodać
+      // bloczka — akceptujemy tylko drop nad samym canvasem. Ghost ma pointerEvents:none,
+      // więc elementFromPoint zwraca element pod nim.
+      const el = document.elementFromPoint(cx, cy);
+      if (!el || !el.closest('.react-flow')) return;
+      processDropAt(cx, cy, payload.mime, payload.data);
+    };
     return () => { _touchDropCb = null; };
   }, [processDropAt]);
 
@@ -5494,21 +5765,29 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       if (Math.abs(c.position.x - baseX) > MAX_DRAG_STEP || Math.abs(c.position.y - baseY) > MAX_DRAG_STEP) continue;
       validMidDrag.push({ id: c.id, x: c.position.x, y: c.position.y });
     }
-    // Live-follow group children.
+    // Live-follow group children (WSZYSTKIE typy, rekurencyjnie dla zagnieżdżonych grup).
     if (validMidDrag.length > 0) {
       const sc = sceneRef.current;
       const dragged = new Set(validMidDrag.map((m) => m.id));
+      const others = [...(sc.functionCalls ?? []), ...(sc.vars ?? []), ...(sc.classObjs ?? []), ...(sc.getProps ?? []), ...(sc.setProps ?? [])];
       const extra: Array<{ id: string; x: number; y: number }> = [];
+      const follow = (groupId: string, dx: number, dy: number) => {
+        for (const child of sc.objects) {
+          if (child.parentId !== groupId) continue;
+          const ct = getTransform(child);
+          if (!dragged.has(child.id)) extra.push({ id: child.id, x: ct.x + dx, y: ct.y + dy });
+          if (child.kind === 'group') follow(child.id, dx, dy);   // zagnieżdżona grupa → jej dzieci też
+        }
+        for (const child of others) {
+          if (child.parentId !== groupId || dragged.has(child.id)) continue;
+          extra.push({ id: child.id, x: child.x + dx, y: child.y + dy });
+        }
+      };
       for (const m of validMidDrag) {
         const grp = sc.objects.find((o) => o.id === m.id && o.kind === 'group');
         if (!grp) continue;
         const g0 = getTransform(grp);
-        const dx = m.x - g0.x, dy = m.y - g0.y;
-        for (const child of sc.objects) {
-          if (child.parentId !== grp.id || dragged.has(child.id)) continue;
-          const ct = getTransform(child);
-          extra.push({ id: child.id, x: ct.x + dx, y: ct.y + dy });
-        }
+        follow(grp.id, m.x - g0.x, m.y - g0.y);
       }
       validMidDrag.push(...extra);
     }
@@ -5558,33 +5837,41 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     }
   }, [updateScene]);
 
-  const filteredObjects = useMemo(() => {
-    if (!searchText) return scene.objects;
-    const q = searchText.toLowerCase();
-    return scene.objects.filter((o) => o.objectName.toLowerCase().includes(q) || o.className.toLowerCase().includes(q));
-  }, [scene.objects, searchText]);
+  // WSZYSTKIE elementy sceny jako jednolite pozycje drzewa (mają parentId → można je
+  // grupować pod group; grupy też mogą być zagnieżdżane). Typ steruje ikoną/kolorem.
+  const unifiedItems = useMemo((): UTreeItem[] => {
+    const out: UTreeItem[] = [];
+    for (const o of scene.objects) out.push({ id: o.id, parentId: o.parentId, type: 'object', kind: o.kind, name: o.objectName, sub: o.className });
+    for (const f of scene.functionCalls ?? []) out.push({ id: f.id, parentId: f.parentId, type: 'fc', name: (f.symbolPath.split('.').pop() || f.symbolPath) + '()', sub: 'fn' });
+    for (const v of scene.vars ?? []) out.push({ id: v.id, parentId: v.parentId, type: 'var', name: v.varName, sub: 'var' });
+    for (const o of scene.classObjs ?? []) out.push({ id: o.id, parentId: o.parentId, type: 'classObj', name: o.className, sub: 'obj' });
+    for (const n of scene.getProps ?? []) out.push({ id: n.id, parentId: n.parentId, type: 'getProp', name: n.propNameOverride || 'getProp', sub: 'get' });
+    for (const n of scene.setProps ?? []) out.push({ id: n.id, parentId: n.parentId, type: 'setProp', name: n.propNameOverride || 'setProp', sub: 'set' });
+    return out;
+  }, [scene.objects, scene.functionCalls, scene.vars, scene.classObjs, scene.getProps, scene.setProps]);
 
-  // Hierarchy for the Scene tree: groups are parents, objects with a matching
-  // parentId render as their children (indented). Each object appears once.
-  const treeRows = useMemo((): Array<{ obj: DashObject; depth: number; childCount: number }> => {
-    const present = new Set(filteredObjects.map((o) => o.id));
-    const rows: Array<{ obj: DashObject; depth: number; childCount: number }> = [];
-    const childrenOf = (id: string) => filteredObjects.filter((c) => c.parentId === id);
-    // Groups and qt-widgets can both contain children (arbitrary nesting depth).
-    const emit = (obj: DashObject, depth: number) => {
-      const kids = childrenOf(obj.id);
-      rows.push({ obj, depth, childCount: kids.length });
-      const container = obj.kind === 'group' || obj.kind === 'qt-widget';
-      if (container && kids.length && !collapsedGroups.has(obj.id)) {
+  // Hierarchy for the Scene tree: containers (group / qt-widget) hold children
+  // (dowolny typ pod group; tylko qt-widgety pod qt-widget). Każda pozycja raz.
+  const treeRows = useMemo((): Array<{ item: UTreeItem; depth: number; childCount: number }> => {
+    const q = searchText.toLowerCase();
+    const filtered = searchText ? unifiedItems.filter((i) => i.name.toLowerCase().includes(q) || (i.sub || '').toLowerCase().includes(q)) : unifiedItems;
+    const present = new Set(filtered.map((i) => i.id));
+    const childrenOf = (id: string) => filtered.filter((c) => c.parentId === id);
+    const isContainer = (i: UTreeItem) => i.type === 'object' && (i.kind === 'group' || i.kind === 'qt-widget');
+    const rows: Array<{ item: UTreeItem; depth: number; childCount: number }> = [];
+    const emit = (item: UTreeItem, depth: number) => {
+      const kids = childrenOf(item.id);
+      rows.push({ item, depth, childCount: kids.length });
+      if (isContainer(item) && kids.length && !collapsedGroups.has(item.id)) {
         for (const c of kids) emit(c, depth + 1);
       }
     };
-    for (const obj of filteredObjects) {
-      const isRoot = !obj.parentId || !present.has(obj.parentId);
-      if (isRoot) emit(obj, 0);
+    for (const item of filtered) {
+      const isRoot = !item.parentId || !present.has(item.parentId);
+      if (isRoot) emit(item, 0);
     }
     return rows;
-  }, [filteredObjects, collapsedGroups]);
+  }, [unifiedItems, searchText, collapsedGroups]);
 
   const toggleSelect = useCallback((id: string, multi: boolean) => {
     setSelectedIds((prev) => {
@@ -5629,26 +5916,174 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     setTimeout(() => fitAllNodes(), 120);
   }, [updateScene, fitAllNodes]);
 
-  // Re-parent an object via the Scene tree (drag-and-drop). Groups can't nest.
-  const reparentObject = useCallback((objId: string, newParentId: string | undefined) => {
-    if (objId === newParentId) return;
-    const objs = sceneRef.current.objects;
-    const dragged = objs.find((o) => o.id === objId);
-    if (!dragged || dragged.kind === 'group') return;
-    // Guard against cycles: the new parent must not be a descendant of the dragged
-    // object (walk the parent chain up from newParent — must not hit objId).
+  // Re-parent DOWOLNY element sceny (object/var/fc/classObj/getProp/setProp) do grupy.
+  // Grupy można zagnieżdżać (group→group). qt-widgety mieszczą tylko qt-widgety.
+  const reparentObject = useCallback((itemId: string, newParentId: string | undefined) => {
+    if (itemId === newParentId) return;
+    const sc = sceneRef.current;
+    const parentIdOf = (id: string): string | undefined => {
+      const o = sc.objects.find((x) => x.id === id); if (o) return o.parentId;
+      const f = (sc.functionCalls ?? []).find((x) => x.id === id); if (f) return f.parentId;
+      const v = (sc.vars ?? []).find((x) => x.id === id); if (v) return v.parentId;
+      const c = (sc.classObjs ?? []).find((x) => x.id === id); if (c) return c.parentId;
+      const g = (sc.getProps ?? []).find((x) => x.id === id); if (g) return g.parentId;
+      const s = (sc.setProps ?? []).find((x) => x.id === id); if (s) return s.parentId;
+      return undefined;
+    };
+    const draggedObj = sc.objects.find((o) => o.id === itemId);
+    const type: UTreeItemType | null =
+      draggedObj ? 'object'
+      : (sc.functionCalls ?? []).some((f) => f.id === itemId) ? 'fc'
+      : (sc.vars ?? []).some((v) => v.id === itemId) ? 'var'
+      : (sc.classObjs ?? []).some((o) => o.id === itemId) ? 'classObj'
+      : (sc.getProps ?? []).some((n) => n.id === itemId) ? 'getProp'
+      : (sc.setProps ?? []).some((n) => n.id === itemId) ? 'setProp'
+      : null;
+    if (!type) return;
     if (newParentId) {
-      let cur: DashObject | undefined = objs.find((o) => o.id === newParentId);
-      while (cur) {
-        if (cur.id === objId) return;
-        cur = cur.parentId ? objs.find((o) => o.id === cur!.parentId) : undefined;
+      const parent = sc.objects.find((o) => o.id === newParentId);
+      if (!parent) return;                                         // rodzic musi być kontenerem (DashObject)
+      if (parent.kind === 'qt-widget') {
+        if (!(type === 'object' && draggedObj?.kind === 'qt-widget')) return;  // qt-widget mieści tylko qt-widgety
+      } else if (parent.kind !== 'group') {
+        return;                                                    // tylko group / qt-widget są kontenerami
       }
+      // Guard cykli: nowy rodzic nie może być potomkiem przeciąganego elementu.
+      let cur: string | undefined = newParentId;
+      while (cur) { if (cur === itemId) return; cur = parentIdOf(cur); }
     }
-    updateScene((prev) => ({
-      ...prev,
-      objects: prev.objects.map((o) => o.id === objId ? { ...o, parentId: newParentId } : o),
-    }));
+    const setP = <T extends { id: string; parentId?: string }>(arr: T[] | undefined): T[] | undefined =>
+      arr?.map((x) => x.id === itemId ? { ...x, parentId: newParentId } : x);
+    updateScene((prev) => {
+      switch (type) {
+        case 'object': return { ...prev, objects: prev.objects.map((o) => o.id === itemId ? { ...o, parentId: newParentId } : o) };
+        case 'fc': return { ...prev, functionCalls: setP(prev.functionCalls) };
+        case 'var': return { ...prev, vars: setP(prev.vars) };
+        case 'classObj': return { ...prev, classObjs: setP(prev.classObjs) };
+        case 'getProp': return { ...prev, getProps: setP(prev.getProps) };
+        case 'setProp': return { ...prev, setProps: setP(prev.setProps) };
+      }
+    });
   }, [updateScene]);
+
+  // Drag&drop drzewa SCENE oparty na Pointer Events (natywne HTML5 DnD nie odpala się
+  // na mobile). Drag startuje z DEDYKOWANEGO uchwytu (grip) — uchwyt ma
+  // `touch-action:none`, więc przeciąganie NIGDY nie scrolluje listy (brak konfliktu
+  // scroll↔drag; reszta wiersza normalnie się przewija i zaznacza tapnięciem).
+  const treeDragRef = useRef<{ id: string; pointerId: number; startX: number; startY: number; started: boolean } | null>(null);
+  const beginTreeRowDrag = useCallback((objId: string) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();   // z uchwytu: nie zaznaczaj wiersza
+    const st = { id: objId, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, started: false };
+    treeDragRef.current = st;
+    const findOver = (x: number, y: number): string | null => {
+      const el = document.elementFromPoint(x, y);
+      const row = el?.closest('[data-tree-id]') as HTMLElement | null;
+      const id = row?.getAttribute('data-tree-id') ?? null;
+      if (!id || id === st.id) return null;
+      const t = sceneRef.current.objects.find((o) => o.id === id);
+      return (t && (t.kind === 'group' || t.kind === 'qt-widget')) ? id : null;
+    };
+    const onMove = (me: PointerEvent) => {
+      if (me.pointerId !== st.pointerId) return;
+      if (!st.started) {
+        if (Math.abs(me.clientX - st.startX) < 5 && Math.abs(me.clientY - st.startY) < 5) return;
+        st.started = true; setTreeDragId(st.id);
+      }
+      setTreeDragOverId(findOver(me.clientX, me.clientY));
+    };
+    const onUp = (ue: PointerEvent) => {
+      if (st.started) {
+        const over = findOver(ue.clientX, ue.clientY);
+        if (over) reparentObject(st.id, over);
+        else if (document.elementFromPoint(ue.clientX, ue.clientY)?.closest('[data-tree-panel]')) reparentObject(st.id, undefined);
+      }
+      cleanup();
+    };
+    function cleanup() {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (treeDragRef.current === st) treeDragRef.current = null;
+      setTreeDragId(null); setTreeDragOverId(null);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [reparentObject]);
+
+  // Rubber-band selekcji (desktop I mobile) z auto-panem przy krawędzi. Startuje gdy
+  // tryb Rect Select jest aktywny i wskaźnik pada na pustą powierzchnię (pane), nie na
+  // bloczek/handle. Zastępuje natywne selectionOnDrag RF (które nie auto-panuje).
+  const rubberRef = useRef<{ startCX: number; startCY: number; ox: number; oy: number; pointerId: number; started: boolean; lastX: number; lastY: number } | null>(null);
+  const onFlowPointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (canvasMode !== 'select' || e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('.react-flow__node') || target.closest('.react-flow__handle')) return;
+    const wrap = flowWrapRef.current;
+    if (!wrap) return;
+    const wr = wrap.getBoundingClientRect();
+    const st = { startCX: e.clientX, startCY: e.clientY, ox: wr.left, oy: wr.top, pointerId: e.pointerId, started: false, lastX: e.clientX, lastY: e.clientY };
+    rubberRef.current = st;
+    // Auto-pan TYLKO gdy palec dojedzie do krawędzi widoku — inaczej widok stoi.
+    let panRaf = 0;
+    const EDGE = 44, SPEED = 14;
+    const drawBand = () => setRubberBand({ x0: st.startCX - st.ox, y0: st.startCY - st.oy, x1: st.lastX - st.ox, y1: st.lastY - st.oy });
+    const autoPan = () => {
+      panRaf = 0;
+      if (!st.started) return;
+      const r = wrap.getBoundingClientRect();
+      let dx = 0, dy = 0;
+      if (st.lastX < r.left + EDGE) dx = SPEED; else if (st.lastX > r.right - EDGE) dx = -SPEED;
+      if (st.lastY < r.top + EDGE) dy = SPEED; else if (st.lastY > r.bottom - EDGE) dy = -SPEED;
+      if (dx || dy) {
+        const vp = getViewport();
+        setViewport({ x: vp.x + dx, y: vp.y + dy, zoom: vp.zoom });
+        drawBand();
+        panRaf = requestAnimationFrame(autoPan);
+      }
+    };
+    const maybeAutoPan = () => {
+      const r = wrap.getBoundingClientRect();
+      const near = st.lastX < r.left + EDGE || st.lastX > r.right - EDGE || st.lastY < r.top + EDGE || st.lastY > r.bottom - EDGE;
+      if (near && !panRaf) panRaf = requestAnimationFrame(autoPan);
+    };
+    const onMove = (me: PointerEvent) => {
+      if (me.pointerId !== st.pointerId) return;
+      if (!st.started && Math.abs(me.clientX - st.startCX) < 6 && Math.abs(me.clientY - st.startCY) < 6) return;
+      st.started = true; st.lastX = me.clientX; st.lastY = me.clientY;
+      drawBand();
+      maybeAutoPan();
+    };
+    const cleanup = () => {
+      if (panRaf) { cancelAnimationFrame(panRaf); panRaf = 0; }
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      rubberRef.current = null;
+      setRubberBand(null);
+    };
+    const onUp = (ue: PointerEvent) => {
+      const started = st.started;
+      cleanup();
+      if (!started) return;
+      const x0 = Math.min(st.startCX, ue.clientX), y0 = Math.min(st.startCY, ue.clientY);
+      const x1 = Math.max(st.startCX, ue.clientX), y1 = Math.max(st.startCY, ue.clientY);
+      const ids = new Set<string>();
+      wrap.querySelectorAll('.react-flow__node').forEach((n) => {
+        const b = (n as HTMLElement).getBoundingClientRect();
+        if (b.right > x0 && b.left < x1 && b.bottom > y0 && b.top < y1) {
+          const id = (n as HTMLElement).getAttribute('data-id');
+          if (id) ids.add(id);
+        }
+      });
+      setSelectedIds(ids);
+    };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [canvasMode, getViewport, setViewport]);
 
   const onNodeDragStop = useCallback((_evt: React.MouseEvent | React.TouchEvent, _node: Node, _draggedNodes: Node[]) => {
     // Użyj naszej zwalidowanej nakładki (nie draggedNodes RF — bywają złe na mobile).
@@ -5656,68 +6091,68 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     dragNodePositionsRef.current.clear();
     setDragNodePositions(null);
     if (finalPos.size === 0) return; // nothing moved
-    updateScene((prev) => ({
-      ...prev,
-      objects: (() => {
-        // Group boxes at their final positions — for drag-into/out detection.
-        const groupRects = prev.objects.filter((o) => o.kind === 'group').map((o) => {
-          const t = getTransform(o);
-          const fp = finalPos.get(o.id);
-          return { id: o.id, x: fp ? fp.x : t.x, y: fp ? fp.y : t.y, w: t.width > 0 ? t.width : 320, h: t.height > 0 ? t.height : 240 };
-        });
-        // Delta of each moved group — to offset children not captured in finalPos.
-        const groupDelta = new Map<string, { dx: number; dy: number }>();
-        for (const o of prev.objects) {
-          if (o.kind !== 'group') continue;
-          const fp = finalPos.get(o.id);
-          if (fp) { const t = getTransform(o); groupDelta.set(o.id, { dx: fp.x - t.x, dy: fp.y - t.y }); }
+    updateScene((prev) => {
+      // Group boxes at their final positions — for drag-into/out detection.
+      const groupRects = prev.objects.filter((o) => o.kind === 'group').map((o) => {
+        const t = getTransform(o); const fp = finalPos.get(o.id);
+        return { id: o.id, x: fp ? fp.x : t.x, y: fp ? fp.y : t.y, w: t.width > 0 ? t.width : 320, h: t.height > 0 ? t.height : 240 };
+      });
+      // Delta of each moved group — to offset children not captured in finalPos.
+      const groupDelta = new Map<string, { dx: number; dy: number }>();
+      for (const o of prev.objects) {
+        if (o.kind !== 'group') continue;
+        const fp = finalPos.get(o.id);
+        if (fp) { const t = getTransform(o); groupDelta.set(o.id, { dx: fp.x - t.x, dy: fp.y - t.y }); }
+      }
+      const hostGroupAt = (cx: number, cy: number) => groupRects.find((g) => cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h);
+      // Reposycjonowanie bloczka x/y (Var/FC/ClassObj/GetProp/SetProp): przesunięty
+      // → nowa pozycja + przypięcie do grupy pod środkiem; nieprzesunięty a rodzic-grupa
+      // się ruszył → offset (jedzie z grupą).
+      const repos = <T extends { id: string; x: number; y: number; parentId?: string }>(item: T): T => {
+        const p = finalPos.get(item.id);
+        if (p) {
+          const host = hostGroupAt(p.x + 70, p.y + 25);
+          const next = { ...item, x: p.x, y: p.y } as T;
+          if (host) next.parentId = host.id; else delete next.parentId;
+          return next;
         }
-        return prev.objects.map((obj) => {
+        if (item.parentId && groupDelta.has(item.parentId)) {
+          const d = groupDelta.get(item.parentId)!;
+          return { ...item, x: item.x + d.dx, y: item.y + d.dy };
+        }
+        return item;
+      };
+      return {
+        ...prev,
+        objects: prev.objects.map((obj) => {
           if (obj.kind === 'group') {
             const p = finalPos.get(obj.id);
             return p ? { ...obj, transform: { ...getTransform(obj), x: p.x, y: p.y } } : obj;
           }
           const p = finalPos.get(obj.id);
           if (p) {
-            // Moved directly → update position and (re)assign parent by center-in-box.
             const t = getTransform(obj);
             const w = t.width > 0 ? t.width : 200, h = t.height > 0 ? t.height : 120;
-            const cx = p.x + w / 2, cy = p.y + h / 2;
-            const host = groupRects.find((g) => cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h);
             const next: DashObject = { ...obj, transform: { ...t, x: p.x, y: p.y } };
-            if (host) next.parentId = host.id; else delete next.parentId;
+            // qt-widget-dziecko qt-widgetu zostaje przy nim; inaczej logika box-grupy.
+            const parentObj = obj.parentId ? prev.objects.find((o) => o.id === obj.parentId) : undefined;
+            if (parentObj?.kind === 'qt-widget') { /* zachowaj parentId */ }
+            else { const host = hostGroupAt(p.x + w / 2, p.y + h / 2); if (host) next.parentId = host.id; else delete next.parentId; }
             return next;
           }
-          // Not moved directly, but its group moved → offset to keep relative position.
           if (obj.parentId && groupDelta.has(obj.parentId)) {
-            const d = groupDelta.get(obj.parentId)!;
-            const t = getTransform(obj);
+            const d = groupDelta.get(obj.parentId)!; const t = getTransform(obj);
             return { ...obj, transform: { ...t, x: t.x + d.dx, y: t.y + d.dy } };
           }
           return obj;
-        });
-      })(),
-      functionCalls: (prev.functionCalls ?? []).map((fc) => {
-        const p = finalPos.get(fc.id);
-        return p ? { ...fc, x: p.x, y: p.y } : fc;
-      }),
-      vars: (prev.vars ?? []).map((v) => {
-        const p = finalPos.get(v.id);
-        return p ? { ...v, x: p.x, y: p.y } : v;
-      }),
-      classObjs: (prev.classObjs ?? []).map((o) => {
-        const p = finalPos.get(o.id);
-        return p ? { ...o, x: p.x, y: p.y } : o;
-      }),
-      getProps: (prev.getProps ?? []).map((gp) => {
-        const p = finalPos.get(gp.id);
-        return p ? { ...gp, x: p.x, y: p.y } : gp;
-      }),
-      setProps: (prev.setProps ?? []).map((sp) => {
-        const p = finalPos.get(sp.id);
-        return p ? { ...sp, x: p.x, y: p.y } : sp;
-      }),
-    }));
+        }),
+        functionCalls: (prev.functionCalls ?? []).map(repos),
+        vars: (prev.vars ?? []).map(repos),
+        classObjs: (prev.classObjs ?? []).map(repos),
+        getProps: (prev.getProps ?? []).map(repos),
+        setProps: (prev.setProps ?? []).map(repos),
+      };
+    });
     // Po dragu mobilny GPU potrafi zostawić warstwę viewportu NIEPRZEMALOWANĄ
     // (node'y są, ale niewidoczne — Fit je „odsłania" bo zmienia transform).
     // Wymuszamy przemalowanie niewidocznym drgnięciem viewportu (x+1 → x).
@@ -5870,7 +6305,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                       primary={cls.name}
                       secondary={
                         cls.name === 'Unknown' ? 'dynamic fields'
-                        : cls.name === 'MarkdownView' ? 'renders markdown content'
+                        : cls.name === 'MarkdownView' ? 'viewer .md z rozszerzeniami (CAD/Event/Plugin…)'
                         : cls.name === 'ObjectRef' ? 'JSON object or array'
                         : cls.fields.map((f) => f.name).join(', ')
                       }
@@ -5938,95 +6373,68 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
                   autoFocus fullWidth inputProps={{ style: { fontSize: 11 } }} />
               </Box>
             )}
-            <Box sx={{ flex: 1, overflow: 'auto' }}
-              onContextMenu={(e) => openSceneCtx(e, null)}
-              onDragOver={(e) => { if (treeDragId) e.preventDefault(); }}
-              onDrop={(e) => { e.preventDefault(); if (treeDragId) reparentObject(treeDragId, undefined); setTreeDragId(null); setTreeDragOverId(null); }}>
-              {filteredObjects.length === 0 && (
+            <Box data-tree-panel sx={{ flex: 1, overflow: 'auto', touchAction: 'pan-y' }}
+              onContextMenu={(e) => openSceneCtx(e, null)}>
+              {treeRows.length === 0 && (
                 <Typography sx={{ fontSize: 11, color: 'text.disabled', p: 1.5, fontStyle: 'italic' }}>
-                  {scene.objects.length === 0 ? 'Right-click to add' : 'No matches'}
+                  {unifiedItems.length === 0 ? 'Right-click to add' : 'No matches'}
                 </Typography>
               )}
               <List dense disablePadding>
-                {treeRows.map(({ obj, depth, childCount }) => {
-                  const isGroup = obj.kind === 'group';
-                  const isQt = obj.kind === 'qt-widget';
+                {treeRows.map(({ item, depth, childCount }) => {
+                  const isGroup = item.type === 'object' && item.kind === 'group';
+                  const isQt = item.type === 'object' && item.kind === 'qt-widget';
                   const isContainer = isGroup || isQt;
-                  const collapsed = collapsedGroups.has(obj.id);
-                  const isDropTarget = isContainer && treeDragOverId === obj.id;
+                  const collapsed = collapsedGroups.has(item.id);
+                  const isDropTarget = isContainer && treeDragOverId === item.id;
+                  const sel = selectedIds.has(item.id);
+                  const dotColor: Record<string, string> = { classObj: '#4fc3f7', getProp: '#4dd0e1', setProp: '#ffb74d' };
                   return (
-                  <ListItemButton key={obj.id} selected={selectedIds.has(obj.id)}
-                    draggable={!isGroup}
-                    onDragStart={!isGroup ? (e) => { setTreeDragId(obj.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', obj.id); } : undefined}
-                    onDragEnd={() => { setTreeDragId(null); setTreeDragOverId(null); }}
-                    onDragOver={isContainer ? (e) => { if (treeDragId && treeDragId !== obj.id) { e.preventDefault(); e.stopPropagation(); setTreeDragOverId(obj.id); } } : undefined}
-                    onDragLeave={isContainer ? () => setTreeDragOverId((cur) => cur === obj.id ? null : cur) : undefined}
-                    onDrop={isContainer ? (e) => { e.preventDefault(); e.stopPropagation(); if (treeDragId) reparentObject(treeDragId, obj.id); setTreeDragId(null); setTreeDragOverId(null); } : undefined}
-                    onClick={(e) => toggleSelect(obj.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
-                    onDoubleClick={() => flyTo(obj.id)}
-                    onContextMenu={(e) => openSceneCtx(e, obj.id)}
+                  <ListItemButton key={item.id} selected={sel}
+                    data-tree-id={item.id}
+                    onClick={(e) => toggleSelect(item.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
+                    onDoubleClick={() => flyTo(item.id)}
+                    onContextMenu={(e) => openSceneCtx(e, item.id)}
                     sx={{ minHeight: 24, py: 0.125, pr: 1, pl: (canvasMode === 'select' ? 0.5 : 1.5) + depth * 2,
+                      ...(treeDragId === item.id ? { opacity: 0.4 } : {}),
                       ...(isDropTarget ? { outline: '2px solid #7c4dff', outlineOffset: '-2px', bgcolor: '#7c4dff22' } : {}),
                       '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText' }, '&.Mui-selected:hover': { bgcolor: 'primary.dark' } }}>
                     {canvasMode === 'select' && (
-                      <Checkbox size="small" checked={selectedIds.has(obj.id)} tabIndex={-1} disableRipple
+                      <Checkbox size="small" checked={sel} tabIndex={-1} disableRipple
                         sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: 'primary.contrastText' } }} />
                     )}
-                    {/* Slot chevronu o STAŁEJ szerokości dla KAŻDego wiersza — także liści.
-                        Bez tego ikona liścia-dziecka wypadała na lewo od ikony rodzica
-                        (który ma chevron), przez co wcięcie hierarchii wyglądało źle. */}
+                    {/* Slot chevronu o STAŁEJ szerokości dla KAŻDego wiersza — także liści. */}
                     <Box component="span"
-                      onClick={isContainer && childCount > 0 ? (e) => { e.stopPropagation(); setCollapsedGroups((prev) => { const n = new Set(prev); if (n.has(obj.id)) n.delete(obj.id); else n.add(obj.id); return n; }); } : undefined}
+                      onClick={isContainer && childCount > 0 ? (e) => { e.stopPropagation(); setCollapsedGroups((prev) => { const n = new Set(prev); if (n.has(item.id)) n.delete(item.id); else n.add(item.id); return n; }); } : undefined}
                       sx={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', mr: 0.25, cursor: isContainer && childCount > 0 ? 'pointer' : 'default' }}>
                       {isContainer && childCount > 0 ? (collapsed ? <ChevronRightIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />) : null}
                     </Box>
-                    {isGroup && <GroupIcon sx={{ fontSize: 14, color: selectedIds.has(obj.id) ? 'inherit' : '#7c4dff', mr: 0.5, flexShrink: 0 }} />}
-                    {isQt && <WidgetsIcon sx={{ fontSize: 14, color: selectedIds.has(obj.id) ? 'inherit' : '#26c6da', mr: 0.5, flexShrink: 0 }} />}
-                    <ListItemText sx={{ my: 0 }}
-                      primary={<Typography component="span" sx={{ fontSize: 12 }}>
-                        <strong>{obj.objectName}</strong>
+                    {isGroup && <GroupIcon sx={{ fontSize: 14, color: sel ? 'inherit' : '#7c4dff', mr: 0.5, flexShrink: 0 }} />}
+                    {isQt && <WidgetsIcon sx={{ fontSize: 14, color: sel ? 'inherit' : '#26c6da', mr: 0.5, flexShrink: 0 }} />}
+                    {item.type === 'fc' && <CodeIcon sx={{ fontSize: 13, color: sel ? 'inherit' : '#ce93d8', mr: 0.5, flexShrink: 0 }} />}
+                    {item.type === 'var' && <StorageIcon sx={{ fontSize: 13, color: sel ? 'inherit' : '#81c784', mr: 0.5, flexShrink: 0 }} />}
+                    {(item.type === 'classObj' || item.type === 'getProp' || item.type === 'setProp') && <CircleIcon sx={{ fontSize: 10, color: sel ? 'inherit' : dotColor[item.type], mr: 0.5, flexShrink: 0 }} />}
+                    <ListItemText sx={{ my: 0, minWidth: 0 }}
+                      primary={<Typography component="span" sx={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                        <strong>{item.name}</strong>
                         {isGroup
-                          ? <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.disabled' }}> · {childCount}</Typography>
-                          : <Typography component="span" sx={{ fontSize: 11, color: selectedIds.has(obj.id) ? 'inherit' : 'text.secondary' }}> :{obj.className}{isQt && childCount > 0 ? ` · ${childCount}` : ''}</Typography>}
+                          ? <Typography component="span" sx={{ fontSize: 11, color: sel ? 'inherit' : 'text.disabled' }}> · {childCount}</Typography>
+                          : item.type === 'object'
+                            ? <Typography component="span" sx={{ fontSize: 11, color: sel ? 'inherit' : 'text.secondary' }}> :{item.sub}{isQt && childCount > 0 ? ` · ${childCount}` : ''}</Typography>
+                            : <Typography component="span" sx={{ fontSize: 10, color: sel ? 'inherit' : 'text.disabled', fontStyle: 'italic' }}> {item.sub}</Typography>}
                       </Typography>}
                     />
+                    {/* Uchwyt do przeciągania: reparent/grupowanie. Każdy element (też grupa —
+                        zagnieżdżanie). touch-action:none → przeciąganie NIE scrolluje listy. */}
+                    <Box component="span" onPointerDown={beginTreeRowDrag(item.id)} onClick={(e) => e.stopPropagation()}
+                      title="Przeciągnij, aby zmienić grupę/rodzica"
+                      sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, ml: 0.5, px: 0.25, cursor: 'grab', touchAction: 'none',
+                        color: sel ? 'inherit' : 'text.disabled', opacity: 0.7, '&:active': { cursor: 'grabbing' } }}>
+                      <DragIndicatorIcon sx={{ fontSize: 16 }} />
+                    </Box>
                   </ListItemButton>
                   );
                 })}
-                {(scene.functionCalls ?? []).map((fc) => (
-                  <ListItemButton key={fc.id} selected={selectedIds.has(fc.id)}
-                    onClick={(e) => toggleSelect(fc.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
-                    sx={{ minHeight: 24, py: 0.125, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#7c4dff', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#6939e0' } }}>
-                    {canvasMode === 'select' && (
-                      <Checkbox size="small" checked={selectedIds.has(fc.id)} tabIndex={-1} disableRipple
-                        sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: '#fff' } }} />
-                    )}
-                    <ListItemText sx={{ my: 0 }}
-                      primary={<Typography component="span" sx={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <CodeIcon sx={{ fontSize: 13, color: selectedIds.has(fc.id) ? '#fff' : '#ce93d8' }} />
-                        <strong>{fc.symbolPath.split('.').pop()}()</strong>
-                        <Typography component="span" sx={{ fontSize: 10, color: selectedIds.has(fc.id) ? 'rgba(255,255,255,0.7)' : 'text.disabled', fontStyle: 'italic' }}> fn</Typography>
-                      </Typography>}
-                    />
-                  </ListItemButton>
-                ))}
-                {(scene.vars ?? []).map((v) => (
-                  <ListItemButton key={v.id} selected={selectedIds.has(v.id)}
-                    onClick={(e) => toggleSelect(v.id, canvasMode === 'select' || e.ctrlKey || e.metaKey)}
-                    sx={{ minHeight: 24, py: 0.125, px: canvasMode === 'select' ? 0.5 : 1.5, '&.Mui-selected': { bgcolor: '#388e3c', color: '#fff' }, '&.Mui-selected:hover': { bgcolor: '#2e7d32' } }}>
-                    {canvasMode === 'select' && (
-                      <Checkbox size="small" checked={selectedIds.has(v.id)} tabIndex={-1} disableRipple
-                        sx={{ p: 0.25, mr: 0.5, color: 'text.disabled', '&.Mui-checked': { color: '#fff' } }} />
-                    )}
-                    <ListItemText sx={{ my: 0 }}
-                      primary={<Typography component="span" sx={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <StorageIcon sx={{ fontSize: 13, color: selectedIds.has(v.id) ? '#fff' : '#81c784' }} />
-                        <strong>{v.varName}</strong>
-                        <Typography component="span" sx={{ fontSize: 10, color: selectedIds.has(v.id) ? 'rgba(255,255,255,0.7)' : 'text.disabled', fontStyle: 'italic' }}> var</Typography>
-                      </Typography>}
-                    />
-                  </ListItemButton>
-                ))}
               </List>
             </Box>
           </Box>
@@ -6053,8 +6461,15 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               WebkitUserDrag: 'none' as any, touchAction: 'none',
             } }}
-          onPointerDown={(e) => e.stopPropagation()}>
+          onPointerDown={onFlowPointerDown}>
           {error && <Alert severity="error" onClose={() => setError(null)} sx={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 10 }}>{error}</Alert>}
+          {/* Wizualny prostokąt własnej selekcji (mobile) */}
+          {rubberBand && (
+            <Box sx={{ position: 'absolute', zIndex: 8, pointerEvents: 'none',
+              left: Math.min(rubberBand.x0, rubberBand.x1), top: Math.min(rubberBand.y0, rubberBand.y1),
+              width: Math.abs(rubberBand.x1 - rubberBand.x0), height: Math.abs(rubberBand.y1 - rubberBand.y0),
+              border: '1.5px solid #4fc3f7', bgcolor: 'rgba(79,195,247,0.18)', borderRadius: '2px' }} />
+          )}
           <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
             onNodeDragStop={onNodeDragStop}
@@ -6064,11 +6479,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             connectionRadius={20}
             autoPanOnNodeDrag={!isMobile}
             nodeExtent={[[-20000, -20000], [20000, 20000]]}
-            selectionOnDrag={canvasMode === 'select' && !isMobile}
-            // Mobile: one-finger drag pans the canvas (node drag still works on
-            // nodes), pinch zooms. Rect-select stays desktop-only. Previously
-            // panOnDrag was disabled on mobile, which left no way to pan.
-            panOnDrag={canvasMode === 'select' && !isMobile ? [1] : true}
+            // W trakcie resize gizmo blokujemy drag/pan, by bloczki nie „pływały".
+            nodesDraggable={!isResizing}
+            // Rect Select obsługuje NASZ rubber-band (onFlowPointerDown) — desktop I mobile
+            // — z auto-panem przy krawędzi. Natywne selectionOnDrag RF wyłączone (nie
+            // auto-panuje), a pan w trybie select wyłączony (drag = rysowanie prostokąta).
+            selectionOnDrag={false}
+            panOnDrag={isResizing ? false : canvasMode === 'select' ? false : true}
             zoomOnPinch
             panOnScroll={false}
             selectionMode={SelectionMode.Partial}
@@ -6652,6 +7069,20 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           onClick={() => { ungroupSelected(); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1 }}>
           <GroupIcon fontSize="small" sx={{ opacity: 0.55 }} />Ungroup
         </MenuItem>
+        {/* Odłącz od rodzica (parent=null) — zawsze dostępne, niezależnie od scrolla/
+            pełności drzewa (drag-drop na puste miejsce bywa niedostępny przy pełnej scenie). */}
+        {(() => {
+          const targets = new Set<string>(selectedIds);
+          if (sceneCtxMenu?.objId) targets.add(sceneCtxMenu.objId);
+          const hasParented = [...targets].some((id) => scene.objects.find((o) => o.id === id)?.parentId);
+          return (
+            <MenuItem disabled={!hasParented}
+              onClick={() => { for (const id of targets) { if (scene.objects.find((o) => o.id === id)?.parentId) reparentObject(id, undefined); } closeSceneCtx(); }}
+              sx={{ fontSize: 13, gap: 1 }}>
+              <LinkOffIcon fontSize="small" />Odłącz od rodzica
+            </MenuItem>
+          );
+        })()}
         <Divider />
         <MenuItem disabled={!selectedIds.size} onClick={() => { cutSelected(); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1 }}>
           <ContentCutIcon fontSize="small" />Cut

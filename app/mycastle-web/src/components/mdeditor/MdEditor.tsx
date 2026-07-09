@@ -438,6 +438,12 @@ const MdEditor: React.FC<MdEditorProps> = ({
     ],
     content: '',
     editable,
+    // Odracza utworzenie widoku ProseMirror do useEffect (zamiast synchronicznie w
+    // renderze). Rekomendacja TipTap dla React 18 — eliminuje błąd „editor view is
+    // not available. Cannot access view['dom']", który wywala się przy montażu w
+    // StrictMode / kontenerach montowanych dynamicznie (np. węzeł ReactFlow w scenie
+    // dash). EditorContent obsługuje wtedy brak widoku aż do jego utworzenia.
+    immediatelyRender: false,
     autofocus: autoFocus ? 'start' : false,
     editorProps: {
       // Initial spellcheck attributes — TipTap merges these onto the

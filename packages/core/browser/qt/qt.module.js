@@ -2086,8 +2086,16 @@ class QtCanvas extends LitElement {
   _closeAllPopups() { if (this._popups.length) { this._popups = []; this._scheduleRepaint(); } }
 
   _resize() {
-    const dpr = window.devicePixelRatio || 1; const r = this.getBoundingClientRect();
-    const w = Math.max(1, Math.round(r.width)) || 300, h = Math.max(1, Math.round(r.height)) || 300;
+    const dpr = window.devicePixelRatio || 1;
+    // WAŻNE: bierzemy rozmiar LAYOUTOWY (clientWidth/Height), NIE getBoundingClientRect.
+    // Ten drugi zwraca prostokąt WIZUALNY — zawiera transformacje CSS przodków (np.
+    // `transform: scale(zoom)` viewportu ReactFlow). Przy zoom≠1 root dostawał wtedy
+    // rozmiar PRZESKALOWANY, a treść (wewnętrzne widgety) była rozciągana → „dziwne
+    // przeskalowywanie" przy resize/zoom. clientWidth/Height to rozmiar logiczny,
+    // niezależny od transformacji przodków (fallback na rect gdy 0 — np. display:contents).
+    const r = this.getBoundingClientRect();
+    const w = Math.max(1, this.clientWidth || Math.round(r.width)) || 300;
+    const h = Math.max(1, this.clientHeight || Math.round(r.height)) || 300;
     this._canvas.width = w * dpr; this._canvas.height = h * dpr; this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.root.setGeometry(QRect.of(0, 0, w, h)); this._scheduleRepaint();
   }
@@ -2109,7 +2117,17 @@ class QtCanvas extends LitElement {
     p.setFont(f); p.setPen(Pal.text); p.drawText(QRect.of(x + 8, y, tw - 16, th), Qt.AlignLeft | Qt.AlignVCenter, this._tooltip.text);
   }
 
-  _toView(e) { const r = this._canvas.getBoundingClientRect(); return new QPoint(e.clientX - r.left, e.clientY - r.top); }
+  _toView(e) {
+    const r = this._canvas.getBoundingClientRect();
+    // Canvas może być SKALOWANY przez rodzica (np. zoom ReactFlow) — CSS-owy rozmiar
+    // (r.width) różni się wtedy od logicznego (root.width()). Przeliczamy współrzędne
+    // ekranowe → logiczne, inaczej hit-test/eventy trafiają w złe miejsce przy zoom≠1.
+    const lw = this.root ? this.root.width() : r.width;
+    const lh = this.root ? this.root.height() : r.height;
+    const sx = r.width > 0 ? lw / r.width : 1;
+    const sy = r.height > 0 ? lh / r.height : 1;
+    return new QPoint((e.clientX - r.left) * sx, (e.clientY - r.top) * sy);
+  }
   _hitAll(vp) {
     for (let i = this._popups.length - 1; i >= 0; i--) { const pu = this._popups[i]; if (pu.geometry().contains(vp)) return { target: pu._hitTest(vp.sub(pu.pos())), inPopup: true }; }
     if (this._popups.length) return { target: null, inPopup: false, outsidePopup: true };
