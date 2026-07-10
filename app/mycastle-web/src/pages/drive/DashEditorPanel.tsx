@@ -99,6 +99,8 @@ import EditIcon from '@mui/icons-material/Edit';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import CategoryIcon from '@mui/icons-material/Category';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import DeleteIcon from '@mui/icons-material/Delete';
 import BuildIcon from '@mui/icons-material/Build';
@@ -2443,6 +2445,21 @@ const extractBraceBody = (str: string, openPos: number): string => {
   return '';
 };
 
+// Treść między zbalansowanymi nawiasami () zaczynając od pierwszego '(' za openPos.
+// Obsługuje zagnieżdżone nawiasy i wieloliniowe listy parametrów (np. domyślne
+// wartości `(a = () => 1, b)` czy destrukturyzacje) — inaczej niż regex `[^)]*`.
+const extractParenGroup = (str: string, openPos: number): { params: string; end: number } | null => {
+  let i = openPos;
+  while (i < str.length && str[i] !== '(') i++;
+  if (i >= str.length) return null;
+  let depth = 0; const start = i + 1;
+  for (; i < str.length; i++) {
+    if (str[i] === '(') depth++;
+    else if (str[i] === ')') { if (--depth === 0) return { params: str.slice(start, i), end: i }; }
+  }
+  return null;
+};
+
 const parseClassBody = (body: string): CodeSymbol[] => {
   const members: CodeSymbol[] = [];
   const seen = new Set<string>();
@@ -2512,16 +2529,39 @@ const parseJsSource = (code: string): CodeSymbol[] => {
     symbols.push({ kind: 'type', name: m[2], mods: m[1] ? ['export'] : [] });
   }
 
-  // Named functions
-  const fnRe = /(?:^|[\n;])[ \t]*(?:(export)\s+)?(?:(async)\s+)?function\s+(\w+)\s*(?:<[^>]*)?\(([^)]*)\)/gm;
+  // Named functions (w tym `export default function`, generatory `function*`).
+  // Parametry pobieramy przez balanced-paren (obsługa zagnieżdżeń/wieloliniowości).
+  const fnRe = /(?:^|[\n;])[ \t]*(?:(export)\s+)?(?:default\s+)?(?:(async)\s+)?function(\s*\*)?\s+(\w+)\s*(?:<[^>]*>)?\s*\(/gm;
+  const fnSeen = new Set<string>();
   while ((m = fnRe.exec(clean)) !== null) {
-    symbols.push({ kind: 'function', name: m[3], mods: [m[1] && 'export', m[2] && 'async'].filter(Boolean) as string[], params: m[4].trim() });
+    const pg = extractParenGroup(clean, m.index + m[0].length - 1);
+    if (fnSeen.has(m[4])) continue; fnSeen.add(m[4]);
+    symbols.push({ kind: 'function', name: m[4],
+      mods: [m[1] && 'export', m[2] && 'async', m[3] && 'generator'].filter(Boolean) as string[],
+      params: pg ? pg.params.replace(/\s+/g, ' ').trim() : '' });
   }
 
-  // Arrow / function expressions (const foo = ...)
-  const arrowRe = /(?:^|[\n;])[ \t]*(?:(export)\s+)?const\s+(\w+)\s*(?::\s*[^=]+?)?\s*=\s*(?:(async)\s+)?(?:\([^)]*\)|\w+)\s*=>/gm;
+  // Arrow / function expressions: const/let/var foo = [async] (params) => …
+  // ORAZ const foo = [async] function [name]([params]) { … } (function expression).
+  const arrowRe = /(?:^|[\n;])[ \t]*(?:(export)\s+)?(?:default\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+?)?\s*=\s*(?:(async)\s+)?(function)?(?:\s*\*)?\s*\w*\s*(\(|\w+\s*=>)/gm;
   while ((m = arrowRe.exec(clean)) !== null) {
-    symbols.push({ kind: 'arrow', name: m[2], mods: [m[1] && 'export', m[3] && 'async'].filter(Boolean) as string[] });
+    if (fnSeen.has(m[2])) continue;
+    const isFnExpr = !!m[4];   // m[4] === 'function'
+    const capture = m[5];       // '(' albo `x =>`
+    let params = '';
+    if (capture === '(') {
+      const pg = extractParenGroup(clean, m.index + m[0].length - 1);
+      if (!pg) continue;
+      // Arrow (nie function-expression) MUSI mieć `=>` po nawiasie (poza opcjonalnym
+      // typem zwracanym) — inaczej to zwykłe nawiasowe wyrażenie, nie funkcja.
+      if (!isFnExpr && !/^\s*(?::\s*[\w<>[\]|&\s,.?]+?)?\s*=>/.test(clean.slice(pg.end + 1))) continue;
+      params = pg.params.replace(/\s+/g, ' ').trim();
+    } else {
+      params = capture.replace(/\s*=>$/, '').trim();  // pojedynczy param bez nawiasów: `x =>`
+    }
+    fnSeen.add(m[2]);
+    symbols.push({ kind: 'arrow', name: m[2],
+      mods: [m[1] && 'export', m[3] && 'async'].filter(Boolean) as string[], params });
   }
 
   return symbols;
@@ -2936,9 +2976,11 @@ const DataSourcePanel: React.FC<{
   sources: DataSourceEntry[];
   loadedData: Record<string, JsonNode | null | undefined>;
   onNew: () => void;
+  onCreateNew?: () => void;
   onDelete: (id: string) => void;
   onReload: (id: string) => void;
-}> = ({ sources, loadedData, onNew, onDelete, onReload }) => {
+  onOpenInWorkspace?: (vfsPath: string) => void;
+}> = ({ sources, loadedData, onNew, onCreateNew, onDelete, onReload, onOpenInWorkspace }) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [ctxMenu, setCtxMenu] = useState<DsCtxState | null>(null);
 
@@ -2946,7 +2988,14 @@ const DataSourcePanel: React.FC<{
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 0.5 }}>
         <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>Data</Typography>
-        <Tooltip title="Add file…">
+        {onCreateNew && (
+          <Tooltip title="Utwórz nowy plik + data source…">
+            <IconButton size="small" sx={{ p: 0.25 }} onClick={onCreateNew}>
+              <NoteAddIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+        <Tooltip title="Dodaj istniejący plik…">
           <IconButton size="small" sx={{ p: 0.25 }} onClick={onNew}>
             <AddIcon sx={{ fontSize: 16 }} />
           </IconButton>
@@ -3030,6 +3079,15 @@ const DataSourcePanel: React.FC<{
         <MenuItem onClick={() => { if (ctxMenu) onReload(ctxMenu.id); setCtxMenu(null); }} sx={{ fontSize: 13, gap: 1 }}>
           <CheckCircleIcon fontSize="small" sx={{ color: 'success.main' }} />Reload
         </MenuItem>
+        {onOpenInWorkspace && (
+          <MenuItem onClick={() => {
+            const src = ctxMenu ? sources.find((s) => s.id === ctxMenu.id) : undefined;
+            if (src) onOpenInWorkspace(src.filePath);
+            setCtxMenu(null);
+          }} sx={{ fontSize: 13, gap: 1 }}>
+            <CodeIcon fontSize="small" sx={{ color: '#81c784' }} />Otwórz w edytorze
+          </MenuItem>
+        )}
         <Divider />
         <MenuItem onClick={() => { if (ctxMenu) onDelete(ctxMenu.id); setCtxMenu(null); }} sx={{ fontSize: 13, gap: 1, color: 'error.main' }}>
           <DeleteOutlineIcon fontSize="small" />Delete
@@ -3945,6 +4003,7 @@ interface VarNodeData extends Record<string, unknown> {
   onNameChange: (name: string) => void;
   onEditValue: () => void;   // otwiera edytor wartości (VarInitDialog)
   onValueChange: (json: string) => void;  // inline edycja Array/Object na bloczku
+  hideValue?: boolean;       // ukryj pole edycji wartości na canvasie
 }
 
 const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
@@ -3998,8 +4057,9 @@ const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
         <Typography sx={{ fontSize: 9, color: '#4db6ac', fontFamily: 'monospace', letterSpacing: 0.5, textTransform: 'uppercase' }}>Set</Typography>
       </Box>
       {/* Wartość: dla Array/Object — inline edytor (także wielowymiarowy) wprost na
-          bloczku; dla skalarów — przycisk podglądu „Value" (edycja w VarInitDialog). */}
-      {parsedVal !== null && typeof parsedVal === 'object' ? (
+          bloczku; dla skalarów — przycisk podglądu „Value" (edycja w VarInitDialog).
+          Ukrywane, gdy hideValue = true (property bloczka Var). */}
+      {!data.hideValue && (parsedVal !== null && typeof parsedVal === 'object' ? (
         <Box className="nodrag" onPointerDown={(e) => e.stopPropagation()}
           sx={{ px: 1, py: 0.75, borderBottom: '1px solid #81c78411', maxHeight: 240, overflow: 'auto',
             display: 'flex', flexDirection: 'column', gap: 0.25 }}>
@@ -4018,7 +4078,7 @@ const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
         </Box>
       ) : (
         <ValuePreviewButton jsonValue={data.varValue} accentColor="#81c784" label="Value" onEdit={data.onEditValue} />
-      )}
+      ))}
       {/* Get row (value_out) */}
       <Box className="nodrag" sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: '2px', minHeight: 22, position: 'relative', borderTop: '1px solid #81c78411',
         justifyContent: flipped ? 'flex-start' : 'flex-end', borderBottom: fieldKeys.length > 0 ? '2px solid #81c78422' : 'none' }}>
@@ -5149,6 +5209,18 @@ const VarInitDialog: React.FC<{
 // Renderowane WEWNĄTRZ ReactFlowProvider (obok ReactFlow), pozycjonowane z
 // bieżącego viewportu (x,y,zoom): flow (fx,fy) → ekran (fx*zoom + x, fy*zoom + y).
 
+// MOBILE: utrzymuje STAŁY-EKRANOWY rozmiar obszaru dotykowego uchwytów niezależnie
+// od zoomu — ustawia CSS var `--dash-touch-pad` = 12px / zoom (w jednostkach flow),
+// co po przeskalowaniu viewportem daje ~12px ekranu wokół każdego uchwytu.
+const TouchHandleSizer: React.FC = () => {
+  const { zoom } = useViewport();
+  useEffect(() => {
+    const el = document.querySelector('.react-flow') as HTMLElement | null;
+    if (el) el.style.setProperty('--dash-touch-pad', `${12 / Math.max(0.05, zoom)}px`);
+  }, [zoom]);
+  return null;
+};
+
 // Krzyżyk w początku układu sceny (0,0).
 const OriginCross: React.FC = () => {
   const { x, y } = useViewport();
@@ -5301,6 +5373,163 @@ const FileMonacoDialog: React.FC<{ open: boolean; userName: string; path: string
   );
 };
 
+// Reużywalny splitter zmiany rozmiaru panelu. axis 'x' → pionowy pasek (szerokość),
+// 'y' → poziomy pasek (wysokość). side 'end' = pasek po prawej/dole panelu (drag w tę
+// stronę powiększa), 'start' = pasek po lewej/górze panelu (drag odwrotnie).
+const ResizeSplitter: React.FC<{
+  axis: 'x' | 'y'; side: 'start' | 'end';
+  size: number; min: number; max: number; onSize: (v: number) => void;
+}> = ({ axis, side, size, min, max, onSize }) => {
+  const ref = useRef<{ start: number; startSize: number } | null>(null);
+  const onDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    ref.current = { start: axis === 'x' ? e.clientX : e.clientY, startSize: size };
+    const onMove = (me: PointerEvent) => {
+      if (!ref.current) return;
+      const pos = axis === 'x' ? me.clientX : me.clientY;
+      let delta = pos - ref.current.start;
+      if (side === 'start') delta = -delta;
+      onSize(Math.max(min, Math.min(max, ref.current.startSize + delta)));
+    };
+    const onUp = () => { ref.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [axis, side, size, min, max, onSize]);
+  return (
+    <Box onPointerDown={onDown} sx={{
+      flexShrink: 0, position: 'relative', zIndex: 3, bgcolor: 'divider', touchAction: 'none',
+      ...(axis === 'x' ? { width: 6, cursor: 'col-resize' } : { height: 6, cursor: 'row-resize' }),
+      '&:hover': { bgcolor: 'primary.main' }, '&:active': { bgcolor: 'primary.main' },
+    }} />
+  );
+};
+
+// Parsuje tekstowe wywołanie funkcji, np. "greet(name, count)" → nazwa + parametry.
+const parseFcText = (text: string): { name: string; params: string[] } => {
+  const t = text.trim();
+  const m = t.match(/^([\w.]+)\s*\(([\s\S]*)\)\s*$/);
+  if (m) {
+    const params = m[2].split(',').map((s) => s.trim().split(/[:=]/)[0].trim()).filter(Boolean);
+    return { name: m[1], params };
+  }
+  return { name: t.replace(/\(.*$/, '').trim(), params: [] };
+};
+
+// Kreator bloczka FunctionCall — wpisz wywołanie funkcji jako tekst i wybierz plik
+// źródłowy (datasource), w którym funkcja ma zostać uruchomiona.
+const FunctionCallWizard: React.FC<{
+  open: boolean;
+  dataSources: DataSourceEntry[];
+  initial?: { sourceId: string; symbolPath: string; paramNames: string[] };
+  onConfirm: (v: { sourceId: string; symbolPath: string; paramNames: string[]; lang?: 'python' }) => void;
+  onClose: () => void;
+}> = ({ open, dataSources, initial, onConfirm, onClose }) => {
+  const callable = dataSources.filter((d) => d.fileType === 'js' || d.fileType === 'ts' || d.fileType === 'python' || d.fileType === 'json');
+  const [text, setText] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  useEffect(() => {
+    if (!open) return;
+    setSourceId(initial?.sourceId ?? callable[0]?.id ?? '');
+    setText(initial ? `${initial.symbolPath}(${initial.paramNames.join(', ')})` : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const parsed = parseFcText(text);
+  const src = callable.find((d) => d.id === sourceId);
+  const canConfirm = !!parsed.name && !!sourceId;
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: 14, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CodeIcon sx={{ fontSize: 18, color: '#ce93d8' }} /> Kreator wywołania funkcji
+      </DialogTitle>
+      <DialogContent sx={{ pt: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+          Wpisz wywołanie funkcji jako tekst (np. <code>greet(name, count)</code>) i wybierz plik źródłowy (datasource), w którym ta funkcja ma zostać uruchomiona.
+        </Typography>
+        <TextField label="Wywołanie funkcji" fullWidth size="small" value={text} autoFocus
+          onChange={(e) => setText(e.target.value)} placeholder="greet(name, count)"
+          sx={{ mb: 2 }} inputProps={{ style: { fontFamily: 'monospace' } }} />
+        <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>Plik źródłowy (datasource)</Typography>
+        <Select size="small" fullWidth displayEmpty value={callable.some((d) => d.id === sourceId) ? sourceId : ''}
+          onChange={(e) => setSourceId(e.target.value)} sx={{ fontSize: 13 }}>
+          <MenuItem value="" disabled sx={{ fontSize: 12, fontStyle: 'italic' }}>
+            {callable.length === 0 ? '— brak plików (dodaj w panelu Data) —' : '— wybierz plik —'}
+          </MenuItem>
+          {callable.map((d) => <MenuItem key={d.id} value={d.id} sx={{ fontSize: 12 }}>{d.name} .{d.fileType}</MenuItem>)}
+        </Select>
+        {parsed.name && (
+          <Box sx={{ mt: 2, px: 1.5, py: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+            <Typography sx={{ fontSize: 12, fontFamily: 'monospace', color: '#ce93d8' }}>{parsed.name}({parsed.params.join(', ')})</Typography>
+            <Typography sx={{ fontSize: 10, color: 'text.disabled', mt: 0.25 }}>{parsed.params.length} parametr(ów){src ? ` · źródło: ${src.name}` : ''}</Typography>
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ px: 2, pb: 1.5 }}>
+        <Button size="small" onClick={onClose}>Anuluj</Button>
+        <Button size="small" variant="contained" disabled={!canConfirm}
+          onClick={() => { onConfirm({ sourceId, symbolPath: parsed.name, paramNames: parsed.params, lang: src?.fileType === 'python' ? 'python' : undefined }); onClose(); }}
+          sx={{ bgcolor: '#ce93d8', '&:hover': { bgcolor: '#b878c4' } }}>
+          {initial ? 'Zastosuj' : 'Utwórz'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+// Dialog: utwórz NOWY plik w katalogu użytkownika i od razu dodaj go jako data source.
+const DS_FILE_TYPES: { ext: 'js' | 'ts' | 'py' | 'json'; label: string; template: (name: string) => string }[] = [
+  { ext: 'js', label: 'JavaScript (.js)', template: (n) => `// ${n}\nfunction example(x) {\n  return x;\n}\n` },
+  { ext: 'ts', label: 'TypeScript (.ts)', template: (n) => `// ${n}\nexport function example(x: number): number {\n  return x;\n}\n` },
+  { ext: 'py', label: 'Python (.py)', template: (n) => `# ${n}\ndef example(x):\n    return x\n` },
+  { ext: 'json', label: 'JSON (.json)', template: () => `{\n  \n}\n` },
+];
+const NewDataSourceFileDialog: React.FC<{
+  open: boolean;
+  onCreate: (opts: { dir: string; name: string; ext: 'js' | 'ts' | 'py' | 'json'; content: string }) => void;
+  onClose: () => void;
+}> = ({ open, onCreate, onClose }) => {
+  const [name, setName] = useState('data');
+  const [dir, setDir] = useState('');
+  const [ext, setExt] = useState<'js' | 'ts' | 'py' | 'json'>('js');
+  useEffect(() => { if (open) { setName('data'); setDir(''); setExt('js'); } }, [open]);
+  const cleanName = name.replace(/\.[^.]*$/, '').trim();
+  const cleanDir = dir.replace(/^\/+|\/+$/g, '').trim();
+  const rel = `${cleanDir ? cleanDir + '/' : ''}${cleanName}.${ext}`;
+  const canCreate = !!cleanName && /^[\w./-]+$/.test(rel);
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: 14, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <NoteAddIcon sx={{ fontSize: 18, color: '#81c784' }} /> Nowy plik + data source
+      </DialogTitle>
+      <DialogContent sx={{ pt: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+          Tworzy nowy plik w katalogu drive użytkownika (z szablonem wg typu) i od razu dodaje go jako źródło danych.
+        </Typography>
+        <TextField label="Nazwa pliku" fullWidth size="small" value={name} autoFocus
+          onChange={(e) => setName(e.target.value)} sx={{ mb: 2 }} inputProps={{ style: { fontFamily: 'monospace' } }} />
+        <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>Typ</Typography>
+        <Select size="small" fullWidth value={ext} onChange={(e) => setExt(e.target.value as 'js' | 'ts' | 'py' | 'json')} sx={{ mb: 2, fontSize: 13 }}>
+          {DS_FILE_TYPES.map((t) => <MenuItem key={t.ext} value={t.ext} sx={{ fontSize: 13 }}>{t.label}</MenuItem>)}
+        </Select>
+        <TextField label="Podkatalog (opcjonalnie)" fullWidth size="small" value={dir} placeholder="np. scripts"
+          onChange={(e) => setDir(e.target.value)} sx={{ mb: 1 }} inputProps={{ style: { fontFamily: 'monospace' } }} />
+        <Box sx={{ px: 1.5, py: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+          <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: canCreate ? '#81c784' : 'error.main', wordBreak: 'break-all' }}>
+            drive/{rel}
+          </Typography>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 2, pb: 1.5 }}>
+        <Button size="small" onClick={onClose}>Anuluj</Button>
+        <Button size="small" variant="contained" disabled={!canCreate}
+          onClick={() => { const tpl = DS_FILE_TYPES.find((t) => t.ext === ext)!; onCreate({ dir: cleanDir, name: cleanName, ext, content: tpl.template(cleanName) }); onClose(); }}
+          sx={{ bgcolor: '#81c784', color: '#0a1a0a', '&:hover': { bgcolor: '#66bb6a' } }}>
+          Utwórz
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
 // ─── Main editor ─────────────────────────────────────────────────────────────
 
 const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, workspaceFs, workspaceProjectDeps, workspaceExtraPlugins, workspaceInitialPath, mapVfsToWorkspace }) => {
@@ -5417,6 +5646,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
   const [externalObjects, setExternalObjects] = useState<DashObject[]>([]);
   const [embedReload, setEmbedReload] = useState(0); // bump → przeładuj osadzone sceny (po edycji)
   const [dsPickerOpen, setDsPickerOpen] = useState(false);
+  const [dsCreateOpen, setDsCreateOpen] = useState(false);
   const [sourceCtxMenu, setSourceCtxMenu] = useState<{ mouseX: number; mouseY: number; sourceId: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [canvasMode, setCanvasMode] = useState<'pan' | 'select'>('pan');
@@ -5436,6 +5666,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
   const [clipboard, setClipboard] = useState<{ objects: DashObject[] } | null>(null);
   const [newMenuAnchor, setNewMenuAnchor] = useState<HTMLElement | null>(null);
   const [qtMenuAnchor, setQtMenuAnchor] = useState<HTMLElement | null>(null);
+  const [shapeMenuAnchor, setShapeMenuAnchor] = useState<HTMLElement | null>(null);
   const [qtuiPickerOpen, setQtuiPickerOpen] = useState(false);
   const [sceneCtxMenu, setSceneCtxMenu] = useState<{ mouseX: number; mouseY: number; objId: string | null } | null>(null);
 
@@ -5472,6 +5703,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
   // Kompleksowy edytor (TextEditorWorkspace) jako panel po prawej — chowany domyślnie.
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [wsWidth, setWsWidth] = useState(520);
+  // Rozmiary paneli (splittery) — DATA/TYPES/SCENE/PROPERTIES szerokość, CONSOLE wysokość.
+  const [dataW, setDataW] = useState(220);
+  const [typesW, setTypesW] = useState(200);
+  const [sceneW, setSceneW] = useState(200);
+  const [propsW, setPropsW] = useState(220);
+  const [consoleH, setConsoleH] = useState(200);
   const wsResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const onWsResizeDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -5570,6 +5807,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
   }, [setCenter, getViewport]);
   // File: pełnoekranowy edytor Monaco + otwarcie w workspace.
   const [fileEditPath, setFileEditPath] = useState<string | null>(null);
+  // Kreator FunctionCall — { } = tworzenie nowego; { fcId } = edycja istniejącego.
+  const [fcWizard, setFcWizard] = useState<{ fcId?: string } | null>(null);
   const [wsPath, setWsPath] = useState<string | undefined>(workspaceInitialPath);
   useEffect(() => { setWsPath(workspaceInitialPath); }, [workspaceInitialPath]);
   const openFileInWorkspace = useCallback((vfsPath: string) => {
@@ -5757,6 +5996,18 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
       return next;
     });
   }, [userName, updateScene]);
+
+  // Utwórz nowy plik w katalogu drive użytkownika (z szablonem) i dodaj jako data source.
+  const createNewDataSource = useCallback(async (opts: { dir: string; name: string; ext: 'js' | 'ts' | 'py' | 'json'; content: string }) => {
+    const rel = `${opts.dir ? opts.dir + '/' : ''}${opts.name}.${opts.ext}`;
+    const vfsPath = `/data/Minis/Users/${userName}/drive/${rel}`;
+    try {
+      await vfsWrite(userName, vfsPath, opts.content);
+      await addDataSource(vfsPath);
+    } catch (e) {
+      notify(`Nie udało się utworzyć pliku: ${(e as Error).message}`, 'error');
+    }
+  }, [userName, addDataSource, notify]);
 
   const removeDataSource = useCallback((id: string) => {
     setDataSources((prev) => {
@@ -7055,6 +7306,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
         onNameChange: (name: string) => updateVarName(v.id, name),
         onEditValue: () => { setVarInitTargetId(v.id); setVarInitDialogOpen(true); },
         onValueChange: (json: string) => updateScene((p) => ({ ...p, vars: (p.vars ?? []).map((vr) => vr.id === v.id ? { ...vr, varValue: json } : vr) })),
+        hideValue: v.hideValue ?? false,
       } as VarNodeData,
     }; });
 
@@ -7768,20 +8020,26 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
 
         {/* ── DataSource ── */}
         {showDataSource && (
-          <Box sx={{ width: 220, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <>
+          <Box sx={{ width: dataW, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <DataSourcePanel
               sources={dataSources}
               loadedData={dsData}
               onNew={() => setDsPickerOpen(true)}
+              onCreateNew={() => setDsCreateOpen(true)}
               onDelete={removeDataSource}
               onReload={(id) => { void reloadDataSource(id); }}
+              onOpenInWorkspace={openFileInWorkspace}
             />
           </Box>
+          <ResizeSplitter axis="x" side="end" size={dataW} min={120} max={600} onSize={setDataW} />
+          </>
         )}
 
         {/* ── Types ── */}
         {showTypes && (
-          <Box sx={{ width: 200, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <>
+          <Box sx={{ width: typesW, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid', borderColor: 'divider' }}>
               <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>Types</Typography>
             </Box>
@@ -7878,11 +8136,14 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
               })}
             </Box>
           </Box>
+          <ResizeSplitter axis="x" side="end" size={typesW} min={120} max={500} onSize={setTypesW} />
+          </>
         )}
 
         {/* ── Scene ── */}
         {showScene && (
-          <Box sx={{ width: 200, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <>
+          <Box sx={{ width: sceneW, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>Scene</Typography>
               {canvasMode === 'select' && selectedIds.size > 0 && (
@@ -7961,6 +8222,8 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
               </List>
             </Box>
           </Box>
+          <ResizeSplitter axis="x" side="end" size={sceneW} min={120} max={500} onSize={setSceneW} />
+          </>
         )}
 
         {/* ── Canvas ── */}
@@ -7983,6 +8246,17 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
               WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               WebkitUserDrag: 'none' as any, touchAction: 'none',
+            },
+            // MOBILE (dotyk): NIEWIDOCZNY obszar dotykowy uchwytów o STAŁYM rozmiarze
+            // EKRANOWYM (niezależnym od zoomu) — inaczej przy oddaleniu jest za mały.
+            // `--dash-touch-pad` aktualizuje TouchHandleSizer wg bieżącego zoomu (12px/zoom
+            // w jednostkach flow = 12px ekranu). Uchwyt ~6px staje się celem ~30px.
+            '@media (pointer: coarse)': {
+              '& .react-flow__handle::after': {
+                content: '""', position: 'absolute', borderRadius: '8px',
+                top: 'calc(-1 * var(--dash-touch-pad, 11px))', left: 'calc(-1 * var(--dash-touch-pad, 11px))',
+                right: 'calc(-1 * var(--dash-touch-pad, 11px))', bottom: 'calc(-1 * var(--dash-touch-pad, 11px))',
+              },
             } }}
           onPointerDown={onFlowPointerDown}>
           {error && <Alert severity="error" onClose={() => setError(null)} sx={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 10 }}>{error}</Alert>}
@@ -7996,14 +8270,19 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
             onNodeDragStop={onNodeDragStop}
-            // To samo menu kontekstowe co w panelu SCENE — również na canvasie:
-            // prawy klik na PUSTY obszar → wersja „New…", na WĘZEŁ → akcje bloczka.
+            // To samo menu kontekstowe co w panelu SCENE — również na canvasie (mysz I dotyk).
+            // WYJĄTEK: gdy cel to UCHWYT połączenia (`react-flow__handle`), NIE otwieramy menu
+            // (tylko preventDefault, by natywne long-press nie anulowało dotyku) — dzięki temu
+            // long-press na uchwycie nadal ROZPOCZYNA połączenie (var/functioncall) na mobile.
             onPaneContextMenu={(e) => openSceneCtx(e as React.MouseEvent, null)}
-            onNodeContextMenu={(e, node) => openSceneCtx(e, node.id)}
+            onNodeContextMenu={(e, node) => {
+              if ((e.target as HTMLElement)?.closest?.('.react-flow__handle')) { e.preventDefault(); return; }
+              openSceneCtx(e, node.id);
+            }}
             minZoom={0.05} maxZoom={3} style={{ width: '100%', height: '100%' }}
             connectionMode={ConnectionMode.Strict}
             deleteKeyCode={null}
-            connectionRadius={20}
+            connectionRadius={isMobile ? 60 : 20}
             autoPanOnNodeDrag={!isMobile}
             // NIE podnoś zIndex zaznaczonego węzła (+1000). Nasze zIndexy są celowe:
             // grupa/kontener MUSI zostać pod treścią. Elevacja zaznaczonego kontenera
@@ -8043,6 +8322,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
               color={gridEnabled ? '#aeb6be' : undefined}
             />
             {displayEnabled && <DisplayGridOverlay w={displayW} h={displayH} />}
+            {isMobile && <TouchHandleSizer />}
             {showOrigin && <OriginCross />}
             {showRulers && <RulerOverlay cursor={cursorPos} />}
             {/* Domyślny fitView RF bywa zawodny (mobile/miary) — używamy własnego
@@ -8090,7 +8370,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
 
         {/* ── Properties ── */}
         {showProperties && (
-          <Box sx={{ width: 220, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <>
+          <ResizeSplitter axis="x" side="start" size={propsW} min={140} max={600} onSize={setPropsW} />
+          <Box sx={{ width: propsW, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
               <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>Properties</Typography>
             </Box>
@@ -8099,6 +8381,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
                 <Box sx={{ p: 1 }}>
                   <Typography sx={{ fontSize: 9, color: '#ce93d8', textTransform: 'uppercase', letterSpacing: 0.5, mb: 0.5 }}>«FunctionCall»</Typography>
                   <Typography sx={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', mb: 1, color: '#ce93d8', wordBreak: 'break-all' }}>{selectedFc.symbolPath}()</Typography>
+                  <Button size="small" variant="outlined" fullWidth startIcon={<EditIcon sx={{ fontSize: 15 }} />}
+                    onClick={() => setFcWizard({ fcId: selectedFc.id })}
+                    sx={{ fontSize: 11, textTransform: 'none', mb: 1, borderColor: '#ce93d866', color: '#ce93d8', '&:hover': { borderColor: '#ce93d8', bgcolor: '#ce93d811' } }}>
+                    Kreator (zmień funkcję / źródło)…
+                  </Button>
                   <Divider sx={{ mb: 1 }} />
                   <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.75 }}>Position</Typography>
                   <TransformField label="X" value={selectedFc.x} onChange={(v) => updateScene((p) => ({ ...p, functionCalls: (p.functionCalls ?? []).map((f) => f.id === selectedFc.id ? { ...f, x: v } : f) }))} />
@@ -8170,6 +8457,14 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
                     <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Flip pins</Typography>
                     <Switch size="small" checked={selectedVar.pinsFlipped ?? false}
                       onChange={(_, checked) => updateScene((p) => ({ ...p, vars: (p.vars ?? []).map((vr) => vr.id === selectedVar.id ? { ...vr, pinsFlipped: checked } : vr) }))} />
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Box>
+                      <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>Ukryj edytor wartości</Typography>
+                      <Typography sx={{ fontSize: 9, color: 'text.disabled' }}>Na canvasie bez pola „Set var value"</Typography>
+                    </Box>
+                    <Switch size="small" checked={selectedVar.hideValue ?? false}
+                      onChange={(_, checked) => updateScene((p) => ({ ...p, vars: (p.vars ?? []).map((vr) => vr.id === selectedVar.id ? { ...vr, hideValue: checked } : vr) }))} />
                   </Box>
                 </Box>
               ) : selectedGetProp ? (
@@ -8353,6 +8648,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
               )}
             </Box>
           </Box>
+          </>
         )}
 
         {/* ── Kompleksowy edytor (TextEditorWorkspace) jako panel po prawej ── */}
@@ -8595,7 +8891,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
 
       {/* ── Console ── */}
       {consoleOpen && (
-        <Box sx={{ flexShrink: 0, borderTop: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', height: 200, bgcolor: 'background.paper' }}>
+        <ResizeSplitter axis="y" side="start" size={consoleH} min={80} max={600} onSize={setConsoleH} />
+      )}
+      {consoleOpen && (
+        <Box sx={{ flexShrink: 0, borderTop: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', height: consoleH, bgcolor: 'background.paper' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.25, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0, gap: 0.5 }}>
             <TerminalIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
             <Typography sx={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>
@@ -8644,6 +8943,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           <MenuItem key={cls.name} onClick={() => { createObject(cls); setNewMenuAnchor(null); closeSceneCtx(); }} sx={{ fontSize: 13 }}>{cls.name}</MenuItem>
         ))}
         <Divider />
+        <MenuItem onClick={() => { setNewMenuAnchor(null); closeSceneCtx(); setFcWizard({}); }} sx={{ fontSize: 13, gap: 1 }}>
+          <CodeIcon sx={{ fontSize: 16, color: '#ce93d8' }} />FunctionCall (kreator)
+        </MenuItem>
         <MenuItem onClick={() => {
           const pos = viewportCenterFlow();
           createVar(pos.x, pos.y);
@@ -8674,10 +8976,32 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           <GroupIcon sx={{ fontSize: 16, color: '#7c4dff' }} />Group
         </MenuItem>
         <Divider />
+        <MenuItem onClick={(e) => setShapeMenuAnchor(e.currentTarget)} sx={{ fontSize: 13, gap: 1 }}>
+          <CategoryIcon sx={{ fontSize: 16, color: '#4fc3f7' }} />Kształty
+          <ChevronRightIcon sx={{ fontSize: 16, ml: 'auto', opacity: 0.6 }} />
+        </MenuItem>
         <MenuItem onClick={(e) => setQtMenuAnchor(e.currentTarget)} sx={{ fontSize: 13, gap: 1 }}>
           <WidgetsIcon sx={{ fontSize: 16, color: '#26c6da' }} />Qt Widget
           <ChevronRightIcon sx={{ fontSize: 16, ml: 'auto', opacity: 0.6 }} />
         </MenuItem>
+      </Menu>
+
+      {/* Kształty submenu — te same figury co w Types → KSZTAŁTY */}
+      <Menu anchorEl={shapeMenuAnchor} open={Boolean(shapeMenuAnchor)} onClose={() => setShapeMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        MenuListProps={{ dense: true }}>
+        {([
+          { type: 'rect' as ShapeType, label: 'Prostokąt' },
+          { type: 'rhombus' as ShapeType, label: 'Romb' },
+          { type: 'ellipse' as ShapeType, label: 'Koło' },
+          { type: 'line' as ShapeType, label: 'Linia' },
+          { type: 'arrow' as ShapeType, label: 'Strzałka' },
+          { type: 'text' as ShapeType, label: 'Text' },
+        ]).map((s) => (
+          <MenuItem key={s.type} onClick={() => { createShape(s.type); setShapeMenuAnchor(null); setNewMenuAnchor(null); closeSceneCtx(); }} sx={{ fontSize: 13, gap: 1 }}>
+            <CategoryIcon sx={{ fontSize: 15, color: '#4fc3f7' }} />{s.label}
+          </MenuItem>
+        ))}
       </Menu>
 
       {/* Qt widget submenu — all MinisQt widget types */}
@@ -8786,6 +9110,27 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
       {/* Pełnoekranowy edytor pliku (bloczek File → „Otwórz"). */}
       <FileMonacoDialog open={fileEditPath !== null} userName={userName} path={fileEditPath ?? ''} onClose={() => setFileEditPath(null)} />
 
+      {/* Kreator FunctionCall (New → FunctionCall lub properties → Kreator). */}
+      <FunctionCallWizard
+        open={fcWizard !== null}
+        dataSources={dataSources}
+        initial={(() => {
+          const fc = fcWizard?.fcId ? (sceneRef.current.functionCalls ?? []).find((f) => f.id === fcWizard.fcId) : undefined;
+          return fc ? { sourceId: fc.sourceId, symbolPath: fc.symbolPath, paramNames: fc.paramNames } : undefined;
+        })()}
+        onConfirm={(v) => {
+          if (fcWizard?.fcId) {
+            updateScene((p) => ({ ...p, functionCalls: (p.functionCalls ?? []).map((f) => f.id === fcWizard.fcId
+              ? { ...f, sourceId: v.sourceId, symbolPath: v.symbolPath, paramNames: v.paramNames, argOverrides: {}, result: null, error: null, ...(v.lang ? { lang: v.lang } : { lang: undefined }) }
+              : f) }));
+          } else {
+            const pos = viewportCenterFlow();
+            createFunctionCall(pos.x, pos.y, v.sourceId, v.symbolPath, v.paramNames, v.lang);
+          }
+        }}
+        onClose={() => setFcWizard(null)}
+      />
+
       {/* Var init dialog */}
       <VarInitDialog
         open={varInitDialogOpen}
@@ -8814,6 +9159,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           filterExt=".json,.js,.py,.ts,.pdf,.djvu"
           onSelect={(p) => { void addDataSource(p); setDsPickerOpen(false); }} />
       )}
+
+      {/* Nowy plik + data source */}
+      <NewDataSourceFileDialog open={dsCreateOpen}
+        onCreate={(opts) => { void createNewDataSource(opts); }}
+        onClose={() => setDsCreateOpen(false)} />
     </Box>
   );
 };

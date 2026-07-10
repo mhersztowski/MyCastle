@@ -114,6 +114,8 @@ export interface VarObject {
   y: number;
   pinsFlipped?: boolean;  // true: oba piny po prawej
   parentId?: string;
+  /** true: ukryj pole edycji „Set var value" na canvasie (bloczek pokazuje tylko nazwę/piny). */
+  hideValue?: boolean;
 }
 
 /** Połączenie (krawędź) między bloczkami. */
