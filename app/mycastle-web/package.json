@@ -71,6 +71,7 @@
     "esptool-js": "^0.5.7",
     "highlight.js": "^11.9.0",
     "json-source-map": "^0.6.1",
+    "jszip": "^3.10.1",
     "katex": "^0.16.28",
     "leaflet": "^1.9.4",
     "lit": "^3.3.3",

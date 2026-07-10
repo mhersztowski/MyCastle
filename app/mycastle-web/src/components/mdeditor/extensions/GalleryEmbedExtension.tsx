@@ -11,6 +11,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Node, mergeAttributes } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
+import { useMdViewSettings } from '../mdViewSettings';
 import {
   Box, Typography, IconButton, Tooltip, CircularProgress, Dialog, DialogTitle,
   DialogContent, DialogActions, Button, TextField, ToggleButton, ToggleButtonGroup,
@@ -198,6 +199,7 @@ export const GalleryDialog: React.FC<{
 // ─── React NodeView ──────────────────────────────────────────────────────────
 
 const GalleryNodeView: React.FC<NodeViewProps> = ({ node, editor, getPos, deleteNode }) => {
+  const { minimalView } = useMdViewSettings();
   const provider = (node.attrs.provider as string) || 'immich';
   const source = (node.attrs.source as string) || '';
   const selected = (node.attrs.selected as string) || '';
@@ -254,7 +256,9 @@ const GalleryNodeView: React.FC<NodeViewProps> = ({ node, editor, getPos, delete
 
   return (
     <NodeViewWrapper className="md-gallery" data-drag-handle>
-      <Box className="md-gallery-card">
+      {/* Widok minimalny: bez ramki/tła/marginesów karty i bez nagłówka. */}
+      <Box className="md-gallery-card" sx={minimalView ? { border: 'none !important', borderRadius: '0 !important', background: 'transparent !important', boxShadow: 'none !important', p: '0 !important', m: '0 !important' } : undefined}>
+        {!minimalView && (
         <Box className="md-gallery-header" contentEditable={false}>
           <Tooltip title={collapsed ? 'Rozwiń' : 'Zwiń'}>
             <IconButton size="small" className="md-gallery-fold" onClick={() => setCollapsed((c) => !c)}>
@@ -272,6 +276,7 @@ const GalleryNodeView: React.FC<NodeViewProps> = ({ node, editor, getPos, delete
             </>
           )}
         </Box>
+        )}
 
         {!collapsed && (
           <Box className="md-gallery-body" contentEditable={false}>

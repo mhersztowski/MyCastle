@@ -65,6 +65,7 @@ import FolderIcon from '@mui/icons-material/Folder';
 import DictationDialog from './DictationDialog';
 
 import MdEditorToolbar from './MdEditorToolbar';
+import { setMdViewSettings } from './mdViewSettings';
 // MobileMdToolbar itself is no longer rendered — but we still pull the
 // height constant (used to size the editor's bottom padding so the bubble
 // menu doesn't cover content) and all of its panel/helper exports so the
@@ -142,6 +143,13 @@ export interface MdEditorProps {
    *  date from `{yyyy}/{mm}/{dd}.md` daily-journal files when inserting
    *  events from a template. Optional; absence falls back to today. */
   filePath?: string;
+  /** Widok minimalny: usuwa marginesy edytora i ukrywa nagłówki/ramki osadzonych
+   *  bloczków (np. CadView). Wartość per-plik, ustawiana z Drive → Ustawienia. */
+  minimalView?: boolean;
+  /** Mały tekst: zmniejsza rozmiar czcionki treści dokumentu. */
+  smallText?: boolean;
+  /** Pełna szerokość: treść bez centralnego limitu 900px (brak pustych obszarów po bokach). */
+  fullWidth?: boolean;
 }
 
 const MdEditor: React.FC<MdEditorProps> = ({
@@ -154,12 +162,19 @@ const MdEditor: React.FC<MdEditorProps> = ({
   autoFocus = false,
   autoSaveDelay = 30000,
   filePath,
+  minimalView = false,
+  smallText = false,
+  fullWidth = false,
 }) => {
   const theme = useTheme();
   // 'md' (< 900px) covers phones in all orientations and small tablets —
   // wider than 'sm' (600px) because the mobile toolbar is useful on any
   // touch screen, not just narrow portrait phones.
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+
+  // Publikuj widok minimalny do współdzielonego store — NodeView-y osadzonych
+  // bloczków (np. CadView) czytają go, by ukryć nagłówki/ramki.
+  useEffect(() => { setMdViewSettings({ minimalView, fullWidth }); }, [minimalView, fullWidth]);
 
   const initialContentRef = useRef(initialContent);
   const isInitializedRef = useRef(false);
@@ -2071,12 +2086,17 @@ const MdEditor: React.FC<MdEditorProps> = ({
           flexGrow: 1,
           overflow: 'auto',
           position: 'relative',
-          pt: 2,
-          pb: editable
+          // Widok minimalny: zero marginesów po każdej stronie.
+          pt: minimalView ? 0 : 2,
+          pb: minimalView ? 0 : (editable
             ? `calc(${MOBILE_TOOLBAR_HEIGHT + 8}px + env(safe-area-inset-bottom, 0px))`
-            : 2,
-          pr: 2,
-          pl: editable ? 4 : 2,
+            : 2),
+          pr: minimalView ? 0 : 2,
+          pl: minimalView ? 0 : (editable ? 4 : 2),
+          // Mały tekst: zmniejsz bazowy font treści (nagłówki/tekst skalują się z em).
+          ...(smallText ? { '& .md-editor-content': { fontSize: '0.82em' } } : {}),
+          // Pełna szerokość: znieś centralny limit 900px (specyficzność bije regułę z CSS).
+          ...(fullWidth ? { '& .md-editor-content .ProseMirror': { maxWidth: 'none' } } : {}),
           '& .ProseMirror': {
             outline: 'none',
             minHeight: '100%',

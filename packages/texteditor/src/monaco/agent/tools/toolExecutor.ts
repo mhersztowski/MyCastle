@@ -66,9 +66,22 @@ export async function executeVfsTool(
       }
 
       case 'vfs_write_file': {
+        // Guard: odrzuć pusty/brakujący content. Model bywa, że zapisuje pusty
+        // plik „na teraz" i dopiero potem się poprawia (widoczne jako „pusty zapis
+        // był błędem") — a to niszczy istniejącą treść. Zamiast cichego sukcesu
+        // zwracamy błąd, przez co model od razu ponawia z PEŁNĄ treścią w tej turze.
+        if (typeof args.content !== 'string' || args.content.length === 0) {
+          return {
+            result: JSON.stringify({
+              error: 'Refused empty write. Provide the COMPLETE file content as a string in a single vfs_write_file call. Never write an empty file to fix it later — it would erase the existing content.',
+              path: args.path,
+            }),
+            affectedFiles,
+          };
+        }
         await provider.writeFile!(args.path, encodeText(args.content), { create: true, overwrite: true });
         affectedFiles.push(args.path);
-        return { result: JSON.stringify({ success: true, path: args.path }), affectedFiles };
+        return { result: JSON.stringify({ success: true, path: args.path, bytes: args.content.length }), affectedFiles };
       }
 
       case 'vfs_mkdir': {

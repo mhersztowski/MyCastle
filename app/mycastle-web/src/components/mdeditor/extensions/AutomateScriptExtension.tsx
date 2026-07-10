@@ -93,6 +93,7 @@ const AutomateScriptSettingsDialog = lazy(() => import('./AutomateScriptSettings
 // Update Script dialog — lazy, opens only when user clicks the button in settings.
 const AutomateUpdateScriptDialog = lazy(() => import('./AutomateUpdateScriptDialog'));
 import { useAutomateDocument, DisplayItem } from './AutomateDocumentContext';
+import { useMdViewSettings } from '../mdViewSettings';
 
 const DISPLAY_API_TYPES = `
 /**
@@ -469,7 +470,12 @@ const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
 };
 
 // Node View Component
-const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected }) => {
+// Akcje bloczka automatyzacji wyzwalane z menu bloczka (⋮): Run / Editor / Ustawienia.
+export const AUTOMATE_ACTION_EVENT = 'md-automate-action';
+export interface AutomateActionEventDetail { pos: number; action: 'run' | 'edit' | 'settings' }
+
+const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, selected, getPos }) => {
+  const { minimalView } = useMdViewSettings();
   const blockId = useRef(node.attrs.blockId || crypto.randomUUID?.() || Math.random().toString(36).substr(2, 9));
   // textareaRef removed — the inline code surface is now Monaco. Cursor /
   // focus tracking handled internally by Monaco; no React ref needed
@@ -744,6 +750,19 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     setEditorDialogOpen(true);
   }, [code]);
 
+  // Akcje z menu bloczka (⋮): odpal właściwy handler, gdy zdarzenie dotyczy TEGO węzła.
+  useEffect(() => {
+    const onAction = (e: Event) => {
+      const d = (e as CustomEvent<AutomateActionEventDetail>).detail;
+      if (!d || typeof getPos !== 'function' || d.pos !== getPos()) return;
+      if (d.action === 'run') handleRun();
+      else if (d.action === 'edit') openEditorDialog();
+      else if (d.action === 'settings') setSettingsOpen(true);
+    };
+    window.addEventListener(AUTOMATE_ACTION_EVENT, onAction);
+    return () => window.removeEventListener(AUTOMATE_ACTION_EVENT, onAction);
+  }, [getPos, handleRun, openEditorDialog]);
+
   // Dirty = there are unsaved changes. `code` is the last-persisted version
   // (the source of truth in TipTap attrs); `dialogCode` is the in-flight
   // edit buffer in the fullscreen dialog. They diverge as soon as the user
@@ -981,7 +1000,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
         }}
         className="automate-script-wrapper"
       >
-        {/* Header bar */}
+        {/* Header bar — ukryty w widoku minimalnym (akcje dostępne w menu ⋮ bloczka). */}
+        {!minimalView && (
         <Box sx={{
           display: 'flex',
           alignItems: 'center',
@@ -1078,6 +1098,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
               the Tabs. The inline header was getting cramped; trimming to
               Run / Edit / Settings keeps it scannable. */}
         </Box>
+        )}
 
         {/* ── Surface decision matrix ──────────────────────────────────────
               The component has three possible content surfaces below the

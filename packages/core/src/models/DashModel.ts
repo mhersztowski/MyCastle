@@ -174,6 +174,27 @@ export interface DashPyodideConfig {
   pypi: string[];
 }
 
+/** Ustawienia WIDOKU canvas (siatka / początek 0,0 / linijki / siatka wyświetlacza).
+ *  Zapisywane w scenie (*.dash.json) → utrwalane w backend VFS razem z sceną. */
+export interface DashViewSettings {
+  /** Siatka pomocnicza. */
+  grid?: boolean;
+  /** Rozstaw siatki w jednostkach sceny (px). */
+  gridSpacing?: number;
+  /** Krzyżyk w początku układu (0,0). */
+  origin?: boolean;
+  /** Linijki (miarki) na górnej/lewej krawędzi. */
+  rulers?: boolean;
+  /** Siatka wyświetlacza — grubsze prostokąty o rzeczywistym rozmiarze ekranu. */
+  display?: {
+    enabled?: boolean;
+    /** Rzeczywista szerokość wyświetlacza w jednostkach sceny (np. 800). */
+    width?: number;
+    /** Rzeczywista wysokość wyświetlacza (np. 480). */
+    height?: number;
+  };
+}
+
 /** Cała scena edytora dash (*.dash.json). */
 export interface DashScene {
   type: 'dash-scene';
@@ -193,6 +214,8 @@ export interface DashScene {
   libs?: DashLibs;
   /** Środowisko Python (Pyodide) — uruchamiane równolegle w Web Workerze, gdy włączone. */
   pyodide?: DashPyodideConfig;
+  /** Ustawienia widoku canvas (siatka / 0,0 / linijki / siatka wyświetlacza). */
+  view?: DashViewSettings;
 }
 
 /** Członek klasy UML (pole/metoda) — używane przy imporcie UML do sceny. */

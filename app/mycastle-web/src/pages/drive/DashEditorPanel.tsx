@@ -12,6 +12,8 @@ import {
   SelectionMode,
   useReactFlow,
   useStoreApi,
+  useViewport,
+  useStore,
   type Node,
   type Edge,
   type NodeChange,
@@ -140,6 +142,7 @@ import type {
   FcEdge, ClassObjItem, GetPropObject, SetPropObject, DashScene,
   UmlMember, UmlClassDef, UmlSource,
 } from '@mhersztowski/core';
+import { TextEditorWorkspace } from '@mhersztowski/texteditor';
 
 const FIELD_TYPES: QFieldType[] = ['QString', 'QNumber', 'QFilePath', 'QObjectRef', 'QChildsObjectRef', 'QIcon', 'QImage', 'QArray', 'QMap'];
 
@@ -227,7 +230,17 @@ const argsToStr = (args: unknown[]): string =>
     try { return JSON.stringify(a, null, 2); } catch { return String(a); }
   }).join(' ');
 
-interface DashEditorPanelProps { userName: string; filePath: string; }
+type TEWProps = React.ComponentProps<typeof TextEditorWorkspace>;
+interface DashEditorPanelProps {
+  userName: string;
+  filePath: string;
+  // Opcjonalny kompleksowy edytor (TextEditorWorkspace) jako panel po prawej —
+  // te same instancje FS/pluginów co panel Drive (przekazywane z DrivePage).
+  workspaceFs?: TEWProps['provider'] | null;
+  workspaceProjectDeps?: TEWProps['projectDeps'];
+  workspaceExtraPlugins?: TEWProps['extraPlugins'];
+  workspaceInitialPath?: string;
+}
 
 // Jednolita pozycja drzewa SCENE — obejmuje WSZYSTKIE typy bloczków (object/var/fc/…),
 // dzięki czemu każdy da się zgrupować pod group (a grupy zagnieżdżać).
@@ -3061,6 +3074,8 @@ const MarkdownViewContent = React.memo(({ src, userName }: { src: string; userNa
             editable={false}
             autoSaveDelay={0}
             filePath={isPath ? trimmed : undefined}
+            minimalView          /* w scenie: bez marginesów i bez nagłówków/ramek osadzonych bloczków */
+            fullWidth            /* w scenie: treść na całą szerokość węzła — bez limitu 900px */
           />
         </React.Suspense>
       </MdRenderBoundary>
@@ -3758,6 +3773,7 @@ interface VarNodeData extends Record<string, unknown> {
   pinsFlipped: boolean;
   onNameChange: (name: string) => void;
   onEditValue: () => void;   // otwiera edytor wartości (VarInitDialog)
+  onValueChange: (json: string) => void;  // inline edycja Array/Object na bloczku
 }
 
 const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
@@ -3810,8 +3826,28 @@ const VarNode: React.FC<NodeProps<Node<VarNodeData>>> = ({ data }) => {
           style={{ position: 'absolute', [pinSide]: -5, top: '50%', transform: 'translateY(-50%)', width: 10, height: 10, background: '#4db6ac', border: '1.5px solid #001a0d', borderRadius: 2, pointerEvents: 'all' }} />
         <Typography sx={{ fontSize: 9, color: '#4db6ac', fontFamily: 'monospace', letterSpacing: 0.5, textTransform: 'uppercase' }}>Set</Typography>
       </Box>
-      {/* Value preview + edycja (przycisk „Edytuj…" w popupie → VarInitDialog) */}
-      <ValuePreviewButton jsonValue={data.varValue} accentColor="#81c784" label="Value" onEdit={data.onEditValue} />
+      {/* Wartość: dla Array/Object — inline edytor (także wielowymiarowy) wprost na
+          bloczku; dla skalarów — przycisk podglądu „Value" (edycja w VarInitDialog). */}
+      {parsedVal !== null && typeof parsedVal === 'object' ? (
+        <Box className="nodrag" onPointerDown={(e) => e.stopPropagation()}
+          sx={{ px: 1, py: 0.75, borderBottom: '1px solid #81c78411', maxHeight: 240, overflow: 'auto',
+            display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography sx={{ fontSize: 8, color: '#81c784', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {Array.isArray(parsedVal) ? `Array [${(parsedVal as unknown[]).length}]` : `Object {${Object.keys(parsedVal as object).length}}`}
+            </Typography>
+            <Tooltip title="Zmień typ / edytuj w oknie">
+              <IconButton size="small" className="nodrag" sx={{ p: 0.125 }} onClick={data.onEditValue}>
+                <EditIcon sx={{ fontSize: 11, color: '#81c78499' }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <JsonValueEditor value={parsedVal} accent="#81c784"
+            onChange={(v) => data.onValueChange(JSON.stringify(v))} />
+        </Box>
+      ) : (
+        <ValuePreviewButton jsonValue={data.varValue} accentColor="#81c784" label="Value" onEdit={data.onEditValue} />
+      )}
       {/* Get row (value_out) */}
       <Box className="nodrag" sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: '2px', minHeight: 22, position: 'relative', borderTop: '1px solid #81c78411',
         justifyContent: flipped ? 'flex-start' : 'flex-end', borderBottom: fieldKeys.length > 0 ? '2px solid #81c78422' : 'none' }}>
@@ -4674,6 +4710,135 @@ const QtWidgetNode: React.FC<NodeProps<Node<QtWidgetNodeData>>> = ({ data }) => 
 
 const NODE_TYPES = { dashObject: DashObjectNode, group: GroupNode, qtWidget: QtWidgetNode, shape: ShapeNode, fcNode: FunctionCallNode, varNode: VarNode, objNode: ObjNode, getPropNode: GetPropNode, setPropNode: SetPropNode };
 
+// ─── JsonValueEditor: rekurencyjny edytor wartości JSON ───────────────────────
+// Edytuje dowolną wartość JSON: skalary, TABLICE (także wielowymiarowe — element
+// może sam być tablicą/obiektem) oraz OBIEKTY. Zmiana typu elementu przez mały
+// selektor „kind". Skalary komitują onBlur (bez skoków kursora); zmiany struktury
+// (dodaj/usuń/typ/rename) komitują natychmiast w górę przez onChange.
+type JKind = 'string' | 'number' | 'boolean' | 'null' | 'array' | 'object';
+
+const jsonKind = (v: unknown): JKind =>
+  v === null ? 'null'
+    : Array.isArray(v) ? 'array'
+    : typeof v === 'object' ? 'object'
+    : typeof v === 'number' ? 'number'
+    : typeof v === 'boolean' ? 'boolean'
+    : 'string';
+
+const defaultForKind = (k: JKind): unknown =>
+  k === 'string' ? '' : k === 'number' ? 0 : k === 'boolean' ? false : k === 'null' ? null : k === 'array' ? [] : {};
+
+const JKIND_OPTS: JKind[] = ['string', 'number', 'boolean', 'null', 'array', 'object'];
+
+const KindPicker: React.FC<{ kind: JKind; onChange: (k: JKind) => void }> = ({ kind, onChange }) => (
+  <Select size="small" variant="standard" value={kind} className="nodrag" disableUnderline
+    onChange={(e) => onChange(e.target.value as JKind)}
+    sx={{
+      fontSize: 9, mt: 0.25, bgcolor: 'rgba(255,255,255,0.08)', borderRadius: 0.75,
+      border: '1px solid rgba(255,255,255,0.18)',
+      '& .MuiSelect-select': { py: '1px', pl: 0.5, pr: '16px !important', fontSize: 9, color: 'rgba(255,255,255,0.85)', fontFamily: 'monospace' },
+      '& .MuiSelect-icon': { color: 'rgba(255,255,255,0.6)' },
+      '&:hover': { bgcolor: 'rgba(255,255,255,0.14)' },
+    }}>
+    {JKIND_OPTS.map((k) => <MenuItem key={k} value={k} sx={{ fontSize: 11 }}>{k}</MenuItem>)}
+  </Select>
+);
+
+// Wspólny styl inputu edytora JSON — czytelny na ciemnym tle bloczka (tło + ramka).
+const jsonInputSx = {
+  '& .MuiInput-root': { bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 0.75, px: 0.5 },
+  '& .MuiInput-underline:before': { borderBottomColor: 'rgba(255,255,255,0.28)' },
+  '& .MuiInput-underline:hover:not(.Mui-disabled):before': { borderBottomColor: 'rgba(255,255,255,0.5)' },
+} as const;
+
+const ScalarInput: React.FC<{ value: unknown; kind: JKind; onCommit: (v: unknown) => void; accent: string }> = ({ value, kind, onCommit, accent }) => {
+  const [draft, setDraft] = useState(kind === 'number' ? String(value ?? 0) : String(value ?? ''));
+  useEffect(() => { setDraft(kind === 'number' ? String(value ?? 0) : String(value ?? '')); }, [value, kind]);
+  if (kind === 'boolean') {
+    return (
+      <ToggleButtonGroup exclusive size="small" value={value ? 'true' : 'false'} className="nodrag"
+        onChange={(_, v) => { if (v) onCommit(v === 'true'); }}>
+        <ToggleButton value="true" sx={{ py: 0, px: 0.75, fontSize: 9, color: '#ffb74d', '&.Mui-selected': { color: '#ffb74d', bgcolor: '#ffb74d22' } }}>true</ToggleButton>
+        <ToggleButton value="false" sx={{ py: 0, px: 0.75, fontSize: 9, color: '#ef535088', '&.Mui-selected': { color: '#ef5350', bgcolor: '#ef535022' } }}>false</ToggleButton>
+      </ToggleButtonGroup>
+    );
+  }
+  if (kind === 'null') return <Typography sx={{ fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.55)', mt: 0.5 }}>null</Typography>;
+  return (
+    <TextField size="small" variant="standard" fullWidth className="nodrag"
+      type={kind === 'number' ? 'number' : 'text'} value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => onCommit(kind === 'number' ? (parseFloat(draft) || 0) : draft)}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      sx={jsonInputSx}
+      inputProps={{ style: { fontSize: 10, fontFamily: 'monospace', color: accent, padding: '1px 2px' } }} />
+  );
+};
+
+const ObjectKeyInput: React.FC<{ keyName: string; onRename: (k: string) => void }> = ({ keyName, onRename }) => {
+  const [draft, setDraft] = useState(keyName);
+  useEffect(() => setDraft(keyName), [keyName]);
+  return (
+    <TextField size="small" variant="standard" className="nodrag" value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => onRename(draft.trim())}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      inputProps={{ style: { fontSize: 10, fontFamily: 'monospace', color: '#7fd4ff', padding: '1px 2px' } }}
+      sx={{ width: 54, flexShrink: 0, mt: 0.25, ...jsonInputSx }} />
+  );
+};
+
+const JsonValueEditor: React.FC<{ value: unknown; onChange: (v: unknown) => void; depth?: number; accent?: string }> = ({ value, onChange, depth = 0, accent = '#81c784' }) => {
+  const kind = jsonKind(value);
+  if (kind === 'array') {
+    const arr = value as unknown[];
+    return (
+      <Box sx={{ pl: depth ? 0.5 : 0, borderLeft: depth ? '1px solid #81c78433' : 'none' }}>
+        {arr.map((item, i) => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.25, mb: 0.25 }}>
+            <Typography sx={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', mt: 0.5, minWidth: 12, textAlign: 'right', fontFamily: 'monospace' }}>{i}</Typography>
+            <KindPicker kind={jsonKind(item)} onChange={(k) => onChange(arr.map((it, j) => j === i ? defaultForKind(k) : it))} />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <JsonValueEditor value={item} depth={depth + 1} accent={accent}
+                onChange={(nv) => onChange(arr.map((it, j) => j === i ? nv : it))} />
+            </Box>
+            <IconButton size="small" className="nodrag" sx={{ p: 0.125, color: 'rgba(255,255,255,0.5)', '&:hover': { color: '#ef5350' } }} onClick={() => onChange(arr.filter((_, j) => j !== i))}>
+              <CloseIcon sx={{ fontSize: 11 }} />
+            </IconButton>
+          </Box>
+        ))}
+        <Button size="small" startIcon={<AddIcon sx={{ fontSize: 11 }} />} className="nodrag"
+          onClick={() => onChange([...arr, ''])} sx={{ fontSize: 9, py: 0, minWidth: 0, color: accent, textTransform: 'none' }}>item</Button>
+      </Box>
+    );
+  }
+  if (kind === 'object') {
+    const obj = value as Record<string, unknown>;
+    const entries = Object.entries(obj);
+    return (
+      <Box sx={{ pl: depth ? 0.5 : 0, borderLeft: depth ? '1px solid #4fc3f733' : 'none' }}>
+        {entries.map(([k, v], i) => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.25, mb: 0.25 }}>
+            <ObjectKeyInput keyName={k} onRename={(nk) => { if (nk && nk !== k) onChange(Object.fromEntries(entries.map(([ek, ev]) => [ek === k ? nk : ek, ev]))); }} />
+            <KindPicker kind={jsonKind(v)} onChange={(nk) => onChange(Object.fromEntries(entries.map(([ek, ev]) => [ek, ek === k ? defaultForKind(nk) : ev])))} />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <JsonValueEditor value={v} depth={depth + 1} accent={accent}
+                onChange={(nv) => onChange(Object.fromEntries(entries.map(([ek, ev]) => [ek, ek === k ? nv : ev])))} />
+            </Box>
+            <IconButton size="small" className="nodrag" sx={{ p: 0.125, color: 'rgba(255,255,255,0.5)', '&:hover': { color: '#ef5350' } }} onClick={() => { const n = { ...obj }; delete n[k]; onChange(n); }}>
+              <CloseIcon sx={{ fontSize: 11 }} />
+            </IconButton>
+          </Box>
+        ))}
+        <Button size="small" startIcon={<AddIcon sx={{ fontSize: 11 }} />} className="nodrag"
+          onClick={() => { let nk = 'key'; let n = 1; while (nk in obj) nk = `key${n++}`; onChange({ ...obj, [nk]: '' }); }}
+          sx={{ fontSize: 9, py: 0, minWidth: 0, color: '#4fc3f7', textTransform: 'none' }}>key</Button>
+      </Box>
+    );
+  }
+  return <ScalarInput value={value} kind={kind} accent={accent} onCommit={onChange} />;
+};
+
 // ─── VarInitDialog ────────────────────────────────────────────────────────────
 
 type VarInitType = 'QNumber' | 'QString' | 'QBool' | 'QDate' | 'Array' | 'Object' | 'null';
@@ -4708,6 +4873,8 @@ const VarInitDialog: React.FC<{
 }> = ({ open, currentJson, onConfirm, onClose }) => {
   const [selType, setSelType] = useState<VarInitType>('QNumber');
   const [rawValue, setRawValue] = useState('0');
+  // Edytowalna struktura dla Array/Object (obsługuje wielowymiarowość / zagnieżdżenia).
+  const [structVal, setStructVal] = useState<unknown>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -4721,8 +4888,8 @@ const VarInitDialog: React.FC<{
         if (/^\d{4}-\d{2}-\d{2}/.test(v)) { setSelType('QDate'); setRawValue(v.slice(0, 10)); }
         else { setSelType('QString'); setRawValue(v); }
       }
-      else if (Array.isArray(v)) { setSelType('Array'); setRawValue(''); }
-      else { setSelType('Object'); setRawValue(''); }
+      else if (Array.isArray(v)) { setSelType('Array'); setStructVal(v); }
+      else { setSelType('Object'); setStructVal(v); }
     } catch { setSelType('QString'); setRawValue(currentJson); }
   }, [open, currentJson]);
 
@@ -4730,9 +4897,12 @@ const VarInitDialog: React.FC<{
     setSelType(t);
     const def = VAR_TYPES.find((x) => x.id === t)!;
     setRawValue(def.defaultRaw);
+    if (t === 'Array') setStructVal([]);
+    if (t === 'Object') setStructVal({});
   };
 
-  const preview = buildVarJson(selType, rawValue);
+  const isStruct = selType === 'Array' || selType === 'Object';
+  const preview = isStruct ? JSON.stringify(structVal) : buildVarJson(selType, rawValue);
   const accent = VAR_TYPES.find((x) => x.id === selType)?.color ?? '#81c784';
 
   return (
@@ -4774,9 +4944,14 @@ const VarInitDialog: React.FC<{
             onChange={(e) => setRawValue(e.target.value)} autoFocus
             InputLabelProps={{ shrink: true }} />
         )}
-        {(selType === 'Array' || selType === 'Object' || selType === 'null') && (
+        {selType === 'null' && (
           <Box sx={{ px: 1.5, py: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
             <Typography sx={{ fontSize: 12, fontFamily: 'monospace', color: accent }}>{preview}</Typography>
+          </Box>
+        )}
+        {isStruct && (
+          <Box sx={{ px: 1, py: 1, borderRadius: 1, bgcolor: 'action.hover', maxHeight: 320, overflow: 'auto' }}>
+            <JsonValueEditor value={structVal} onChange={setStructVal} accent={accent} />
           </Box>
         )}
 
@@ -4799,9 +4974,129 @@ const VarInitDialog: React.FC<{
   );
 };
 
+// ─── Nakładki canvas: krzyżyk 0,0 + linijki ──────────────────────────────────
+// Renderowane WEWNĄTRZ ReactFlowProvider (obok ReactFlow), pozycjonowane z
+// bieżącego viewportu (x,y,zoom): flow (fx,fy) → ekran (fx*zoom + x, fy*zoom + y).
+
+// Krzyżyk w początku układu sceny (0,0).
+const OriginCross: React.FC = () => {
+  const { x, y } = useViewport();
+  return (
+    <Box sx={{ position: 'absolute', left: 0, top: 0, zIndex: 5, pointerEvents: 'none' }}>
+      <Box sx={{ position: 'absolute', left: x - 14, top: y - 1, width: 28, height: 2, bgcolor: '#ff5252', opacity: 0.85 }} />
+      <Box sx={{ position: 'absolute', left: x - 1, top: y - 14, width: 2, height: 28, bgcolor: '#ff5252', opacity: 0.85 }} />
+      <Box sx={{ position: 'absolute', left: x + 5, top: y + 4, fontSize: 9, fontFamily: 'monospace', color: '#ff5252', fontWeight: 700 }}>0,0</Box>
+    </Box>
+  );
+};
+
+// „Ładny" krok linijki (1/2/5 × 10^n) tak, by etykiety były ~80px od siebie.
+const niceStep = (zoom: number): number => {
+  const raw = 80 / zoom;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / pow;
+  const mul = n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10;
+  return mul * pow;
+};
+
+// Linijki na górnej i lewej krawędzi + znacznik pozycji kursora (flow units wokół 0,0).
+const RulerOverlay: React.FC<{ cursor: { x: number; y: number } | null }> = ({ cursor }) => {
+  const { x: vx, y: vy, zoom } = useViewport();
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  const RW = 18;
+  const step = niceStep(zoom);
+  const stepPx = step * zoom;
+  const fmt = (v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000)}k` : String(Math.round(v)));
+
+  // Ticki: pierwszy widoczny flow-multiple kroku.
+  const ticksX: { px: number; label: string }[] = [];
+  if (stepPx > 4 && width > 0) {
+    const firstFx = Math.ceil((-vx / zoom) / step) * step;
+    for (let fx = firstFx, guard = 0; fx * zoom + vx <= width && guard < 400; fx += step, guard++) {
+      ticksX.push({ px: fx * zoom + vx, label: fmt(fx) });
+    }
+  }
+  const ticksY: { px: number; label: string }[] = [];
+  if (stepPx > 4 && height > 0) {
+    const firstFy = Math.ceil((-vy / zoom) / step) * step;
+    for (let fy = firstFy, guard = 0; fy * zoom + vy <= height && guard < 400; fy += step, guard++) {
+      ticksY.push({ px: fy * zoom + vy, label: fmt(fy) });
+    }
+  }
+
+  const rulerBg = '#12161c';
+  const line = 'rgba(255,255,255,0.28)';
+  const labelCol = 'rgba(255,255,255,0.7)';
+  const curCol = '#4fc3f7';
+
+  return (
+    <Box sx={{ position: 'absolute', inset: 0, zIndex: 6, pointerEvents: 'none' }}>
+      {/* Narożnik */}
+      <Box sx={{ position: 'absolute', left: 0, top: 0, width: RW, height: RW, bgcolor: rulerBg, borderRight: `1px solid ${line}`, borderBottom: `1px solid ${line}` }} />
+      {/* Górna linijka */}
+      <Box sx={{ position: 'absolute', left: RW, top: 0, right: 0, height: RW, bgcolor: rulerBg, borderBottom: `1px solid ${line}`, overflow: 'hidden' }}>
+        {ticksX.map((t, i) => (
+          <Box key={i} sx={{ position: 'absolute', left: t.px - RW, top: 0, height: '100%' }}>
+            <Box sx={{ position: 'absolute', left: 0, bottom: 0, width: '1px', height: 6, bgcolor: line }} />
+            <Typography sx={{ position: 'absolute', left: 2, top: 1, fontSize: 8, fontFamily: 'monospace', color: labelCol, whiteSpace: 'nowrap' }}>{t.label}</Typography>
+          </Box>
+        ))}
+        {cursor && cursor.x >= RW && (
+          <Box sx={{ position: 'absolute', left: cursor.x - RW, top: 0, width: '1px', height: '100%', bgcolor: curCol }} />
+        )}
+      </Box>
+      {/* Lewa linijka */}
+      <Box sx={{ position: 'absolute', left: 0, top: RW, bottom: 0, width: RW, bgcolor: rulerBg, borderRight: `1px solid ${line}`, overflow: 'hidden' }}>
+        {ticksY.map((t, i) => (
+          <Box key={i} sx={{ position: 'absolute', top: t.px - RW, left: 0, width: '100%' }}>
+            <Box sx={{ position: 'absolute', top: 0, right: 0, height: '1px', width: 6, bgcolor: line }} />
+            <Typography sx={{ position: 'absolute', top: 1, left: 1, fontSize: 8, fontFamily: 'monospace', color: labelCol, writingMode: 'vertical-rl', whiteSpace: 'nowrap' }}>{t.label}</Typography>
+          </Box>
+        ))}
+        {cursor && cursor.y >= RW && (
+          <Box sx={{ position: 'absolute', top: cursor.y - RW, left: 0, width: '100%', height: '1px', bgcolor: curCol }} />
+        )}
+      </Box>
+    </Box>
+  );
+};
+
+// Siatka WYŚWIETLACZA — grubsze linie (2px) co rzeczywisty rozmiar ekranu (w×h
+// jednostek sceny), zaczynając od 0,0. Tworzy „prostokąty" o rozmiarze wyświetlacza.
+const DisplayGridOverlay: React.FC<{ w: number; h: number }> = ({ w, h }) => {
+  const { x: vx, y: vy, zoom } = useViewport();
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  if (w <= 0 || h <= 0 || width === 0 || height === 0) return null;
+  const col = 'rgba(79,195,247,0.65)'; // wyraźny błękit
+  const linesX: number[] = [];
+  const linesY: number[] = [];
+  if (w * zoom > 3) {
+    const firstK = Math.floor(-vx / zoom / w);
+    for (let k = firstK, g = 0; k * w * zoom + vx <= width && g < 600; k++, g++) {
+      const px = k * w * zoom + vx;
+      if (px >= 0) linesX.push(px);
+    }
+  }
+  if (h * zoom > 3) {
+    const firstK = Math.floor(-vy / zoom / h);
+    for (let k = firstK, g = 0; k * h * zoom + vy <= height && g < 600; k++, g++) {
+      const px = k * h * zoom + vy;
+      if (px >= 0) linesY.push(px);
+    }
+  }
+  return (
+    <Box sx={{ position: 'absolute', inset: 0, zIndex: 4, pointerEvents: 'none' }}>
+      {linesX.map((px, i) => <Box key={`dx${i}`} sx={{ position: 'absolute', left: px, top: 0, width: '2px', height: '100%', bgcolor: col }} />)}
+      {linesY.map((px, i) => <Box key={`dy${i}`} sx={{ position: 'absolute', top: px, left: 0, height: '2px', width: '100%', bgcolor: col }} />)}
+    </Box>
+  );
+};
+
 // ─── Main editor ─────────────────────────────────────────────────────────────
 
-const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath }) => {
+const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, workspaceFs, workspaceProjectDeps, workspaceExtraPlugins, workspaceInitialPath }) => {
   const alliApi = useAlliApi();
   const { notify } = useNotification();
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
@@ -4967,6 +5262,35 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return () => window.removeEventListener('dash-resize-active', h as EventListener);
   }, []);
   const [visiblePanels, setVisiblePanels] = useState<string[]>(['scene', 'properties']);
+  // Kompleksowy edytor (TextEditorWorkspace) jako panel po prawej — chowany domyślnie.
+  const [showWorkspace, setShowWorkspace] = useState(false);
+  const [wsWidth, setWsWidth] = useState(520);
+  const wsResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onWsResizeDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    wsResizeRef.current = { startX: e.clientX, startW: wsWidth };
+    const onMove = (me: PointerEvent) => {
+      if (!wsResizeRef.current) return;
+      // Przeciąganie w LEWO poszerza panel (splitter jest na jego lewej krawędzi).
+      const dx = wsResizeRef.current.startX - me.clientX;
+      setWsWidth(Math.max(280, Math.min(1100, wsResizeRef.current.startW + dx)));
+    };
+    const onUp = () => { wsResizeRef.current = null; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [wsWidth]);
+  // Ustawienia widoku canvas — czytane z sceny (scene.view), utrwalane w backend
+  // przy zapisie sceny. Zmieniane w Ustawieniach przez updateScene (patrz setView niżej).
+  const view = scene.view;
+  const gridEnabled = !!view?.grid;
+  const gridSpacing = view?.gridSpacing ?? 20;
+  const showOrigin = !!view?.origin;
+  const showRulers = !!view?.rulers;
+  const displayEnabled = !!view?.display?.enabled;
+  const displayW = view?.display?.width ?? 800;
+  const displayH = view?.display?.height ?? 480;
+  // Pozycja kursora względem kontenera canvas (do znacznika na linijkach).
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [fcRunning, setFcRunning] = useState<Set<string>>(new Set());
   const [varInitDialogOpen, setVarInitDialogOpen] = useState(false);
   const [varInitTargetId, setVarInitTargetId] = useState<string | null>(null);
@@ -5005,6 +5329,24 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
   const updateScene = useCallback((updater: (prev: DashScene) => DashScene) => {
     setScene((prev) => { const next = updater(prev); sceneRef.current = next; setDirty(true); return next; });
   }, []);
+  // Patch ustawień widoku (scene.view) — utrwalane w scenie przy zapisie.
+  const setView = useCallback((patch: Partial<NonNullable<DashScene['view']>>) => {
+    updateScene((p) => ({ ...p, view: { ...p.view, ...patch } }));
+  }, [updateScene]);
+  // Znacznik kursora na linijkach — nasłuch na POZIOMIE OKNA, by aktualizował się
+  // również w trakcie przeciągania bloczka (ReactFlow przechwytuje pointer capture
+  // na węźle, ale zdarzenia i tak bąblują do window).
+  useEffect(() => {
+    if (!showRulers) { setCursorPos(null); return; }
+    const onMove = (e: PointerEvent) => {
+      const r = flowWrapRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      setCursorPos(x >= 0 && y >= 0 && x <= r.width && y <= r.height ? { x, y } : null);
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [showRulers]);
 
   // Nawigacja do osadzonej sceny (edytowalnej) i powrót. Load effect reaguje na activeFilePath.
   // Auto-save wyłączony → ostrzegamy przed utratą niezapisanych zmian przy przełączaniu.
@@ -5747,6 +6089,22 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     return { x: Math.round(cx - w / 2 + cascade), y: Math.round(cy - h / 2 + cascade), rot: 0, scale: 1, width, height };
   }, [screenToFlowPosition]);
 
+  // Środek WIDOCZNEGO canvas w współrzędnych flow. Menu „New" otwiera się z drzewa
+  // SCENE (lewy panel), więc pozycja kursora nie odpowiada miejscu na canvasie —
+  // nowe bloczki (Var/GetProp/SetProp/Group/Qt) trafiają tam, gdzie użytkownik
+  // patrzy, a nie poza kadr. Mały kaskadowy offset, by kolejne się nie nakładały.
+  const viewportCenterFlow = useCallback((): { x: number; y: number } => {
+    const el = document.querySelector('.react-flow');
+    let cx = 200, cy = 160;
+    if (el && typeof screenToFlowPosition === 'function') {
+      const r = el.getBoundingClientRect();
+      const c = screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      cx = c.x; cy = c.y;
+    }
+    const cascade = (sceneRef.current.objects.length % 6) * 22;
+    return { x: Math.round(cx - 90 + cascade), y: Math.round(cy - 40 + cascade) };
+  }, [screenToFlowPosition]);
+
   const createObject = useCallback((cls: UmlClassDef) => {
     const count = sceneRef.current.objects.length;
     const isCustom = cls.name === 'Unknown';
@@ -6452,6 +6810,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         pinsFlipped: v.pinsFlipped ?? false,
         onNameChange: (name: string) => updateVarName(v.id, name),
         onEditValue: () => { setVarInitTargetId(v.id); setVarInitDialogOpen(true); },
+        onValueChange: (json: string) => updateScene((p) => ({ ...p, vars: (p.vars ?? []).map((vr) => vr.id === v.id ? { ...vr, varValue: json } : vr) })),
       } as VarNodeData,
     }; });
 
@@ -6525,7 +6884,20 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
     // Obiekty osadzonej sceny (id z `::`) są READ-ONLY: nie przeciągalne/zaznaczalne,
     // by nie trafiały do edycji/zapisu głównej sceny.
     const readonlyDash = dashNodes.map((n) => n.id.includes('::') ? { ...n, draggable: false, selectable: false } : n);
-    return [...readonlyDash, ...fcNodes, ...varNodes, ...classObjNodes, ...getPropNodes, ...setPropNodes];
+    const all = [...readonlyDash, ...fcNodes, ...varNodes, ...classObjNodes, ...getPropNodes, ...setPropNodes];
+    // MiniMap renderuje węzeł tylko gdy ma wymiary (measured ?? width ?? initialWidth).
+    // Auto-rozmiarowe węzły (bez width w style) i te niezmierzone znikały z minimapy —
+    // dokładamy initialWidth/initialHeight (hint, nie usztywnia auto-rozmiaru).
+    const MM_DEF: Record<string, [number, number]> = {
+      group: [320, 240], shape: [120, 80], qtWidget: [160, 120], dashObject: [220, 140],
+      fcNode: [220, 120], varNode: [180, 70], objNode: [200, 120], getPropNode: [180, 90], setPropNode: [180, 90],
+    };
+    return all.map((n) => {
+      const sw = typeof n.style?.width === 'number' ? n.style.width as number : undefined;
+      const sh = typeof n.style?.height === 'number' ? n.style.height as number : undefined;
+      const [dw, dh] = MM_DEF[n.type ?? ''] ?? [180, 100];
+      return { ...n, initialWidth: sw ?? dw, initialHeight: sh ?? dh };
+    });
   }, [renderObjects, scene.objects, scene.fcEdges, scene.classObjs, scene.getProps, scene.setProps, classMap, selectedIds, selectedField, userName, qtSelectMode,
       actionMode, signalHandlersMap, runSignalHandler,
       updateProperty, updateObjectName, addCustomField, removeCustomField, changeCustomFieldType, renameCustomField, updateTransform,
@@ -7094,10 +7466,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             <TuneIcon sx={{ fontSize: 16 }} />
             Properties
           </ToggleButton>
-          <ToggleButton value="json" sx={{ px: 1, py: 0.25, gap: 0.5, fontSize: 11 }}>
-            <CodeIcon sx={{ fontSize: 16 }} />
-            JSON
-          </ToggleButton>
         </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />
         <Tooltip title={canvasMode === 'select' ? 'Switch to Pan mode' : 'Rect Select: drag on canvas to select multiple nodes'}>
@@ -7167,6 +7535,14 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
               </Button>
             </Tooltip>
           </>
+        )}
+        {workspaceFs && (
+          <Tooltip title={showWorkspace ? 'Ukryj edytor (workspace)' : 'Pokaż edytor plików (workspace: zakładki, IntelliSense, terminal, agent)'}>
+            <IconButton size="small" onClick={() => setShowWorkspace((v) => !v)}
+              sx={{ p: 0.5, bgcolor: showWorkspace ? 'primary.main' : 'transparent', color: showWorkspace ? 'primary.contrastText' : 'inherit', borderRadius: 1, '&:hover': { bgcolor: showWorkspace ? 'primary.dark' : 'action.hover' } }}>
+              <CodeIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
         )}
         <Button size="small" variant="outlined" onClick={() => { setImportError(null); setShowImportDialog(true); }}
           sx={{ fontSize: 11, py: 0.25, textTransform: 'none' }}>Import UML</Button>
@@ -7442,9 +7818,42 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
             }}
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
             onDrop={handleCanvasDrop}>
-            <Background variant={BackgroundVariant.Dots} />
+            <Background
+              variant={gridEnabled ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+              gap={gridEnabled ? Math.max(2, gridSpacing) : 20}
+              // Tło canvasu RF jest jasne — kolor siatki musi być kontrastowy (jasnoszary),
+              // inaczej „nic się nie pokazuje" (poprzednio białe linie na białym).
+              color={gridEnabled ? '#aeb6be' : undefined}
+            />
+            {displayEnabled && <DisplayGridOverlay w={displayW} h={displayH} />}
+            {showOrigin && <OriginCross />}
+            {showRulers && <RulerOverlay cursor={cursorPos} />}
             <Controls />
-            {!isMobile && <MiniMap />}
+            {!isMobile && (
+              <MiniMap
+                pannable
+                zoomable
+                ariaLabel="Minimapa"
+                nodeStrokeWidth={2}
+                nodeBorderRadius={2}
+                // Domyślna minimapa pobiera kolor z tła węzła — grupy (transparent) i
+                // jasne bloczki bywały NIEWIDOCZNE. Nadajemy każdemu typowi wyraźny kolor.
+                nodeColor={(n) => {
+                  switch (n.type) {
+                    case 'group': return 'rgba(124,77,255,0.28)';
+                    case 'shape': return String((n.data as { properties?: { fill?: string } })?.properties?.fill || '#4fc3f7');
+                    case 'qtWidget': return '#26c6da';
+                    case 'fcNode': return '#7c4dff';
+                    case 'varNode': return '#81c784';
+                    case 'objNode': return '#4fc3f7';
+                    case 'getPropNode': return '#4dd0e1';
+                    case 'setPropNode': return '#ffb74d';
+                    default: return '#78909c';
+                  }
+                }}
+                nodeStrokeColor={(n) => (n.selected ? '#0288d1' : 'rgba(0,0,0,0.25)')}
+              />
+            )}
           </ReactFlow>
         </Box>
 
@@ -7719,6 +8128,28 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
           </Box>
         )}
 
+        {/* ── Kompleksowy edytor (TextEditorWorkspace) jako panel po prawej ── */}
+        {showWorkspace && workspaceFs && (
+          <>
+            {/* Splitter — przeciągnij, aby zmienić szerokość panelu edytora. */}
+            <Box onPointerDown={onWsResizeDown}
+              sx={{ flexShrink: 0, width: 6, cursor: 'col-resize', bgcolor: 'divider',
+                position: 'relative', zIndex: 3, '&:hover': { bgcolor: 'primary.main' },
+                '&:active': { bgcolor: 'primary.main' },
+                touchAction: 'none' }} />
+            <Box sx={{ width: wsWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}
+              onPointerDown={(e) => e.stopPropagation()}>
+              <TextEditorWorkspace
+                key={`dash-ws-${userName}`}
+                provider={workspaceFs}
+                initialPath={workspaceInitialPath}
+                projectDeps={workspaceProjectDeps}
+                extraPlugins={workspaceExtraPlugins}
+              />
+            </Box>
+          </>
+        )}
+
       </Box>
 
       {/* ── Dialog: połącz sygnał qt z funkcją-handlerem z data source ── */}
@@ -7777,9 +8208,67 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
       {showSettings && (
         <Dialog open onClose={() => setShowSettings(false)} maxWidth="xs" fullWidth>
           <DialogTitle sx={{ fontSize: 14, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <SettingsIcon sx={{ fontSize: 18 }} /> Ustawienia sandboxu
+            <SettingsIcon sx={{ fontSize: 18 }} /> Ustawienia
           </DialogTitle>
           <DialogContent sx={{ pt: '8px !important' }}>
+            {/* ── Widok canvas ── */}
+            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>
+              Widok canvas
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.5 }}>
+              <Box>
+                <Typography variant="body2">Siatka</Typography>
+                <Typography variant="caption" color="text.secondary">Linie pomocnicze z ustawianym rozstawem</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {gridEnabled && (
+                  <TextField type="number" size="small" value={gridSpacing}
+                    onChange={(e) => setView({ gridSpacing: Math.max(2, Math.min(500, Number(e.target.value) || 20)) })}
+                    label="Rozstaw (px)" sx={{ width: 96 }}
+                    inputProps={{ min: 2, max: 500, style: { fontSize: 12 } }} InputLabelProps={{ sx: { fontSize: 11 } }} />
+                )}
+                <Switch checked={gridEnabled} onChange={(e) => setView({ grid: e.target.checked })} />
+              </Box>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.5 }}>
+              <Box>
+                <Typography variant="body2">Początek 0,0 (krzyżyk)</Typography>
+                <Typography variant="caption" color="text.secondary">Znacznik początku układu sceny</Typography>
+              </Box>
+              <Switch checked={showOrigin} onChange={(e) => setView({ origin: e.target.checked })} />
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.5 }}>
+              <Box>
+                <Typography variant="body2">Linijki</Typography>
+                <Typography variant="caption" color="text.secondary">Miarki na górnej/lewej krawędzi + pozycja kursora</Typography>
+              </Box>
+              <Switch checked={showRulers} onChange={(e) => setView({ rulers: e.target.checked })} />
+            </Box>
+            {/* Siatka wyświetlacza — grubsze prostokąty o rzeczywistym rozmiarze ekranu. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.5 }}>
+              <Box>
+                <Typography variant="body2">Siatka wyświetlacza</Typography>
+                <Typography variant="caption" color="text.secondary">Prostokąty o rzeczywistym rozmiarze ekranu</Typography>
+              </Box>
+              <Switch checked={displayEnabled} onChange={(e) => setView({ display: { ...view?.display, enabled: e.target.checked } })} />
+            </Box>
+            {displayEnabled && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 1, pb: 0.5 }}>
+                <TextField type="number" size="small" value={displayW}
+                  onChange={(e) => setView({ display: { ...view?.display, width: Math.max(1, Number(e.target.value) || 800) } })}
+                  label="Szer. (px)" sx={{ width: 100 }}
+                  inputProps={{ min: 1, style: { fontSize: 12 } }} InputLabelProps={{ sx: { fontSize: 11 } }} />
+                <Typography sx={{ fontSize: 12, color: 'text.disabled' }}>×</Typography>
+                <TextField type="number" size="small" value={displayH}
+                  onChange={(e) => setView({ display: { ...view?.display, height: Math.max(1, Number(e.target.value) || 480) } })}
+                  label="Wys. (px)" sx={{ width: 100 }}
+                  inputProps={{ min: 1, style: { fontSize: 12 } }} InputLabelProps={{ sx: { fontSize: 11 } }} />
+              </Box>
+            )}
+
+            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mt: 2, mb: 0.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+              Sandbox
+            </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
               Wbudowane biblioteki dostępne w skryptach JS tej dashboard — tak samo jak w skryptach
               automatyzacji w edytorze Markdown. Klient MQTT jest zawsze dostępny przez <code>api.mqtt</code>.
@@ -7929,21 +8418,21 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         ))}
         <Divider />
         <MenuItem onClick={() => {
-          const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 80, y: 80 };
+          const pos = viewportCenterFlow();
           createVar(pos.x, pos.y);
           setNewMenuAnchor(null); closeSceneCtx();
         }} sx={{ fontSize: 13, gap: 1 }}>
           <StorageIcon sx={{ fontSize: 16, color: '#81c784' }} />Var
         </MenuItem>
         <MenuItem onClick={() => {
-          const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 80, y: 80 };
+          const pos = viewportCenterFlow();
           createGetProp(pos.x, pos.y);
           setNewMenuAnchor(null); closeSceneCtx();
         }} sx={{ fontSize: 13, gap: 1 }}>
           <ArrowUpwardIcon sx={{ fontSize: 16, color: '#4dd0e1' }} />GetProp
         </MenuItem>
         <MenuItem onClick={() => {
-          const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 80, y: 80 };
+          const pos = viewportCenterFlow();
           createSetProp(pos.x, pos.y);
           setNewMenuAnchor(null); closeSceneCtx();
         }} sx={{ fontSize: 13, gap: 1 }}>
@@ -7951,7 +8440,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => {
-          const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 80, y: 80 };
+          const pos = viewportCenterFlow();
           createGroup(pos.x, pos.y);
           setNewMenuAnchor(null); closeSceneCtx();
         }} sx={{ fontSize: 13, gap: 1 }}>
@@ -7976,7 +8465,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath })
         {QT_WIDGETS.map((w) => (
           <MenuItem key={w.type} sx={{ fontSize: 13, gap: 1 }}
             onClick={() => {
-              const pos = sceneCtxMenu ? screenToFlowPosition({ x: sceneCtxMenu.mouseX, y: sceneCtxMenu.mouseY }) : { x: 40, y: 40 };
+              const pos = viewportCenterFlow();
               createQtWidget(w.type, pos.x, pos.y);
               setQtMenuAnchor(null); setNewMenuAnchor(null); closeSceneCtx();
             }}>

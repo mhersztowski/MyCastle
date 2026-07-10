@@ -233,19 +233,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         <Typography sx={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8, color: '#bbb', flexGrow: 1 }}>
           AI Agent
         </Typography>
-        {processing && (
-          <Tooltip title="Stop">
-            <IconButton
-              size="small"
-              onClick={handleStop}
-              sx={{ color: '#f48771', '&:hover': { bgcolor: '#3c3c3c' } }}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <rect x="3" y="3" width="10" height="10" rx="1" />
-              </svg>
-            </IconButton>
-          </Tooltip>
-        )}
         <Tooltip title="Load saved session">
           <span>
             <IconButton
@@ -285,7 +272,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       <ChatMessages messages={messages} processing={processing} onFileClick={onFileOpen} />
 
       {/* Input */}
-      <ChatInput onSend={handleSend} onClear={handleClear} disabled={processing} skills={skills} />
+      <ChatInput onSend={handleSend} onClear={handleClear} disabled={processing} skills={skills} processing={processing} onStop={handleStop} />
 
       {/* Load session dialog */}
       <Dialog

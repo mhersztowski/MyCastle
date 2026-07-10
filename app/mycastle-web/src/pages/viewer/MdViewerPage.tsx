@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Box, Typography, Button, CircularProgress, Alert, Paper } from '@mui/material';
+import { Box, Typography, Button, CircularProgress, Alert } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, Edit as EditIcon } from '@mui/icons-material';
 import { useMinimalTopBarSlot } from '../../components/MinimalTopBarContext';
 import { useMqtt } from '../../modules/mqttclient/MqttContext';
-import { MarkdownRenderer } from '../../utils/MdParser';
-import 'katex/dist/katex.min.css';
-import 'highlight.js/styles/github.css';
+import MdEditor from '../../components/mdeditor/MdEditor';
 
 const MdViewerPage: React.FC = () => {
   const { '*': filePath } = useParams();
@@ -80,8 +78,7 @@ const MdViewerPage: React.FC = () => {
       <Box
         sx={{
           flexGrow: 1,
-          overflow: 'auto',
-          bgcolor: 'grey.50',
+          overflow: 'hidden',
           minHeight: 0,
           paddingBottom: 'env(safe-area-inset-bottom)',
           WebkitOverflowScrolling: 'touch',
@@ -92,75 +89,10 @@ const MdViewerPage: React.FC = () => {
             <CircularProgress />
           </Box>
         ) : (
-          <Paper
-            sx={{
-              maxWidth: 900,
-              mx: 'auto',
-              my: 2,
-              p: 4,
-              '& pre': {
-                backgroundColor: '#f6f8fa',
-                padding: 2,
-                borderRadius: 1,
-                overflow: 'auto',
-              },
-              '& code': {
-                fontFamily: 'monospace',
-              },
-              '& table': {
-                borderCollapse: 'collapse',
-                width: '100%',
-                my: 2,
-                tableLayout: 'fixed',
-              },
-              '& th, & td': {
-                border: '1px solid #ddd',
-                padding: '8px',
-                textAlign: 'left',
-                verticalAlign: 'top',
-                boxSizing: 'border-box',
-              },
-              '& th': {
-                backgroundColor: '#f6f8fa',
-                fontWeight: 600,
-              },
-              // Allow inline styles to override text-align
-              '& th[style*="text-align"], & td[style*="text-align"]': {
-                textAlign: 'inherit',
-              },
-              '& img': {
-                maxWidth: '100%',
-                height: 'auto',
-                borderRadius: '8px',
-              },
-              '& img[style*="float: left"]': {
-                marginRight: '16px',
-                marginBottom: '8px',
-              },
-              '& img[style*="float: right"]': {
-                marginLeft: '16px',
-                marginBottom: '8px',
-              },
-              '& img[style*="display: inline-block"]': {
-                verticalAlign: 'top',
-                marginRight: '8px',
-              },
-              // Clear floats after content
-              '& p::after, & h1::after, & h2::after, & h3::after': {
-                content: '""',
-                display: 'table',
-                clear: 'both',
-              },
-              '& blockquote': {
-                borderLeft: '4px solid #ddd',
-                margin: 0,
-                paddingLeft: 2,
-                color: 'text.secondary',
-              },
-            }}
-          >
-            <MarkdownRenderer markdown={content} />
-          </Paper>
+          // Renderuj przez prawdziwy MdEditor (read-only) — dzięki temu działają
+          // WSZYSTKIE customowe rozszerzenia (CadView, galerie, mapy, InfoMark,
+          // Event/Plugin/Automate…), tak samo jak w edytorze markdown.
+          <MdEditor key={path} initialContent={content} editable={false} filePath={path} />
         )}
       </Box>
     </Box>

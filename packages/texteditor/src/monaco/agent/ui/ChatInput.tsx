@@ -10,11 +10,21 @@ interface ChatInputProps {
   onClear?: () => void;
   disabled?: boolean;
   skills?: Map<string, string>;
+  /** True while the agent is processing a prompt — swaps Send for a Stop button. */
+  processing?: boolean;
+  /** Interrupt the running prompt (aborts the in-flight request). */
+  onStop?: () => void;
 }
 
 const SendIcon = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
     <path d="M1 1.5l14 6.5-14 6.5V9l10-1-10-1V1.5z" />
+  </svg>
+);
+
+const StopIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+    <rect x="3" y="3" width="10" height="10" rx="1" />
   </svg>
 );
 
@@ -31,7 +41,7 @@ const ClearIcon = () => (
   </svg>
 );
 
-export function ChatInput({ onSend, onClear, disabled, skills }: ChatInputProps) {
+export function ChatInput({ onSend, onClear, disabled, skills, processing, onStop }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [skillSuggestions, setSkillSuggestions] = useState<string[]>([]);
@@ -230,19 +240,32 @@ export function ChatInput({ onSend, onClear, disabled, skills }: ChatInputProps)
           }}
         />
 
-        {/* Send */}
-        <IconButton
-          size="small"
-          onClick={handleSend}
-          disabled={!canSend}
-          sx={{
-            color: canSend ? '#007acc' : '#555',
-            mb: 0.25,
-            '&:hover': { bgcolor: '#3c3c3c' },
-          }}
-        >
-          <SendIcon />
-        </IconButton>
+        {/* Send / Stop — podczas przetwarzania przycisk przełącza się na Stop,
+            tuż przy polu promptu (a nie w nagłówku panelu). */}
+        {processing ? (
+          <Tooltip title="Zatrzymaj (przerwij prompt)">
+            <IconButton
+              size="small"
+              onClick={onStop}
+              sx={{ color: '#f48771', mb: 0.25, '&:hover': { bgcolor: '#3c3c3c' } }}
+            >
+              <StopIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <IconButton
+            size="small"
+            onClick={handleSend}
+            disabled={!canSend}
+            sx={{
+              color: canSend ? '#007acc' : '#555',
+              mb: 0.25,
+              '&:hover': { bgcolor: '#3c3c3c' },
+            }}
+          >
+            <SendIcon />
+          </IconButton>
+        )}
       </Box>
     </Box>
   );

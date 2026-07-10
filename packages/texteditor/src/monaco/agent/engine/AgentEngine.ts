@@ -246,17 +246,28 @@ export class AgentEngine {
           this.callbacks.onMessage(assistantMsg);
 
           const WRITE_TOOLS = new Set(['vfs_write_file', 'vfs_delete', 'vfs_rename', 'vfs_copy', 'vfs_mkdir']);
-          for (const toolCall of response.toolCalls) {
-            if (signal.aborted) break;
-            let result: string;
-            let affectedFiles: string[];
-            if (toolCall.function.name === 'web_fetch' && this.webFetchUrl) {
-              const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
-              result = await executeWebTool(toolCall.function.name, args, this.webFetchUrl, this.authToken ?? undefined);
-              affectedFiles = [];
-            } else {
-              ({ result, affectedFiles } = await executeVfsTool(toolCall, this.provider));
+          // Wykonaj WSZYSTKIE tool-calle z tej tury RÓWNOLEGLE. Każda operacja VFS
+          // to osobny round-trip HTTP; sekwencyjne `await` sprawiało, że dostęp do
+          // VFS był „strasznie wolny" przy wielu plikach (N × latencja). Ścieżki są
+          // niezależne, więc równoległość jest bezpieczna. Wyniki spinamy z powrotem
+          // w ORYGINALNEJ kolejności (Anthropic wymaga tool_result dla każdego id).
+          const execResults = await Promise.all(response.toolCalls.map(async (toolCall) => {
+            if (signal.aborted) return { result: JSON.stringify({ error: 'aborted' }), affectedFiles: [] as string[] };
+            try {
+              if (toolCall.function.name === 'web_fetch' && this.webFetchUrl) {
+                const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+                const result = await executeWebTool(toolCall.function.name, args, this.webFetchUrl, this.authToken ?? undefined);
+                return { result, affectedFiles: [] as string[] };
+              }
+              return await executeVfsTool(toolCall, this.provider);
+            } catch (err) {
+              return { result: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), affectedFiles: [] as string[] };
             }
+          }));
+
+          for (let i = 0; i < response.toolCalls.length; i++) {
+            const toolCall = response.toolCalls[i];
+            const { result, affectedFiles } = execResults[i];
             for (const f of affectedFiles) this.allAffectedFiles.add(f);
             if (affectedFiles.length > 0 && WRITE_TOOLS.has(toolCall.function.name)) {
               this.callbacks.onFileWritten?.(affectedFiles);
@@ -313,6 +324,9 @@ export class AgentEngine {
     const lines = [
       'You are an AI coding assistant embedded in a code editor with access to a virtual file system (VFS).',
       'You can read, search, and browse files using the provided VFS tools.',
+      // Wsadowe odczyty w JEDNEJ turze wykonują się równolegle (silnik odpala je
+      // przez Promise.all) — dużo szybciej niż plik-po-pliku w kolejnych turach.
+      'PERFORMANCE — When you need several files, request ALL of them in the SAME turn (multiple tool calls at once). They run in parallel; reading them one-per-turn is much slower.',
       readOnly
         ? 'The file system is READ-ONLY. You cannot create, edit, or delete files.'
         : [
@@ -320,6 +334,7 @@ export class AgentEngine {
             'IMPORTANT — Writing files: When creating or modifying files, you MUST call vfs_write_file for EVERY file.',
             'Never just describe file contents in text without calling the tool.',
             'If you plan to create 5 files, make 5 separate vfs_write_file calls — one per file.',
+            'Each vfs_write_file MUST contain the COMPLETE final content of that file. NEVER write an empty or partial file intending to fill it in on a later call — an empty write erases existing content and is rejected by the tool.',
             'Always use absolute paths starting with / for all VFS operations.',
             'After writing a batch of files, list the directory to confirm all files were created.',
           ].join(' '),

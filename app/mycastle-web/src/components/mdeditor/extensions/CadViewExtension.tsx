@@ -40,6 +40,7 @@ import {
 import MapIcon from '@mui/icons-material/Map';
 import GestureIcon from '@mui/icons-material/Gesture';
 import WidgetsIcon from '@mui/icons-material/Widgets';
+import { useMdViewSettings } from '../mdViewSettings';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -358,6 +359,20 @@ function baseFromUrl(url: string): string {
   return i > 0 ? url.slice(0, i) : '';
 }
 
+// „Change project" wyzwalane z menu bloczka (⋮): NodeView nasłuchuje i otwiera picker.
+export const CADVIEW_EDIT_EVENT = 'md-cadview-edit';
+export interface CadViewEditEventDetail { pos: number }
+
+/** Zewnętrzny URL „Open in CAD app" wyliczony z atrybutów bloczka cadView. */
+export function getCadExternalUrl(attrs: { mode?: string; path?: string; url?: string }): string {
+  const url = attrs.url || '';
+  const vfsPath = attrs.path || vfsPathFromUrl(url);
+  if (!vfsPath) return '';
+  const apiBase = baseFromUrl(url) || getCadBaseUrl();
+  const mode = (attrs.mode as string) || 'scene3d';
+  return `${apiBase.replace(/\/$/, '')}/viewer/${mode}/${vfsPath}`;
+}
+
 // The viewer pages use hardcoded dark panels but pull TEXT colours from the MUI
 // theme (`text.secondary`, `divider`, …). Embedded in the light-themed editor
 // those tokens turn dark → dark-on-dark, "colours blend". Forcing a dark theme
@@ -385,11 +400,22 @@ function NativeCadViewer({ mode, vfsPath, apiBase }: { mode: CadViewMode; vfsPat
 
 // ── Node view ────────────────────────────────────────────────────────────────
 
-function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
+function CadViewNodeView({ node, updateAttributes, editor, getPos }: NodeViewProps) {
   const mode = (node.attrs.mode as CadViewMode) || 'scene3d';
   const url: string = node.attrs.url || '';
   const vfsPath: string = (node.attrs.path as string) || vfsPathFromUrl(url);
   const [pickerOpen, setPickerOpen] = useState(!vfsPath);
+  const { minimalView } = useMdViewSettings();
+
+  // „Change project" z menu bloczka (⋮): otwórz picker, gdy zdarzenie dotyczy TEGO węzła.
+  useEffect(() => {
+    const onEdit = (e: Event) => {
+      const detail = (e as CustomEvent<CadViewEditEventDetail>).detail;
+      if (detail && typeof getPos === 'function' && detail.pos === getPos()) setPickerOpen(true);
+    };
+    window.addEventListener(CADVIEW_EDIT_EVENT, onEdit);
+    return () => window.removeEventListener(CADVIEW_EDIT_EVENT, onEdit);
+  }, [getPos]);
 
   // Display name: last path segment of the vfs path.
   const label = vfsPath ? decodeURIComponent(vfsPath.split('/').pop() ?? vfsPath) : '';
@@ -410,9 +436,13 @@ function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
       <Box
         className="md-cadview-embed"
         contentEditable={false}
-        sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden', my: 1, bgcolor: 'background.paper' }}
+        // Widok minimalny: bez ramki i bez marginesów (bloczek „na styk").
+        sx={minimalView
+          ? { overflow: 'hidden', my: 0, bgcolor: 'background.paper' }
+          : { border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden', my: 1, bgcolor: 'background.paper' }}
       >
-        {/* Header */}
+        {/* Header — ukryty w widoku minimalnym (akcje dostępne z menu kontekstowego). */}
+        {!minimalView && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75, bgcolor: 'background.default', borderBottom: '1px solid', borderColor: 'divider' }}>
           {MODE_ICONS[mode]}
           <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>
@@ -434,6 +464,7 @@ function CadViewNodeView({ node, updateAttributes, editor }: NodeViewProps) {
             </Tooltip>
           )}
         </Box>
+        )}
 
         {/* Content — native core-cad-viewer render (no iframe). */}
         {vfsPath ? (

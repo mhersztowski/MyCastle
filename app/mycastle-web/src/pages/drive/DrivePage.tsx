@@ -23,13 +23,19 @@ import {
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, LinearProgress,
   Link, ListItemIcon, ListItemText, Menu, MenuItem, Paper, Select, Snackbar, Stack, Table,
   TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
-  Switch, FormControlLabel,
+  Switch, FormControlLabel, Popover,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
+import TuneIcon from '@mui/icons-material/Tune';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ArticleIcon from '@mui/icons-material/Article';
 import { useLayoutChrome } from '../../components/Layout';
 import { AccountMenu } from '../../components/AccountMenu';
 import { MdEditor } from '@/components/mdeditor';
+import { MdTocPanel, MdFavoritesPanel } from './MdFloatingPanels';
+import JSZip from 'jszip';
+import { stripMdExtensions, extractMdLinks, resolveRelPath, dirOf, isWithin } from './mdPortability';
 // Side-effect: ensures Monaco workers + compiler options + completionItems
 // configuration is in place BEFORE MdEditor (or the embedded workspace) mounts.
 import '../../modules/editor/monacoWorkers';
@@ -50,6 +56,7 @@ import DriveFolderUploadIcon from '@mui/icons-material/DriveFolderUpload';
 import EditIcon from '@mui/icons-material/Edit';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import FolderIcon from '@mui/icons-material/Folder';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -294,6 +301,29 @@ async function saveFileProperties(userName: string, props: FileProperties): Prom
   // accents in tag names, file paths).
   const b64 = btoa(unescape(encodeURIComponent(text)));
   await vfsWriteFile(userName, FILE_PROPS_PATH, b64);
+}
+
+// ─── Ustawienia widoku markdown (per-plik, zapisywane na backend) ────────────
+// Jeden plik na usera: klucz = ścieżka pliku (taka sama jak `filePath` przekazany
+// do MdEditor), wartość = { minimalView }.
+const MDVIEW_PATH = '.mdview.json';
+interface MdViewEntry { minimalView?: boolean; showToc?: boolean; showFavorites?: boolean; smallText?: boolean; fullWidth?: boolean }
+interface MdViewMap { [fileKey: string]: MdViewEntry }
+
+async function loadMdViewSettingsMap(userName: string): Promise<MdViewMap> {
+  try {
+    const r = await fetch(apiUrl(userName, 'readFile', MDVIEW_PATH), { headers: authHeaders() });
+    if (!r.ok) return {};
+    const j: { data?: string } = await r.json();
+    if (!j.data) return {};
+    const parsed = JSON.parse(decodeURIComponent(escape(atob(j.data)))) as MdViewMap;
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch { return {}; }
+}
+
+async function saveMdViewSettingsMap(userName: string, map: MdViewMap): Promise<void> {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(map, null, 2))));
+  await vfsWriteFile(userName, MDVIEW_PATH, b64);
 }
 
 // ─── Cron schedules for backend JS scripts (Drive → Właściwości) ─────────────
@@ -616,6 +646,28 @@ function isEditableTextFile(name: string, mime: string): boolean {
   return /^(json|jsonc|json5|map|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyi|xml|svg|xsd|xsl|html|htm|css|scss|less|yaml|yml|sh|bash|zsh|sql|c|h|cpp|cc|cxx|hpp|hh|hxx|java|kt|rs|go|rb|php|cs|fs|swift|dart|lua|r|pl|ini|cfg|toml|env|conf|dockerfile|gitignore|gitattributes)$/.test(ext);
 }
 
+// Lekkie czyszczenie markdown wyeksportowanego z Notion: dekoduje %20 w lokalnych
+// linkach i usuwa 32-znakowy hash Notion z nazw plików ("Nazwa 1a2b…def.md" → "Nazwa.md").
+function cleanNotionMarkdown(md: string): string {
+  let s = md.replace(/\r\n/g, '\n');
+  s = s.replace(/\]\(([^)]+)\)/g, (m, url: string) => {
+    if (/^https?:/i.test(url)) return m;
+    try { return `](${decodeURIComponent(url).replace(/ [0-9a-f]{32}(?=[./]|$)/gi, '')})`; } catch { return m; }
+  });
+  s = s.replace(/ [0-9a-f]{32}(?=[.\s)/])/gi, '');
+  return s.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function stripNotionHash(s: string): string { return s.replace(/ [0-9a-f]{32}(?=\.|\/|$)/gi, ''); }
+function sanitizeFileName(s: string): string { return (s.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'plik'); }
+
+function triggerDownload(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 500);
+}
+
 function base64ToText(b64: string): string {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -791,7 +843,7 @@ export default function DrivePage(): React.JSX.Element {
     failed: number;
   } | null>(null);
   const [snack, setSnack] = useState<{ open: boolean; msg: string; severity: 'success'|'error'|'info' }>({ open: false, msg: '', severity: 'success' });
-  const [menuFor, setMenuFor] = useState<{ anchor: HTMLElement; entry: VfsEntry } | null>(null);
+  const [menuFor, setMenuFor] = useState<{ anchor: HTMLElement | null; entry: VfsEntry; pos?: { top: number; left: number } } | null>(null);
   const [newFolderDialog, setNewFolderDialog] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [renameDialog, setRenameDialog] = useState<{ entry: VfsEntry; value: string } | null>(null);
@@ -834,6 +886,9 @@ export default function DrivePage(): React.JSX.Element {
     // and read/write bypass the drive-scoped helpers. `rel` mirrors it for UI.
     pimRel?: string;
   } | null>(null);
+  // Ustawienia widoku markdown per-plik (klucz = ścieżka MdEditor.filePath).
+  const [mdViewMap, setMdViewMap] = useState<MdViewMap>({});
+  const [mdSettingsAnchor, setMdSettingsAnchor] = useState<HTMLElement | null>(null);
   // MJD editor — opens in the same right-side preview slot as MdEditor.
   //   mode='def'  → MjdVfsLoader edits the .mjd schema (data path omitted)
   //   mode='data' → MjdVfsLoader edits sibling .data.json against the .mjd
@@ -1377,6 +1432,16 @@ export default function DrivePage(): React.JSX.Element {
   }, [favoritesOpen]);
 
   const isFavorite = useCallback((rel: string) => favorites.has(rel), [favorites]);
+
+  // Toggle ulubionego po pełnej ścieżce (nie zależy od cwd) — używane w okienku Ulubione.
+  const toggleFavoritePath = useCallback((rel: string, name: string) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(rel)) { next.delete(rel); toast(`Usunięto z ulubionych: ${name}`, 'info'); }
+      else { next.add(rel); toast(`Dodano do ulubionych: ${name}`); }
+      return next;
+    });
+  }, [toast]);
 
   const toggleFavorite = useCallback((entry: VfsEntry) => {
     const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
@@ -2047,6 +2112,150 @@ export default function DrivePage(): React.JSX.Element {
     } finally {
       setMdEditing((prev) => prev ? { ...prev, saving: false } : null);
     }
+  }, [mdEditing, userName, toast]);
+
+  // Wczytaj ustawienia widoku markdown (raz na usera).
+  useEffect(() => { void loadMdViewSettingsMap(userName).then(setMdViewMap); }, [userName]);
+  // Klucz aktywnego pliku md = dokładnie ta ścieżka, którą dostaje MdEditor (filePath).
+  const mdFileKey = mdEditing ? (mdEditing.pimRel ?? `drive/${mdEditing.rel}`) : '';
+  const mdView = (mdFileKey ? mdViewMap[mdFileKey] : undefined) ?? {};
+  const setMdSetting = useCallback((patch: Partial<MdViewEntry>) => {
+    if (!mdFileKey) return;
+    setMdViewMap((prev) => {
+      const next: MdViewMap = { ...prev, [mdFileKey]: { ...prev[mdFileKey], ...patch } };
+      void saveMdViewSettingsMap(userName, next).catch(() => {});
+      return next;
+    });
+  }, [mdFileKey, userName]);
+
+  // ── Import markdown (czysty / Notion) z pliku lokalnego → nowy plik w bieżącym katalogu ──
+  const mdImportInputRef = useRef<HTMLInputElement | null>(null);
+  const mdImportKindRef = useRef<'plain' | 'notion'>('plain');
+  const triggerMdImport = useCallback((kind: 'plain' | 'notion') => {
+    mdImportKindRef.current = kind;
+    setMdSettingsAnchor(null);
+    mdImportInputRef.current?.click();
+  }, []);
+  const onMdImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = '';
+    if (!file) return;
+    const notion = mdImportKindRef.current === 'notion';
+    try {
+      if (/\.zip$/i.test(file.name)) {
+        // Notion .zip: główna strona (.md) + folder z zasobami. Wgrywamy zasoby do
+        // `{stem}-assets/`, główną + podstrony jako pliki .md, przepisujemy linki obrazów.
+        const zip = await JSZip.loadAsync(file);
+        const files = Object.values(zip.files).filter((f) => !f.dir);
+        const mdFiles = files.filter((f) => /\.md$/i.test(f.name));
+        const assetFiles = files.filter((f) => !/\.md$/i.test(f.name));
+        if (mdFiles.length === 0) { toast('Brak plików .md w archiwum', 'error'); return; }
+        const main = mdFiles.slice().sort((a, b) =>
+          a.name.split('/').length - b.name.split('/').length || a.name.length - b.name.length)[0];
+        const stem = sanitizeFileName(stripNotionHash(decodeURIComponent(main.name.split('/').pop()!.replace(/\.md$/i, ''))));
+        const assetsRel = cwd ? `${cwd}/${stem}-assets` : `${stem}-assets`;
+        const assetBases = new Set<string>();
+        for (const a of assetFiles) {
+          const b64 = await a.async('base64');
+          const newBase = sanitizeFileName(stripNotionHash(decodeURIComponent(a.name.split('/').pop()!)));
+          assetBases.add(newBase);
+          await vfsWriteFile(userName, `${assetsRel}/${newBase}`, b64);
+        }
+        const rewriteAssets = (md: string) => md.replace(/\]\(([^)]+\.(?:png|jpe?g|gif|svg|webp|bmp|avif|ico|pdf))(?:#[^)]*)?\)/gi, (m, p: string) => {
+          const base = sanitizeFileName(stripNotionHash(decodeURIComponent(p.split('/').pop()!)));
+          return assetBases.has(base) ? `](${stem}-assets/${base})` : m;
+        });
+        let mainRel = '';
+        for (const md of mdFiles) {
+          const clean = rewriteAssets(cleanNotionMarkdown(await md.async('string')));
+          const nm = sanitizeFileName(stripNotionHash(decodeURIComponent(md.name.split('/').pop()!.replace(/\.md$/i, ''))));
+          const rel = cwd ? `${cwd}/${nm}.md` : `${nm}.md`;
+          await vfsWriteFile(userName, rel, textToBase64(clean));
+          if (md === main) mainRel = rel;
+        }
+        await refresh();
+        toast(`Zaimportowano z Notion: ${mdFiles.length} stron, ${assetFiles.length} plików`, 'success');
+        if (mainRel) void openInMdEditor({ name: `${stem}.md`, type: FILE_TYPE }, mainRel);
+        return;
+      }
+      // Zwykły plik .md/.txt
+      let text = await file.text();
+      let nameStem = file.name.replace(/\.(md|markdown|txt)$/i, '');
+      if (notion) { text = cleanNotionMarkdown(text); nameStem = nameStem.replace(/ [0-9a-f]{32}$/i, ''); }
+      const stem = sanitizeFileName(nameStem);
+      const rel = cwd ? `${cwd}/${stem}.md` : `${stem}.md`;
+      await vfsWriteFile(userName, rel, textToBase64(text));
+      await refresh();
+      toast(`Zaimportowano: ${stem}.md`, 'success');
+      void openInMdEditor({ name: `${stem}.md`, type: FILE_TYPE }, rel);
+    } catch (err) {
+      toast(`Import nieudany: ${(err as Error).message}`, 'error');
+    }
+  }, [cwd, userName, toast, refresh, openInMdEditor]);
+
+  // ── Eksport bieżącego dokumentu do czystego .md (bez rozszerzeń MyCastle) ──
+  const exportCleanMd = useCallback(async () => {
+    if (!mdEditing) return;
+    setMdSettingsAnchor(null);
+    try {
+      const rel = mdEditing.rel;
+      const r = await fetch(mdEditing.pimRel
+        ? `/api/users/${encodeURIComponent(userName)}/vfs/readFile?path=${encodeURIComponent(`/data/Minis/Users/${userName}/${mdEditing.pimRel}`)}`
+        : apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json() as { data?: string };
+      const src = j.data ? base64ToText(j.data) : '';
+      const clean = stripMdExtensions(src);
+      const stem = mdEditing.entry.name.replace(/\.md$/i, '');
+      triggerDownload(new Blob([clean], { type: 'text/markdown' }), `${stem}-clean.md`);
+      toast('Wyeksportowano czysty markdown', 'success');
+    } catch (err) { toast(`Eksport nieudany: ${(err as Error).message}`, 'error'); }
+  }, [mdEditing, userName, toast]);
+
+  // ── Eksport do zip: bieżąca strona + strony/zasoby linkowane w VFS (bieżący kat./podkat.) ──
+  const exportZip = useCallback(async (clean: boolean) => {
+    if (!mdEditing || mdEditing.pimRel) { toast('Eksport zip dostępny dla plików w drive/', 'info'); setMdSettingsAnchor(null); return; }
+    setMdSettingsAnchor(null);
+    try {
+      const startRel = mdEditing.rel;
+      const baseDir = dirOf(startRel);
+      const readText = async (rel: string): Promise<string | null> => {
+        const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+        if (!r.ok) return null;
+        const j = await r.json() as { data?: string };
+        return j.data ? base64ToText(j.data) : '';
+      };
+      const readB64 = async (rel: string): Promise<string | null> => {
+        const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+        if (!r.ok) return null;
+        const j = await r.json() as { data?: string };
+        return j.data ?? null;
+      };
+      const visited = new Set<string>();
+      const assets = new Set<string>();
+      const queue = [startRel];
+      const pageContent = new Map<string, string>();
+      while (queue.length) {
+        const rel = queue.shift()!;
+        if (visited.has(rel) || !isWithin(baseDir, rel)) continue;
+        visited.add(rel);
+        const md = await readText(rel);
+        if (md == null) continue;
+        pageContent.set(rel, md);
+        const { pages, assets: as } = extractMdLinks(md);
+        const fromDir = dirOf(rel);
+        for (const p of pages) { const t = resolveRelPath(fromDir, p); if (t && isWithin(baseDir, t) && !visited.has(t)) queue.push(t); }
+        for (const a of as) { const t = resolveRelPath(fromDir, a); if (t && isWithin(baseDir, t)) assets.add(t); }
+      }
+      const zip = new JSZip();
+      const zipPath = (rel: string) => (baseDir ? rel.slice(baseDir.length + 1) : rel);
+      for (const [rel, md] of pageContent) zip.file(zipPath(rel), clean ? stripMdExtensions(md) : md);
+      for (const a of assets) { const b64 = await readB64(a); if (b64) zip.file(zipPath(a), b64, { base64: true }); }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const stem = mdEditing.entry.name.replace(/\.md$/i, '');
+      triggerDownload(blob, `${stem}-export${clean ? '-clean' : ''}.zip`);
+      toast(`Wyeksportowano zip: ${pageContent.size} stron, ${assets.size} zasobów`, 'success');
+    } catch (err) { toast(`Eksport zip nieudany: ${(err as Error).message}`, 'error'); }
   }, [mdEditing, userName, toast]);
 
   const closeRightPanel = useCallback(() => {
@@ -2947,6 +3156,12 @@ export default function DrivePage(): React.JSX.Element {
                     key={e.name}
                     hover
                     onDoubleClick={() => onOpen(e)}
+                    onContextMenu={(ev) => {
+                      // Prawy przycisk myszy (desktop) otwiera to samo menu co kebab (⋮),
+                      // zakotwiczone w pozycji kursora (anchorPosition).
+                      ev.preventDefault();
+                      setMenuFor({ anchor: null, entry: e, pos: { top: ev.clientY, left: ev.clientX } });
+                    }}
                     sx={{ cursor: 'pointer' }}
                   >
                     <TableCell sx={{ width: 40 }}>
@@ -3131,6 +3346,17 @@ export default function DrivePage(): React.JSX.Element {
               </Tooltip>
             )}
             {mdEditing && (
+              <Tooltip title="Otwórz w Viewer (podgląd read-only w nowym oknie)">
+                <IconButton size="small" onClick={() => {
+                  const p = mdEditing.pimRel ?? `drive/${mdEditing.rel}`;
+                  const url = `/viewer/md/${p.split('/').map(encodeURIComponent).join('/')}`;
+                  window.open(url, '_blank', 'noopener,noreferrer');
+                }}>
+                  <OpenInNewIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {mdEditing && (
               <Tooltip title="Otwórz kod źródłowy (Markdown w edytorze tekstu)">
                 <IconButton size="small" onClick={() => void openMdAsRawSource(mdEditing.entry)}>
                   <CodeIcon fontSize="small" />
@@ -3205,6 +3431,13 @@ export default function DrivePage(): React.JSX.Element {
                 color={mdEditing.saving ? 'warning' : 'success'}
                 label={mdEditing.saving ? 'Zapisywanie…' : 'Auto-save'}
               />
+            )}
+            {mdEditing && (
+              <Tooltip title="Ustawienia widoku (zapisywane per plik)">
+                <IconButton size="small" color={(mdView.minimalView || mdView.showToc || mdView.showFavorites || mdView.smallText || mdView.fullWidth) ? 'primary' : 'default'} onClick={(e) => setMdSettingsAnchor(e.currentTarget)}>
+                  <TuneIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
             )}
             <Tooltip title={panelFullscreen ? 'Pokaż listę plików' : 'Ukryj listę plików (panel na cały ekran)'}>
               <IconButton size="small" onClick={() => setPanelFullscreen((f) => !f)}>
@@ -3282,7 +3515,12 @@ export default function DrivePage(): React.JSX.Element {
             )}
             {dashEditing && (
               <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <DashEditorPanel key={dashEditing.path} userName={userName} filePath={dashEditing.path} />
+                <DashEditorPanel key={dashEditing.path} userName={userName} filePath={dashEditing.path}
+                  workspaceFs={driveWorkspaceFs}
+                  workspaceProjectDeps={driveWorkspaceProjectDeps}
+                  workspaceExtraPlugins={driveExtraPlugins}
+                  workspaceInitialPath={isAdmin ? `/user/drive/${dashEditing.path}` : `/drive/${dashEditing.path}`}
+                />
               </Box>
             )}
             {jsonFormEditing && (
@@ -3299,6 +3537,9 @@ export default function DrivePage(): React.JSX.Element {
                   onLinkClick={handleMdLinkClick}  /* internal .md links open in THIS panel */
                   autoSaveDelay={2000}              /* faster than the default 30s */
                   filePath={mdEditing.pimRel ?? `drive/${mdEditing.rel}`}  /* userBase-relative; pim files (e.g. md/rome.md) sit outside drive/ */
+                  minimalView={!!mdView.minimalView}  /* per-file: no margins + no embed headers/frames */
+                  smallText={!!mdView.smallText}      /* per-file: smaller content font */
+                  fullWidth={!!mdView.fullWidth}      /* per-file: no 900px centre cap */
                 />
               </Box>
             )}
@@ -3469,7 +3710,19 @@ export default function DrivePage(): React.JSX.Element {
       </Box>
 
       {/* Per-entry menu */}
-      <Menu anchorEl={menuFor?.anchor} open={menuFor !== null} onClose={() => setMenuFor(null)}>
+      <Menu
+        anchorEl={menuFor?.anchor}
+        anchorReference={menuFor?.pos ? 'anchorPosition' : 'anchorEl'}
+        anchorPosition={menuFor?.pos}
+        open={menuFor !== null}
+        onClose={() => setMenuFor(null)}
+      >
+        {menuFor && menuFor.entry.type === DIR_TYPE && (
+          <MenuItem onClick={() => { const entry = menuFor.entry; setMenuFor(null); onOpen(entry); }}>
+            <ListItemIcon><FolderOpenIcon fontSize="small" color="primary" /></ListItemIcon>
+            <ListItemText>Otwórz</ListItemText>
+          </MenuItem>
+        )}
         {menuFor && menuFor.entry.type === FILE_TYPE && (
           <MenuItem onClick={() => { void viewFile(menuFor.entry); setMenuFor(null); }}>
             <ListItemIcon><VisibilityIcon fontSize="small" /></ListItemIcon>
@@ -3563,6 +3816,18 @@ export default function DrivePage(): React.JSX.Element {
         }}>
           <ListItemIcon><CodeIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Path" secondary="Ścieżka dla api.file (skrypty)" />
+        </MenuItem>
+        <MenuItem onClick={async () => {
+          // Pełna ścieżka VFS w katalogu użytkownika (backendowa: /data/Minis/Users/{u}/...).
+          const rel = cwd ? `${cwd}/${menuFor!.entry.name}` : menuFor!.entry.name;
+          const vfsPath = `/data/Minis/Users/${userName}/drive/${rel}`;
+          setMenuFor(null);
+          const ok = await copyTextToClipboard(vfsPath);
+          if (ok) toast(`Skopiowano VFS path: ${vfsPath}`);
+          else prompt('Skopiuj VFS path ręcznie:', vfsPath);
+        }}>
+          <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="VFS path" secondary="Pełna ścieżka w katalogu użytkownika" />
         </MenuItem>
         <MenuItem onClick={() => { copyToClipboard(menuFor!.entry, 'copy'); setMenuFor(null); }}>
           <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
@@ -3796,6 +4061,96 @@ export default function DrivePage(): React.JSX.Element {
             </Button>
           </DialogActions>
         </Dialog>
+      )}
+
+      {/* Ustawienia widoku markdown (per-plik, zapisywane na backend). */}
+      <Popover
+        open={Boolean(mdSettingsAnchor)}
+        anchorEl={mdSettingsAnchor}
+        onClose={() => setMdSettingsAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Box sx={{ p: 1.5, minWidth: 280 }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>
+            Ustawienia widoku
+          </Typography>
+          <FormControlLabel
+            sx={{ ml: 0, width: '100%', justifyContent: 'space-between', mr: 0 }}
+            labelPlacement="start"
+            control={<Switch size="small" checked={!!mdView.minimalView} onChange={(e) => setMdSetting({ minimalView: e.target.checked })} />}
+            label={<Box><Typography sx={{ fontSize: 13 }}>Widok minimalny</Typography>
+              <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Bez marginesów i bez nagłówków/ramek osadzonych bloczków</Typography></Box>}
+          />
+          <FormControlLabel
+            sx={{ ml: 0, width: '100%', justifyContent: 'space-between', mr: 0 }}
+            labelPlacement="start"
+            control={<Switch size="small" checked={!!mdView.fullWidth} onChange={(e) => setMdSetting({ fullWidth: e.target.checked })} />}
+            label={<Box><Typography sx={{ fontSize: 13 }}>Pełna szerokość</Typography>
+              <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Treść na całą szerokość — bez pustych obszarów po bokach</Typography></Box>}
+          />
+          <FormControlLabel
+            sx={{ ml: 0, width: '100%', justifyContent: 'space-between', mr: 0 }}
+            labelPlacement="start"
+            control={<Switch size="small" checked={!!mdView.smallText} onChange={(e) => setMdSetting({ smallText: e.target.checked })} />}
+            label={<Box><Typography sx={{ fontSize: 13 }}>Mały tekst</Typography>
+              <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Mniejsza czcionka treści dokumentu</Typography></Box>}
+          />
+          <FormControlLabel
+            sx={{ ml: 0, width: '100%', justifyContent: 'space-between', mr: 0 }}
+            labelPlacement="start"
+            control={<Switch size="small" checked={!!mdView.showToc} onChange={(e) => setMdSetting({ showToc: e.target.checked })} />}
+            label={<Box><Typography sx={{ fontSize: 13 }}>Pokaż spis treści</Typography>
+              <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Ruchome okienko z nagłówkami (linki)</Typography></Box>}
+          />
+          <FormControlLabel
+            sx={{ ml: 0, width: '100%', justifyContent: 'space-between', mr: 0 }}
+            labelPlacement="start"
+            control={<Switch size="small" checked={!!mdView.showFavorites} onChange={(e) => setMdSetting({ showFavorites: e.target.checked })} />}
+            label={<Box><Typography sx={{ fontSize: 13 }}>Pokaż ulubione</Typography>
+              <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>Ruchome okienko z ulubionymi plikami</Typography></Box>}
+          />
+          <Divider sx={{ my: 1 }} />
+          <Typography sx={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.5 }}>
+            Import / Eksport
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => triggerMdImport('plain')} sx={{ justifyContent: 'flex-start', textTransform: 'none', fontSize: 12 }}>
+              Importuj czysty .md (z dysku)
+            </Button>
+            <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => triggerMdImport('notion')} sx={{ justifyContent: 'flex-start', textTransform: 'none', fontSize: 12 }}>
+              Importuj z Notion (.md / .zip)
+            </Button>
+            <Button size="small" variant="outlined" startIcon={<DownloadIcon fontSize="small" />} onClick={() => void exportCleanMd()} sx={{ justifyContent: 'flex-start', textTransform: 'none', fontSize: 12 }}>
+              Eksportuj czysty .md (bez rozszerzeń)
+            </Button>
+            <Button size="small" variant="outlined" startIcon={<DownloadIcon fontSize="small" />} onClick={() => void exportZip(true)} sx={{ justifyContent: 'flex-start', textTransform: 'none', fontSize: 12 }}>
+              Eksportuj strony → zip (czysty)
+            </Button>
+            <Button size="small" variant="outlined" startIcon={<DownloadIcon fontSize="small" />} onClick={() => void exportZip(false)} sx={{ justifyContent: 'flex-start', textTransform: 'none', fontSize: 12 }}>
+              Eksportuj strony → zip (z rozszerzeniami)
+            </Button>
+          </Box>
+        </Box>
+      </Popover>
+      {/* Ukryty input pliku do importu markdown. */}
+      <input ref={mdImportInputRef} type="file" accept=".md,.markdown,.txt,.zip" style={{ display: 'none' }} onChange={onMdImportFile} />
+
+      {/* Ruchome okienka: Spis treści / Ulubione (per-plik, ustawiane w Ustawieniach). */}
+      {mdEditing && mdView.showToc && (
+        <MdTocPanel onClose={() => setMdSetting({ showToc: false })} />
+      )}
+      {mdEditing && mdView.showFavorites && (
+        <MdFavoritesPanel
+          favorites={Array.from(favorites).sort()}
+          currentRel={mdEditing.pimRel ? undefined : mdEditing.rel}
+          currentName={mdEditing.entry.name}
+          isCurrentFav={!mdEditing.pimRel && favorites.has(mdEditing.rel)}
+          onToggleCurrent={() => toggleFavoritePath(mdEditing.rel, mdEditing.entry.name)}
+          onOpen={(rel) => { void goToFavorite(rel); }}
+          onRemove={(rel) => toggleFavoritePath(rel, rel.split('/').pop() ?? rel)}
+          onClose={() => setMdSetting({ showFavorites: false })}
+        />
       )}
 
       {/* Preview actions menu — shared between mobile Dialog and the compact

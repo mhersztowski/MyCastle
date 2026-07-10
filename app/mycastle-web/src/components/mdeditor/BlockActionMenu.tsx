@@ -10,10 +10,16 @@ import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import CodeIcon from '@mui/icons-material/Code';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import EditIcon from '@mui/icons-material/Edit';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import SettingsIcon from '@mui/icons-material/Settings';
 import type { Editor } from '@tiptap/react';
 import { toggleHeadingFold, isHeadingCollapsed } from './extensions/HeadingFoldExtension';
 import { copyBlocks, readBlocksForPaste } from './utils/blockClipboard';
 import { blockToRaw, rawToRendered, isRawMarkdownBlock } from './extensions/RawMarkdownBlockExtension';
+import { CADVIEW_EDIT_EVENT, getCadExternalUrl } from './extensions/CadViewExtension';
+import { AUTOMATE_ACTION_EVENT } from './extensions/AutomateScriptExtension';
 
 export function getBlockId(el: HTMLElement): string | null {
   return (
@@ -116,6 +122,15 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
 
   const blockId = menuAnchor ? getBlockId(blockEl) : null;
   const canEditBlock = !!(editor && typeof blockPos === 'number');
+
+  // Węzeł tego bloczka — do akcji specyficznych dla typu (CAD, skrypt automatyzacji itd.).
+  const blockNode = (menuAnchor && editor && typeof blockPos === 'number') ? editor.state.doc.nodeAt(blockPos) : null;
+  const blockType = blockNode?.type.name;
+  const dispatchBlock = useCallback((name: string, detail: unknown) => {
+    window.dispatchEvent(new CustomEvent(name, { detail }));
+    closeMenu();
+  }, [closeMenu]);
+  const cadUrl = blockType === 'cadViewEmbed' && blockNode ? getCadExternalUrl(blockNode.attrs) : '';
   const isRaw = !!(menuAnchor && editor && typeof blockPos === 'number' && isRawMarkdownBlock(editor, blockPos));
   // Fold action only makes sense on headings — the section fold hangs off them.
   const isHeading = /^H[1-6]$/.test(blockEl.tagName);
@@ -153,6 +168,35 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
       >
+        {/* Akcje specyficzne dla typu bloczka (przeniesione z nagłówków osadzeń). */}
+        {blockType === 'cadViewEmbed' && [
+          <MenuItem key="cad-edit" dense onClick={() => dispatchBlock(CADVIEW_EDIT_EVENT, { pos: blockPos })}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Change project" />
+          </MenuItem>,
+          cadUrl ? (
+            <MenuItem key="cad-open" dense onClick={() => { window.open(cadUrl, '_blank', 'noopener,noreferrer'); closeMenu(); }}>
+              <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Open in CAD app" />
+            </MenuItem>
+          ) : null,
+          <Divider key="cad-div" />,
+        ]}
+        {blockType === 'automateScriptBlock' && [
+          <MenuItem key="au-run" dense onClick={() => dispatchBlock(AUTOMATE_ACTION_EVENT, { pos: blockPos, action: 'run' })}>
+            <ListItemIcon><PlayArrowIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Uruchom" />
+          </MenuItem>,
+          <MenuItem key="au-edit" dense onClick={() => dispatchBlock(AUTOMATE_ACTION_EVENT, { pos: blockPos, action: 'edit' })}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Edytor skryptu" />
+          </MenuItem>,
+          <MenuItem key="au-set" dense onClick={() => dispatchBlock(AUTOMATE_ACTION_EVENT, { pos: blockPos, action: 'settings' })}>
+            <ListItemIcon><SettingsIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Ustawienia skryptu" />
+          </MenuItem>,
+          <Divider key="au-div" />,
+        ]}
         {canEditBlock && (
           <MenuItem onClick={handleCopy} dense>
             <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
