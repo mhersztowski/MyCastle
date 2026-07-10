@@ -3520,6 +3520,16 @@ export default function DrivePage(): React.JSX.Element {
                   workspaceProjectDeps={driveWorkspaceProjectDeps}
                   workspaceExtraPlugins={driveExtraPlugins}
                   workspaceInitialPath={isAdmin ? `/user/drive/${dashEditing.path}` : `/drive/${dashEditing.path}`}
+                  mapVfsToWorkspace={(vfsPath) => {
+                    // Absolutną ścieżkę VFS mapuj na mount workspace: userDir → /user (admin) lub / (user);
+                    // pozostałe (admin) → /server (mount pełnego katalogu danych).
+                    const userPrefix = `/data/Minis/Users/${userName}/`;
+                    if (vfsPath.startsWith(userPrefix)) {
+                      const rel = vfsPath.slice(userPrefix.length);
+                      return isAdmin ? `/user/${rel}` : `/${rel}`;
+                    }
+                    return isAdmin ? `/server${vfsPath.startsWith('/') ? vfsPath : `/${vfsPath}`}` : vfsPath;
+                  }}
                 />
               </Box>
             )}

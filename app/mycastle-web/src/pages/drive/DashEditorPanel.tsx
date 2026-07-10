@@ -5,6 +5,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  ControlButton,
   MiniMap,
   Handle,
   Position,
@@ -41,6 +42,7 @@ import {
   CircularProgress,
   Popover,
   Select,
+  FormControl,
   ToggleButton,
   ToggleButtonGroup,
   Switch,
@@ -94,6 +96,9 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import MailIcon from '@mui/icons-material/Mail';
 import ShareIcon from '@mui/icons-material/Share';
 import EditIcon from '@mui/icons-material/Edit';
+import EditNoteIcon from '@mui/icons-material/EditNote';
+import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import DeleteIcon from '@mui/icons-material/Delete';
 import BuildIcon from '@mui/icons-material/Build';
@@ -119,7 +124,6 @@ import SyncIcon from '@mui/icons-material/Sync';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import PanToolIcon from '@mui/icons-material/PanTool';
 import FitScreenIcon from '@mui/icons-material/FitScreen';
-import GridViewIcon from '@mui/icons-material/GridView';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
 // MdEditor (TipTap + wszystkie customowe rozszerzenia: CadViewEmbed, EventBlock,
@@ -143,6 +147,7 @@ import type {
   UmlMember, UmlClassDef, UmlSource,
 } from '@mhersztowski/core';
 import { TextEditorWorkspace } from '@mhersztowski/texteditor';
+import Editor from '@monaco-editor/react';
 
 const FIELD_TYPES: QFieldType[] = ['QString', 'QNumber', 'QFilePath', 'QObjectRef', 'QChildsObjectRef', 'QIcon', 'QImage', 'QArray', 'QMap'];
 
@@ -171,6 +176,9 @@ interface DashObjectNodeData extends Record<string, unknown> {
   showHeader: boolean;
   selectedFieldName: string | null;
   onFieldSelect: (fieldName: string | null) => void;
+  onLinkNavigate?: () => void;   // LinkTo: klik → przenieś widok do grupy docelowej
+  onOpenFileFullscreen?: () => void;   // File: otwórz w pełnoekranowym Monaco
+  onOpenFileInWorkspace?: () => void;  // File: otwórz w edytorze workspace
 }
 
 import { useNotification } from '../../modules/notification';
@@ -240,6 +248,8 @@ interface DashEditorPanelProps {
   workspaceProjectDeps?: TEWProps['projectDeps'];
   workspaceExtraPlugins?: TEWProps['extraPlugins'];
   workspaceInitialPath?: string;
+  /** Mapuje absolutną ścieżkę VFS na ścieżkę w providerze workspace (zależy od isAdmin). */
+  mapVfsToWorkspace?: (vfsPath: string) => string;
 }
 
 // Jednolita pozycja drzewa SCENE — obejmuje WSZYSTKIE typy bloczków (object/var/fc/…),
@@ -292,6 +302,18 @@ const resolveSource = (edge: FcEdge, scene: DashScene): unknown => {
     try { return JSON.parse(setPropSrc.result); } catch { return setPropSrc.result; }
   }
   return undefined;
+};
+
+/** Jak resolveSource, ale ASYNC — bloczek File (`value_out`) podaje ZAWARTOŚĆ pliku
+ *  (odczyt z VFS). Dla pozostałych źródeł deleguje do synchronicznego resolveSource. */
+const resolveSourceAsync = async (edge: FcEdge, scene: DashScene, userName: string): Promise<unknown> => {
+  const src = scene.objects?.find((o) => o.id === edge.source);
+  if (src && src.className === 'File' && edge.sourceHandle === 'value_out') {
+    const path = String(src.properties?.path ?? '').trim();
+    if (!path) return undefined;
+    try { return await vfsRead(userName, path); } catch { return undefined; }
+  }
+  return resolveSource(edge, scene);
 };
 
 const detectFieldType = (typeStr: string): QFieldType => {
@@ -824,6 +846,14 @@ const BUILT_IN_CLASSES: UmlClassDef[] = [
   {
     name: 'ObjectRef', kind: 'class',
     fields: [{ name: 'filePath', type: 'QString' }, { name: 'objectPath', type: 'QString' }],
+  },
+  {
+    name: 'LinkTo', kind: 'class',
+    fields: [{ name: 'targetGroupId', type: 'QString' }, { name: 'label', type: 'QString' }],
+  },
+  {
+    name: 'File', kind: 'class',
+    fields: [{ name: 'path', type: 'QString' }],
   },
 ];
 
@@ -1657,7 +1687,7 @@ const TransformField: React.FC<{ label: string; value: number; step?: number; on
             onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
             sx={{ flex: 1 }} />
         : <Typography sx={{ fontSize: 11, fontFamily: 'monospace', cursor: 'text', color: 'text.primary', flex: 1, '&:hover': { bgcolor: 'action.hover' }, borderRadius: 0.5, px: 0.25 }}
-            onClick={() => { setDraft(String(value)); setEditing(true); }}>{Math.round(value * 100) / 100}</Typography>}
+            onClick={() => { setDraft(String(Math.round(value * 100) / 100)); setEditing(true); }}>{Math.round(value * 100) / 100}</Typography>}
     </Box>
   );
 };
@@ -1898,12 +1928,20 @@ const PropertiesPanel: React.FC<{
   selectedFieldDef: FieldDef | null;
   isCustom: boolean;
   onFieldTypeChange: (fieldName: string, newType: string) => void;
-}> = ({ object, fields, userName, onObjectNameChange, onTransformChange, onPropertyChange, showDetails, onToggleShowDetails, showHeader, onToggleShowHeader, showPins, onToggleShowPins, zIndex, onZIndexChange, selectedFieldDef, isCustom, onFieldTypeChange }) => {
+  // LinkTo: lista grup sceny + nawigacja widoku do wybranej grupy.
+  sceneGroups: { id: string; name: string }[];
+  onNavigateToGroup: (groupId: string) => void;
+  // File: otwarcie pliku w pełnoekranowym edytorze Monaco / w edytorze workspace.
+  onOpenFileFullscreen: (path: string) => void;
+  onOpenFileInWorkspace: (path: string) => void;
+}> = ({ object, fields, userName, onObjectNameChange, onTransformChange, onPropertyChange, showDetails, onToggleShowDetails, showHeader, onToggleShowHeader, showPins, onToggleShowPins, zIndex, onZIndexChange, selectedFieldDef, isCustom, onFieldTypeChange, sceneGroups, onNavigateToGroup, onOpenFileFullscreen, onOpenFileInWorkspace }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [refFilePickerOpen, setRefFilePickerOpen] = useState(false);
   const [refObjPathDraft, setRefObjPathDraft] = useState('');
   const [mdPickerOpen, setMdPickerOpen] = useState(false);
+  const [mdTextOpen, setMdTextOpen] = useState(false); // pełnoekranowy edytor markdown (źródło jako tekst)
+  const [filePickerOpen, setFilePickerOpen] = useState(false); // wybór pliku dla bloczka File
 
   useEffect(() => { setEditingName(false); }, [object?.id]);
 
@@ -1985,6 +2023,12 @@ const PropertiesPanel: React.FC<{
                 </Tooltip>
               )}
             </Box>
+            {/* Źródło jako TEKST inline — edycja w pełnoekranowym edytorze markdown. */}
+            <Button size="small" variant="outlined" startIcon={<EditNoteIcon sx={{ fontSize: 15 }} />}
+              onClick={() => setMdTextOpen(true)}
+              sx={{ fontSize: 11, textTransform: 'none', mt: 0.5, width: '100%' }}>
+              {isFile ? 'Edytuj jako tekst (pełny ekran)…' : 'Edytuj tekst markdown (pełny ekran)…'}
+            </Button>
             <FilePickerDialog
               open={mdPickerOpen}
               onClose={() => setMdPickerOpen(false)}
@@ -1993,6 +2037,94 @@ const PropertiesPanel: React.FC<{
               filterExt=".md"
               onSelect={(p) => onPropertyChange(object.id, 'src', p)}
             />
+            {/* Pełnoekranowy edytor markdown dla źródła inline (property `src` = surowy markdown). */}
+            {/* z-index poniżej menu MdEditora (portalowanych do body: BlockActionMenu=1200,
+                command palette/bubble ≥1300), by ⋮ menu bloczka i paleta komend były NAD
+                pełnoekranowym edytorem, a nie za nim. */}
+            <Dialog open={mdTextOpen} onClose={() => setMdTextOpen(false)} fullScreen sx={{ zIndex: 1150 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+                <EditNoteIcon sx={{ fontSize: 20, color: '#4fc3f7' }} />
+                <Typography sx={{ fontSize: 14, fontWeight: 700, flex: 1 }}>Markdown (tekst) — {object.objectName}</Typography>
+                <Button size="small" variant="contained" onClick={() => setMdTextOpen(false)} sx={{ textTransform: 'none' }}>Gotowe</Button>
+              </Box>
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <React.Suspense fallback={<Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>}>
+                  <MdEditor
+                    key={`mdtext-${object.id}`}
+                    initialContent={isFile ? '' : srcVal}
+                    editable
+                    autoSaveDelay={800}
+                    onSave={(content: string) => onPropertyChange(object.id, 'src', content)}
+                  />
+                </React.Suspense>
+              </Box>
+            </Dialog>
+          </>
+        );
+      })()}
+
+      {/* LinkTo — element sceny przesuwający widok do wybranej grupy. */}
+      {object.className === 'LinkTo' && (() => {
+        const targetId = String(object.properties['targetGroupId'] ?? '');
+        const target = sceneGroups.find((g) => g.id === targetId);
+        return (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary', mb: 0.75 }}>Cel (grupa)</Typography>
+            <FormControl size="small" fullWidth sx={{ mb: 0.75 }}>
+              <Select value={target ? targetId : ''} displayEmpty
+                onChange={(e) => onPropertyChange(object.id, 'targetGroupId', e.target.value)}
+                sx={{ fontSize: 12 }}>
+                <MenuItem value="" sx={{ fontSize: 12, fontStyle: 'italic' }}>— wybierz grupę —</MenuItem>
+                {sceneGroups.map((g) => <MenuItem key={g.id} value={g.id} sx={{ fontSize: 12 }}>{g.name}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <TextField size="small" fullWidth label="Etykieta (opcjonalnie)" value={String(object.properties['label'] ?? '')}
+              onChange={(e) => onPropertyChange(object.id, 'label', e.target.value)}
+              inputProps={{ style: { fontSize: 12 } }} InputLabelProps={{ sx: { fontSize: 11 } }} sx={{ mb: 0.75 }} />
+            <Button size="small" variant="contained" fullWidth startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+              disabled={!target} onClick={() => onNavigateToGroup(targetId)}
+              sx={{ fontSize: 11, textTransform: 'none' }}>
+              Przejdź do grupy
+            </Button>
+          </>
+        );
+      })()}
+
+      {/* File — bloczek pliku VFS (wyjście z zawartością do func) + edycja. */}
+      {object.className === 'File' && (() => {
+        const path = String(object.properties['path'] ?? '');
+        return (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
+              <InsertDriveFileIcon sx={{ fontSize: 14, color: '#ffb74d' }} />
+              <Typography sx={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>Plik (VFS)</Typography>
+            </Box>
+            <TextField size="small" fullWidth placeholder="/data/Minis/Users/…/plik.txt" value={path}
+              onChange={(e) => onPropertyChange(object.id, 'path', e.target.value)}
+              inputProps={{ style: { fontSize: 11, fontFamily: 'monospace' } }} sx={{ mb: 0.75 }} />
+            <Box sx={{ display: 'flex', gap: 0.5, mb: 0.5 }}>
+              <Button size="small" variant="outlined" startIcon={<FolderOpenIcon sx={{ fontSize: 14 }} />}
+                onClick={() => setFilePickerOpen(true)} sx={{ fontSize: 10, textTransform: 'none', flex: 1 }}>
+                Zmień plik…
+              </Button>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              <Button size="small" variant="contained" startIcon={<EditIcon sx={{ fontSize: 14 }} />}
+                disabled={!path} onClick={() => onOpenFileFullscreen(path)}
+                sx={{ fontSize: 10, textTransform: 'none', flex: 1 }}>
+                Otwórz
+              </Button>
+              <Button size="small" variant="outlined" startIcon={<CodeIcon sx={{ fontSize: 14 }} />}
+                disabled={!path} onClick={() => onOpenFileInWorkspace(path)}
+                sx={{ fontSize: 10, textTransform: 'none', flex: 1 }}>
+                W edytorze
+              </Button>
+            </Box>
+            <FilePickerDialog open={filePickerOpen} onClose={() => setFilePickerOpen(false)}
+              userName={userName} currentPath={path} filterExt=""
+              onSelect={(p) => onPropertyChange(object.id, 'path', p)} />
           </>
         );
       })()}
@@ -3223,6 +3355,8 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
   const isPdfView = data.className === 'PdfView';
   const isDjvuView = data.className === 'DjvuView';
   const isObjectRefNode = data.className === 'ObjectRef';
+  const isLinkTo = data.className === 'LinkTo';
+  const isFile = data.className === 'File';
   const t = data.transform;
   const visible = data.selected;
 
@@ -3325,8 +3459,9 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
             type="source"
             position={Position.Right}
             id="value_out"
-            style={{ width: 10, height: 10, background: '#81c784', border: '2px solid #1a1028', borderRadius: 2, pointerEvents: 'all',
-              opacity: data.selected ? 1 : 0.45, transition: 'opacity 0.15s',
+            style={{ width: isFile ? 14 : 10, height: isFile ? 14 : 10, background: '#81c784', border: '2px solid #1a1028', borderRadius: 2, pointerEvents: 'all',
+              // Dla File pin zawsze wyraźny — z niego prowadzi się połączenie z zawartością pliku.
+              opacity: (data.selected || isFile) ? 1 : 0.45, transition: 'opacity 0.15s', zIndex: 5,
             }}
           />
           <Box sx={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)',
@@ -3365,7 +3500,43 @@ const DashObjectNode: React.FC<NodeProps<Node<DashObjectNodeData>>> = ({ data })
       )}
 
       {/* Fields / Markdown / ObjectRef / ChildsObjectRef content */}
-      {isObjectRefNode ? (
+      {isFile ? (() => {
+        const fp = String(data.properties['path'] ?? '');
+        const fname = fp.split('/').filter(Boolean).pop() || '(brak pliku)';
+        return (
+          // Kompaktowy render: ikona pliku + nazwa + ikony otwarcia. Wąski, by nie
+          // zasłaniać pinu `value_out` po prawej (można z niego poprowadzić połączenie).
+          <Box className="nodrag" onPointerDown={(e) => e.stopPropagation()}
+            sx={{ px: 0.75, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5, mr: 2 }}>
+            <InsertDriveFileIcon sx={{ fontSize: 18, color: '#ffb74d', flexShrink: 0 }} />
+            <Typography title={fp} sx={{ flex: 1, fontSize: 11, fontFamily: 'monospace', color: fp ? 'text.primary' : 'text.disabled',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fname}</Typography>
+            <Tooltip title="Otwórz w pełnoekranowym edytorze">
+              <span><IconButton size="small" className="nodrag" disabled={!fp}
+                onClick={(e) => { e.stopPropagation(); data.onOpenFileFullscreen?.(); }} sx={{ p: 0.25 }}>
+                <EditIcon sx={{ fontSize: 15, color: fp ? '#4fc3f7' : 'text.disabled' }} />
+              </IconButton></span>
+            </Tooltip>
+            <Tooltip title="Otwórz w edytorze (workspace)">
+              <span><IconButton size="small" className="nodrag" disabled={!fp}
+                onClick={(e) => { e.stopPropagation(); data.onOpenFileInWorkspace?.(); }} sx={{ p: 0.25 }}>
+                <CodeIcon sx={{ fontSize: 15, color: fp ? '#81c784' : 'text.disabled' }} />
+              </IconButton></span>
+            </Tooltip>
+          </Box>
+        );
+      })() : isLinkTo ? (
+        // LinkTo — klikalna etykieta; klik przenosi widok do grupy docelowej.
+        <Box className="nodrag" onPointerDown={(e) => e.stopPropagation()}
+          sx={{ p: 0.75, display: 'flex', justifyContent: 'center' }}>
+          <Button size="small" variant="contained" fullWidth
+            startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+            onClick={(e) => { e.stopPropagation(); data.onLinkNavigate?.(); }}
+            sx={{ textTransform: 'none', fontSize: 12, fontWeight: 700, bgcolor: '#7c4dff', '&:hover': { bgcolor: '#6a3ce0' } }}>
+            {String(data.properties['label'] ?? '') || data.objectName || 'LinkTo'}
+          </Button>
+        </Box>
+      ) : isObjectRefNode ? (
         <ObjectRefNodeContent userName={data.userName} properties={data.properties}
           onPropertyChange={data.onPropertyChange} height={t.height} />
       ) : isPdfView ? (
@@ -5094,9 +5265,45 @@ const DisplayGridOverlay: React.FC<{ w: number; h: number }> = ({ w, h }) => {
   );
 };
 
+// Pełnoekranowy edytor pliku (Monaco) z zapisem do VFS — dla bloczka File „Otwórz".
+const FileMonacoDialog: React.FC<{ open: boolean; userName: string; path: string; onClose: () => void }> = ({ open, userName, path, onClose }) => {
+  const [content, setContent] = useState('');
+  const contentRef = useRef('');
+  useEffect(() => { contentRef.current = content; }, [content]);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('');
+  useEffect(() => {
+    if (!open || !path) return;
+    setLoading(true); setStatus('');
+    vfsRead(userName, path).then((t) => setContent(t)).catch((e) => setStatus('Błąd odczytu: ' + (e as Error).message)).finally(() => setLoading(false));
+  }, [open, path, userName]);
+  const save = async () => {
+    try { await vfsWrite(userName, path, contentRef.current); setStatus('Zapisano ✓'); setTimeout(() => setStatus(''), 1500); }
+    catch (e) { setStatus('Błąd zapisu: ' + (e as Error).message); }
+  };
+  return (
+    <Dialog open={open} onClose={onClose} fullScreen>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+        <InsertDriveFileIcon sx={{ fontSize: 18, color: '#ffb74d' }} />
+        <Typography sx={{ fontSize: 13, fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</Typography>
+        {status && <Typography sx={{ fontSize: 12, color: status.startsWith('Błąd') ? 'error.main' : 'success.main' }}>{status}</Typography>}
+        <Button size="small" variant="contained" onClick={save} sx={{ textTransform: 'none' }}>Zapisz (Ctrl+S)</Button>
+        <Button size="small" onClick={onClose} sx={{ textTransform: 'none' }}>Zamknij</Button>
+      </Box>
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        {loading ? <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box> : (
+          <Editor height="100%" path={path || 'file.txt'} value={content}
+            onChange={(v) => setContent(v ?? '')} theme="vs-dark" options={{ fontSize: 13, minimap: { enabled: false } }}
+            onMount={(editor, monaco) => { editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { void save(); }); }} />
+        )}
+      </Box>
+    </Dialog>
+  );
+};
+
 // ─── Main editor ─────────────────────────────────────────────────────────────
 
-const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, workspaceFs, workspaceProjectDeps, workspaceExtraPlugins, workspaceInitialPath }) => {
+const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, workspaceFs, workspaceProjectDeps, workspaceExtraPlugins, workspaceInitialPath, mapVfsToWorkspace }) => {
   const alliApi = useAlliApi();
   const { notify } = useNotification();
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
@@ -5347,6 +5554,28 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
     window.addEventListener('pointermove', onMove);
     return () => window.removeEventListener('pointermove', onMove);
   }, [showRulers]);
+  // LinkTo: lista grup + nawigacja widoku do środka grupy.
+  const sceneGroups = useMemo(
+    () => scene.objects.filter((o) => o.kind === 'group').map((o) => ({ id: o.id, name: o.objectName })),
+    [scene.objects],
+  );
+  const navigateToGroup = useCallback((groupId: string) => {
+    const g = sceneRef.current.objects.find((o) => o.id === groupId && o.kind === 'group');
+    if (!g) return;
+    const gp = getGlobalXY(sceneRef.current.objects, g);
+    const t = getTransform(g);
+    const cx = gp.x + (t.width > 0 ? t.width : 320) / 2;
+    const cy = gp.y + (t.height > 0 ? t.height : 240) / 2;
+    setCenter(cx, cy, { zoom: getViewport().zoom, duration: 400 });
+  }, [setCenter, getViewport]);
+  // File: pełnoekranowy edytor Monaco + otwarcie w workspace.
+  const [fileEditPath, setFileEditPath] = useState<string | null>(null);
+  const [wsPath, setWsPath] = useState<string | undefined>(workspaceInitialPath);
+  useEffect(() => { setWsPath(workspaceInitialPath); }, [workspaceInitialPath]);
+  const openFileInWorkspace = useCallback((vfsPath: string) => {
+    setWsPath(mapVfsToWorkspace ? mapVfsToWorkspace(vfsPath) : vfsPath);
+    setShowWorkspace(true);
+  }, [mapVfsToWorkspace]);
 
   // Nawigacja do osadzonej sceny (edytowalnej) i powrót. Load effect reaguje na activeFilePath.
   // Auto-save wyłączony → ostrzegamy przed utratą niezapisanych zmian przy przełączaniu.
@@ -5651,10 +5880,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
     try {
       const fcEdges = sceneRef.current.fcEdges ?? [];
 
-      const argValues: unknown[] = fc.paramNames.map((_, i) => {
+      const argValues: unknown[] = await Promise.all(fc.paramNames.map(async (_, i) => {
         const edge = fcEdges.find((e) => e.target === fcId && e.targetHandle === `arg_${i}`);
         if (edge) {
-          const v = resolveSource(edge, sceneRef.current);
+          const v = await resolveSourceAsync(edge, sceneRef.current, userName);
           if (v !== undefined) return v;
         }
         const override = fc.argOverrides[i];
@@ -5667,11 +5896,11 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           return override;
         }
         return undefined;
-      });
+      }));
 
       // Resolve "this" value
       const thisEdge = fcEdges.find((e) => e.target === fcId && e.targetHandle === 'this');
-      const thisValue: unknown = thisEdge ? resolveSource(thisEdge, sceneRef.current) : undefined;
+      const thisValue: unknown = thisEdge ? await resolveSourceAsync(thisEdge, sceneRef.current, userName) : undefined;
 
       const text = await vfsRead(userName, ds.filePath);
       // Ujednolicone z automatyzacją Markdown: wstrzyknij wbudowane biblioteki
@@ -6112,6 +6341,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
     for (const f of cls.fields) props[f.name] = defaultForType(detectFieldType(f.type));
     const size = cls.name === 'MarkdownView' ? { width: 320, height: 400 }
       : cls.name === 'ObjectRef' ? { width: 280, height: 0 }
+      : cls.name === 'File' ? { width: 220, height: 0 }
       : { width: 0, height: 0 };
     const transform: DashTransform = centeredTransform(size.width, size.height, count);
     const obj: DashObject = {
@@ -6738,6 +6968,15 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           showHeader: obj.showHeader ?? false,
           selectedFieldName: selectedField?.objId === obj.id ? selectedField.fieldName : null,
           onFieldSelect: (fieldName: string | null) => setSelectedField(fieldName ? { objId: obj.id, fieldName } : null),
+          onLinkNavigate: obj.className === 'LinkTo'
+            ? () => navigateToGroup(String(obj.properties?.targetGroupId ?? ''))
+            : undefined,
+          onOpenFileFullscreen: obj.className === 'File'
+            ? () => setFileEditPath(String(obj.properties?.path ?? ''))
+            : undefined,
+          onOpenFileInWorkspace: obj.className === 'File'
+            ? () => openFileInWorkspace(String(obj.properties?.path ?? ''))
+            : undefined,
         },
       });
     }
@@ -6749,7 +6988,12 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
         if (m) {
           const idx = parseInt(m[1]);
           const varNode = vars.find((v) => v.id === edge.source);
-          if (varNode?.varValue !== null && varNode?.varValue !== undefined) {
+          const fileSrc = scene.objects.find((o) => o.id === edge.source && o.className === 'File');
+          if (fileSrc && edge.sourceHandle === 'value_out') {
+            // Podgląd: zawartość ładowana async przy uruchomieniu — tu pokazujemy plik.
+            const fp = String(fileSrc.properties?.path ?? '');
+            connectedArgValues[idx] = `📄 ${fp.split('/').filter(Boolean).pop() || fp || 'file'}`;
+          } else if (varNode?.varValue !== null && varNode?.varValue !== undefined) {
             if (edge.sourceHandle.startsWith('get_')) {
               const field = edge.sourceHandle.slice(4);
               try { connectedArgValues[idx] = (JSON.parse(varNode.varValue) as Record<string, unknown>)[field]; } catch {}
@@ -7101,27 +7345,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
     setCenter(cx, cy, { zoom: 1, duration: 0 }); // instant (animowany bywa ignorowany na mobile)
   }, [setCenter]);
 
-  // Odzyskiwanie: układa WSZYSTKIE node'y (także te z zepsutą/skrajną pozycją) w
-  // czytelną siatkę i dopasowuje widok. Ratunek po „wyrzuceniu" bloczka poza kadr.
-  const gatherNodes = useCallback(() => {
-    updateScene((prev) => {
-      let i = 0;
-      const cols = 6, gapX = 240, gapY = 150, x0 = 40, y0 = 40;
-      const next = () => { const c = i % cols, r = Math.floor(i / cols); i++; return { x: x0 + c * gapX, y: y0 + r * gapY }; };
-      // Dzieci qt-widgetów pozycjonują się względem rodzica — ich nie ruszamy.
-      const qtChildIds = new Set(prev.objects.filter((o) => o.parentId && prev.objects.some((p) => p.id === o.parentId && p.kind === 'qt-widget')).map((o) => o.id));
-      return {
-        ...prev,
-        objects: prev.objects.map((o) => { if (qtChildIds.has(o.id)) return o; const p = next(); return { ...o, transform: { ...getTransform(o), x: p.x, y: p.y } }; }),
-        functionCalls: (prev.functionCalls ?? []).map((f) => { const p = next(); return { ...f, x: p.x, y: p.y }; }),
-        vars: (prev.vars ?? []).map((v) => { const p = next(); return { ...v, x: p.x, y: p.y }; }),
-        classObjs: (prev.classObjs ?? []).map((o) => { const p = next(); return { ...o, x: p.x, y: p.y }; }),
-        getProps: (prev.getProps ?? []).map((n) => { const p = next(); return { ...n, x: p.x, y: p.y }; }),
-        setProps: (prev.setProps ?? []).map((n) => { const p = next(); return { ...n, x: p.x, y: p.y }; }),
-      };
-    });
-    setTimeout(() => fitAllNodes(), 120);
-  }, [updateScene, fitAllNodes]);
 
   // Re-parent DOWOLNY element sceny (object/var/fc/classObj/getProp/setProp) do grupy.
   // Grupy można zagnieżdżać (group→group). qt-widgety mieszczą tylko qt-widgety.
@@ -7492,16 +7715,6 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
             <PlayArrowIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Fit all nodes in view">
-          <IconButton size="small" onClick={() => fitAllNodes()} sx={{ p: 0.5 }}>
-            <FitScreenIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Zbierz wszystkie bloczki w siatkę (ratunek gdy bloczek wypadł poza kadr)">
-          <IconButton size="small" onClick={gatherNodes} sx={{ p: 0.5 }}>
-            <GridViewIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-        </Tooltip>
         {(selectedIds.size > 0 || selectedEdgeIds.size > 0) && (
           <Tooltip title="Delete selected (nodes + connections)">
             <IconButton size="small" color="error" onClick={deleteSelected} sx={{ p: 0.5 }}>
@@ -7783,6 +7996,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
             onNodeDragStop={onNodeDragStop}
+            // To samo menu kontekstowe co w panelu SCENE — również na canvasie:
+            // prawy klik na PUSTY obszar → wersja „New…", na WĘZEŁ → akcje bloczka.
+            onPaneContextMenu={(e) => openSceneCtx(e as React.MouseEvent, null)}
+            onNodeContextMenu={(e, node) => openSceneCtx(e, node.id)}
             minZoom={0.05} maxZoom={3} style={{ width: '100%', height: '100%' }}
             connectionMode={ConnectionMode.Strict}
             deleteKeyCode={null}
@@ -7828,7 +8045,13 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
             {displayEnabled && <DisplayGridOverlay w={displayW} h={displayH} />}
             {showOrigin && <OriginCross />}
             {showRulers && <RulerOverlay cursor={cursorPos} />}
-            <Controls />
+            {/* Domyślny fitView RF bywa zawodny (mobile/miary) — używamy własnego
+                `fitAllNodes` (ten sam co przycisk „Fit all nodes in view" w toolbarze). */}
+            <Controls showFitView={false}>
+              <ControlButton onClick={() => fitAllNodes()} title="Fit all nodes in view">
+                <FitScreenIcon sx={{ fontSize: 14 }} />
+              </ControlButton>
+            </Controls>
             {!isMobile && (
               <MiniMap
                 pannable
@@ -8122,6 +8345,10 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
                   selectedFieldDef={selectedFieldDef}
                   isCustom={selectedObject?.className === 'Unknown' || selectedObject?.customFields !== undefined}
                   onFieldTypeChange={(fieldName, newType) => { if (selectedObject) changeCustomFieldType(selectedObject.id, fieldName, newType); }}
+                  sceneGroups={sceneGroups}
+                  onNavigateToGroup={navigateToGroup}
+                  onOpenFileFullscreen={(p) => setFileEditPath(p)}
+                  onOpenFileInWorkspace={openFileInWorkspace}
                 />
               )}
             </Box>
@@ -8142,7 +8369,7 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
               <TextEditorWorkspace
                 key={`dash-ws-${userName}`}
                 provider={workspaceFs}
-                initialPath={workspaceInitialPath}
+                initialPath={wsPath}
                 projectDeps={workspaceProjectDeps}
                 extraPlugins={workspaceExtraPlugins}
               />
@@ -8555,6 +8782,9 @@ const DashEditorInner: React.FC<DashEditorPanelProps> = ({ userName, filePath, w
           <DeleteOutlineIcon fontSize="small" />Remove
         </MenuItem>
       </Menu>
+
+      {/* Pełnoekranowy edytor pliku (bloczek File → „Otwórz"). */}
+      <FileMonacoDialog open={fileEditPath !== null} userName={userName} path={fileEditPath ?? ''} onClose={() => setFileEditPath(null)} />
 
       {/* Var init dialog */}
       <VarInitDialog
