@@ -24,6 +24,7 @@ const TYPE_COLOR: Record<MapNodeType, string> = {
   group:        '#78909c',
   route:        '#42a5f5',
   label:        '#ffd54f',
+  collection:   '#ab47bc',
 }
 
 // ── small building blocks ─────────────────────────────────────────────────────
@@ -324,9 +325,13 @@ interface Props {
   onUpdate: (id: string, changes: Partial<MapNode>) => void
   onUpdateMany: (ids: string[], changes: Partial<MapNode>) => void
   onShowInfo?: (node: MapNode) => void
+  /** Aktualnie aktywna kolekcja (dla checkbox mode w hierarchy) — jeśli set, hierarchy pokazuje checkboxes. */
+  collectionEditingId?: string | null
+  onStartCollectionEditing?: (id: string) => void
+  onStopCollectionEditing?: () => void
 }
 
-export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany, onShowInfo }: Props) {
+export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany, onShowInfo, collectionEditingId, onStartCollectionEditing, onStopCollectionEditing }: Props) {
   const isMulti = selectedNodes.length > 1
 
   const upd = useCallback((changes: Partial<MapNode>) => {
@@ -539,6 +544,46 @@ export function MapPropertiesPanel({ node, selectedNodes, onUpdate, onUpdateMany
             <Row label="Width">
               <NumberInput value={node.weight} placeholder={4} min={0.5} step={0.5} onChange={v => upd({ weight: v })} />
             </Row>
+          </>)}
+
+          {/* ── collection ────────────────────────────────── */}
+          {node.type === 'collection' && (<>
+            <SectionLabel>Collection</SectionLabel>
+            <Row label="Members">
+              <Typography sx={{ fontSize: '0.72rem', color: 'text.primary' }}>
+                {(node.memberIds?.length ?? 0)} element{(node.memberIds?.length ?? 0) !== 1 ? 'ów' : ''}
+              </Typography>
+            </Row>
+            <Box sx={{ px: 1.5, pb: 1 }}>
+              {collectionEditingId === node.id ? (
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  fullWidth
+                  onClick={() => onStopCollectionEditing?.()}
+                  sx={{ fontSize: '0.7rem' }}
+                >
+                  ✓ Zakończ wybór (Done)
+                </Button>
+              ) : (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="primary"
+                  fullWidth
+                  onClick={() => onStartCollectionEditing?.(node.id)}
+                  sx={{ fontSize: '0.7rem' }}
+                >
+                  Select — dodawaj/usuwaj przez checkboxy
+                </Button>
+              )}
+              {(node.memberIds ?? []).length > 0 && (
+                <Typography sx={{ fontSize: '0.65rem', color: 'text.secondary', mt: 0.75, display: 'block' }}>
+                  Zaznaczenie kolekcji na hierarchii pokaże wszystkich członków na mapie i wyzoomuje widok.
+                </Typography>
+              )}
+            </Box>
           </>)}
 
           {/* ── group ────────────────────────────────────── */}

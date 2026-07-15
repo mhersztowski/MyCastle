@@ -34,17 +34,19 @@ export class CadRenderer {
   private canvas: HTMLCanvasElement;
 
   onViewChange?: () => void;
+  private theme: 'light' | 'dark';
 
-  constructor(canvas: HTMLCanvasElement, project: Project) {
+  constructor(canvas: HTMLCanvasElement, project: Project, opts?: { theme?: 'light' | 'dark' }) {
     this.project = project;
     this.canvas = canvas;
+    this.theme = opts?.theme ?? 'dark';
     this.width = canvas.clientWidth || canvas.width || 800;
     this.height = canvas.clientHeight || canvas.height || 600;
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(this.width, this.height, false);
-    this.renderer.setClearColor(0x1e1e1e, 1);
+    this.renderer.setClearColor(this.theme === 'light' ? 0xffffff : 0x1e1e1e, 1);
     this.renderer.shadowMap.enabled = true;
 
     // Orthographic camera (2D mode)
@@ -106,20 +108,21 @@ export class CadRenderer {
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    const mat = new THREE.LineBasicMaterial({ color: 0x4a4a4a, linewidth: 1 });
+    const light = this.theme === 'light';
+    const mat = new THREE.LineBasicMaterial({ color: light ? 0xe2e4e7 : 0x4a4a4a, linewidth: 1 });
     this.gridGroup.add(new THREE.LineSegments(geo, mat));
 
     const xGeo = new THREE.BufferGeometry();
     xGeo.setAttribute('position', new THREE.Float32BufferAttribute([
       -extent, 0, -0.4, extent, 0, -0.4,
     ], 3));
-    this.gridGroup.add(new THREE.LineSegments(xGeo, new THREE.LineBasicMaterial({ color: 0xcc4444 })));
+    this.gridGroup.add(new THREE.LineSegments(xGeo, new THREE.LineBasicMaterial({ color: light ? 0xd98d94 : 0xcc4444 })));
 
     const yGeo = new THREE.BufferGeometry();
     yGeo.setAttribute('position', new THREE.Float32BufferAttribute([
       0, -extent, -0.4, 0, extent, -0.4,
     ], 3));
-    this.gridGroup.add(new THREE.LineSegments(yGeo, new THREE.LineBasicMaterial({ color: 0x44cc44 })));
+    this.gridGroup.add(new THREE.LineSegments(yGeo, new THREE.LineBasicMaterial({ color: light ? 0x8fca8f : 0x44cc44 })));
   }
 
   private buildLights(): void {

@@ -1,20 +1,21 @@
 import { useState, useCallback, useRef } from 'react';
 import { Project } from '@mhersztowski/core-cad';
-import type { Feature, FeatureTree, SketchFeature, SketchPlane } from './types';
-import { defaultDatumCs, defaultDatumLine, defaultDatumPlane, defaultDatumPoint, defaultExtrude, defaultGroove, defaultHelix, defaultHole, defaultLoft, defaultLoftCut, defaultMirror, defaultPocket, defaultRevolve, defaultShell, defaultSketch, defaultSweep, defaultSweepCut } from './types';
+import type { FaceRef, Feature, FeatureTree, SketchFeature, SketchPlane, Vec3 } from './types';
+import { defaultChamfer, defaultDatumCs, defaultDatumLine, defaultDatumPlane, defaultDatumPoint, defaultExtrude, defaultFillet, defaultGroove, defaultHelix, defaultHole, defaultLinearPattern, defaultLoft, defaultLoftCut, defaultMirror, defaultPocket, defaultPolarPattern, defaultRevolve, defaultShell, defaultSketch, defaultSweep, defaultSweepCut } from './types';
 
 const STORAGE_KEY = 'cad3d-feature-tree';
 
+// Persistence WYŁĄCZONA — scena była zapisywana do localStorage co powodowało
+// problemy z legacy state (stare sketchy on face bez faceRef, migracje typów,
+// zmiany defaultów). Każde odświeżenie = clean slate.
+// Przy pierwszym załadowaniu kasujemy stary klucz żeby usunąć śmieci użytkowników.
 function load(): FeatureTree {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as FeatureTree;
-  } catch {}
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* SSR / disabled storage */ }
   return { version: 1 as const, features: [] };
 }
 
-function save(tree: FeatureTree): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
+function save(_tree: FeatureTree): void {
+  // no-op — nie zapisujemy sceny do localStorage
 }
 
 export interface Cad3dState {
@@ -22,7 +23,11 @@ export interface Cad3dState {
   selectedId: string | null;
   editingSketchId: string | null;
   mergeFeatures: (json: string) => void;
-  addSketch: (plane?: SketchPlane, offset?: number, planeMatrix?: number[]) => void;
+  /** Zwraca aktualne drzewo jako JSON (do save na backend). */
+  getTreeJson: () => string;
+  /** Zastępuje drzewo tym z JSON (open z backendu) + rebuild sketch projects. */
+  replaceTree: (json: string) => void;
+  addSketch: (plane?: SketchPlane, offset?: number, planeMatrix?: number[], faceRef?: FaceRef) => void;
   startEditSketch: (id: string) => void;
   exitSketch: () => void;
   getSketchProject: (id: string) => Project;
@@ -33,15 +38,19 @@ export interface Cad3dState {
   addMirror: () => void;
   addRevolve: (sketchId: string | null, entityIds: string[]) => void;
   addShell: () => void;
+  addFillet: () => void;
+  addChamfer: () => void;
+  addLinearPattern: () => void;
+  addPolarPattern: () => void;
   addLoft: () => void;
   addLoftCut: () => void;
   addSweep: () => void;
   addSweepCut: () => void;
   addHelix: () => void;
-  addDatumPoint: () => void;
-  addDatumLine: () => void;
-  addDatumPlane: () => void;
-  addDatumCs: () => void;
+  addDatumPoint: (position?: Vec3) => void;
+  addDatumLine: (position?: Vec3, direction?: Vec3, length?: number) => void;
+  addDatumPlane: (position?: Vec3, normal?: Vec3, size?: number) => string;
+  addDatumCs: (position?: Vec3, rotation?: Vec3, size?: number) => void;
   removeFeature: (id: string) => void;
   updateFeature: (id: string, patch: Partial<Feature>) => void;
   toggleFeature: (id: string) => void;
@@ -85,8 +94,8 @@ export function useCad3d(): Cad3dState {
     return sketchProjectsRef.current.get(id)!;
   }, []);
 
-  const addSketch = useCallback((plane: SketchPlane = 'XY', offset = 0, planeMatrix?: number[]) => {
-    const f = defaultSketch(plane, offset, planeMatrix);
+  const addSketch = useCallback((plane: SketchPlane = 'XY', offset = 0, planeMatrix?: number[], faceRef?: FaceRef) => {
+    const f = defaultSketch(plane, offset, planeMatrix, faceRef);
     sketchProjectsRef.current.set(f.id, new Project());
     setTree(prev => {
       const next = { ...prev, features: [...prev.features, f] };
@@ -161,6 +170,30 @@ export function useCad3d(): Cad3dState {
     setSelectedId(f.id);
   }, []);
 
+  const addFillet = useCallback(() => {
+    const f = defaultFillet();
+    setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
+    setSelectedId(f.id);
+  }, []);
+
+  const addChamfer = useCallback(() => {
+    const f = defaultChamfer();
+    setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
+    setSelectedId(f.id);
+  }, []);
+
+  const addLinearPattern = useCallback(() => {
+    const f = defaultLinearPattern();
+    setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
+    setSelectedId(f.id);
+  }, []);
+
+  const addPolarPattern = useCallback(() => {
+    const f = defaultPolarPattern();
+    setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
+    setSelectedId(f.id);
+  }, []);
+
   const addLoft = useCallback(() => {
     const f = defaultLoft();
     setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
@@ -197,14 +230,18 @@ export function useCad3d(): Cad3dState {
     setSelectedId(f.id);
   }, []);
 
-  const addDatum = useCallback((f: Feature) => {
+  const addDatum = useCallback((f: Feature): string => {
     setTree(prev => { const next = { ...prev, features: [...prev.features, f] }; save(next); return next; });
     setSelectedId(f.id);
+    return f.id;
   }, []);
-  const addDatumPoint = useCallback(() => addDatum(defaultDatumPoint()), [addDatum]);
-  const addDatumLine = useCallback(() => addDatum(defaultDatumLine()), [addDatum]);
-  const addDatumPlane = useCallback(() => addDatum(defaultDatumPlane()), [addDatum]);
-  const addDatumCs = useCallback(() => addDatum(defaultDatumCs()), [addDatum]);
+  const addDatumPoint = useCallback((position?: Vec3) => addDatum(defaultDatumPoint(position)), [addDatum]);
+  const addDatumLine = useCallback((position?: Vec3, direction?: Vec3, length?: number) =>
+    addDatum(defaultDatumLine(position, direction, length)), [addDatum]);
+  const addDatumPlane = useCallback((position?: Vec3, normal?: Vec3, size?: number): string =>
+    addDatum(defaultDatumPlane(position, normal, size)), [addDatum]);
+  const addDatumCs = useCallback((position?: Vec3, rotation?: Vec3, size?: number) =>
+    addDatum(defaultDatumCs(position, rotation, size)), [addDatum]);
 
   const removeFeature = useCallback((id: string) => {
     sketchProjectsRef.current.delete(id);
@@ -276,11 +313,48 @@ export function useCad3d(): Cad3dState {
     setEditingSketchId(null);
   }, []);
 
+  /** Serializuje aktualne drzewo do JSON (dla zapisu na backend VFS). */
+  const getTreeJson = useCallback((): string => {
+    return JSON.stringify(treeRef.current, null, 2);
+  }, []);
+
+  /**
+   * Zastępuje aktualne drzewo tym z JSON (open z backendu). W przeciwieństwie do
+   * mergeFeatures NIE robi ID remap ani append — pełne przywrócenie. Odbudowuje
+   * też sketchProjectsRef z sketch.projectData (żeby edycja sketchów po open działała).
+   */
+  const replaceTree = useCallback((json: string) => {
+    try {
+      const data = JSON.parse(json) as FeatureTree;
+      if (!data || !Array.isArray(data.features)) {
+        console.warn('[useCad3d] replaceTree: invalid JSON structure');
+        return;
+      }
+      sketchProjectsRef.current.clear();
+      for (const f of data.features) {
+        if (f.type === 'sketch' && (f as SketchFeature).projectData) {
+          try {
+            const p = Project.fromJSON(JSON.parse((f as SketchFeature).projectData!));
+            sketchProjectsRef.current.set(f.id, p);
+          } catch (e) {
+            console.warn('[useCad3d] failed to restore sketch project', f.id, e);
+            sketchProjectsRef.current.set(f.id, new Project());
+          }
+        }
+      }
+      setTree({ version: 1 as const, features: data.features });
+      setSelectedId(null);
+      setEditingSketchId(null);
+    } catch (e) {
+      console.error('[useCad3d] replaceTree failed', e);
+    }
+  }, []);
+
   return {
     tree, selectedId, editingSketchId,
-    mergeFeatures,
+    mergeFeatures, getTreeJson, replaceTree,
     addSketch, startEditSketch, exitSketch, getSketchProject,
-    addExtrude, addPocket, addHole, addGroove, addMirror, addRevolve, addShell, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
+    addExtrude, addPocket, addHole, addGroove, addMirror, addRevolve, addShell, addFillet, addChamfer, addLinearPattern, addPolarPattern, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
     addDatumPoint, addDatumLine, addDatumPlane, addDatumCs,
     removeFeature, updateFeature, toggleFeature, moveFeature,
     selectFeature, clearTree,

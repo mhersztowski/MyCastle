@@ -1,19 +1,14 @@
 import { useState, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import {
-  Box, Button, ButtonGroup, Chip, Divider, Menu, MenuItem,
+  Alert, Box, Button, ButtonGroup, Chip, Divider, Menu, MenuItem, Snackbar,
   ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from '@mui/material';
-import ViewInArIcon from '@mui/icons-material/ViewInAr';
-import IndeterminateCheckBoxIcon from '@mui/icons-material/IndeterminateCheckBox';
-import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
-import FlipIcon from '@mui/icons-material/Flip';
-import RotateRightIcon from '@mui/icons-material/RotateRight';
+import { ThemeProvider, createTheme, useTheme } from '@mui/material/styles';
+// Material icons używane w toolbar-ach spoza Ops (np. GridOnIcon dla Add Sketch).
+// Ops toolbar używa <FreeCadIcon> — kolorowe SVG z FreeCAD (LGPL).
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
-import AdjustIcon from '@mui/icons-material/Adjust';
-import LayersIcon from '@mui/icons-material/Layers';
-import GestureIcon from '@mui/icons-material/Gesture';
-import AutorenewIcon from '@mui/icons-material/Autorenew';
+import { FreeCadIcon } from './cad3d/FreeCadIcon';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import NearMeIcon from '@mui/icons-material/NearMe';
@@ -29,7 +24,7 @@ import { FeaturePropsPanel } from './cad3d/FeaturePropsPanel';
 import { SceneTreePanel } from './cad3d/SceneTreePanel';
 import { SketchEditor } from './cad3d/SketchEditor';
 import type { SketchFeature, SketchPlane } from '../cad3d/types';
-import { planeFromFace } from '../cad3d/subSelect';
+import { planeFromFace, datumParamsFromFace } from '../cad3d/subSelect';
 import type { SubSelectMode, SubHit } from '../cad3d/subSelect';
 import type { ActiveTemplate } from './RepositoryPanel';
 
@@ -37,6 +32,10 @@ interface Props {
   project: Project;
   version: number;
   mergeTreeRef?: MutableRefObject<((json: string) => void) | null>;
+  /** Rejestruje funkcję zwracającą aktualne drzewo jako JSON — używane przez File menu / backend save. */
+  getTreeJsonRef?: MutableRefObject<(() => string) | null>;
+  /** Rejestruje funkcję ładującą drzewo z JSON — używane przez File menu / backend open. */
+  replaceTreeRef?: MutableRefObject<((json: string) => void) | null>;
   /** Armed template for serial placement — each click in the viewport adds the template at origin. */
   placementTemplate?: ActiveTemplate | null;
 }
@@ -74,13 +73,13 @@ function SubHitLabel({ hit }: { hit: SubHit | null }) {
   );
 }
 
-export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }: Props) {
+export function Cad3dView({ project, version, mergeTreeRef, getTreeJsonRef, replaceTreeRef, placementTemplate }: Props) {
   const {
     tree, selectedId, editingSketchId,
-    mergeFeatures,
+    mergeFeatures, getTreeJson, replaceTree,
     addSketch, startEditSketch, exitSketch, getSketchProject,
     addExtrude, addPocket, addHole, addGroove,
-    addMirror, addRevolve, addShell, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
+    addMirror, addRevolve, addShell, addFillet, addChamfer, addLinearPattern, addPolarPattern, addLoft, addLoftCut, addSweep, addSweepCut, addHelix,
     addDatumPoint, addDatumLine, addDatumPlane, addDatumCs,
     removeFeature, updateFeature, toggleFeature, moveFeature,
     selectFeature, clearTree,
@@ -91,13 +90,40 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
   const [sceneRoot, setSceneRoot] = useState<THREE.Object3D | null>(null);
   const [subSelectMode, setSubSelectMode] = useState<SubSelectMode>('object');
   const [subHit, setSubHit] = useState<SubHit | null>(null);
+  const [evalError, setEvalError] = useState<{ feature: string; reason: string } | null>(null);
   const placementFetchingRef = useRef(false);
+
+  // Nasłuchuj błędów evaluatora OCC (evalExtrude/evalRevolve/…) — dyspozytor emituje
+  // 'cad3d:eval-error' zamiast cichego return null, żeby użytkownik zobaczył konkretną
+  // przyczynę (np. "szkic nie tworzy zamkniętego konturu").
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { feature: string; reason: string } | undefined;
+      if (detail?.feature && detail?.reason) setEvalError({ feature: detail.feature, reason: detail.reason });
+    };
+    window.addEventListener('cad3d:eval-error', handler);
+    return () => window.removeEventListener('cad3d:eval-error', handler);
+  }, []);
 
   useEffect(() => {
     if (!mergeTreeRef) return;
     mergeTreeRef.current = mergeFeatures;
     return () => { mergeTreeRef.current = null; };
   }, [mergeTreeRef, mergeFeatures]);
+
+  // Rejestruje save/load callbacks — App-level trzyma refs, File menu ich używa
+  // do zapisu / odczytu CAD 3D feature tree z backendu VFS.
+  useEffect(() => {
+    if (!getTreeJsonRef) return;
+    getTreeJsonRef.current = getTreeJson;
+    return () => { getTreeJsonRef.current = null; };
+  }, [getTreeJsonRef, getTreeJson]);
+
+  useEffect(() => {
+    if (!replaceTreeRef) return;
+    replaceTreeRef.current = replaceTree;
+    return () => { replaceTreeRef.current = null; };
+  }, [replaceTreeRef, replaceTree]);
 
   const handleSceneChange = useCallback((root: THREE.Object3D) => setSceneRoot(root), []);
   const handleSubSelect = useCallback((hit: SubHit | null) => setSubHit(hit), []);
@@ -145,16 +171,75 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
 
   const faceHit = subHit?.type === 'face' ? subHit : null;
   const faceInfo = faceHit ? planeFromFace(faceHit) : null;
+  // Edge hit → midpoint + tangent direction (dla Fillet/Chamfer edge selection)
+  const edgeHit = subHit?.type === 'edge' ? subHit : null;
+  const edgeInfo = edgeHit ? {
+    midpoint: [
+      (edgeHit.a.x + edgeHit.b.x) / 2,
+      (edgeHit.a.y + edgeHit.b.y) / 2,
+      (edgeHit.a.z + edgeHit.b.z) / 2,
+    ] as [number, number, number],
+    tangent: (() => {
+      const dx = edgeHit.b.x - edgeHit.a.x;
+      const dy = edgeHit.b.y - edgeHit.a.y;
+      const dz = edgeHit.b.z - edgeHit.a.z;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      return [dx / len, dy / len, dz / len] as [number, number, number];
+    })(),
+  } : null;
 
   const handleSketchOnFace = () => {
     if (!faceInfo) return;
-    addSketch(faceInfo.plane, faceInfo.offset, faceInfo.planeMatrix);
+    addSketch(faceInfo.plane, faceInfo.offset, faceInfo.planeMatrix, faceInfo.faceRef);
     setSubHit(null);
     setSubSelectMode('object');
   };
 
+  // ── Datum (odniesienia geometryczne) na zaznaczonej face ──────────────────
+  const datumParams = faceHit ? datumParamsFromFace(faceHit) : null;
+
+  const handleDatumPointOnFace = () => {
+    if (!datumParams) return;
+    addDatumPoint(datumParams.position);
+    setSubHit(null); setSubSelectMode('object');
+  };
+  const handleDatumLineOnFace = () => {
+    if (!datumParams) return;
+    // Linia prostopadła do face — direction = face normal, długość dopasowana do rozmiaru face
+    addDatumLine(datumParams.position, datumParams.normal, datumParams.size);
+    setSubHit(null); setSubSelectMode('object');
+  };
+  const handleDatumPlaneOnFace = () => {
+    if (!datumParams) return;
+    // Płaszczyzna wzdłuż face — normal = face normal
+    addDatumPlane(datumParams.position, datumParams.normal, datumParams.size);
+    setSubHit(null); setSubSelectMode('object');
+  };
+  const handleDatumCsOnFace = () => {
+    if (!datumParams) return;
+    // Układ współrzędnych z basis U/V/N face (Z osi CS = normal face)
+    addDatumCs(datumParams.position, datumParams.rotationEulerXYZ, datumParams.size * 0.6);
+    setSubHit(null); setSubSelectMode('object');
+  };
+
+  // Light theme lokalnie dla CAD 3D — jasne toolbary/paneły, jasne tło rendering.
+  // Global theme aplikacji pozostaje dark (main.tsx). Owijamy TYLKO Cad3dView.
+  const globalTheme = useTheme();
+  const lightTheme = createTheme({
+    ...globalTheme,
+    palette: {
+      ...globalTheme.palette,
+      mode: 'light',
+      primary: globalTheme.palette.primary,
+      background: { default: '#fafafa', paper: '#ffffff' },
+      text: { primary: '#212121', secondary: '#616161' },
+      divider: 'rgba(0,0,0,0.12)',
+    },
+  });
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <ThemeProvider theme={lightTheme}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', bgcolor: 'background.default', color: 'text.primary' }}>
       {/* Toolbar */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75, flexWrap: 'wrap',
@@ -162,14 +247,25 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
       }}>
         {/* Add sketch — smart when face is selected */}
         {faceInfo ? (
-          <Tooltip title={`Create sketch on selected face — arbitrary orientation, centered on face`}>
-            <Button size="small" variant="contained" color="success"
-              startIcon={<GridOnIcon />}
-              onClick={handleSketchOnFace}
-            >
-              Sketch on Face
-            </Button>
-          </Tooltip>
+          <ButtonGroup size="small" variant="contained" color="success">
+            <Tooltip title="Create sketch on selected face — arbitrary orientation, centered on face">
+              <Button startIcon={<GridOnIcon />} onClick={handleSketchOnFace}>
+                Sketch on Face
+              </Button>
+            </Tooltip>
+            <Tooltip title="Punkt odniesienia na centroidzie face">
+              <Button onClick={handleDatumPointOnFace}>Punkt</Button>
+            </Tooltip>
+            <Tooltip title="Linia odniesienia prostopadła do face (kierunek = normal)">
+              <Button onClick={handleDatumLineOnFace}>Linia</Button>
+            </Tooltip>
+            <Tooltip title="Płaszczyzna odniesienia wzdłuż zaznaczonej face">
+              <Button onClick={handleDatumPlaneOnFace}>Płaszczyzna</Button>
+            </Tooltip>
+            <Tooltip title="Układ współrzędnych na face (Z = normal, U/V basis w plane)">
+              <Button onClick={handleDatumCsOnFace}>Układ</Button>
+            </Tooltip>
+          </ButtonGroup>
         ) : (
           <>
             <Tooltip title="Add a new sketch on a plane">
@@ -194,40 +290,52 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>Ops:</Typography>
         <ButtonGroup size="small" variant="outlined">
           <Tooltip title="Extrude selected sketch">
-            <Button startIcon={<ViewInArIcon />} onClick={() => addExtrude(getSketchId(), [])}>Extrude</Button>
+            <Button startIcon={<FreeCadIcon name="extrude" />} onClick={() => addExtrude(getSketchId(), [])}>Extrude</Button>
           </Tooltip>
           <Tooltip title="Pocket — subtract selected sketch from solid (CSG)">
-            <Button startIcon={<IndeterminateCheckBoxIcon />} onClick={() => addPocket(getSketchId(), [])}>Pocket</Button>
+            <Button startIcon={<FreeCadIcon name="pocket" />} onClick={() => addPocket(getSketchId(), [])}>Pocket</Button>
           </Tooltip>
           <Tooltip title="Hole — drill cylinder into solid from sketch circle centers (CSG)">
-            <Button startIcon={<RadioButtonUncheckedIcon />} onClick={() => addHole(getSketchId())}>Hole</Button>
+            <Button startIcon={<FreeCadIcon name="hole" />} onClick={() => addHole(getSketchId())}>Hole</Button>
           </Tooltip>
           <Tooltip title="Mirror accumulated solid">
-            <Button startIcon={<FlipIcon />} onClick={() => addMirror()}>Mirror</Button>
+            <Button startIcon={<FreeCadIcon name="mirror" />} onClick={() => addMirror()}>Mirror</Button>
           </Tooltip>
           <Tooltip title="Revolve selected sketch profile">
-            <Button startIcon={<RotateRightIcon />} onClick={() => addRevolve(getSketchId(), [])}>Revolve</Button>
+            <Button startIcon={<FreeCadIcon name="revolve" />} onClick={() => addRevolve(getSketchId(), [])}>Revolve</Button>
           </Tooltip>
           <Tooltip title="Groove — subtractive revolution, cuts groove into solid (CSG)">
-            <Button startIcon={<RotateRightIcon />} onClick={() => addGroove(getSketchId(), [])}>Groove</Button>
+            <Button startIcon={<FreeCadIcon name="groove" />} onClick={() => addGroove(getSketchId(), [])}>Groove</Button>
           </Tooltip>
           <Tooltip title="Shell — hollow the accumulated solid with a wall thickness">
-            <Button startIcon={<AdjustIcon />} onClick={() => addShell()}>Shell</Button>
+            <Button startIcon={<FreeCadIcon name="shell" />} onClick={() => addShell()}>Shell</Button>
+          </Tooltip>
+          <Tooltip title="Fillet — round sharp edges with a radius">
+            <Button startIcon={<FreeCadIcon name="fillet" />} onClick={() => addFillet()}>Fillet</Button>
+          </Tooltip>
+          <Tooltip title="Chamfer — bevel sharp edges with a distance">
+            <Button startIcon={<FreeCadIcon name="chamfer" />} onClick={() => addChamfer()}>Chamfer</Button>
+          </Tooltip>
+          <Tooltip title="Linear Pattern — replicate feature(s) along a line">
+            <Button startIcon={<FreeCadIcon name="linear_pattern" />} onClick={() => addLinearPattern()}>Linear</Button>
+          </Tooltip>
+          <Tooltip title="Polar Pattern — replicate feature(s) around an axis">
+            <Button startIcon={<FreeCadIcon name="polar_pattern" />} onClick={() => addPolarPattern()}>Polar</Button>
           </Tooltip>
           <Tooltip title="Loft — blend through multiple sketch cross-sections">
-            <Button startIcon={<LayersIcon />} onClick={() => addLoft()}>Loft</Button>
+            <Button startIcon={<FreeCadIcon name="loft" />} onClick={() => addLoft()}>Loft</Button>
           </Tooltip>
           <Tooltip title="Loft Cut — subtractive loft, cuts through cross-sections (CSG)">
-            <Button startIcon={<LayersIcon />} onClick={() => addLoftCut()}>Loft Cut</Button>
+            <Button startIcon={<FreeCadIcon name="loft_cut" />} onClick={() => addLoftCut()}>Loft Cut</Button>
           </Tooltip>
           <Tooltip title="Sweep — extrude a profile sketch along a path sketch">
-            <Button startIcon={<GestureIcon />} onClick={() => addSweep()}>Sweep</Button>
+            <Button startIcon={<FreeCadIcon name="sweep" />} onClick={() => addSweep()}>Sweep</Button>
           </Tooltip>
           <Tooltip title="Sweep Cut — subtractive sweep, removes material along a path (CSG)">
-            <Button startIcon={<GestureIcon />} onClick={() => addSweepCut()}>Sweep Cut</Button>
+            <Button startIcon={<FreeCadIcon name="sweep_cut" />} onClick={() => addSweepCut()}>Sweep Cut</Button>
           </Tooltip>
           <Tooltip title="Helix — sweep a profile along a helical spine">
-            <Button startIcon={<AutorenewIcon />} onClick={() => addHelix()}>Helix</Button>
+            <Button startIcon={<FreeCadIcon name="helix" />} onClick={() => addHelix()}>Helix</Button>
           </Tooltip>
         </ButtonGroup>
 
@@ -259,22 +367,22 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
           sx={{ height: 28 }}
         >
           <Tooltip title="Object mode (default)">
-            <ToggleButton value="object" sx={{ px: 1 }}>
+            <ToggleButton value="object" sx={{ px: 1, color: 'text.primary' }}>
               <NearMeIcon sx={{ fontSize: 14 }} />
             </ToggleButton>
           </Tooltip>
           <Tooltip title="Vertex selection">
-            <ToggleButton value="vertex" sx={{ px: 1 }}>
+            <ToggleButton value="vertex" sx={{ px: 1, color: 'text.primary' }}>
               <ScatterPlotIcon sx={{ fontSize: 14 }} />
             </ToggleButton>
           </Tooltip>
           <Tooltip title="Edge selection">
-            <ToggleButton value="edge" sx={{ px: 1 }}>
+            <ToggleButton value="edge" sx={{ px: 1, color: 'text.primary' }}>
               <TimelineIcon sx={{ fontSize: 14 }} />
             </ToggleButton>
           </Tooltip>
           <Tooltip title="Face selection">
-            <ToggleButton value="face" sx={{ px: 1 }}>
+            <ToggleButton value="face" sx={{ px: 1, color: 'text.primary' }}>
               <CropSquareIcon sx={{ fontSize: 14 }} />
             </ToggleButton>
           </Tooltip>
@@ -333,6 +441,7 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
             style={{ position: 'absolute', inset: 0 }}
             onSceneChange={handleSceneChange}
             onSubSelect={handleSubSelect}
+            selectedId={selectedId}
           />
           {/* Placement overlay — click anywhere in viewport to stamp template */}
           {placementTemplate?.mode === 'cad3d' && (
@@ -362,8 +471,27 @@ export function Cad3dView({ project, version, mergeTreeRef, placementTemplate }:
           features={tree.features}
           onUpdate={updateFeature}
           onEditSketch={startEditSketch}
+          onCreateDatumPlane={addDatumPlane}
+          faceDatumParams={datumParams ? {
+            position: datumParams.position,
+            normal: datumParams.normal,
+            size: datumParams.size,
+          } : null}
+          edgeParams={edgeInfo}
         />
       </Box>
+
+      <Snackbar
+        open={!!evalError}
+        autoHideDuration={6000}
+        onClose={() => setEvalError(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="warning" onClose={() => setEvalError(null)} sx={{ maxWidth: 480 }}>
+          <strong>{evalError?.feature}</strong> — {evalError?.reason}
+        </Alert>
+      </Snackbar>
     </Box>
+    </ThemeProvider>
   );
 }

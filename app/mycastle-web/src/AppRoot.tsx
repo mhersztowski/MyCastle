@@ -101,6 +101,7 @@ import ShoppingPage from './pages/shopping/ShoppingPage';
 import HealthPage from './pages/health/HealthPage';
 import MemoryPage from './pages/memory/MemoryPage';
 import DrivePage from './pages/drive/DrivePage';
+import PulpitPage from './pages/pulpit/PulpitPage';
 
 // Layout pages — minis
 import HomePage from './pages/HomePage';
@@ -250,6 +251,19 @@ function AppRoot() {
             <Box sx={{ display: 'flex', minHeight: '100vh' }}>
               <Layout fullBleed hideChrome>
                 <DrivePage />
+              </Layout>
+            </Box>
+          }
+        />
+
+        {/* Pulpit — widget dashboard, full-bleed like Drive so the
+            floating-widget canvas gets the full remaining viewport. */}
+        <Route
+          path="/user/:userName/pim/pulpit"
+          element={
+            <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+              <Layout fullBleed hideChrome>
+                <PulpitPage />
               </Layout>
             </Box>
           }

@@ -25,8 +25,10 @@ export function sketchToWorldTrsf(oc: OCC, sketch: Pick<SketchFeature, 'plane' |
 
   if (sketch.plane === 'face' && sketch.planeMatrix) {
     // Column-major THREE.Matrix4 → row-major gp_Trsf
+    // opencascade.js — metoda nazywa się `SetValues` bez suffix _1.
     const m = sketch.planeMatrix;
-    trsf.SetValues_1(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (trsf as any).SetValues(
       m[0], m[4], m[8],  m[12],
       m[1], m[5], m[9],  m[13],
       m[2], m[6], m[10], m[14],
@@ -82,6 +84,43 @@ export function entitiesToWires(oc: OCC, entities: Entity[], sc: OccScope): unkn
   wires.push(...chained);
 
   return wires;
+}
+
+/**
+ * Buduje OTWARTY wire z line/arc/open polyline segments. Używany przez Sweep
+ * jako Path spine — path zwykle jest otwartą krzywą (nie zamkniętym rect).
+ * Ignoruje rect/circle/closed polyline (bo path nie powinien być zamknięty).
+ * Zwraca pojedynczy wire chain-ując wszystkie edges w kolejności.
+ */
+export function entitiesToOpenPathWire(oc: OCC, entities: Entity[], sc: OccScope): unknown | null {
+  const wb = sc.track(new oc.BRepBuilderAPI_MakeWire_1());
+  let addedEdges = 0;
+
+  for (const e of entities) {
+    const type = e['type'] as string;
+    if (type === 'line') {
+      const x1 = e['x1'] as number, y1 = e['y1'] as number;
+      const x2 = e['x2'] as number, y2 = e['y2'] as number;
+      const p1 = sc.track(new oc.gp_Pnt_3(x1, y1, 0));
+      const p2 = sc.track(new oc.gp_Pnt_3(x2, y2, 0));
+      const edge = sc.track(new oc.BRepBuilderAPI_MakeEdge_3(p1, p2)).Edge();
+      wb.Add_1(edge);
+      addedEdges++;
+    } else if (type === 'polyline' && !(e['closed'] as boolean)) {
+      const pts = (e['points'] as Array<{ x: number; y: number }>) ?? [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = sc.track(new oc.gp_Pnt_3(pts[i].x, pts[i].y, 0));
+        const p2 = sc.track(new oc.gp_Pnt_3(pts[i + 1].x, pts[i + 1].y, 0));
+        const edge = sc.track(new oc.BRepBuilderAPI_MakeEdge_3(p1, p2)).Edge();
+        wb.Add_1(edge);
+        addedEdges++;
+      }
+    }
+    // rect/circle/closed polyline — pomijamy (path nie powinien być zamknięty)
+  }
+
+  if (addedEdges === 0) return null;
+  try { return wb.Wire(); } catch { return null; }
 }
 
 function isDirectlyClosed(e: Entity): boolean {
@@ -316,14 +355,13 @@ export function shapeToThreeMesh(
   linearDeflection = 0.5,
   angularDeflection = 0.3,
 ): { geo: THREE.BufferGeometry; edgeGeo: THREE.BufferGeometry } {
-  // Tessellate
+  // Tessellate — Perform_1 wymaga Message_ProgressRange w nowszych wersjach opencascade.js.
   const mesher = new oc.BRepMesh_IncrementalMesh_2(
     shape as object, linearDeflection, false, angularDeflection, false,
   );
-  mesher.Perform_1();
+  mesher.Perform_1(new oc.Message_ProgressRange_1());
 
   const positions: number[] = [];
-  const normals: number[] = [];
   const indices: number[] = [];
   let offset = 0;
 
@@ -343,33 +381,40 @@ export function shapeToThreeMesh(
       const nn = p.NbNodes();
       const isReversed = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
 
-      // Compute location transform matrix (apply to each vertex)
-      let applyLoc = false;
+      // Face position matrix — po CSG cut nowe wewnętrzne face mają non-identity
+      // TopLoc_Location. Trzeba przetransformować ich vertices do world space,
+      // inaczej ścianki dziury renderują się w złym miejscu (nakładając się na
+      // zewnętrzne face box'a → "brak dziury" wizualnie).
       let locMat: THREE.Matrix4 | null = null;
       if (!aLoc.IsIdentity()) {
-        applyLoc = true;
-        // Build transform matrix from location's gp_Trsf
-        const gt = aLoc.IsIdentity(); // returns bool — we just use identity fallback
-        void gt; // suppress unused warning; full location support requires deeper OCC binding
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const trsf = (aLoc as any).Transformation() as {
+          TranslationPart: () => { X: () => number; Y: () => number; Z: () => number };
+          VectorialPart: () => { Value: (r: number, c: number) => number };
+        };
+        const t = trsf.TranslationPart();
+        const m = trsf.VectorialPart();
+        const tx = t.X(), ty = t.Y(), tz = t.Z();
+        const m11 = m.Value(1, 1), m12 = m.Value(1, 2), m13 = m.Value(1, 3);
+        const m21 = m.Value(2, 1), m22 = m.Value(2, 2), m23 = m.Value(2, 3);
+        const m31 = m.Value(3, 1), m32 = m.Value(3, 2), m33 = m.Value(3, 3);
+        // THREE.Matrix4.set() jest row-major.
+        locMat = new THREE.Matrix4().set(
+          m11, m12, m13, tx,
+          m21, m22, m23, ty,
+          m31, m32, m33, tz,
+          0, 0, 0, 1,
+        );
       }
 
       for (let i = 1; i <= nn; i++) {
         const node = p.Node(i);
         let nx = node.X(), ny = node.Y(), nz = node.Z();
-        if (applyLoc && locMat) {
+        if (locMat) {
           const v = new THREE.Vector3(nx, ny, nz).applyMatrix4(locMat);
           nx = v.x; ny = v.y; nz = v.z;
         }
         positions.push(nx, ny, nz);
-
-        // Normal — computed from geometry if available
-        if (p.HasNormals()) {
-          const n = p.Normal(i);
-          const flip = isReversed ? -1 : 1;
-          normals.push(n.X() * flip, n.Y() * flip, n.Z() * flip);
-        } else {
-          normals.push(0, 0, isReversed ? -1 : 1);
-        }
       }
 
       const nt = p.NbTriangles();
@@ -378,6 +423,12 @@ export function shapeToThreeMesh(
         const n1 = tri.Value(1) - 1 + offset;
         const n2 = tri.Value(2) - 1 + offset;
         const n3 = tri.Value(3) - 1 + offset;
+        // Zachowaj oryginalny winding OCC, tylko flippuj dla REVERSED orientation
+        // face. Trójkąty z BRepMesh mają winding zgodny z NATURALNĄ orientation
+        // powierzchni; OCC ustawia flag REVERSED gdy face w solidzie ma normal
+        // odwrotny do naturalnego. Flippując winding dla REVERSED, dostajemy
+        // ostatecznie SPÓJNIE outward normale całego solid — dzięki temu
+        // computeVertexNormals daje jednolite cieniowanie.
         if (isReversed) {
           indices.push(n1, n3, n2);
         } else {
@@ -395,11 +446,11 @@ export function shapeToThreeMesh(
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   geo.setIndex(indices);
-  if (!geo.attributes['normal'] || (geo.attributes['normal'] as THREE.BufferAttribute).count === 0) {
-    geo.computeVertexNormals();
-  }
+  // Normale liczone z geometrii (winding order). Fragment shader dla flatShading
+  // używa derivatives dFdx/dFdy zamiast tych vertex normals, ale zostawiamy je
+  // jako fallback dla materiałów bez flatShading (helpers, edges).
+  geo.computeVertexNormals();
 
   // Edge wireframe via edge explorer
   const edgePositions: number[] = [];
@@ -415,14 +466,37 @@ export function shapeToThreeMesh(
     if (!poly3d.IsNull()) {
       const ep = poly3d.get();
       const enodes = ep.NbNodes();
-      for (let i = 1; i <= enodes; i++) {
-        const nd = ep.Nodes().Value(i);
-        edgePositions.push(nd.X(), nd.Y(), nd.Z());
-        if (i > 1) {
-          // Add previous vertex again for line segment
-          const prev = ep.Nodes().Value(i - 1);
-          edgePositions.splice(edgePositions.length - 3, 0, prev.X(), prev.Y(), prev.Z());
+      const nodes = ep.Nodes();
+      // Location transform dla edge (jak dla face)
+      let edgeLocMat: THREE.Matrix4 | null = null;
+      if (!aLoc2.IsIdentity()) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const trsf = (aLoc2 as any).Transformation() as {
+          TranslationPart: () => { X: () => number; Y: () => number; Z: () => number };
+          VectorialPart: () => { Value: (r: number, c: number) => number };
+        };
+        const t = trsf.TranslationPart();
+        const m = trsf.VectorialPart();
+        edgeLocMat = new THREE.Matrix4().set(
+          m.Value(1, 1), m.Value(1, 2), m.Value(1, 3), t.X(),
+          m.Value(2, 1), m.Value(2, 2), m.Value(2, 3), t.Y(),
+          m.Value(3, 1), m.Value(3, 2), m.Value(3, 3), t.Z(),
+          0, 0, 0, 1,
+        );
+      }
+      // LineSegments wymaga PAR vertexów: dla polyline [A, B, C] → segments [A,B, B,C]
+      // Iteracja i=1 do enodes-1 → dodaje segment (i, i+1)
+      const tmpVec = new THREE.Vector3();
+      for (let i = 1; i < enodes; i++) {
+        const a = nodes.Value(i);
+        const b = nodes.Value(i + 1);
+        let ax = a.X(), ay = a.Y(), az = a.Z();
+        let bx = b.X(), by = b.Y(), bz = b.Z();
+        if (edgeLocMat) {
+          tmpVec.set(ax, ay, az).applyMatrix4(edgeLocMat); ax = tmpVec.x; ay = tmpVec.y; az = tmpVec.z;
+          tmpVec.set(bx, by, bz).applyMatrix4(edgeLocMat); bx = tmpVec.x; by = tmpVec.y; bz = tmpVec.z;
         }
+        edgePositions.push(ax, ay, az, bx, by, bz);
       }
     }
     edgeExplorer.Next();
@@ -445,22 +519,38 @@ export function shapeToGroup(
   featureId: string,
 ): THREE.Group {
   const group = new THREE.Group();
-  const { geo } = shapeToThreeMesh(oc, shape);
+  const { geo, edgeGeo } = shapeToThreeMesh(oc, shape);
 
+  // MeshPhongMaterial + FrontSide + flatShading:
+  // - FrontSide (nie DoubleSide) — dla otworu pocket/hole potrzebujemy że
+  //   patrząc "z zewnątrz" bryły widać otwór: zewnętrzna face bryły MA
+  //   dziurę → w miejscu dziury renderuje się wewnętrzna face (dno pocketa)
+  //   które ma outward normal w stronę wnętrza pocketa = w stronę kamery
+  //   przez otwór. DoubleSide dodawałby back-face zewnętrznej ściany bryły
+  //   który zasłaniał otwór (efekt "nie ma dziury").
+  // - flatShading — per-face normal z fragment derivatives (dFdx/dFdy).
+  //   Bez uśredniania między face na krawędziach triangulacji.
   const mat = new THREE.MeshPhongMaterial({
     color,
     side: THREE.DoubleSide,
-    shininess: 60,
-    specular: new THREE.Color(0x222222),
+    flatShading: true,
+    shininess: 40,
+    specular: new THREE.Color(0x333333),
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData['featureId'] = featureId;
   group.add(mesh);
 
-  // Edges
-  const edgesGeo = new THREE.EdgesGeometry(geo, 20);
+  // Edges — używamy EdgesGeometry z threshold 15° (klasyczny CAD).
+  // Dla zaokrąglonych powierzchni po Fillet: OCC edgeGeo (topological)
+  // ma prawidłowe edges, ale renderowanie może być niepewne przez tessellation.
+  // EdgesGeometry(geo, 15) łapie wszystkie CAD-owe krawędzie łącznie z arc-ami
+  // (bo tessellation arc daje triangles z angle break > 15° między nimi).
+  const edgesGeo = new THREE.EdgesGeometry(geo, 15);
+  // Zachowaj też edgeGeo w case future use (obecnie nie używane w renderze).
+  void edgeGeo;
   const edgesMat = new THREE.LineBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.22,
+    color: 0x2a2a2a, transparent: true, opacity: 0.6,
   });
   group.add(new THREE.LineSegments(edgesGeo, edgesMat));
 

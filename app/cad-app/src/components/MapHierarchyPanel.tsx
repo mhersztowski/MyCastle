@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useCallback } from 'react'
 import Box from '@mui/material/Box'
+import Checkbox from '@mui/material/Checkbox'
 import List from '@mui/material/List'
 import ListItemButton from '@mui/material/ListItemButton'
 import ListItemIcon from '@mui/material/ListItemIcon'
@@ -8,6 +9,11 @@ import IconButton from '@mui/material/IconButton'
 import Collapse from '@mui/material/Collapse'
 import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
+import Button from '@mui/material/Button'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Divider from '@mui/material/Divider'
@@ -19,6 +25,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import AddIcon from '@mui/icons-material/Add'
 import LayersIcon from '@mui/icons-material/Layers'
+import BookmarksIcon from '@mui/icons-material/Bookmarks'
 import PlaceIcon from '@mui/icons-material/Place'
 import CropSquareIcon from '@mui/icons-material/CropSquare'
 import TimelineIcon from '@mui/icons-material/Timeline'
@@ -45,6 +52,7 @@ function getNodeIcon(type: MapNodeType) {
     case 'group':      return <FolderIcon sx={{ fontSize: 14, color: '#78909c' }} />
     case 'route':      return <RouteIcon sx={{ fontSize: 14, color: '#42a5f5' }} />
     case 'label':      return <TextFieldsIcon sx={{ fontSize: 14, color: '#ffd54f' }} />
+    case 'collection': return <BookmarksIcon sx={{ fontSize: 14, color: '#ab47bc' }} />
   }
 }
 
@@ -52,6 +60,7 @@ function getNodeIcon(type: MapNodeType) {
 
 const ADD_ITEMS: Array<{ type: MapNodeType; label: string } | 'divider'> = [
   { type: 'group',      label: 'Group' },
+  { type: 'collection', label: 'Collection' },
   'divider',
   { type: 'tile-layer', label: 'Tile Layer' },
   { type: 'marker',     label: 'Marker' },
@@ -101,6 +110,9 @@ interface TreeNodeProps {
   onHandlePointerMove: (e: React.PointerEvent) => void
   onHandlePointerUp: (e: React.PointerEvent) => void
   onShowInfo?: (id: string) => void
+  collectionEditingId?: string | null
+  collectionMemberIds?: Set<string>
+  onToggleMember?: (id: string) => void
 }
 
 function TreeNode({
@@ -108,18 +120,14 @@ function TreeNode({
   onSelect, onToggleExpand, onToggleVisibility, onContextMenu,
   onRenameValueChange, onRenameCommit, onRenameCancel,
   dropTarget, onHandlePointerDown, onHandlePointerMove, onHandlePointerUp, onShowInfo,
+  collectionEditingId, collectionMemberIds, onToggleMember,
 }: TreeNodeProps) {
   const hasChildren = (node.children?.length ?? 0) > 0
   const isExpanded  = expandedIds.has(node.id)
   const isSelected  = selectedIds.has(node.id)
   const isPrimary   = selectedIds.size === 1 && isSelected
   const isRenaming  = node.id === renamingId
-  const inputRef    = useRef<HTMLInputElement>(null)
   const dropPos     = dropTarget?.id === node.id ? dropTarget.pos : null
-
-  useEffect(() => {
-    if (isRenaming) inputRef.current?.focus()
-  }, [isRenaming])
 
   return (
     <>
@@ -159,6 +167,16 @@ function TreeNode({
           '&:hover .map-vis-btn': { opacity: 1 },
         }}
       >
+        {/* Collection edit mode — checkbox przed każdym node (poza samą kolekcją) */}
+        {collectionEditingId && collectionEditingId !== node.id && (
+          <Checkbox
+            size="small"
+            checked={collectionMemberIds?.has(node.id) ?? false}
+            onClick={e => e.stopPropagation()}
+            onChange={() => onToggleMember?.(node.id)}
+            sx={{ p: 0, mr: 0.5, flexShrink: 0, '& .MuiSvgIcon-root': { fontSize: 16 } }}
+          />
+        )}
         {/* drag handle — pointer-based so it works with mouse, touch & stylus */}
         {!isRenaming && (
           <Box
@@ -199,41 +217,60 @@ function TreeNode({
           {getNodeIcon(node.type)}
         </ListItemIcon>
 
-        {/* name / rename input */}
-        {isRenaming ? (
-          <TextField
-            inputRef={inputRef}
-            size="small"
-            value={renameValue}
-            onChange={e => onRenameValueChange(e.target.value)}
-            onBlur={onRenameCommit}
-            onKeyDown={e => {
-              if (e.key === 'Enter') onRenameCommit()
-              if (e.key === 'Escape') onRenameCancel()
-            }}
-            onClick={e => e.stopPropagation()}
-            onDoubleClick={e => e.stopPropagation()}
-            sx={{
-              flex: 1,
-              '& .MuiInputBase-root': { height: 20, fontSize: '0.75rem' },
-              '& .MuiInputBase-input': { py: 0, px: 0.5 },
-              '& .MuiOutlinedInput-notchedOutline': { borderColor: 'primary.main' },
-            }}
-          />
-        ) : (
-          <ListItemText
-            primary={node.name}
-            sx={{
-              m: 0,
-              '& .MuiListItemText-primary': {
-                fontSize: '0.75rem',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              },
-            }}
-          />
-        )}
+        {/* Nazwa — zawsze read-only w wąskim wierszu drzewa. Rename otwiera dedykowany
+            Dialog (poniżej) z pełnowymiarowym inputem — na mobile inline TextField
+            w 20px-wysokim wierszu jest niemożliwy do obsługi (za mały touch target,
+            selection handles nie mieszczą się). */}
+        <ListItemText
+          primary={node.name}
+          sx={{
+            m: 0,
+            '& .MuiListItemText-primary': {
+              fontSize: '0.75rem',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              // Kursywa gdy rename aktywny — sygnał wizualny że dialog jest otwarty
+              fontStyle: isRenaming ? 'italic' : 'normal',
+              opacity: isRenaming ? 0.6 : 1,
+            },
+          }}
+        />
+
+        {/* Rename Dialog — otwiera się gdy user kliknie rename z kontekstowego menu.
+            Pełnowymiarowy input, autoFocus, auto-select, natywne systemowe menu na mobile. */}
+        <Dialog
+          open={isRenaming}
+          onClose={onRenameCancel}
+          maxWidth="xs"
+          fullWidth
+          onClick={e => e.stopPropagation()}
+        >
+          <DialogTitle sx={{ pb: 1 }}>Zmień nazwę</DialogTitle>
+          <DialogContent sx={{ pb: 1 }}>
+            <TextField
+              autoFocus
+              fullWidth
+              value={renameValue}
+              onChange={e => onRenameValueChange(e.target.value)}
+              onFocus={e => e.currentTarget.select()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); onRenameCommit() }
+                if (e.key === 'Escape') { e.preventDefault(); onRenameCancel() }
+              }}
+              inputProps={{
+                autoComplete: 'off',
+                autoCorrect: 'off',
+                spellCheck: false,
+              }}
+              sx={{ mt: 1 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={onRenameCancel}>Anuluj</Button>
+            <Button onClick={onRenameCommit} variant="contained">Zapisz</Button>
+          </DialogActions>
+        </Dialog>
 
         {/* info button — shown when the node has a description */}
         {!isRenaming && node.info?.trim() && onShowInfo && (
@@ -296,6 +333,9 @@ function TreeNode({
                 onHandlePointerMove={onHandlePointerMove}
                 onHandlePointerUp={onHandlePointerUp}
                 onShowInfo={onShowInfo}
+                collectionEditingId={collectionEditingId}
+                collectionMemberIds={collectionMemberIds}
+                onToggleMember={onToggleMember}
               />
             ))}
           </List>
@@ -331,9 +371,13 @@ interface Props {
   onSplit?: (id: string) => void
   onMove: (dragId: string, targetId: string, pos: DropPosition) => void
   onShowInfo?: (id: string) => void
+  /** ID kolekcji w trybie edycji — hierarchy pokazuje checkboxes obok każdego node. */
+  collectionEditingId?: string | null
+  collectionMemberIds?: Set<string>
+  onToggleMember?: (id: string) => void
 }
 
-export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, onToggleVisibility, onRename, onDelete, onAdd, onAddRoute, onSplit, onMove, onShowInfo }: Props) {
+export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, onToggleVisibility, onRename, onDelete, onAdd, onAddRoute, onSplit, onMove, onShowInfo, collectionEditingId, collectionMemberIds, onToggleMember }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set(['root-group']))
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null)
   const [addCtxPos, setAddCtxPos] = useState<{ left: number; top: number } | null>(null)
@@ -491,6 +535,9 @@ export function MapHierarchyPanel({ nodes, selectedId, selectedIds, onSelect, on
     onHandlePointerMove: handleHandlePointerMove,
     onHandlePointerUp: handleHandlePointerUp,
     onShowInfo,
+    collectionEditingId,
+    collectionMemberIds,
+    onToggleMember,
   }
 
   return (

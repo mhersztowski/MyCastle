@@ -7,6 +7,39 @@ export { MObject } from './core/MObject';
 // ── Node (typed scene/tree node) ──────────────────────────────────────────────
 export { Node } from './Node';
 
+// ── Qt wrappers (browser-Qt QObject/widget → Node bridge) ─────────────────────
+export {
+  QtNode,
+  QtProperty,
+  QtWidgetNode,
+  QtAbstractButtonNode,
+  QtButtonNode,
+  QtCheckBoxNode,
+  QtRadioButtonNode,
+  QtSliderNode,
+  QtProgressBarNode,
+  QtSpinBoxNode,
+  QtLineEditNode,
+  QtLabelNode,
+  QtComboBoxNode,
+  QtListWidgetNode,
+  wrapQt,
+  createQt,
+  registerQtWrapper,
+  isQtSignal,
+} from './qt';
+export type {
+  QtWrapOptions,
+  QtNodeCtor,
+  QtClassProvider,
+  CreateQtOptions,
+  QtObjectLike,
+  QtSignalLike,
+  QtConnectionLike,
+  QtPropertyMeta,
+  QtSignalMeta,
+} from './qt';
+
 // ── Properties ────────────────────────────────────────────────────────────────
 export { MProperty } from './MProperty';
 

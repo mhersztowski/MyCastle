@@ -18,27 +18,32 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import RepeatIcon from '@mui/icons-material/Repeat';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { EventNode, TaskSequenceComponentModel } from '@mhersztowski/core';
+import { Dayjs } from 'dayjs';
 import { useFilesystem } from '../../modules/filesystem';
 
 interface EventListItemProps {
   event: EventNode;
+  displayDate?: Dayjs;
   onInsertBefore?: (event: EventNode) => void;
   onInsertAfter?: (event: EventNode) => void;
   onEdit?: (event: EventNode) => void;
   onDelete?: (event: EventNode) => void;
 }
 
-const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, onInsertAfter, onEdit, onDelete }) => {
+const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onInsertBefore, onInsertAfter, onEdit, onDelete }) => {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [expanded, setExpanded] = useState(false);
   const menuOpen = Boolean(anchorEl);
   const { dataSource } = useFilesystem();
 
-  const isPast = event.isPast();
-  const isNow = event.isNow();
+  // Dla wystąpień powtarzalnych „przeszłość"/„teraz" liczymy względem
+  // wyświetlanego dnia, a nie oryginalnej daty startu eventu.
+  const isPast = displayDate ? event.isPastOn(displayDate) : event.isPast();
+  const isNow = displayDate ? event.isNowOn(displayDate) : event.isNow();
 
   const sequenceTasks = useMemo(() => {
     if (!event.taskId) return null;
@@ -125,6 +130,15 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, onInsertBefore, on
             </Typography>
             {isNow && (
               <Chip label="Now" size="small" color="primary" />
+            )}
+            {event.getRecurrenceLabel() && (
+              <Chip
+                icon={<RepeatIcon />}
+                label={event.getRecurrenceLabel()}
+                size="small"
+                variant="outlined"
+                color="info"
+              />
             )}
           </Box>
 

@@ -48,14 +48,29 @@ function getEdgeLines(scene: THREE.Object3D): THREE.LineSegments[] {
   return out;
 }
 
-/** Find all triangle indices in a geometry that are coplanar with `refNormal` (local space). */
-function coplanarFaceIndices(geo: THREE.BufferGeometry, refNormal: THREE.Vector3): number[] {
+/**
+ * Znajduje wszystkie indices triangles które leżą na TEJ SAMEJ płaszczyźnie
+ * (refPoint, refNormal). Sprawdza:
+ *  1. Kierunek normali (dot > 0.99) — ta sama orientacja
+ *  2. Odległość od płaszczyzny (~0) — triangle na TEJ SAMEJ plane, nie na
+ *     równoległej. Bez tego sprawdzenia, klikając na top face sześcianu
+ *     łapaliśmy też bottom face (obie mają normal +Z, ale są na Z=0 i Z=H) —
+ *     centroid uśredniał vertices z OBUCH → sketch plane w środku bryły
+ *     zamiast na klikniętej face.
+ */
+function coplanarFaceIndices(
+  geo: THREE.BufferGeometry,
+  refNormal: THREE.Vector3,
+  refPoint: THREE.Vector3,
+  planeTol = 0.5,
+): number[] {
   const pos = geo.attributes['position'] as THREE.BufferAttribute;
   const idx = geo.index;
   const faceCount = idx ? idx.count / 3 : pos.count / 3;
   const out: number[] = [];
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
   const n = new THREE.Vector3();
+  const tmp = new THREE.Vector3();
 
   for (let i = 0; i < faceCount; i++) {
     let a: number, b: number, c: number;
@@ -66,7 +81,16 @@ function coplanarFaceIndices(geo: THREE.BufferGeometry, refNormal: THREE.Vector3
     vb.set(pos.getX(b), pos.getY(b), pos.getZ(b));
     vc.set(pos.getX(c), pos.getY(c), pos.getZ(c));
     n.crossVectors(vb.clone().sub(va), vc.clone().sub(va)).normalize();
-    if (n.dot(refNormal) > 0.99) out.push(i);
+    if (n.dot(refNormal) <= 0.99) continue;
+
+    // Distance test — czy centroid triangle leży na plane (refPoint, refNormal)?
+    const cx = (va.x + vb.x + vc.x) / 3;
+    const cy = (va.y + vb.y + vc.y) / 3;
+    const cz = (va.z + vb.z + vc.z) / 3;
+    tmp.set(cx - refPoint.x, cy - refPoint.y, cz - refPoint.z);
+    if (Math.abs(tmp.dot(refNormal)) > planeTol) continue;
+
+    out.push(i);
   }
   return out;
 }
@@ -92,7 +116,11 @@ export function pickFace(ndc: THREE.Vector2, camera: THREE.Camera, scene: THREE.
     .crossVectors(vb.clone().sub(va), vc.clone().sub(va))
     .normalize();
 
-  const faceIndices = coplanarFaceIndices(mesh.geometry, localNormal);
+  // Reference point na klikniętej płaszczyźnie — jeden z vertices triangle.
+  // Bez tego coplanarFaceIndices łapie też EQUIDIRECTIONAL face równoległą
+  // (np. bottom face bryły ma tę samą normal co top → obie łapane → centroid
+  // uśredniał vertices z obu → sketch plane w środku bryły).
+  const faceIndices = coplanarFaceIndices(mesh.geometry, localNormal, va);
 
   const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
   const worldNormal = localNormal.clone().applyMatrix3(normalMatrix).normalize();
@@ -200,11 +228,49 @@ export function buildFaceOverlay(hit: HitFace, color: THREE.Color): THREE.Mesh {
   return mesh;
 }
 
-export function buildEdgeOverlay(hit: HitEdge, color: THREE.Color): THREE.Line {
-  const geo = new THREE.BufferGeometry().setFromPoints([hit.a, hit.b]);
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, depthTest: false }));
-  line.renderOrder = 999;
-  return line;
+export function buildEdgeOverlay(hit: HitEdge, color: THREE.Color): THREE.Object3D {
+  // WebGL nie honoruje LineBasicMaterial.linewidth (zawsze 1px), więc dla
+  // wyraźnego highlightu używamy CYLINDER (grubą "rurkę") wzdłuż edge +
+  // sfery na końcach — zawsze widoczne przez bryłę (depthTest: false).
+  const group = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    depthTest: false, depthWrite: false,
+    transparent: true, opacity: 0.9,
+  });
+
+  const dir = hit.b.clone().sub(hit.a);
+  const length = dir.length();
+  const mid = hit.a.clone().add(hit.b).multiplyScalar(0.5);
+
+  if (length > 0.001) {
+    // Cylinder o długości edge, promień proporcjonalny do długości (min 1.5)
+    const radius = Math.max(1.5, length * 0.02);
+    const cylGeo = new THREE.CylinderGeometry(radius, radius, length, 12, 1, false);
+    const cyl = new THREE.Mesh(cylGeo, mat);
+    // CylinderGeometry jest wzdłuż osi Y — rotuj żeby wzdłuż a→b
+    cyl.position.copy(mid);
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    const dirNorm = dir.clone().normalize();
+    const quat = new THREE.Quaternion().setFromUnitVectors(yAxis, dirNorm);
+    cyl.quaternion.copy(quat);
+    cyl.renderOrder = 999;
+    group.add(cyl);
+  }
+
+  // Sfery na końcach edge — pokazują wyraźnie początek/koniec
+  const sphereRadius = Math.max(2, length * 0.03);
+  const sphereGeo = new THREE.SphereGeometry(sphereRadius, 12, 8);
+  const sphereA = new THREE.Mesh(sphereGeo, mat);
+  sphereA.position.copy(hit.a);
+  sphereA.renderOrder = 999;
+  group.add(sphereA);
+  const sphereB = new THREE.Mesh(sphereGeo, mat);
+  sphereB.position.copy(hit.b);
+  sphereB.renderOrder = 999;
+  group.add(sphereB);
+
+  return group;
 }
 
 export function buildVertexOverlay(hit: HitVertex, color: THREE.Color): THREE.Points {
@@ -226,7 +292,12 @@ export function buildVertexOverlay(hit: HitVertex, color: THREE.Color): THREE.Po
  *   - sketch X/Y = two orthogonal tangent vectors on the face
  *   - sketch origin = face centroid
  */
-export function planeFromFace(hit: HitFace): { plane: 'face'; offset: number; planeMatrix: number[] } {
+export function planeFromFace(hit: HitFace): {
+  plane: 'face';
+  offset: number;
+  planeMatrix: number[];
+  faceRef: { hintNormal: [number, number, number]; hintPoint: [number, number, number] };
+} {
   // ── Centroid of all coplanar faces ──────────────────────────────────────────
   const pos = hit.mesh.geometry.attributes['position'] as THREE.BufferAttribute;
   const idx = hit.mesh.geometry.index;
@@ -264,7 +335,75 @@ export function planeFromFace(hit: HitFace): { plane: 'face'; offset: number; pl
   const mat = new THREE.Matrix4().makeBasis(u, v, n);
   mat.setPosition(centroid);
 
-  return { plane: 'face', offset: 0, planeMatrix: mat.toArray() };
+  console.log('[planeFromFace] centroid:', centroid.toArray(), 'normal:', n.toArray(),
+    'meshName:', hit.mesh.name || '(unnamed)',
+    'meshType:', (hit.mesh.material as THREE.Material).type,
+    'faceIndicesCount:', hit.faceIndices.length,
+    'meshWorldPos:', hit.mesh.matrixWorld.elements.slice(12, 15));
+  return {
+    plane: 'face',
+    offset: 0,
+    planeMatrix: mat.toArray(),
+    faceRef: {
+      hintNormal: [n.x, n.y, n.z],
+      hintPoint: [centroid.x, centroid.y, centroid.z],
+    },
+  };
+}
+
+/**
+ * Wylicza parametry dla datum (odniesienia geometrycznego) na podstawie
+ * zaznaczonej face bryły. Zwraca:
+ *  - `position` — centroid face (środek datum)
+ *  - `normal` — outward normal face (kierunek plane / linii)
+ *  - `rotationEulerXYZ` — obrót w stopniach dla datum_cs (basis U/V/N na face)
+ *  - `size` — bok kwadratu wizualizacji plane (dopasowany do rozmiaru face)
+ */
+export function datumParamsFromFace(hit: HitFace): {
+  position: [number, number, number];
+  normal: [number, number, number];
+  rotationEulerXYZ: [number, number, number];
+  size: number;
+} {
+  // Reuse planeFromFace żeby dostać centroid + basis (u, v, n) — potem
+  // planeMatrix daje nam obie rzeczy (position z ostatniej kolumny + basis z 3 pierwszych).
+  const info = planeFromFace(hit);
+  const m = new THREE.Matrix4().fromArray(info.planeMatrix);
+  const position: [number, number, number] = [
+    info.planeMatrix[12],
+    info.planeMatrix[13],
+    info.planeMatrix[14],
+  ];
+  const normal: [number, number, number] = [...info.faceRef.hintNormal];
+
+  // Rotation Euler z basis matrix — konwersja rotation part → Euler XYZ (stopnie)
+  const euler = new THREE.Euler().setFromRotationMatrix(m, 'XYZ');
+  const rotationEulerXYZ: [number, number, number] = [
+    THREE.MathUtils.radToDeg(euler.x),
+    THREE.MathUtils.radToDeg(euler.y),
+    THREE.MathUtils.radToDeg(euler.z),
+  ];
+
+  // Size dla plane — bbox wszystkich coplanar triangles, longest side * 1.2
+  const pos = hit.mesh.geometry.attributes['position'] as THREE.BufferAttribute;
+  const idx = hit.mesh.geometry.index;
+  const mw = hit.mesh.matrixWorld;
+  const bbox = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for (const fi of hit.faceIndices) {
+    let a: number, b: number, c: number;
+    if (idx) { a = idx.getX(fi * 3); b = idx.getX(fi * 3 + 1); c = idx.getX(fi * 3 + 2); }
+    else      { a = fi * 3;           b = fi * 3 + 1;             c = fi * 3 + 2; }
+    for (const vi of [a, b, c]) {
+      v.set(pos.getX(vi), pos.getY(vi), pos.getZ(vi)).applyMatrix4(mw);
+      bbox.expandByPoint(v);
+    }
+  }
+  const dim = new THREE.Vector3();
+  bbox.getSize(dim);
+  const size = Math.max(50, Math.max(dim.x, dim.y, dim.z) * 1.2);
+
+  return { position, normal, rotationEulerXYZ, size };
 }
 
 export function buildOverlay(hit: SubHit, color: THREE.Color = SELECT_COLOR): THREE.Object3D {

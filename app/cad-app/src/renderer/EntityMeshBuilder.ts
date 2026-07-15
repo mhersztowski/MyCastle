@@ -5,8 +5,6 @@ const SELECTION_COLOR = new THREE.Color('#4fc3f7');
 const PREVIEW_COLOR = new THREE.Color('#ffcc00');
 const DIM_COLOR_DEFAULT = '#c0c0c0';
 const CIRCLE_SEGMENTS = 64;
-const SELECTION_EMISSIVE = new THREE.Color('#1a6080');
-
 function getEntityColor(entity: Entity, layer: Layer | undefined): THREE.Color {
   if (entity.color !== 'bylayer') {
     return new THREE.Color(entity.color as string);
@@ -345,9 +343,10 @@ export function buildEntityObject(entity: Entity, layer: Layer | undefined, isSe
 function makeSolidMaterial(color: THREE.Color, isSelected: boolean): THREE.MeshPhongMaterial {
   return new THREE.MeshPhongMaterial({
     color: isSelected ? SELECTION_COLOR : color,
-    emissive: isSelected ? SELECTION_EMISSIVE : new THREE.Color(0x000000),
-    shininess: 60,
     side: THREE.DoubleSide,
+    flatShading: true,
+    shininess: 40,
+    specular: new THREE.Color(0x333333),
   });
 }
 

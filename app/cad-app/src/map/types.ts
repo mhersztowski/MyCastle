@@ -1,4 +1,4 @@
-export type MapNodeType = 'tile-layer' | 'marker' | 'polygon' | 'polyline' | 'circle' | 'group' | 'route' | 'label'
+export type MapNodeType = 'tile-layer' | 'marker' | 'polygon' | 'polyline' | 'circle' | 'group' | 'route' | 'label' | 'collection'
 
 /** Mode of travel for a route between two points. */
 export type TravelMode = 'foot' | 'bike' | 'car' | 'train' | 'bus' | 'plane'
@@ -46,4 +46,6 @@ export interface MapNode {
   color?: string
   fillOpacity?: number
   weight?: number
+  // collection — lista ID innych map nodes (nie children; to referencje)
+  memberIds?: string[]
 }

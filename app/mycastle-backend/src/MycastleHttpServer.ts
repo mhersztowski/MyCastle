@@ -440,6 +440,46 @@ export class MycastleHttpServer extends HttpUploadServer {
     return Array.from(seen);
   }
 
+  /** Minimal RSS 2.0 + Atom parser (regex-based — no XML dep). Returns
+   *  normalized items so the frontend widget doesn't touch raw XML. */
+  private parseRssFeed(xml: string, limit: number): { title: string; items: { title: string; link: string; date: string; description: string }[] } {
+    const decode = (s: string) =>
+      (s ?? '')
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+        .replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const pick = (block: string, tag: string): string => {
+      const m = block.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, 'i'));
+      return m ? m[1] : '';
+    };
+    const feedTitle = decode(pick(xml.replace(/<item[\s\S]*$/i, '').replace(/<entry[\s\S]*$/i, ''), 'title'));
+
+    const isAtom = /<entry[\s>]/i.test(xml) && !/<item[\s>]/i.test(xml);
+    const blocks = xml.match(isAtom ? /<entry[\s\S]*?<\/entry>/gi : /<item[\s\S]*?<\/item>/gi) ?? [];
+    const items = blocks.slice(0, limit).map((b) => {
+      let link = '';
+      if (isAtom) {
+        // <link href="..."/> — prefer rel="alternate" or the first href.
+        const alt = b.match(/<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["']/i);
+        const any = b.match(/<link[^>]*href=["']([^"']+)["']/i);
+        link = (alt?.[1] ?? any?.[1] ?? '').trim();
+      } else {
+        link = decode(pick(b, 'link'));
+      }
+      return {
+        title: decode(pick(b, 'title')),
+        link,
+        date: decode(pick(b, isAtom ? 'updated' : 'pubDate') || pick(b, 'published') || pick(b, 'dc:date')),
+        description: decode(pick(b, 'description') || pick(b, 'summary') || pick(b, 'content')).slice(0, 280),
+      };
+    });
+    return { title: feedTitle, items };
+  }
+
   private async handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const fullApiPath = req.url!.replace(/^\/api/, '');
     const apiPath = fullApiPath.split('?')[0];
@@ -717,6 +757,29 @@ export class MycastleHttpServer extends HttpUploadServer {
         res.end(buffer);
       } catch (e) {
         this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
+    // GET /api/rss?url=<feed-url>&limit=<n>  — fetch + parse an RSS/Atom feed server-side
+    // (browsers can't fetch arbitrary feeds due to CORS). Returns normalized items.
+    if (apiPath === '/rss' && method === 'GET') {
+      try {
+        const p = new URL(req.url!, 'http://localhost').searchParams;
+        const url = p.get('url') ?? '';
+        const limit = Math.max(1, Math.min(50, parseInt(p.get('limit') ?? '10', 10) || 10));
+        if (!/^https?:\/\//.test(url)) { this.sendJsonResponse(res, 400, { error: 'Invalid url' }); return; }
+        const feedResp = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (MyCastle RSS)', 'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' },
+          redirect: 'follow',
+        });
+        if (!feedResp.ok) { this.sendJsonResponse(res, 502, { error: `Feed ${feedResp.status}` }); return; }
+        const xml = await feedResp.text();
+        const parsed = this.parseRssFeed(xml, limit);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' });
+        res.end(JSON.stringify(parsed));
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'RSS error' });
       }
       return;
     }

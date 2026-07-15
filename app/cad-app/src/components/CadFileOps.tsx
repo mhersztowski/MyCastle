@@ -4,7 +4,7 @@ import type { Project } from '@mhersztowski/core-cad';
 import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSTEP, exportSTL, exportSVG, importDXF, importJSON, importSTL } from '../io/CadExporter';
 import { ProjectBrowser } from './ProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
-import { SCENE_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../vfs/cadProjectApi';
+import { SCENE_EXT, CAD3D_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../vfs/cadProjectApi';
 import { useRegisterFileOps, type FileOps } from '../fileops/FileOpsContext';
 
 interface Props {
@@ -39,13 +39,19 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
     project.reset();
   }
 
+  // Dla mode='cad3d' zapisujemy feature tree do .cad3d.json, dla pozostałych — Scene 3D data do .scene.json
+  const sceneExtForMode = mode === 'cad3d' ? CAD3D_EXT : SCENE_EXT;
+
   async function handleWriteScene(dir: string, name: string) {
     const sceneJson = getSceneData?.();
-    if (!sceneJson) throw new Error('No Scene 3D data to save — open the Scene 3D tab first.');
-    await writeFileAt(dir, name, SCENE_EXT, sceneJson);
+    if (!sceneJson) {
+      const what = mode === 'cad3d' ? 'CAD 3D feature tree' : 'Scene 3D data';
+      throw new Error(`No ${what} to save — utwórz coś w scenie najpierw.`);
+    }
+    await writeFileAt(dir, name, sceneExtForMode, sceneJson);
   }
   async function handleReadScene(dir: string, name: string) {
-    onSceneData?.(await readFileAt(dir, name, SCENE_EXT));
+    onSceneData?.(await readFileAt(dir, name, sceneExtForMode));
   }
 
   async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -78,15 +84,30 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
     ? buildViewerUrl(mode === 'cad3d' ? 'cad3d' : 'cad', currentFile.dir, currentFile.name)
     : null;
 
+  // Mode-aware server actions:
+  // - mode='cad3d' → CAD 3D feature tree jest primary (.cad3d.json); 2D CAD project (.cad.json)
+  //   pozostaje dostępny bo w CAD 3D tab jest też 2D sketch project używany przez sketche.
+  //   Scene 3D save/load jest z osobnego tab-a więc pomijamy.
+  // - mode='cad' (2D CAD) → primary jest .cad.json, Scene 3D companion (.scene.json)
+  const isCad3d = mode === 'cad3d';
+  const serverActions = isCad3d
+    ? [
+        { label: 'Open CAD 3D from Server…', secondary: 'Reads .cad3d.json (feature tree)', run: () => setSceneOpenOpen(true) },
+        { label: 'Save CAD 3D to Server…', secondary: 'Writes .cad3d.json (feature tree)', run: () => setSceneSaveOpen(true) },
+        { label: 'Open 2D CAD from Server…', secondary: 'Reads .cad.json (2D project)', run: () => setBrowserMode('open') },
+        { label: 'Save 2D CAD to Server…', secondary: 'Writes .cad.json (2D project)', run: () => setBrowserMode('save') },
+      ]
+    : [
+        { label: 'Open CAD from Server…', secondary: 'Reads .cad.json', run: () => setBrowserMode('open') },
+        { label: 'Save CAD to Server…', secondary: 'Writes .cad.json', run: () => setBrowserMode('save') },
+        { label: 'Open Scene 3D from Server…', secondary: 'Reads .scene.json', run: () => setSceneOpenOpen(true) },
+        { label: 'Save Scene 3D to Server…', secondary: hasSceneData ? 'Writes .scene.json' : 'No scene loaded', run: () => setSceneSaveOpen(true), disabled: !hasSceneData },
+      ];
+
   const ops: FileOps = useMemo(() => ({
     currentName,
     newDoc: handleNew,
-    server: [
-      { label: 'Open CAD from Server…', secondary: 'Reads .cad.json', run: () => setBrowserMode('open') },
-      { label: 'Save CAD to Server…', secondary: 'Writes .cad.json', run: () => setBrowserMode('save') },
-      { label: 'Open Scene 3D from Server…', secondary: 'Reads .scene.json', run: () => setSceneOpenOpen(true) },
-      { label: 'Save Scene 3D to Server…', secondary: hasSceneData ? 'Writes .scene.json' : 'No scene loaded', run: () => setSceneSaveOpen(true), disabled: !hasSceneData },
-    ],
+    server: serverActions,
     importItems: [
       { label: 'Open JSON (local)…', run: () => fileInputRef.current?.click() },
       { label: 'Import DXF (local)…', secondary: 'Adds entities', run: () => dxfInputRef.current?.click() },
@@ -104,7 +125,7 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
     ],
     viewerUrl,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [mode, hasSceneData, busy, viewerUrl, currentName, project]);
+  }), [mode, hasSceneData, busy, viewerUrl, currentName, project, serverActions]);
 
   useRegisterFileOps(mode, ops, [mode, hasSceneData, busy, viewerUrl, currentName]);
 
@@ -131,16 +152,20 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
 
       {sceneOpenOpen && (
         <ServerFileBrowser
-          open mode="open" title="Open Scene 3D from Server" extension={SCENE_EXT} storageKey="cad.projectBrowser.dir"
+          open mode="open"
+          title={mode === 'cad3d' ? 'Open CAD 3D feature tree from Server' : 'Open Scene 3D from Server'}
+          extension={sceneExtForMode} storageKey="cad.projectBrowser.dir"
           onClose={() => setSceneOpenOpen(false)} onOpen={handleReadScene}
-          onDone={name => setToast({ msg: `Opened scene: ${name}`, severity: 'success' })}
+          onDone={name => setToast({ msg: `Opened: ${name}`, severity: 'success' })}
         />
       )}
       {sceneSaveOpen && (
         <ServerFileBrowser
-          open mode="save" title="Save Scene 3D to Server" extension={SCENE_EXT} storageKey="cad.projectBrowser.dir"
+          open mode="save"
+          title={mode === 'cad3d' ? 'Save CAD 3D feature tree to Server' : 'Save Scene 3D to Server'}
+          extension={sceneExtForMode} storageKey="cad.projectBrowser.dir"
           onClose={() => setSceneSaveOpen(false)} onSave={handleWriteScene}
-          onDone={name => setToast({ msg: `Saved scene: ${name}`, severity: 'success' })}
+          onDone={name => setToast({ msg: `Saved: ${name}`, severity: 'success' })}
         />
       )}
     </>

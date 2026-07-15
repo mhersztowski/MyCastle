@@ -440,6 +440,10 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT)
   const [nameSearch, setNameSearch] = useState('')
   const [areaSearch, setAreaSearch] = useState('')
+  // Address search (osobne pole — używa Nominatim żeby znaleźć adres i skoczyć na mapie).
+  const [addressSearch, setAddressSearch] = useState('')
+  const [addressLoading, setAddressLoading] = useState(false)
+  const [addressResults, setAddressResults] = useState<NominatimHit[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [elements, setElements] = useState<OsmElement[]>([])
@@ -573,6 +577,44 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
       setLoading(false)
     }
   }, [nameSearch, areaSearch, fetchOverpass])
+
+  // Address search — używa Nominatim żeby znaleźć adres i skoczyć na mapie
+  // do znalezionej lokalizacji. Nie importuje elementów; tylko zoom + pin.
+  const handleAddressSearch = useCallback(async () => {
+    const q = addressSearch.trim()
+    if (!q) return
+    setAddressLoading(true)
+    setError(null)
+    setAddressResults([])
+    try {
+      const url = `${NOMINATIM_ENDPOINT}?` + new URLSearchParams({
+        q,
+        format: 'jsonv2',
+        limit: '10',
+        dedupe: '1',
+        addressdetails: '1',
+      }).toString()
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`Nominatim HTTP ${res.status}`)
+      const hits = (await res.json()) as NominatimHit[]
+      if (!hits.length) {
+        setError(`Nie znaleziono adresu "${q}".`)
+        return
+      }
+      setAddressResults(hits)
+      // Auto-fly do pierwszego wyniku
+      const first = hits[0]
+      const lat = parseFloat(first.lat)
+      const lng = parseFloat(first.lon)
+      if (!isNaN(lat) && !isNaN(lng)) {
+        mapRef.current?.flyTo([lat, lng], 17, { animate: true, duration: 0.6 })
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAddressLoading(false)
+    }
+  }, [addressSearch])
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort()
@@ -722,6 +764,64 @@ export function OverpassDialog({ open, onClose, onImport, initialCenter = [52.22
           borderRight: '1px solid rgba(255,255,255,0.08)',
           overflow: 'hidden',
         }}>
+          {/* Find by Address — Nominatim geocoding, skacze na mapie do znalezionej lokalizacji */}
+          <Box sx={{ px: 1.5, pt: 1.5, pb: 0.5, flexShrink: 0 }}>
+            <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'text.secondary' }}>
+              Find by Address
+            </Typography>
+          </Box>
+          <Box sx={{ px: 1.5, pb: 1, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            <TextField
+              fullWidth
+              size="small"
+              label="Address"
+              placeholder="np. Marszałkowska 100, Warszawa"
+              value={addressSearch}
+              onChange={e => setAddressSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddressSearch() } }}
+              sx={{ '& .MuiInputBase-input': { fontSize: '0.75rem' }, '& .MuiInputLabel-root': { fontSize: '0.72rem' } }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={addressLoading
+                ? <CircularProgress size={13} color="inherit" />
+                : <SearchIcon sx={{ fontSize: 16 }} />
+              }
+              onClick={handleAddressSearch}
+              disabled={addressLoading || !addressSearch.trim()}
+              sx={{ textTransform: 'none', fontSize: '0.76rem' }}
+            >
+              Find address
+            </Button>
+            {addressResults.length > 0 && (
+              <Box sx={{ maxHeight: 130, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 0.5 }}>
+                {addressResults.map((hit, i) => (
+                  <Box key={`${hit.osm_type}-${hit.osm_id}-${i}`}
+                    onClick={() => {
+                      const la = parseFloat(hit.lat), ln = parseFloat(hit.lon)
+                      if (!isNaN(la) && !isNaN(ln)) mapRef.current?.flyTo([la, ln], 17, { animate: true, duration: 0.6 })
+                    }}
+                    sx={{
+                      px: 0.75, py: 0.5, cursor: 'pointer',
+                      fontSize: '0.68rem', color: 'text.primary',
+                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                      '&:hover': { bgcolor: 'action.hover' },
+                      '&:last-child': { borderBottom: 'none' },
+                    }}
+                  >
+                    {hit.display_name}
+                  </Box>
+                ))}
+              </Box>
+            )}
+            <Typography sx={{ fontSize: '0.6rem', color: 'text.disabled', lineHeight: 1.4 }}>
+              Wpisz adres — mapa skoczy do znalezionego miejsca. Kliknięcie na wyniku poniżej też skacze.
+            </Typography>
+          </Box>
+
+          <Divider sx={{ mx: 1.5, flexShrink: 0 }} />
+
           {/* Find by name (fuzzy / typo-tolerant via Nominatim) */}
           <Box sx={{ px: 1.5, pt: 1.5, pb: 0.5, flexShrink: 0 }}>
             <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'text.secondary' }}>

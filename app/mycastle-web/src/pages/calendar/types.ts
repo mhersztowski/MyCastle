@@ -1,4 +1,5 @@
 import { Dayjs } from 'dayjs';
+import { RecurrenceModel } from '@mhersztowski/core';
 
 export interface CurrentEvent {
   name: string;
@@ -6,6 +7,7 @@ export interface CurrentEvent {
   taskId?: string;
   startTime: Dayjs;
   endTime?: Dayjs;
+  recurrence?: RecurrenceModel;
 }
 
 export interface DayTemplateEvent {

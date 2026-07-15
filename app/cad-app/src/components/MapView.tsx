@@ -6,6 +6,8 @@ import Typography from '@mui/material/Typography'
 import Snackbar from '@mui/material/Snackbar'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import CloseIcon from '@mui/icons-material/Close'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import {
   MapContainer,
   useMap,
@@ -77,6 +79,40 @@ function collectLatLngs(node: MapNode, acc: [number, number][]): void {
   if (node.children) for (const c of node.children) collectLatLngs(c, acc)
 }
 
+/**
+ * Gdy Collection jest zaznaczona, chcemy pokazać na mapie WYŁĄCZNIE jej członków
+ * (plus tile-layery jako podkład). Ta funkcja zwraca sfiltrowane drzewo:
+ * — tile-layer: przepuszczamy zawsze (mapa musi mieć podkład)
+ * — group: renderujemy rekursywnie sfiltrowaną zawartość jeśli cokolwiek zostało
+ * — inne node'y: renderujemy tylko gdy są w memberIds, przy czym force visible=true
+ *   (żeby użytkownik zobaczył też te które sam ukrył w hierarchy)
+ * — sama Collection: nie renderujemy (nie ma własnej geometrii)
+ */
+function filterForCollection(nodes: MapNode[], memberSet: Set<string>): MapNode[] {
+  const result: MapNode[] = []
+  for (const n of nodes) {
+    if (n.type === 'tile-layer') {
+      result.push(n)
+      continue
+    }
+    if (n.type === 'collection') continue
+    if (n.type === 'group') {
+      const childrenFiltered = filterForCollection(n.children ?? [], memberSet)
+      if (childrenFiltered.length > 0) {
+        // Grupa musi być widoczna, inaczej Leaflet nie zrenderuje dzieci
+        result.push({ ...n, visible: true, children: childrenFiltered })
+      }
+      continue
+    }
+    if (memberSet.has(n.id)) {
+      // Force visible — użytkownik chce zobaczyć wszystkich członków kolekcji,
+      // nawet jeśli w hierarchy je ukrył.
+      result.push({ ...n, visible: true })
+    }
+  }
+  return result
+}
+
 // Captures the Leaflet map instance into a ref so MapView can fly imperatively.
 function MapRefCapture({ mapRef }: { mapRef: MutableRefObject<L.Map | null> }) {
   const map = useMap()
@@ -116,8 +152,21 @@ export function MapView() {
 
   const selectedNodes = collectNodes(nodes, selectedIds)
 
+  // Gdy Collection jest zaznaczona → mapa pokazuje TYLKO jej członków (isolation mode).
+  // W przeciwnym wypadku — całe drzewo tak jak jest.
+  const renderNodes = useMemo(() => {
+    if (selectedNode?.type === 'collection') {
+      const memberSet = new Set(selectedNode.memberIds ?? [])
+      return filterForCollection(nodes, memberSet)
+    }
+    return nodes
+  }, [nodes, selectedNode])
+
   // Leaflet map instance — used to zoom to a node when activated in the hierarchy.
   const mapRef = useRef<L.Map | null>(null)
+
+  const nodesRef = useRef<MapNode[]>([])
+  nodesRef.current = nodes
 
   const flyToNode = useCallback((node: MapNode) => {
     const map = mapRef.current
@@ -126,6 +175,22 @@ export function MapView() {
     if (node.type === 'circle' && node.lat != null && node.lng != null && node.radius) {
       const bounds = L.latLng(node.lat, node.lng).toBounds(node.radius * 2.4)
       map.flyToBounds(bounds, { animate: true, duration: 0.5 })
+      return
+    }
+    // Collection: zbieramy punkty ze wszystkich member nodes → fitBounds
+    if (node.type === 'collection') {
+      const pts: [number, number][] = []
+      for (const memberId of node.memberIds ?? []) {
+        const member = findNode(nodesRef.current, memberId)
+        if (member) collectLatLngs(member, pts)
+      }
+      if (pts.length === 0) return
+      if (pts.length === 1) {
+        map.flyTo(pts[0], Math.max(map.getZoom(), 16), { animate: true, duration: 0.5 })
+        return
+      }
+      const bounds = L.latLngBounds(pts)
+      if (bounds.isValid()) map.flyToBounds(bounds.pad(0.2), { animate: true, duration: 0.5 })
       return
     }
     const pts: [number, number][] = []
@@ -198,7 +263,28 @@ export function MapView() {
 
   // Node whose info/description is currently displayed (lookup keeps it live while editing).
   const [infoNodeId, setInfoNodeId] = useState<string | null>(null)
+  // Collection editing — jeśli set, hierarchy pokazuje checkboxes obok każdego node
+  const [collectionEditingId, setCollectionEditingId] = useState<string | null>(null)
+  // Panel visibility toggles — hierarchy (left) + inspector (right)
+  const [hierarchyOpen, setHierarchyOpen] = useState(true)
+  const [inspectorOpen, setInspectorOpen] = useState(true)
   const infoNode = infoNodeId ? findNode(nodes, infoNodeId) : null
+
+  // Collection member IDs (Set) for hierarchy checkbox rendering
+  const collectionEditingNode = collectionEditingId ? findNode(nodes, collectionEditingId) : null
+  const collectionMemberIds = useMemo(() =>
+    new Set(collectionEditingNode?.memberIds ?? []),
+    [collectionEditingNode]
+  )
+  const toggleCollectionMember = useCallback((memberId: string) => {
+    if (!collectionEditingId) return
+    const current = findNode(nodes, collectionEditingId)
+    if (!current) return
+    const ids = new Set(current.memberIds ?? [])
+    if (ids.has(memberId)) ids.delete(memberId)
+    else ids.add(memberId)
+    updateLayer(collectionEditingId, { memberIds: Array.from(ids) })
+  }, [collectionEditingId, nodes, updateLayer])
 
   // ── route state ─────────────────────────────────────────────────────────────
   const [routeOpen, setRouteOpen] = useState(false)
@@ -392,7 +478,7 @@ export function MapView() {
   return (
     <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left: Hierarchy panel */}
-      <MapHierarchyPanel
+      {hierarchyOpen && <MapHierarchyPanel
         nodes={nodes}
         selectedId={selectedId}
         selectedIds={selectedIds}
@@ -405,7 +491,10 @@ export function MapView() {
         onSplit={handleSplitOpen}
         onMove={moveNode}
         onShowInfo={setInfoNodeId}
-      />
+        collectionEditingId={collectionEditingId}
+        collectionMemberIds={collectionMemberIds}
+        onToggleMember={toggleCollectionMember}
+      />}
 
       {/* Center: Leaflet map */}
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
@@ -418,7 +507,9 @@ export function MapView() {
         >
           <MapRefCapture mapRef={mapRef} />
           <RoutePickCapture active={routePicking !== null} onPick={handleRoutePick} />
-          {nodes.map(n => renderMapNode(n))}
+          {/* Gdy Collection jest zaznaczona, renderujemy TYLKO jej członków (plus tile-layery).
+              W przeciwnym razie renderujemy całe drzewo normalnie. */}
+          {renderNodes.map(n => renderMapNode(n))}
           <MapDrawingLayer
             activeTool={activeTool}
             drawingPts={drawingPts}
@@ -461,6 +552,46 @@ export function MapView() {
           onCancel={cancelDrawing}
           onEscapeKey={cancelDrawing}
         />
+
+        {/* Panel toggle handles — w środku pionowej krawędzi panelu (jak VSCode collapse handle).
+            Nie koliduje z: Leaflet zoom (top-left), file+Overpass buttons (top-right), drawing toolbar (bottom-center). */}
+        <Box sx={{
+          position: 'absolute',
+          top: '50%', transform: 'translateY(-50%)',
+          left: hierarchyOpen ? 260 : 0,
+          zIndex: 1000,
+          transition: 'left 0.15s ease',
+        }}>
+          <Tooltip title={hierarchyOpen ? 'Ukryj hierarchię' : 'Pokaż hierarchię'} placement="right">
+            <IconButton size="small" onClick={() => setHierarchyOpen(v => !v)}
+              sx={{
+                bgcolor: 'background.paper', boxShadow: 2, borderRadius: '0 6px 6px 0',
+                width: 22, height: 40,
+                '&:hover': { bgcolor: 'background.paper' },
+              }}>
+              {hierarchyOpen ? <ChevronLeftIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        <Box sx={{
+          position: 'absolute',
+          top: '50%', transform: 'translateY(-50%)',
+          right: inspectorOpen ? 300 : 0,
+          zIndex: 1000,
+          transition: 'right 0.15s ease',
+        }}>
+          <Tooltip title={inspectorOpen ? 'Ukryj inspector' : 'Pokaż inspector'} placement="left">
+            <IconButton size="small" onClick={() => setInspectorOpen(v => !v)}
+              sx={{
+                bgcolor: 'background.paper', boxShadow: 2, borderRadius: '6px 0 0 6px',
+                width: 22, height: 40,
+                '&:hover': { bgcolor: 'background.paper' },
+              }}>
+              {inspectorOpen ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        </Box>
 
         {/* Top-right: file + Overpass buttons */}
         <Box sx={{
@@ -540,13 +671,16 @@ export function MapView() {
       />
 
       {/* Right: Properties inspector */}
-      <MapPropertiesPanel
+      {inspectorOpen && <MapPropertiesPanel
         node={selectedNode ?? null}
         selectedNodes={selectedNodes}
         onUpdate={updateLayer}
         onUpdateMany={updateLayers}
         onShowInfo={n => setInfoNodeId(n.id)}
-      />
+        collectionEditingId={collectionEditingId}
+        onStartCollectionEditing={id => setCollectionEditingId(id)}
+        onStopCollectionEditing={() => setCollectionEditingId(null)}
+      />}
 
       {/* Info / description viewer (compact card or fullscreen) */}
       <InfoView node={infoNode} onClose={() => setInfoNodeId(null)} />

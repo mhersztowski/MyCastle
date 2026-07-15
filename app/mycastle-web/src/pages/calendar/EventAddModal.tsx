@@ -9,6 +9,12 @@ import {
   Box,
   IconButton,
   Typography,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -16,8 +22,10 @@ import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import CloseIcon from '@mui/icons-material/Close';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AddIcon from '@mui/icons-material/Add';
+import RepeatIcon from '@mui/icons-material/Repeat';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/pl';
+import type { RecurrenceModel, RecurrenceFreq } from '@mhersztowski/core';
 import { CurrentEvent } from './types';
 import { TaskPicker } from '../../components/task';
 import { useFilesystem } from '../../modules/filesystem';
@@ -33,9 +41,25 @@ interface EventAddModalProps {
   initialName?: string;
   initialDescription?: string;
   initialTaskId?: string;
+  initialRecurrence?: RecurrenceModel;
   mode?: ModalMode;
   editMode?: boolean;
 }
+
+type FreqOption = 'none' | RecurrenceFreq;
+const FREQ_OPTIONS: { value: FreqOption; label: string }[] = [
+  { value: 'none', label: 'Bez powtarzania' },
+  { value: 'daily', label: 'Codziennie' },
+  { value: 'weekly', label: 'Co tydzień' },
+  { value: 'monthly', label: 'Co miesiąc' },
+  { value: 'yearly', label: 'Co rok' },
+  { value: 'weekdays', label: 'Wybrane dni tygodnia' },
+];
+// Kolejność wyświetlania dni: Pn…Nd (wartości dayjs: 1..6,0)
+const WEEKDAYS: { value: number; label: string }[] = [
+  { value: 1, label: 'Pn' }, { value: 2, label: 'Wt' }, { value: 3, label: 'Śr' },
+  { value: 4, label: 'Cz' }, { value: 5, label: 'Pt' }, { value: 6, label: 'So' }, { value: 0, label: 'Nd' },
+];
 
 const EventAddModal: React.FC<EventAddModalProps> = ({
   open,
@@ -46,6 +70,7 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
   initialName,
   initialDescription,
   initialTaskId,
+  initialRecurrence,
   mode = 'current',
   editMode = false,
 }) => {
@@ -55,6 +80,9 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
   const [taskId, setTaskId] = useState<string | null>(null);
   const [startTime, setStartTime] = useState<Dayjs>(dayjs());
   const [endTime, setEndTime] = useState<Dayjs>(dayjs());
+  const [recFreq, setRecFreq] = useState<FreqOption>('none');
+  const [recInterval, setRecInterval] = useState<number>(1);
+  const [recWeekdays, setRecWeekdays] = useState<number[]>([]);
 
   const isPermanent = mode === 'permanent';
 
@@ -66,8 +94,19 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
       setName(initialName || '');
       setDescription(initialDescription || '');
       setTaskId(initialTaskId || null);
+      setRecFreq(initialRecurrence?.freq ?? 'none');
+      setRecInterval(Math.max(1, initialRecurrence?.interval ?? 1));
+      setRecWeekdays(initialRecurrence?.weekdays ?? []);
     }
-  }, [open, initialStartTime, initialEndTime, initialName, initialDescription, initialTaskId]);
+  }, [open, initialStartTime, initialEndTime, initialName, initialDescription, initialTaskId, initialRecurrence]);
+
+  const buildRecurrence = (): RecurrenceModel | undefined => {
+    if (!isPermanent || recFreq === 'none') return undefined;
+    if (recFreq === 'weekdays') {
+      return { freq: 'weekdays', weekdays: recWeekdays.length ? [...recWeekdays].sort((a, b) => a - b) : [startTime.day()] };
+    }
+    return recInterval > 1 ? { freq: recFreq, interval: recInterval } : { freq: recFreq };
+  };
 
   const handleTaskChange = useCallback((id: string | null) => {
     setTaskId(id);
@@ -101,6 +140,7 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
       taskId: taskId || undefined,
       startTime,
       endTime: isPermanent ? endTime : undefined,
+      recurrence: buildRecurrence(),
     });
 
     // Reset form
@@ -109,6 +149,9 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
     setTaskId(null);
     setStartTime(dayjs());
     setEndTime(dayjs().add(1, 'hour'));
+    setRecFreq('none');
+    setRecInterval(1);
+    setRecWeekdays([]);
     onClose();
   };
 
@@ -118,6 +161,9 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
     setTaskId(null);
     setStartTime(dayjs());
     setEndTime(dayjs().add(1, 'hour'));
+    setRecFreq('none');
+    setRecInterval(1);
+    setRecWeekdays([]);
     onClose();
   };
 
@@ -190,6 +236,57 @@ const EventAddModal: React.FC<EventAddModalProps> = ({
               />
             )}
           </LocalizationProvider>
+
+          {isPermanent && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: 0.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <RepeatIcon fontSize="small" color="action" />
+                <Typography variant="body2" color="text.secondary">Powtarzanie</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 2 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="rec-freq-label">Częstotliwość</InputLabel>
+                  <Select
+                    labelId="rec-freq-label"
+                    label="Częstotliwość"
+                    value={recFreq}
+                    onChange={(e) => setRecFreq(e.target.value as FreqOption)}
+                  >
+                    {FREQ_OPTIONS.map((o) => (
+                      <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                {recFreq !== 'none' && recFreq !== 'weekdays' && (
+                  <TextField
+                    label="Co ile"
+                    type="number"
+                    size="small"
+                    value={recInterval}
+                    onChange={(e) => setRecInterval(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    inputProps={{ min: 1 }}
+                    sx={{ width: 110 }}
+                  />
+                )}
+              </Box>
+
+              {recFreq === 'weekdays' && (
+                <ToggleButtonGroup
+                  value={recWeekdays}
+                  onChange={(_, next: number[]) => setRecWeekdays(next)}
+                  size="small"
+                  sx={{ flexWrap: 'wrap' }}
+                >
+                  {WEEKDAYS.map((d) => (
+                    <ToggleButton key={d.value} value={d.value} sx={{ px: 1.5 }}>
+                      {d.label}
+                    </ToggleButton>
+                  ))}
+                </ToggleButtonGroup>
+              )}
+            </Box>
+          )}
         </Box>
       </DialogContent>
 

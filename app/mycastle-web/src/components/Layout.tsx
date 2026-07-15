@@ -128,6 +128,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
       return [
         { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
         { text: 'Drive', icon: <DriveFolderUploadIcon />, path: `/user/${userName}/pim/drive` },
+        { text: 'Pulpit', icon: <DashboardIcon />, path: `/user/${userName}/pim/pulpit` },
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },

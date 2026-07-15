@@ -23,7 +23,7 @@ function LoginPage() {
       sessionStorage.removeItem('auth_redirect');
       // Only follow redirect if it's not another user's page
       const redirectOk = redirect && (!redirect.startsWith('/user/') || redirect.startsWith(`/user/${userName}/`));
-      navigate(redirectOk ? redirect : `/user/${userName}/main`);
+      navigate(redirectOk ? redirect : `/user/${userName}/pim/pulpit`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

@@ -1,6 +1,6 @@
 import dayjs, { Dayjs } from 'dayjs';
 import { NodeBase } from './NodeBase';
-import { EventModel, EventComponentModel } from '../models/EventModel';
+import { EventModel, EventComponentModel, RecurrenceModel } from '../models/EventModel';
 
 // Forward reference type for task
 type TaskNodeRef = { id: string; name: string } | null;
@@ -17,6 +17,7 @@ export class EventNode extends NodeBase<EventModel> {
   startTime: string;
   endTime?: string;
   components?: EventComponentModel[];
+  recurrence?: RecurrenceModel;
 
   // Task reference
   private _taskRef: TaskNodeRef = null;
@@ -33,6 +34,7 @@ export class EventNode extends NodeBase<EventModel> {
     this.startTime = model.startTime;
     this.endTime = model.endTime;
     this.components = model.components;
+    this.recurrence = model.recurrence;
     this.parseDates();
   }
 
@@ -219,6 +221,7 @@ export class EventNode extends NodeBase<EventModel> {
     this.startTime = model.startTime;
     this.endTime = model.endTime;
     this.components = model.components;
+    this.recurrence = model.recurrence;
     this.parseDates();
     this.markDirty();
     return this;
@@ -238,6 +241,98 @@ export class EventNode extends NodeBase<EventModel> {
     if (!this._startDate) return false;
     const compareDate = dayjs(date);
     return this._startDate.isSame(compareDate, 'day');
+  }
+
+  /**
+   * Czy event występuje danego dnia (uwzględniając regułę powtarzania).
+   * Bez `recurrence` — tylko w dniu startu. Nigdy przed dniem startu.
+   */
+  occursOn(date: Dayjs | Date): boolean {
+    if (!this._startDate) return false;
+    const target = dayjs(date).startOf('day');
+    const start = this._startDate.startOf('day');
+    if (!this.recurrence) return start.isSame(target, 'day');
+    if (target.isBefore(start)) return false;
+
+    const rec = this.recurrence;
+    if (rec.until) {
+      const until = dayjs(rec.until).startOf('day');
+      if (until.isValid() && target.isAfter(until)) return false;
+    }
+    const interval = Math.max(1, Math.floor(rec.interval ?? 1));
+
+    switch (rec.freq) {
+      case 'daily':
+        return target.diff(start, 'day') % interval === 0;
+      case 'weekly':
+        if (target.day() !== start.day()) return false;
+        return (target.diff(start, 'day') / 7) % interval === 0;
+      case 'monthly':
+        if (target.date() !== start.date()) return false;
+        return target.diff(start, 'month') % interval === 0;
+      case 'yearly':
+        return target.date() === start.date()
+          && target.month() === start.month()
+          && (target.year() - start.year()) % interval === 0;
+      case 'weekdays': {
+        const wd = rec.weekdays && rec.weekdays.length ? rec.weekdays : [start.day()];
+        return wd.includes(target.day());
+      }
+      default:
+        return start.isSame(target, 'day');
+    }
+  }
+
+  /** Start eventu z porą dnia z modelu, ale w dniu `date` (dla wystąpień powtarzalnych). */
+  getStartOn(date: Dayjs | Date): Dayjs | null {
+    if (!this._startDate) return null;
+    const d = dayjs(date);
+    return d.hour(this._startDate.hour()).minute(this._startDate.minute()).second(this._startDate.second()).millisecond(0);
+  }
+
+  /** Koniec eventu przeniesiony na dzień `date` (zachowując czas trwania). */
+  getEndOn(date: Dayjs | Date): Dayjs | null {
+    const start = this.getStartOn(date);
+    if (!start) return null;
+    if (!this._endDate || !this._startDate) return null;
+    const durationMs = this._endDate.diff(this._startDate);
+    return start.add(durationMs, 'millisecond');
+  }
+
+  /** Czy wystąpienie w dniu `date` jest już przeszłością (wg pory dnia eventu). */
+  isPastOn(date: Dayjs | Date): boolean {
+    const end = this.getEndOn(date) ?? this.getStartOn(date);
+    if (!end) return false;
+    return dayjs().isAfter(end);
+  }
+
+  /** Czy wystąpienie w dniu `date` odbywa się teraz. */
+  isNowOn(date: Dayjs | Date): boolean {
+    const start = this.getStartOn(date);
+    if (!start) return false;
+    const now = dayjs();
+    const end = this.getEndOn(date) ?? start.add(1, 'hour');
+    return (now.isAfter(start) || now.isSame(start)) && (now.isBefore(end) || now.isSame(end));
+  }
+
+  /** Krótki opis reguły powtarzania (PL) lub null gdy jednorazowy. */
+  getRecurrenceLabel(): string | null {
+    const rec = this.recurrence;
+    if (!rec) return null;
+    const n = Math.max(1, Math.floor(rec.interval ?? 1));
+    const every = (unit1: string, unitN: string) => (n === 1 ? `Co ${unit1}` : `Co ${n} ${unitN}`);
+    switch (rec.freq) {
+      case 'daily': return every('dzień', 'dni');
+      case 'weekly': return every('tydzień', 'tygodnie');
+      case 'monthly': return every('miesiąc', 'miesiące');
+      case 'yearly': return every('rok', 'lata');
+      case 'weekdays': {
+        const names = ['Nd', 'Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So'];
+        const wd = rec.weekdays && rec.weekdays.length ? rec.weekdays : [];
+        return wd.length ? wd.map((d) => names[d]).join(', ') : 'Wybrane dni';
+      }
+      default: return 'Powtarzalny';
+    }
   }
 
   // Check if event is today
@@ -282,6 +377,7 @@ export class EventNode extends NodeBase<EventModel> {
       startTime: this.startTime,
       endTime: this.endTime,
       components: this.components,
+      recurrence: this.recurrence,
     };
   }
 

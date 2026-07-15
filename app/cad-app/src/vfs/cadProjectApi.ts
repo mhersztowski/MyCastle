@@ -52,6 +52,8 @@ async function vfsFetch(url: string, init?: RequestInit): Promise<Response> {
 export const CAD_EXT = '.cad.json';
 /** Scene3D companion file extension (saved next to a CAD project). */
 export const SCENE_EXT = '.scene.json';
+/** CAD 3D feature tree file extension (extrude/pocket/mirror/sketch on face + faceRef). */
+export const CAD3D_EXT = '.cad3d.json';
 /** Electronics schematic file extension. */
 export const ELEC_EXT = '.elec.json';
 /** Map project file extension. */

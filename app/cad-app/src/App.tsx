@@ -9,6 +9,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import Looks3OutlinedIcon from '@mui/icons-material/Looks3Outlined';
 import LooksOneOutlinedIcon from '@mui/icons-material/LooksOneOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
+import DeveloperBoardIcon from '@mui/icons-material/DeveloperBoard';
 import MapOutlinedIcon from '@mui/icons-material/MapOutlined';
 import StorageIcon from '@mui/icons-material/Storage';
 import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
@@ -32,6 +33,8 @@ import { LayerPanel } from './components/LayerPanel';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Scene3DView } from './components/Scene3DView';
 import { LegoView } from './components/LegoView';
+import { CadNewView } from './pages/CadNewView';
+import { PcbView } from './components/PcbView';
 import { StatusBar } from './components/StatusBar';
 import { ActionBar } from './components/ActionBar';
 import { Toolbar } from './components/Toolbar';
@@ -56,7 +59,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'map' | 'audio' | 'repository' | 'notes';
+type AppMode = 'cadnew' | 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -213,6 +216,9 @@ export default function App() {
   const mergeSceneRef = useRef<((json: string) => void) | null>(null);
   const mergeTreeRef = useRef<((json: string) => void) | null>(null);
   const mergeElecSchemaRef = useRef<((schema: ElectronicsSchema) => void) | null>(null);
+  // CAD 3D feature tree — save/load do backendu VFS
+  const getCad3dTreeJsonRef = useRef<(() => string) | null>(null);
+  const replaceCad3dTreeRef = useRef<((json: string) => void) | null>(null);
 
   const handleOpenSceneFromRepo = useCallback((jsonText: string) => {
     setAiSceneData(jsonText);
@@ -316,8 +322,19 @@ export default function App() {
           <CadFileOps
             project={project}
             mode={mode}
-            getSceneData={() => savedSceneJson}
-            onSceneData={json => { setAiSceneData(json); setSavedSceneJson(json); }}
+            // Dla mode='cad3d' używamy CAD 3D feature tree JSON. Dla mode='cad' — Scene 3D data (legacy).
+            getSceneData={() => {
+              if (mode === 'cad3d') return getCad3dTreeJsonRef.current?.() ?? null;
+              return savedSceneJson;
+            }}
+            onSceneData={json => {
+              if (mode === 'cad3d') {
+                replaceCad3dTreeRef.current?.(json);
+              } else {
+                setAiSceneData(json);
+                setSavedSceneJson(json);
+              }
+            }}
           />
         )}
         <Box ref={tabBarRef} sx={{ flex: 1, minWidth: 0, overflow: 'hidden', cursor: 'grab', '&:active': { cursor: 'grabbing' } }}>
@@ -328,6 +345,12 @@ export default function App() {
           onChange={(_, v: AppMode) => setMode(v)}
           sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0, fontSize: 12 } }}
         >
+          <Tab
+            value="cadnew"
+            label="CAD NEW"
+            icon={<ViewInArOutlinedIcon sx={{ fontSize: 16, color: '#2f6fd0' }} />}
+            iconPosition="start"
+          />
           <Tab
             value="cad"
             label="CAD"
@@ -356,6 +379,12 @@ export default function App() {
             value="electronics"
             label="Electronics"
             icon={<ElectricalServicesIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+          />
+          <Tab
+            value="pcb"
+            label="PCB"
+            icon={<DeveloperBoardIcon sx={{ fontSize: 16, color: '#66bb6a' }} />}
             iconPosition="start"
           />
           <Tab
@@ -534,7 +563,11 @@ export default function App() {
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
           <Box sx={{ flex: 1, overflow: 'hidden' }}>
-            <Cad3dView project={project} version={version} mergeTreeRef={mergeTreeRef} placementTemplate={placementTemplate?.mode === 'cad3d' ? placementTemplate : null} />
+            <Cad3dView project={project} version={version}
+              mergeTreeRef={mergeTreeRef}
+              getTreeJsonRef={getCad3dTreeJsonRef}
+              replaceTreeRef={replaceCad3dTreeRef}
+              placementTemplate={placementTemplate?.mode === 'cad3d' ? placementTemplate : null} />
           </Box>
           {aiOpen && (
             <Box sx={{
@@ -582,6 +615,10 @@ export default function App() {
       </Box>
 
       {/* Lego panel — parametric Lego-set designer (scene tree + viewport + properties) */}
+      <Box sx={{ flex: 1, display: mode === 'cadnew' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        {mode === 'cadnew' && <CadNewView />}
+      </Box>
+
       <Box sx={{ flex: 1, display: mode === 'lego' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
         {mode === 'lego' && <LegoView />}
       </Box>
@@ -616,6 +653,11 @@ export default function App() {
           )}
         </Box>
         <TemplatesPanel mode="electronics" templates={activeTemplates.filter(t => t.mode === 'electronics')} onInsert={handleInsertActiveTemplate} armedTemplateId={placementTemplate?.id ?? null} onArm={handleArmTemplate} />
+      </Box>
+
+      {/* PCB panel — schematic sheets + PCB boards workspace */}
+      <Box sx={{ flex: 1, display: mode === 'pcb' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        {mode === 'pcb' && <PcbView />}
       </Box>
 
       {/* Map panel */}

@@ -91,6 +91,8 @@ interface Props {
   style?: React.CSSProperties;
   onSceneChange?: (root: THREE.Object3D) => void;
   onSubSelect?: (hit: SubHit | null) => void;
+  /** ID selected feature — jeśli extrude/pocket, rysujemy wireframe preview. */
+  selectedId?: string | null;
 }
 
 interface ViewportState {
@@ -130,10 +132,11 @@ function OccSpinner() {
   );
 }
 
-export function Cad3dViewport({ tree, project, version, subSelectMode, style, onSceneChange, onSubSelect }: Props) {
+export function Cad3dViewport({ tree, project, version, subSelectMode, style, onSceneChange, onSubSelect, selectedId }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const gizmoCanvasRef = useRef<HTMLCanvasElement>(null);
   const prevTreeRef = useRef<FeatureTree>(tree);
+  const prevFeatureIdsRef = useRef<string>(tree.features.map(f => f.id).join(','));
   const stateRef = useRef<ViewportState | null>(null);
   const [occLoading, setOccLoading] = useState(false);
   // Abort token for in-flight evaluations — avoids stale updates
@@ -154,22 +157,20 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(el.clientWidth, el.clientHeight);
-    renderer.setClearColor(0x1a1a1a);
+    // Jasne tło rendering — podobnie jak FreeCAD/SolidWorks default
+    renderer.setClearColor(0xf5f5f5);
     el.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
+    // Uniwersalne oświetlenie CAD:
+    // - AmbientLight (0.6) — minimum oświetlenia zewsząd.
+    // - Camera-attached DirectionalLight (headlight, 0.5) — świeci od obserwatora.
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-    dir.position.set(1, 2, 3);
-    scene.add(dir);
-    const dir2 = new THREE.DirectionalLight(0xffffff, 0.3);
-    dir2.position.set(-1, -1, -2);
-    scene.add(dir2);
+    const headlight = new THREE.DirectionalLight(0xffffff, 0.5);
+    scene.add(headlight);
 
-    const grid = new THREE.GridHelper(2000, 100, 0x333333, 0x222222);
-    grid.rotation.x = Math.PI / 2;
-    scene.add(grid);
-    scene.add(new THREE.AxesHelper(50));
+    // Grid + AxesHelper zostały usunięte na życzenie użytkownika — czyste jasne tło.
+    // Nawigacja przez OrbitControls i gizmo w rogu nadal działa.
 
     const hoverGroup = new THREE.Group();
     hoverGroup.name = 'hover-overlay';
@@ -191,6 +192,9 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
     function animate() {
       raf = requestAnimationFrame(animate);
       controls.update();
+      // Headlight follow camera — świeci zawsze "od obserwatora" niezależnie
+      // od orientacji sceny. Uniwersalne dla dowolnej geometrii.
+      headlight.position.copy(camera.position);
       renderer.render(scene, camera);
       drawAxesGizmo(gizmoCanvasRef.current, camera);
     }
@@ -221,8 +225,13 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
     const s = stateRef.current;
     if (!s) return;
 
-    const treeChanged = prevTreeRef.current !== tree;
+    // Fit camera TYLKO gdy zmienił się skład drzewa (add/remove feature).
+    // Zmiana samych parametrów istniejącego feature nie triggeruje fit — inaczej
+    // symmetric/reversed przesunięcia byłyby maskowane przez auto-kadrowanie.
+    const currentFeatureIds = tree.features.map(f => f.id).join(',');
+    const treeChanged = prevFeatureIdsRef.current !== currentFeatureIds;
     prevTreeRef.current = tree;
+    prevFeatureIdsRef.current = currentFeatureIds;
 
     // Cancel any previous in-flight evaluation
     evalAbortRef.current.cancelled = true;
@@ -237,7 +246,7 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
 
     setOccLoading(hasSolids);
 
-    void evaluateFeatureTreeAsync(tree, project).then(root => {
+    void evaluateFeatureTreeAsync(tree, project, selectedId).then(root => {
       if (token.cancelled) return; // superseded by newer evaluation
       setOccLoading(false);
       const s2 = stateRef.current;
@@ -252,7 +261,7 @@ export function Cad3dViewport({ tree, project, version, subSelectMode, style, on
       setOccLoading(false);
       console.error('OCC evaluation error:', err);
     });
-  }, [tree, project, version, onSceneChange]);
+  }, [tree, project, version, onSceneChange, selectedId]);
 
   // ── Sub-selection event handlers ──────────────────────────────────────────
 

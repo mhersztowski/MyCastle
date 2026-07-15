@@ -694,6 +694,217 @@ async function handleLdraw(req: http.IncomingMessage, res: http.ServerResponse, 
   return false;
 }
 
+// ── EasyEDA / LCSC proxy (omija CORS + wymagany „przeglądarkowy" User-Agent) ──
+const EASYEDA_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
+const easyedaHeaders = { Accept: 'application/json', 'User-Agent': EASYEDA_UA };
+
+async function handleEasyEda(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const p = url.pathname;
+  if (!p.startsWith('/api/easyeda')) return false;
+
+  // GET /api/easyeda/search?q=... → lista części (LCSC number + MPN + package)
+  if (p === '/api/easyeda/search' && req.method === 'GET') {
+    const q = url.searchParams.get('q') ?? '';
+    if (!q.trim()) { json(res, { products: [] }); return true; }
+    try {
+      const r = await fetch(`https://easyeda.com/api/eda/product/search?keyword=${encodeURIComponent(q)}&currentPage=1&pageSize=25`, { headers: easyedaHeaders });
+      if (!r.ok) throw new Error(`EasyEDA HTTP ${r.status}`);
+      const data = await r.json() as { result?: { productList?: Array<Record<string, unknown>> } };
+      const list = data?.result?.productList ?? [];
+      const products = list.map((it) => ({
+        lcsc: String(it.number ?? ''),
+        mpn: String(it.mpn ?? ''),
+        package: String(it.package ?? ''),
+        manufacturer: String(it.manufacturer ?? ''),
+        stock: Number(it.stock ?? it.stockNumber ?? 0) || 0,
+        smtStock: Number(it.SMTStock ?? it.smtStock ?? it.jlcStock ?? 0) || 0,
+        price: String(it.price ?? it.splitPrice ?? ''),
+      })).filter((it) => it.lcsc);
+      json(res, { products });
+    } catch (err) {
+      json(res, { error: err instanceof Error ? err.message : String(err), products: [] }, 502);
+    }
+    return true;
+  }
+
+  // GET /api/easyeda/component/:lcscId → symbol (Sheet) + footprint (PCB)
+  const m = p.match(/^\/api\/easyeda\/component\/([^/]+)$/);
+  if (m && req.method === 'GET') {
+    const lcsc = decodeURIComponent(m[1]);
+    try {
+      const r = await fetch(`https://easyeda.com/api/products/${encodeURIComponent(lcsc)}/components?version=6.4.19.5`, { headers: easyedaHeaders });
+      if (!r.ok) throw new Error(`EasyEDA HTTP ${r.status}`);
+      const data = await r.json() as { result?: Record<string, unknown> };
+      const rr = data?.result as { title?: string; dataStr?: { head?: { c_para?: Record<string, string> }; shape?: string[]; BBox?: Record<string, number> }; packageDetail?: { dataStr?: { shape?: string[]; BBox?: Record<string, number> } } } | undefined;
+      if (!rr?.dataStr) throw new Error('brak danych symbolu');
+      json(res, {
+        lcsc,
+        title: rr.title ?? '',
+        prefix: rr.dataStr.head?.c_para?.pre ?? 'U?',
+        symbol: { shapes: rr.dataStr.shape ?? [], bbox: rr.dataStr.BBox ?? null },
+        footprint: rr.packageDetail?.dataStr ? { shapes: rr.packageDetail.dataStr.shape ?? [], bbox: rr.packageDetail.dataStr.BBox ?? null } : null,
+      });
+    } catch (err) {
+      json(res, { error: err instanceof Error ? err.message : String(err) }, 502);
+    }
+    return true;
+  }
+  return false;
+}
+
+// ── SnapEDA (proxy) — wymaga klucza partnerskiego SNAPEDA_API_KEY ──────────────
+// SnapEDA nie ma darmowego publicznego JSON API (jak EasyEDA). Gdy klucz + URL są
+// skonfigurowane, odpytujemy API partnerskie; bez klucza zwracamy tylko link do
+// wyszukiwania na stronie SnapEDA (skąd można pobrać pliki ręcznie).
+async function handleSnapeda(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  if (url.pathname !== '/api/snapeda/search' || req.method !== 'GET') return false;
+  const q = url.searchParams.get('q') ?? '';
+  const webUrl = `https://www.snapeda.com/search/?q=${encodeURIComponent(q)}`;
+  const key = process.env.SNAPEDA_API_KEY;
+  const api = process.env.SNAPEDA_API_URL; // szablon z {q}, np. https://api.snapeda.com/.../search?q={q}
+  if (!key || !api || !q.trim()) { json(res, { configured: !!(key && api), parts: [], webUrl }); return true; }
+  try {
+    const r = await fetch(api.replace('{q}', encodeURIComponent(q)), { headers: { Authorization: `Token ${key}`, Accept: 'application/json', 'User-Agent': EASYEDA_UA } });
+    if (!r.ok) throw new Error(`SnapEDA HTTP ${r.status}`);
+    const d = await r.json() as { results?: unknown[]; parts?: unknown[] };
+    const list = (Array.isArray(d.results) ? d.results : Array.isArray(d.parts) ? d.parts : []) as Array<Record<string, unknown>>;
+    const parts = list.slice(0, 25).map((it) => ({
+      mpn: String(it.part_number ?? it.mpn ?? it.name ?? ''),
+      manufacturer: String((it.manufacturer as { name?: string } | string) instanceof Object ? (it.manufacturer as { name?: string }).name : it.manufacturer ?? ''),
+      pins: Number(it.pins ?? it.pin_count ?? 0) || 0,
+      url: String(it.url ?? it.part_url ?? webUrl),
+    })).filter((p) => p.mpn);
+    json(res, { configured: true, parts, webUrl });
+  } catch (err) { json(res, { configured: true, error: err instanceof Error ? err.message : String(err), parts: [], webUrl }, 502); }
+  return true;
+}
+
+// ── Współdzielona biblioteka symboli (widoczna dla wszystkich projektów) ──────
+const SYMBOLS_DIR = () => resolve(DATA_DIR, 'symbols');
+const safeName = (s: string) => (s || 'Symbol').replace(/[^\w\-. ]+/g, '_').trim().slice(0, 80) || 'Symbol';
+
+async function handleSymbols(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const p = url.pathname;
+  if (!p.startsWith('/api/symbols')) return false;
+  const dir = SYMBOLS_DIR();
+
+  // GET /api/symbols → lista zapisanych symboli (nazwa + metadane)
+  if (p === '/api/symbols' && req.method === 'GET') {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+      const symbols = files.map((f) => {
+        try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.title ?? f.slice(0, -5), owner: d.owner ?? '', manufacturer: d.manufacturer ?? '', mfrPart: d.mfrPart ?? '', tags: d.tags ?? '' }; }
+        catch { return { name: f.slice(0, -5), title: f.slice(0, -5) }; }
+      });
+      json(res, { symbols });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err), symbols: [] }, 500); }
+    return true;
+  }
+
+  // POST /api/symbols → zapis symbolu do współdzielonego pliku
+  if (p === '/api/symbols' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const title = String(body.title ?? 'NowySymbol');
+      const name = safeName(title);
+      fs.mkdirSync(dir, { recursive: true });
+      const record = { ...body, title, savedAt: new Date().toISOString() };
+      fs.writeFileSync(resolve(dir, `${name}.json`), JSON.stringify(record, null, 2), 'utf8');
+      json(res, { ok: true, name, title });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 500); }
+    return true;
+  }
+
+  // GET /api/symbols/:name → wczytanie jednego symbolu
+  const m = p.match(/^\/api\/symbols\/([^/]+)$/);
+  if (m && req.method === 'GET') {
+    try {
+      const data = JSON.parse(fs.readFileSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`), 'utf8'));
+      json(res, data);
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 404); }
+    return true;
+  }
+  return false;
+}
+
+// ── Współdzielona biblioteka footprintów ──────────────────────────────────────
+const FOOTPRINTS_DIR = () => resolve(DATA_DIR, 'footprints');
+async function handleFootprints(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const p = url.pathname;
+  if (!p.startsWith('/api/footprints')) return false;
+  const dir = FOOTPRINTS_DIR();
+  if (p === '/api/footprints' && req.method === 'GET') {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+      const footprints = files.map((f) => { try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.title ?? f.slice(0, -5), tags: d.tags ?? '' }; } catch { return { name: f.slice(0, -5), title: f.slice(0, -5) }; } });
+      json(res, { footprints });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err), footprints: [] }, 500); }
+    return true;
+  }
+  if (p === '/api/footprints' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const title = String(body.title ?? 'NEW_FOOTPRINT');
+      const name = safeName(title);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(resolve(dir, `${name}.json`), JSON.stringify({ ...body, title, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+      json(res, { ok: true, name, title });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 500); }
+    return true;
+  }
+  const m = p.match(/^\/api\/footprints\/([^/]+)$/);
+  if (m && req.method === 'GET') {
+    try { json(res, JSON.parse(fs.readFileSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`), 'utf8'))); }
+    catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 404); }
+    return true;
+  }
+  return false;
+}
+
+// ── Projekty PCB (pełny zapis: wszystkie dokumenty + historia) ─────────────────
+const PROJECTS_DIR = () => resolve(DATA_DIR, 'projects');
+async function handleProjects(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const p = url.pathname;
+  if (!p.startsWith('/api/projects')) return false;
+  const dir = PROJECTS_DIR();
+  // GET /api/projects → lista zapisanych projektów
+  if (p === '/api/projects' && req.method === 'GET') {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+      const projects = files.map((f) => { try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.project ?? d.title ?? f.slice(0, -5), savedAt: d.savedAt ?? null }; } catch { return { name: f.slice(0, -5), title: f.slice(0, -5) }; } });
+      json(res, { projects });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err), projects: [] }, 500); }
+    return true;
+  }
+  // POST /api/projects → zapis pełnego projektu (nadpisuje plik o tej nazwie)
+  if (p === '/api/projects' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const title = String(body.name ?? body.project ?? 'project');
+      const name = safeName(title);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(resolve(dir, `${name}.json`), JSON.stringify({ ...body, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+      json(res, { ok: true, name, title });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 500); }
+    return true;
+  }
+  const m = p.match(/^\/api\/projects\/([^/]+)$/);
+  if (m && req.method === 'GET') {
+    try { json(res, JSON.parse(fs.readFileSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`), 'utf8'))); }
+    catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 404); }
+    return true;
+  }
+  if (m && req.method === 'DELETE') {
+    try { fs.unlinkSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`)); json(res, { ok: true }); }
+    catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 404); }
+    return true;
+  }
+  return false;
+}
+
 function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   if (!fs.existsSync(PUBLIC_DIR)) return false;
   const url = new URL(req.url!, `http://localhost`);
@@ -760,6 +971,21 @@ const server = http.createServer(async (req, res) => {
 
   // ── LDraw parts library (Lego page) ───────────────────────────────────────
   if (await handleLdraw(req, res, url)) return;
+
+  // ── EasyEDA / LCSC proxy (symbole + footprinty) ───────────────────────────
+  if (await handleEasyEda(req, res, url)) return;
+
+  // ── SnapEDA proxy ─────────────────────────────────────────────────────────
+  if (await handleSnapeda(req, res, url)) return;
+
+  // ── Współdzielona biblioteka symboli ──────────────────────────────────────
+  if (await handleSymbols(req, res, url)) return;
+
+  // ── Współdzielona biblioteka footprintów ──────────────────────────────────
+  if (await handleFootprints(req, res, url)) return;
+
+  // ── Projekty PCB (pełny zapis: dokumenty + historia) ──────────────────────
+  if (await handleProjects(req, res, url)) return;
 
   // ── Scene3D project API ───────────────────────────────────────────────────
   if (await handleScene3d(req, res, url.pathname)) return;

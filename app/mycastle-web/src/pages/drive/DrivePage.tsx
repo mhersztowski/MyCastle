@@ -1956,9 +1956,13 @@ export default function DrivePage(): React.JSX.Element {
   useEffect(() => {
     const openRel = searchParams.get('open');
     if (!openRel) return;
+    // `?fullscreen=1` (np. z widgetu „Ulubione" na Pulpicie) otwiera plik
+    // z panelem po prawej rozwiniętym na cały ekran (lista plików ukryta).
+    if (searchParams.get('fullscreen') === '1') setPanelFullscreen(true);
     void openInMdEditor({ name: openRel.split('/').pop() as string, type: FILE_TYPE }, openRel);
     const next = new URLSearchParams(searchParams);
     next.delete('open');
+    next.delete('fullscreen');
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);

@@ -26,6 +26,7 @@ const TYPE_DEFAULTS: Record<MapNodeType, Partial<MapNode>> = {
   group: { children: [] },
   route: { color: '#42a5f5', weight: 4 },
   label: { lat: 52.2297, lng: 21.0122, text: '**Label**', color: '#ffffff', fontSize: 14 },
+  collection: { memberIds: [] },
 }
 
 /** Current map viewport, used to spawn new objects where the user is looking

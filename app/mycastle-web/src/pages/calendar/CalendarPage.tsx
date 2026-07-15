@@ -25,7 +25,7 @@ import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/pl';
 import { useMqtt } from '../../modules/mqttclient';
 import { useFilesystem } from '../../modules/filesystem';
-import { EventNode, EventModel, EventsModel } from '@mhersztowski/core';
+import { EventNode, EventModel, EventsModel, RecurrenceModel } from '@mhersztowski/core';
 import { CurrentEvent, DayTemplate, DayTemplateEvent, DayTemplatesFile } from './types';
 import EventAddModal from './EventAddModal';
 import CurrentEventWidget from './CurrentEventWidget';
@@ -50,6 +50,7 @@ const CalendarPage: React.FC = () => {
   const [modalInitialName, setModalInitialName] = useState<string | undefined>(undefined);
   const [modalInitialDescription, setModalInitialDescription] = useState<string | undefined>(undefined);
   const [modalInitialTaskId, setModalInitialTaskId] = useState<string | undefined>(undefined);
+  const [modalInitialRecurrence, setModalInitialRecurrence] = useState<RecurrenceModel | undefined>(undefined);
   const [editingEvent, setEditingEvent] = useState<EventNode | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -61,11 +62,8 @@ const CalendarPage: React.FC = () => {
 
   // Filter events for selected date, sorted by time
   const filteredEvents = useMemo(() => {
-    const dateStr = selectedDate.format('YYYY-MM-DD');
-    const dayEvents = dataSource.events.filter(e => {
-      const eventDate = e.getStartDate();
-      return eventDate && eventDate.format('YYYY-MM-DD') === dateStr;
-    });
+    // Uwzględnia eventy powtarzalne (occursOn) obok jednorazowych z danego dnia.
+    const dayEvents = dataSource.events.filter(e => e.occursOn(selectedDate));
     return EventNode.sortByTime(dayEvents);
   }, [dataSource.events, selectedDate]);
 
@@ -89,6 +87,7 @@ const CalendarPage: React.FC = () => {
     setModalInitialName(undefined);
     setModalInitialDescription(undefined);
     setModalInitialTaskId(undefined);
+    setModalInitialRecurrence(undefined);
     setEditingEvent(null);
     setModalMode('current');
     setAddModalOpen(true);
@@ -100,6 +99,7 @@ const CalendarPage: React.FC = () => {
     setModalInitialName(undefined);
     setModalInitialDescription(undefined);
     setModalInitialTaskId(undefined);
+    setModalInitialRecurrence(undefined);
     setEditingEvent(null);
     setModalMode('permanent');
     setAddModalOpen(true);
@@ -113,6 +113,7 @@ const CalendarPage: React.FC = () => {
       setModalInitialName(undefined);
       setModalInitialDescription(undefined);
       setModalInitialTaskId(undefined);
+    setModalInitialRecurrence(undefined);
       setEditingEvent(null);
       setModalMode('permanent');
       setAddModalOpen(true);
@@ -136,6 +137,7 @@ const CalendarPage: React.FC = () => {
     setModalInitialName(undefined);
     setModalInitialDescription(undefined);
     setModalInitialTaskId(undefined);
+    setModalInitialRecurrence(undefined);
     setEditingEvent(null);
     setModalMode('permanent');
     setAddModalOpen(true);
@@ -147,6 +149,7 @@ const CalendarPage: React.FC = () => {
     setModalInitialName(event.getDisplayName());
     setModalInitialDescription(event.description || undefined);
     setModalInitialTaskId(event.taskId || undefined);
+    setModalInitialRecurrence(event.recurrence);
     setEditingEvent(event);
     setModalMode('permanent');
     setAddModalOpen(true);
@@ -170,6 +173,7 @@ const CalendarPage: React.FC = () => {
           taskId: event.taskId,
           startTime: event.startTime.toISOString(),
           endTime: event.endTime.toISOString(),
+          recurrence: event.recurrence,
         };
 
         // Build file path
@@ -655,6 +659,7 @@ const CalendarPage: React.FC = () => {
                 <EventListItem
                   key={index}
                   event={event}
+                  displayDate={selectedDate}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}
                   onEdit={handleEditEvent}
@@ -686,6 +691,7 @@ const CalendarPage: React.FC = () => {
         initialName={modalInitialName}
         initialDescription={modalInitialDescription}
         initialTaskId={modalInitialTaskId}
+        initialRecurrence={modalInitialRecurrence}
         mode={modalMode}
         editMode={!!editingEvent}
       />

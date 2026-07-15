@@ -23,7 +23,7 @@ function HomePage() {
   }, []);
 
   if (currentUser) {
-    return <Navigate to={`/user/${currentUser.name}/main`} replace />;
+    return <Navigate to={`/user/${currentUser.name}/pim/pulpit`} replace />;
   }
 
   return (

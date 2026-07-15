@@ -44,6 +44,8 @@ interface Props {
   placementTemplate?: ActiveTemplate | null;
   /** Called when Esc is pressed while placement is active. */
   onCancelPlacement?: () => void;
+  /** Motyw kanwy — 'light' daje białe tło + jasną siatkę (np. edytor szkicu CAD NEW). */
+  theme?: 'light' | 'dark';
 }
 
 interface PlacementData {
@@ -76,7 +78,7 @@ const tools: Record<ToolName, Tool> = {
   sphere3d: new Sphere3dTool(),
 };
 
-export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement }: Props) {
+export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement, theme }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CadRenderer | null>(null);
   const prevToolRef = useRef<ToolName>(activeTool);
@@ -93,7 +95,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const renderer = new CadRenderer(canvas, project);
+    const renderer = new CadRenderer(canvas, project, { theme });
     rendererRef.current = renderer;
     const parent = canvas.parentElement!;
     if (parent.clientWidth > 0 && parent.clientHeight > 0) {
