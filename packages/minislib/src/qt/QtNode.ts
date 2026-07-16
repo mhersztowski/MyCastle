@@ -39,27 +39,44 @@ export class QtNode extends Node {
   #destroyedConn: QtConnectionLike | null = null;
   readonly #ownsNative: boolean;
 
-  constructor(native: QtObjectLike, parent?: QtNode, opts: QtWrapOptions = {}) {
+  /**
+   * Native browser-Qt class name used to auto-create a native object when a
+   * typed wrapper is constructed with no `native` argument (e.g. `new
+   * QtButtonNode()` emitted by the visual graph). Subclasses set this; the
+   * native class is resolved from `globalThis` (populated by `qt.module.js`).
+   */
+  static readonly qtClass?: string;
+
+  constructor(native?: QtObjectLike, parent?: QtNode, opts: QtWrapOptions = {}) {
+    // No native passed → auto-create one from globalThis using the subclass's
+    // `qtClass` (so `new QtLineEditNode()` yields a real native QLineEdit).
+    const resolved = native ?? QtNode.#autoNative((new.target as unknown as { qtClass?: string })?.qtClass);
+    if (!resolved) {
+      throw new Error(
+        `${(new.target as { name?: string })?.name ?? 'QtNode'}: no native object provided and ` +
+        `no browser-Qt class available (load qt.module.js, or pass a native object / use createQt).`,
+      );
+    }
     // Attach the parent *after* super() — Node's tree signals aren't
     // initialised until its field initialisers run (post-super), so passing a
     // parent into MObject's ctor (which calls setParent) would NPE.
-    super(undefined, native.objectName());
-    this.native = native;
-    this.#ownsNative = opts.ownsNative ?? false;
+    super(undefined, resolved.objectName());
+    this.native = resolved;
+    this.#ownsNative = opts.ownsNative ?? native === undefined;
 
     const p = parent ?? opts.parent;
     if (p) this.setParent(p);
 
     // Native teardown → tear down the wrapper (guarded against recursion).
-    if (isQtSignal(native.destroyed)) {
-      this.#destroyedConn = native.destroyed.connect(() => {
+    if (isQtSignal(resolved.destroyed)) {
+      this.#destroyedConn = resolved.destroyed.connect(() => {
         if (!this.isDestroyed) this.destroy();
       });
     }
 
     if (opts.recursive) {
       const wrapChild = opts.wrapChild ?? ((n, p) => new QtNode(n, p, opts));
-      for (const child of native.children()) {
+      for (const child of resolved.children()) {
         wrapChild(child, this);
       }
     }
@@ -155,5 +172,12 @@ export class QtNode extends Node {
     for (const s of this.#signals.values()) s.disconnectAll();
     this.#signals.clear();
     if (this.#ownsNative && !this.native.isDestroyed()) this.native.destroy();
+  }
+
+  /** Instantiate a native browser-Qt object by class name from `globalThis`. */
+  static #autoNative(className?: string): QtObjectLike | null {
+    if (!className) return null;
+    const Ctor = (globalThis as Record<string, unknown>)[className];
+    return typeof Ctor === 'function' ? new (Ctor as new () => QtObjectLike)() : null;
   }
 }

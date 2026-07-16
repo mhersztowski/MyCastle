@@ -1,5 +1,8 @@
 # Project: MyCastle
 
+## Komunikacja
+Wszystkie komunikaty, odpowiedzi i wyjaśnienia pisz **po polsku** (z pełną poprawnością ortograficzną i polskimi znakami). Terminy techniczne i identyfikatory z kodu zostają w oryginale.
+
 ## Overview
 pnpm monorepo zarządzający danymi PIM (osoby, taski, projekty, eventy, shopping, IoT/Minis devices, CAD). Współdzielone pakiety w `packages/`, aplikacje w `app/`.
 

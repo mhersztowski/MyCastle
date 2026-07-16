@@ -887,19 +887,31 @@ interface MinislibPluginManifest {
 /**
  * Translate a client-side VFS path to the correct backend API URL.
  *
- * Client VFS paths under /home/ map to the user-scoped endpoint:
- *   /home/{relPath} → /api/users/{user}/vfs/{op}?path=/data/Minis/Users/{user}/{relPath}
+ * The builtin `/home` mount, AND any user-created mount that uses the
+ * **User Home** provider (whatever its mount-point name — `/user`, `/me`, …),
+ * map to the per-user endpoint:
+ *   /{mount}/{relPath} → /api/users/{user}/vfs/{op}?path=/data/Minis/Users/{user}/{relPath}
  *
- * All other paths fall back to the admin endpoint (for /server/, /devices/, etc.).
+ * The mount→provider mapping is read from the saved VFS presets
+ * (`localStorage.mycastle_vfs_presets`). Everything else (system mounts like
+ * `/server`, `/mycastle-code`, `/devices`, or unknown mounts) falls back to the
+ * admin/composite endpoint — same as before.
  */
 function vfsApiUrl(clientPath: string, op: string): string {
-  if (clientPath.startsWith('/home/') || clientPath === '/home') {
-    const userName = window.location.pathname.match(/\/user\/([^/]+)\//)?.[1];
-    if (userName) {
-      const relPath = clientPath.slice('/home'.length) || '/';
-      const backendPath = `/data/Minis/Users/${userName}${relPath === '/' ? '' : relPath}` || `/data/Minis/Users/${userName}`;
-      return `/api/users/${encodeURIComponent(userName)}/vfs/${op}?path=${encodeURIComponent(backendPath)}`;
-    }
+  const userName = window.location.pathname.match(/\/user\/([^/]+)\//)?.[1];
+  const segs = clientPath.replace(/^\/+/, '').split('/');
+  const mountSeg = segs[0] ?? '';
+  const rest = segs.slice(1).join('/');
+
+  // Any mount that isn't a known system mount is treated as the user's home dir
+  // — strip its mount-point segment and map the rest under /data/Minis/Users/{user}.
+  // This mirrors how the TypeScript-IntelliSense plugin resolves the same paths
+  // (`/user/drive/x.ts` → /api/users/{u}/vfs?path=/data/Minis/Users/{u}/drive/x.ts)
+  // and works for /home, /user, or any custom User-Home mount name.
+  const SYSTEM_VFS_MOUNTS = new Set(['server', 'mycastle-code', 'devices', 'data', 'api']);
+  if (userName && mountSeg && !SYSTEM_VFS_MOUNTS.has(mountSeg)) {
+    const backendPath = `/data/Minis/Users/${userName}${rest ? '/' + rest : ''}`;
+    return `/api/users/${encodeURIComponent(userName)}/vfs/${op}?path=${encodeURIComponent(backendPath)}`;
   }
   return `/api/vfs/${op}?path=${encodeURIComponent(clientPath)}`;
 }
@@ -988,6 +1000,141 @@ export interface ExternalClassEntry {
   def: ExternalClassDef;
 }
 
+/* ── Import-driven class parsing (manifest-free) ─────────────────────────────
+ * Resolve imported classes straight from project source, so importing a Node
+ * subclass is enough to expose its ports — no minislib-plugin.json required.
+ * Handles field-style (`readonly x = new Signal/MProperty(...)`) AND reflective
+ * getter-style wrappers (`get x() { return this.signal/prop('x') }`, e.g. the Qt
+ * Node wrappers), merging ports across the `extends` chain and barrels. */
+
+/** Collapse `.`/`..` segments in a VFS path (keeps a leading slash). */
+function normalizeVfsPath(p: string): string {
+  const abs = p.startsWith('/');
+  const out: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (out.length && out[out.length - 1] !== '..') out.pop(); else out.push('..'); }
+    else out.push(seg);
+  }
+  return (abs ? '/' : '') + out.join('/');
+}
+
+async function cachedReadText(path: string, cache: Map<string, string | null>): Promise<string | null> {
+  if (cache.has(path)) return cache.get(path)!;
+  const txt = await vfsReadFileText(path);
+  cache.set(path, txt);
+  return txt;
+}
+
+/** Resolve an import specifier (relative or bare) to an existing VFS .ts file. */
+async function resolveImportToFile(
+  specifier: string, fromFile: string, projectRoot: string, cache: Map<string, string | null>,
+): Promise<string | null> {
+  const dir = fromFile.split('/').slice(0, -1).join('/');
+  const bases = specifier.startsWith('.')
+    ? [normalizeVfsPath(`${dir}/${specifier}`)]
+    : [normalizeVfsPath(`${projectRoot}/${specifier}`), normalizeVfsPath(`${projectRoot}/node_modules/${specifier}`)];
+  for (const b of bases) {
+    for (const cand of [`${b}.ts`, `${b}.tsx`, `${b}/index.ts`, `${b}/index.tsx`]) {
+      if ((await cachedReadText(cand, cache)) !== null) return cand;
+    }
+  }
+  return null;
+}
+
+/** Find the file + body where `className` is defined, following re-exports and
+ *  imports across project files. */
+async function findClassDefinition(
+  className: string, startFile: string, projectRoot: string,
+  cache: Map<string, string | null>, seen = new Set<string>(),
+): Promise<{ file: string; body: string; extendsName: string | null } | null> {
+  if (seen.has(startFile) || seen.size > 40) return null;
+  seen.add(startFile);
+  const code = await cachedReadText(startFile, cache);
+  if (!code) return null;
+
+  const classRe = new RegExp(`(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?class\\s+${className}\\b[^{]*`);
+  const cm = classRe.exec(code);
+  if (cm) {
+    return {
+      file: startFile,
+      body: extractClassBody(code, cm.index + cm[0].length),
+      extendsName: /extends\s+(\w+)/.exec(cm[0])?.[1] ?? null,
+    };
+  }
+
+  // Re-export / import that brings `className` from another module → follow it.
+  const linkRe = /(?:export|import)\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+  let lm: RegExpExecArray | null;
+  while ((lm = linkRe.exec(code)) !== null) {
+    const names = lm[1].split(',').map((n) => n.trim().split(/\s+as\s+/)[0].trim());
+    if (!names.includes(className)) continue;
+    const target = await resolveImportToFile(lm[2], startFile, projectRoot, cache);
+    if (target) {
+      const found = await findClassDefinition(className, target, projectRoot, cache, seen);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function propTypeFromGeneric(generic?: string): string {
+  const t = (generic ?? '').trim();
+  return t === 'boolean' || t === 'number' || t === 'string' ? t : (t || 'string');
+}
+
+/** Parse field-style AND reflective getter-style ports from a class body. */
+function parseAnyClassPorts(body: string): { signals: SignalPort[]; properties: PropertyDef[] } {
+  const signals: SignalPort[] = [...parseSignalPorts(body)];
+  const properties: PropertyDef[] = [...parseLocalProperties(body)];
+  const getterRe = /get\s+(\w+)\s*\(\)\s*(?::[^={;]+)?\{\s*return\s+this\.(signal|prop)\s*(?:<([^>]*)>)?\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = getterRe.exec(body)) !== null) {
+    const [, name, kind, generic] = m;
+    if (kind === 'signal') {
+      if (!signals.some((s) => s.name === name)) signals.push({ name, type: (generic ?? '').trim() });
+    } else if (!properties.some((p) => p.name === name)) {
+      properties.push({ name, type: propTypeFromGeneric(generic) });
+    }
+  }
+  return { signals, properties };
+}
+
+function dedupeSignals(ports: SignalPort[]): SignalPort[] {
+  const seen = new Set<string>();
+  return ports.filter((p) => (seen.has(p.name) ? false : (seen.add(p.name), true)));
+}
+function dedupeProps(props: PropertyDef[]): PropertyDef[] {
+  const seen = new Set<string>();
+  return props.filter((p) => (seen.has(p.name) ? false : (seen.add(p.name), true)));
+}
+
+/** Build an ExternalClassDef for `className` by parsing its definition + the
+ *  `extends` chain across project files. Null if it can't be located. */
+async function buildClassDefFromSource(
+  className: string, definingFile: string, projectRoot: string,
+  cache: Map<string, string | null>, depth = 0,
+): Promise<ExternalClassDef | null> {
+  if (depth > 12) return null;
+  const src = await findClassDefinition(className, definingFile, projectRoot, cache);
+  if (!src) return null;
+  const own = parseAnyClassPorts(src.body);
+  let signals = own.signals;
+  let properties = own.properties;
+
+  const base = src.extendsName;
+  if (base === 'Node') {
+    signals = [...NODE_BUILTIN_SIGNALS, ...signals];
+  } else if (base && !MINISLIB_BASE_KIND[base]) {
+    const baseDef = await buildClassDefFromSource(base, src.file, projectRoot, cache, depth + 1);
+    if (baseDef) {
+      signals = dedupeSignals([...baseDef.signals, ...signals]);
+      properties = dedupeProps([...baseDef.properties, ...properties]);
+    }
+  }
+  return { kind: 'class', signals, slots: [], paramDefs: [], properties };
+}
+
 /**
  * Load all external minislib-plugin.json manifests available to the project.
  *
@@ -1007,10 +1154,11 @@ async function loadExternalClassDefs(code: string, uri: string): Promise<{
   const fromPackageJson = await readPackageJsonDeps(projectRoot);
   // Skip @mhersztowski/minislib — it's handled separately as built-ins.
   const pkgSet = new Set([...fromImports, ...fromPackageJson].filter((p) => p !== '@mhersztowski/minislib'));
-  if (pkgSet.size === 0) return { byClass: new Map(), entries: [] };
 
   const byClass = new Map<string, ExternalClassDef>();
   const entries: ExternalClassEntry[] = [];
+
+  // 1. Manifest-declared classes (minislib-plugin.json).
   await Promise.all(
     Array.from(pkgSet).map(async (packageName) => {
       const defs = await fetchManifest(projectRoot, packageName);
@@ -1020,6 +1168,30 @@ async function loadExternalClassDefs(code: string, uri: string): Promise<{
       }
     }),
   );
+
+  // 2. Imported classes parsed straight from project source (manifest-free).
+  //    Resolves each import to a file, then parses the class + its `extends`
+  //    chain — covering both field-style and reflective getter-style (Qt)
+  //    wrappers. Manifest entries above win on name collisions.
+  const readCache = new Map<string, string | null>();
+  const imports = parseAllImports(code).filter(({ packageName }) => packageName !== '@mhersztowski/minislib');
+  await Promise.all(
+    imports.map(async ({ packageName, names }) => {
+      const classNames = names.filter((n) => /^[A-Z]/.test(n) && !MINISLIB_EXPORTS.includes(n) && !byClass.has(n));
+      if (classNames.length === 0) return;
+      const file = await resolveImportToFile(packageName, uri, projectRoot, readCache);
+      if (!file) return;
+      for (const className of classNames) {
+        if (byClass.has(className)) continue;
+        const def = await buildClassDefFromSource(className, file, projectRoot, readCache);
+        if (def && (def.signals.length > 0 || def.properties.length > 0)) {
+          byClass.set(className, def);
+          entries.push({ packageName, className, def });
+        }
+      }
+    }),
+  );
+
   return { byClass, entries };
 }
 

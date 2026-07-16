@@ -60,6 +60,28 @@ export async function readUserJson<T = unknown>(userName: string, relPath: strin
 }
 
 /**
+ * Read a file under `data/Minis/Users/{userName}/{relPath}` as raw UTF-8 text.
+ * Returns `null` if the file doesn't exist. Throws on unexpected HTTP errors.
+ */
+export async function readUserFileText(userName: string, relPath: string): Promise<string | null> {
+  if (!userName) throw new Error('readUserFileText: empty userName');
+  const u = new URL(
+    `/api/users/${encodeURIComponent(userName)}/vfs/readFile`,
+    window.location.origin,
+  );
+  u.searchParams.set('path', fullPath(userName, relPath));
+  const r = await fetch(u.pathname + u.search, { headers: authHeaders() });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`readUserFileText ${relPath}: HTTP ${r.status}`);
+  const json = await r.json() as { data?: string };
+  if (!json.data) return '';
+  const binary = atob(json.data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+/**
  * Write a JSON file. Creates the file (and parent dirs implicitly via VFS)
  * and overwrites existing content. Throws on HTTP errors.
  */

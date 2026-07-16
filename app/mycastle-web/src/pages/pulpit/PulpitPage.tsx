@@ -29,6 +29,8 @@ import {
   Radio,
   FormControl,
   FormLabel,
+  Select,
+  InputLabel,
   Tabs,
   Tab,
   Avatar,
@@ -78,6 +80,7 @@ import {
   ChevronRightRounded as ChevronRightIcon,
   WbSunnyRounded as WeatherIcon,
   ContactsRounded as ContactsIcon,
+  WidgetsRounded as ComponentIcon,
   LightModeRounded as LightIcon,
   DarkModeRounded as DarkIcon,
   DeleteOutlineRounded as DeleteIcon,
@@ -86,7 +89,8 @@ import {
   CheckRounded as CheckIcon,
   FormatSizeRounded as TextSizeIcon,
 } from '@mui/icons-material';
-import { readUserJson } from '../../services/userJson';
+import { readUserJson, readUserFileText } from '../../services/userJson';
+import { runBrowserComponent, type RunHandle } from '../../modules/component-runner/runBrowserComponent';
 
 /* ------------------------------------------------------------------ *
  *  Pulpit — widget dashboard (floating windows)
@@ -99,7 +103,7 @@ import { readUserJson } from '../../services/userJson';
  *  w localStorage.
  * ------------------------------------------------------------------ */
 
-type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts';
+type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component';
 
 interface RssFeed { name?: string; url: string; }
 interface Contact { name: string; detail?: string; hue?: number; }
@@ -117,6 +121,7 @@ interface WidgetConfig {
   clockNumbers?: boolean;         // clock: pokaż cyfry godzin (analog)
   weatherCity?: string;           // weather: miasto
   contacts?: Contact[];           // contacts: lista kontaktów
+  componentId?: string;           // component: id wpisu z Programming/Components
 }
 
 /* --- motyw (jasny/ciemny) współdzielony przez widgety --------------- */
@@ -190,6 +195,7 @@ const WIDGET_CATALOG: { kind: WidgetKind; label: string; icon: React.ReactNode; 
   { kind: 'clock', label: 'Zegar', icon: <ClockIcon fontSize="small" />, w: 280, h: 280 },
   { kind: 'weather', label: 'Pogoda', icon: <WeatherIcon fontSize="small" />, w: 340, h: 300 },
   { kind: 'contacts', label: 'Kontakty', icon: <ContactsIcon fontSize="small" />, w: 320, h: 360 },
+  { kind: 'component', label: 'Komponent (Programming/Components)', icon: <ComponentIcon fontSize="small" />, w: 420, h: 360 },
 ];
 
 const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> = {
@@ -202,7 +208,16 @@ const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> 
   'clock': { title: 'Zegar', icon: <ClockIcon sx={{ fontSize: 16 }} /> },
   'weather': { title: 'Pogoda', icon: <WeatherIcon sx={{ fontSize: 16 }} /> },
   'contacts': { title: 'Kontakty', icon: <ContactsIcon sx={{ fontSize: 16 }} /> },
+  'component': { title: 'Komponent', icon: <ComponentIcon sx={{ fontSize: 16 }} /> },
 };
+
+/* --- typ wpisu z Programming/Components (do widgetu Komponent) ------------- */
+interface StoredComponent { id: string; name: string; path: string; }
+
+async function loadStoredComponents(userName: string): Promise<StoredComponent[]> {
+  const d = await readUserJson<{ components?: StoredComponent[] }>(userName, 'programming/components.json').catch(() => null);
+  return Array.isArray(d?.components) ? d!.components!.filter((c) => c && c.id && c.path) : [];
+}
 
 function defaultLayout(): WidgetInstance[] {
   return [
@@ -1136,6 +1151,59 @@ function ContactsWidget({ config }: { config?: WidgetConfig }) {
 }
 
 /* ================================================================== *
+ *  Widget: Komponent (uruchamia komponent Lit/Qt z Programming/Components)
+ * ================================================================== */
+function ComponentWidget({ userName, config }: { userName: string; config?: WidgetConfig }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<RunHandle | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  const componentId = config?.componentId;
+
+  useEffect(() => {
+    let alive = true;
+    handleRef.current?.stop();
+    handleRef.current = null;
+    setError(null);
+    if (!componentId) { setStatus(''); return; }
+    (async () => {
+      try {
+        setStatus('Ładowanie…');
+        const list = await loadStoredComponents(userName);
+        const entry = list.find((c) => c.id === componentId);
+        if (!entry) throw new Error('Komponent nie istnieje na liście (Programming/Components)');
+        const code = await readUserFileText(userName, entry.path);
+        if (code == null) throw new Error(`Brak pliku: ${entry.path}`);
+        await new Promise((r) => requestAnimationFrame(r));
+        if (!alive || !hostRef.current) return;
+        handleRef.current = await runBrowserComponent(code, {
+          host: hostRef.current, userName, fileName: entry.path,
+          log: (lvl, txt) => { if (lvl === 'error') setError(txt); },
+        });
+        if (alive) setStatus('');
+      } catch (e) {
+        if (alive) { setError(e instanceof Error ? e.message : String(e)); setStatus(''); }
+      }
+    })();
+    return () => { alive = false; handleRef.current?.stop(); };
+  }, [userName, componentId]);
+
+  if (!componentId) return <EmptyGalleryHint icon={<ComponentIcon />} text="Wybierz komponent w ustawieniach ⚙" />;
+
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box ref={hostRef} sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 0.5, display: 'flex', flexDirection: 'column' }} />
+      {status && <Typography variant="caption" sx={{ px: 1, opacity: 0.6 }}>{status}</Typography>}
+      {error && (
+        <Typography variant="caption" color="error" sx={{ px: 1, py: 0.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {error}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/* ================================================================== *
  *  Dialog ustawień widgetu
  * ================================================================== */
 function WidgetSettingsDialog({
@@ -1174,6 +1242,15 @@ function WidgetSettingsDialog({
       .catch(() => { if (alive) setGimgs([]); });
     return () => { alive = false; };
   }, [widget.kind, cfg.shareUrl]);
+
+  // component: lista komponentów z Programming/Components
+  const [compList, setCompList] = useState<StoredComponent[] | null>(null);
+  useEffect(() => {
+    if (widget.kind !== 'component') { setCompList(null); return; }
+    let alive = true;
+    loadStoredComponents(userName).then((l) => { if (alive) setCompList(l); });
+    return () => { alive = false; };
+  }, [widget.kind, userName]);
 
   const gMode = cfg.mode ?? 'random';
   const gSelected = cfg.selected ?? [];
@@ -1411,6 +1488,30 @@ function WidgetSettingsDialog({
             Ten widget pokazuje pliki oznaczone gwiazdką w Drive. Dodatkowa konfiguracja nie jest potrzebna.
           </Typography>
         )}
+
+        {/* --- component: wybór komponentu po nazwie z Programming/Components --- */}
+        {widget.kind === 'component' && (
+          <>
+            <FormControl fullWidth size="small">
+              <InputLabel id="pulpit-component-label">Komponent</InputLabel>
+              <Select
+                labelId="pulpit-component-label"
+                label="Komponent"
+                value={compList && compList.some((c) => c.id === cfg.componentId) ? (cfg.componentId ?? '') : ''}
+                onChange={(e) => patch({ componentId: e.target.value || undefined })}
+              >
+                {(compList ?? []).map((c) => (
+                  <MenuItem key={c.id} value={c.id}>{c.name} <Box component="span" sx={{ opacity: 0.5, ml: 1, fontSize: 12 }}>({c.path})</Box></MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {compList !== null && compList.length === 0 && (
+              <Typography variant="body2" sx={{ opacity: 0.6, mt: 1 }}>
+                Brak komponentów. Dodaj je w Programming → Components.
+              </Typography>
+            )}
+          </>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Anuluj</Button>
@@ -1528,6 +1629,7 @@ function WidgetFrame({
         {widget.kind === 'clock' && <ClockWidget config={widget.config} />}
         {widget.kind === 'weather' && <WeatherWidget config={widget.config} />}
         {widget.kind === 'contacts' && <ContactsWidget config={widget.config} />}
+        {widget.kind === 'component' && <ComponentWidget userName={userName} config={widget.config} />}
       </Box>
 
       {custom && CORNERS.map((c) => (

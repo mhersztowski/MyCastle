@@ -2,7 +2,12 @@
 // We intentionally do NOT import the MqttClient *type* so it never
 // appears in the generated .d.ts, preventing @types/node conflicts
 // in consumer projects.
-import { connect as mqttConnect } from 'mqtt';
+//
+// mqtt's Node build exposes a named `connect`, but its browser ESM build only
+// has a default export. Import the namespace and resolve `connect` from either
+// shape so minislib bundles for the browser (Vite/Rollup, which fails on a
+// missing named export) AND still runs under Node.
+import * as mqttModule from 'mqtt';
 import { Signal } from './core/Signal';
 import { Node } from './Node';
 
@@ -25,6 +30,13 @@ interface _Client {
   end(force?: boolean): void;
   on(event: string, listener: (...args: unknown[]) => void): void;
 }
+
+// Resolve mqtt's `connect` from either the Node (named) or browser (default)
+// export shape — see the import note above.
+const mqttConnect = (
+  (mqttModule as unknown as { connect?: unknown }).connect ??
+  (mqttModule as unknown as { default?: { connect?: unknown } }).default?.connect
+) as (url: string, opts: Record<string, unknown>) => _Client;
 
 /**
  * MQTT connection node.

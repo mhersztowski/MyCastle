@@ -418,6 +418,9 @@ importers:
       '@mhersztowski/core-scene3d':
         specifier: workspace:*
         version: link:../../packages/core-scene3d
+      '@mhersztowski/minislib':
+        specifier: workspace:*
+        version: link:../../packages/minislib
       '@mhersztowski/server-logic':
         specifier: workspace:*
         version: link:../../packages/server-logic
@@ -14988,6 +14991,14 @@ snapshots:
     optionalDependencies:
       vite: 5.4.21(@types/node@24.12.2)(lightningcss@1.27.0)(terser@5.46.1)
 
+  '@vitest/mocker@4.0.18(vite@6.4.1(@types/node@20.19.33)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2))':
+    dependencies:
+      '@vitest/spy': 4.0.18
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 6.4.1(@types/node@20.19.33)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2)
+
   '@vitest/mocker@4.0.18(vite@6.4.1(@types/node@24.12.2)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2))':
     dependencies:
       '@vitest/spy': 4.0.18
@@ -20522,7 +20533,7 @@ snapshots:
   vitest@4.0.18(@types/node@20.19.33)(jsdom@28.1.0)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.18
-      '@vitest/mocker': 4.0.18(vite@6.4.1(@types/node@24.12.2)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2))
+      '@vitest/mocker': 4.0.18(vite@6.4.1(@types/node@20.19.33)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2))
       '@vitest/pretty-format': 4.0.18
       '@vitest/runner': 4.0.18
       '@vitest/snapshot': 4.0.18

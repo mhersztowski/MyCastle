@@ -19,6 +19,7 @@
     "@mhersztowski/core-cad": "workspace:*",
     "@mhersztowski/core-cad-viewer": "workspace:*",
     "@mhersztowski/core-scene3d": "workspace:*",
+    "@mhersztowski/minislib": "workspace:*",
     "@mhersztowski/server-logic": "workspace:*",
     "@mhersztowski/texteditor": "workspace:*",
     "@mhersztowski/web-client": "workspace:*",

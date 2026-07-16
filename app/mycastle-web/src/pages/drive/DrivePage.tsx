@@ -996,6 +996,8 @@ export default function DrivePage(): React.JSX.Element {
   const [browserConsoleOpen, setBrowserConsoleOpen] = useState(false);
   const [browserRunning, setBrowserRunning] = useState(false);
   const browserSessionRef = useRef<{ stopped: boolean; timers: number[]; subs: Array<() => void> } | null>(null);
+  // DOM mount surface for visual output — scripts push elements via `display.dom(el)`.
+  const browserDomRef = useRef<HTMLDivElement | null>(null);
 
   // Defined early (before the AI agent / prompt-library blocks reference it).
   const toast = useCallback((msg: string, severity: 'success'|'error'|'info' = 'success') => {
@@ -1094,24 +1096,128 @@ export default function DrivePage(): React.JSX.Element {
 
     try {
       if (/\.ts$/i.test(name)) {
+        // TS→JS via Monaco's built-in TypeScript compiler. Its worker runs with
+        // `noEmit: true` (intellisense-only) so `getEmitOutput` normally yields
+        // nothing — we flip `noEmit` off just for the emit (and restore it),
+        // which reuses Monaco's real compiler WITHOUT bundling `typescript`
+        // (that 7 MB dependency OOMs the build). All type syntax
+        // (import/declare/`as`/annotations/generics) is stripped; imports stay
+        // ESNext and are handled by the import-stripping pass below.
+        const tsLang = monaco.languages.typescript.typescriptDefaults;
+        const prevOpts = tsLang.getCompilerOptions();
         const tmpUri = monaco.Uri.parse(`inmemory://drive-run/${rel.replace(/[^\w.]/g, '_')}.ts`);
-        const tmp = monaco.editor.getModel(tmpUri) ?? monaco.editor.createModel(code, 'typescript', tmpUri);
+        const tmp = monaco.editor.getModel(tmpUri) ?? monaco.editor.createModel('', 'typescript', tmpUri);
         tmp.setValue(code);
         try {
+          tsLang.setCompilerOptions({ ...prevOpts, noEmit: false });
           const getWorker = await monaco.languages.typescript.getTypeScriptWorker();
           const worker = await getWorker(tmpUri);
-          const out = await worker.getEmitOutput(tmpUri.toString());
-          const js = out.outputFiles?.find(f => /\.jsx?$/.test(f.name))?.text;
-          if (js != null) code = js;
+          // Retry — the worker recreates on the options change and re-syncs the
+          // model asynchronously, so the first emit(s) may still be empty.
+          let js: string | undefined;
+          for (let i = 0; i < 40 && js == null && !session.stopped; i++) {
+            const out = await worker.getEmitOutput(tmpUri.toString());
+            js = out.outputFiles?.find(f => /\.jsx?$/.test(f.name))?.text;
+            if (js == null) await new Promise(r => setTimeout(r, 50));
+          }
+          if (js == null) throw new Error('Transpilacja TS nie powiodła się (worker nie wyemitował JS).');
+          code = js;
         } finally {
+          tsLang.setCompilerOptions(prevOpts);
           tmp.dispose();
         }
       }
       if (session.stopped) return;
+
+      // Visual output surface. `display.dom(el)` mounts a DOM node into the run
+      // panel; `display.text(...)` prints to the console. Host is cleared per run.
+      const domHost = browserDomRef.current;
+      if (domHost) domHost.replaceChildren();
+      const display = {
+        dom: (el: unknown) => { if (!session.stopped && domHost && el instanceof Node) domHost.appendChild(el); },
+        text: (...a: unknown[]) => push('log', a),
+        clear: () => { if (domHost) domHost.replaceChildren(); setBrowserConsole([]); },
+      };
+      // Also expose on globalThis so scripts can grab it without a `declare`
+      // (which some TS→JS transpile paths leave in place → runtime SyntaxError).
+      (globalThis as Record<string, unknown>).display = display;
+
+      // Preload the browser-Qt library so minislib Qt wrappers (`new
+      // QtLineEditNode()` …) auto-create native widgets from globalThis, and
+      // QtCanvas/QLineEdit/… exist. Lit (bundled) is exposed as globalThis.Lit
+      // so qt.module.js reuses it instead of fetching from a CDN.
+      //
+      // Loaded HARD and IN ORDER (qobject → qt): `await import()` only resolves
+      // after the module's top-level code (which Object.assign's the classes
+      // onto globalThis) has run, so once these awaits return the globals are
+      // guaranteed present. We verify afterwards and throw a clear error rather
+      // than letting the script run into "QLabel is not a constructor". A cache
+      // buster is used only when a global is still missing, so a previously
+      // failed module fetch (cached as a rejected module record) can retry.
+      const g = globalThis as Record<string, unknown>;
+      const lit = await import('lit');
+      g.Lit = lit;
+      const qtBase = `/public/drive/users/${encodeURIComponent(currentUser?.name ?? userName)}/lit/qt`;
+      const loadQtModule = async (file: string, sentinel: string): Promise<void> => {
+        if (g[sentinel]) return;                       // already loaded this session
+        try {
+          await import(/* @vite-ignore */ `${qtBase}/${file}?t=${Date.now()}`);
+        } catch (err) {
+          throw new Error(`Nie udało się załadować ${file} z ${qtBase} — ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (!g[sentinel]) throw new Error(`${file} załadowany, ale ${sentinel} nie pojawił się na globalThis`);
+      };
+      await loadQtModule('qobject.module.js', 'QObject');  // must be first — qt.module.js reads globalThis.QObject/Signal
+      await loadQtModule('qt.module.js', 'QtCanvas');
+      // Final assertion so the script never starts with half-loaded Qt.
+      for (const need of ['QObject', 'Signal', 'QWidget', 'QLabel', 'QtCanvas', 'QVBoxLayout']) {
+        if (typeof g[need] !== 'function') {
+          throw new Error(`Klasa Qt "${need}" niedostępna po załadowaniu — sprawdź ${qtBase}/qt.module.js`);
+        }
+      }
+      if (session.stopped) return;
+
+      // ES `import` statements can't run inside `new Function`. Strip them and
+      // bind their names from bundled modules: `@mhersztowski/minislib` (and any
+      // `.../minislib/...qt/...` specifier) → the bundled minislib package (which
+      // re-exports the Qt Node wrappers); `lit` → the bundled Lit. Unknown
+      // modules are dropped (their symbols stay undefined).
+      const minislib = await import('@mhersztowski/minislib');
+      const resolveNs = (spec: string): unknown | null =>
+        spec === 'lit' ? lit
+          : (spec === '@mhersztowski/minislib' || /minislib/.test(spec)) ? minislib
+            : null;
+      const nsMap: Record<string, unknown> = {};
+      const bindings: string[] = [];
+      let nsIdx = 0;
+      code = code
+        .replace(
+          /^\s*import\s+(?:type\s+)?([^;'"]*?)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/gm,
+          (_m: string, clauseRaw: string, spec: string) => {
+            const ns = resolveNs(spec);
+            if (!ns) return '';
+            const key = `__m${nsIdx++}`;
+            nsMap[key] = ns;
+            const clause = clauseRaw.trim();
+            if (clause.startsWith('{')) {
+              const names = clause.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean)
+                .filter(s => !s.startsWith('type '))
+                .map(s => { const [o, a] = s.split(/\s+as\s+/).map(x => x.trim()); return a ? `${o}: ${a}` : o; });
+              if (names.length) bindings.push(`const { ${names.join(', ')} } = __ns.${key};`);
+            } else if (clause.startsWith('*')) {
+              bindings.push(`const ${clause.replace(/\*\s*as\s*/, '').trim()} = __ns.${key};`);
+            } else if (clause) {
+              bindings.push(`const ${clause} = (__ns.${key}.default ?? __ns.${key});`);
+            }
+            return '';
+          },
+        )
+        .replace(/^\s*import\s+['"][^'"]+['"]\s*;?\s*$/gm, ''); // side-effect imports
+
       // eslint-disable-next-line no-new-func
       const fn = new Function(
-        'client', 'console', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-        `"use strict";\nreturn (async () => {\n${code}\n})();`,
+        'client', 'console', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', '__ns',
+        `"use strict";\nreturn (async () => {\n${bindings.join('\n')}\n${code}\n})();`,
       );
       await fn(
         client,
@@ -1120,6 +1226,7 @@ export default function DrivePage(): React.JSX.Element {
         wrapTimer(window.setInterval.bind(window)),
         window.clearTimeout.bind(window),
         window.clearInterval.bind(window),
+        nsMap,
       );
       if (session.stopped) return;
       // Keep the session live while subscriptions / timers are pending so
@@ -3491,9 +3598,20 @@ export default function DrivePage(): React.JSX.Element {
                         </IconButton>
                       </Tooltip>
                     </Box>
+                    {/* Visual output — DOM/components mounted via display.dom() */}
+                    <Box
+                      ref={browserDomRef}
+                      sx={{
+                        flex: 1, minHeight: 0, overflow: 'auto', p: 1,
+                        display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1,
+                        bgcolor: 'background.default',
+                        '&:empty': { display: 'none' },  // collapse when nothing rendered
+                      }}
+                    />
                     {/* Console output */}
                     <Box sx={{
-                      flex: 1, minHeight: 0, overflow: 'auto', px: 1, py: 0.5,
+                      maxHeight: 140, flexShrink: 0, minHeight: 0, overflow: 'auto', px: 1, py: 0.5,
+                      borderTop: 1, borderColor: 'divider',
                       fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: 12, lineHeight: 1.5,
                       bgcolor: 'action.hover',
                     }}>

@@ -62,6 +62,7 @@ import {
   Schema as SchemaIcon,
   Memory as MemoryIcon,
   Dns as DnsIcon,
+  Widgets as WidgetsIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -146,6 +147,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
           text: 'Programming', icon: <IntegrationInstructionsIcon />, children: [
             { text: 'UML', icon: <SchemaIcon />, path: `/user/${userName}/programming/uml` },
             { text: 'MinisC', icon: <MemoryIcon />, path: `/user/${userName}/programming/minisc` },
+            { text: 'Components', icon: <WidgetsIcon />, path: `/user/${userName}/programming/components` },
             { text: 'Server Logic', icon: <DnsIcon />, path: `/user/${userName}/programming/server-logic` },
           ],
         },

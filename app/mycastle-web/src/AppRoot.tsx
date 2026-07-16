@@ -82,6 +82,7 @@ const MinisCppProjectPage = lazy(() => import('./pages/minis-user/CppProjectPage
 // Programming — UML editor (ReactFlow bundle is heavy → lazy load)
 const UmlEditorPage = lazy(() => import('./pages/programming/UmlEditorPage'));
 const MiniscPage = lazy(() => import('./pages/programming/MiniscPage'));
+const LitComponentsPage = lazy(() => import('./pages/programming/ComponentsPage'));
 const ServerLogicPage = lazy(() => import('./pages/programming/ServerLogicPage'));
 
 // Layout pages — Pim
@@ -307,6 +308,7 @@ function AppRoot() {
                   <Route path="/user/:userName/iot/automations" element={<IotAutomationsPage />} />
                   <Route path="/user/:userName/iot/retention" element={<IotRetentionPage />} />
                   <Route path="/user/:userName/iot/emulator" element={<IotEmulatorPage />} />
+                  <Route path="/user/:userName/programming/components" element={<Suspense fallback={null}><LitComponentsPage /></Suspense>} />
                   <Route path="/user/:userName/programming/server-logic" element={<AdminOnly><Suspense fallback={null}><ServerLogicPage /></Suspense></AdminOnly>} />
                   <Route path="/user/:userName/tools/rpc" element={<AdminOnly><RpcExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/mqtt-explorer" element={<AdminOnly><MqttExplorerPage /></AdminOnly>} />

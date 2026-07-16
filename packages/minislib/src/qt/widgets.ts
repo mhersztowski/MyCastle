@@ -19,6 +19,7 @@ import type { QtProperty } from './QtProperty';
 
 /** Common `QWidget` geometry/state (base for every visual widget). */
 export class QtWidgetNode extends QtNode {
+  static override readonly qtClass: string = 'QWidget';
   get visible(): QtProperty<boolean> { return this.prop<boolean>('visible')!; }
   get enabled(): QtProperty<boolean> { return this.prop<boolean>('enabled')!; }
   get toolTip(): QtProperty<string> { return this.prop<string>('toolTip')!; }
@@ -34,6 +35,7 @@ export class QtWidgetNode extends QtNode {
 
 /** `QAbstractButton` — QPushButton / QToolButton / QCheckBox / QRadioButton. */
 export class QtAbstractButtonNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QAbstractButton';
   get text(): QtProperty<string> { return this.prop<string>('text')!; }
   get checkable(): QtProperty<boolean> { return this.prop<boolean>('checkable')!; }
   get checked(): QtProperty<boolean> { return this.prop<boolean>('checked')!; }
@@ -47,20 +49,25 @@ export class QtAbstractButtonNode extends QtWidgetNode {
 
 /** `QPushButton` / `QToolButton`. */
 export class QtButtonNode extends QtAbstractButtonNode {
+  static override readonly qtClass: string = 'QPushButton';
   get flat(): QtProperty<boolean> { return this.prop<boolean>('flat')!; }
   get default(): QtProperty<boolean> { return this.prop<boolean>('default')!; }
 }
 
 /** `QCheckBox`. */
 export class QtCheckBoxNode extends QtAbstractButtonNode {
+  static override readonly qtClass: string = 'QCheckBox';
   get tristate(): QtProperty<boolean> { return this.prop<boolean>('tristate')!; }
 }
 
 /** `QRadioButton`. */
-export class QtRadioButtonNode extends QtAbstractButtonNode {}
+export class QtRadioButtonNode extends QtAbstractButtonNode {
+  static override readonly qtClass: string = 'QRadioButton';
+}
 
 /** `QAbstractSlider` — QSlider / QScrollBar / QDial. */
 export class QtSliderNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QSlider';
   get value(): QtProperty<number> { return this.prop<number>('value')!; }
   get minimum(): QtProperty<number> { return this.prop<number>('minimum')!; }
   get maximum(): QtProperty<number> { return this.prop<number>('maximum')!; }
@@ -74,6 +81,7 @@ export class QtSliderNode extends QtWidgetNode {
 
 /** `QProgressBar`. */
 export class QtProgressBarNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QProgressBar';
   get value(): QtProperty<number> { return this.prop<number>('value')!; }
   get minimum(): QtProperty<number> { return this.prop<number>('minimum')!; }
   get maximum(): QtProperty<number> { return this.prop<number>('maximum')!; }
@@ -81,6 +89,7 @@ export class QtProgressBarNode extends QtWidgetNode {
 
 /** `QSpinBox` / `QDoubleSpinBox`. */
 export class QtSpinBoxNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QSpinBox';
   get value(): QtProperty<number> { return this.prop<number>('value')!; }
   get minimum(): QtProperty<number> { return this.prop<number>('minimum')!; }
   get maximum(): QtProperty<number> { return this.prop<number>('maximum')!; }
@@ -93,6 +102,7 @@ export class QtSpinBoxNode extends QtWidgetNode {
 
 /** `QLineEdit`. */
 export class QtLineEditNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QLineEdit';
   get text(): QtProperty<string> { return this.prop<string>('text')!; }
   get placeholderText(): QtProperty<string> { return this.prop<string>('placeholderText')!; }
   get readOnly(): QtProperty<boolean> { return this.prop<boolean>('readOnly')!; }
@@ -107,11 +117,13 @@ export class QtLineEditNode extends QtWidgetNode {
 
 /** `QLabel`. */
 export class QtLabelNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QLabel';
   get text(): QtProperty<string> { return this.prop<string>('text')!; }
 }
 
 /** `QComboBox`. */
 export class QtComboBoxNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QComboBox';
   get currentIndex(): QtProperty<number> { return this.prop<number>('currentIndex')!; }
   get currentText(): QtProperty<string> { return this.prop<string>('currentText')!; }
   get count(): QtProperty<number> { return this.prop<number>('count')!; }
@@ -122,6 +134,7 @@ export class QtComboBoxNode extends QtWidgetNode {
 
 /** `QListWidget`. */
 export class QtListWidgetNode extends QtWidgetNode {
+  static override readonly qtClass: string = 'QListWidget';
   get currentRow(): QtProperty<number> { return this.prop<number>('currentRow')!; }
   get count(): QtProperty<number> { return this.prop<number>('count')!; }
 
