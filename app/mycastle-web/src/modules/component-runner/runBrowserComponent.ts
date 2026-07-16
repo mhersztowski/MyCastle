@@ -21,8 +21,8 @@ export interface RunHandle {
 export interface RunOptions {
   /** DOM element the component mounts into (via `display.dom`). */
   host: HTMLElement;
-  /** Used to locate `/public/drive/users/{userName}/lit/qt/*.module.js`. */
-  userName: string;
+  /** Retained for callsite compatibility — no longer used to locate qt libs. */
+  userName?: string;
   /** File name — `.ts`/`.tsx` triggers transpilation. */
   fileName?: string;
   /** Console sink for `display.text` / `console.*`. */
@@ -57,31 +57,49 @@ async function transpileTs(code: string, fileName: string): Promise<string> {
   }
 }
 
-/** Load browser-Qt globals + Lit; throws a clear error if anything is missing. */
-async function ensureQt(userName: string): Promise<void> {
+/** Load browser-Qt globals + Lit; throws a clear error if anything is missing.
+ *
+ *  Qt libs (qobject.module.js / qt.module.js) są SYSTEM assetami wersjonowanymi
+ *  razem z kodem — nie user-data. Pobieramy je przez `/api/browser-scripts/content`
+ *  (whitelist w `packages/core/browser/scripts.json`), tak samo jak qtLib.ts dla
+ *  QtUi Scene Editor. Wcześniej ładowaliśmy z `/public/drive/users/{userName}/lit/qt/*`
+ *  co wymagało ręcznego skopiowania plików do Drive użytkownika — na produkcji
+ *  `sync.sh push` wyklucza `drive/`, więc świeże instalacje failowały 404.
+ */
+async function ensureQt(): Promise<void> {
   const g = globalThis as Record<string, unknown>;
   if (!g.Lit) g.Lit = await import('lit');
-  const qtBase = `/public/drive/users/${encodeURIComponent(userName)}/lit/qt`;
-  const load = async (file: string, sentinel: string) => {
-    if (g[sentinel]) return;
+
+  const BUNDLES: Array<{ path: string; sentinel: string }> = [
+    { path: 'packages/core/browser/qt/qobject.module.js', sentinel: 'QObject' },
+    { path: 'packages/core/browser/qt/qt.module.js',      sentinel: 'QtCanvas' },
+  ];
+
+  for (const { path, sentinel } of BUNDLES) {
+    if (g[sentinel]) continue;
+    const res = await fetch(`/api/browser-scripts/content?path=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error(`Nie udało się pobrać ${path} (HTTP ${res.status})`);
+    const src = await res.text();
+    // Blob-URL module — pozwala załadować jako ES module bez wymogu MIME
+    // (endpoint zwraca text/plain, ale Blob wymusza text/javascript).
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     try {
-      await import(/* @vite-ignore */ `${qtBase}/${file}?t=${Date.now()}`);
-    } catch (err) {
-      throw new Error(`Nie udało się załadować ${file} z ${qtBase} — ${err instanceof Error ? err.message : String(err)}`);
+      await import(/* @vite-ignore */ url);
+    } finally {
+      URL.revokeObjectURL(url);
     }
-    if (!g[sentinel]) throw new Error(`${file} załadowany, ale ${sentinel} nie pojawił się na globalThis`);
-  };
-  await load('qobject.module.js', 'QObject'); // first — qt.module.js reads globalThis.QObject/Signal
-  await load('qt.module.js', 'QtCanvas');
+    if (!g[sentinel]) throw new Error(`${path} załadowany, ale ${sentinel} nie pojawił się na globalThis`);
+  }
+
   for (const need of ['QObject', 'Signal', 'QWidget', 'QLabel', 'QtCanvas', 'QVBoxLayout']) {
     if (typeof g[need] !== 'function') {
-      throw new Error(`Klasa Qt "${need}" niedostępna po załadowaniu — sprawdź ${qtBase}/qt.module.js`);
+      throw new Error(`Klasa Qt "${need}" niedostępna po załadowaniu — sprawdź packages/core/browser/qt/qt.module.js`);
     }
   }
 }
 
 export async function runBrowserComponent(code: string, opts: RunOptions): Promise<RunHandle> {
-  const { host, userName, fileName = 'component.ts', log } = opts;
+  const { host, fileName = 'component.ts', log } = opts;
   const session = { stopped: false, timers: [] as number[] };
   const emit = (level: string, args: unknown[]) => { if (!session.stopped) log?.(level, args.map(fmt).join(' ')); };
 
@@ -90,7 +108,7 @@ export async function runBrowserComponent(code: string, opts: RunOptions): Promi
   if (/\.tsx?$/i.test(fileName)) js = await transpileTs(code, fileName);
 
   // 2. Qt + Lit globals.
-  await ensureQt(userName);
+  await ensureQt();
   if (session.stopped) return { stop() { /* already stopped */ } };
 
   // 3. display API (mounts into the window host).

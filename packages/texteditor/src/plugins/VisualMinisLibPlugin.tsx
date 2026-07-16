@@ -1136,6 +1136,169 @@ async function buildClassDefFromSource(
 }
 
 /**
+ * Hardcoded manifest for Qt widget wrapper classes from `@mhersztowski/minislib`
+ * (`packages/minislib/src/qt/widgets.ts`). Utrzymywane ręcznie w sync z widgets.ts
+ * + qt.module.js (`packages/core/browser/qt/qt.module.js`) — źródło prawdy dla
+ * signals/properties per klasa.
+ *
+ * DLACZEGO hardcoded (nie parsuje source ani nie ładuje runtime):
+ *  1. Klasy QtNode używają REFLEKTYWNEGO bridge: `get text() { return this.prop('text') }`.
+ *     Regex-parser plugin nie widzi tego jako signal/property — trzeba metadanych.
+ *  2. Native Q-klasy (QLabel, QPushButton) mają `static properties/signals` w
+ *     qt.module.js, ale ten plik nie jest importowany do plugin — jest ładowany
+ *     runtime przez `runBrowserComponent` gdy user uruchamia komponent.
+ *  3. Manifest JSON w node_modules/@mhersztowski/minislib/ nie działa dla skryptów
+ *     w Drive user (user data nie ma `node_modules/`), a `loadExternalClassDefs`
+ *     świadomie pomija `@mhersztowski/minislib` uważając ją za built-in.
+ *
+ * Signals/properties zawierają dziedziczone z całego łańcucha (QObject→QWidget→…).
+ * Fields `slots` pomijamy — Qt widgets nie deklarują slotów jak minislib klasy;
+ * użytkownik może podpiąć się do dowolnego settera przez `.connect(x.setFoo)`.
+ */
+const MINISLIB_QT_MANIFEST: Record<string, ExternalClassDef> = (() => {
+  // Wspólne dla WSZYSTKICH widgetów Qt (dziedziczne QObject + QWidget).
+  const baseSignals: SignalPort[] = [
+    { name: 'destroyed', type: '' },
+    { name: 'objectNameChanged', type: 'string' },
+    { name: 'clicked', type: '' },
+  ];
+  const baseProps: PropertyDef[] = [
+    { name: 'objectName', type: 'string' },
+    { name: 'visible', type: 'bool' },
+    { name: 'enabled', type: 'bool' },
+    { name: 'toolTip', type: 'string' },
+    { name: 'x', type: 'number' },
+    { name: 'y', type: 'number' },
+    { name: 'width', type: 'number' },
+    { name: 'height', type: 'number' },
+    { name: 'geometry', type: 'QRect' },
+    { name: 'pos', type: 'QPoint' },
+    { name: 'size', type: 'QSize' },
+  ];
+  // Common dla QAbstractButton → QPushButton / QToolButton / QCheckBox / QRadioButton.
+  const abstractButtonSignals: SignalPort[] = [
+    { name: 'clicked', type: 'boolean' },
+    { name: 'toggled', type: 'boolean' },
+    { name: 'pressed', type: '' },
+    { name: 'released', type: '' },
+  ];
+  const abstractButtonProps: PropertyDef[] = [
+    { name: 'text', type: 'string' },
+    { name: 'checkable', type: 'bool' },
+    { name: 'checked', type: 'bool' },
+    { name: 'down', type: 'bool' },
+  ];
+
+  const mk = (
+    signals: SignalPort[],
+    properties: PropertyDef[],
+  ): ExternalClassDef => ({ kind: 'class', signals, slots: [], paramDefs: [], properties });
+
+  return {
+    QtWidgetNode: mk(baseSignals, baseProps),
+    QtLabelNode: mk(baseSignals, [...baseProps,
+      { name: 'text', type: 'string' },
+      { name: 'alignment', type: 'number' },
+    ]),
+    QtAbstractButtonNode: mk(
+      [...baseSignals, ...abstractButtonSignals],
+      [...baseProps, ...abstractButtonProps],
+    ),
+    QtButtonNode: mk(
+      [...baseSignals, ...abstractButtonSignals],
+      [...baseProps, ...abstractButtonProps,
+        { name: 'flat', type: 'bool' },
+        { name: 'default', type: 'bool' },
+      ],
+    ),
+    QtCheckBoxNode: mk(
+      [...baseSignals, ...abstractButtonSignals,
+        { name: 'stateChanged', type: 'number' },
+      ],
+      [...baseProps, ...abstractButtonProps,
+        { name: 'tristate', type: 'bool' },
+      ],
+    ),
+    QtRadioButtonNode: mk(
+      [...baseSignals, ...abstractButtonSignals],
+      [...baseProps, ...abstractButtonProps],
+    ),
+    QtLineEditNode: mk(
+      [...baseSignals,
+        { name: 'textChanged', type: 'string' },
+        { name: 'textEdited', type: 'string' },
+        { name: 'returnPressed', type: '' },
+        { name: 'editingFinished', type: '' },
+      ],
+      [...baseProps,
+        { name: 'text', type: 'string' },
+        { name: 'placeholderText', type: 'string' },
+        { name: 'readOnly', type: 'bool' },
+        { name: 'maxLength', type: 'number' },
+        { name: 'echoMode', type: 'number' },
+      ],
+    ),
+    QtSliderNode: mk(
+      [...baseSignals,
+        { name: 'valueChanged', type: 'number' },
+        { name: 'sliderMoved', type: 'number' },
+      ],
+      [...baseProps,
+        { name: 'value', type: 'number' },
+        { name: 'minimum', type: 'number' },
+        { name: 'maximum', type: 'number' },
+        { name: 'singleStep', type: 'number' },
+        { name: 'pageStep', type: 'number' },
+        { name: 'orientation', type: 'number' },
+      ],
+    ),
+    QtProgressBarNode: mk(
+      baseSignals,
+      [...baseProps,
+        { name: 'value', type: 'number' },
+        { name: 'minimum', type: 'number' },
+        { name: 'maximum', type: 'number' },
+      ],
+    ),
+    QtSpinBoxNode: mk(
+      [...baseSignals,
+        { name: 'valueChanged', type: 'number' },
+      ],
+      [...baseProps,
+        { name: 'value', type: 'number' },
+        { name: 'minimum', type: 'number' },
+        { name: 'maximum', type: 'number' },
+        { name: 'singleStep', type: 'number' },
+        { name: 'prefix', type: 'string' },
+        { name: 'suffix', type: 'string' },
+      ],
+    ),
+    QtComboBoxNode: mk(
+      [...baseSignals,
+        { name: 'currentIndexChanged', type: 'number' },
+        { name: 'activated', type: 'number' },
+      ],
+      [...baseProps,
+        { name: 'currentIndex', type: 'number' },
+        { name: 'currentText', type: 'string' },
+        { name: 'count', type: 'number' },
+      ],
+    ),
+    QtListWidgetNode: mk(
+      [...baseSignals,
+        { name: 'currentRowChanged', type: 'number' },
+        { name: 'itemClicked', type: 'QListWidgetItem' },
+        { name: 'itemDoubleClicked', type: 'QListWidgetItem' },
+      ],
+      [...baseProps,
+        { name: 'currentRow', type: 'number' },
+        { name: 'count', type: 'number' },
+      ],
+    ),
+  };
+})();
+
+/**
  * Load all external minislib-plugin.json manifests available to the project.
  *
  * We scan both:
@@ -1148,7 +1311,17 @@ async function loadExternalClassDefs(code: string, uri: string): Promise<{
   byClass: Map<string, ExternalClassDef>;
   entries: ExternalClassEntry[];
 }> {
-  if (!uri || uri.startsWith('virtual://')) return { byClass: new Map(), entries: [] };
+  if (!uri || uri.startsWith('virtual://')) {
+    // Nawet dla virtual URI seedujemy Qt manifest — plugin działa gdy user
+    // otwiera graph z untitled buforu.
+    const seed = new Map<string, ExternalClassDef>();
+    const seedEntries: ExternalClassEntry[] = [];
+    for (const [className, def] of Object.entries(MINISLIB_QT_MANIFEST)) {
+      seed.set(className, def);
+      seedEntries.push({ packageName: '@mhersztowski/minislib', className, def });
+    }
+    return { byClass: seed, entries: seedEntries };
+  }
   const projectRoot = deriveProjectRoot(uri);
   const fromImports = parseNpmImports(code).map(({ packageName }) => packageName);
   const fromPackageJson = await readPackageJsonDeps(projectRoot);
@@ -1157,6 +1330,14 @@ async function loadExternalClassDefs(code: string, uri: string): Promise<{
 
   const byClass = new Map<string, ExternalClassDef>();
   const entries: ExternalClassEntry[] = [];
+
+  // 0. Seed hardcoded Qt widget manifest (widgets.ts z minislib) — bez tego
+  //    plugin nie widzi signal/property dla QtLabelNode/QtButtonNode/… (reflektywne
+  //    gettery, `parseNpmImports` klasyfikuje je jako 'instance' bez portów).
+  for (const [className, def] of Object.entries(MINISLIB_QT_MANIFEST)) {
+    byClass.set(className, def);
+    entries.push({ packageName: '@mhersztowski/minislib', className, def });
+  }
 
   // 1. Manifest-declared classes (minislib-plugin.json).
   await Promise.all(

@@ -1584,6 +1584,10 @@ function WidgetFrame({
             py: 0.75,
             cursor: 'grab',
             userSelect: 'none',
+            // touchAction: 'none' — kluczowe na mobile: bez tego przeglądarka
+            // przechwytuje gest jako scroll/pinch i pointermove eventy przestają
+            // przychodzić po ~5px ruchu palcem.
+            touchAction: 'none',
             borderTopLeftRadius: '18px',
             borderTopRightRadius: '18px',
             borderBottom: `1px solid ${pal.subtle}`,
@@ -1632,23 +1636,49 @@ function WidgetFrame({
         {widget.kind === 'component' && <ComponentWidget userName={userName} config={widget.config} />}
       </Box>
 
-      {custom && CORNERS.map((c) => (
-        <Box
-          key={c}
-          onPointerDown={(e) => { e.stopPropagation(); onDragStart(e, { mode: 'resize', id: widget.id, corner: c }); }}
-          sx={{
-            position: 'absolute',
-            width: 12,
-            height: 12,
-            borderRadius: '4px',
-            background: '#6f8cff',
-            border: '2px solid #fff',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
-            zIndex: 3,
-            ...cornerPos[c],
-          }}
-        />
-      ))}
+      {/* Resize handles — visible 12px marker w środku, niewidoczny 32x32 hitbox
+          na zewnątrz żeby palec trafiał bez pixel-perfect precision. Bez tego
+          na mobile praktycznie nie da się złapać narożnika (target ~44px). */}
+      {custom && CORNERS.map((c) => {
+        const pos = cornerPos[c] as Record<string, number | string>;
+        // Hitbox offset — rozciągnij hitbox 10px poza widget, ale wycentruj tak
+        // żeby wizualny marker (12px) pozostał w tej samej pozycji.
+        const hitboxOffset = -15; // -5 (marker offset) - 10 (hitbox padding)
+        const hit: Record<string, number | string> = {};
+        for (const [k, v] of Object.entries(pos)) {
+          if (typeof v === 'number') hit[k] = hitboxOffset;
+          else hit[k] = v;
+        }
+        return (
+          <Box
+            key={c}
+            onPointerDown={(e) => { e.stopPropagation(); onDragStart(e, { mode: 'resize', id: widget.id, corner: c }); }}
+            sx={{
+              position: 'absolute',
+              width: 32,
+              height: 32,
+              // touchAction: 'none' — jak wyżej, konieczne dla touch drag na mobile.
+              touchAction: 'none',
+              zIndex: 3,
+              // Wizualny marker 12x12 wycentrowany w hitboxie 32x32.
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              ...hit,
+              '&::after': {
+                content: '""',
+                width: 12,
+                height: 12,
+                borderRadius: '4px',
+                background: '#6f8cff',
+                border: '2px solid #fff',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+              },
+              cursor: pos.cursor,
+            }}
+          />
+        );
+      })}
     </Box>
   );
 }
@@ -1732,6 +1762,10 @@ export default function PulpitPage() {
       e.preventDefault();
       const w = widgets.find((x) => x.id === spec.id);
       if (!w) return;
+      // setPointerCapture — kluczowe dla touch: kieruje wszystkie następne
+      // pointer events do targetu nawet gdy palec wyjdzie poza jego bounding rect.
+      // Bez tego szybki ruch palcem gubi pointermove eventy (browser odpina).
+      try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* iOS pre-16 może nie wspierać na wszystkich elementach */ }
       if (spec.mode === 'move') {
         dragRef.current = { mode: 'move', id: spec.id, startX: e.clientX, startY: e.clientY, ox: w.x, oy: w.y };
       } else {
