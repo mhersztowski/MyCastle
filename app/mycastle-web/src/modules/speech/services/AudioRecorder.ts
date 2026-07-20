@@ -32,10 +32,13 @@ export class AudioRecorder {
     return this._isRecording;
   }
 
-  async start(silenceOptions?: SilenceDetectionOptions): Promise<void> {
+  async start(silenceOptions?: SilenceDetectionOptions, deviceId?: string): Promise<void> {
     if (this._isRecording) return;
 
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const audioConstraints: MediaTrackConstraints | boolean = deviceId
+      ? { deviceId: { exact: deviceId } }
+      : true;
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'

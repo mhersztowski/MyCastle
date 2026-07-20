@@ -40,11 +40,15 @@ import { useMqtt } from '../../modules/mqttclient';
 const TTS_PROVIDER_LABELS: Record<TtsProviderType, string> = {
   openai: 'OpenAI TTS',
   browser: 'Browser (Web Speech API)',
+  google: 'Google TTS',
+  elevenlabs: 'ElevenLabs (Eleven v3)',
 };
 
 const STT_PROVIDER_LABELS: Record<SttProviderType, string> = {
   openai: 'OpenAI Whisper',
   browser: 'Browser (Speech Recognition)',
+  google: 'Google STT',
+  elevenlabs: 'ElevenLabs Scribe v2 realtime',
 };
 
 const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;

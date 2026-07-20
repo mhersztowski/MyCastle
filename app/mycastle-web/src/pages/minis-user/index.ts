@@ -15,6 +15,7 @@ export { default as IotNotificationsPage } from './iot/IotNotificationsPage';
 export { default as IotAutomationsPage } from './iot/IotAutomationsPage';
 export { default as IotRetentionPage } from './iot/IotRetentionPage';
 export { default as IotEmulatorPage } from './iot/IotEmulatorPage';
+export { default as IotAuraPage } from './iot/IotAuraPage';
 export { default as IotDashboard2Page } from './iot/IotDashboard2Page';
 export { default as IotDashboard2ConfigPage } from './iot/IotDashboard2ConfigPage';
 export { default as ElectronicsConfigurationPage } from './electronics/ElectronicsConfigurationPage';

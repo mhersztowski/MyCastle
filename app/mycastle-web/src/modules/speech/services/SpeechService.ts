@@ -19,6 +19,10 @@ import { OpenAiTtsProvider } from '../providers/OpenAiTtsProvider';
 import { BrowserTtsProvider } from '../providers/BrowserTtsProvider';
 import { OpenAiSttProvider } from '../providers/OpenAiSttProvider';
 import { BrowserSttProvider } from '../providers/BrowserSttProvider';
+import { GoogleTtsProvider } from '../providers/GoogleTtsProvider';
+import { GoogleSttProvider } from '../providers/GoogleSttProvider';
+import { ElevenLabsTtsProvider } from '../providers/ElevenLabsTtsProvider';
+import { ElevenLabsSttProvider } from '../providers/ElevenLabsSttProvider';
 
 const SPEECH_CONFIG_PATH = 'data/speech_config.json';
 
@@ -28,6 +32,10 @@ function createTtsProvider(providerType: TtsProviderType): TtsProvider {
       return new OpenAiTtsProvider();
     case 'browser':
       return new BrowserTtsProvider();
+    case 'google':
+      return new GoogleTtsProvider();
+    case 'elevenlabs':
+      return new ElevenLabsTtsProvider();
   }
 }
 
@@ -37,6 +45,10 @@ function createSttProvider(providerType: SttProviderType): SttProvider {
       return new OpenAiSttProvider();
     case 'browser':
       return new BrowserSttProvider();
+    case 'google':
+      return new GoogleSttProvider();
+    case 'elevenlabs':
+      return new ElevenLabsSttProvider();
   }
 }
 
@@ -66,8 +78,22 @@ export class SpeechService {
         this.config = {
           ...DEFAULT_SPEECH_CONFIG,
           ...data,
-          tts: { ...DEFAULT_SPEECH_CONFIG.tts, ...data.tts, openai: { ...DEFAULT_SPEECH_CONFIG.tts.openai, ...data.tts?.openai }, browser: { ...DEFAULT_SPEECH_CONFIG.tts.browser, ...data.tts?.browser } },
-          stt: { ...DEFAULT_SPEECH_CONFIG.stt, ...data.stt, openai: { ...DEFAULT_SPEECH_CONFIG.stt.openai, ...data.stt?.openai }, browser: { ...DEFAULT_SPEECH_CONFIG.stt.browser, ...data.stt?.browser } },
+          tts: {
+            ...DEFAULT_SPEECH_CONFIG.tts,
+            ...data.tts,
+            openai: { ...DEFAULT_SPEECH_CONFIG.tts.openai, ...data.tts?.openai },
+            browser: { ...DEFAULT_SPEECH_CONFIG.tts.browser, ...data.tts?.browser },
+            google: { ...DEFAULT_SPEECH_CONFIG.tts.google, ...data.tts?.google },
+            elevenlabs: { ...DEFAULT_SPEECH_CONFIG.tts.elevenlabs, ...data.tts?.elevenlabs },
+          },
+          stt: {
+            ...DEFAULT_SPEECH_CONFIG.stt,
+            ...data.stt,
+            openai: { ...DEFAULT_SPEECH_CONFIG.stt.openai, ...data.stt?.openai },
+            browser: { ...DEFAULT_SPEECH_CONFIG.stt.browser, ...data.stt?.browser },
+            google: { ...DEFAULT_SPEECH_CONFIG.stt.google, ...data.stt?.google },
+            elevenlabs: { ...DEFAULT_SPEECH_CONFIG.stt.elevenlabs, ...data.stt?.elevenlabs },
+          },
           wakeWord: { ...DEFAULT_SPEECH_CONFIG.wakeWord, ...data.wakeWord },
         };
       }
@@ -98,14 +124,24 @@ export class SpeechService {
     return this.config;
   }
 
+  private ttsProviderConfig(): Record<string, unknown> {
+    const tts = this.config.tts;
+    return (tts[tts.provider] ?? tts.browser) as unknown as Record<string, unknown>;
+  }
+
+  private sttProviderConfig(): Record<string, unknown> {
+    const stt = this.config.stt;
+    return (stt[stt.provider] ?? stt.browser) as unknown as Record<string, unknown>;
+  }
+
   isTtsConfigured(): boolean {
     if (this.config.tts.provider === 'browser') return true;
-    return !!this.config.tts.openai.apiKey;
+    return !!(this.ttsProviderConfig().apiKey);
   }
 
   isSttConfigured(): boolean {
     if (this.config.stt.provider === 'browser') return true;
-    return !!this.config.stt.openai.apiKey;
+    return !!(this.sttProviderConfig().apiKey);
   }
 
   async speak(request: TtsRequest): Promise<void> {
@@ -117,11 +153,7 @@ export class SpeechService {
       this.ttsProvider = createTtsProvider(this.config.tts.provider);
     }
 
-    const providerConfig = this.config.tts.provider === 'openai'
-      ? this.config.tts.openai as unknown as Record<string, unknown>
-      : this.config.tts.browser as unknown as Record<string, unknown>;
-
-    return this.ttsProvider.speak(request, providerConfig);
+    return this.ttsProvider.speak(request, this.ttsProviderConfig());
   }
 
   stopSpeaking(): void {
@@ -138,11 +170,7 @@ export class SpeechService {
     }
 
     const provider = createSttProvider(this.config.stt.provider);
-    const providerConfig = this.config.stt.provider === 'openai'
-      ? this.config.stt.openai as unknown as Record<string, unknown>
-      : this.config.stt.browser as unknown as Record<string, unknown>;
-
-    return provider.transcribe(request, providerConfig);
+    return provider.transcribe(request, this.sttProviderConfig());
   }
 
   async testTts(): Promise<{ success: boolean; message: string }> {
@@ -164,11 +192,12 @@ export class SpeechService {
         }
         return { success: false, message: 'Speech Recognition API not supported in this browser' };
       }
-      // For OpenAI, check API key
-      if (!this.config.stt.openai.apiKey) {
-        return { success: false, message: 'API key not configured' };
+      // Providery chmurowe (openai / google / elevenlabs) — sprawdź klucz API
+      const provider = this.config.stt.provider;
+      if (!this.sttProviderConfig().apiKey) {
+        return { success: false, message: `Brak klucza API dla providera "${provider}"` };
       }
-      return { success: true, message: 'OpenAI Whisper configured' };
+      return { success: true, message: `Provider "${provider}" skonfigurowany (klucz API ustawiony)` };
     } catch (err) {
       return { success: false, message: err instanceof Error ? err.message : String(err) };
     }

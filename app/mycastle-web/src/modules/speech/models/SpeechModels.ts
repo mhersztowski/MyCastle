@@ -2,8 +2,8 @@
  * Speech module - interfejsy modeli danych TTS/STT/Wake Word
  */
 
-export type TtsProviderType = 'openai' | 'browser';
-export type SttProviderType = 'openai' | 'browser';
+export type TtsProviderType = 'openai' | 'browser' | 'google' | 'elevenlabs';
+export type SttProviderType = 'openai' | 'browser' | 'google' | 'elevenlabs';
 
 export interface TtsConfig {
   provider: TtsProviderType;
@@ -21,6 +21,19 @@ export interface TtsConfig {
     pitch: number;
     voiceURI: string;
   };
+  // Google Cloud Text-to-Speech (REST v1, klucz API w query stringu)
+  google: {
+    apiKey: string;
+    languageCode: string;
+    voiceName: string;
+    speakingRate: number;
+  };
+  // ElevenLabs Text-to-Speech (domyślnie model Eleven Multilingual v3)
+  elevenlabs: {
+    apiKey: string;
+    voiceId: string;
+    model: string;
+  };
 }
 
 export interface SttConfig {
@@ -35,6 +48,17 @@ export interface SttConfig {
     lang: string;
     continuous: boolean;
     interimResults: boolean;
+  };
+  // Google Cloud Speech-to-Text (REST v1, klucz API w query stringu)
+  google: {
+    apiKey: string;
+    languageCode: string;
+  };
+  // ElevenLabs Speech-to-Text (domyślnie model Scribe v2 realtime)
+  elevenlabs: {
+    apiKey: string;
+    model: string;
+    language: string;
   };
 }
 
@@ -89,6 +113,17 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfigModel = {
       pitch: 1.0,
       voiceURI: '',
     },
+    google: {
+      apiKey: '',
+      languageCode: 'pl-PL',
+      voiceName: 'pl-PL-Wavenet-A',
+      speakingRate: 1.0,
+    },
+    elevenlabs: {
+      apiKey: '',
+      voiceId: 'JBFqnCBsd6RMkjVDRZzb',
+      model: 'eleven_v3',
+    },
   },
   stt: {
     provider: 'browser',
@@ -102,6 +137,15 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfigModel = {
       lang: 'pl-PL',
       continuous: false,
       interimResults: true,
+    },
+    google: {
+      apiKey: '',
+      languageCode: 'pl-PL',
+    },
+    elevenlabs: {
+      apiKey: '',
+      model: 'scribe_v2_realtime',
+      language: 'pol',
     },
   },
   wakeWord: {

@@ -78,6 +78,8 @@ export interface AiChatMessage {
 export interface AiChatRequest {
   messages: AiChatMessage[];
   model?: string;
+  /** Opcjonalne nadpisanie providera dla tego wywołania (np. Aura wybiera ChatGPT vs Claude per model) */
+  provider?: AiProviderType;
   temperature?: number;
   maxTokens?: number;
   tools?: AiToolDefinition[];

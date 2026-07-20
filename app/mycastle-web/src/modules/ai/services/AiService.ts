@@ -99,8 +99,9 @@ export class AiService {
       await this.loadConfig();
     }
 
-    const providerConfig = this.getActiveProviderConfig();
-    const provider = createProvider(this.config.provider);
+    const providerType = request.provider || this.config.provider;
+    const providerConfig = this.config.providers[providerType];
+    const provider = createProvider(providerType);
 
     const mergedRequest: AiChatRequest = {
       messages: request.messages,
