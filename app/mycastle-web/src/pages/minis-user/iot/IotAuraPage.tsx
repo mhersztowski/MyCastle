@@ -216,6 +216,9 @@ const IotAuraPage: React.FC = () => {
   const realtimeRef = useRef<RealtimeSttService | null>(null);
   // Ciągły nasłuch słowa aktywacyjnego przez realtime STT (bez restartu mikrofonu = bez beepa na Androidzie)
   const wakeRealtimeRef = useRef<RealtimeSttService | null>(null);
+  // Nasłuch słowa aktywacyjnego przez nagrywanie+transkrypcję chmurową (OpenAI/Google) — bez Web Speech = bez beepa
+  const cloudWakeRecorderRef = useRef<AudioRecorder | null>(null);
+  const cloudWakeActiveRef = useRef(false);
   const historyRef = useRef<ChatMessage[]>([]);
   const stateRef = useRef<AuraState>('idle');
   const alwaysOnRef = useRef(false);
@@ -684,8 +687,9 @@ const IotAuraPage: React.FC = () => {
           const q = String(query ?? '').trim();
           if (!q) return [];
           const apiKey = googleSearchRef.current.serperKey;
+          dbgRef.current(`googleSearch: q="${q}" serperKey=${apiKey ? 'jest' : 'BRAK'}`);
           if (!apiKey) {
-            appendAssistant('(Wygoogluj: wpisz klucz Serper.dev API w Edytorze Konwersacji)');
+            appendAssistant('⚠️ Wygoogluj: wpisz klucz Serper.dev API w Edytorze Konwersacji (sekcja „Wygoogluj (Serper.dev)").');
             return [];
           }
           try {
@@ -695,11 +699,27 @@ const IotAuraPage: React.FC = () => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ query: q, apiKey, count: 10 }),
             });
-            if (!res.ok) { console.warn('[Aura] Serper Search error', res.status, await res.text()); return []; }
+            if (!res.ok) {
+              const body = await res.text();
+              dbgRef.current(`googleSearch: HTTP ${res.status} — ${body.slice(0, 200)}`);
+              if (res.status === 404) {
+                appendAssistant('⚠️ Wygoogluj: backend nie zna trasy /api/search/web (404) — zrestartuj backend (pnpm dev:backend).');
+              } else if (res.status === 401 || res.status === 403) {
+                appendAssistant(`⚠️ Wygoogluj: błędny/nieaktywny klucz Serper.dev (HTTP ${res.status}).`);
+              } else {
+                appendAssistant(`⚠️ Wygoogluj: błąd wyszukiwania (HTTP ${res.status}).`);
+              }
+              return [];
+            }
             const data = await res.json();
-            return ((data.urls || []) as string[]).filter(Boolean);
+            const urls = ((data.urls || []) as string[]).filter(Boolean);
+            dbgRef.current(`googleSearch: OK, ${urls.length} wyników`);
+            if (urls.length === 0) appendAssistant('ℹ️ Wygoogluj: 0 wyników dla tego zapytania.');
+            return urls;
           } catch (e) {
-            console.warn('[Aura] Serper Search:', e);
+            const msg = e instanceof Error ? e.message : String(e);
+            dbgRef.current(`googleSearch: wyjątek — ${msg}`);
+            appendAssistant(`⚠️ Wygoogluj: błąd połączenia (${msg}).`);
             return [];
           }
         },
@@ -939,6 +959,11 @@ const IotAuraPage: React.FC = () => {
       wakeRealtimeRef.current.stop();
       wakeRealtimeRef.current = null;
     }
+    cloudWakeActiveRef.current = false;
+    if (cloudWakeRecorderRef.current) {
+      cloudWakeRecorderRef.current.cancel();
+      cloudWakeRecorderRef.current = null;
+    }
     setInterimText('');
     setState('idle');
   }, []);
@@ -1067,18 +1092,94 @@ const IotAuraPage: React.FC = () => {
     return true;
   }, [speechService, isSelfEcho, matchWakePhrase, playWakeSound]);
 
+  // Nasłuch słowa aktywacyjnego przez CHMURĘ (OpenAI/Google): nagrywanie + transkrypcja w pętli.
+  // Używa getUserMedia (NIE Web Speech), więc na Androidzie NIE ma systemowego beepa/migotania.
+  // Transkrybuje tylko nagrania, w których wykryto mowę (bramka VAD) — brak kosztu na ciszy.
+  const startCloudWake = useCallback((phrase: string): boolean => {
+    const provider = sttProviderRef.current;
+    const fullCfg = speechService.getConfig().stt;
+    const sttCfg = fullCfg as unknown as Record<string, { apiKey?: string }>;
+    const cloudKey = provider !== 'browser' ? (sttCfg[provider]?.apiKey || '') : '';
+    if (!cloudKey) return false; // brak klucza chmurowego → nie ta ścieżka
+
+    cloudWakeActiveRef.current = true;
+    dbgRef.current(`startCloudWake: provider=${provider} — pętla nagrywanie+transkrypcja (bez Web Speech, bez beepa)`);
+
+    const loop = () => {
+      if (!cloudWakeActiveRef.current || !alwaysOnRef.current || !wakeModeRef.current || stateRef.current !== 'idle') {
+        setWakeActive(false);
+        return;
+      }
+      const recorder = new AudioRecorder();
+      cloudWakeRecorderRef.current = recorder;
+      setWakeActive(true);
+      recorder.start({
+        onSilenceDetected: async () => {
+          let blob: Blob | null = null;
+          try { blob = await recorder.stop(); } catch { /* */ }
+          cloudWakeRecorderRef.current = null;
+          if (!cloudWakeActiveRef.current || !alwaysOnRef.current || !wakeModeRef.current || stateRef.current !== 'idle') {
+            setWakeActive(false);
+            return;
+          }
+          // Bramka: transkrybuj tylko gdy była mowa (oszczędza wywołania API na ciszy)
+          if (!blob || !recorder.speechDetected) { loop(); return; }
+          try {
+            const r = await speechService.transcribe({ audio: blob });
+            const text = (r.text || '').trim();
+            if (!text || isSelfEcho(text)) { dbgRef.current(`cloudWake ignor: "${text}"`); loop(); return; }
+            const { hit, command } = matchWakePhrase(text, phrase);
+            dbgRef.current(`cloudWake onFinal: "${text}" hit=${hit}${hit ? ` cmd="${command}"` : ''}`);
+            if (hit) {
+              cloudWakeActiveRef.current = false;
+              setWakeActive(false);
+              playWakeSound();
+              if (command && command.length >= 2) processUserInputRef.current(command);
+              else if (stateRef.current === 'idle') armListeningRef.current();
+            } else {
+              loop(); // słuchaj dalej (nowe nagranie, wciąż getUserMedia — bez beepa)
+            }
+          } catch (e) {
+            dbgRef.current(`cloudWake transcribe błąd: ${e instanceof Error ? e.message : String(e)}`);
+            setTimeout(() => loop(), 600);
+          }
+        },
+        duration: 700,
+        minRecordingTime: 400,
+      }, inputDeviceRef.current || undefined).catch((e) => {
+        dbgRef.current(`cloudWake recorder błąd: ${e instanceof Error ? e.message : String(e)}`);
+        cloudWakeRecorderRef.current = null;
+        setWakeActive(false);
+      });
+    };
+    loop();
+    return true;
+  }, [speechService, isSelfEcho, matchWakePhrase, playWakeSound]);
+
   // Uruchom nasłuch słowa aktywacyjnego; po wykryciu → jedna tura konwersacji.
   const startWakeWordListening = useCallback((): boolean => {
     const phrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim();
     if (!phrase) { dbgRef.current('startWakeWord: brak frazy aktywacyjnej'); return false; }
 
-    // Na Androidzie (i gdy skonfigurowano ElevenLabs) używaj ciągłego realtime — bez beepa/migotania.
-    // Web Speech (przeglądarkowe) na Androidzie restartuje mikrofon co chwilę i wydaje dźwięk.
-    const hasEleven = !!speechService.getConfig().stt.elevenlabs?.apiKey;
-    dbgRef.current(`startWakeWord: fraza="${phrase}" android=${isAndroid} elevenKey=${hasEleven} → ${hasEleven && (isAndroid || sttProviderRef.current === 'elevenlabs') ? 'REALTIME' : 'BROWSER(WebSpeech)'}`);
-    if (hasEleven && (isAndroid || sttProviderRef.current === 'elevenlabs')) {
+    // Wybór ścieżki nasłuchu słowa aktywacyjnego, tak by NA ANDROIDZIE unikać Web Speech (beep/migotanie):
+    //  1) ElevenLabs realtime (ciągły WS) — jeśli jest klucz ElevenLabs.
+    //  2) Chmura (OpenAI/Google) — nagrywanie+transkrypcja w pętli (getUserMedia, bez beepa).
+    //  3) Web Speech (przeglądarka) — tylko gdy brak kluczy chmurowych (na Androidzie wtedy niestety beep).
+    const provider = sttProviderRef.current;
+    const fullStt = speechService.getConfig().stt;
+    const sttCfg = fullStt as unknown as Record<string, { apiKey?: string }>;
+    const hasEleven = !!fullStt.elevenlabs?.apiKey;
+    const cloudKey = provider !== 'browser' && provider !== 'elevenlabs' ? (sttCfg[provider]?.apiKey || '') : '';
+
+    if (hasEleven && (isAndroid || provider === 'elevenlabs')) {
+      dbgRef.current(`startWakeWord: fraza="${phrase}" → REALTIME (ElevenLabs)`);
       return startRealtimeWake(phrase);
     }
+    if (cloudKey) {
+      dbgRef.current(`startWakeWord: fraza="${phrase}" → CHMURA (${provider}, nagrywanie+Whisper)`);
+      return startCloudWake(phrase);
+    }
+    dbgRef.current(`startWakeWord: fraza="${phrase}" android=${isAndroid} → BROWSER(WebSpeech)${isAndroid ? ' ⚠️ beep nieunikniony bez klucza chmurowego' : ''}`);
 
     wakeWordService.configure({
       phrase,
@@ -1095,7 +1196,7 @@ const IotAuraPage: React.FC = () => {
       onLog: (m) => dbgRef.current(`wakeword(browser): ${m}`),
     });
     return wakeWordService.start();
-  }, [wakeWords, wakeLang, wakeWordService, playWakeSound, speechService, isAndroid, startRealtimeWake]);
+  }, [wakeWords, wakeLang, wakeWordService, playWakeSound, speechService, isAndroid, startRealtimeWake, startCloudWake]);
   useEffect(() => { startWakeWordRef.current = startWakeWordListening; }, [startWakeWordListening]);
 
   // Wznów nasłuch po turze: wake-word (czeka na słowo) lub ciągły.
@@ -1167,6 +1268,8 @@ const IotAuraPage: React.FC = () => {
       if (recorderRef.current) recorderRef.current.cancel();
       if (realtimeRef.current) realtimeRef.current.stop();
       if (wakeRealtimeRef.current) wakeRealtimeRef.current.stop();
+      cloudWakeActiveRef.current = false;
+      if (cloudWakeRecorderRef.current) cloudWakeRecorderRef.current.cancel();
       if (captureHandleRef.current) captureHandleRef.current.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

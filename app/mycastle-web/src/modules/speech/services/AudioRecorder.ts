@@ -27,9 +27,15 @@ export class AudioRecorder {
   private silenceStart: number | null = null;
   private recordingStartTime = 0;
   private silenceCallbackFired = false;
+  private _speechDetected = false;
 
   get isRecording(): boolean {
     return this._isRecording;
+  }
+
+  /** Czy w trakcie nagrania wykryto mowę (RMS powyżej progu). Przydatne do bramkowania transkrypcji. */
+  get speechDetected(): boolean {
+    return this._speechDetected;
   }
 
   async start(silenceOptions?: SilenceDetectionOptions, deviceId?: string): Promise<void> {
@@ -71,6 +77,7 @@ export class AudioRecorder {
 
     this.silenceCallbackFired = false;
     this.silenceStart = null;
+    this._speechDetected = false;
 
     try {
       this.audioContext = new AudioContext();
@@ -105,6 +112,7 @@ export class AudioRecorder {
             options.onSilenceDetected();
           }
         } else {
+          this._speechDetected = true;
           this.silenceStart = null;
         }
       }, 100);
