@@ -613,6 +613,36 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Web search proxy (Serper.dev = wyniki Google) — omija CORS przeglądarki i nie eksponuje klucza.
+    // Klucz (X-API-KEY) przekazuje wołający (per-user, z Edytora Konwersacji).
+    // POST /api/search/web  { query, apiKey, count? } → { urls, results:[{title,url,description}] }
+    if (apiPath === '/search/web' && method === 'POST') {
+      try {
+        const body = await this.parseRequestBody(req) as { query?: string; apiKey?: string; count?: number };
+        const q = (body.query || '').trim();
+        const key = (body.apiKey || '').trim();
+        if (!q) { this.sendJsonResponse(res, 400, { error: 'Brak zapytania (query)' }); return; }
+        if (!key) { this.sendJsonResponse(res, 400, { error: 'Brak klucza Serper.dev API (apiKey)' }); return; }
+        const count = Math.min(Math.max(Number(body.count) || 10, 1), 20);
+
+        const r = await fetch('https://google.serper.dev/search', {
+          method: 'POST',
+          headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q, num: count }),
+        });
+        if (!r.ok) { this.sendJsonResponse(res, r.status, { error: `Serper ${r.status}`, detail: await r.text() }); return; }
+        const data = await r.json() as { organic?: Array<{ link?: string; title?: string; snippet?: string }> };
+        const results = (data.organic ?? [])
+          .map(it => ({ url: it.link || '', title: it.title || '', description: it.snippet || '' }))
+          .filter(x => x.url);
+
+        this.sendJsonResponse(res, 200, { urls: results.map(x => x.url), results });
+      } catch (e) {
+        this.sendJsonResponse(res, 502, { error: e instanceof Error ? e.message : 'Proxy error' });
+      }
+      return;
+    }
+
     // Immich proxy — all /api/immich/* routes proxy to the Immich server (avoids CORS in browser)
 
     // POST /api/immich/login  { immichUrl, email, password } → { accessToken }

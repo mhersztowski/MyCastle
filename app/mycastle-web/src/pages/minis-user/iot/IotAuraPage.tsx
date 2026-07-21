@@ -41,6 +41,7 @@ import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PersonIcon from '@mui/icons-material/Person';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
@@ -187,6 +188,19 @@ const IotAuraPage: React.FC = () => {
     typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent),
   );
 
+  // Panel debug — log cyklu życia mikrofonu (diagnostyka mobile/Android)
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const dbg = useCallback((msg: string) => {
+    const d = new Date();
+    const ts = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+    const line = `[${ts}] ${msg}`;
+    console.log('[Aura-dbg]', line);
+    setDebugLog(prev => (prev.length > 400 ? [...prev.slice(-400), line] : [...prev, line]));
+  }, []);
+  const dbgRef = useRef(dbg);
+  useEffect(() => { dbgRef.current = dbg; }, [dbg]);
+
   // Konfiguracja kluczy API (edytowalne kopie configów AI i mowy)
   const [aiConfig, setAiConfig] = useState<AiConfigModel | null>(null);
   const [speechCfg, setSpeechCfg] = useState<SpeechConfigModel | null>(null);
@@ -216,7 +230,7 @@ const IotAuraPage: React.FC = () => {
   const actionsRef = useRef<VoiceAction[]>([]);
   const variantsRef = useRef<VoiceActionVariant[]>([]);
   const globalXmlRef = useRef<string>('');
-  const googleSearchRef = useRef<{ apiKey: string; cx: string }>({ apiKey: '', cx: '' });
+  const googleSearchRef = useRef<{ apiKey?: string; cx?: string; serperKey?: string }>({ apiKey: '', cx: '' });
   const lastUtteranceRef = useRef<string>('');
   const actionDepthRef = useRef<number>(0);
   const captureHandleRef = useRef<{ stop: () => void } | null>(null);
@@ -669,19 +683,23 @@ const IotAuraPage: React.FC = () => {
         googleSearch: async (query: unknown): Promise<string[]> => {
           const q = String(query ?? '').trim();
           if (!q) return [];
-          const { apiKey, cx } = googleSearchRef.current;
-          if (!apiKey || !cx) {
-            appendAssistant('(Wygoogluj: skonfiguruj klucz API i CX w Edytorze Konwersacji)');
+          const apiKey = googleSearchRef.current.serperKey;
+          if (!apiKey) {
+            appendAssistant('(Wygoogluj: wpisz klucz Serper.dev API w Edytorze Konwersacji)');
             return [];
           }
           try {
-            const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(q)}`;
-            const res = await fetch(url);
-            if (!res.ok) { console.warn('[Aura] Google Search error', res.status, await res.text()); return []; }
+            // przez backendowy proxy (Serper nie pozwala na wywołania z przeglądarki — CORS)
+            const res = await fetch('/api/search/web', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: q, apiKey, count: 10 }),
+            });
+            if (!res.ok) { console.warn('[Aura] Serper Search error', res.status, await res.text()); return []; }
             const data = await res.json();
-            return ((data.items || []) as Array<{ link?: string }>).map(it => it.link || '').filter(Boolean);
+            return ((data.urls || []) as string[]).filter(Boolean);
           } catch (e) {
-            console.warn('[Aura] Google Search:', e);
+            console.warn('[Aura] Serper Search:', e);
             return [];
           }
         },
@@ -761,7 +779,7 @@ const IotAuraPage: React.FC = () => {
 
   // ---- Rozpoczęcie pojedynczego cyklu nasłuchu ----
   const armListening = useCallback(async () => {
-    if (stateRef.current !== 'idle') return;
+    if (stateRef.current !== 'idle') { dbgRef.current(`armListening: pominięto (stan=${stateRef.current})`); return; }
 
     setState('listening');
     setInterimText('');
@@ -770,11 +788,13 @@ const IotAuraPage: React.FC = () => {
 
     const provider = sttProviderRef.current;
     const sttFull = speechService.getConfig().stt;
+    dbgRef.current(`armListening: provider=${provider} android=${isAndroid} elevenKey=${!!sttFull.elevenlabs.apiKey}`);
 
     // ElevenLabs Scribe v2 realtime (WebSocket) — transkrypcja na żywo.
     // Na Androidzie wymuszamy realtime (jeśli jest klucz), bo Web Speech restartuje mikrofon (beep/migotanie).
     const useRealtime = !!sttFull.elevenlabs.apiKey && (provider === 'elevenlabs' || isAndroid);
     if (useRealtime) {
+      dbgRef.current('armListening → REALTIME (ElevenLabs), mikrofon: START (ciągły)');
       const rt = new RealtimeSttService();
       realtimeRef.current = rt;
       rt.start({
@@ -784,17 +804,21 @@ const IotAuraPage: React.FC = () => {
         model: sttFull.elevenlabs.model,
         onPartial: (t) => setInterimText(t),
         onFinal: (t) => {
+          dbgRef.current(`realtime onFinal: "${t}" → mikrofon: STOP`);
           rt.stop();
           realtimeRef.current = null;
           handleVoiceFinal(t);
         },
         onError: () => {
+          dbgRef.current('realtime onError → mikrofon: STOP, wznawiam');
           rt.stop();
           realtimeRef.current = null;
           setState('idle');
           resumeListeningRef.current();
         },
-      }).catch(() => {
+      }).then(() => dbgRef.current('realtime: połączono (WS otwarty)'))
+        .catch(() => {
+        dbgRef.current('realtime: BŁĄD połączenia (klucz API?)');
         realtimeRef.current = null;
         setError('ElevenLabs realtime: nie udało się połączyć (sprawdź klucz API)');
         setState('idle');
@@ -805,12 +829,14 @@ const IotAuraPage: React.FC = () => {
     if (provider === 'browser') {
       // Web Speech API — nasłuch ciągły (mikrofon zostaje włączony, brak migotania);
       // po pierwszej finalnej wypowiedzi zatrzymujemy, by przetworzyć/odpowiedzieć.
+      dbgRef.current('armListening → BROWSER (Web Speech), recognition.start()');
       const recognition = createBrowserRecognition({
         lang: 'pl-PL',
         continuous: true,
         interimResults: true,
         onResult: (transcript, isFinal) => {
           if (isFinal) {
+            dbgRef.current(`browser onResult FINAL: "${transcript}" → abort`);
             const r = recognitionRef.current;
             recognitionRef.current = null;
             r?.abort();
@@ -820,6 +846,7 @@ const IotAuraPage: React.FC = () => {
           }
         },
         onError: (err) => {
+          dbgRef.current(`browser onError: ${err}`);
           recognitionRef.current = null;
           setInterimText('');
           if (err !== 'no-speech' && err !== 'aborted') {
@@ -830,6 +857,7 @@ const IotAuraPage: React.FC = () => {
           if (err !== 'not-allowed') resumeListeningRef.current();
         },
         onEnd: () => {
+          dbgRef.current(`browser onEnd (mikrofon: STOP)${recognitionRef.current ? ' → wznawiam' : ''}`);
           // Jeśli zakończono bez wyniku — ponów (wake lub ciągły)
           if (recognitionRef.current) {
             recognitionRef.current = null;
@@ -848,6 +876,7 @@ const IotAuraPage: React.FC = () => {
       }
     } else {
       // Providery chmurowe: nagrywanie z auto-stopem po ciszy, następnie transkrypcja
+      dbgRef.current('armListening → CHMURA (nagrywanie z auto-stopem po ciszy)');
       try {
         const recorder = new AudioRecorder();
         recorderRef.current = recorder;
@@ -857,6 +886,7 @@ const IotAuraPage: React.FC = () => {
         );
       } catch (err) {
         console.warn('[Aura] Brak dostępu do mikrofonu:', err);
+        dbgRef.current(`armListening: BŁĄD mikrofonu chmura: ${err instanceof Error ? err.message : String(err)}`);
         setError('Brak dostępu do wybranego mikrofonu');
         setState('idle');
       }
@@ -891,6 +921,7 @@ const IotAuraPage: React.FC = () => {
 
   // ---- Zatrzymanie nasłuchu ----
   const stopListening = useCallback(() => {
+    dbgRef.current(`stopListening (rec=${!!recognitionRef.current} recorder=${!!recorderRef.current} rt=${!!realtimeRef.current} wakeRt=${!!wakeRealtimeRef.current})`);
     if (recognitionRef.current) {
       const r = recognitionRef.current;
       recognitionRef.current = null;
@@ -916,6 +947,7 @@ const IotAuraPage: React.FC = () => {
   // Jeśli ustawiono słowo aktywacyjne → tryb wake-word (czeka na słowo, potem tura).
   // Bez słowa aktywacyjnego → tryb ciągły (transkrybuje wszystko).
   const toggleAlwaysOn = useCallback((enabled: boolean) => {
+    dbgRef.current(`=== NASŁUCH ${enabled ? 'WŁ' : 'WYŁ'} (provider=${sttProviderRef.current}, android=${isAndroid}) ===`);
     setAlwaysOn(enabled);
     alwaysOnRef.current = enabled;
     if (!enabled) {
@@ -986,9 +1018,10 @@ const IotAuraPage: React.FC = () => {
   const startRealtimeWake = useCallback((phrase: string): boolean => {
     const sttFull = speechService.getConfig().stt;
     const key = sttFull.elevenlabs?.apiKey;
-    if (!key) return false;
+    if (!key) { dbgRef.current('startRealtimeWake: brak klucza ElevenLabs'); return false; }
     // zamknij ewentualny poprzedni strumień
     if (wakeRealtimeRef.current) { wakeRealtimeRef.current.stop(); wakeRealtimeRef.current = null; }
+    dbgRef.current('startRealtimeWake: mikrofon WAKE START (ciągły realtime)');
     const rt = new RealtimeSttService();
     wakeRealtimeRef.current = rt;
     rt.start({
@@ -998,11 +1031,13 @@ const IotAuraPage: React.FC = () => {
       model: sttFull.elevenlabs.model,
       onPartial: () => { /* podgląd pomijamy w trybie wake */ },
       onFinal: (text) => {
-        if (stateRef.current !== 'idle') return;      // tura w toku — ignoruj
-        if (isSelfEcho(text)) return;                 // nie reaguj na własne TTS
+        if (stateRef.current !== 'idle') { dbgRef.current(`wake onFinal ignor (stan=${stateRef.current}): "${text}"`); return; }
+        if (isSelfEcho(text)) { dbgRef.current(`wake onFinal echo-ignor: "${text}"`); return; }
         const { hit, command } = matchWakePhrase(text, phrase);
+        dbgRef.current(`wake onFinal: "${text}" hit=${hit}${hit ? ` cmd="${command}"` : ''}`);
         if (!hit) return;                             // słuchaj dalej (ten sam strumień, brak beepa)
         // wykryto słowo aktywacyjne
+        dbgRef.current('wake: WYKRYTO → mikrofon WAKE STOP');
         rt.stop();
         wakeRealtimeRef.current = null;
         setWakeActive(false);
@@ -1015,6 +1050,7 @@ const IotAuraPage: React.FC = () => {
         }
       },
       onError: () => {
+        dbgRef.current('wake realtime onError → mikrofon WAKE STOP');
         wakeRealtimeRef.current = null;
         setWakeActive(false);
         // spróbuj ponownie za chwilę, jeśli wciąż w trybie wake
@@ -1022,7 +1058,7 @@ const IotAuraPage: React.FC = () => {
           setTimeout(() => { if (alwaysOnRef.current && wakeModeRef.current) startWakeWordRef.current(); }, 1500);
         }
       },
-    }).then(() => setWakeActive(true))
+    }).then(() => { dbgRef.current('wake realtime: połączono (WS otwarty, mikrofon otwarty)'); setWakeActive(true); })
       .catch(() => {
         wakeRealtimeRef.current = null;
         setWakeActive(false);
@@ -1034,11 +1070,12 @@ const IotAuraPage: React.FC = () => {
   // Uruchom nasłuch słowa aktywacyjnego; po wykryciu → jedna tura konwersacji.
   const startWakeWordListening = useCallback((): boolean => {
     const phrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim();
-    if (!phrase) return false;
+    if (!phrase) { dbgRef.current('startWakeWord: brak frazy aktywacyjnej'); return false; }
 
     // Na Androidzie (i gdy skonfigurowano ElevenLabs) używaj ciągłego realtime — bez beepa/migotania.
     // Web Speech (przeglądarkowe) na Androidzie restartuje mikrofon co chwilę i wydaje dźwięk.
     const hasEleven = !!speechService.getConfig().stt.elevenlabs?.apiKey;
+    dbgRef.current(`startWakeWord: fraza="${phrase}" android=${isAndroid} elevenKey=${hasEleven} → ${hasEleven && (isAndroid || sttProviderRef.current === 'elevenlabs') ? 'REALTIME' : 'BROWSER(WebSpeech)'}`);
     if (hasEleven && (isAndroid || sttProviderRef.current === 'elevenlabs')) {
       return startRealtimeWake(phrase);
     }
@@ -1048,12 +1085,14 @@ const IotAuraPage: React.FC = () => {
       sensitivity: 0.7,
       lang: langToRecog(wakeLang),
       onWake: () => {
+        dbgRef.current('wakeword(browser): WYKRYTO słowo → stop + tura');
         wakeWordService.stop();
         setWakeActive(false);
         playWakeSound();
         if (stateRef.current === 'idle') armListeningRef.current();
       },
       onStatusChange: (listening) => setWakeActive(listening),
+      onLog: (m) => dbgRef.current(`wakeword(browser): ${m}`),
     });
     return wakeWordService.start();
   }, [wakeWords, wakeLang, wakeWordService, playWakeSound, speechService, isAndroid, startRealtimeWake]);
@@ -1061,10 +1100,12 @@ const IotAuraPage: React.FC = () => {
 
   // Wznów nasłuch po turze: wake-word (czeka na słowo) lub ciągły.
   const resumeListening = useCallback(() => {
-    if (!alwaysOnRef.current) return;
+    if (!alwaysOnRef.current) { dbgRef.current('resumeListening: pominięto (Nasłuch wyłączony)'); return; }
     if (wakeModeRef.current) {
+      dbgRef.current('resumeListening: tryb WAKE → za 500ms startWakeWord');
       setTimeout(() => startWakeWordRef.current(), 500);
     } else {
+      dbgRef.current('resumeListening: tryb CIĄGŁY → za 900ms armListening');
       setTimeout(() => armListeningRef.current(), 900);
     }
   }, []);
@@ -1226,7 +1267,42 @@ const IotAuraPage: React.FC = () => {
         <Tooltip title="Wyczyść historię">
           <IconButton onClick={clearHistory} size="small"><DeleteSweepIcon /></IconButton>
         </Tooltip>
+
+        <Tooltip title="Panel debug mikrofonu">
+          <IconButton onClick={() => setDebugOpen(o => !o)} size="small" color={debugOpen ? 'secondary' : 'default'}>
+            <BugReportIcon />
+          </IconButton>
+        </Tooltip>
       </Box>
+
+      {/* Panel debug — diagnostyka cyklu mikrofonu (mobile/Android) */}
+      {debugOpen && (
+        <Paper variant="outlined" sx={{ mb: 1, bgcolor: '#0d1117', color: '#e6edf3' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, borderBottom: '1px solid #30363d' }}>
+            <BugReportIcon sx={{ fontSize: 18, color: '#f0883e' }} />
+            <Typography variant="caption" sx={{ flex: 1, fontWeight: 600 }}>
+              Debug mikrofonu · android={String(isAndroid)} · micSupported={String(micSupported)} · stt={sttProvider} · elevenKey={String(!!speechCfg?.stt?.elevenlabs?.apiKey)}
+            </Typography>
+            <Button size="small" variant="outlined" sx={{ color: '#e6edf3', borderColor: '#30363d', minWidth: 0 }}
+              onClick={() => {
+                const text = debugLog.join('\n');
+                navigator.clipboard?.writeText(text).then(
+                  () => setDebugLog(l => [...l, '[skopiowano do schowka ✓]']),
+                  () => { /* brak clipboard */ },
+                );
+              }}
+            >Kopiuj</Button>
+            <Button size="small" variant="outlined" sx={{ color: '#e6edf3', borderColor: '#30363d', minWidth: 0 }}
+              onClick={() => setDebugLog([])}
+            >Wyczyść</Button>
+          </Box>
+          <Box sx={{ maxHeight: 220, overflow: 'auto', px: 1, py: 0.5, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+            {debugLog.length === 0
+              ? <span style={{ opacity: 0.5 }}>Log pusty — włącz „Nasłuch", odtwórz problem, potem „Kopiuj" i wyślij mi log.</span>
+              : debugLog.map((l, i) => <div key={i}>{l}</div>)}
+          </Box>
+        </Paper>
+      )}
 
       {/* Panel konfiguracji */}
       <Paper variant="outlined" sx={{ p: 1.5, mb: 1 }}>

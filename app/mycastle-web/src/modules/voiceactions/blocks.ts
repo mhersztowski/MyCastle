@@ -263,13 +263,13 @@ export function defineAuraConversationBlocks(): void {
     },
   };
 
-  // Wygoogluj — zwraca listę adresów URL dla zapytania (Google Custom Search)
+  // Wygoogluj — zwraca listę adresów URL dla zapytania (Serper.dev = wyniki Google)
   Blockly.Blocks['aura_google_search'] = {
     init(this: Blockly.Block) {
       this.appendValueInput('QUERY').setCheck('String').appendField('🔎 Wygoogluj');
       this.setOutput(true, 'Array');
       this.setColour(HUE_WEB);
-      this.setTooltip('Wyszukaj w Google i zwróć listę adresów URL wyników (wymaga klucza API i CX w Edytorze Konwersacji).');
+      this.setTooltip('Wyszukaj w internecie (Serper.dev = wyniki Google) i zwróć listę adresów URL. Wymaga klucza API w Edytorze Konwersacji.');
     },
   };
 

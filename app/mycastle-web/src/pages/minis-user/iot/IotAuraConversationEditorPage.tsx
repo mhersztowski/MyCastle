@@ -73,7 +73,7 @@ const IotAuraConversationEditorPage: React.FC = () => {
   const [codePreview, setCodePreview] = useState('');
   const [wakeWords, setWakeWords] = useState<WakeWord[]>([]);
   const [globalXml, setGlobalXml] = useState('');
-  const [googleSearch, setGoogleSearch] = useState<{ apiKey: string; cx: string }>({ apiKey: '', cx: '' });
+  const [googleSearch, setGoogleSearch] = useState<{ apiKey?: string; cx?: string; serperKey?: string }>({ apiKey: '', cx: '' });
   const [fullscreen, setFullscreen] = useState(false);
   const GLOBAL_ID = '__global__';
 
@@ -289,21 +289,15 @@ const IotAuraConversationEditorPage: React.FC = () => {
             </Box>
             <Divider />
 
-            {/* Google Custom Search (bloczek „Wygoogluj") */}
+            {/* Wyszukiwanie internetowe (bloczek „Wygoogluj") — Serper.dev (wyniki Google) */}
             <Box sx={{ p: 1 }}>
-              <Typography variant="subtitle2" fontWeight={600} gutterBottom>Wygoogluj (Google Search)</Typography>
+              <Typography variant="subtitle2" fontWeight={600} gutterBottom>Wygoogluj (Serper.dev)</Typography>
               <TextField
-                size="small" fullWidth type="password" label="Google API key" sx={{ mb: 0.75 }}
-                value={googleSearch.apiKey}
-                onChange={e => { setGoogleSearch(g => ({ ...g, apiKey: e.target.value })); setDirty(true); }}
+                size="small" fullWidth type="password" label="Serper.dev API key"
+                value={googleSearch.serperKey || ''}
+                onChange={e => { setGoogleSearch(g => ({ ...g, serperKey: e.target.value })); setDirty(true); }}
                 autoComplete="off"
-              />
-              <TextField
-                size="small" fullWidth label="Search Engine ID (cx)"
-                value={googleSearch.cx}
-                onChange={e => { setGoogleSearch(g => ({ ...g, cx: e.target.value })); setDirty(true); }}
-                autoComplete="off"
-                helperText="Custom Search Engine — programmablesearchengine.google.com"
+                helperText="Klucz z serper.dev (2500 zapytań za darmo, bez karty, wyniki Google)"
               />
             </Box>
             <Divider />

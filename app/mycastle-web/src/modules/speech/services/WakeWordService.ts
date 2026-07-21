@@ -15,6 +15,7 @@ export class WakeWordService {
   private _lang = 'en-US';
   private _onWake: WakeWordCallback | null = null;
   private _onStatusChange: ((listening: boolean) => void) | null = null;
+  private _onLog: ((msg: string) => void) | null = null;
   private restartTimeout: ReturnType<typeof setTimeout> | null = null;
 
   get isListening(): boolean {
@@ -31,12 +32,14 @@ export class WakeWordService {
     lang?: string;
     onWake?: WakeWordCallback;
     onStatusChange?: (listening: boolean) => void;
+    onLog?: (msg: string) => void;
   }): void {
     if (options.phrase !== undefined) this._wakePhrase = options.phrase.toLowerCase();
     if (options.sensitivity !== undefined) this._sensitivity = options.sensitivity;
     if (options.lang !== undefined) this._lang = options.lang;
     if (options.onWake !== undefined) this._onWake = options.onWake;
     if (options.onStatusChange !== undefined) this._onStatusChange = options.onStatusChange;
+    if (options.onLog !== undefined) this._onLog = options.onLog;
   }
 
   start(): boolean {
@@ -51,6 +54,7 @@ export class WakeWordService {
       },
       onError: (error) => {
         console.warn('[WakeWord] Recognition error:', error);
+        this._onLog?.(`onError: ${error}`);
         // Restart on recoverable errors
         if (error !== 'aborted' && error !== 'not-allowed') {
           this.scheduleRestart();
@@ -59,6 +63,7 @@ export class WakeWordService {
         }
       },
       onEnd: () => {
+        this._onLog?.(`onEnd (mikrofon STOP)${this._isListening ? ' → restart za 150ms' : ''}`);
         // Auto-restart if still supposed to be listening
         if (this._isListening) {
           this.scheduleRestart();
@@ -68,11 +73,13 @@ export class WakeWordService {
 
     if (!this.recognition) {
       console.error('[WakeWord] SpeechRecognition not supported');
+      this._onLog?.('SpeechRecognition NIEDOSTĘPNE');
       return false;
     }
 
     try {
       this.recognition.start();
+      this._onLog?.('recognition.start() (mikrofon START)');
       this.setListening(true);
       return true;
     } catch (err) {
@@ -126,6 +133,7 @@ export class WakeWordService {
       if (this._isListening && this.recognition) {
         try {
           this.recognition.start();
+          this._onLog?.('restart → recognition.start() (mikrofon START ponownie)');
         } catch {
           // Recognition might still be active, retry later
           this.scheduleRestart();
