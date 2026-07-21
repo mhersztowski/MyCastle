@@ -182,6 +182,9 @@ const IotAuraPage: React.FC = () => {
       !!((window as unknown as Record<string, unknown>).SpeechRecognition ||
         (window as unknown as Record<string, unknown>).webkitSpeechRecognition),
   );
+  const [isAndroid] = useState<boolean>(
+    typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent),
+  );
 
   // Konfiguracja kluczy API (edytowalne kopie configów AI i mowy)
   const [aiConfig, setAiConfig] = useState<AiConfigModel | null>(null);
@@ -1334,6 +1337,13 @@ const IotAuraPage: React.FC = () => {
         <Alert severity="info" sx={{ mb: 1 }}>
           Ta przeglądarka nie wspiera rozpoznawania mowy (Web Speech API). Wybierz chmurowy model STT
           (Google / ElevenLabs / OpenAI) z kluczem API, albo pisz tekstem.
+        </Alert>
+      )}
+      {isAndroid && sttProvider === 'browser' && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          Na Androidzie STT „Przeglądarka" (Web Speech) <b>restartuje mikrofon po każdej pauzie</b> (ograniczenie systemu —
+          stąd migotanie i „ding"). Dla <b>stabilnego mikrofonu</b> wybierz Model STT = <b>ElevenLabs Scribe v2 realtime</b>
+          (z kluczem API) — jeden ciągły strumień, bez restartów.
         </Alert>
       )}
       {error && (
