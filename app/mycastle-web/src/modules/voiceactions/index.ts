@@ -5,7 +5,7 @@
 export { VoiceActionService, voiceActionService } from './VoiceActionService';
 export { default as AuraBlocklyEditor } from './AuraBlocklyEditor';
 export type { AuraBlocklyEditorProps } from './AuraBlocklyEditor';
-export { codeFromXml } from './blocks';
+export { codeFromXml, setGlobalFunctionNames, extractGlobalFunctionNames } from './blocks';
 export {
   setVfsFilePicker, setVfsJsonPicker,
   listVfsFiles, getVfsTree, readVfsFile, readVfsJson, runVfsJsonQuery,

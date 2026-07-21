@@ -11,12 +11,15 @@ import {
   defineAuraConversationBlocks,
   registerAuraGenerators,
   AURA_TOOLBOX,
+  AURA_GLOBAL_TOOLBOX,
   generateConversationCode,
 } from './blocks';
 
 export interface AuraBlocklyEditorProps {
   initialXml?: string;
   onChange: (xml: string, code: string) => void;
+  /** Tryb „Global" — toolbox z definicjami funkcji globalnych. */
+  global?: boolean;
 }
 
 // Podnieś z-index nakładek pól Blockly (raz, globalnie).
@@ -29,12 +32,13 @@ function ensureZFix() {
   document.head.appendChild(style);
 }
 
-export default function AuraBlocklyEditor({ initialXml, onChange }: AuraBlocklyEditorProps) {
+export default function AuraBlocklyEditor({ initialXml, onChange, global }: AuraBlocklyEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<Blockly.WorkspaceSvg | null>(null);
   const cbRef = useRef(onChange);
   cbRef.current = onChange;
   const initialRef = useRef(initialXml);
+  const globalRef = useRef(global);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -45,7 +49,7 @@ export default function AuraBlocklyEditor({ initialXml, onChange }: AuraBlocklyE
     registerAuraGenerators();
 
     const ws = Blockly.inject(container, {
-      toolbox: AURA_TOOLBOX,
+      toolbox: globalRef.current ? AURA_GLOBAL_TOOLBOX : AURA_TOOLBOX,
       grid: { spacing: 22, length: 3, colour: '#e0e0e0', snap: true },
       zoom: { controls: true, wheel: true, startScale: 0.9, maxScale: 3, minScale: 0.3 },
       trashcan: true,

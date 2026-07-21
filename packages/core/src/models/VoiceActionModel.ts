@@ -42,6 +42,8 @@ export interface VoiceActionCollection {
   variants: VoiceActionVariant[];
   /** Słowa aktywacyjne per język (np. pl="hej aura", en="hey aura"). */
   wakeWords?: WakeWord[];
+  /** Globalny workspace Blockly (definicje funkcji/procedur globalnych) — XML. */
+  globalXml?: string;
 }
 
 export const DEFAULT_VOICE_ACTION_COLLECTION: VoiceActionCollection = {
@@ -49,6 +51,7 @@ export const DEFAULT_VOICE_ACTION_COLLECTION: VoiceActionCollection = {
   actions: [],
   variants: [],
   wakeWords: [],
+  globalXml: '',
 };
 
 /** Fabryka akcji głosowej (id dostarczany przez wywołującego — brak zależności od crypto). */

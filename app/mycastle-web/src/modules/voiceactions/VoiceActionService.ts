@@ -45,6 +45,7 @@ export class VoiceActionService {
         actions: parsed?.actions ?? [],
         variants: parsed?.variants ?? [],
         wakeWords: parsed?.wakeWords ?? [],
+        globalXml: parsed?.globalXml ?? '',
       };
       this._isLoaded = true;
       return this.data;

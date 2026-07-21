@@ -57,7 +57,7 @@ import { App } from '../../../App';
 import { AudioRecorder, createBrowserRecognition, RealtimeSttService } from '../../../modules/speech';
 import type { TtsProviderType, SttProviderType, SpeechConfigModel } from '../../../modules/speech';
 import type { AiProviderType, AiConfigModel } from '../../../modules/ai';
-import { codeFromXml, readVfsFile, runVfsJsonQuery } from '../../../modules/voiceactions';
+import { codeFromXml, readVfsFile, runVfsJsonQuery, setGlobalFunctionNames, extractGlobalFunctionNames } from '../../../modules/voiceactions';
 import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig } from '../../../modules/voiceactions';
 import { useMqtt } from '../../../modules/mqttclient/MqttContext';
 
@@ -206,6 +206,7 @@ const IotAuraPage: React.FC = () => {
   // Runtime konwersacji (akcje głosowe z Edytora Konwersacji)
   const actionsRef = useRef<VoiceAction[]>([]);
   const variantsRef = useRef<VoiceActionVariant[]>([]);
+  const globalXmlRef = useRef<string>('');
   const lastUtteranceRef = useRef<string>('');
   const actionDepthRef = useRef<number>(0);
   const captureHandleRef = useRef<{ stop: () => void } | null>(null);
@@ -213,6 +214,9 @@ const IotAuraPage: React.FC = () => {
   const pendingCaptureRef = useRef<((t: string) => void) | null>(null);
   // Kolejka TTS (łańcuch) — zdania odtwarzane po kolei, nakładają się na streaming LLM.
   const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
+  // Ochrona przed sprzężeniem: mikrofon łapiący własną mowę TTS (echo).
+  const lastSpokenRef = useRef<string>('');
+  const clearSpokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Runtime agenta AI (bloki AgentNewChat / AgentSendPrompt / Odpowiedź agenta AI)
   const agentChatsRef = useRef<Record<string, { role: 'user' | 'assistant'; content: string }[]>>({});
   const currentAgentChatRef = useRef<string>('default');
@@ -235,13 +239,15 @@ const IotAuraPage: React.FC = () => {
   // ---- Ładowanie konfiguracji po połączeniu MQTT ----
   useEffect(() => {
     if (!isConnected) return;
-    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ type: 'voice_actions' as const, actions: [], variants: [], wakeWords: [] })]).then(([ai, speech, va]) => {
+    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ type: 'voice_actions' as const, actions: [], variants: [], wakeWords: [], globalXml: '' })]).then(([ai, speech, va]) => {
       setSttProvider(speech.stt.provider);
       setTtsProvider(speech.tts.provider);
       setAiConfig(ai);
       setSpeechCfg(speech);
       actionsRef.current = va.actions;
       variantsRef.current = va.variants;
+      globalXmlRef.current = va.globalXml ?? '';
+      setGlobalFunctionNames(extractGlobalFunctionNames(va.globalXml ?? ''));
       const ww = va.wakeWords ?? [];
       setWakeWords(ww);
       if (ww.length && !ww.some(w => w.language === 'pl')) setWakeLang(ww[0].language);
@@ -474,12 +480,44 @@ const IotAuraPage: React.FC = () => {
   }, [speechService]);
 
   // ---- Kolejka TTS: zdania odtwarzane sekwencyjnie (łańcuch obietnic) ----
+  const normText = (s: string): string =>
+    s.toLowerCase().replace(/[^0-9a-ząćęłńóśźż ]/gi, ' ').replace(/\s+/g, ' ').trim();
+
   const enqueueTts = useCallback((text: string) => {
     const t = text.trim();
     if (!t) return;
     setState('speaking');
-    ttsChainRef.current = ttsChainRef.current.then(() => speechService.speak({ text: t }).catch(() => {}));
+    // Zapamiętaj wypowiadany tekst (ochrona przed echem); wyczyść po chwili od zakończenia.
+    lastSpokenRef.current = normText(`${lastSpokenRef.current} ${t}`).slice(-400);
+    if (clearSpokenTimerRef.current) clearTimeout(clearSpokenTimerRef.current);
+    ttsChainRef.current = ttsChainRef.current
+      .then(() => speechService.speak({ text: t }).catch(() => {}))
+      .then(() => {
+        if (clearSpokenTimerRef.current) clearTimeout(clearSpokenTimerRef.current);
+        clearSpokenTimerRef.current = setTimeout(() => { lastSpokenRef.current = ''; }, 1800);
+      });
   }, [speechService]);
+
+  // Czy wypowiedź to echo naszej własnej mowy (TTS złapane przez mikrofon)?
+  const isSelfEcho = useCallback((text: string): boolean => {
+    const t = normText(text);
+    const spoken = lastSpokenRef.current;
+    if (!t || !spoken) return false;
+    return spoken.includes(t) || t.includes(spoken);
+  }, []);
+
+  // Obsługa finalnej wypowiedzi z nasłuchu ciągłego (z guardem echa/pustki).
+  const handleVoiceFinal = useCallback((text: string) => {
+    setInterimText('');
+    setState('idle');
+    const t = text.trim();
+    if (!t || isSelfEcho(t)) {
+      // ignoruj echo/pustkę; wznów nasłuch w trybie ciągłym z cooldownem
+      if (alwaysOnRef.current) setTimeout(() => armListeningRef.current(), 900);
+      return;
+    }
+    processUserInputRef.current(t);
+  }, [isSelfEcho]);
 
   // ---- Streaming odpowiedzi AI: pokazuje tekst na bieżąco i mówi zdaniami ----
   const streamAiResponse = useCallback(async (request: Parameters<typeof aiService.chatStream>[0]): Promise<string> => {
@@ -530,10 +568,20 @@ const IotAuraPage: React.FC = () => {
         appendAssistant(`(Akcja „${action.name}" nie ma jeszcze logiki — dodaj bloczki w Edytorze Konwersacji.)`);
         return;
       }
+      const globalCode = codeFromXml(globalXmlRef.current);
       const code = codeFromXml(variant.blocklyXml);
-      console.debug('[Aura] uruchamiam akcję:', action.name, '\nkod:\n', code);
+      const fullCode = `${globalCode}\n${code}`;
+      console.debug('[Aura] uruchamiam akcję:', action.name, '\nkod:\n', fullCode);
       const handlers: Array<() => Promise<void>> = [];
+      const globals: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
       const aura = {
+        _globals: globals,
+        callGlobal: async (name: unknown, ...args: unknown[]): Promise<unknown> => {
+          const fn = globals[String(name)];
+          if (typeof fn === 'function') return await fn(...args);
+          console.warn('[Aura] brak funkcji globalnej:', name);
+          return undefined;
+        },
         onActivator: (_phrase: string, fn: () => Promise<void>) => { handlers.push(fn); },
         say: async (text: unknown) => {
           const t = String(text ?? '');
@@ -597,7 +645,7 @@ const IotAuraPage: React.FC = () => {
       setState('thinking');
       try {
         const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as new (arg: string, body: string) => (aura: unknown) => Promise<void>;
-        const fn = new AsyncFunction('aura', code);
+        const fn = new AsyncFunction('aura', fullCode);
         await fn(aura);
         for (const h of handlers) { await h(); }
       } catch (err) {
@@ -649,9 +697,9 @@ const IotAuraPage: React.FC = () => {
       appendAssistant(`Przepraszam, wystąpił błąd: ${errMsg}`);
     } finally {
       setState('idle');
-      // Wznów nasłuch jeśli tryb ciągły jest włączony
+      // Wznów nasłuch jeśli tryb ciągły jest włączony (cooldown by uniknąć echa/pętli)
       if (alwaysOnRef.current) {
-        setTimeout(() => armListeningRef.current(), 400);
+        setTimeout(() => armListeningRef.current(), 900);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -682,11 +730,9 @@ const IotAuraPage: React.FC = () => {
         model: sttFull.elevenlabs.model,
         onPartial: (t) => setInterimText(t),
         onFinal: (t) => {
-          setInterimText('');
           rt.stop();
           realtimeRef.current = null;
-          setState('idle');
-          processUserInputRef.current(t);
+          handleVoiceFinal(t);
         },
         onError: () => {
           rt.stop();
@@ -710,10 +756,8 @@ const IotAuraPage: React.FC = () => {
         interimResults: true,
         onResult: (transcript, isFinal) => {
           if (isFinal) {
-            setInterimText('');
             recognitionRef.current = null;
-            setState('idle');
-            processUserInputRef.current(transcript);
+            handleVoiceFinal(transcript);
           } else {
             setInterimText(transcript);
           }
@@ -778,13 +822,7 @@ const IotAuraPage: React.FC = () => {
       const audioBlob = await recorderRef.current.stop();
       recorderRef.current = null;
       const result = await speechService.transcribe({ audio: audioBlob });
-      if (result.text.trim()) {
-        setState('idle');
-        processUserInputRef.current(result.text);
-      } else {
-        setState('idle');
-        if (alwaysOnRef.current) setTimeout(() => armListeningRef.current(), 400);
-      }
+      handleVoiceFinal(result.text);
     } catch (err) {
       console.warn('[Aura] Błąd transkrypcji:', err);
       setError('Błąd transkrypcji audio');

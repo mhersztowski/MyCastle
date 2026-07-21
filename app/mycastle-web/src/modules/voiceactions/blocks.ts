@@ -24,6 +24,34 @@ const HUE_LOGIC = 160;   // zielony — logika/wartości
 const HUE_ACTION = 30;   // pomarańcz — akcje
 const HUE_AGENT = 250;   // indygo — agent AI
 const HUE_VFS = 45;      // złoto — pliki/VFS
+const HUE_GLOBAL = 330;  // magenta — funkcje globalne
+
+// Nazwy funkcji globalnych (do dropdownu bloku wywołania) — aktualizowane przez edytor.
+let globalNames: string[] = [];
+export function setGlobalFunctionNames(names: string[]): void {
+  globalNames = Array.from(new Set(names.filter(Boolean)));
+}
+function globalNameOptions(): [string, string][] {
+  return globalNames.length ? globalNames.map(n => [n, n] as [string, string]) : [['(brak funkcji)', '']];
+}
+
+/** Wyodrębnij nazwy funkcji globalnych z XML workspace „Global". */
+export function extractGlobalFunctionNames(xml: string): string[] {
+  if (!xml || !xml.trim()) return [];
+  try {
+    const dom = Blockly.utils.xml.textToDom(xml);
+    const blocks = dom.querySelectorAll('block[type="aura_global_def"]');
+    const names: string[] = [];
+    blocks.forEach(b => {
+      const f = b.querySelector(':scope > field[name="NAME"]');
+      const n = (f?.textContent || '').trim();
+      if (n) names.push(n);
+    });
+    return names;
+  } catch {
+    return [];
+  }
+}
 
 let blocksDefined = false;
 let generatorsRegistered = false;
@@ -223,6 +251,55 @@ export function defineAuraConversationBlocks(): void {
       this.setTooltip('Wybierz plik JSON, ścieżkę wewnątrz niego (okrojenie) i filtry (np. ma atrybut, zawiera tekst, jest liczbą…).');
     },
   };
+
+  // Definicja funkcji globalnej (tylko w workspace „Global")
+  Blockly.Blocks['aura_global_def'] = {
+    init(this: Blockly.Block) {
+      this.appendDummyInput()
+        .appendField('🌐 Funkcja globalna')
+        .appendField(new Blockly.FieldTextInput('mojaFunkcja'), 'NAME');
+      this.appendDummyInput()
+        .appendField('argumenty (po przecinku)')
+        .appendField(new Blockly.FieldTextInput(''), 'PARAMS');
+      this.appendStatementInput('DO').appendField('zrób');
+      this.appendValueInput('RESULT').appendField('zwróć (opcjonalnie)');
+      this.setColour(HUE_GLOBAL);
+      this.setTooltip('Zdefiniuj funkcję globalną (dostępną we wszystkich akcjach). Argumenty rozdziel przecinkami.');
+    },
+  };
+
+  // Wywołanie funkcji globalnej (instrukcja) — z wyborem await/async
+  Blockly.Blocks['aura_call_global'] = {
+    init(this: Blockly.Block) {
+      this.appendDummyInput()
+        .appendField('🌐 Wywołaj funkcję')
+        .appendField(new Blockly.FieldDropdown(globalNameOptions), 'NAME')
+        .appendField('czekaj (await)')
+        .appendField(new Blockly.FieldCheckbox('TRUE'), 'AWAIT');
+      this.appendValueInput('ARGS').setCheck('Array').appendField('argumenty (lista)');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_GLOBAL);
+      this.setTooltip('Wywołaj funkcję globalną po nazwie. „czekaj (await)" — czy poczekać na jej zakończenie.');
+    },
+  };
+
+  // Wywołanie funkcji globalnej (wartość — zwraca wynik) — z wyborem await/async
+  Blockly.Blocks['aura_call_global_return'] = {
+    init(this: Blockly.Block) {
+      this.appendDummyInput()
+        .appendField('🌐 Wynik funkcji')
+        .appendField(new Blockly.FieldDropdown(globalNameOptions), 'NAME')
+        .appendField('czekaj (await)')
+        .appendField(new Blockly.FieldCheckbox('TRUE'), 'AWAIT');
+      this.appendValueInput('ARGS').setCheck('Array').appendField('argumenty (lista)');
+      this.setInputsInline(true);
+      this.setOutput(true, null);
+      this.setColour(HUE_GLOBAL);
+      this.setTooltip('Wywołaj funkcję globalną po nazwie i użyj jej wyniku. Bez „await" zwraca obietnicę (Promise).');
+    },
+  };
 }
 
 export function registerAuraGenerators(): void {
@@ -309,6 +386,30 @@ export function registerAuraGenerators(): void {
     // cfg to poprawny JSON → wstaw jako literał obiektu argumentu
     return [`await aura.vfsReadJson(${cfg})`, Order.AWAIT];
   };
+
+  g.forBlock['aura_global_def'] = function (block) {
+    const name = block.getFieldValue('NAME') || 'fn';
+    const params = String(block.getFieldValue('PARAMS') || '').split(',').map((s: string) => s.trim()).filter(Boolean).join(', ');
+    const body = g.statementToCode(block, 'DO');
+    const ret = g.valueToCode(block, 'RESULT', Order.NONE);
+    return `aura._globals[${JSON.stringify(name)}] = async (${params}) => {\n${body}${ret ? `  return ${ret};\n` : ''}};\n`;
+  };
+
+  g.forBlock['aura_call_global'] = function (block) {
+    const name = block.getFieldValue('NAME') || '';
+    const args = g.valueToCode(block, 'ARGS', Order.NONE);
+    const doAwait = block.getFieldValue('AWAIT') !== 'FALSE';
+    const call = `aura.callGlobal(${JSON.stringify(name)}${args ? `, ...(${args} || [])` : ''})`;
+    return `${doAwait ? 'await ' : ''}${call};\n`;
+  };
+
+  g.forBlock['aura_call_global_return'] = function (block) {
+    const name = block.getFieldValue('NAME') || '';
+    const args = g.valueToCode(block, 'ARGS', Order.NONE);
+    const doAwait = block.getFieldValue('AWAIT') !== 'FALSE';
+    const call = `aura.callGlobal(${JSON.stringify(name)}${args ? `, ...(${args} || [])` : ''})`;
+    return doAwait ? [`await ${call}`, Order.AWAIT] : [call, Order.FUNCTION_CALL];
+  };
 }
 
 /** Toolbox edytora konwersacji: kategoria „Konwersacja" + Text/Logic/Loops + Zmienne/Funkcje. */
@@ -339,6 +440,13 @@ export const AURA_TOOLBOX = {
       contents: [
         { kind: 'block', type: 'aura_vfs_read_file' },
         { kind: 'block', type: 'aura_vfs_read_json' },
+      ],
+    },
+    {
+      kind: 'category', name: 'Funkcje globalne', colour: String(HUE_GLOBAL),
+      contents: [
+        { kind: 'block', type: 'aura_call_global' },
+        { kind: 'block', type: 'aura_call_global_return' },
       ],
     },
     {
@@ -375,9 +483,38 @@ export const AURA_TOOLBOX = {
         { kind: 'block', type: 'math_arithmetic' },
       ],
     },
+    {
+      kind: 'category', name: 'Listy', categorystyle: 'list_category',
+      contents: [
+        { kind: 'block', type: 'lists_create_with' },
+        { kind: 'block', type: 'lists_repeat', inputs: { NUM: { shadow: { type: 'math_number', fields: { NUM: 3 } } } } },
+        { kind: 'block', type: 'lists_length' },
+        { kind: 'block', type: 'lists_isEmpty' },
+        { kind: 'block', type: 'lists_indexOf' },
+        { kind: 'block', type: 'lists_getIndex' },
+        { kind: 'block', type: 'lists_setIndex' },
+      ],
+    },
     { kind: 'sep' },
     { kind: 'category', name: 'Zmienne', categorystyle: 'variable_category', custom: 'VARIABLE' },
     { kind: 'category', name: 'Funkcje', categorystyle: 'procedure_category', custom: 'PROCEDURE' },
+  ],
+};
+
+/**
+ * Toolbox workspace „Global" — definicje funkcji globalnych + wszystkie kategorie
+ * (funkcje mogą korzystać z mowy, agenta, VFS itd.).
+ */
+export const AURA_GLOBAL_TOOLBOX = {
+  kind: 'categoryToolbox',
+  contents: [
+    {
+      kind: 'category', name: 'Definicje globalne', colour: String(HUE_GLOBAL),
+      contents: [
+        { kind: 'block', type: 'aura_global_def' },
+      ],
+    },
+    ...AURA_TOOLBOX.contents,
   ],
 };
 

@@ -34,11 +34,14 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import { App } from '../../../App';
 import {
   AuraBlocklyEditor,
   VfsFileDialog, VfsJsonQueryDialog,
   setVfsFilePicker, setVfsJsonPicker,
+  setGlobalFunctionNames, extractGlobalFunctionNames,
 } from '../../../modules/voiceactions';
 import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig } from '../../../modules/voiceactions';
 
@@ -68,6 +71,9 @@ const IotAuraConversationEditorPage: React.FC = () => {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [codePreview, setCodePreview] = useState('');
   const [wakeWords, setWakeWords] = useState<WakeWord[]>([]);
+  const [globalXml, setGlobalXml] = useState('');
+  const [fullscreen, setFullscreen] = useState(false);
+  const GLOBAL_ID = '__global__';
 
   // Dialogi VFS (rejestrowane dla pól Blockly)
   const [fileDialog, setFileDialog] = useState<{ current: string; resolve: (p: string | null) => void } | null>(null);
@@ -83,6 +89,8 @@ const IotAuraConversationEditorPage: React.FC = () => {
       setActions([...data.actions]);
       setVariants([...data.variants]);
       setWakeWords([...(data.wakeWords ?? [])]);
+      setGlobalXml(data.globalXml ?? '');
+      setGlobalFunctionNames(extractGlobalFunctionNames(data.globalXml ?? ''));
       if (data.actions.length) {
         setSelectedActionId(data.actions[0].id);
         const firstVar = data.variants.find(v => v.voiceActionId === data.actions[0].id);
@@ -183,7 +191,7 @@ const IotAuraConversationEditorPage: React.FC = () => {
       v.id === selectedVariantId ? { ...v, blocklyXml: currentXmlRef.current } : v,
     );
     try {
-      const ok = await voiceActionService.saveConfig(userName, { type: 'voice_actions', actions, variants: finalVariants, wakeWords });
+      const ok = await voiceActionService.saveConfig(userName, { type: 'voice_actions', actions, variants: finalVariants, wakeWords, globalXml });
       setVariants(finalVariants);
       setDirty(false);
       setMessage({ ok, text: ok ? 'Zapisano konwersacje.' : 'Błąd zapisu.' });
@@ -192,7 +200,18 @@ const IotAuraConversationEditorPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  }, [actions, variants, selectedVariantId, voiceActionService, userName, wakeWords]);
+  }, [actions, variants, selectedVariantId, voiceActionService, userName, wakeWords, globalXml]);
+
+  const globalMode = selectedActionId === GLOBAL_ID;
+  const selectGlobal = useCallback(() => {
+    setSelectedActionId(GLOBAL_ID);
+    setSelectedVariantId(null);
+  }, []);
+  const handleGlobalChange = useCallback((xml: string) => {
+    setGlobalXml(xml);
+    setGlobalFunctionNames(extractGlobalFunctionNames(xml));
+    setDirty(true);
+  }, []);
 
   // Rejestracja dialogów VFS dla pól Blockly
   useEffect(() => {
@@ -271,7 +290,15 @@ const IotAuraConversationEditorPage: React.FC = () => {
               </Tooltip>
             </Box>
             <Divider />
-            <List dense sx={{ maxHeight: 180, overflow: 'auto', flexShrink: 0 }}>
+            <List dense sx={{ maxHeight: 220, overflow: 'auto', flexShrink: 0 }}>
+              <ListItemButton selected={globalMode} onClick={selectGlobal}>
+                <ListItemText
+                  primary="🌐 Global — funkcje globalne"
+                  secondary="Definicje wspólne dla wszystkich akcji"
+                  primaryTypographyProps={{ fontWeight: 600 }}
+                />
+              </ListItemButton>
+              <Divider />
               {actions.length === 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ p: 1.5, display: 'block' }}>
                   Brak akcji. Kliknij „+", aby utworzyć pierwszy typ konwersacji.
@@ -294,8 +321,15 @@ const IotAuraConversationEditorPage: React.FC = () => {
             </List>
             <Divider />
 
-            {/* Edycja wybranej akcji */}
-            {selectedAction ? (
+            {/* Edycja wybranej akcji / info o Global */}
+            {globalMode ? (
+              <Box sx={{ p: 2 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Definiuj tu <b>funkcje globalne</b> bloczkiem „🌐 Funkcja globalna" (kategoria „Definicje globalne").
+                  Wywołasz je w dowolnej akcji bloczkiem „🌐 Wywołaj funkcję" / „🌐 Wynik funkcji".
+                </Typography>
+              </Box>
+            ) : selectedAction ? (
               <Box sx={{ p: 1.5, overflow: 'auto', flex: 1, minHeight: 0 }}>
                 <TextField
                   label="Nazwa" size="small" fullWidth sx={{ mb: 1.5 }}
@@ -362,8 +396,29 @@ const IotAuraConversationEditorPage: React.FC = () => {
           </Paper>
 
           {/* Prawy panel: Blockly + podgląd kodu */}
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1 }}>
-            {selectedVariant ? (
+          <Box sx={fullscreen
+            ? { position: 'fixed', inset: 0, zIndex: 1300, bgcolor: 'background.default', p: 1, display: 'flex', flexDirection: 'column', gap: 1 }
+            : { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1, position: 'relative' }}
+          >
+            <Tooltip title={fullscreen ? 'Zmniejsz edytor' : 'Rozciągnij edytor na cały ekran'}>
+              <IconButton
+                size="small"
+                onClick={() => setFullscreen(f => !f)}
+                sx={{ position: 'absolute', top: fullscreen ? 12 : 6, right: fullscreen ? 12 : 6, zIndex: 5, bgcolor: 'background.paper', boxShadow: 1, '&:hover': { bgcolor: 'background.paper' } }}
+              >
+                {fullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+              </IconButton>
+            </Tooltip>
+            {globalMode ? (
+              <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <AuraBlocklyEditor
+                  key="__global__"
+                  global
+                  initialXml={globalXml}
+                  onChange={(xml) => handleGlobalChange(xml)}
+                />
+              </Paper>
+            ) : selectedVariant ? (
               <>
                 <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                   <AuraBlocklyEditor
