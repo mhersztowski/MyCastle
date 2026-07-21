@@ -10,6 +10,7 @@ import WidgetsIcon from '@mui/icons-material/Widgets';
 import { GlobalWindow } from '../../components/GlobalWindow';
 import { readUserJson, writeUserJson, readUserFileText } from '../../services/userJson';
 import { runBrowserComponent, type RunHandle } from '../../modules/component-runner/runBrowserComponent';
+import { BUILTIN_COMPONENTS, BuiltinComponentView } from '../../modules/voiceactions';
 
 interface ComponentEntry {
   id: string;
@@ -186,6 +187,23 @@ export default function ComponentsPage() {
               <Tooltip title="Usuń z listy">
                 <IconButton size="small" onClick={() => remove(e.id)} sx={{ color: 'error.main' }}><DeleteOutlineIcon fontSize="small" /></IconButton>
               </Tooltip>
+            </Stack>
+          </Box>
+        ))}
+      </Paper>
+
+      {/* Wbudowane komponenty (React) */}
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, mt: 3, mb: 1 }}>Wbudowane komponenty</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        Gotowe komponenty React (funkcjonalne). Dostępne też w Edytorze Konwersacji (bloczek „Wyświetl komponent").
+      </Typography>
+      <Paper variant="outlined">
+        {BUILTIN_COMPONENTS.map((b, i) => (
+          <Box key={b.id}>
+            {i > 0 && <Divider />}
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2, py: 1.5 }}>
+              <Typography variant="body2" sx={{ flex: 1, fontWeight: 500 }}>{b.name}</Typography>
+              <BuiltinComponentView id={b.id} />
             </Stack>
           </Box>
         ))}

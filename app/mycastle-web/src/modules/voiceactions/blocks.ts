@@ -16,7 +16,7 @@
 
 import * as Blockly from 'blockly';
 import { javascriptGenerator, Order } from 'blockly/javascript';
-import { FieldVfsFile, FieldVfsJson, registerVfsFields } from './fields';
+import { FieldVfsFile, FieldVfsJson, FieldShowComponent, registerVfsFields } from './fields';
 
 const HUE_EVENT = 285;   // fiolet — aktywatory
 const HUE_SPEAK = 200;   // niebieski — mowa
@@ -25,6 +25,8 @@ const HUE_ACTION = 30;   // pomarańcz — akcje
 const HUE_AGENT = 250;   // indygo — agent AI
 const HUE_VFS = 45;      // złoto — pliki/VFS
 const HUE_GLOBAL = 330;  // magenta — funkcje globalne
+const HUE_WEB = 210;     // niebieski — sieć/Google
+const HUE_COMPONENT = 100; // limonka — komponenty UI
 
 // Nazwy funkcji globalnych (do dropdownu bloku wywołania) — aktualizowane przez edytor.
 let globalNames: string[] = [];
@@ -261,6 +263,29 @@ export function defineAuraConversationBlocks(): void {
     },
   };
 
+  // Wygoogluj — zwraca listę adresów URL dla zapytania (Google Custom Search)
+  Blockly.Blocks['aura_google_search'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('QUERY').setCheck('String').appendField('🔎 Wygoogluj');
+      this.setOutput(true, 'Array');
+      this.setColour(HUE_WEB);
+      this.setTooltip('Wyszukaj w Google i zwróć listę adresów URL wyników (wymaga klucza API i CX w Edytorze Konwersacji).');
+    },
+  };
+
+  // Wyświetl komponent (osadzony span lub popup przez przycisk) — z oknem wyboru
+  Blockly.Blocks['aura_show_component'] = {
+    init(this: Blockly.Block) {
+      this.appendDummyInput()
+        .appendField('🧩 Wyświetl komponent')
+        .appendField(new FieldShowComponent('{}'), 'CONFIG');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_COMPONENT);
+      this.setTooltip('Wyświetla komponent (wbudowany lub z Programming/Components) w czacie Aury — osadzony lub jako popup.');
+    },
+  };
+
   // Definicja funkcji globalnej (tylko w workspace „Global")
   Blockly.Blocks['aura_global_def'] = {
     init(this: Blockly.Block) {
@@ -397,6 +422,17 @@ export function registerAuraGenerators(): void {
     return [`await aura.vfsReadJson(${JSON.stringify(cfg)})`, Order.AWAIT];
   };
 
+  g.forBlock['aura_google_search'] = function (block) {
+    const query = g.valueToCode(block, 'QUERY', Order.NONE) || "''";
+    return [`await aura.googleSearch(${query})`, Order.AWAIT];
+  };
+
+  g.forBlock['aura_show_component'] = function (block) {
+    const cfg = block.getFieldValue('CONFIG') || '{}';
+    // przekaż jako string (parsowane w runtime aura.showComponent)
+    return `await aura.showComponent(${JSON.stringify(cfg)});\n`;
+  };
+
   g.forBlock['aura_global_def'] = function (block) {
     const name = block.getFieldValue('NAME') || 'fn';
     const params = String(block.getFieldValue('PARAMS') || '').split(',').map((s: string) => s.trim()).filter(Boolean).join(', ');
@@ -450,6 +486,18 @@ export const AURA_TOOLBOX = {
       contents: [
         { kind: 'block', type: 'aura_vfs_read_file' },
         { kind: 'block', type: 'aura_vfs_read_json' },
+      ],
+    },
+    {
+      kind: 'category', name: 'Sieć / Google', colour: String(HUE_WEB),
+      contents: [
+        { kind: 'block', type: 'aura_google_search', inputs: { QUERY: { shadow: { type: 'text', fields: { TEXT: 'pogoda Warszawa' } } } } },
+      ],
+    },
+    {
+      kind: 'category', name: 'Komponenty', colour: String(HUE_COMPONENT),
+      contents: [
+        { kind: 'block', type: 'aura_show_component' },
       ],
     },
     {

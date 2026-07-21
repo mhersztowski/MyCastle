@@ -50,6 +50,7 @@ export class VoiceActionService {
         variants: parsed?.variants ?? [],
         wakeWords: parsed?.wakeWords ?? [],
         globalXml: parsed?.globalXml ?? '',
+        googleSearch: parsed?.googleSearch ?? { apiKey: '', cx: '' },
       };
       this._isLoaded = true;
       return this.data;

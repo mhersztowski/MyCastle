@@ -13,6 +13,13 @@ export {
 export type { VfsJsonQueryConfig, VfsJsonFilter, VfsFilterOp } from './vfsPicker';
 export { default as VfsFileDialog } from './VfsFileDialog';
 export { default as VfsJsonQueryDialog } from './VfsJsonQueryDialog';
+export { ShowComponentDialog } from './ShowComponentDialog';
+export { ComponentHost } from './ComponentHost';
+export { BuiltinComponentView, BUILTIN_COMPONENTS, isBuiltinComponent } from './builtinComponents';
+export {
+  setShowComponentPicker, getShowComponentPicker, listComponents, summarizeShowComponent,
+} from './showComponentPicker';
+export type { ShowComponentConfig, ComponentListItem } from './showComponentPicker';
 export type {
   VoiceAction,
   VoiceActionVariant,

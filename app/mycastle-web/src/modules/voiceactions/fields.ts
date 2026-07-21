@@ -7,6 +7,8 @@
 import * as Blockly from 'blockly';
 import { getVfsFilePicker, getVfsJsonPicker } from './vfsPicker';
 import type { VfsJsonQueryConfig } from './vfsPicker';
+import { getShowComponentPicker, summarizeShowComponent } from './showComponentPicker';
+import type { ShowComponentConfig } from './showComponentPicker';
 
 /** Pole wyboru pliku z VFS — klik otwiera dialog zamiast edycji tekstu. */
 export class FieldVfsFile extends Blockly.FieldTextInput {
@@ -59,10 +61,37 @@ export class FieldVfsJson extends Blockly.FieldTextInput {
   }
 }
 
+/** Pole wyboru komponentu do wyświetlenia. Wartość = JSON stringa konfiguracji (ShowComponentConfig). */
+export class FieldShowComponent extends Blockly.FieldTextInput {
+  protected showEditor_(): void {
+    const picker = getShowComponentPicker();
+    if (!picker) { super.showEditor_(); return; }
+    let cur: ShowComponentConfig | null = null;
+    try { cur = JSON.parse((this.getValue() as string) || 'null'); } catch { cur = null; }
+    picker(cur).then(res => {
+      if (res) this.setValue(JSON.stringify(res));
+    });
+  }
+
+  getText(): string {
+    try {
+      const cfg = JSON.parse((this.getValue() as string) || 'null') as ShowComponentConfig | null;
+      return summarizeShowComponent(cfg);
+    } catch {
+      return 'wybierz komponent…';
+    }
+  }
+
+  static fromJson(options: Record<string, unknown>): FieldShowComponent {
+    return new FieldShowComponent((options['value'] as string) ?? '{}');
+  }
+}
+
 let registered = false;
 export function registerVfsFields(): void {
   if (registered) return;
   registered = true;
   try { Blockly.fieldRegistry.register('field_vfs_file', FieldVfsFile); } catch { /* już zarejestrowane */ }
   try { Blockly.fieldRegistry.register('field_vfs_json', FieldVfsJson); } catch { /* już zarejestrowane */ }
+  try { Blockly.fieldRegistry.register('field_show_component', FieldShowComponent); } catch { /* już zarejestrowane */ }
 }

@@ -44,6 +44,8 @@ export interface VoiceActionCollection {
   wakeWords?: WakeWord[];
   /** Globalny workspace Blockly (definicje funkcji/procedur globalnych) — XML. */
   globalXml?: string;
+  /** Konfiguracja Google Custom Search (bloczek „Wygoogluj"): klucz API + identyfikator wyszukiwarki (cx). */
+  googleSearch?: { apiKey: string; cx: string };
 }
 
 export const DEFAULT_VOICE_ACTION_COLLECTION: VoiceActionCollection = {

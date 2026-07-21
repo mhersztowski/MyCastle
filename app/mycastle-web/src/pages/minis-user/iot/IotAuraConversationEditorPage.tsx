@@ -42,8 +42,9 @@ import {
   VfsFileDialog, VfsJsonQueryDialog,
   setVfsFilePicker, setVfsJsonPicker,
   setGlobalFunctionNames, extractGlobalFunctionNames,
+  ShowComponentDialog, setShowComponentPicker,
 } from '../../../modules/voiceactions';
-import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig } from '../../../modules/voiceactions';
+import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig, ShowComponentConfig } from '../../../modules/voiceactions';
 
 const LANGUAGES = [
   { code: 'pl', label: 'Polski (pl)' },
@@ -72,12 +73,14 @@ const IotAuraConversationEditorPage: React.FC = () => {
   const [codePreview, setCodePreview] = useState('');
   const [wakeWords, setWakeWords] = useState<WakeWord[]>([]);
   const [globalXml, setGlobalXml] = useState('');
+  const [googleSearch, setGoogleSearch] = useState<{ apiKey: string; cx: string }>({ apiKey: '', cx: '' });
   const [fullscreen, setFullscreen] = useState(false);
   const GLOBAL_ID = '__global__';
 
   // Dialogi VFS (rejestrowane dla pól Blockly)
   const [fileDialog, setFileDialog] = useState<{ current: string; resolve: (p: string | null) => void } | null>(null);
   const [jsonDialog, setJsonDialog] = useState<{ current: VfsJsonQueryConfig | null; resolve: (c: VfsJsonQueryConfig | null) => void } | null>(null);
+  const [componentDialog, setComponentDialog] = useState<{ current: ShowComponentConfig | null; resolve: (c: ShowComponentConfig | null) => void } | null>(null);
 
   const currentXmlRef = useRef('');
 
@@ -90,6 +93,7 @@ const IotAuraConversationEditorPage: React.FC = () => {
       setVariants([...data.variants]);
       setWakeWords([...(data.wakeWords ?? [])]);
       setGlobalXml(data.globalXml ?? '');
+      setGoogleSearch(data.googleSearch ?? { apiKey: '', cx: '' });
       setGlobalFunctionNames(extractGlobalFunctionNames(data.globalXml ?? ''));
       if (data.actions.length) {
         setSelectedActionId(data.actions[0].id);
@@ -191,7 +195,7 @@ const IotAuraConversationEditorPage: React.FC = () => {
       v.id === selectedVariantId ? { ...v, blocklyXml: currentXmlRef.current } : v,
     );
     try {
-      const ok = await voiceActionService.saveConfig(userName, { type: 'voice_actions', actions, variants: finalVariants, wakeWords, globalXml });
+      const ok = await voiceActionService.saveConfig(userName, { type: 'voice_actions', actions, variants: finalVariants, wakeWords, globalXml, googleSearch });
       setVariants(finalVariants);
       setDirty(false);
       setMessage({ ok, text: ok ? 'Zapisano konwersacje.' : 'Błąd zapisu.' });
@@ -200,7 +204,7 @@ const IotAuraConversationEditorPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  }, [actions, variants, selectedVariantId, voiceActionService, userName, wakeWords, globalXml]);
+  }, [actions, variants, selectedVariantId, voiceActionService, userName, wakeWords, globalXml, googleSearch]);
 
   const globalMode = selectedActionId === GLOBAL_ID;
   const selectGlobal = useCallback(() => {
@@ -217,7 +221,8 @@ const IotAuraConversationEditorPage: React.FC = () => {
   useEffect(() => {
     setVfsFilePicker((current) => new Promise<string | null>((resolve) => setFileDialog({ current, resolve })));
     setVfsJsonPicker((current) => new Promise<VfsJsonQueryConfig | null>((resolve) => setJsonDialog({ current, resolve })));
-    return () => { setVfsFilePicker(null); setVfsJsonPicker(null); };
+    setShowComponentPicker((current) => new Promise<ShowComponentConfig | null>((resolve) => setComponentDialog({ current, resolve })));
+    return () => { setVfsFilePicker(null); setVfsJsonPicker(null); setShowComponentPicker(null); };
   }, []);
 
   // ---- Wake words (per język) ----
@@ -283,6 +288,26 @@ const IotAuraConversationEditorPage: React.FC = () => {
               ))}
             </Box>
             <Divider />
+
+            {/* Google Custom Search (bloczek „Wygoogluj") */}
+            <Box sx={{ p: 1 }}>
+              <Typography variant="subtitle2" fontWeight={600} gutterBottom>Wygoogluj (Google Search)</Typography>
+              <TextField
+                size="small" fullWidth type="password" label="Google API key" sx={{ mb: 0.75 }}
+                value={googleSearch.apiKey}
+                onChange={e => { setGoogleSearch(g => ({ ...g, apiKey: e.target.value })); setDirty(true); }}
+                autoComplete="off"
+              />
+              <TextField
+                size="small" fullWidth label="Search Engine ID (cx)"
+                value={googleSearch.cx}
+                onChange={e => { setGoogleSearch(g => ({ ...g, cx: e.target.value })); setDirty(true); }}
+                autoComplete="off"
+                helperText="Custom Search Engine — programmablesearchengine.google.com"
+              />
+            </Box>
+            <Divider />
+
             <Box sx={{ display: 'flex', alignItems: 'center', p: 1, gap: 1 }}>
               <Typography variant="subtitle2" fontWeight={600} sx={{ flex: 1 }}>Voice Actions</Typography>
               <Tooltip title="Dodaj akcję">
@@ -455,6 +480,13 @@ const IotAuraConversationEditorPage: React.FC = () => {
         open={!!jsonDialog}
         current={jsonDialog?.current || null}
         onClose={(c) => { jsonDialog?.resolve(c); setJsonDialog(null); }}
+      />
+      <ShowComponentDialog
+        open={!!componentDialog}
+        userName={userName || ''}
+        initial={componentDialog?.current || null}
+        onCancel={() => { componentDialog?.resolve(null); setComponentDialog(null); }}
+        onConfirm={(cfg) => { componentDialog?.resolve(cfg); setComponentDialog(null); }}
       />
     </Box>
   );

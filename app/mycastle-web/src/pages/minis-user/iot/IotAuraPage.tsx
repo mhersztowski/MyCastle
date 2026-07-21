@@ -56,8 +56,8 @@ import { App } from '../../../App';
 import { AudioRecorder, createBrowserRecognition, RealtimeSttService } from '../../../modules/speech';
 import type { TtsProviderType, SttProviderType, SpeechConfigModel } from '../../../modules/speech';
 import type { AiProviderType, AiConfigModel } from '../../../modules/ai';
-import { codeFromXml, readVfsFile, runVfsJsonQuery, setGlobalFunctionNames, extractGlobalFunctionNames } from '../../../modules/voiceactions';
-import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig } from '../../../modules/voiceactions';
+import { codeFromXml, readVfsFile, runVfsJsonQuery, setGlobalFunctionNames, extractGlobalFunctionNames, ComponentHost } from '../../../modules/voiceactions';
+import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig, ShowComponentConfig } from '../../../modules/voiceactions';
 import { useMqtt } from '../../../modules/mqttclient/MqttContext';
 
 // ---- Stan asystenta ----
@@ -84,6 +84,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  component?: ShowComponentConfig;
 }
 
 // ---- Modele AI (ChatGPT + Claude) ----
@@ -199,6 +200,8 @@ const IotAuraPage: React.FC = () => {
   const recorderRef = useRef<AudioRecorder | null>(null);
   const recognitionRef = useRef<{ stop: () => void; abort: () => void } | null>(null);
   const realtimeRef = useRef<RealtimeSttService | null>(null);
+  // Ciągły nasłuch słowa aktywacyjnego przez realtime STT (bez restartu mikrofonu = bez beepa na Androidzie)
+  const wakeRealtimeRef = useRef<RealtimeSttService | null>(null);
   const historyRef = useRef<ChatMessage[]>([]);
   const stateRef = useRef<AuraState>('idle');
   const alwaysOnRef = useRef(false);
@@ -213,6 +216,7 @@ const IotAuraPage: React.FC = () => {
   const actionsRef = useRef<VoiceAction[]>([]);
   const variantsRef = useRef<VoiceActionVariant[]>([]);
   const globalXmlRef = useRef<string>('');
+  const googleSearchRef = useRef<{ apiKey: string; cx: string }>({ apiKey: '', cx: '' });
   const lastUtteranceRef = useRef<string>('');
   const actionDepthRef = useRef<number>(0);
   const captureHandleRef = useRef<{ stop: () => void } | null>(null);
@@ -249,7 +253,7 @@ const IotAuraPage: React.FC = () => {
   // ---- Ładowanie konfiguracji po połączeniu MQTT ----
   useEffect(() => {
     if (!isConnected) return;
-    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ type: 'voice_actions' as const, actions: [], variants: [], wakeWords: [], globalXml: '' })]).then(([ai, speech, va]) => {
+    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ type: 'voice_actions' as const, actions: [], variants: [], wakeWords: [], globalXml: '', googleSearch: { apiKey: '', cx: '' } })]).then(([ai, speech, va]) => {
       setSttProvider(speech.stt.provider);
       setTtsProvider(speech.tts.provider);
       setAiConfig(ai);
@@ -257,6 +261,7 @@ const IotAuraPage: React.FC = () => {
       actionsRef.current = va.actions;
       variantsRef.current = va.variants;
       globalXmlRef.current = va.globalXml ?? '';
+      googleSearchRef.current = va.googleSearch ?? { apiKey: '', cx: '' };
       setGlobalFunctionNames(extractGlobalFunctionNames(va.globalXml ?? ''));
       const ww = va.wakeWords ?? [];
       setWakeWords(ww);
@@ -617,6 +622,16 @@ const IotAuraPage: React.FC = () => {
           const t = String(msg ?? '').trim();
           if (t) appendAssistant(t);
         },
+        // Wyświetl komponent (wbudowany lub z Programming/Components) w czacie — inline lub popup
+        showComponent: async (cfgStr: unknown) => {
+          let cfg: ShowComponentConfig | null = null;
+          try { cfg = JSON.parse(String(cfgStr ?? 'null')); } catch { cfg = null; }
+          if (!cfg || !cfg.id) return;
+          setMessages(prev => [...prev, {
+            id: `${Date.now()}-c-${Math.random().toString(36).slice(2, 5)}`,
+            role: 'assistant', content: '', timestamp: Date.now(), component: cfg!,
+          }]);
+        },
         // Nasłuchuj z limitem czasu — zwraca rozpoznany tekst
         listen: async (timeout: unknown): Promise<string> => {
           const secs = Number(timeout) || 0;
@@ -650,6 +665,26 @@ const IotAuraPage: React.FC = () => {
         },
         // Ostatnia odpowiedź agenta AI (zmienna „Odpowiedź agenta AI")
         agentResponse: () => agentResponseRef.current,
+        // Wygoogluj — zwraca listę adresów URL wyników (Google Custom Search API)
+        googleSearch: async (query: unknown): Promise<string[]> => {
+          const q = String(query ?? '').trim();
+          if (!q) return [];
+          const { apiKey, cx } = googleSearchRef.current;
+          if (!apiKey || !cx) {
+            appendAssistant('(Wygoogluj: skonfiguruj klucz API i CX w Edytorze Konwersacji)');
+            return [];
+          }
+          try {
+            const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(q)}`;
+            const res = await fetch(url);
+            if (!res.ok) { console.warn('[Aura] Google Search error', res.status, await res.text()); return []; }
+            const data = await res.json();
+            return ((data.items || []) as Array<{ link?: string }>).map(it => it.link || '').filter(Boolean);
+          } catch (e) {
+            console.warn('[Aura] Google Search:', e);
+            return [];
+          }
+        },
         // VFS: wczytaj plik (treść tekstowa)
         vfsReadFile: async (path: unknown) => await readVfsFile(String(path ?? '')),
         // VFS: wczytaj JSON z okrojeniem ścieżki i filtrami (cfg może być stringiem JSON)
@@ -736,8 +771,10 @@ const IotAuraPage: React.FC = () => {
     const provider = sttProviderRef.current;
     const sttFull = speechService.getConfig().stt;
 
-    // ElevenLabs Scribe v2 realtime (WebSocket) — transkrypcja na żywo
-    if (provider === 'elevenlabs' && sttFull.elevenlabs.apiKey) {
+    // ElevenLabs Scribe v2 realtime (WebSocket) — transkrypcja na żywo.
+    // Na Androidzie wymuszamy realtime (jeśli jest klucz), bo Web Speech restartuje mikrofon (beep/migotanie).
+    const useRealtime = !!sttFull.elevenlabs.apiKey && (provider === 'elevenlabs' || isAndroid);
+    if (useRealtime) {
       const rt = new RealtimeSttService();
       realtimeRef.current = rt;
       rt.start({
@@ -867,6 +904,10 @@ const IotAuraPage: React.FC = () => {
       realtimeRef.current.stop();
       realtimeRef.current = null;
     }
+    if (wakeRealtimeRef.current) {
+      wakeRealtimeRef.current.stop();
+      wakeRealtimeRef.current = null;
+    }
     setInterimText('');
     setState('idle');
   }, []);
@@ -924,10 +965,84 @@ const IotAuraPage: React.FC = () => {
 
   const wakePhrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim() || '';
 
+  // Czy fraza aktywacyjna występuje w wypowiedzi (z rozmyciem)? Zwraca też tekst komendy po frazie.
+  const matchWakePhrase = useCallback((raw: string, phrase: string): { hit: boolean; command: string } => {
+    const p = normText(phrase);
+    const t = normText(raw);
+    if (!p) return { hit: false, command: '' };
+    const idx = t.indexOf(p);
+    if (idx >= 0) {
+      return { hit: true, command: t.slice(idx + p.length).trim() };
+    }
+    // rozmyte dopasowanie po słowach (0.7)
+    const pw = p.split(' ').filter(Boolean);
+    const tw = t.split(' ').filter(Boolean);
+    const m = pw.filter(w => tw.some(x => x.includes(w) || w.includes(x))).length;
+    return { hit: pw.length > 0 && m / pw.length >= 0.7, command: '' };
+  }, []);
+
+  // Nasłuch słowa aktywacyjnego na CIĄGŁYM strumieniu realtime (ElevenLabs) — bez restartu mikrofonu.
+  // Rozwiązuje problem migotania/beepa na Androidzie (Web Speech restartuje SpeechRecognizer).
+  const startRealtimeWake = useCallback((phrase: string): boolean => {
+    const sttFull = speechService.getConfig().stt;
+    const key = sttFull.elevenlabs?.apiKey;
+    if (!key) return false;
+    // zamknij ewentualny poprzedni strumień
+    if (wakeRealtimeRef.current) { wakeRealtimeRef.current.stop(); wakeRealtimeRef.current = null; }
+    const rt = new RealtimeSttService();
+    wakeRealtimeRef.current = rt;
+    rt.start({
+      apiKey: key,
+      language: sttFull.elevenlabs.language || 'pol',
+      deviceId: inputDeviceRef.current || undefined,
+      model: sttFull.elevenlabs.model,
+      onPartial: () => { /* podgląd pomijamy w trybie wake */ },
+      onFinal: (text) => {
+        if (stateRef.current !== 'idle') return;      // tura w toku — ignoruj
+        if (isSelfEcho(text)) return;                 // nie reaguj na własne TTS
+        const { hit, command } = matchWakePhrase(text, phrase);
+        if (!hit) return;                             // słuchaj dalej (ten sam strumień, brak beepa)
+        // wykryto słowo aktywacyjne
+        rt.stop();
+        wakeRealtimeRef.current = null;
+        setWakeActive(false);
+        playWakeSound();
+        if (command && command.length >= 2) {
+          // komenda już w tej samej wypowiedzi (np. „aura, jaka pogoda") — przetwórz od razu
+          processUserInputRef.current(command);
+        } else if (stateRef.current === 'idle') {
+          armListeningRef.current();
+        }
+      },
+      onError: () => {
+        wakeRealtimeRef.current = null;
+        setWakeActive(false);
+        // spróbuj ponownie za chwilę, jeśli wciąż w trybie wake
+        if (alwaysOnRef.current && wakeModeRef.current) {
+          setTimeout(() => { if (alwaysOnRef.current && wakeModeRef.current) startWakeWordRef.current(); }, 1500);
+        }
+      },
+    }).then(() => setWakeActive(true))
+      .catch(() => {
+        wakeRealtimeRef.current = null;
+        setWakeActive(false);
+        setError('ElevenLabs realtime (wake): nie udało się połączyć — sprawdź klucz API.');
+      });
+    return true;
+  }, [speechService, isSelfEcho, matchWakePhrase, playWakeSound]);
+
   // Uruchom nasłuch słowa aktywacyjnego; po wykryciu → jedna tura konwersacji.
   const startWakeWordListening = useCallback((): boolean => {
     const phrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim();
     if (!phrase) return false;
+
+    // Na Androidzie (i gdy skonfigurowano ElevenLabs) używaj ciągłego realtime — bez beepa/migotania.
+    // Web Speech (przeglądarkowe) na Androidzie restartuje mikrofon co chwilę i wydaje dźwięk.
+    const hasEleven = !!speechService.getConfig().stt.elevenlabs?.apiKey;
+    if (hasEleven && (isAndroid || sttProviderRef.current === 'elevenlabs')) {
+      return startRealtimeWake(phrase);
+    }
+
     wakeWordService.configure({
       phrase,
       sensitivity: 0.7,
@@ -941,7 +1056,7 @@ const IotAuraPage: React.FC = () => {
       onStatusChange: (listening) => setWakeActive(listening),
     });
     return wakeWordService.start();
-  }, [wakeWords, wakeLang, wakeWordService, playWakeSound]);
+  }, [wakeWords, wakeLang, wakeWordService, playWakeSound, speechService, isAndroid, startRealtimeWake]);
   useEffect(() => { startWakeWordRef.current = startWakeWordListening; }, [startWakeWordListening]);
 
   // Wznów nasłuch po turze: wake-word (czeka na słowo) lub ciągły.
@@ -1010,6 +1125,7 @@ const IotAuraPage: React.FC = () => {
       if (recognitionRef.current) recognitionRef.current.abort();
       if (recorderRef.current) recorderRef.current.cancel();
       if (realtimeRef.current) realtimeRef.current.stop();
+      if (wakeRealtimeRef.current) wakeRealtimeRef.current.stop();
       if (captureHandleRef.current) captureHandleRef.current.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1034,7 +1150,8 @@ const IotAuraPage: React.FC = () => {
           borderColor: 'divider',
         }}
       >
-        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{msg.content}</Typography>
+        {msg.content && <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{msg.content}</Typography>}
+        {msg.component && <ComponentHost config={msg.component} userName={userName || ''} />}
         <Typography variant="caption" sx={{ opacity: 0.6, display: 'block', textAlign: 'right', mt: 0.5, fontSize: 10 }}>
           {new Date(msg.timestamp).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}
         </Typography>
@@ -1339,11 +1456,11 @@ const IotAuraPage: React.FC = () => {
           (Google / ElevenLabs / OpenAI) z kluczem API, albo pisz tekstem.
         </Alert>
       )}
-      {isAndroid && sttProvider === 'browser' && (
+      {isAndroid && sttProvider === 'browser' && !speechService.getConfig().stt.elevenlabs?.apiKey && (
         <Alert severity="warning" sx={{ mb: 1 }}>
           Na Androidzie STT „Przeglądarka" (Web Speech) <b>restartuje mikrofon po każdej pauzie</b> (ograniczenie systemu —
-          stąd migotanie i „ding"). Dla <b>stabilnego mikrofonu</b> wybierz Model STT = <b>ElevenLabs Scribe v2 realtime</b>
-          (z kluczem API) — jeden ciągły strumień, bez restartów.
+          stąd migotanie i „ding"). Wpisz <b>klucz API ElevenLabs</b> (albo wybierz Model STT = <b>ElevenLabs Scribe v2 realtime</b>) —
+          wtedy Aura sama użyje jednego ciągłego strumienia realtime, bez restartów i dźwięku.
         </Alert>
       )}
       {error && (
