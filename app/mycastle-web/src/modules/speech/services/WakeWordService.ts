@@ -131,7 +131,7 @@ export class WakeWordService {
           this.scheduleRestart();
         }
       }
-    }, 500);
+    }, 150);
   }
 
   private clearRestart(): void {

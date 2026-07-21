@@ -31,8 +31,14 @@ let globalNames: string[] = [];
 export function setGlobalFunctionNames(names: string[]): void {
   globalNames = Array.from(new Set(names.filter(Boolean)));
 }
-function globalNameOptions(): [string, string][] {
-  return globalNames.length ? globalNames.map(n => [n, n] as [string, string]) : [['(brak funkcji)', '']];
+function globalNameOptions(this: Blockly.FieldDropdown | void): [string, string][] {
+  const opts: [string, string][] = globalNames.map(n => [n, n] as [string, string]);
+  // Zachowaj zapisaną nazwę, nawet jeśli nie ma jej jeszcze na liście (unikaj resetu na headless).
+  try {
+    const cur = this && (this as Blockly.FieldDropdown).getValue?.() as string | null;
+    if (cur && !globalNames.includes(cur)) opts.unshift([cur, cur]);
+  } catch { /* pomiń */ }
+  return opts.length ? opts : [['(brak funkcji)', '']];
 }
 
 /** Wyodrębnij nazwy funkcji globalnych z XML workspace „Global". */
@@ -387,8 +393,8 @@ export function registerAuraGenerators(): void {
 
   g.forBlock['aura_vfs_read_json'] = function (block) {
     const cfg = block.getFieldValue('QUERY') || '{}';
-    // cfg to poprawny JSON → wstaw jako literał obiektu argumentu
-    return [`await aura.vfsReadJson(${cfg})`, Order.AWAIT];
+    // przekaż jako string (bezpieczniej niż wstawianie surowego JSON jako literału)
+    return [`await aura.vfsReadJson(${JSON.stringify(cfg)})`, Order.AWAIT];
   };
 
   g.forBlock['aura_global_def'] = function (block) {

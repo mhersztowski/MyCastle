@@ -42,7 +42,11 @@ export class VoiceActionService {
       const parsed = await minisApi.getVoiceActions(userName);
       this.data = {
         type: 'voice_actions',
-        actions: parsed?.actions ?? [],
+        actions: (parsed?.actions ?? []).map(a => ({
+          ...a,
+          activatorStrings: a.activatorStrings ?? [],
+          activatorsSimilarStringsArray: a.activatorsSimilarStringsArray ?? [],
+        })),
         variants: parsed?.variants ?? [],
         wakeWords: parsed?.wakeWords ?? [],
         globalXml: parsed?.globalXml ?? '',

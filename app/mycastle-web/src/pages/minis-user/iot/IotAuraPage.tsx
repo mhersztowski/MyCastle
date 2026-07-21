@@ -107,6 +107,10 @@ const CLAUDE_MODELS: AiModelOption[] = [
 
 const ALL_AI_MODELS: AiModelOption[] = [...OPENAI_MODELS, ...CLAUDE_MODELS];
 
+/** Normalizacja tekstu do dopasowań (małe litery, tylko litery/cyfry/spacje). */
+const normText = (s: string): string =>
+  s.toLowerCase().replace(/[^0-9a-ząćęłńóśźż ]/gi, ' ').replace(/\s+/g, ' ').trim();
+
 // ---- Opcje STT / TTS ----
 const STT_OPTIONS: { value: SttProviderType; label: string }[] = [
   { value: 'browser', label: 'Przeglądarka (Web Speech)' },
@@ -389,22 +393,23 @@ const IotAuraPage: React.FC = () => {
 
   // ---- Dopasowanie wypowiedzi do akcji głosowej (aktywatory) ----
   const matchAction = useCallback((utteranceRaw: string): VoiceAction | null => {
-    const u = utteranceRaw.toLowerCase().trim();
-    if (!u) return null;
-    // 1) dokładne aktywatory (sekwencja słów zawarta w wypowiedzi)
+    const norm = normText(utteranceRaw);
+    if (!norm) return null;
+    const padded = ` ${norm} `;
+    const words = norm.split(' ').filter(Boolean);
+    // 1) dokładne aktywatory — jako całe słowa/fraza (bez fałszywych trafień typu „tak" w „kontakt")
     for (const a of actionsRef.current) {
-      for (const s of a.activatorStrings) {
-        const ss = s.toLowerCase().trim();
-        if (ss && u.includes(ss)) return a;
+      for (const s of (a.activatorStrings ?? [])) {
+        const ss = normText(s);
+        if (ss && padded.includes(` ${ss} `)) return a;
       }
     }
-    // 2) aktywatory podobne (rozmyte — pokrycie słów >= 60%)
-    const words = u.split(/\s+/).filter(Boolean);
+    // 2) aktywatory podobne (rozmyte — pokrycie CAŁYCH słów >= 60%)
     for (const a of actionsRef.current) {
-      for (const s of a.activatorsSimilarStringsArray) {
-        const pw = s.toLowerCase().split(/\s+/).filter(Boolean);
+      for (const s of (a.activatorsSimilarStringsArray ?? [])) {
+        const pw = normText(s).split(' ').filter(Boolean);
         if (!pw.length) continue;
-        const hit = pw.filter(w => words.some(x => x.includes(w) || w.includes(x))).length;
+        const hit = pw.filter(w => words.includes(w)).length;
         if (hit / pw.length >= 0.6) return a;
       }
     }
@@ -483,9 +488,6 @@ const IotAuraPage: React.FC = () => {
   }, [speechService]);
 
   // ---- Kolejka TTS: zdania odtwarzane sekwencyjnie (łańcuch obietnic) ----
-  const normText = (s: string): string =>
-    s.toLowerCase().replace(/[^0-9a-ząćęłńóśźż ]/gi, ' ').replace(/\s+/g, ' ').trim();
-
   const enqueueTts = useCallback((text: string) => {
     const t = text.trim();
     if (!t) return;
@@ -647,8 +649,14 @@ const IotAuraPage: React.FC = () => {
         agentResponse: () => agentResponseRef.current,
         // VFS: wczytaj plik (treść tekstowa)
         vfsReadFile: async (path: unknown) => await readVfsFile(String(path ?? '')),
-        // VFS: wczytaj JSON z okrojeniem ścieżki i filtrami
-        vfsReadJson: async (cfg: unknown) => await runVfsJsonQuery(cfg as VfsJsonQueryConfig),
+        // VFS: wczytaj JSON z okrojeniem ścieżki i filtrami (cfg może być stringiem JSON)
+        vfsReadJson: async (cfg: unknown) => {
+          let parsed: VfsJsonQueryConfig;
+          try { parsed = (typeof cfg === 'string' ? JSON.parse(cfg || '{}') : cfg) as VfsJsonQueryConfig; }
+          catch { return null; }
+          if (!parsed || !parsed.path) return null;
+          return await runVfsJsonQuery(parsed);
+        },
       };
       setState('thinking');
       try {
@@ -755,14 +763,17 @@ const IotAuraPage: React.FC = () => {
     }
 
     if (provider === 'browser') {
-      // Web Speech API - nasłuch na jedną wypowiedź
+      // Web Speech API — nasłuch ciągły (mikrofon zostaje włączony, brak migotania);
+      // po pierwszej finalnej wypowiedzi zatrzymujemy, by przetworzyć/odpowiedzieć.
       const recognition = createBrowserRecognition({
         lang: 'pl-PL',
-        continuous: false,
+        continuous: true,
         interimResults: true,
         onResult: (transcript, isFinal) => {
           if (isFinal) {
+            const r = recognitionRef.current;
             recognitionRef.current = null;
+            r?.abort();
             handleVoiceFinal(transcript);
           } else {
             setInterimText(transcript);
