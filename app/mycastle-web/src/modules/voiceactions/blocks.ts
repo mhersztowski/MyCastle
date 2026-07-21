@@ -158,12 +158,15 @@ export function defineAuraConversationBlocks(): void {
     },
   };
 
-  // Zakończ konwersację
+  // Zakończ konwersację — z tekstem wyświetlanym na stronie (bez mowy)
   Blockly.Blocks['aura_stop'] = {
     init(this: Blockly.Block) {
-      this.appendDummyInput().appendField('⏹ zakończ konwersację');
+      this.appendDummyInput()
+        .appendField('⏹ zakończ konwersację, pokaż tekst')
+        .appendField(new Blockly.FieldTextInput('Koniec konwersacji'), 'MSG');
       this.setPreviousStatement(true, null);
       this.setColour(HUE_ACTION);
+      this.setTooltip('Kończy konwersację i wyświetla tekst na stronie (bez odczytu głosem).');
     },
   };
 
@@ -348,8 +351,9 @@ export function registerAuraGenerators(): void {
     return `await aura.wait(${s});\n`;
   };
 
-  g.forBlock['aura_stop'] = function () {
-    return 'return;\n';
+  g.forBlock['aura_stop'] = function (block) {
+    const msg = block.getFieldValue('MSG') || '';
+    return `aura.endConversation(${JSON.stringify(msg)});\nreturn;\n`;
   };
 
   g.forBlock['aura_listen'] = function (block) {

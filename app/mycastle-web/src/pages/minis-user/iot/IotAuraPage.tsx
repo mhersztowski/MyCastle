@@ -46,7 +46,6 @@ import PersonIcon from '@mui/icons-material/Person';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SettingsVoiceIcon from '@mui/icons-material/SettingsVoice';
 import HearingIcon from '@mui/icons-material/Hearing';
-import HearingDisabledIcon from '@mui/icons-material/HearingDisabled';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import ScienceIcon from '@mui/icons-material/Science';
 import SaveIcon from '@mui/icons-material/Save';
@@ -217,6 +216,10 @@ const IotAuraPage: React.FC = () => {
   // Ochrona przed sprzężeniem: mikrofon łapiący własną mowę TTS (echo).
   const lastSpokenRef = useRef<string>('');
   const clearSpokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tryb nasłuchu: wake-word (czeka na słowo) vs ciągły. Refy krzyżowe.
+  const wakeModeRef = useRef(false);
+  const startWakeWordRef = useRef<() => boolean>(() => false);
+  const resumeListeningRef = useRef<() => void>(() => {});
   // Runtime agenta AI (bloki AgentNewChat / AgentSendPrompt / Odpowiedź agenta AI)
   const agentChatsRef = useRef<Record<string, { role: 'user' | 'assistant'; content: string }[]>>({});
   const currentAgentChatRef = useRef<string>('default');
@@ -512,8 +515,8 @@ const IotAuraPage: React.FC = () => {
     setState('idle');
     const t = text.trim();
     if (!t || isSelfEcho(t)) {
-      // ignoruj echo/pustkę; wznów nasłuch w trybie ciągłym z cooldownem
-      if (alwaysOnRef.current) setTimeout(() => armListeningRef.current(), 900);
+      // ignoruj echo/pustkę; wznów nasłuch (wake lub ciągły)
+      resumeListeningRef.current();
       return;
     }
     processUserInputRef.current(t);
@@ -604,6 +607,11 @@ const IotAuraPage: React.FC = () => {
           if (target) await runVoiceActionRef.current(target, lastUtteranceRef.current);
         },
         wait: (s: unknown) => new Promise<void>(r => setTimeout(r, (Number(s) || 0) * 1000)),
+        // Zakończ konwersację — pokaż tekst na stronie (bez odczytu głosem)
+        endConversation: (msg: unknown) => {
+          const t = String(msg ?? '').trim();
+          if (t) appendAssistant(t);
+        },
         // Nasłuchuj z limitem czasu — zwraca rozpoznany tekst
         listen: async (timeout: unknown): Promise<string> => {
           const secs = Number(timeout) || 0;
@@ -697,10 +705,8 @@ const IotAuraPage: React.FC = () => {
       appendAssistant(`Przepraszam, wystąpił błąd: ${errMsg}`);
     } finally {
       setState('idle');
-      // Wznów nasłuch jeśli tryb ciągły jest włączony (cooldown by uniknąć echa/pętli)
-      if (alwaysOnRef.current) {
-        setTimeout(() => armListeningRef.current(), 900);
-      }
+      // Wznów nasłuch (wake-word lub ciągły) — z cooldownem by uniknąć echa/pętli
+      resumeListeningRef.current();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiModelId, matchAction, appendUser, appendAssistant, streamAiResponse]);
@@ -738,7 +744,7 @@ const IotAuraPage: React.FC = () => {
           rt.stop();
           realtimeRef.current = null;
           setState('idle');
-          if (alwaysOnRef.current) setTimeout(() => armListeningRef.current(), 600);
+          resumeListeningRef.current();
         },
       }).catch(() => {
         realtimeRef.current = null;
@@ -769,19 +775,15 @@ const IotAuraPage: React.FC = () => {
             setError(`Błąd rozpoznawania mowy: ${err}`);
           }
           setState('idle');
-          // Ponów nasłuch (np. po ciszy / no-speech) w trybie ciągłym
-          if (alwaysOnRef.current && err !== 'not-allowed') {
-            setTimeout(() => armListening(), 500);
-          }
+          // Ponów nasłuch (wake lub ciągły), chyba że brak uprawnień
+          if (err !== 'not-allowed') resumeListeningRef.current();
         },
         onEnd: () => {
-          // Jeśli zakończono bez wyniku, a tryb ciągły aktywny - ponów
+          // Jeśli zakończono bez wyniku — ponów (wake lub ciągły)
           if (recognitionRef.current) {
             recognitionRef.current = null;
             setState('idle');
-            if (alwaysOnRef.current) {
-              setTimeout(() => armListening(), 500);
-            }
+            resumeListeningRef.current();
           }
         },
       });
@@ -828,7 +830,7 @@ const IotAuraPage: React.FC = () => {
       setError('Błąd transkrypcji audio');
       recorderRef.current = null;
       setState('idle');
-      if (alwaysOnRef.current) setTimeout(() => armListeningRef.current(), 600);
+      resumeListeningRef.current();
     } finally {
       stoppingRef.current = false;
     }
@@ -855,19 +857,34 @@ const IotAuraPage: React.FC = () => {
     setState('idle');
   }, []);
 
-  // ---- Przełącznik trybu ciągłego ----
+  // ---- Przełącznik „Nasłuch" ----
+  // Jeśli ustawiono słowo aktywacyjne → tryb wake-word (czeka na słowo, potem tura).
+  // Bez słowa aktywacyjnego → tryb ciągły (transkrybuje wszystko).
   const toggleAlwaysOn = useCallback((enabled: boolean) => {
     setAlwaysOn(enabled);
     alwaysOnRef.current = enabled;
-    if (enabled) {
-      if (stateRef.current === 'idle') {
-        armListeningRef.current();
+    if (!enabled) {
+      wakeModeRef.current = false;
+      stopListening();
+      wakeWordService.stop();
+      setWakeActive(false);
+      speechService.stopSpeaking();
+      return;
+    }
+    const phrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim();
+    if (phrase && micSupported) {
+      wakeModeRef.current = true;
+      const ok = startWakeWordRef.current();
+      if (!ok) {
+        wakeModeRef.current = false;
+        setError('Wake word niedostępny — sprawdź mikrofon/przeglądarkę. Przechodzę na nasłuch ciągły.');
+        if (stateRef.current === 'idle') armListeningRef.current();
       }
     } else {
-      stopListening();
-      speechService.stopSpeaking();
+      wakeModeRef.current = false;
+      if (stateRef.current === 'idle') armListeningRef.current();
     }
-  }, [speechService, stopListening]);
+  }, [wakeWords, wakeLang, micSupported, wakeWordService, speechService, stopListening]);
 
   // ---- Słowo aktywacyjne (wake word) ----
   const langToRecog = (l: string): string =>
@@ -893,30 +910,45 @@ const IotAuraPage: React.FC = () => {
 
   const wakePhrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim() || '';
 
-  const toggleWakeWord = useCallback((enabled: boolean) => {
-    if (!enabled) {
-      wakeWordService.stop();
-      setWakeActive(false);
-      return;
-    }
+  // Uruchom nasłuch słowa aktywacyjnego; po wykryciu → jedna tura konwersacji.
+  const startWakeWordListening = useCallback((): boolean => {
     const phrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim();
-    if (!phrase) {
-      setError(`Brak słowa aktywacyjnego dla języka „${wakeLang}" — skonfiguruj w Edytorze Konwersacji.`);
-      return;
-    }
+    if (!phrase) return false;
     wakeWordService.configure({
       phrase,
       sensitivity: 0.7,
       lang: langToRecog(wakeLang),
       onWake: () => {
+        wakeWordService.stop();
+        setWakeActive(false);
         playWakeSound();
         if (stateRef.current === 'idle') armListeningRef.current();
       },
       onStatusChange: (listening) => setWakeActive(listening),
     });
-    const ok = wakeWordService.start();
-    if (!ok) setError('Wake word niedostępny — sprawdź uprawnienia mikrofonu / przeglądarkę.');
+    return wakeWordService.start();
   }, [wakeWords, wakeLang, wakeWordService, playWakeSound]);
+  useEffect(() => { startWakeWordRef.current = startWakeWordListening; }, [startWakeWordListening]);
+
+  // Wznów nasłuch po turze: wake-word (czeka na słowo) lub ciągły.
+  const resumeListening = useCallback(() => {
+    if (!alwaysOnRef.current) return;
+    if (wakeModeRef.current) {
+      setTimeout(() => startWakeWordRef.current(), 500);
+    } else {
+      setTimeout(() => armListeningRef.current(), 900);
+    }
+  }, []);
+  useEffect(() => { resumeListeningRef.current = resumeListening; }, [resumeListening]);
+
+  // Zmiana języka słowa aktywacyjnego podczas nasłuchu wake → zrestartuj z nową frazą.
+  useEffect(() => {
+    if (alwaysOnRef.current && wakeModeRef.current && stateRef.current === 'idle') {
+      wakeWordService.stop();
+      startWakeWordRef.current();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wakeLang]);
 
   // ---- Ręczne kliknięcie mikrofonu (pojedyncze pytanie) ----
   const handleMicClick = useCallback(() => {
@@ -1021,12 +1053,18 @@ const IotAuraPage: React.FC = () => {
           }}
         />
 
-        <Tooltip title={alwaysOn ? 'Ciągły nasłuch aktywny (jak Alexa)' : 'Włącz ciągły nasłuch'}>
+        <Tooltip title={
+          alwaysOn
+            ? (wakePhrase ? `Nasłuch: czeka na słowo „${wakePhrase}"` : 'Nasłuch ciągły aktywny')
+            : (wakePhrase ? `Włącz nasłuch — czeka na słowo aktywacyjne „${wakePhrase}"` : 'Włącz nasłuch ciągły (bez słowa aktywacyjnego)')
+        }>
           <FormControlLabel
             control={<Switch checked={alwaysOn} onChange={(_, c) => toggleAlwaysOn(c)} color="secondary" disabled={!micSupported} />}
             label={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <SettingsVoiceIcon sx={{ fontSize: 18 }} />
+                {alwaysOn && wakeActive
+                  ? <HearingIcon sx={{ fontSize: 18, color: STATE_COLORS.listening }} />
+                  : <SettingsVoiceIcon sx={{ fontSize: 18 }} />}
                 <Typography variant="caption">Nasłuch</Typography>
               </Box>
             }
@@ -1034,11 +1072,11 @@ const IotAuraPage: React.FC = () => {
           />
         </Tooltip>
 
-        {/* Wake word: język + przełącznik nasłuchu słowa aktywacyjnego */}
+        {/* Język słowa aktywacyjnego (gdy skonfigurowano >1 język) */}
         {wakeWords.length > 1 && (
           <Select
             value={wakeLang}
-            onChange={(e) => { if (wakeActive) toggleWakeWord(false); setWakeLang(e.target.value); }}
+            onChange={(e) => setWakeLang(e.target.value)}
             size="small"
             sx={{ height: 30, fontSize: 12 }}
           >
@@ -1047,22 +1085,6 @@ const IotAuraPage: React.FC = () => {
             ))}
           </Select>
         )}
-        <Tooltip title={
-          !micSupported ? 'Mikrofon niedostępny'
-            : !wakePhrase ? 'Brak słowa aktywacyjnego — skonfiguruj w Edytorze Konwersacji'
-              : wakeActive ? `Wake word aktywny („${wakePhrase}")` : `Włącz wake word („${wakePhrase}")`
-        }>
-          <span>
-            <IconButton
-              onClick={() => toggleWakeWord(!wakeActive)}
-              color={wakeActive ? 'primary' : 'default'}
-              size="small"
-              disabled={!micSupported || !wakePhrase}
-            >
-              {wakeActive ? <HearingIcon /> : <HearingDisabledIcon />}
-            </IconButton>
-          </span>
-        </Tooltip>
 
         <Tooltip title="Edytor Konwersacji">
           <IconButton onClick={() => navigate(`/user/${userName}/iot/aura/conversation-editor`)} size="small">
