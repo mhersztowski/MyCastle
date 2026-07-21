@@ -128,6 +128,7 @@ import {
   IotRetentionPage,
   IotEmulatorPage,
   IotAuraPage,
+  IotAuraConversationEditorPage,
   ElectronicsConfigurationPage,
   ElectronicsWelcomePage,
   RpcExplorerPage,
@@ -310,6 +311,7 @@ function AppRoot() {
                   <Route path="/user/:userName/iot/retention" element={<IotRetentionPage />} />
                   <Route path="/user/:userName/iot/emulator" element={<IotEmulatorPage />} />
                   <Route path="/user/:userName/iot/aura" element={<IotAuraPage />} />
+                  <Route path="/user/:userName/iot/aura/conversation-editor" element={<IotAuraConversationEditorPage />} />
                   <Route path="/user/:userName/programming/components" element={<Suspense fallback={null}><LitComponentsPage /></Suspense>} />
                   <Route path="/user/:userName/programming/server-logic" element={<AdminOnly><Suspense fallback={null}><ServerLogicPage /></Suspense></AdminOnly>} />
                   <Route path="/user/:userName/tools/rpc" element={<AdminOnly><RpcExplorerPage /></AdminOnly>} />

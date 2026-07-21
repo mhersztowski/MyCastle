@@ -26,6 +26,7 @@ import type {
   IotAutomation,
   IotAutomationTrigger,
   IotAutomationAction,
+  VoiceActionCollection,
 } from '@mhersztowski/core';
 
 export type { AppSession, AppSessionDayStat, AppSessionPlatform, ProjectTimeStat };
@@ -478,6 +479,15 @@ class MinisApiService {
 
   async saveIotArchitecture(userName: string, arch: { nodes: unknown[]; edges: unknown[]; updatedAt: number }): Promise<void> {
     await this.request('PUT', `/users/${encodeURIComponent(userName)}/electronics/configuration`, arch);
+  }
+
+  // Voice Actions (Aura Edytor Konwersacji) — per-user, zapisywane w backendzie.
+  async getVoiceActions(userName: string): Promise<VoiceActionCollection> {
+    return await this.request('GET', `/users/${encodeURIComponent(userName)}/voice-actions`);
+  }
+
+  async saveVoiceActions(userName: string, data: VoiceActionCollection): Promise<void> {
+    await this.request('PUT', `/users/${encodeURIComponent(userName)}/voice-actions`, data);
   }
 
   // UML — generate/update a UML project from source code (backend uses @mhersztowski/devtools).

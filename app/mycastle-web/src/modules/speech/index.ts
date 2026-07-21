@@ -1,6 +1,8 @@
 export { SpeechService, speechService } from './services/SpeechService';
 export { AudioRecorder } from './services/AudioRecorder';
 export { WakeWordService, wakeWordService } from './services/WakeWordService';
+export { RealtimeSttService } from './services/RealtimeSttService';
+export type { RealtimeSttOptions } from './services/RealtimeSttService';
 export type { WakeWordCallback } from './services/WakeWordService';
 export { createBrowserRecognition } from './providers/BrowserSttProvider';
 export type {

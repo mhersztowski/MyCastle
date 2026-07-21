@@ -1397,6 +1397,14 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Voice Actions (Aura Edytor Konwersacji): /users/{userName}/voice-actions
+    const voiceActionsMatch = apiPath.match(/^\/users\/([^/]+)\/voice-actions$/);
+    if (voiceActionsMatch) {
+      const userName = decodeURIComponent(voiceActionsMatch[1]);
+      await this.handleVoiceActions(req, res, method, userName);
+      return;
+    }
+
     // IoT device status: /users/{userName}/iot/devices
     const iotDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/iot\/devices$/);
     if (iotDevicesMatch) {
@@ -5187,6 +5195,30 @@ const { password, ...safeBody } = body;
           this.sendJsonResponse(res, 200, data);
         } catch {
           this.sendJsonResponse(res, 200, { nodes: [], edges: [], updatedAt: 0 });
+        }
+      } else if (method === 'PUT') {
+        const body = await this.parseRequestBody(req);
+        await this.writeJsonFile(filePath, body);
+        this.sendJsonResponse(res, 200, body);
+      } else {
+        this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
+      }
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  // --- Voice Actions (Aura Edytor Konwersacji) ---
+  // Per-user kolekcja akcji głosowych + wariantów Blockly (data/Minis/Users/{userName}/VoiceActions/voice_actions.json)
+  private async handleVoiceActions(req: IncomingMessage, res: ServerResponse, method: string, userName: string): Promise<void> {
+    const filePath = `${MINIS_ROOT}/Users/${userName}/VoiceActions/voice_actions.json`;
+    try {
+      if (method === 'GET') {
+        try {
+          const data = await this.readJsonFile(filePath);
+          this.sendJsonResponse(res, 200, data);
+        } catch {
+          this.sendJsonResponse(res, 200, { type: 'voice_actions', actions: [], variants: [] });
         }
       } else if (method === 'PUT') {
         const body = await this.parseRequestBody(req);

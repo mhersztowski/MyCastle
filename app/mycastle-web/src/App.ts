@@ -11,6 +11,7 @@ import { AutomateService, automateService } from './modules/automate/services/Au
 import { UIFormService, uiFormService } from './modules/uiforms/services/UIFormService';
 import { ReceiptScannerService, receiptScannerService } from './modules/shopping/services/ReceiptScannerService';
 import { PageHooksService, pageHooksService } from './modules/automate/hooks/PageHooksService';
+import { VoiceActionService, voiceActionService } from './modules/voiceactions/VoiceActionService';
 
 export class App {
   private static _instance: App;
@@ -27,6 +28,7 @@ export class App {
   readonly uiFormService: UIFormService;
   readonly receiptScannerService: ReceiptScannerService;
   readonly pageHooksService: PageHooksService;
+  readonly voiceActionService: VoiceActionService;
 
   private constructor() {
     this.mqttClient = mqttClient;
@@ -41,6 +43,7 @@ export class App {
     this.uiFormService = uiFormService;
     this.receiptScannerService = receiptScannerService;
     this.pageHooksService = pageHooksService;
+    this.voiceActionService = voiceActionService;
   }
 
   static create(): App {

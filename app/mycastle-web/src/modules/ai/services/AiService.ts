@@ -19,6 +19,24 @@ import { OllamaProvider } from '../providers/OllamaProvider';
 
 const AI_CONFIG_PATH = 'data/ai_config.json';
 
+/** Iteruje po liniach `data:` ze strumienia SSE odpowiedzi fetch. */
+async function* sseData(response: Response): AsyncGenerator<string> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (line.startsWith('data:')) yield line.slice(5).trim();
+    }
+  }
+}
+
 function createProvider(providerType: AiProviderType): AiProvider {
   switch (providerType) {
     case 'openai':
@@ -113,6 +131,99 @@ export class AiService {
     };
 
     return provider.chat(mergedRequest, providerConfig);
+  }
+
+  /**
+   * Streaming chat — wywołuje onDelta(fragment) w miarę spływania tokenów,
+   * zwraca pełną odpowiedź. Obsługuje OpenAI i Anthropic (SSE). Dla pozostałych
+   * providerów robi fallback do zwykłego chat() i emituje całość jednorazowo.
+   *
+   * Uproszczone: obsługuje wiadomości z treścią tekstową (bez narzędzi/multimodal).
+   */
+  async chatStream(request: AiChatRequest, onDelta: (text: string) => void): Promise<AiChatResponse> {
+    if (!this._isLoaded) await this.loadConfig();
+
+    const providerType = request.provider || this.config.provider;
+    const cfg = this.config.providers[providerType];
+    const model = request.model || cfg.defaultModel;
+    const temperature = request.temperature ?? this.config.defaults.temperature;
+    const maxTokens = request.maxTokens ?? this.config.defaults.maxTokens;
+    const asText = (c: unknown) => (typeof c === 'string' ? c : JSON.stringify(c));
+
+    // Providery bez streamingu → fallback
+    if (providerType === 'ollama') {
+      const res = await this.chat(request);
+      onDelta(res.content);
+      return res;
+    }
+
+    if (providerType === 'anthropic') {
+      const systemParts = request.messages.filter(m => m.role === 'system').map(m => asText(m.content));
+      const msgs = request.messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role, content: asText(m.content) }));
+      const body: Record<string, unknown> = {
+        model,
+        max_tokens: maxTokens,
+        messages: msgs,
+        stream: true,
+      };
+      if (systemParts.length) body.system = systemParts.join('\n\n');
+      const response = await fetch(`${cfg.baseUrl}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': cfg.apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Anthropic API error (${response.status}): ${await response.text()}`);
+      }
+      let content = '';
+      for await (const data of sseData(response)) {
+        if (data === '[DONE]') break;
+        try {
+          const ev = JSON.parse(data);
+          if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
+            content += ev.delta.text;
+            onDelta(ev.delta.text);
+          }
+        } catch { /* pomiń niekompletną linię */ }
+      }
+      return { content, model };
+    }
+
+    // OpenAI-compatible (openai / custom)
+    const body: Record<string, unknown> = {
+      model,
+      messages: request.messages.map(m => ({ role: m.role, content: asText(m.content) })),
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    };
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
+    const response = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`OpenAI API error (${response.status}): ${await response.text()}`);
+    }
+    let content = '';
+    for await (const data of sseData(response)) {
+      if (data === '[DONE]') break;
+      try {
+        const ev = JSON.parse(data);
+        const delta = ev.choices?.[0]?.delta?.content;
+        if (delta) { content += delta; onDelta(delta); }
+      } catch { /* pomiń niekompletną linię */ }
+    }
+    return { content, model };
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {

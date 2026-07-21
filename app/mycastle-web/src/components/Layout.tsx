@@ -162,6 +162,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
             { text: 'Retention', icon: <StorageIcon />, path: `/user/${userName}/iot/retention` },
             { text: 'Emulator', icon: <BugReportIcon />, path: `/user/${userName}/iot/emulator` },
             { text: 'Aura', icon: <RecordVoiceOverIcon />, path: `/user/${userName}/iot/aura` },
+            { text: 'Edytor Konwersacji', icon: <AccountTreeIcon />, path: `/user/${userName}/iot/aura/conversation-editor` },
           ],
         },
         {

@@ -18,3 +18,4 @@ export * from './SmartDisplayModel';
 export * from './AuthTypes';
 export * from './AppSessionModel';
 export * from './DashModel';
+export * from './VoiceActionModel';

@@ -45,15 +45,20 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PersonIcon from '@mui/icons-material/Person';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SettingsVoiceIcon from '@mui/icons-material/SettingsVoice';
+import HearingIcon from '@mui/icons-material/Hearing';
+import HearingDisabledIcon from '@mui/icons-material/HearingDisabled';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import ScienceIcon from '@mui/icons-material/Science';
 import SaveIcon from '@mui/icons-material/Save';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { useParams } from 'react-router-dom';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import { useParams, useNavigate } from 'react-router-dom';
 import { App } from '../../../App';
-import { AudioRecorder, createBrowserRecognition } from '../../../modules/speech';
+import { AudioRecorder, createBrowserRecognition, RealtimeSttService } from '../../../modules/speech';
 import type { TtsProviderType, SttProviderType, SpeechConfigModel } from '../../../modules/speech';
 import type { AiProviderType, AiConfigModel } from '../../../modules/ai';
+import { codeFromXml, readVfsFile, runVfsJsonQuery } from '../../../modules/voiceactions';
+import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig } from '../../../modules/voiceactions';
 import { useMqtt } from '../../../modules/mqttclient/MqttContext';
 
 // ---- Stan asystenta ----
@@ -138,7 +143,8 @@ const DEFAULT_SYSTEM_PROMPT =
 
 const IotAuraPage: React.FC = () => {
   const { userName } = useParams<{ userName: string }>();
-  const { aiService, speechService } = App.instance;
+  const navigate = useNavigate();
+  const { aiService, speechService, voiceActionService, wakeWordService } = App.instance;
   const { isConnected } = useMqtt();
 
   // Konwersacja
@@ -150,6 +156,11 @@ const IotAuraPage: React.FC = () => {
 
   // Tryb ciągłego nasłuchu (jak Alexa)
   const [alwaysOn, setAlwaysOn] = useState(false);
+
+  // Słowo aktywacyjne (wake word) — konfigurowane w Edytorze Konwersacji, per język
+  const [wakeWords, setWakeWords] = useState<WakeWord[]>([]);
+  const [wakeLang, setWakeLang] = useState('pl');
+  const [wakeActive, setWakeActive] = useState(false);
 
   // Wybory
   const [aiModelId, setAiModelId] = useState<string>('claude-haiku-4-5');
@@ -181,6 +192,7 @@ const IotAuraPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
   const recognitionRef = useRef<{ stop: () => void; abort: () => void } | null>(null);
+  const realtimeRef = useRef<RealtimeSttService | null>(null);
   const historyRef = useRef<ChatMessage[]>([]);
   const stateRef = useRef<AuraState>('idle');
   const alwaysOnRef = useRef(false);
@@ -191,6 +203,21 @@ const IotAuraPage: React.FC = () => {
   const processUserInputRef = useRef<(text: string) => void>(() => {});
   const armListeningRef = useRef<() => void>(() => {});
   const finishCloudUtteranceRef = useRef<() => void>(() => {});
+  // Runtime konwersacji (akcje głosowe z Edytora Konwersacji)
+  const actionsRef = useRef<VoiceAction[]>([]);
+  const variantsRef = useRef<VoiceActionVariant[]>([]);
+  const lastUtteranceRef = useRef<string>('');
+  const actionDepthRef = useRef<number>(0);
+  const captureHandleRef = useRef<{ stop: () => void } | null>(null);
+  // Gdy trwa przechwytywanie (blok Nasłuchuj/Zapytaj) — pozwala nakarmić je tekstem z pola.
+  const pendingCaptureRef = useRef<((t: string) => void) | null>(null);
+  // Kolejka TTS (łańcuch) — zdania odtwarzane po kolei, nakładają się na streaming LLM.
+  const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
+  // Runtime agenta AI (bloki AgentNewChat / AgentSendPrompt / Odpowiedź agenta AI)
+  const agentChatsRef = useRef<Record<string, { role: 'user' | 'assistant'; content: string }[]>>({});
+  const currentAgentChatRef = useRef<string>('default');
+  const agentResponseRef = useRef<string>('');
+  const aiModelIdRef = useRef<string>('claude-haiku-4-5');
 
   // Synchronizacja refów
   useEffect(() => { historyRef.current = messages; }, [messages]);
@@ -198,6 +225,7 @@ const IotAuraPage: React.FC = () => {
   useEffect(() => { alwaysOnRef.current = alwaysOn; }, [alwaysOn]);
   useEffect(() => { sttProviderRef.current = sttProvider; }, [sttProvider]);
   useEffect(() => { inputDeviceRef.current = inputDeviceId; }, [inputDeviceId]);
+  useEffect(() => { aiModelIdRef.current = aiModelId; }, [aiModelId]);
 
   // Auto-scroll
   useEffect(() => {
@@ -207,11 +235,16 @@ const IotAuraPage: React.FC = () => {
   // ---- Ładowanie konfiguracji po połączeniu MQTT ----
   useEffect(() => {
     if (!isConnected) return;
-    Promise.all([aiService.loadConfig(), speechService.loadConfig()]).then(([ai, speech]) => {
+    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ type: 'voice_actions' as const, actions: [], variants: [], wakeWords: [] })]).then(([ai, speech, va]) => {
       setSttProvider(speech.stt.provider);
       setTtsProvider(speech.tts.provider);
       setAiConfig(ai);
       setSpeechCfg(speech);
+      actionsRef.current = va.actions;
+      variantsRef.current = va.variants;
+      const ww = va.wakeWords ?? [];
+      setWakeWords(ww);
+      if (ww.length && !ww.some(w => w.language === 'pl')) setWakeLang(ww[0].language);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected]);
@@ -337,31 +370,271 @@ const IotAuraPage: React.FC = () => {
     }
   }, [saveAll, aiService, speechService, aiProvider, selectedAiModel]);
 
-  // ---- Przetwarzanie wypowiedzi użytkownika przez model AI ----
+  // ---- Pomocnicze: dodawanie wiadomości ----
+  const appendAssistant = useCallback((text: string) => {
+    setMessages(prev => [...prev, { id: `${Date.now()}-a-${Math.random().toString(36).slice(2, 5)}`, role: 'assistant', content: text, timestamp: Date.now() }]);
+  }, []);
+  const appendUser = useCallback((text: string) => {
+    setMessages(prev => [...prev, { id: `${Date.now()}-u-${Math.random().toString(36).slice(2, 5)}`, role: 'user', content: text, timestamp: Date.now() }]);
+  }, []);
+
+  // ---- Dopasowanie wypowiedzi do akcji głosowej (aktywatory) ----
+  const matchAction = useCallback((utteranceRaw: string): VoiceAction | null => {
+    const u = utteranceRaw.toLowerCase().trim();
+    if (!u) return null;
+    // 1) dokładne aktywatory (sekwencja słów zawarta w wypowiedzi)
+    for (const a of actionsRef.current) {
+      for (const s of a.activatorStrings) {
+        const ss = s.toLowerCase().trim();
+        if (ss && u.includes(ss)) return a;
+      }
+    }
+    // 2) aktywatory podobne (rozmyte — pokrycie słów >= 60%)
+    const words = u.split(/\s+/).filter(Boolean);
+    for (const a of actionsRef.current) {
+      for (const s of a.activatorsSimilarStringsArray) {
+        const pw = s.toLowerCase().split(/\s+/).filter(Boolean);
+        if (!pw.length) continue;
+        const hit = pw.filter(w => words.some(x => x.includes(w) || w.includes(x))).length;
+        if (hit / pw.length >= 0.6) return a;
+      }
+    }
+    return null;
+  }, []);
+
+  // ---- Przechwycenie jednej wypowiedzi (dla bloków „Zapytaj" / „Nasłuchuj") ----
+  const captureOneUtterance = useCallback((timeoutSec = 0): Promise<string> => {
+    return new Promise<string>((resolve) => {
+      setState('listening');
+      setInterimText('');
+      const provider = sttProviderRef.current;
+      const fullCfg = speechService.getConfig().stt;
+      // Fallback: jeśli provider chmurowy nie ma klucza API — użyj STT przeglądarki
+      const sttCfg = fullCfg as unknown as Record<string, { apiKey?: string }>;
+      const cloudKey = provider !== 'browser' ? (sttCfg[provider]?.apiKey || '') : '';
+      const useRealtime = provider === 'elevenlabs' && !!cloudKey; // Scribe v2 realtime (WS)
+      const useBrowser = !useRealtime && (provider === 'browser' || !cloudKey);
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const done = (text: string) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        const h = captureHandleRef.current;
+        captureHandleRef.current = null;
+        pendingCaptureRef.current = null;
+        setInterimText('');
+        h?.stop(); // zawsze przerwij trwający nasłuch (mowa lub tekst z pola)
+        resolve(text.trim());
+      };
+      // Umożliw nakarmienie tekstem z pola podczas nasłuchu
+      pendingCaptureRef.current = (t: string) => done(t);
+      if (timeoutSec > 0) {
+        timer = setTimeout(() => done(''), timeoutSec * 1000);
+      }
+      if (useRealtime) {
+        // ElevenLabs Scribe v2 realtime (WebSocket) — transkrypcja w trakcie mówienia
+        const rt = new RealtimeSttService();
+        captureHandleRef.current = { stop: () => rt.stop() };
+        rt.start({
+          apiKey: cloudKey,
+          language: fullCfg.elevenlabs.language || 'pol',
+          deviceId: inputDeviceRef.current || undefined,
+          model: fullCfg.elevenlabs.model,
+          onPartial: (t) => setInterimText(t),
+          onFinal: (t) => done(t),
+          onError: () => done(''),
+        }).catch(() => done(''));
+      } else if (useBrowser) {
+        const rec = createBrowserRecognition({
+          lang: 'pl-PL', continuous: false, interimResults: true,
+          onResult: (t, isFinal) => { if (isFinal) done(t); else setInterimText(t); },
+          onError: () => done(''),
+          onEnd: () => done(''),
+        });
+        if (!rec) { done(''); return; }
+        captureHandleRef.current = { stop: () => rec.abort() };
+        rec.start();
+      } else {
+        const recorder = new AudioRecorder();
+        captureHandleRef.current = { stop: () => recorder.cancel() };
+        recorder.start({
+          onSilenceDetected: async () => {
+            try {
+              const blob = await recorder.stop();
+              const r = await speechService.transcribe({ audio: blob });
+              done(r.text);
+            } catch { done(''); }
+          },
+          duration: 800,
+          minRecordingTime: 500,
+        }, inputDeviceRef.current || undefined).catch(() => done(''));
+      }
+    });
+  }, [speechService]);
+
+  // ---- Kolejka TTS: zdania odtwarzane sekwencyjnie (łańcuch obietnic) ----
+  const enqueueTts = useCallback((text: string) => {
+    const t = text.trim();
+    if (!t) return;
+    setState('speaking');
+    ttsChainRef.current = ttsChainRef.current.then(() => speechService.speak({ text: t }).catch(() => {}));
+  }, [speechService]);
+
+  // ---- Streaming odpowiedzi AI: pokazuje tekst na bieżąco i mówi zdaniami ----
+  const streamAiResponse = useCallback(async (request: Parameters<typeof aiService.chatStream>[0]): Promise<string> => {
+    const msgId = `${Date.now()}-a-stream-${Math.random().toString(36).slice(2, 5)}`;
+    setMessages(prev => [...prev, { id: msgId, role: 'assistant', content: '', timestamp: Date.now() }]);
+    let buffer = '';
+    let full = '';
+    const drain = (final: boolean) => {
+      for (;;) {
+        const m = buffer.match(/[.!?…\n]/);
+        if (!m || m.index === undefined) break;
+        const cut = m.index + 1;
+        const sentence = buffer.slice(0, cut).trim();
+        buffer = buffer.slice(cut);
+        if (sentence) enqueueTts(sentence);
+      }
+      if (final && buffer.trim()) { enqueueTts(buffer.trim()); buffer = ''; }
+    };
+    try {
+      const res = await aiService.chatStream(request, (delta) => {
+        full += delta;
+        buffer += delta;
+        setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: full } : m)));
+        drain(false);
+      });
+      full = res.content || full;
+      setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: full } : m)));
+    } catch (err) {
+      const em = err instanceof Error ? err.message : String(err);
+      full = full || `Przepraszam, wystąpił błąd: ${em}`;
+      setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: full } : m)));
+    }
+    drain(true);
+    await ttsChainRef.current; // poczekaj aż mowa się dokończy
+    return full;
+  }, [aiService, enqueueTts]);
+
+  // ---- Wykonanie logiki konwersacji (wariant Blockly) ----
+  const runVoiceActionRef = useRef<(a: VoiceAction, u: string) => Promise<void>>(async () => {});
+  const runVoiceAction = useCallback(async (action: VoiceAction, _utterance: string) => {
+    if (actionDepthRef.current > 5) return;
+    actionDepthRef.current++;
+    try {
+      const variant =
+        variantsRef.current.find(v => v.voiceActionId === action.id && v.language === action.language) ||
+        variantsRef.current.find(v => v.voiceActionId === action.id);
+      if (!variant || !variant.blocklyXml.trim()) {
+        appendAssistant(`(Akcja „${action.name}" nie ma jeszcze logiki — dodaj bloczki w Edytorze Konwersacji.)`);
+        return;
+      }
+      const code = codeFromXml(variant.blocklyXml);
+      console.debug('[Aura] uruchamiam akcję:', action.name, '\nkod:\n', code);
+      const handlers: Array<() => Promise<void>> = [];
+      const aura = {
+        onActivator: (_phrase: string, fn: () => Promise<void>) => { handlers.push(fn); },
+        say: async (text: unknown) => {
+          const t = String(text ?? '');
+          appendAssistant(t);
+          if (t.trim()) { enqueueTts(t); await ttsChainRef.current; }
+        },
+        ask: async (text: unknown): Promise<string> => {
+          const t = String(text ?? '');
+          appendAssistant(t);
+          if (t.trim()) { enqueueTts(t); await ttsChainRef.current; }
+          const answer = await captureOneUtterance();
+          if (answer) { appendUser(answer); lastUtteranceRef.current = answer; }
+          return answer;
+        },
+        lastUtterance: () => lastUtteranceRef.current,
+        utteranceContains: (t: unknown) => lastUtteranceRef.current.toLowerCase().includes(String(t ?? '').toLowerCase()),
+        callAction: async (id: unknown) => {
+          const key = String(id);
+          const target = actionsRef.current.find(a => a.id === key || a.name === key || a.tag === key);
+          if (target) await runVoiceActionRef.current(target, lastUtteranceRef.current);
+        },
+        wait: (s: unknown) => new Promise<void>(r => setTimeout(r, (Number(s) || 0) * 1000)),
+        // Nasłuchuj z limitem czasu — zwraca rozpoznany tekst
+        listen: async (timeout: unknown): Promise<string> => {
+          const secs = Number(timeout) || 0;
+          appendAssistant(`🎧 Słucham${secs ? ` (do ${secs}s)` : ''}... powiedz lub wpisz odpowiedź.`);
+          const t = await captureOneUtterance(secs);
+          if (t) { appendUser(t); lastUtteranceRef.current = t; }
+          else appendAssistant('(nie usłyszałem odpowiedzi)');
+          return t;
+        },
+        // Nowy kontekst rozmowy z agentem AI
+        agentNewChat: async (id: unknown) => {
+          const key = String(id ?? '') || 'default';
+          agentChatsRef.current[key] = [];
+          currentAgentChatRef.current = key;
+        },
+        // Wyślij prompt do agenta AI (z pamięcią kontekstu), zapisz odpowiedź
+        agentSendPrompt: async (prompt: unknown) => {
+          const p = String(prompt ?? '');
+          const key = currentAgentChatRef.current;
+          const hist = agentChatsRef.current[key] || (agentChatsRef.current[key] = []);
+          hist.push({ role: 'user', content: p });
+          const model = ALL_AI_MODELS.find(m => m.id === aiModelIdRef.current) || CLAUDE_MODELS[0];
+          setState('thinking');
+          const content = await streamAiResponse({
+            provider: model.provider,
+            model: model.id,
+            messages: [{ role: 'system', content: DEFAULT_SYSTEM_PROMPT }, ...hist],
+          });
+          hist.push({ role: 'assistant', content });
+          agentResponseRef.current = content;
+        },
+        // Ostatnia odpowiedź agenta AI (zmienna „Odpowiedź agenta AI")
+        agentResponse: () => agentResponseRef.current,
+        // VFS: wczytaj plik (treść tekstowa)
+        vfsReadFile: async (path: unknown) => await readVfsFile(String(path ?? '')),
+        // VFS: wczytaj JSON z okrojeniem ścieżki i filtrami
+        vfsReadJson: async (cfg: unknown) => await runVfsJsonQuery(cfg as VfsJsonQueryConfig),
+      };
+      setState('thinking');
+      try {
+        const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as new (arg: string, body: string) => (aura: unknown) => Promise<void>;
+        const fn = new AsyncFunction('aura', code);
+        await fn(aura);
+        for (const h of handlers) { await h(); }
+      } catch (err) {
+        console.warn('[Aura] Błąd wykonania konwersacji:', err);
+      }
+    } finally {
+      actionDepthRef.current--;
+    }
+  }, [captureOneUtterance, appendAssistant, appendUser, enqueueTts, streamAiResponse]);
+  useEffect(() => { runVoiceActionRef.current = runVoiceAction; }, [runVoiceAction]);
+
+  // ---- Przetwarzanie wypowiedzi: najpierw akcje głosowe, potem model AI ----
   const processUserInput = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    lastUtteranceRef.current = trimmed;
 
-    const model = ALL_AI_MODELS.find(m => m.id === aiModelId) || CLAUDE_MODELS[0];
-
-    const userMsg: ChatMessage = {
-      id: `${Date.now()}-u`,
-      role: 'user',
-      content: trimmed,
-      timestamp: Date.now(),
-    };
-    setMessages(prev => [...prev, userMsg]);
-
-    setState('thinking');
+    appendUser(trimmed);
     setError(null);
 
     try {
+      // 1) Spróbuj dopasować do akcji głosowej z Edytora Konwersacji
+      const matched = matchAction(trimmed);
+      console.debug('[Aura] akcje:', actionsRef.current.length, 'dopasowano:', matched?.name ?? '(brak → AI)');
+      if (matched) {
+        await runVoiceActionRef.current(matched, trimmed);
+        return;
+      }
+
+      // 2) Fallback: rozmowa z modelem AI (streaming + mowa zdaniami)
+      const model = ALL_AI_MODELS.find(m => m.id === aiModelId) || CLAUDE_MODELS[0];
+      setState('thinking');
       const history = historyRef.current.slice(-20).map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       }));
-
-      const response = await aiService.chat({
+      await streamAiResponse({
         provider: model.provider,
         model: model.id,
         messages: [
@@ -370,33 +643,10 @@ const IotAuraPage: React.FC = () => {
           { role: 'user', content: trimmed },
         ],
       });
-
-      const assistantMsg: ChatMessage = {
-        id: `${Date.now()}-a`,
-        role: 'assistant',
-        content: response.content,
-        timestamp: Date.now(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-
-      // TTS odpowiedzi
-      if (response.content.trim()) {
-        setState('speaking');
-        try {
-          await speechService.speak({ text: response.content });
-        } catch (ttsErr) {
-          console.warn('[Aura] Błąd TTS:', ttsErr);
-        }
-      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       setError(errMsg);
-      setMessages(prev => [...prev, {
-        id: `${Date.now()}-e`,
-        role: 'assistant',
-        content: `Przepraszam, wystąpił błąd: ${errMsg}`,
-        timestamp: Date.now(),
-      }]);
+      appendAssistant(`Przepraszam, wystąpił błąd: ${errMsg}`);
     } finally {
       setState('idle');
       // Wznów nasłuch jeśli tryb ciągły jest włączony
@@ -405,7 +655,7 @@ const IotAuraPage: React.FC = () => {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiModelId, aiService, speechService]);
+  }, [aiModelId, matchAction, appendUser, appendAssistant, streamAiResponse]);
 
   useEffect(() => { processUserInputRef.current = processUserInput; }, [processUserInput]);
 
@@ -419,6 +669,38 @@ const IotAuraPage: React.FC = () => {
     stoppingRef.current = false;
 
     const provider = sttProviderRef.current;
+    const sttFull = speechService.getConfig().stt;
+
+    // ElevenLabs Scribe v2 realtime (WebSocket) — transkrypcja na żywo
+    if (provider === 'elevenlabs' && sttFull.elevenlabs.apiKey) {
+      const rt = new RealtimeSttService();
+      realtimeRef.current = rt;
+      rt.start({
+        apiKey: sttFull.elevenlabs.apiKey,
+        language: sttFull.elevenlabs.language || 'pol',
+        deviceId: inputDeviceRef.current || undefined,
+        model: sttFull.elevenlabs.model,
+        onPartial: (t) => setInterimText(t),
+        onFinal: (t) => {
+          setInterimText('');
+          rt.stop();
+          realtimeRef.current = null;
+          setState('idle');
+          processUserInputRef.current(t);
+        },
+        onError: () => {
+          rt.stop();
+          realtimeRef.current = null;
+          setState('idle');
+          if (alwaysOnRef.current) setTimeout(() => armListeningRef.current(), 600);
+        },
+      }).catch(() => {
+        realtimeRef.current = null;
+        setError('ElevenLabs realtime: nie udało się połączyć (sprawdź klucz API)');
+        setState('idle');
+      });
+      return;
+    }
 
     if (provider === 'browser') {
       // Web Speech API - nasłuch na jedną wypowiedź
@@ -473,7 +755,7 @@ const IotAuraPage: React.FC = () => {
         const recorder = new AudioRecorder();
         recorderRef.current = recorder;
         await recorder.start(
-          { onSilenceDetected: () => finishCloudUtteranceRef.current() },
+          { onSilenceDetected: () => finishCloudUtteranceRef.current(), duration: 800, minRecordingTime: 500 },
           inputDeviceRef.current || undefined,
         );
       } catch (err) {
@@ -527,6 +809,10 @@ const IotAuraPage: React.FC = () => {
       recorderRef.current.cancel();
       recorderRef.current = null;
     }
+    if (realtimeRef.current) {
+      realtimeRef.current.stop();
+      realtimeRef.current = null;
+    }
     setInterimText('');
     setState('idle');
   }, []);
@@ -545,10 +831,59 @@ const IotAuraPage: React.FC = () => {
     }
   }, [speechService, stopListening]);
 
+  // ---- Słowo aktywacyjne (wake word) ----
+  const langToRecog = (l: string): string =>
+    ({ pl: 'pl-PL', en: 'en-US', de: 'de-DE', es: 'es-ES' } as Record<string, string>)[l] || 'pl-PL';
+
+  const playWakeSound = useCallback(() => {
+    try {
+      const ctx = new AudioContext();
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(660, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12);
+      osc.connect(gain);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.25);
+      osc.onended = () => ctx.close();
+    } catch { /* brak AudioContext */ }
+  }, []);
+
+  const wakePhrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim() || '';
+
+  const toggleWakeWord = useCallback((enabled: boolean) => {
+    if (!enabled) {
+      wakeWordService.stop();
+      setWakeActive(false);
+      return;
+    }
+    const phrase = wakeWords.find(w => w.language === wakeLang)?.phrase?.trim();
+    if (!phrase) {
+      setError(`Brak słowa aktywacyjnego dla języka „${wakeLang}" — skonfiguruj w Edytorze Konwersacji.`);
+      return;
+    }
+    wakeWordService.configure({
+      phrase,
+      sensitivity: 0.7,
+      lang: langToRecog(wakeLang),
+      onWake: () => {
+        playWakeSound();
+        if (stateRef.current === 'idle') armListeningRef.current();
+      },
+      onStatusChange: (listening) => setWakeActive(listening),
+    });
+    const ok = wakeWordService.start();
+    if (!ok) setError('Wake word niedostępny — sprawdź uprawnienia mikrofonu / przeglądarkę.');
+  }, [wakeWords, wakeLang, wakeWordService, playWakeSound]);
+
   // ---- Ręczne kliknięcie mikrofonu (pojedyncze pytanie) ----
   const handleMicClick = useCallback(() => {
     if (state === 'listening') {
-      if (sttProviderRef.current === 'browser') {
+      if (sttProviderRef.current === 'browser' || realtimeRef.current) {
         stopListening();
       } else {
         finishCloudUtterance();
@@ -563,9 +898,15 @@ const IotAuraPage: React.FC = () => {
 
   // ---- Wysłanie tekstu ----
   const handleTextSubmit = useCallback(() => {
-    if (!textInput.trim() || state === 'thinking' || state === 'processing_stt') return;
+    if (!textInput.trim()) return;
     const text = textInput.trim();
     setTextInput('');
+    // Jeśli trwa blok Nasłuchuj/Zapytaj — nakarm go wpisanym tekstem
+    if (pendingCaptureRef.current) {
+      pendingCaptureRef.current(text);
+      return;
+    }
+    if (state === 'thinking' || state === 'processing_stt') return;
     if (state === 'listening') stopListening();
     processUserInputRef.current(text);
   }, [textInput, state, stopListening]);
@@ -580,9 +921,12 @@ const IotAuraPage: React.FC = () => {
   useEffect(() => {
     return () => {
       alwaysOnRef.current = false;
+      wakeWordService.stop();
       speechService.stopSpeaking();
       if (recognitionRef.current) recognitionRef.current.abort();
       if (recorderRef.current) recorderRef.current.cancel();
+      if (realtimeRef.current) realtimeRef.current.stop();
+      if (captureHandleRef.current) captureHandleRef.current.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -650,6 +994,42 @@ const IotAuraPage: React.FC = () => {
             }
             sx={{ mr: 0 }}
           />
+        </Tooltip>
+
+        {/* Wake word: język + przełącznik nasłuchu słowa aktywacyjnego */}
+        {wakeWords.length > 1 && (
+          <Select
+            value={wakeLang}
+            onChange={(e) => { if (wakeActive) toggleWakeWord(false); setWakeLang(e.target.value); }}
+            size="small"
+            sx={{ height: 30, fontSize: 12 }}
+          >
+            {Array.from(new Set(wakeWords.map(w => w.language))).map(l => (
+              <MenuItem key={l} value={l} sx={{ fontSize: 12 }}>{l}</MenuItem>
+            ))}
+          </Select>
+        )}
+        <Tooltip title={
+          !micSupported ? 'Mikrofon niedostępny'
+            : !wakePhrase ? 'Brak słowa aktywacyjnego — skonfiguruj w Edytorze Konwersacji'
+              : wakeActive ? `Wake word aktywny („${wakePhrase}")` : `Włącz wake word („${wakePhrase}")`
+        }>
+          <span>
+            <IconButton
+              onClick={() => toggleWakeWord(!wakeActive)}
+              color={wakeActive ? 'primary' : 'default'}
+              size="small"
+              disabled={!micSupported || !wakePhrase}
+            >
+              {wakeActive ? <HearingIcon /> : <HearingDisabledIcon />}
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        <Tooltip title="Edytor Konwersacji">
+          <IconButton onClick={() => navigate(`/user/${userName}/iot/aura/conversation-editor`)} size="small">
+            <AccountTreeIcon />
+          </IconButton>
         </Tooltip>
 
         <Tooltip title="Wyczyść historię">
