@@ -9,6 +9,9 @@ import { createSvgIcon } from '@mui/material/utils';
 import * as THREE from 'three';
 import { SimpleViewer, SceneGraph } from '@mhersztowski/core-scene3d';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
+import { MyElementsDialog } from './electronics/MyElementsDialog';
+import { BomDialog } from './electronics/BomDialog';
+import type { MyElement } from '../electronics/myElements';
 
 // Ikony
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
@@ -58,6 +61,8 @@ import PlaceOutlinedIcon from '@mui/icons-material/PlaceOutlined';
 import HighlightAltIcon from '@mui/icons-material/HighlightAlt';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
 import PanToolOutlinedIcon from '@mui/icons-material/PanToolOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -406,7 +411,7 @@ interface FormatOps {
   gridAlign: () => void; distH: () => void; distV: () => void; distLeft: () => void; distTop: () => void; distArray: () => void;
   front: () => void; back: () => void; hasSel: boolean;
 }
-function Toolbar({ editor, onSave, ops, fmt, onZoomIn, onZoomOut, onFit, onFind, onFindSimilar, onAnnotate, on3dView }: { editor: Editor; onSave?: () => void; ops: EditOps; fmt: FormatOps; onZoomIn: () => void; onZoomOut: () => void; onFit: () => void; onFind: () => void; onFindSimilar: () => void; onAnnotate: () => void; on3dView?: () => void }) {
+function Toolbar({ editor, onSave, ops, fmt, onZoomIn, onZoomOut, onFit, onFind, onFindSimilar, onAnnotate, on3dView, onMyElements, onBom }: { editor: Editor; onSave?: () => void; ops: EditOps; fmt: FormatOps; onZoomIn: () => void; onZoomOut: () => void; onFit: () => void; onFind: () => void; onFindSimilar: () => void; onAnnotate: () => void; on3dView?: () => void; onMyElements?: () => void; onBom?: () => void }) {
   return (
     <Box sx={{ height: 40, flexShrink: 0, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'center', px: 1 }}>
       <TbIcon icon={FolderOpenIcon} /><TbIcon icon={SaveOutlinedIcon} disabled={!onSave} onClick={onSave} title={editor === 'footprint' ? 'Zapisz jako Footprint' : 'Zapisz jako Symbol'} /><TbDiv />
@@ -420,6 +425,8 @@ function Toolbar({ editor, onSave, ops, fmt, onZoomIn, onZoomOut, onFit, onFind,
       <TbIcon icon={HorizontalDistributeIcon} disabled={!fmt.hasSel} onClick={fmt.distH} title="Rozmieść w poziomie" /><TbIcon icon={VerticalDistributeIcon} disabled={!fmt.hasSel} onClick={fmt.distV} title="Rozmieść w pionie" />
       <TbIcon icon={FlipToFrontIcon} disabled={!fmt.hasSel} onClick={fmt.front} title="Przesuń na wierzch" /><TbIcon icon={FlipToBackIcon} disabled={!fmt.hasSel} onClick={fmt.back} title="Przesuń na spód" />
       <Box sx={{ flex: 1 }} />
+      {(editor === 'pcb' || editor === 'schematic') && <Box onClick={onMyElements} sx={{ px: 1.25, height: 28, display: 'flex', alignItems: 'center', gap: 0.75, borderRadius: 0.75, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.icon, '&:hover': { bgcolor: '#eef1f4' } }} title="Moje elementy — osobista biblioteka części"><Inventory2OutlinedIcon sx={{ fontSize: 18 }} />Moje elementy</Box>}
+      {editor === 'pcb' && <Box onClick={onBom} sx={{ px: 1.25, height: 28, display: 'flex', alignItems: 'center', gap: 0.75, borderRadius: 0.75, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.icon, '&:hover': { bgcolor: '#eef1f4' } }} title="Lista BOM — zestawienie materiałowe projektu"><ReceiptLongOutlinedIcon sx={{ fontSize: 18 }} />Lista BOM</Box>}
       {editor === 'pcb' && <Box onClick={on3dView} sx={{ px: 1.25, height: 28, display: 'flex', alignItems: 'center', gap: 0.75, borderRadius: 0.75, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.icon, '&:hover': { bgcolor: '#eef1f4' } }} title="Podgląd płytki 3D (Scene3D)"><ViewInArIcon sx={{ fontSize: 18 }} />3dView</Box>}
     </Box>
   );
@@ -709,7 +716,12 @@ function renderPlaced(comp: PlacedComp, key: React.Key, preview = false) {
         : def.draw(preview);
   const labelY = comp.easyeda && comp.easyeda.bbox ? comp.easyeda.bbox.height / 2 + 12 : 30;
   const mir = bmir ? ' scale(-1,1)' : ''; // „Dolna warstwa" = flaga odbicia symbolu
-  return <g key={key} transform={`translate(${comp.x},${comp.y})`} opacity={preview ? 0.6 : 1}><g transform={`rotate(${comp.rotation || 0})${mir}`}>{body}</g><text x={0} y={labelY} fontSize={8} fill={C.schBlue} stroke="none" textAnchor="middle" fontFamily="sans-serif">{comp.ref}{comp.easyeda || comp.octopart ? ` ${comp.label}` : ''}</text></g>;
+  // Na schemacie prefiks (R1) sterowany showPrefix; wartość (label, np. „10 kΩ") pokazujemy
+  // domyślnie — ukrywa ją tylko showName === 'Nie' (części EasyEDA/Octopart zawsze pokazują wartość).
+  const showRef = comp.showPrefix !== 'Nie';
+  const showVal = !!comp.label && (comp.showName !== 'Nie' || !!comp.easyeda || !!comp.octopart);
+  const caption = [showRef ? comp.ref : '', showVal ? comp.label : ''].filter(Boolean).join('  ');
+  return <g key={key} transform={`translate(${comp.x},${comp.y})`} opacity={preview ? 0.6 : 1}><g transform={`rotate(${comp.rotation || 0})${mir}`}>{body}</g>{caption && <text x={0} y={labelY} fontSize={8} fill={C.schBlue} stroke="none" textAnchor="middle" fontFamily="sans-serif">{caption}</text>}</g>;
 }
 
 // Prostokątny obrys umieszczonego komponentu (do zaznaczania klikiem)
@@ -2091,7 +2103,7 @@ function SchPlacedProps({ comp, onChange, mouse, onEditSymbol }: { comp: PlacedC
 
 // ── EasyEDA / LCSC (proxy w cad-backend, bez tokena) ──────────────────────────
 interface EasyProduct { lcsc: string; mpn: string; package: string; manufacturer: string; stock?: number; smtStock?: number; price?: string }
-interface PickResult { defId: string; label: string; pins: number; octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; refPrefix?: string; savedEls?: El[]; lcsc?: string; supplier?: string; manufacturer?: string; footprint?: string }
+interface PickResult { defId: string; label: string; pins: number; octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; refPrefix?: string; savedEls?: El[]; lcsc?: string; supplier?: string; manufacturer?: string; footprint?: string; mfrPart?: string }
 
 // ── Import symboli / footprintów (KiCad / Eagle / EasyEDA) ────────────────────
 type SNode = string | SNode[];
@@ -3198,6 +3210,68 @@ function OpenProjectDialog({ open, onClose, onOpen }: { open: boolean; onClose: 
   );
 }
 
+// Podgląd symbolu + footprintu dla numeru LCSC (EasyEDA). Samodzielny — pobiera z
+// `/api/easyeda/component/{lcsc}` i renderuje istniejącymi rendererami. Używany m.in.
+// przez dialog „Moje elementy" (przekazywany jako render-prop, by uniknąć cyklu importów).
+export function LcscPreview({ lcsc }: { lcsc: string }) {
+  const [data, setData] = useState<{ symbol?: EasyEdaSym; footprint?: EasyEdaSym } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const code = lcsc.trim();
+    if (!code) { setData(null); setError(null); return; }
+    let cancel = false;
+    setLoading(true); setError(null);
+    // Debounce — pole LCSC może się zmieniać przy pisaniu; nie odpytuj przy każdym znaku.
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/easyeda/component/${encodeURIComponent(code)}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        if (!cancel) setData({ symbol: d.symbol || d.sym, footprint: d.footprint || d.fp });
+      } catch (e) {
+        if (!cancel) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancel) setLoading(false);
+      }
+    }, 350);
+    return () => { cancel = true; clearTimeout(timer); };
+  }, [lcsc]);
+
+  if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}><CircularProgress size={22} /></Box>;
+  if (error) return <Typography variant="body2" color="error">Nie udało się pobrać danych EasyEDA dla {lcsc}: {error}</Typography>;
+  if (!data) return null;
+
+  const sym = data.symbol, fp = data.footprint;
+  const symW = sym?.bbox?.width || 100, symH = sym?.bbox?.height || 100;
+  const fpW = (fp?.bbox?.width || 40) * 4, fpH = (fp?.bbox?.height || 40) * 4;
+  const vb = (w: number, h: number, pad: number) => `${-w / 2 - pad} ${-h / 2 - pad} ${w + 2 * pad} ${h + 2 * pad}`;
+  const boxSx = { height: 160, border: '1px solid rgba(0,0,0,0.2)', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } as const;
+  const empty = { color: 'text.disabled', fontSize: 13 };
+
+  return (
+    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+      <Box sx={{ width: 240, maxWidth: '100%' }}>
+        <Typography variant="caption" color="text.secondary">Symbol</Typography>
+        <Box sx={{ ...boxSx, bgcolor: '#fff' }}>
+          {sym && sym.shapes?.length
+            ? <svg width="100%" height="100%" viewBox={vb(symW, symH, 8)} preserveAspectRatio="xMidYMid meet">{renderEasyEdaSymbol(sym)}</svg>
+            : <Box sx={empty}>brak symbolu</Box>}
+        </Box>
+      </Box>
+      <Box sx={{ width: 240, maxWidth: '100%' }}>
+        <Typography variant="caption" color="text.secondary">Footprint</Typography>
+        <Box sx={{ ...boxSx, bgcolor: '#111' }}>
+          {fp && fp.shapes?.length
+            ? <svg width="100%" height="100%" viewBox={vb(fpW, fpH, 30)} preserveAspectRatio="xMidYMid meet">{renderFootprint(fp)}</svg>
+            : <Box sx={empty}>brak footprintu</Box>}
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
 // ── Klon EasyEDA STD ──────────────────────────────────────────────────────────
 export function PcbView() {
   const [editor, setEditor] = useState<Editor>('schematic');
@@ -3299,6 +3373,8 @@ export function PcbView() {
   const [openProjOpen, setOpenProjOpen] = useState(false);
   const [newPcbOpen, setNewPcbOpen] = useState(false);
   const [board3dOpen, setBoard3dOpen] = useState(false);
+  const [myElementsOpen, setMyElementsOpen] = useState(false);
+  const [bomOpen, setBomOpen] = useState(false);
   const [pcbCopper, setPcbCopper] = useState(2);
   const layerNames = layerDefsFor(pcbCopper).map((d) => d.name); // z warstwami Inner przy >2 warstwach miedzi
   const findCursor = useRef(0);
@@ -3334,8 +3410,8 @@ export function PcbView() {
     // Duch startuje na środku widoku, żeby był widoczny i „Osadź tutaj" działało bez przeciągania (mobile)
     const cx = size.w ? snapTo((size.w / 2 - view.x) / view.zoom) : 0, cy = size.h ? snapTo((size.h / 2 - view.y) / view.zoom) : 0;
     setPlacing({ id: `pc_${placeSeq.current}`, defId: r.defId, x: cx, y: cy, ref: `${prefix}${n}`, label: r.label, pins: r.pins, octopart: r.octopart, easyeda: r.easyeda, fp: r.fp, savedEls: r.savedEls,
-      layer: 'Górna warstwa', rotation: 0, showPrefix: 'Tak', showName: 'Nie', addToBom: 'Tak', locked: 'Nie', convertToPcb: 'Tak', displayFootprint: 'Nie',
-      footprint: r.footprint || r.defId, supplier: r.supplier || (r.lcsc ? 'LCSC' : 'Nieznany'), supplierPart: r.lcsc || '', manufacturer: r.manufacturer || '', mfrPart: r.label, jlcpcb: '', link: '', model3d: r.footprint || '' });
+      layer: 'Górna warstwa', rotation: 0, showPrefix: 'Tak', showName: 'Tak', addToBom: 'Tak', locked: 'Nie', convertToPcb: 'Tak', displayFootprint: 'Nie',
+      footprint: r.footprint || r.defId, supplier: r.supplier || (r.lcsc ? 'LCSC' : 'Nieznany'), supplierPart: r.lcsc || '', manufacturer: r.manufacturer || '', mfrPart: r.mfrPart || r.label, jlcpcb: '', link: '', model3d: r.footprint || '' });
   };
   const placeAt = (p: { x: number; y: number }) => {
     if (!placing) return;
@@ -3344,6 +3420,52 @@ export function PcbView() {
     setPlacing(null); // jednorazowe postawienie
   };
   const moveGhost = (p: { x: number; y: number }) => { if (placing) setPlacing((c) => (c ? { ...c, x: snapTo(p.x), y: snapTo(p.y) } : c)); };
+  // Wstaw element z „Moje elementy" jako komponent — startuje ducha do osadzenia na aktywnym arkuszu/PCB.
+  const insertMyElement = async (el: MyElement) => {
+    const valueLabel = el.value
+      ? `${el.value}${el.valueUnit && el.valueUnit !== '—' ? ' ' + el.valueUnit : ''}`
+      : (el.name || 'U');
+    const code = (el.lcsc || '').trim();
+    // Element z LCSC → pobierz prawdziwy symbol + footprint z EasyEDA (pady na warstwach).
+    if (code) {
+      try {
+        const r = await fetch(`/api/easyeda/component/${encodeURIComponent(code)}`);
+        if (r.ok) {
+          const d = await r.json();
+          const easyeda = d.symbol || d.sym;
+          const fp = d.footprint || d.fp;
+          if (easyeda || fp) {
+            startPlacing({
+              defId: 'easyeda', label: valueLabel, pins: 0,
+              easyeda, fp, refPrefix: d.prefix,
+              lcsc: code, supplier: 'LCSC',
+              manufacturer: '', mfrPart: el.mpn || undefined,
+              footprint: el.packageType || undefined,
+            });
+            return;
+          }
+        }
+      } catch { /* brak sieci / brak części → fallback poniżej */ }
+    }
+    // Fallback: generyczny symbol schematu wg typu (bez footprintu EasyEDA).
+    const t = (el.componentType || '').toLowerCase();
+    const map =
+      /resistor|potentiom|thermistor|varistor|rezystor/.test(t) ? { defId: 'R', refPrefix: 'R', pins: 2 }
+      : /capacitor|kondensator/.test(t) ? { defId: 'C', refPrefix: 'C', pins: 2 }
+      : /inductor|ferrite|choke|cewka|dławik/.test(t) ? { defId: 'L', refPrefix: 'L', pins: 2 }
+      : /\bled\b/.test(t) ? { defId: 'LED', refPrefix: 'D', pins: 2 }
+      : /diode|bridge|dioda/.test(t) ? { defId: 'D', refPrefix: 'D', pins: 2 }
+      : /transistor|mosfet|jfet|igbt|tranzystor/.test(t) ? { defId: 'Q', refPrefix: 'Q', pins: 3 }
+      : /connector|header|złącze|goldpin/.test(t) ? { defId: 'J1x4', refPrefix: 'J', pins: 4 }
+      : { defId: 'U8', refPrefix: 'U', pins: 8 };
+    startPlacing({
+      defId: map.defId, refPrefix: map.refPrefix, pins: map.pins, label: valueLabel,
+      footprint: el.packageType || undefined,
+      lcsc: code || undefined,
+      supplier: code ? 'LCSC' : undefined,
+      mfrPart: el.mpn || undefined,
+    });
+  };
   // Przesunięcie komponentu z warstwy „placed" po indeksie w allPlaced (na PCB) → aktualizuje właściwy arkusz
   const moveAllPlaced = (idx: number, dx: number, dy: number) => {
     const comp = allPlaced[idx]; if (!comp) return;
@@ -3989,7 +4111,7 @@ export function PcbView() {
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, bgcolor: '#fff', fontFamily: 'sans-serif' }}>
       <TopMenuBar editor={editor} onNewProject={newProject} onNewSymbol={addSymbol} onNewSchematic={addSheet} onNewPcb={() => setNewPcbOpen(true)} onNewFootprint={addFootprint} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} onImport={() => setImportOpen(true)} onOpenProject={() => setOpenProjOpen(true)} editOps={editOps} formatOps={formatOps} placeTools={placeTools} onPlaceTool={setActiveTool} onPanTool={panTool} onFind={findAction} onFindSimilar={findSimilar} onSaveProject={() => saveProject()} onSaveProjectAs={saveProjectAs} saving={saving} onExportObj={exportObj} onExportGerber={exportGerber} />
-      <Toolbar editor={editor} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} ops={editOps} fmt={formatOps} onZoomIn={() => zoomAround(1.25)} onZoomOut={() => zoomAround(1 / 1.25)} onFit={fitToWindow} onFind={findAction} onFindSimilar={findSimilar} onAnnotate={() => setAnnotOpen(true)} on3dView={() => setBoard3dOpen(true)} />
+      <Toolbar editor={editor} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} ops={editOps} fmt={formatOps} onZoomIn={() => zoomAround(1.25)} onZoomOut={() => zoomAround(1 / 1.25)} onFit={fitToWindow} onFind={findAction} onFindSimilar={findSimilar} onAnnotate={() => setAnnotOpen(true)} on3dView={() => setBoard3dOpen(true)} onMyElements={() => setMyElementsOpen(true)} onBom={() => setBomOpen(true)} />
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {showLeft && <ProjectPanel width={leftW} projectName={projectName} sheets={sheets} activeSheetId={activeSheetId} pcbName={pcbName} editor={editor}
           exp={treeExp} onToggle={(n) => setTreeExp((s) => ({ ...s, [n]: !s[n] }))}
@@ -4246,6 +4368,13 @@ export function PcbView() {
       <FindSimilarDialog open={findSimOpen} onClose={() => setFindSimOpen(false)} onFind={(f) => { applyFindSimilar(f); setFindSimOpen(false); }} />
       <AnnotationDialog open={annotOpen} onClose={() => setAnnotOpen(false)} onAnnotate={annotate} onReset={annotateReset} />
       <Board3DDialog open={board3dOpen} onClose={() => setBoard3dOpen(false)} pcbEls={pcbEls} placed={allPlaced} name={projectName || 'pcb'} layers={layers} />
+      <MyElementsDialog
+        open={myElementsOpen}
+        onClose={() => setMyElementsOpen(false)}
+        onInsert={(el) => { insertMyElement(el); setMyElementsOpen(false); }}
+        renderLcscPreview={(lcsc) => <LcscPreview lcsc={lcsc} />}
+      />
+      <BomDialog open={bomOpen} onClose={() => setBomOpen(false)} projectName={projectName} placed={allPlaced} />
 
       <Snackbar open={!!snack} autoHideDuration={2500} onClose={() => setSnack(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         <Alert severity="info" variant="filled" onClose={() => setSnack(null)} sx={{ fontSize: 13.5 }}>{snack}</Alert>

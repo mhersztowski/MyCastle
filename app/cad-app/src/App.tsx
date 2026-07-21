@@ -48,6 +48,7 @@ import { RepositoryPanel } from './components/RepositoryPanel';
 import { AudioPanel } from './components/AudioPanel';
 import { TemplatesPanel } from './components/TemplatesPanel';
 import { FileSystemPanel } from './components/FileSystemPanel';
+import { DriveView } from './pages/DriveView';
 import { getCurrentUserId, listFilesRecursive, listScene3dFiles, listScene3dProjects, userRootDir, CAD_EXT, ELEC_EXT } from './vfs/cadProjectApi';
 import type { ElectronicsSchema } from './electronics/types';
 import { loadProjectFromText, mergeProjectFromText } from './io/CadExporter';
@@ -59,7 +60,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cadnew' | 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes';
+type AppMode = 'cadnew' | 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes' | 'drive';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -411,6 +412,12 @@ export default function App() {
             icon={<StorageIcon sx={{ fontSize: 16 }} />}
             iconPosition="start"
           />
+          <Tab
+            value="drive"
+            label="Drive"
+            icon={<StorageIcon sx={{ fontSize: 16, color: '#4a90d9' }} />}
+            iconPosition="start"
+          />
         </Tabs>
         </Box>
 
@@ -678,6 +685,13 @@ export default function App() {
       {mode === 'audio' && (
         <Box sx={{ flex: 1, overflow: 'hidden' }}>
           <AudioPanel />
+        </Box>
+      )}
+
+      {/* Drive — VFS tree browser with upload/download */}
+      {mode === 'drive' && (
+        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+          <DriveView />
         </Box>
       )}
 

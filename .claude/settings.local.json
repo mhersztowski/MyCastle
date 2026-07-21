@@ -89,7 +89,9 @@
       "Bash(git log *)",
       "Bash(python3 -)",
       "Bash(chmod +x run_watchtower.sh)",
-      "Bash(awk '{print $1, $NF}')"
+      "Bash(awk '{print $1, $NF}')",
+      "WebFetch(domain:www.lcsc.com)",
+      "WebSearch"
     ]
   }
 }
