@@ -112,27 +112,43 @@ async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
   const userId = 'default';
   try {
     if (mode === 'pcb') {
-      // Projekty PCB żyją w /api/projects (REST), nie w VFS. Dla każdego projektu
-      // rozwijamy pozycje: PCB (płytka), Sheets/*, Symbols/*, Footprints/*.
-      // `path` to vfsPath oczekiwany przez PcbViewerPage: `{projekt}/{view}[/{id}]`.
-      const listRes = await fetch(`${base}/api/projects`, { signal: AbortSignal.timeout(4000) });
-      if (!listRes.ok) return [];
-      const listData = (await listRes.json()) as { projects?: string[] };
-      const names = listData.projects ?? [];
+      // Projekty PCB to pliki VFS /users/{user}/projects/*.pcb.json (spójnie z innymi trybami).
+      // Dla każdego rozwijamy pozycje: PCB (płytka), Sheets/*, Symbols/*, Footprints/*.
+      // `path` = vfsPath dla PcbViewerPage: `{vfsFilePath}/{view}[/{id}]`.
+      const ext = '.pcb.json';
+      const root = `/users/${userId}/projects`;
+      const rels: string[] = []; // ścieżki plików względem root, bez rozszerzenia
+      const walk = async (dirPath: string, rel: string, depth: number): Promise<void> => {
+        if (depth > 8) return;
+        const res = await fetch(`${base}/api/vfs/readdir?path=${encodeURIComponent(dirPath)}`, { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) return;
+        const data = (await res.json()) as { entries?: { name: string; type: number }[] };
+        const dirs = (data.entries ?? []).filter(e => e.type === 2);
+        for (const e of data.entries ?? []) {
+          if (e.type !== 2 && e.name.endsWith(ext)) rels.push(rel ? `${rel}/${e.name.slice(0, -ext.length)}` : e.name.slice(0, -ext.length));
+        }
+        for (const d of dirs) await walk(`${dirPath}/${d.name}`, rel ? `${rel}/${d.name}` : d.name, depth + 1);
+      };
+      await walk(root, '', 0);
+      const decode = (b64: string): string => {
+        try { const bin = atob(b64); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return new TextDecoder().decode(bytes); } catch { return ''; }
+      };
       const entries: ProjectEntry[] = [];
-      await Promise.all(names.map(async (pname) => {
+      await Promise.all(rels.map(async (rel) => {
+        const vfsFile = `users/${userId}/projects/${rel}`;
         try {
-          const res = await fetch(`${base}/api/projects/${encodeURIComponent(pname)}`, { signal: AbortSignal.timeout(4000) });
-          if (!res.ok) return;
-          const d = (await res.json()) as {
+          const r = await fetch(`${base}/api/vfs/readFile?path=${encodeURIComponent(`/users/${userId}/projects/${rel}${ext}`)}`, { signal: AbortSignal.timeout(6000) });
+          if (!r.ok) return;
+          const rd = (await r.json()) as { data?: string };
+          const d = JSON.parse(decode(rd.data ?? '')) as {
             sheets?: { id: string; name?: string }[];
             symbols?: { id: string; name?: string }[];
             footprints?: { id: string; name?: string }[];
           };
-          entries.push({ name: `${pname}/PCB`, path: `${pname}/pcb` });
-          for (const s of d.sheets ?? []) entries.push({ name: `${pname}/Sheets/${s.name || s.id}`, path: `${pname}/sheet/${s.id}` });
-          for (const s of d.symbols ?? []) entries.push({ name: `${pname}/Symbols/${s.name || s.id}`, path: `${pname}/symbol/${s.id}` });
-          for (const s of d.footprints ?? []) entries.push({ name: `${pname}/Footprints/${s.name || s.id}`, path: `${pname}/footprint/${s.id}` });
+          entries.push({ name: `${rel}/PCB`, path: `${vfsFile}/pcb` });
+          for (const s of d.sheets ?? []) entries.push({ name: `${rel}/Sheets/${s.name || s.id}`, path: `${vfsFile}/sheet/${s.id}` });
+          for (const s of d.symbols ?? []) entries.push({ name: `${rel}/Symbols/${s.name || s.id}`, path: `${vfsFile}/symbol/${s.id}` });
+          for (const s of d.footprints ?? []) entries.push({ name: `${rel}/Footprints/${s.name || s.id}`, path: `${vfsFile}/footprint/${s.id}` });
         } catch { /* pomiń projekt */ }
       }));
       entries.sort((a, b) => a.name.localeCompare(b.name));

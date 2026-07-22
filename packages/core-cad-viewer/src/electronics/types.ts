@@ -62,6 +62,8 @@ export interface PartDef {
   label?: string;
   /** LED/indicator color (for led shape) */
   indicatorColor?: string;
+  /** Geometria osadzonego symbolu (tylko dla bodyShape === 'symbol'). */
+  symbolShapes?: SymShape[];
 }
 
 export interface ComponentPlacement {
@@ -94,6 +96,8 @@ export interface ElectronicsSchema {
   version: 1;
   components: ComponentPlacement[];
   wires: Wire[];
+  /** Definicje osadzonych symboli, do których odwołują się komponenty przez partId. */
+  embeddedParts?: PartDef[];
 }
 
 export const WIRE_COLORS = [

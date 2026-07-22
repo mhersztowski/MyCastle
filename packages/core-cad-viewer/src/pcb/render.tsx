@@ -152,18 +152,31 @@ export function renderFootprint(fp: EasyEdaSym, preview?: boolean, layers?: Laye
 export function renderPcbPart(comp: PlacedComp, key: Key, preview = false, layers?: LayerState) {
   const bottom = comp.layer === 'Dolna warstwa'; // dolna strona → lustro + zamiana warstw góra↔dół (kolory)
   const rot = comp.rotation || 0;
-  const body = comp.fp
-    ? renderFootprint(comp.fp, preview, layers, bottom, rot)
-    : comp.fpEls && comp.fpEls.length
-      // Footprint z Work Space (własne FpEl na warstwach) — wyśrodkowany w (0,0), renderowany z kolorami warstw.
-      ? (() => { const bb = unionBB(comp.fpEls, elBBoxFp); return <g transform={`translate(${-(bb.x + bb.w / 2)},${-(bb.y + bb.h / 2)})`}>{comp.fpEls.map((el, i) => renderFpEl(el, i, preview, layers))}</g>; })()
-      : <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
+  // Półwymiary footprintu w przestrzeni tekstu (świat) — do proporcjonalnego rozmiaru/pozycji prefiksu/nazwy.
+  let hw = 14, hh = 10;
+  let body: ReactNode;
+  if (comp.fp) {
+    body = renderFootprint(comp.fp, preview, layers, bottom, rot);
+    if (comp.fp.bbox) { hw = comp.fp.bbox.width * 2; hh = comp.fp.bbox.height * 2; } // renderFootprint skaluje ×SC(4) → półwymiar = width·2
+  } else if (comp.fpEls && comp.fpEls.length) {
+    // Footprint z Work Space (własne FpEl na warstwach) — wyśrodkowany w (0,0), renderowany z kolorami warstw.
+    const bb = unionBB(comp.fpEls, elBBoxFp);
+    hw = bb.w / 2; hh = bb.h / 2;
+    body = <g transform={`translate(${-(bb.x + bb.w / 2)},${-(bb.y + bb.h / 2)})`}>{comp.fpEls.map((el, i) => renderFpEl(el, i, preview, layers))}</g>;
+  } else {
+    body = <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
+  }
   // Footprint na PCB ma WŁASNĄ pozycję (pcbX/pcbY), niezależną od symbolu na schemacie (x/y).
   const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y;
   const tf = `translate(${px},${py}) rotate(${rot})${bottom ? ' scale(-1,1)' : ''}`;
+  // Prefiks/nazwa proporcjonalne do rozmiaru footprintu (świat = mil) — stały fontSize=7 znikał na dużych footprintach z Work Space.
+  const refFs = Math.max(6, Math.min(Math.max(hw, hh) * 0.14, Math.min(hw, hh) * 0.8));
+  const nameFs = refFs * 0.85;
+  const refY = -(hh + refFs * 0.5);
+  const nameY = hh + nameFs * 1.1;
   return <g key={key} transform={tf} opacity={preview ? 0.7 : 1}>{body}
-    {comp.showPrefix !== 'Nie' && <text x={0} y={-14} fontSize={7} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, -14, rot, bottom)}>{comp.ref}</text>}
-    {comp.showName === 'Tak' && <text x={0} y={16} fontSize={6} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, 16, rot, bottom)}>{comp.label}</text>}
+    {comp.showPrefix !== 'Nie' && <text x={0} y={refY} fontSize={refFs} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, refY, rot, bottom)}>{comp.ref}</text>}
+    {comp.showName === 'Tak' && <text x={0} y={nameY} fontSize={nameFs} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, nameY, rot, bottom)}>{comp.label}</text>}
   </g>;
 }
 

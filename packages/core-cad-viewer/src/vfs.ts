@@ -30,6 +30,7 @@ export const ELEC_EXT = '.elec.json';
 export const MAP_EXT = '.map.json';
 export const NOTES_EXT = '.notes.json';
 export const LEGO_EXT = '.lego.json';
+export const PCB_EXT = '.pcb.json';
 
 class VfsNetworkError extends Error {
   readonly code = 'NETWORK';
@@ -85,13 +86,9 @@ export async function readFileAt(dir: string, name: string, extension: string): 
 
 // ── PCB projects API ──────────────────────────────────────────────────────────
 
-/** Read a full PCB project by name from the cad-backend (/api/projects/{name}). */
-export async function readPcbProject(name: string): Promise<unknown> {
-  const url = new URL(`/api/projects/${encodeURIComponent(name)}`, apiOrigin());
-  const res = await vfsFetch(url.toString());
-  const data = await res.json();
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
-  return data;
+/** Read a full PCB project from the per-user VFS (/users/{userId}/projects/{name}.pcb.json). */
+export async function readPcbProject(dir: string, name: string): Promise<unknown> {
+  return JSON.parse(await readFileAt(dir, name, PCB_EXT));
 }
 
 // ── scene3d API ─────────────────────────────────────────────────────────────

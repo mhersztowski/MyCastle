@@ -56,6 +56,8 @@ export const SCENE_EXT = '.scene.json';
 export const CAD3D_EXT = '.cad3d.json';
 /** Electronics schematic file extension. */
 export const ELEC_EXT = '.elec.json';
+/** PCB project file extension (pełny projekt: sheety + pcb + symbole + footprinty + historia). */
+export const PCB_EXT = '.pcb.json';
 /** Map project file extension. */
 export const MAP_EXT = '.map.json';
 /** Notes project file extension. */

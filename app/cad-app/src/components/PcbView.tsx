@@ -9,6 +9,7 @@ import { createSvgIcon } from '@mui/material/utils';
 import * as THREE from 'three';
 import { SimpleViewer, SceneGraph } from '@mhersztowski/core-scene3d';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
+import { PCB_EXT, userProjectsDir, writeFileAt, readFileAt, deleteFileAt, listFilesRecursive } from '../vfs/cadProjectApi';
 import { MyElementsDialog } from './electronics/MyElementsDialog';
 import { BomDialog } from './electronics/BomDialog';
 import type { MyElement } from '../electronics/myElements';
@@ -567,18 +568,32 @@ function renderFootprint(fp: EasyEdaSym, preview?: boolean, layers?: LayerState,
 function renderPcbPart(comp: PlacedComp, key: React.Key, preview = false, layers?: LayerState) {
   const bottom = comp.layer === 'Dolna warstwa'; // dolna strona → lustro + zamiana warstw góra↔dół (kolory)
   const rot = comp.rotation || 0;
-  const body = comp.fp
-    ? renderFootprint(comp.fp, preview, layers, bottom, rot)
-    : comp.fpEls && comp.fpEls.length
-      // Footprint z Work Space (własne FpEl na warstwach) — wyśrodkowany w (0,0), renderowany z kolorami warstw.
-      ? (() => { const bb = unionBB(comp.fpEls, elBBoxFp); return <g transform={`translate(${-(bb.x + bb.w / 2)},${-(bb.y + bb.h / 2)})`}>{comp.fpEls.map((el, i) => renderFpEl(el, i, preview, layers))}</g>; })()
-      : <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
+  // Półwymiary footprintu w przestrzeni tekstu (świat) — do proporcjonalnego rozmiaru/pozycji prefiksu/nazwy.
+  let hw = 14, hh = 10;
+  let body: React.ReactNode;
+  if (comp.fp) {
+    body = renderFootprint(comp.fp, preview, layers, bottom, rot);
+    if (comp.fp.bbox) { hw = comp.fp.bbox.width * 2; hh = comp.fp.bbox.height * 2; } // renderFootprint skaluje ×SC(4) → półwymiar = width·2
+  } else if (comp.fpEls && comp.fpEls.length) {
+    // Footprint z Work Space (własne FpEl na warstwach) — wyśrodkowany w (0,0), renderowany z kolorami warstw.
+    const bb = unionBB(comp.fpEls, elBBoxFp);
+    hw = bb.w / 2; hh = bb.h / 2;
+    body = <g transform={`translate(${-(bb.x + bb.w / 2)},${-(bb.y + bb.h / 2)})`}>{comp.fpEls.map((el, i) => renderFpEl(el, i, preview, layers))}</g>;
+  } else {
+    body = <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
+  }
   // Footprint na PCB ma WŁASNĄ pozycję (pcbX/pcbY), niezależną od symbolu na schemacie (x/y).
   const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y;
   const tf = `translate(${px},${py}) rotate(${rot})${bottom ? ' scale(-1,1)' : ''}`;
+  // Prefiks/nazwa proporcjonalne do rozmiaru footprintu (świat = mil). Stały fontSize=7 był czytelny
+  // tylko dla małych footprintów EasyEDA, a znikał na dużych footprintach z Work Space (natywne mile).
+  const refFs = Math.max(6, Math.min(Math.max(hw, hh) * 0.14, Math.min(hw, hh) * 0.8));
+  const nameFs = refFs * 0.85;
+  const refY = -(hh + refFs * 0.5);
+  const nameY = hh + nameFs * 1.1;
   return <g key={key} transform={tf} opacity={preview ? 0.7 : 1}>{body}
-    {comp.showPrefix !== 'Nie' && <text x={0} y={-14} fontSize={7} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, -14, rot, bottom)}>{comp.ref}</text>}
-    {comp.showName === 'Tak' && <text x={0} y={16} fontSize={6} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, 16, rot, bottom)}>{comp.label}</text>}
+    {comp.showPrefix !== 'Nie' && <text x={0} y={refY} fontSize={refFs} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, refY, rot, bottom)}>{comp.ref}</text>}
+    {comp.showName === 'Tak' && <text x={0} y={nameY} fontSize={nameFs} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, nameY, rot, bottom)}>{comp.label}</text>}
   </g>;
 }
 
@@ -3295,9 +3310,9 @@ function OpenProjectDialog({ open, onClose, onOpen }: { open: boolean; onClose: 
   const [projects, setProjects] = useState<{ name: string; title: string; savedAt?: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
-  const reload = () => { setLoading(true); fetch('/api/projects').then((r) => r.json()).then((d) => setProjects(Array.isArray(d.projects) ? d.projects : [])).catch(() => setProjects([])).finally(() => setLoading(false)); };
+  const reload = () => { setLoading(true); listFilesRecursive(userProjectsDir(), PCB_EXT).then((fs) => setProjects(fs.map((f) => ({ name: f.name, title: f.name })))).catch(() => setProjects([])).finally(() => setLoading(false)); };
   useEffect(() => { if (open) { setSel(null); reload(); } }, [open]);
-  const del = async (name: string) => { if (!window.confirm(`Usunąć projekt „${name}" z serwera?`)) return; try { await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch { /* ignore */ } reload(); };
+  const del = async (name: string) => { if (!window.confirm(`Usunąć projekt „${name}" z serwera?`)) return; try { await deleteFileAt(userProjectsDir(), name, PCB_EXT); } catch { /* ignore */ } reload(); };
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 1 } }}>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#f2f3f5', py: 1.25, fontSize: 15 }}>Otwórz projekt (serwer)<IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton></DialogTitle>
@@ -4083,9 +4098,10 @@ export function PcbView() {
   const saveProject = async (nameArg?: string) => {
     const name = (nameArg ?? projectName).trim() || 'project'; setSaving(true);
     try {
-      const res = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildProjectData(name)) });
-      const d = await res.json().catch(() => ({})); if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
-      if (nameArg) setProjectName(name); toast(`Projekt zapisany na serwerze: „${name}"`);
+      // Zapis do per-user VFS (/users/{userId}/projects/{name}.pcb.json) — spójnie z pozostałymi
+      // trybami (CAD/Electronics), widoczne w Drive, izolowane per-user.
+      await writeFileAt(userProjectsDir(), name, PCB_EXT, JSON.stringify(buildProjectData(name)));
+      if (nameArg) setProjectName(name); toast(`Projekt zapisany: „${name}"`);
     } catch (e) { toast(`Błąd zapisu: ${e instanceof Error ? e.message : String(e)}`); } finally { setSaving(false); }
   };
   const saveProjectAs = () => { const v = window.prompt('Zapisz projekt jako:', projectName); if (v && v.trim()) saveProject(v.trim()); };
@@ -4106,8 +4122,7 @@ export function PcbView() {
   // Plik → Otwórz: wczytanie pełnego projektu z serwera (odtwarza wszystkie dokumenty + historię)
   const loadProject = async (name: string) => {
     try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(name)}`);
-      const d = await res.json();
+      const d = JSON.parse(await readFileAt(userProjectsDir(), name, PCB_EXT));
       if (d.error) throw new Error(d.error);
       type PDoc = { id: string; name: string; desc?: string; elements?: unknown[]; placed?: unknown[]; meta?: unknown };
       const rawSheets = (Array.isArray(d.sheets) ? d.sheets : []) as PDoc[];
