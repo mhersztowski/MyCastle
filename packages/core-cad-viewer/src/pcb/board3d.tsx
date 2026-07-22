@@ -15,7 +15,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { SceneGraph, SimpleViewer } from '@mhersztowski/core-scene3d';
 import {
   type FpEl, type PlacedComp, type LayerState, type EasyEdaSym, type Pt,
-  pcbPartBBox,
+  pcbPartBBox, unionBB, elBBoxFp,
 } from './render';
 import { readModel3dObj } from '../vfs';
 
@@ -39,9 +39,49 @@ function eeNameFlip(layerNum: string, flip: boolean): string {
 // Umieszczony footprint (EasyEDA shapes) → elementy FpEl w układzie świata (mil).
 // Odwzorowuje transformację renderPcbPart/renderFootprint: wyśrodkowanie, skala ×4,
 // obrót komponentu i lustro + zamiana warstw dla strony dolnej.
+// Odbicie nazwy warstwy góra↔dół (footprint na dolnej stronie płytki).
+const OUR_LAYER_FLIP: Record<string, string> = {
+  'Górna warstwa': 'Dolna warstwa', 'Dolna warstwa': 'Górna warstwa',
+  'Górna warstwa opisowa': 'Dolna warstwa opisowa', 'Dolna warstwa opisowa': 'Górna warstwa opisowa',
+  'Górna warstwa maski lutowniczej': 'Dolna warstwa maski lutowniczej', 'Dolna warstwa maski lutowniczej': 'Górna warstwa maski lutowniczej',
+  'Górna warstwa maski pasty lutowniczej': 'Dolna warstwa maski pasty lutowniczej', 'Dolna warstwa maski pasty lutowniczej': 'Górna warstwa maski pasty lutowniczej',
+  'Górny montaż': 'Dolny montaż', 'Dolny montaż': 'Górny montaż',
+};
+const flipOurLayer = (l: string, bottom: boolean) => (bottom && OUR_LAYER_FLIP[l]) ? OUR_LAYER_FLIP[l] : l;
+
+// Umieszczony footprint z Work Space (własne FpEl) → elementy FpEl w układzie świata (mil).
+function placedWsFpEls(comp: PlacedComp): FpEl[] {
+  const els = comp.fpEls; if (!els || !els.length) return [];
+  const bb = unionBB(els, elBBoxFp);
+  const ccx = bb.x + bb.w / 2, ccy = bb.y + bb.h / 2;
+  const bottom = comp.layer === 'Dolna warstwa';
+  const rad = ((comp.rotation || 0) * Math.PI) / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+  const ortho = Math.abs(sin) > Math.abs(cos);
+  const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y;
+  const rotAdd = comp.rotation || 0;
+  const q = (sx: number, sy: number): Pt => { let x = sx - ccx; const y = sy - ccy; if (bottom) x = -x; return { x: px + (x * cos - y * sin), y: py + (x * sin + y * cos) }; };
+  const L = (l: string) => flipOurLayer(l, bottom);
+  const out: FpEl[] = [];
+  const tr = (el: FpEl): void => {
+    switch (el.t) {
+      case 'track': case 'copper': case 'fill': out.push({ ...el, pts: el.pts.map((p) => q(p.x, p.y)), layer: L(el.layer), id: newId() }); break;
+      case 'pad': { const p = q(el.x, el.y); let w = el.w, h = el.h; if (ortho) { const t = w; w = h; h = t; } out.push({ ...el, x: p.x, y: p.y, w, h, rot: (el.rot || 0) + rotAdd, layer: L(el.layer), id: newId() }); break; }
+      case 'via': case 'hole': { const p = q(el.x, el.y); out.push({ ...el, x: p.x, y: p.y, id: newId() }); break; }
+      case 'fcircle': case 'arc': { const p = q(el.cx, el.cy); out.push({ ...el, cx: p.x, cy: p.y, layer: L(el.layer), id: newId() }); break; }
+      case 'ftext': { const p = q(el.x, el.y); out.push({ ...el, x: p.x, y: p.y, rot: (el.rot || 0) + rotAdd, layer: L(el.layer), id: newId() }); break; }
+      case 'frect': { const p = q(el.x + el.w / 2, el.y + el.h / 2); let w = el.w, h = el.h; if (ortho) { const t = w; w = h; h = t; } out.push({ ...el, x: p.x - w / 2, y: p.y - h / 2, w, h, layer: L(el.layer), id: newId() }); break; }
+      case 'dimension': { const a = q(el.x1, el.y1), b = q(el.x2, el.y2); out.push({ ...el, x1: a.x, y1: a.y, x2: b.x, y2: b.y, layer: L(el.layer), id: newId() }); break; }
+      case 'group': el.children.forEach(tr); break;
+      default: break;
+    }
+  };
+  els.forEach(tr);
+  return out;
+}
+
 function placedFpEls(comp: PlacedComp): FpEl[] {
   const fp = comp.fp;
-  if (!fp) return [];
+  if (!fp) return placedWsFpEls(comp);
   const SC = 4;
   const cx = fp.bbox ? fp.bbox.x + fp.bbox.width / 2 : 0;
   const cy = fp.bbox ? fp.bbox.y + fp.bbox.height / 2 : 0;
@@ -138,7 +178,7 @@ export function boardLayerRows(pcbEls: FpEl[], placed: PlacedComp[], layers?: La
   const present = new Set<string>(['board']);
   const allEls = [...pcbEls, ...placed.flatMap(placedFpEls)];
   for (const e of allEls) { if ('layer' in e) { const k = rowKeyOfLayer(e.layer); if (k) present.add(k); } }
-  for (const c of placed) { if (c.fp) present.add(c.layer === 'Dolna warstwa' ? 'body-bot' : 'body-top'); }
+  for (const c of placed) { if (c.fp || (c.fpEls && c.fpEls.length)) present.add(c.layer === 'Dolna warstwa' ? 'body-bot' : 'body-top'); }
   return BOARD_ROWS.filter((r) => present.has(r.key)).map((r) => ({ key: r.key, label: r.label, color: (r.layerName && layers?.[r.layerName]?.color) || r.fallback }));
 }
 
@@ -252,11 +292,28 @@ export function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: L
     } else if (e.t === 'fcircle') {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(Math.max(e.r * W2MM, 0.05), Math.max(e.width * W2MM / 2, 0.04), 6, 40), matFor(c, kind));
       ring.position.set(X(e.cx), Y(e.cy), z + CU_THICK_MM / 2); g.add(ring);
+    } else if (e.t === 'frect') {
+      const w = Math.max(Math.abs(e.w) * W2MM, 0.05), h = Math.max(Math.abs(e.h) * W2MM, 0.05);
+      const rcx = X(e.x + e.w / 2), rcy = Y(e.y + e.h / 2), zc = z + CU_THICK_MM / 2;
+      if (e.fill === 'Nie' || e.fill === '') {
+        const t = Math.max((e.width || 6) * W2MM, 0.06);
+        const bars: [number, number, number, number][] = [[w, t, 0, h / 2], [w, t, 0, -h / 2], [t, h, w / 2, 0], [t, h, -w / 2, 0]];
+        for (const [bw, bh, ox, oy] of bars) { const bar = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, CU_THICK_MM), matFor(c, kind)); bar.position.set(rcx + ox, rcy + oy, zc); g.add(bar); }
+      } else {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, CU_THICK_MM), matFor(c, kind));
+        box.position.set(rcx, rcy, zc); g.add(box);
+      }
+    } else if (e.t === 'fill' && e.pts.length >= 3) {
+      const shape = new THREE.Shape();
+      shape.moveTo(X(e.pts[0].x), Y(e.pts[0].y));
+      for (let i = 1; i < e.pts.length; i++) shape.lineTo(X(e.pts[i].x), Y(e.pts[i].y));
+      const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), matFor(c, kind));
+      mesh.position.z = z + CU_THICK_MM / 2; g.add(mesh);
     }
   }
   // Obudowy komponentów — realny model 3D EasyEDA jeśli załadowany, inaczej uproszczona bryła z bbox.
   for (const c of placed) {
-    if (!c.fp) continue;
+    if (!c.fp && !(c.fpEls && c.fpEls.length)) continue;
     const bottom = c.layer === 'Dolna warstwa', key = bottom ? 'body-bot' : 'body-top';
     if (isHidden(key)) continue;
     const bb = pcbPartBBox(c);

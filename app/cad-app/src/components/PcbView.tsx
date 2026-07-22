@@ -12,6 +12,7 @@ import { SimpleViewer, SceneGraph } from '@mhersztowski/core-scene3d';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
 import { PCB_EXT, writeFileAt, readFileAt } from '../vfs/cadProjectApi';
 import { ServerFileBrowser } from './ServerFileBrowser';
+import { downloadText } from '../io/exportGraphics';
 import { MyElementsDialog } from './electronics/MyElementsDialog';
 import { BomDialog } from './electronics/BomDialog';
 import type { MyElement } from '../electronics/myElements';
@@ -731,21 +732,60 @@ function cloneShifted(el: unknown, editor: Editor): unknown {
   return c;
 }
 
-// Dekoracje arkusza (ramka rysunkowa + tabliczka tytułowa) — rysowane w świecie
-// jako `overlay` generalizowanego SymbolEditorCanvas (ten sam canvas co edytor symbolu).
-function SheetFrame() {
+// Dekoracje arkusza (ramka rysunkowa + tabliczka tytułowa) — rozmiar wg dokumentu (A4/A3…),
+// w proporcjach strony z File/Print, żeby wydruk 1:1 odpowiadał ramce. Skala: A4 poziomo ≈ 1160
+// jedn. szerokości (zgodnie z dotychczasową konwencją arkusza).
+const SHEET_K = 1160 / 296.926; // jedn. świata na mm
+function SheetFrame({ doc, project, sheet }: { doc?: DocSettings; project?: string; sheet?: string }) {
+  const wmm = parseFloat(doc?.w ?? '') || 296.926;
+  const hmm = parseFloat(doc?.h ?? '') || 209.804;
+  const mm = (v: number) => v * SHEET_K;
+  const OX = 40, OY = 40;                    // lewy-górny róg strony
+  const W = mm(wmm), H = mm(hmm), m = mm(5); // strona + margines wewnętrznej ramki
+  const ix = OX + m, iy = OY + m, iw = W - 2 * m, ih = H - 2 * m;
+  const R = C.schRed, size = doc?.size || 'A4';
+  const cols = Math.max(4, Math.round(wmm / 55)), rows = Math.max(3, Math.round(hmm / 55));
+  const letters = 'ABCDEFGHJKLMNPRSTUVWZ';
+  // Tabliczka tytułowa w prawym-dolnym rogu ramki wewnętrznej
+  const tbW = mm(Math.min(180, wmm - 20)), tbH = mm(28);
+  const tx = ix + iw - tbW, ty = iy + ih - tbH, c1 = tx + tbW * 0.62, c2 = tx + tbW * 0.82;
   return (
-    <>
-      <g stroke={C.schRed} strokeWidth={1} fill={C.schRed} fontFamily="sans-serif">
-        <line x1={40} y1={70} x2={1200} y2={70} /><line x1={40} y1={76} x2={1200} y2={76} />
-        {[1, 2, 3].map((n, i) => <g key={`zt${n}`}><line x1={40 + (i + 1) * 300} y1={70} x2={40 + (i + 1) * 300} y2={76} /><text x={40 + i * 300 + 150} y={74.5} fontSize={8} textAnchor="middle" stroke="none">{n}</text></g>)}
-        <line x1={40} y1={640} x2={1200} y2={640} /><line x1={40} y1={646} x2={1200} y2={646} />
-        {[1, 2, 3, 4].map((n, i) => <g key={`zb${n}`}><line x1={40 + (i + 1) * 290} y1={640} x2={40 + (i + 1) * 290} y2={646} /><text x={40 + i * 290 + 145} y={644.5} fontSize={8} textAnchor="middle" stroke="none">{n}</text></g>)}
-        <rect x={1000} y={560} width={190} height={80} fill="none" /><line x1={1000} y1={588} x2={1190} y2={588} />
-        <text x={1006} y={580} fontSize={11} stroke="none">TITLE:</text>
-        <g transform="translate(1010,605)" stroke="none" fill={C.logoTeal}><circle cx={8} cy={0} r={7} fill={C.logoTeal} /><text x={20} y={4} fontSize={12} fontWeight={700} fill={C.logoTeal}>EasyEDA</text></g>
+    <g stroke={R} fill="none" fontFamily="sans-serif">
+      <rect x={OX} y={OY} width={W} height={H} strokeWidth={mm(0.25)} />
+      <rect x={ix} y={iy} width={iw} height={ih} strokeWidth={mm(0.4)} />
+      {/* Strefy: numery na górze/dole, litery po bokach */}
+      {Array.from({ length: cols }).map((_, i) => {
+        const cx = ix + (iw * (i + 0.5)) / cols;
+        return <g key={`c${i}`} stroke="none" fill={R}>
+          <text x={cx} y={OY + m * 0.75} fontSize={mm(2.4)} textAnchor="middle">{i + 1}</text>
+          <text x={cx} y={OY + H - m * 0.3} fontSize={mm(2.4)} textAnchor="middle">{i + 1}</text>
+        </g>;
+      })}
+      {Array.from({ length: cols + 1 }).map((_, i) => { const x = ix + (iw * i) / cols; return <g key={`cl${i}`}><line x1={x} y1={OY} x2={x} y2={iy} strokeWidth={mm(0.2)} /><line x1={x} y1={iy + ih} x2={x} y2={OY + H} strokeWidth={mm(0.2)} /></g>; })}
+      {Array.from({ length: rows }).map((_, i) => {
+        const cy = iy + (ih * (i + 0.5)) / rows;
+        return <g key={`r${i}`} stroke="none" fill={R}>
+          <text x={OX + m * 0.5} y={cy + mm(1)} fontSize={mm(2.4)} textAnchor="middle">{letters[i] ?? ''}</text>
+          <text x={OX + W - m * 0.5} y={cy + mm(1)} fontSize={mm(2.4)} textAnchor="middle">{letters[i] ?? ''}</text>
+        </g>;
+      })}
+      {Array.from({ length: rows + 1 }).map((_, i) => { const y = iy + (ih * i) / rows; return <g key={`rl${i}`}><line x1={OX} y1={y} x2={ix} y2={y} strokeWidth={mm(0.2)} /><line x1={ix + iw} y1={y} x2={OX + W} y2={y} strokeWidth={mm(0.2)} /></g>; })}
+      {/* Tabliczka tytułowa */}
+      <rect x={tx} y={ty} width={tbW} height={tbH} strokeWidth={mm(0.35)} />
+      <line x1={tx} y1={ty + mm(13)} x2={tx + tbW} y2={ty + mm(13)} strokeWidth={mm(0.25)} />
+      <line x1={c1} y1={ty} x2={c1} y2={ty + tbH} strokeWidth={mm(0.25)} />
+      <line x1={c2} y1={ty} x2={c2} y2={ty + tbH} strokeWidth={mm(0.25)} />
+      <g stroke="none" fill={R}>
+        <text x={tx + mm(3)} y={ty + mm(5)} fontSize={mm(2.2)}>TITLE</text>
+        <text x={tx + mm(3)} y={ty + mm(10.5)} fontSize={mm(3.4)} fontWeight={700}>{project || 'Schemat'}</text>
+        <text x={tx + mm(3)} y={ty + mm(18)} fontSize={mm(2.2)}>Sheet: {sheet || '—'}</text>
+        <text x={tx + mm(3)} y={ty + mm(24)} fontSize={mm(2.4)} fill={C.logoTeal} fontWeight={700}>MyCastle CAD</text>
+        <text x={c1 + mm(2)} y={ty + mm(5)} fontSize={mm(2.2)}>Size</text>
+        <text x={c1 + mm(2)} y={ty + mm(11)} fontSize={mm(3.2)} fontWeight={700}>{size}</text>
+        <text x={c1 + mm(2)} y={ty + mm(19)} fontSize={mm(2.2)}>Date</text>
+        <text x={c2 + mm(2)} y={ty + mm(5)} fontSize={mm(2.2)}>Rev</text>
       </g>
-    </>
+    </g>
   );
 }
 
@@ -2922,9 +2962,51 @@ function eeNameFlip(layerNum: string, flip: boolean): string {
 // Umieszczony footprint (EasyEDA shapes) → elementy FpEl w układzie świata (mil).
 // Odwzorowuje transformację renderPcbPart/renderFootprint: wyśrodkowanie, skala ×4,
 // obrót komponentu i lustro + zamiana warstw dla strony dolnej. Używane w eksporcie Gerber.
+// Odbicie nazwy warstwy góra↔dół (dla footprintu na dolnej stronie płytki).
+const OUR_LAYER_FLIP: Record<string, string> = {
+  'Górna warstwa': 'Dolna warstwa', 'Dolna warstwa': 'Górna warstwa',
+  'Górna warstwa opisowa': 'Dolna warstwa opisowa', 'Dolna warstwa opisowa': 'Górna warstwa opisowa',
+  'Górna warstwa maski lutowniczej': 'Dolna warstwa maski lutowniczej', 'Dolna warstwa maski lutowniczej': 'Górna warstwa maski lutowniczej',
+  'Górna warstwa maski pasty lutowniczej': 'Dolna warstwa maski pasty lutowniczej', 'Dolna warstwa maski pasty lutowniczej': 'Górna warstwa maski pasty lutowniczej',
+  'Górny montaż': 'Dolny montaż', 'Dolny montaż': 'Górny montaż',
+};
+const flipOurLayer = (l: string, bottom: boolean) => (bottom && OUR_LAYER_FLIP[l]) ? OUR_LAYER_FLIP[l] : l;
+
+// Umieszczony footprint z Work Space (własne FpEl) → elementy FpEl w układzie świata (mil).
+// Odwzorowuje transformację renderPcbPart: wyśrodkowanie na bbox, obrót komponentu, lustro
+// i zamiana warstw dla strony dolnej. Używane w 3dView (i eksporcie Gerber).
+function placedWsFpEls(comp: PlacedComp): FpEl[] {
+  const els = comp.fpEls; if (!els || !els.length) return [];
+  const bb = unionBB(els, elBBoxFp);
+  const ccx = bb.x + bb.w / 2, ccy = bb.y + bb.h / 2;
+  const bottom = comp.layer === 'Dolna warstwa';
+  const rad = ((comp.rotation || 0) * Math.PI) / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+  const ortho = Math.abs(sin) > Math.abs(cos);
+  const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y;
+  const rotAdd = comp.rotation || 0;
+  const q = (sx: number, sy: number): Pt => { let x = sx - ccx; const y = sy - ccy; if (bottom) x = -x; return { x: px + (x * cos - y * sin), y: py + (x * sin + y * cos) }; };
+  const L = (l: string) => flipOurLayer(l, bottom);
+  const out: FpEl[] = [];
+  const tr = (el: FpEl): void => {
+    switch (el.t) {
+      case 'track': case 'copper': case 'fill': out.push({ ...el, pts: el.pts.map((p) => q(p.x, p.y)), layer: L(el.layer), id: newId() }); break;
+      case 'pad': { const p = q(el.x, el.y); let w = el.w, h = el.h; if (ortho) { const t = w; w = h; h = t; } out.push({ ...el, x: p.x, y: p.y, w, h, rot: (el.rot || 0) + rotAdd, layer: L(el.layer), id: newId() }); break; }
+      case 'via': case 'hole': { const p = q(el.x, el.y); out.push({ ...el, x: p.x, y: p.y, id: newId() }); break; }
+      case 'fcircle': case 'arc': { const p = q(el.cx, el.cy); out.push({ ...el, cx: p.x, cy: p.y, layer: L(el.layer), id: newId() }); break; }
+      case 'ftext': { const p = q(el.x, el.y); out.push({ ...el, x: p.x, y: p.y, rot: (el.rot || 0) + rotAdd, layer: L(el.layer), id: newId() }); break; }
+      case 'frect': { const p = q(el.x + el.w / 2, el.y + el.h / 2); let w = el.w, h = el.h; if (ortho) { const t = w; w = h; h = t; } out.push({ ...el, x: p.x - w / 2, y: p.y - h / 2, w, h, layer: L(el.layer), id: newId() }); break; }
+      case 'dimension': { const a = q(el.x1, el.y1), b = q(el.x2, el.y2); out.push({ ...el, x1: a.x, y1: a.y, x2: b.x, y2: b.y, layer: L(el.layer), id: newId() }); break; }
+      case 'group': el.children.forEach(tr); break;
+      default: break;
+    }
+  };
+  els.forEach(tr);
+  return out;
+}
+
 function placedFpEls(comp: PlacedComp): FpEl[] {
   const fp = comp.fp;
-  if (!fp) return [];
+  if (!fp) return placedWsFpEls(comp);
   const SC = 4;
   const cx = fp.bbox ? fp.bbox.x + fp.bbox.width / 2 : 0;
   const cy = fp.bbox ? fp.bbox.y + fp.bbox.height / 2 : 0;
@@ -3076,7 +3158,7 @@ function boardLayerRows(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerStat
   const present = new Set<string>(['board']);
   const allEls = [...pcbEls, ...placed.flatMap(placedFpEls)];
   for (const e of allEls) { if ('layer' in e) { const k = rowKeyOfLayer(e.layer); if (k) present.add(k); } }
-  for (const c of placed) { if (c.fp) present.add(c.layer === 'Dolna warstwa' ? 'body-bot' : 'body-top'); }
+  for (const c of placed) { if (c.fp || (c.fpEls && c.fpEls.length)) present.add(c.layer === 'Dolna warstwa' ? 'body-bot' : 'body-top'); }
   return BOARD_ROWS.filter((r) => present.has(r.key)).map((r) => ({ key: r.key, label: r.label, color: (r.layerName && layers?.[r.layerName]?.color) || r.fallback }));
 }
 // ── Modele 3D EasyEDA ────────────────────────────────────────────────────────
@@ -3189,11 +3271,31 @@ function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerSta
     } else if (e.t === 'fcircle') {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(Math.max(e.r * W2MM, 0.05), Math.max(e.width * W2MM / 2, 0.04), 6, 40), matFor(c, kind));
       ring.position.set(X(e.cx), Y(e.cy), z + CU_THICK_MM / 2); g.add(ring);
+    } else if (e.t === 'frect') {
+      // Prostokąt (pad/feature/obrys silk) — wypełniony box albo obrys z 4 belek.
+      const w = Math.max(Math.abs(e.w) * W2MM, 0.05), h = Math.max(Math.abs(e.h) * W2MM, 0.05);
+      const rcx = X(e.x + e.w / 2), rcy = Y(e.y + e.h / 2), zc = z + CU_THICK_MM / 2;
+      if (e.fill === 'Nie' || e.fill === '') {
+        const t = Math.max((e.width || 6) * W2MM, 0.06);
+        const bars: [number, number, number, number][] = [[w, t, 0, h / 2], [w, t, 0, -h / 2], [t, h, w / 2, 0], [t, h, -w / 2, 0]];
+        for (const [bw, bh, ox, oy] of bars) { const bar = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, CU_THICK_MM), matFor(c, kind)); bar.position.set(rcx + ox, rcy + oy, zc); g.add(bar); }
+      } else {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, CU_THICK_MM), matFor(c, kind));
+        box.position.set(rcx, rcy, zc); g.add(box);
+      }
+    } else if (e.t === 'fill' && e.pts.length >= 3) {
+      // Wypełnienie (copper pour / region) — płaski wielokąt.
+      const shape = new THREE.Shape();
+      shape.moveTo(X(e.pts[0].x), Y(e.pts[0].y));
+      for (let i = 1; i < e.pts.length; i++) shape.lineTo(X(e.pts[i].x), Y(e.pts[i].y));
+      const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), matFor(c, kind));
+      mesh.position.z = z + CU_THICK_MM / 2; g.add(mesh);
     }
   }
-  // Obudowy komponentów — realny model 3D EasyEDA jeśli załadowany, inaczej uproszczona bryła z bbox.
+  // Obudowy komponentów — realny model 3D EasyEDA jeśli załadowany, inaczej uproszczona bryła z bbox
+  // (dla footprintów EasyEDA i Work Space).
   for (const c of placed) {
-    if (!c.fp) continue;
+    if (!c.fp && !(c.fpEls && c.fpEls.length)) continue;
     const bottom = c.layer === 'Dolna warstwa', key = bottom ? 'body-bot' : 'body-top';
     if (isHidden(key)) continue;
     const bb = pcbPartBBox(c);
@@ -3773,7 +3875,7 @@ export function PcbView() {
     open: () => setServerBrowser('open'), save: () => saveProject(), saveAs: () => saveProjectAs(),
     saveSymbol: () => setSaveOpen(true), saveFootprint: () => setFpSaveOpen(true),
     import: () => setImportOpen(true), print: () => printCurrent(),
-    exportObj: () => exportObj(), exportGerber: () => exportGerber(),
+    exportSvg: () => exportSvg(), exportObj: () => exportObj(), exportGerber: () => exportGerber(),
   };
   useRegisterFileOps('pcb', {
     currentName,
@@ -3794,6 +3896,7 @@ export function PcbView() {
     importItems: [{ label: 'Import…', run: () => fileHandlersRef.current.import() }],
     exportItems: [
       { label: 'Print… (A4)', run: () => fileHandlersRef.current.print() },
+      { label: 'Export SVG…', run: () => fileHandlersRef.current.exportSvg() },
       { label: 'Export OBJ (3D board)…', run: () => fileHandlersRef.current.exportObj() },
       { label: 'Export Gerber (ZIP)…', run: () => fileHandlersRef.current.exportGerber() },
     ],
@@ -4318,26 +4421,66 @@ export function PcbView() {
     // (1 jedn. świata = 1 mil = 0.0254 mm), więc milimetry na wydruku się zgadzają.
     const parts = vb.split(/\s+/).map(Number);
     const vbW = parts[2] || 1, vbH = parts[3] || 1;
-    const wmm = vbW * W2MM, hmm = vbH * W2MM;
-    const landscape = wmm > hmm; // dłuższy bok → A4 poziomo (lepsze dopasowanie)
     const dark = editor === 'pcb' || editor === 'footprint';
     const bg = dark ? '#000000' : '#ffffff';
     const title = editor === 'schematic' ? (projectName || 'Schemat')
       : editor === 'pcb' ? (pcbName || 'PCB')
       : editor === 'symbol' ? (symMeta.name || 'Symbol')
       : (fpMeta.footprint || 'Footprint');
-    const maxW = landscape ? 277 : 190, maxH = landscape ? 190 : 277; // pole zadruku A4 (10mm marginesy)
-    if (wmm > maxW + 1 || hmm > maxH + 1) toast(`Rysunek ${wmm.toFixed(0)}×${hmm.toFixed(0)} mm nie mieści się na A4 przy skali 1:1 — część może zostać przycięta`);
+    // Arkusz: ramka ma proporcje strony (docSettings) → skalujemy ją do pola zadruku A4 (dopasowanie),
+    // żeby wydruk odpowiadał tabliczce/ramce. Pozostałe tryby (PCB/footprint/symbol) drukują 1:1 (mm).
+    let outWmm: number, outHmm: number;
+    if (editor === 'schematic') {
+      const land = vbW >= vbH;
+      outWmm = land ? 281 : 194; outHmm = land ? 194 : 281; // A4 − 8 mm marginesy
+    } else {
+      outWmm = vbW * W2MM; outHmm = vbH * W2MM;
+      const maxW = outWmm > outHmm ? 277 : 190, maxH = outWmm > outHmm ? 190 : 277;
+      if (outWmm > maxW + 1 || outHmm > maxH + 1) toast(`Rysunek ${outWmm.toFixed(0)}×${outHmm.toFixed(0)} mm nie mieści się na A4 przy skali 1:1 — część może zostać przycięta`);
+    }
+    const landscape = outWmm > outHmm;
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>`
-      + `<style>@page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:10mm}`
+      + `<style>@page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:${editor === 'schematic' ? '8mm' : '10mm'}}`
       + `html,body{margin:0;padding:0}`
       + `.page{display:inline-block;background:${bg};line-height:0}`
       + `svg{display:block}</style></head>`
-      + `<body><div class="page"><svg xmlns="http://www.w3.org/2000/svg" width="${wmm.toFixed(3)}mm" height="${hmm.toFixed(3)}mm" viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${inner}</svg></div>`
+      + `<body><div class="page"><svg xmlns="http://www.w3.org/2000/svg" width="${outWmm.toFixed(3)}mm" height="${outHmm.toFixed(3)}mm" viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${inner}</svg></div>`
       + `<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},150);};<\/script></body></html>`;
     const w = window.open('', '_blank');
     if (!w) { toast('Nie udało się otworzyć okna druku (popup zablokowany?)'); return; }
     w.document.open(); w.document.write(html); w.document.close();
+  };
+  // Eksport bieżącej zakładki (sheet/pcb/symbol/footprint) do samodzielnego pliku SVG.
+  const exportSvg = () => {
+    const svg = canvasRef.current?.querySelector('svg');
+    if (!svg) { toast('Brak rysunku do eksportu'); return; }
+    const contentG = svg.querySelector('g[transform]') as SVGGraphicsElement | null;
+    let inner: string, vb: string;
+    if (contentG) {
+      let bb: { x: number; y: number; width: number; height: number };
+      try { bb = contentG.getBBox(); } catch { bb = { x: 0, y: 0, width: 0, height: 0 }; }
+      if (!bb.width || !bb.height) { toast('Pusty widok — nie ma czego eksportować'); return; }
+      const pad = Math.max(6, Math.max(bb.width, bb.height) * 0.03);
+      vb = `${bb.x - pad} ${bb.y - pad} ${bb.width + 2 * pad} ${bb.height + 2 * pad}`;
+      inner = contentG.innerHTML;
+    } else {
+      vb = svg.getAttribute('viewBox') || `0 0 ${svg.clientWidth || 800} ${svg.clientHeight || 600}`;
+      inner = svg.innerHTML;
+    }
+    const parts = vb.split(/\s+/).map(Number);
+    const vw = parts[2] || 1, vh = parts[3] || 1;
+    const dark = editor === 'pcb' || editor === 'footprint';
+    const bg = dark ? '#000000' : '#ffffff';
+    const name = (editor === 'schematic' ? (sheetName || projectName || 'schemat')
+      : editor === 'pcb' ? (pcbName || 'pcb')
+      : editor === 'symbol' ? (symMeta.name || 'symbol')
+      : (fpMeta.footprint || 'footprint')) || 'export';
+    const file = name.trim().replace(/[/\\:*?"<>|]/g, '_') || 'export';
+    const svgStr = `<?xml version="1.0" encoding="UTF-8"?>\n`
+      + `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${vb}">`
+      + `<rect x="${parts[0]}" y="${parts[1]}" width="${vw}" height="${vh}" fill="${bg}"/>${inner}</svg>`;
+    downloadText(svgStr, `${file}.svg`);
+    toast(`Wyeksportowano ${file}.svg`);
   };
   const panTool = () => setActiveTool('pan');
   const formatOps: FormatOps = { rotL: () => rotateSel(false), rotR: () => rotateSel(true), flipH: () => flipSel(true), flipV: () => flipSel(false), alignLeft: () => alignSel('left'), alignRight: () => alignSel('right'), alignTop: () => alignSel('top'), alignBottom: () => alignSel('bottom'), centerH: () => alignSel('cx'), centerV: () => alignSel('cy'), gridAlign: gridAlignSel, distH: () => distributeSel('h', false), distV: () => distributeSel('v', false), distLeft: () => distributeSel('h', true), distTop: () => distributeSel('v', true), distArray: () => toast('Distribute Array — parametry macierzy (wkrótce)'), front: () => zOrderSel(true), back: () => zOrderSel(false), hasSel: fmtCount > 0 || selPlacedAll.length > 0 };
@@ -4411,7 +4554,7 @@ export function PcbView() {
                   marqueeMode={marqueeMode} onSelectMany={onSelectManyIdx}
                   onContextMenu={(e) => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY }); }}
                   overlay={<>
-                    <SheetFrame />
+                    <SheetFrame doc={docSettings} project={projectName} sheet={sheetName} />
                     {placed.map((c, i) => renderPlaced(placedMove && placedDrag.includes(i) ? { ...c, x: c.x + placedMove.dx, y: c.y + placedMove.dy } : c, c.id))}
                     {placing && renderPlaced(placing, 'placing', true)}
                     {selPlacedAll.filter((i) => placed[i]).map((i) => <g key={`plhl${i}`}>{selHighlight(placedBBox(placedMove && placedDrag.includes(i) ? { ...placed[i], x: placed[i].x + placedMove.dx, y: placed[i].y + placedMove.dy } : placed[i]), view.zoom, '#2196f3')}</g>)}
