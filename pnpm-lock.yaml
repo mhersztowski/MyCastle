@@ -448,6 +448,9 @@ importers:
       '@mui/x-tree-view':
         specifier: ^8.0.0
         version: 8.27.2(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.2.0))(@types/react@18.3.28)(react@18.2.0))(@mui/material@6.5.0(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.2.0))(@types/react@18.3.28)(react@18.2.0))(@types/react@18.3.28)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(@mui/system@7.3.8(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.2.0))(@types/react@18.3.28)(react@18.2.0))(@types/react@18.3.28)(react@18.2.0))(@types/react@18.3.28)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+      '@novnc/novnc':
+        specifier: ^1.7.0
+        version: 1.7.0
       '@react-form-builder/components-material-ui':
         specifier: ^7.15.0
         version: 7.15.0(e867943202a789b5695bbcf07e2c3103)
@@ -3518,6 +3521,9 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@npmcli/fs@3.1.1':
     resolution: {integrity: sha512-q9CRWjpHCMIh5sVyefoD1cA7PkvILqCZsnSOEUUivORLjxCO/Irmue2DprETiNgEqktDBZaM1Bi+jrarx1XdCg==}
@@ -12507,6 +12513,8 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@novnc/novnc@1.7.0': {}
 
   '@npmcli/fs@3.1.1':
     dependencies:

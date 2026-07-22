@@ -1464,8 +1464,10 @@ export default function DrivePage(): React.JSX.Element {
     setLogsView(null);
   }, []);
 
-  const showSidebar = !(isWide && panelFullscreen);
-  const showRightPanel = isWide && panelOpen;
+  // The editor/preview panel now opens inline on every screen size. On a phone
+  // it takes over the whole viewport (the file list hides while it is open).
+  const showRightPanel = panelOpen;
+  const showSidebar = !((isWide && panelFullscreen) || (!isWide && panelOpen));
   const showAgent = isWide && agentOpen;
 
   // ── Initial mkdir + refresh ─────────────────────────────────────────────
@@ -1958,12 +1960,7 @@ export default function DrivePage(): React.JSX.Element {
   // call sites that pass just an entry from the file list.
   const openInMdEditor = useCallback(async (entry: VfsEntry, relOverride?: string) => {
     const rel = relOverride ?? (cwd ? `${cwd}/${entry.name}` : entry.name);
-    if (!isWide) {
-      const fullPath = `data/Minis/Users/${userName}/drive/${rel}`;
-      const encoded = fullPath.split('/').map(encodeURIComponent).join('/');
-      window.open(`/editor/md/${encoded}`, '_blank');
-      return;
-    }
+    // Open inline in the right panel on all screen sizes (mobile shows it full-screen).
     try {
       const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
       if (!r.ok) throw new Error(`readFile failed: ${r.status}`);
@@ -1974,7 +1971,7 @@ export default function DrivePage(): React.JSX.Element {
     } catch (err) {
       toast((err as Error).message, 'error');
     }
-  }, [userName, cwd, isWide, toast, resetPanels]);
+  }, [userName, cwd, isWide, toast, resetPanels, navigate]);
 
   // Open a markdown file that lives OUTSIDE the drive subtree (user-root-relative,
   // e.g. a Notes file `md/rome.md` → `/data/Minis/Users/{u}/md/rome.md`) in the
@@ -1983,11 +1980,7 @@ export default function DrivePage(): React.JSX.Element {
   const openPimMdInPanel = useCallback(async (pimRel: string) => {
     const name = pimRel.split('/').pop() as string;
     const fullPath = `/data/Minis/Users/${userName}/${pimRel}`;
-    if (!isWide) {
-      const encoded = fullPath.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
-      window.open(`/editor/md/${encoded}`, '_blank');
-      return;
-    }
+    // Open inline in the right panel on all screen sizes (mobile shows it full-screen).
     try {
       const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/readFile`, window.location.origin);
       u.searchParams.set('path', fullPath);
@@ -2000,7 +1993,7 @@ export default function DrivePage(): React.JSX.Element {
     } catch (err) {
       toast((err as Error).message, 'error');
     }
-  }, [userName, isWide, toast, resetPanels]);
+  }, [userName, isWide, toast, resetPanels, navigate]);
 
   // Clicking a link inside the Drive markdown editor ("Open in editor"): open the
   // TARGET in this same right-hand editor panel (stay in Drive) instead of
@@ -4329,88 +4322,6 @@ export default function DrivePage(): React.JSX.Element {
         </Menu>
       )}
 
-      {/* View dialog — mobile fallback (desktop uses inline right panel) */}
-      {viewing && !isWide && (
-        <Dialog open onClose={() => setViewing(null)} maxWidth="lg" fullWidth>
-          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pr: 6, flexWrap: 'wrap' }}>
-            <Tooltip title={hasPrev ? 'Poprzedni' : 'Pierwszy plik'}>
-              <span>
-                <IconButton size="small" disabled={!hasPrev} onClick={() => void navigatePreview(-1)}>
-                  <NavigateBeforeIcon />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Typography variant="caption" sx={{ minWidth: 40, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
-              {currentPreviewIdx >= 0 ? `${currentPreviewIdx + 1} / ${fileEntries.length}` : '—'}
-            </Typography>
-            <Tooltip title={hasNext ? 'Następny' : 'Ostatni plik'}>
-              <span>
-                <IconButton size="small" disabled={!hasNext} onClick={() => void navigatePreview(1)}>
-                  <NavigateNextIcon />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-            <VisibilityIcon /> {viewing.entry.name}
-            <Box sx={{ flex: 1 }} />
-            <Tooltip title="Akcje pliku">
-              <IconButton size="small" onClick={(ev) => setViewActionsMenu(ev.currentTarget)}>
-                <MoreVertIcon />
-              </IconButton>
-            </Tooltip>
-          </DialogTitle>
-          <DialogContent dividers sx={{ minHeight: 400 }}>
-            {viewing.textContent !== undefined ? (
-              // Selectable <pre> — browser's native selection lets the user
-              // mark a block and ⌘C / Ctrl+C copies it to system clipboard.
-              <Box component="pre" sx={{
-                m: 0, p: 1.5, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-                fontSize: 13, lineHeight: 1.5,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                userSelect: 'text', cursor: 'text',
-                maxHeight: '70vh', overflow: 'auto',
-                bgcolor: 'action.hover', borderRadius: 1,
-              }}>
-                {viewing.textContent}
-              </Box>
-            ) : isImageMime(viewing.mime) ? (
-              <Box sx={{ textAlign: 'center' }}>
-                <img
-                  src={`data:${viewing.mime};base64,${viewing.dataB64}`}
-                  alt={viewing.entry.name}
-                  style={{ maxWidth: '100%', maxHeight: '70vh' }}
-                />
-              </Box>
-            ) : isPdfMime(viewing.mime) ? (
-              <Box sx={{ height: '70vh' }}><DocPreview userName={userName} filePath={viewingRel} kind="pdf" /></Box>
-            ) : isDjvuMime(viewing.mime) ? (
-              <Box sx={{ height: '70vh' }}><DocPreview userName={userName} filePath={viewingRel} kind="djvu" /></Box>
-            ) : isAudioMime(viewing.mime) ? (
-              <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Box component="audio" controls
-                  src={`data:${viewing.mime};base64,${viewing.dataB64}`}
-                  sx={{ width: '100%', maxWidth: 500 }}
-                />
-              </Box>
-            ) : isVideoMime(viewing.mime) ? (
-              <Box component="video" controls
-                src={`data:${viewing.mime};base64,${viewing.dataB64}`}
-                sx={{ width: '100%', maxHeight: '70vh' }}
-              />
-            ) : (
-              <Alert severity="info">
-                Plik binarny <code>{viewing.mime}</code> (~{formatBytes(Math.floor(viewing.dataB64.length * 3 / 4))}) —
-                podgląd niedostępny w przeglądarce. Pobierz, aby otworzyć w odpowiedniej aplikacji.
-              </Alert>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button startIcon={<DownloadIcon />} onClick={() => void onDownload(viewing.entry)}>Pobierz</Button>
-            <Box sx={{ flex: 1 }} />
-            <Button onClick={() => setViewing(null)}>Zamknij</Button>
-          </DialogActions>
-        </Dialog>
-      )}
 
       {/* New empty file dialog */}
       {newFileDialog && (() => {

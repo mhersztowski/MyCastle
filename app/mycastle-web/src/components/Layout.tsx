@@ -55,6 +55,7 @@ import {
   CloudDownload as CloudDownloadIcon,
   Storefront as StorefrontIcon,
   PhotoLibrary as PhotoLibraryIcon,
+  ScreenShare as ScreenShareIcon,
   AutoMode as AutoModeIcon,
   Notifications as NotificationsIcon,
   FitnessCenter as FitnessCenterIcon,
@@ -187,6 +188,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
         {
           text: 'Tools', icon: <BuildIcon />, children: [
             { text: 'UI Docs', icon: <PhotoLibraryIcon />, path: `/user/${userName}/tools/ui-docs` },
+            { text: 'VNC', icon: <ScreenShareIcon />, path: `/user/${userName}/tools/vnc` },
             ...(isAdmin && !impersonating ? [
               { text: 'API Keys', icon: <VpnKeyIcon />, path: `/user/${userName}/tools/api-keys` },
               { text: 'Test VFS', icon: <AccountTreeIcon />, path: `/user/${userName}/tools/testvfs` },

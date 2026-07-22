@@ -91,7 +91,13 @@
       "Bash(chmod +x run_watchtower.sh)",
       "Bash(awk '{print $1, $NF}')",
       "WebFetch(domain:www.lcsc.com)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:freecad-documentation.netlify.app)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('latest:', d['dist-tags']\\); import time; vs=list\\(d['versions'].keys\\(\\)\\); print\\('all versions:', vs[-8:]\\); lat=d['dist-tags']['latest']; v=d['versions'][lat]; print\\('main:', v.get\\('main'\\)\\); print\\('module:', v.get\\('module'\\)\\); print\\('type:', v.get\\('type'\\)\\); print\\('exports:', json.dumps\\(v.get\\('exports'\\), indent=1\\) if v.get\\('exports'\\) else 'none'\\); print\\('types:', v.get\\('types'\\) or v.get\\('typings'\\) or 'NONE'\\); print\\('files:', v.get\\('files'\\)\\); print\\('time_latest:', d['time'][lat]\\)\")",
+      "WebFetch(domain:www.altium.com)",
+      "Bash(python3 -c \"import sys,json; v=json.load\\(sys.stdin\\); print\\('name:', v['name']\\); print\\('version:', v['version']\\); print\\('type:', v.get\\('type'\\)\\); print\\('main:', v.get\\('main'\\)\\); print\\('exports:', json.dumps\\(v.get\\('exports'\\), indent=1\\)\\); print\\('dependencies:', v.get\\('dependencies'\\)\\); print\\('peerDeps:', v.get\\('peerDependencies'\\)\\)\")",
+      "Bash(awk 'NR>=4326 && NR<=4420 && /<\\\\/Dialog>/{print NR\": \"$0}' DrivePage.tsx)",
+      "Bash(awk 'NR>=1760 && NR<=1960 && \\(/\\\\{elements\\\\.map/ || /\\\\{overlay\\\\}/ || /\\\\{preview /|| /<svg/ || /renderFpEl\\\\\\(/\\)' components/PcbView.tsx)"
     ]
   }
 }

@@ -67,8 +67,6 @@ import PanToolOutlinedIcon from '@mui/icons-material/PanToolOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import HistoryIcon from '@mui/icons-material/History';
-import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import ArrowRightIcon from '@mui/icons-material/ArrowRight';
@@ -169,45 +167,20 @@ function CollapseTab({ open, side, onToggle }: { open: boolean; side: 'left' | '
   return <Box onClick={onToggle} title={open ? 'Ukryj panel' : 'Pokaż panel'} sx={{ width: 13, flexShrink: 0, bgcolor: '#f0f2f4', borderLeft: `1px solid ${C.panelBorder}`, borderRight: `1px solid ${C.panelBorder}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', '&:hover': { bgcolor: '#e4e7ea' } }}><Typography sx={{ fontSize: 13, color: '#6b7177', userSelect: 'none' }}>{ch}</Typography></Box>;
 }
 
-// ── Przeciągany panel ─────────────────────────────────────────────────────────
-function DraggablePanel({
-  title, initial, width, children, headerRight,
-}: { title: string; initial: { x: number; y: number }; width: number; children: React.ReactNode; headerRight?: React.ReactNode }) {
-  const [pos, setPos] = useState(initial);
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
-  // Przytnij pozycję do obszaru canvasu (na mobile stałe współrzędne wychodziły poza ekran → paleta niewidoczna)
-  useEffect(() => {
-    const clamp = () => {
-      const el = boxRef.current; if (!el) return;
-      const parent = el.offsetParent as HTMLElement | null;
-      const pw = parent ? parent.clientWidth : window.innerWidth, ph = parent ? parent.clientHeight : window.innerHeight;
-      const w = el.offsetWidth, h = el.offsetHeight;
-      setPos((p) => ({ x: Math.max(4, Math.min(p.x, pw - w - 4)), y: Math.max(4, Math.min(p.y, ph - h - 4)) }));
-    };
-    clamp();
-    window.addEventListener('resize', clamp);
-    return () => window.removeEventListener('resize', clamp);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const onPointerDown = (e: React.PointerEvent) => {
-    dragRef.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
-    const move = (ev: PointerEvent) => { if (dragRef.current) setPos({ x: ev.clientX - dragRef.current.dx, y: ev.clientY - dragRef.current.dy }); };
-    const up = () => { dragRef.current = null; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
-  };
-  return (
-    <Box ref={boxRef} sx={{ position: 'absolute', left: pos.x, top: pos.y, width, maxWidth: 'calc(100% - 8px)', bgcolor: '#fff', border: `1px solid ${C.barBorder}`, borderRadius: 1, boxShadow: '0 4px 14px rgba(0,0,0,0.18)', zIndex: 8, userSelect: 'none' }}>
-      <Box onPointerDown={onPointerDown} sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, borderBottom: `1px solid ${C.barBorder}`, cursor: 'move', touchAction: 'none' }}>
-        <Typography sx={{ fontSize: 13, color: '#3a3f45', flex: 1 }}>{title}</Typography>
-        {headerRight}
-        <RemoveIcon sx={{ fontSize: 16, color: C.icon, cursor: 'pointer' }} />
-      </Box>
-      {children}
-    </Box>
-  );
-}
+// Styl poziomego przewijania paska narzędzi palcem/piórem, gdy nie mieści się na
+// ekranie: dzieci nie kurczą się (więc treść realnie wystaje), gest poziomy = scroll,
+// pasek przewijania ukryty.
+const HSCROLL_SX = {
+  overflowX: 'auto' as const,
+  overflowY: 'hidden' as const,
+  WebkitOverflowScrolling: 'touch' as const,
+  touchAction: 'pan-x' as const,
+  '&::-webkit-scrollbar': { display: 'none' },
+  scrollbarWidth: 'none' as const,
+  '& > *': { flexShrink: 0 },
+};
 
+// ── Przeciągany panel ─────────────────────────────────────────────────────────
 // Dokowany pasek narzędzi (osadzony na stałe u góry canvasu; zamiast pływających palet)
 function DockedTools({ editor, activeTool, setActiveTool }: { editor: Editor; activeTool: string; setActiveTool: (id: string) => void }) {
   const groups: { tools: Tool[] }[] =
@@ -216,7 +189,7 @@ function DockedTools({ editor, activeTool, setActiveTool }: { editor: Editor; ac
         : editor === 'symbol' ? [{ tools: SYMBOL_TOOLS }]
           : [{ tools: FOOTPRINT_TOOLS }];
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, height: 34, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, px: 0.5, overflowX: 'auto', overflowY: 'hidden' }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, height: 34, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, px: 0.5, ...HSCROLL_SX }}>
       {groups.map((g, gi) => (
         <Box key={gi} sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
           {gi > 0 && <Box sx={{ width: '1px', height: 20, bgcolor: '#d7dadd', mx: 0.75, flexShrink: 0 }} />}
@@ -323,7 +296,7 @@ function TopMenuBar({ editor, onNewProject, onNewSymbol, onNewSchematic, onNewPc
   const closeAll = () => { setPlikAnchor(null); setNowyAnchor(null); setEksportAnchor(null); setOpen(null); };
   const fs = !formatOps.hasSel, es = !editOps.hasSel;
   return (
-    <Box sx={{ height: 40, flexShrink: 0, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'center', px: 1.5, overflowX: 'auto' }}>
+    <Box sx={{ height: 40, flexShrink: 0, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'center', px: 1.5, ...HSCROLL_SX }}>
       {menus[editor].map((m) => (
         <Box key={m} onClick={(e) => { if (m === 'Plik') setPlikAnchor(e.currentTarget as HTMLElement); else if (m === 'Edycja' || m === 'Umieść' || m === 'Format') setOpen({ name: m, el: e.currentTarget as HTMLElement }); }}
           sx={{ px: 1, py: 0.5, fontSize: 13.5, color: C.menuText, cursor: 'default', borderRadius: 0.5, '&:hover': { bgcolor: '#eef1f4' } }}>{m}</Box>
@@ -413,7 +386,7 @@ interface FormatOps {
 }
 function Toolbar({ editor, onSave, ops, fmt, onZoomIn, onZoomOut, onFit, onFind, onFindSimilar, onAnnotate, on3dView, onMyElements, onBom }: { editor: Editor; onSave?: () => void; ops: EditOps; fmt: FormatOps; onZoomIn: () => void; onZoomOut: () => void; onFit: () => void; onFind: () => void; onFindSimilar: () => void; onAnnotate: () => void; on3dView?: () => void; onMyElements?: () => void; onBom?: () => void }) {
   return (
-    <Box sx={{ height: 40, flexShrink: 0, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'center', px: 1 }}>
+    <Box sx={{ height: 40, flexShrink: 0, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'center', px: 1, ...HSCROLL_SX }}>
       <TbIcon icon={FolderOpenIcon} /><TbIcon icon={SaveOutlinedIcon} disabled={!onSave} onClick={onSave} title={editor === 'footprint' ? 'Zapisz jako Footprint' : 'Zapisz jako Symbol'} /><TbDiv />
       <TbIcon icon={UndoIcon} disabled={!ops.canUndo} onClick={ops.undo} title="Cofnij (Ctrl+Z)" /><TbIcon icon={RedoIcon} disabled={!ops.canRedo} onClick={ops.redo} title="Ponów (Ctrl+Y)" /><TbIcon icon={ContentCopyOutlinedIcon} disabled={!ops.hasSel} onClick={ops.copy} title="Kopiuj (Ctrl+C)" /><TbIcon icon={ContentPasteOutlinedIcon} disabled={!ops.hasClip} onClick={ops.paste} title="Wklej (Ctrl+V)" /><TbIcon icon={ContentCutIcon} disabled={!ops.hasSel} onClick={ops.cut} title="Wytnij (Ctrl+X)" /><TbIcon icon={DeleteOutlineIcon} disabled={!ops.hasSel} onClick={ops.del} title="Usuń (Del)" /><TbDiv />
       <TbIcon icon={SearchIcon} onClick={onFind} title="Znajdź…" /><TbIcon icon={ManageSearchIcon} onClick={onFindSimilar} title="Find Similar Objects…" /><TbIcon icon={StraightenIcon} onClick={onAnnotate} title="Adnotacja…" /><TbDiv />
@@ -482,7 +455,7 @@ function DocTabs({ editor, setEditor, symbols, activeSymbolId, onSelectSymbol, o
     borderTop: active ? '2px solid #4a90e2' : '2px solid transparent',
   });
   return (
-    <Box sx={{ height: 35, flexShrink: 0, bgcolor: '#f0f2f4', borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'stretch', overflowX: 'auto' }}>
+    <Box sx={{ height: 35, flexShrink: 0, bgcolor: '#f0f2f4', borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'stretch', ...HSCROLL_SX }}>
       <Box sx={tab(false)}>Start</Box>
       <Box sx={tab(editor === 'schematic')} onClick={() => setEditor('schematic')}><FolderOutlinedIcon sx={{ fontSize: 16, color: '#e0a83a' }} /> {projectName}</Box>
       <Box sx={tab(editor === 'pcb')} onClick={() => setEditor('pcb')}><GridOnIcon sx={{ fontSize: 16, color: '#3aa757' }} /> *{pcbName}</Box>
@@ -537,7 +510,7 @@ interface CompDef { id: string; name: string; category: string; refPrefix: strin
 interface EasyEdaSym { shapes: string[]; bbox: { x: number; y: number; width: number; height: number } | null }
 interface PlacedComp {
   id: string; defId: string; x: number; y: number; ref: string; label: string; pins: number;
-  octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; savedEls?: El[];
+  octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; savedEls?: El[]; fpEls?: FpEl[];
   // Właściwości komponentu (sheet/PCB) — prezentacja + atrybuty
   layer?: string; rotation?: number; showPrefix?: string; showName?: string; addToBom?: string; locked?: string; convertToPcb?: string; displayFootprint?: string;
   footprint?: string; supplier?: string; supplierPart?: string; manufacturer?: string; mfrPart?: string; jlcpcb?: string; link?: string; model3d?: string;
@@ -593,7 +566,10 @@ function renderPcbPart(comp: PlacedComp, key: React.Key, preview = false, layers
   const rot = comp.rotation || 0;
   const body = comp.fp
     ? renderFootprint(comp.fp, preview, layers, bottom, rot)
-    : <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
+    : comp.fpEls && comp.fpEls.length
+      // Footprint z Work Space (własne FpEl na warstwach) — wyśrodkowany w (0,0), renderowany z kolorami warstw.
+      ? (() => { const bb = unionBB(comp.fpEls, elBBoxFp); return <g transform={`translate(${-(bb.x + bb.w / 2)},${-(bb.y + bb.h / 2)})`}>{comp.fpEls.map((el, i) => renderFpEl(el, i, preview, layers))}</g>; })()
+      : <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
   const tf = `translate(${comp.x},${comp.y}) rotate(${rot})${bottom ? ' scale(-1,1)' : ''}`;
   return <g key={key} transform={tf} opacity={preview ? 0.7 : 1}>{body}
     {comp.showPrefix !== 'Nie' && <text x={0} y={-14} fontSize={7} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, -14, rot, bottom)}>{comp.ref}</text>}
@@ -737,6 +713,7 @@ function placedBBox(comp: PlacedComp): { x: number; y: number; w: number; h: num
 function pcbPartBBox(comp: PlacedComp): { x: number; y: number; w: number; h: number } {
   const b = comp.fp?.bbox;
   if (b) return { x: comp.x - b.width * 2, y: comp.y - b.height * 2, w: b.width * 4, h: b.height * 4 };
+  if (comp.fpEls && comp.fpEls.length) { const bb = unionBB(comp.fpEls, elBBoxFp); return { x: comp.x - bb.w / 2, y: comp.y - bb.h / 2, w: bb.w, h: bb.h }; }
   return { x: comp.x - 16, y: comp.y - 12, w: 32, h: 24 };
 }
 function hitTestPcbPart(arr: PlacedComp[], p: { x: number; y: number }, pad = 6): number | null {
@@ -1234,21 +1211,25 @@ function SymbolEditorCanvas({ elements, onChange, activeTool, setActiveTool, vie
 }
 
 // ── Panel warstw (PCB) ────────────────────────────────────────────────────────
-function LayersPanel({ layers, activeLayer, onColor, onToggle, onActive, objVis, onObjToggle, copper }: {
+// Zawartość panelu Layers/Objects, zadokowana w zakładce prawego panelu
+// (obok Properties) na wszystkich rozmiarach ekranu.
+function LayersPanelBody({ layers, activeLayer, onColor, onToggle, onActive, objVis, onObjToggle, copper, docked }: {
   layers: LayerState; activeLayer: string; onColor: (name: string, color: string) => void; onToggle: (name: string) => void; onActive: (name: string) => void;
-  objVis: Record<string, boolean>; onObjToggle: (cat: string) => void; copper?: number;
+  objVis: Record<string, boolean>; onObjToggle: (cat: string) => void; copper?: number; docked?: boolean;
 }) {
   const [tab, setTab] = useState<'All' | 'Copper' | 'Non-Copper' | 'Object'>('All');
   const allDefs = layerDefsFor(copper ?? 2); // uwzględnia warstwy Inner przy Copper Layer > 2
   const defs = tab === 'Copper' ? allDefs.filter((d) => d.group === 'copper') : tab === 'Non-Copper' ? allDefs.filter((d) => d.group === 'non-copper') : allDefs;
   const allObj = OBJECT_CATS.every((c) => objVis[c] !== false);
+  // Zadokowany wypełnia dostępną wysokość zakładki; pływający ma stałą maks. wysokość.
+  const listSx = docked ? { flex: 1, minHeight: 0, overflow: 'auto' } : { maxHeight: 460, overflow: 'auto' };
   return (
-    <DraggablePanel title="Layers and Objects" initial={{ x: 430, y: 12 }} width={300} headerRight={<><PushPinOutlinedIcon sx={{ fontSize: 16, color: C.icon, mr: 0.75 }} /><SettingsOutlinedIcon sx={{ fontSize: 16, color: C.icon, mr: 0.75 }} /></>}>
-      <Box sx={{ display: 'flex', borderBottom: `1px solid ${C.barBorder}`, fontSize: 13 }}>
+    <>
+      <Box sx={{ display: 'flex', borderBottom: `1px solid ${C.barBorder}`, fontSize: 13, flexShrink: 0 }}>
         {(['All', 'Copper', 'Non-Copper', 'Object'] as const).map((t) => <Box key={t} onClick={() => setTab(t)} sx={{ px: 1.5, py: 0.75, cursor: 'default', color: tab === t ? '#2196f3' : '#5b6169', fontWeight: tab === t ? 600 : 400, borderBottom: tab === t ? '2px solid #2196f3' : '2px solid transparent' }}>{t}</Box>)}
       </Box>
       {tab !== 'Object' ? (
-        <Box sx={{ maxHeight: 460, overflow: 'auto' }}>
+        <Box sx={listSx}>
           {defs.map((d) => {
             const st = layers[d.name] ?? { color: d.color, visible: true }; const active = activeLayer === d.name;
             return (
@@ -1268,7 +1249,7 @@ function LayersPanel({ layers, activeLayer, onColor, onToggle, onActive, objVis,
           })}
         </Box>
       ) : (
-        <Box sx={{ maxHeight: 460, overflow: 'auto' }}>
+        <Box sx={listSx}>
           <Box onClick={() => onObjToggle('__all__')} sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.7, gap: 1.5, borderBottom: '1px solid #f0f1f3', bgcolor: '#eceef1' }}>
             <Box sx={{ width: 20, display: 'flex', justifyContent: 'center' }}>{allObj && <CheckIcon sx={{ fontSize: 17, color: '#2b2f34' }} />}</Box>
             <Box sx={{ width: 17 }} /><Typography sx={{ fontSize: 13.5 }}>Wszystko</Typography>
@@ -1281,7 +1262,7 @@ function LayersPanel({ layers, activeLayer, onColor, onToggle, onActive, objVis,
           ))}
         </Box>
       )}
-    </DraggablePanel>
+    </>
   );
 }
 
@@ -1934,9 +1915,11 @@ function FootprintCanvas({ elements, onChange, activeTool, setActiveTool, view, 
       <defs><pattern id="fpgrid" width={g} height={g} patternUnits="userSpaceOnUse" patternTransform={`translate(${view.x},${view.y})`}><path d={`M${g} 0 L0 0 0 ${g}`} fill="none" stroke={meta.gridColor || '#FFFFFF'} strokeOpacity={meta.gridShow === 'Nie' ? 0 : 0.22} strokeWidth={1} /></pattern></defs>
       <rect width="100%" height="100%" fill={meta.bg || '#000000'} /><rect width="100%" height="100%" fill="url(#fpgrid)" />
       <g transform={`translate(${view.x},${view.y}) scale(${view.zoom})`}>
-        {overlay}
         {elements.map((el, i) => renderFpEl(gripDraft && gripDraft.idx === i ? gripDraft.el : (moveDelta && moveDelta.idxs.includes(i) ? translateEl(el, moveDelta.dx, moveDelta.dy) : el), i, false, layers))}
         {preview && renderFpEl(preview, 'draft', true, layers)}
+        {/* Wstawione komponenty (footprinty) rysujemy NAD miedzią/wypełnieniami płytki —
+            inaczej wypełnienie warstwy płytki przykrywało pady (np. górnej warstwy) footprintu. */}
+        {overlay}
         {(() => { const sel = selectedIdxs && selectedIdxs.length ? selectedIdxs : selectedIdx != null ? [selectedIdx] : []; const showGrips = sel.length <= 12; return sel.map((si) => { if (!elements[si]) return null; const el = gripDraft && gripDraft.idx === si ? gripDraft.el : moveDelta && moveDelta.idxs.includes(si) ? translateEl(elements[si], moveDelta.dx, moveDelta.dy) : elements[si]; const b = elBBoxFp(el); return <g key={si}><rect x={b.x - 4} y={b.y - 4} width={b.w + 8} height={b.h + 8} fill="none" stroke="#4fc3f7" strokeWidth={1 / view.zoom} strokeDasharray={`${4 / view.zoom} ${3 / view.zoom}`} />{showGrips && gripMarkers(gripsFp(el), view.zoom, `s${si}`)}</g>; }); })()}
         {marquee && <rect x={Math.min(marquee.x0, marquee.x1)} y={Math.min(marquee.y0, marquee.y1)} width={Math.abs(marquee.x1 - marquee.x0)} height={Math.abs(marquee.y1 - marquee.y0)} fill="#4fc3f7" fillOpacity={0.12} stroke="#4fc3f7" strokeWidth={1 / view.zoom} strokeDasharray={`${4 / view.zoom} ${2 / view.zoom}`} />}
       </g>
@@ -2103,7 +2086,7 @@ function SchPlacedProps({ comp, onChange, mouse, onEditSymbol }: { comp: PlacedC
 
 // ── EasyEDA / LCSC (proxy w cad-backend, bez tokena) ──────────────────────────
 interface EasyProduct { lcsc: string; mpn: string; package: string; manufacturer: string; stock?: number; smtStock?: number; price?: string }
-interface PickResult { defId: string; label: string; pins: number; octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; refPrefix?: string; savedEls?: El[]; lcsc?: string; supplier?: string; manufacturer?: string; footprint?: string; mfrPart?: string }
+interface PickResult { defId: string; label: string; pins: number; octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; refPrefix?: string; savedEls?: El[]; fpEls?: FpEl[]; lcsc?: string; supplier?: string; manufacturer?: string; footprint?: string; mfrPart?: string }
 
 // ── Import symboli / footprintów (KiCad / Eagle / EasyEDA) ────────────────────
 type SNode = string | SNode[];
@@ -2277,14 +2260,34 @@ const unionBB = <T,>(arr: T[], bb: (e: T) => { x: number; y: number; w: number; 
   const bs = arr.map(bb); const x = Math.min(...bs.map((b) => b.x)), y = Math.min(...bs.map((b) => b.y));
   return { x, y, w: Math.max(...bs.map((b) => b.x + b.w)) - x, h: Math.max(...bs.map((b) => b.y + b.h)) - y };
 };
+// SVG, które po zamontowaniu mierzy realny bounding box treści (getBBox — obejmuje
+// też teksty pinów rysowane poza bbox symbolu) i ustawia dokładny viewBox. Dzięki
+// temu symbol z etykietami nie jest ucinany, niezależnie od proporcji kontenera.
+function AutoFitSvg({ children, pad = 8, background }: { children: React.ReactNode; pad?: number; background?: string }) {
+  const gRef = useRef<SVGGElement | null>(null);
+  const [vb, setVb] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const g = gRef.current;
+    if (!g) return;
+    try {
+      const b = g.getBBox();
+      if (b.width > 0 && b.height > 0) setVb(`${b.x - pad} ${b.y - pad} ${b.width + 2 * pad} ${b.height + 2 * pad}`);
+    } catch { /* getBBox może rzucić zanim SVG jest w layoutcie */ }
+  });
+  return (
+    <svg width="100%" height="100%" viewBox={vb} preserveAspectRatio="xMidYMid meet" style={background ? { background } : undefined}>
+      <g ref={gRef}>{children}</g>
+    </svg>
+  );
+}
 function LibraryPreview({ prev, type }: { prev: LibPrev; type: string }) {
   if (!prev) return <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9aa0a6', fontSize: 12 }}>Wybierz element, aby zobaczyć podgląd</Box>;
   if (prev.kind === 'sym-el') return <svg width="100%" height="100%" viewBox={fitVB(unionBB(prev.els, elBBox))} preserveAspectRatio="xMidYMid meet">{prev.els.map((el, i) => renderEl(el, i))}</svg>;
   if (prev.kind === 'fp-el') return <svg width="100%" height="100%" viewBox={fitVB(unionBB(prev.els, elBBoxFp), 30)} preserveAspectRatio="xMidYMid meet" style={{ background: '#111' }}>{prev.els.map((el, i) => renderFpEl(el, i))}</svg>;
-  // renderEasyEdaSymbol centruje treść w (0,0) przez translate(-cx,-cy) → viewBox wyśrodkowany
-  if (prev.kind === 'easy-sym') { const w = prev.sym.bbox?.width || 100, h = prev.sym.bbox?.height || 100; return <svg width="100%" height="100%" viewBox={fitVB({ x: -w / 2, y: -h / 2, w, h })} preserveAspectRatio="xMidYMid meet">{renderEasyEdaSymbol(prev.sym)}</svg>; }
-  // renderFootprint: scale(4) translate(-cx,-cy) → treść w (0,0), skalowana ×4
-  if (prev.kind === 'easy-fp') { const w = (prev.fp.bbox?.width || 40) * 4, h = (prev.fp.bbox?.height || 40) * 4; return <svg width="100%" height="100%" viewBox={fitVB({ x: -w / 2, y: -h / 2, w, h }, 30)} preserveAspectRatio="xMidYMid meet" style={{ background: '#111' }}>{renderFootprint(prev.fp)}</svg>; }
+  // Etykiety pinów rysowane są POZA bbox symbolu → mierzymy realny zasięg (getBBox),
+  // żeby symbol z tekstami nie był ucinany.
+  if (prev.kind === 'easy-sym') return <AutoFitSvg pad={8}>{renderEasyEdaSymbol(prev.sym)}</AutoFitSvg>;
+  if (prev.kind === 'easy-fp') return <AutoFitSvg pad={30} background="#111">{renderFootprint(prev.fp)}</AutoFitSvg>;
   // 'easy' (część LCSC) — pokaż OBA: symbol u góry, footprint niżej
   if (!prev.sym && !prev.fp) return <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9aa0a6', fontSize: 12 }}>Brak podglądu</Box>;
   return (
@@ -2342,8 +2345,8 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
 
   const kwl = kw.trim().toLowerCase(), ql = query.trim().toLowerCase();
   const match = (s: string) => { const l = s.toLowerCase(); return (!kwl || l.includes(kwl)) && (!ql || l.includes(ql)); };
-  const wsSymRows = (): LibRow[] => wsSym.filter((s) => match(s.title)).map((s) => ({ key: `ws:${s.name}`, name: s.name, title: s.title, pkg: (s as { footprint?: string }).footprint || s.mfrPart || '', owner: s.owner || 'mhersztowski', source: 'ws-sym' as const }));
-  const wsFpRows = (): LibRow[] => wsFp.filter((s) => match(s.title)).map((s) => ({ key: `wf:${s.name}`, name: s.name, title: s.title, pkg: s.tags || '', owner: s.owner || 'mhersztowski', source: 'ws-fp' as const }));
+  const wsSymRows = (): LibRow[] => wsSym.filter((s) => match(s.title || s.name)).map((s) => ({ key: `ws:${s.name}`, name: s.name, title: s.title || s.name, pkg: (s as { footprint?: string }).footprint || s.mfrPart || '', owner: s.owner || 'mhersztowski', source: 'ws-sym' as const }));
+  const wsFpRows = (): LibRow[] => wsFp.filter((s) => match(s.title || s.name)).map((s) => ({ key: `wf:${s.name}`, name: s.name, title: s.title || s.name, pkg: s.tags || '', owner: s.owner || 'mhersztowski', source: 'ws-fp' as const }));
   // Budowa wierszy zależnie od Typu + Klasy (lub lewego panelu: My Libraries / kategoria ulubionych)
   const ONLINE_CLS = ['LCSC', 'System', 'JLCPCB Assembled', 'Wkład użytkownika', 'Śledź'];
   const rows: LibRow[] = (() => {
@@ -2383,7 +2386,7 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
     try {
       if (sel.source === 'ws-sym') { const els = prev && prev.kind === 'sym-el' ? prev.els : (await (await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`)).json()).elements as El[]; onPick({ defId: 'saved', label: sel.title, pins: 0, savedEls: els || [], refPrefix: 'U' }); onClose(); }
       else if (sel.source === 'lcsc' && sel.lcsc) { const d = prev && prev.kind === 'easy' ? prev : await (await fetch(`/api/easyeda/component/${encodeURIComponent(sel.lcsc)}`)).json(); onPick({ defId: 'easyeda', label: sel.title, pins: 0, easyeda: d.sym || d.symbol, fp: d.fp || d.footprint, refPrefix: d.prefix, lcsc: sel.lcsc, supplier: 'LCSC', manufacturer: sel.owner, footprint: sel.pkg }); onClose(); }
-      else if (sel.source === 'ws-fp') { onPick({ defId: 'ic-generic', label: sel.title, pins: 0 }); onClose(); }
+      else if (sel.source === 'ws-fp') { const els = prev && prev.kind === 'fp-el' ? prev.els : (await (await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`)).json()).elements as FpEl[]; onPick({ defId: 'ic-generic', label: sel.title, pins: 0, fpEls: els || [], refPrefix: 'U' }); onClose(); }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
   const doEdit = async () => {
@@ -2455,21 +2458,21 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
           </Box>
           {/* Tabela wyników */}
           <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            <Box sx={{ display: 'flex', px: 1.5, py: 0.75, borderBottom: `2px solid ${C.barBorder}`, bgcolor: '#fafbfc', fontSize: 13, fontWeight: 600, color: '#3a3f45' }}>
-              <Box sx={{ flex: 1 }}>Nazwa (Numer części)</Box><Box sx={{ width: 220 }}>{isFp ? 'Footprint' : 'package'}</Box><Box sx={{ width: 140 }}>owner</Box>
+            <Box sx={{ display: 'flex', px: 1.5, py: 0.75, borderBottom: `2px solid ${C.barBorder}`, bgcolor: '#fafbfc', fontSize: 13, fontWeight: 600, color: '#000' }}>
+              <Box sx={{ flex: 1, minWidth: 120 }}>Nazwa (Numer części)</Box><Box sx={{ width: 220, display: { xs: 'none', md: 'block' } }}>{isFp ? 'Footprint' : 'package'}</Box><Box sx={{ width: 140, display: { xs: 'none', md: 'block' } }}>owner</Box>
             </Box>
             <Box sx={{ flex: 1, overflow: 'auto' }}>
               {loading && isOnline && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>}
               {!loading && rows.length === 0 && <Box sx={{ p: 2, fontSize: 12.5, color: '#9aa0a6' }}>{isOnline ? (query.trim().length < 2 ? 'Wpisz min. 2 znaki lub numer LCSC (np. C25804), aby wyszukać online.' : 'Brak wyników.') : 'Brak elementów w Work Space. Zapisz symbol/footprint w edytorze (Save).'}</Box>}
               {rows.map((r) => (
-                <Box key={r.key} onClick={() => setSelKey(r.key)} onDoubleClick={doPlace} onContextMenu={(e) => { e.preventDefault(); setSelKey(r.key); setCtxRow({ x: e.clientX, y: e.clientY, row: r }); }} sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.75, cursor: 'default', borderBottom: '1px solid #f0f1f3', bgcolor: selKey === r.key ? '#2f7fe0' : 'transparent', color: selKey === r.key ? '#fff' : '#2b2f34', '&:hover': { bgcolor: selKey === r.key ? '#2f7fe0' : '#f4f6f8' } }}>
-                  <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                <Box key={r.key} onClick={() => setSelKey(r.key)} onDoubleClick={doPlace} onContextMenu={(e) => { e.preventDefault(); setSelKey(r.key); setCtxRow({ x: e.clientX, y: e.clientY, row: r }); }} sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.75, cursor: 'default', borderBottom: '1px solid #f0f1f3', bgcolor: selKey === r.key ? '#2f7fe0' : 'transparent', color: selKey === r.key ? '#fff' : '#000', '&:hover': { bgcolor: selKey === r.key ? '#2f7fe0' : '#f4f6f8' } }}>
+                  <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 120 }}>
                     {r.source === 'ws-fp' ? <DeveloperBoardIcon sx={{ fontSize: 16, color: selKey === r.key ? '#fff' : '#e0533d', flexShrink: 0 }} /> : <MemoryOutlinedIcon sx={{ fontSize: 16, color: selKey === r.key ? '#fff' : '#3b82d6', flexShrink: 0 }} />}
                     {isFav(r) && <FavoriteIcon sx={{ fontSize: 13, color: selKey === r.key ? '#fff' : '#e05656', flexShrink: 0 }} />}
-                    <Typography sx={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}{r.lcsc && r.lcsc !== r.title ? ` (${r.lcsc})` : ''}</Typography>
+                    <Typography sx={{ fontSize: 13, color: selKey === r.key ? '#fff' : '#000', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}{r.lcsc && r.lcsc !== r.title ? ` (${r.lcsc})` : ''}</Typography>
                   </Box>
-                  <Box title={r.pkg} sx={{ width: 220, fontSize: 12.5, color: selKey === r.key ? '#fff' : '#3a3f45', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', pr: 1 }}>{r.pkg || '—'}</Box>
-                  <Box title={r.owner} sx={{ width: 140, fontSize: 12.5, color: selKey === r.key ? '#fff' : '#5b6169', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.owner || '—'}</Box>
+                  <Box title={r.pkg} sx={{ width: 220, display: { xs: 'none', md: 'block' }, fontSize: 12.5, color: selKey === r.key ? '#fff' : '#000', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', pr: 1 }}>{r.pkg || '—'}</Box>
+                  <Box title={r.owner} sx={{ width: 140, display: { xs: 'none', md: 'block' }, fontSize: 12.5, color: selKey === r.key ? '#fff' : '#000', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.owner || '—'}</Box>
                 </Box>
               ))}
             </Box>
@@ -2533,11 +2536,12 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
 interface SymbolMeta { title: string; owner: string; supplier: string; supplierOther: string; supplierPart: string; manufacturer: string; mfrPart: string; link: string; tags: string; description: string }
 const emptyMeta = (): SymbolMeta => ({ title: 'NowySymbol', owner: 'mhersztowski', supplier: 'Unknown', supplierOther: '', supplierPart: '', manufacturer: '', mfrPart: '', link: '', tags: '', description: '' });
 
-function SaveSymbolDialog({ open, onClose, onSave }: { open: boolean; onClose: () => void; onSave: (m: SymbolMeta) => Promise<void> }) {
+function SaveSymbolDialog({ open, onClose, onSave, initialTitle }: { open: boolean; onClose: () => void; onSave: (m: SymbolMeta) => Promise<void>; initialTitle?: string }) {
   const [m, setM] = useState<SymbolMeta>(emptyMeta);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { if (open) { setM(emptyMeta()); setErr(null); } }, [open]);
+  // Domyślny tytuł = nazwa otwartego symbolu (Place Component → Edycja), by Save szedł „na siebie".
+  useEffect(() => { if (open) { setM({ ...emptyMeta(), title: initialTitle?.trim() || emptyMeta().title }); setErr(null); } }, [open, initialTitle]);
   const upd = (k: keyof SymbolMeta, v: string) => setM((s) => ({ ...s, [k]: v }));
   const doSave = async () => { setSaving(true); setErr(null); try { await onSave(m); onClose(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); } };
 
@@ -2576,11 +2580,12 @@ function SaveSymbolDialog({ open, onClose, onSave }: { open: boolean; onClose: (
 // ── Dialog „Zapisz jako Footprint" ────────────────────────────────────────────
 interface FpSaveMeta { title: string; owner: string; tags: string; link: string; description: string }
 const emptyFpSave = (): FpSaveMeta => ({ title: 'NEW_FOOTPRINT', owner: 'mhersztowski', tags: '', link: '', description: '' });
-function SaveFootprintDialog({ open, onClose, onSave }: { open: boolean; onClose: () => void; onSave: (m: FpSaveMeta) => Promise<void> }) {
+function SaveFootprintDialog({ open, onClose, onSave, initialTitle }: { open: boolean; onClose: () => void; onSave: (m: FpSaveMeta) => Promise<void>; initialTitle?: string }) {
   const [m, setM] = useState<FpSaveMeta>(emptyFpSave);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { if (open) { setM(emptyFpSave()); setErr(null); } }, [open]);
+  // Domyślny tytuł = nazwa otwartego footprintu (Place Component → Edycja), by Save szedł „na siebie".
+  useEffect(() => { if (open) { setM({ ...emptyFpSave(), title: initialTitle?.trim() || emptyFpSave().title }); setErr(null); } }, [open, initialTitle]);
   const upd = (k: keyof FpSaveMeta, v: string) => setM((s) => ({ ...s, [k]: v }));
   const doSave = async () => { setSaving(true); setErr(null); try { await onSave(m); onClose(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); } };
   const label = (t: string) => <Typography sx={{ width: 96, fontSize: 13.5, color: '#3a3f45', pt: 0.9, flexShrink: 0, textAlign: 'right' }}>{t}</Typography>;
@@ -3256,7 +3261,7 @@ export function LcscPreview({ lcsc }: { lcsc: string }) {
         <Typography variant="caption" color="text.secondary">Symbol</Typography>
         <Box sx={{ ...boxSx, bgcolor: '#fff' }}>
           {sym && sym.shapes?.length
-            ? <svg width="100%" height="100%" viewBox={vb(symW, symH, 8)} preserveAspectRatio="xMidYMid meet">{renderEasyEdaSymbol(sym)}</svg>
+            ? <svg width="100%" height="100%" viewBox={vb(symW, symH, Math.max(40, Math.max(symW, symH) * 0.3))} preserveAspectRatio="xMidYMid meet">{renderEasyEdaSymbol(sym)}</svg>
             : <Box sx={empty}>brak symbolu</Box>}
         </Box>
       </Box>
@@ -3387,6 +3392,9 @@ export function PcbView() {
   const [showRight, setShowRight] = useState(true);
   const [leftW, setLeftW] = useState(240);
   const [rightW, setRightW] = useState(300);
+  // Panel „Layers and Objects" jest zadokowany w prawym panelu w zakładce obok
+  // Properties (na wszystkich rozmiarach ekranu; nie pływa nad canvasem).
+  const [rightTab, setRightTab] = useState<'layers' | 'props'>('props');
 
   const snapTo = (v: number) => Math.round(v / snapSize) * snapSize;
   const zoomAround = (factor: number) => setView((v) => {
@@ -3409,7 +3417,7 @@ export function PcbView() {
     placeSeq.current += 1;
     // Duch startuje na środku widoku, żeby był widoczny i „Osadź tutaj" działało bez przeciągania (mobile)
     const cx = size.w ? snapTo((size.w / 2 - view.x) / view.zoom) : 0, cy = size.h ? snapTo((size.h / 2 - view.y) / view.zoom) : 0;
-    setPlacing({ id: `pc_${placeSeq.current}`, defId: r.defId, x: cx, y: cy, ref: `${prefix}${n}`, label: r.label, pins: r.pins, octopart: r.octopart, easyeda: r.easyeda, fp: r.fp, savedEls: r.savedEls,
+    setPlacing({ id: `pc_${placeSeq.current}`, defId: r.defId, x: cx, y: cy, ref: `${prefix}${n}`, label: r.label, pins: r.pins, octopart: r.octopart, easyeda: r.easyeda, fp: r.fp, savedEls: r.savedEls, fpEls: r.fpEls,
       layer: 'Górna warstwa', rotation: 0, showPrefix: 'Tak', showName: 'Tak', addToBom: 'Tak', locked: 'Nie', convertToPcb: 'Tak', displayFootprint: 'Nie',
       footprint: r.footprint || r.defId, supplier: r.supplier || (r.lcsc ? 'LCSC' : 'Nieznany'), supplierPart: r.lcsc || '', manufacturer: r.manufacturer || '', mfrPart: r.mfrPart || r.label, jlcpcb: '', link: '', model3d: r.footprint || '' });
   };
@@ -4182,8 +4190,6 @@ export function PcbView() {
                   </Box>
                 </>
               )}
-              {editor === 'pcb' && <LayersPanel layers={layers} activeLayer={activeLayer} onColor={setLayerColor} onToggle={toggleLayer} onActive={setActiveLayer} objVis={objVis} onObjToggle={toggleObj} copper={pcbCopper} />}
-              {editor === 'footprint' && <LayersPanel layers={layers} activeLayer={activeLayer} onColor={setLayerColor} onToggle={toggleLayer} onActive={setActiveLayer} objVis={objVis} onObjToggle={toggleObj} copper={pcbCopper} />}
 
               {/* Pasek akcji dla dotyku/pióra: kończenie rysowania / wyjście z narzędzia / anulowanie stawiania */}
               {placing && (
@@ -4210,22 +4216,49 @@ export function PcbView() {
         </Box>
         <CollapseTab open={showRight} side="right" onToggle={() => setShowRight((v) => !v)} />
         {showRight && <VSplitter onResize={(d) => setRightW((w) => { const nw = w - d; if (nw < 150) { setShowRight(false); return w; } return Math.min(560, Math.max(180, nw)); })} />}
-        {showRight && (
-          <Box sx={{ width: rightW, flexShrink: 0, display: 'flex', borderLeft: `1px solid ${C.panelBorder}`, minHeight: 0 }}>
-            {selectedIdxs.length > 1 ? (
-              <PropsShell count={selectedIdxs.length}><GroupProps els={selectedIdxs.map((i) => selColl[i]).filter(Boolean) as Record<string, unknown>[]} onChange={updateGroup} /><MouseBlock rows={mRows} /></PropsShell>
-            ) : selectedPlacedComp ? (
-              editor === 'schematic'
-                ? <SchPlacedProps comp={selectedPlacedComp} onChange={updatePlacedComp} mouse={mRows} onEditSymbol={() => { const c = selectedPlacedComp; if (c.savedEls && c.savedEls.length) importSymbol(c.label, c.savedEls); else toast('Edycja dostępna dla symboli z serwera (Place Component → Edycja).'); }} />
-                : <PlacedProps comp={selectedPlacedComp} onChange={updatePlacedComp} mouse={mRows} />
-            ) : (<>
-              {editor === 'schematic' && <SchematicProperties mouse={mRows} sel={selectedSchEl} selPart={selectedPart} onSelChange={updateSchEl} work={schWork} onWork={updSchWork} />}
-              {editor === 'pcb' && <FootprintProperties mouse={mRows} meta={pcbMeta} onMeta={updatePcbMeta} sel={selectedFpEl} onSelChange={updateFpEl} layerNames={layerNames} />}
-              {editor === 'symbol' && <SymbolProperties mouse={mRows} sel={selectedEl} onSelChange={updateEl} meta={symMeta} onMeta={updateSymMeta} work={symWork} onWork={updSymWork} />}
-              {editor === 'footprint' && <FootprintProperties mouse={mRows} meta={fpMeta} onMeta={updateFpMeta} sel={selectedFpEl} onSelChange={updateFpEl} layerNames={layerNames} />}
-            </>)}
-          </Box>
-        )}
+        {showRight && (() => {
+          const propsContent = selectedIdxs.length > 1 ? (
+            <PropsShell count={selectedIdxs.length}><GroupProps els={selectedIdxs.map((i) => selColl[i]).filter(Boolean) as Record<string, unknown>[]} onChange={updateGroup} /><MouseBlock rows={mRows} /></PropsShell>
+          ) : selectedPlacedComp ? (
+            editor === 'schematic'
+              ? <SchPlacedProps comp={selectedPlacedComp} onChange={updatePlacedComp} mouse={mRows} onEditSymbol={() => { const c = selectedPlacedComp; if (c.savedEls && c.savedEls.length) importSymbol(c.label, c.savedEls); else toast('Edycja dostępna dla symboli z serwera (Place Component → Edycja).'); }} />
+              : <PlacedProps comp={selectedPlacedComp} onChange={updatePlacedComp} mouse={mRows} />
+          ) : (<>
+            {editor === 'schematic' && <SchematicProperties mouse={mRows} sel={selectedSchEl} selPart={selectedPart} onSelChange={updateSchEl} work={schWork} onWork={updSchWork} />}
+            {editor === 'pcb' && <FootprintProperties mouse={mRows} meta={pcbMeta} onMeta={updatePcbMeta} sel={selectedFpEl} onSelChange={updateFpEl} layerNames={layerNames} />}
+            {editor === 'symbol' && <SymbolProperties mouse={mRows} sel={selectedEl} onSelChange={updateEl} meta={symMeta} onMeta={updateSymMeta} work={symWork} onWork={updSymWork} />}
+            {editor === 'footprint' && <FootprintProperties mouse={mRows} meta={fpMeta} onMeta={updateFpMeta} sel={selectedFpEl} onSelChange={updateFpEl} layerNames={layerNames} />}
+          </>);
+
+          // Edytory bez warstw (schematic/symbol): tylko Properties.
+          if (!(editor === 'pcb' || editor === 'footprint')) {
+            return (
+              <Box sx={{ width: rightW, flexShrink: 0, display: 'flex', borderLeft: `1px solid ${C.panelBorder}`, minHeight: 0 }}>
+                {propsContent}
+              </Box>
+            );
+          }
+
+          // PCB/footprint: zadokowany „Layers and Objects" w zakładce obok Properties (wszystkie layouty).
+          return (
+            <Box sx={{ width: rightW, flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: `1px solid ${C.panelBorder}`, minHeight: 0 }}>
+              <Box sx={{ display: 'flex', flexShrink: 0, borderBottom: `1px solid ${C.barBorder}`, bgcolor: C.bar }}>
+                {([['layers', 'Layers and Objects'], ['props', 'Properties']] as const).map(([k, label]) => (
+                  <Box key={k} onClick={() => setRightTab(k)} sx={{ flex: 1, textAlign: 'center', px: 1, py: 0.75, fontSize: 12.5, cursor: 'pointer', color: rightTab === k ? '#2196f3' : '#5b6169', fontWeight: rightTab === k ? 600 : 400, borderBottom: rightTab === k ? '2px solid #2196f3' : '2px solid transparent' }}>{label}</Box>
+                ))}
+              </Box>
+              {rightTab === 'layers' ? (
+                <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <LayersPanelBody docked layers={layers} activeLayer={activeLayer} onColor={setLayerColor} onToggle={toggleLayer} onActive={setActiveLayer} objVis={objVis} onObjToggle={toggleObj} copper={pcbCopper} />
+                </Box>
+              ) : (
+                <Box sx={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'auto' }}>
+                  {propsContent}
+                </Box>
+              )}
+            </Box>
+          );
+        })()}
       </Box>
 
       {/* Menu kontekstowe canvasu Sheet */}
@@ -4383,8 +4416,8 @@ export function PcbView() {
       <OpenProjectDialog open={openProjOpen} onClose={() => setOpenProjOpen(false)} onOpen={loadProject} />
       <NewPcbDialog open={newPcbOpen} onClose={() => setNewPcbOpen(false)} onApply={(c) => { applyNewPcb(c); setNewPcbOpen(false); }} />
       <PlaceComponentDialog open={placeOpen} onClose={() => setPlaceOpen(false)} onPick={startPlacing} onEditSymbol={importSymbol} onEditFootprint={importFootprint} />
-      <SaveSymbolDialog open={saveOpen} onClose={() => setSaveOpen(false)} onSave={saveSymbol} />
-      <SaveFootprintDialog open={fpSaveOpen} onClose={() => setFpSaveOpen(false)} onSave={saveFootprint} />
+      <SaveSymbolDialog open={saveOpen} onClose={() => setSaveOpen(false)} onSave={saveSymbol} initialTitle={symMeta.name} />
+      <SaveFootprintDialog open={fpSaveOpen} onClose={() => setFpSaveOpen(false)} onSave={saveFootprint} initialTitle={fpMeta.footprint} />
       <DocSettingsDialog open={docOpen} onClose={() => setDocOpen(false)} initial={docSettings} onPlace={setDocSettings} />
       <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} onSymbol={importSymbol} onFootprint={importFootprint} />
     </Box>

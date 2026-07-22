@@ -102,6 +102,7 @@ import ShoppingPage from './pages/shopping/ShoppingPage';
 import HealthPage from './pages/health/HealthPage';
 import MemoryPage from './pages/memory/MemoryPage';
 import DrivePage from './pages/drive/DrivePage';
+import VncPage from './pages/vnc/VncPage';
 import PulpitPage from './pages/pulpit/PulpitPage';
 
 // Layout pages — minis
@@ -215,6 +216,18 @@ function AppRoot() {
                 <AdminOnly><TestVfsPage /></AdminOnly>
               </Layout>
             </Box>
+          }
+        />
+        <Route
+          path="/user/:userName/tools/vnc"
+          element={
+            <RequireAuth>
+              <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+                <Layout fullBleed hideChrome>
+                  <VncPage />
+                </Layout>
+              </Box>
+            </RequireAuth>
           }
         />
         <Route
