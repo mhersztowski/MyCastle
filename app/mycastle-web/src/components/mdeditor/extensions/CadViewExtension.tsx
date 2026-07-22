@@ -136,20 +136,20 @@ async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
       const entries: ProjectEntry[] = [];
       await Promise.all(rels.map(async (rel) => {
         const vfsFile = `users/${userId}/projects/${rel}`;
+        // Zawsze pokaż projekt (zakładki Sheet/PCB/3D w viewerze), nawet gdy odczyt treści zawiedzie.
+        entries.push({ name: `${rel}/Project (Sheet · PCB · 3D)`, path: `${vfsFile}/project` });
         try {
           const r = await fetch(`${base}/api/vfs/readFile?path=${encodeURIComponent(`/users/${userId}/projects/${rel}${ext}`)}`, { signal: AbortSignal.timeout(6000) });
           if (!r.ok) return;
           const rd = (await r.json()) as { data?: string };
           const d = JSON.parse(decode(rd.data ?? '')) as {
-            sheets?: { id: string; name?: string }[];
             symbols?: { id: string; name?: string }[];
             footprints?: { id: string; name?: string }[];
           };
-          entries.push({ name: `${rel}/PCB`, path: `${vfsFile}/pcb` });
-          for (const s of d.sheets ?? []) entries.push({ name: `${rel}/Sheets/${s.name || s.id}`, path: `${vfsFile}/sheet/${s.id}` });
+          // Konkretny symbol/footprint (viewer pokaże go + powiązany element).
           for (const s of d.symbols ?? []) entries.push({ name: `${rel}/Symbols/${s.name || s.id}`, path: `${vfsFile}/symbol/${s.id}` });
           for (const s of d.footprints ?? []) entries.push({ name: `${rel}/Footprints/${s.name || s.id}`, path: `${vfsFile}/footprint/${s.id}` });
-        } catch { /* pomiń projekt */ }
+        } catch { /* pokaż przynajmniej wpis projektu */ }
       }));
       entries.sort((a, b) => a.name.localeCompare(b.name));
       return entries;

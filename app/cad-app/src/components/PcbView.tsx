@@ -7,9 +7,11 @@ import {
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { createSvgIcon } from '@mui/material/utils';
 import * as THREE from 'three';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { SimpleViewer, SceneGraph } from '@mhersztowski/core-scene3d';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
-import { PCB_EXT, userProjectsDir, writeFileAt, readFileAt, deleteFileAt, listFilesRecursive } from '../vfs/cadProjectApi';
+import { PCB_EXT, writeFileAt, readFileAt } from '../vfs/cadProjectApi';
+import { ServerFileBrowser } from './ServerFileBrowser';
 import { MyElementsDialog } from './electronics/MyElementsDialog';
 import { BomDialog } from './electronics/BomDialog';
 import type { MyElement } from '../electronics/myElements';
@@ -54,7 +56,6 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import GridOnIcon from '@mui/icons-material/GridOn';
-import PrintOutlinedIcon from '@mui/icons-material/PrintOutlined';
 import RemoveIcon from '@mui/icons-material/Remove';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
@@ -284,50 +285,23 @@ const SYMBOL_SHORTCUTS: Record<string, string> = { p: 'pin', l: 'line', q: 'bezi
 function MI({ label, sc, icon, disabled, onClick }: { label: string; sc?: string; icon?: React.ReactNode; disabled?: boolean; onClick?: () => void }) {
   return <MenuItem disabled={disabled} onClick={onClick} sx={{ fontSize: 13.5, gap: 1.5, minWidth: 240 }}>{icon}<span>{label}</span>{sc && <span style={{ marginLeft: 'auto', color: '#9aa0a6', fontSize: 12.5, paddingLeft: 24 }}>{sc}</span>}</MenuItem>;
 }
-function TopMenuBar({ editor, onNewProject, onNewSymbol, onNewSchematic, onNewPcb, onNewFootprint, onSave, onImport, onOpenProject, editOps, formatOps, placeTools, onPlaceTool, onPanTool, onFind, onFindSimilar, onSaveProject, onSaveProjectAs, saving, onExportObj, onExportGerber, onPrint }: { editor: Editor; onNewProject: () => void; onNewSymbol: () => void; onNewSchematic: () => void; onNewPcb: () => void; onNewFootprint: () => void; onSave?: () => void; onImport: () => void; onOpenProject: () => void; editOps: EditOps; formatOps: FormatOps; placeTools: Tool[]; onPlaceTool: (id: string) => void; onPanTool: () => void; onFind: () => void; onFindSimilar: () => void; onSaveProject: () => void; onSaveProjectAs: () => void; saving: boolean; onExportObj: () => void; onExportGerber: () => void; onPrint: () => void }) {
+function TopMenuBar({ editor, editOps, formatOps, placeTools, onPlaceTool, onPanTool, onFind, onFindSimilar }: { editor: Editor; editOps: EditOps; formatOps: FormatOps; placeTools: Tool[]; onPlaceTool: (id: string) => void; onPanTool: () => void; onFind: () => void; onFindSimilar: () => void }) {
+  // Menu „Plik" przeniesione do globalnego menu „File" (górny pasek, obok CAD/CAD 3D).
   const menus: Record<Editor, string[]> = {
-    schematic: ['Plik', 'Edycja', 'Umieść', 'Format', 'Zobacz', 'Design', 'Narzędzia', 'Fabrication', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
-    pcb: ['Plik', 'Edycja', 'Umieść', 'Format', 'Zobacz', 'Design', 'Trasa', 'Narzędzia', 'Fabrication', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
-    symbol: ['Plik', 'Edycja', 'Umieść', 'Format', 'Zobacz', 'Narzędzia', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
-    footprint: ['Plik', 'Edycja', 'Umieść', 'Format', 'Zobacz', 'Narzędzia', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
+    schematic: ['Edycja', 'Umieść', 'Format', 'Zobacz', 'Design', 'Narzędzia', 'Fabrication', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
+    pcb: ['Edycja', 'Umieść', 'Format', 'Zobacz', 'Design', 'Trasa', 'Narzędzia', 'Fabrication', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
+    symbol: ['Edycja', 'Umieść', 'Format', 'Zobacz', 'Narzędzia', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
+    footprint: ['Edycja', 'Umieść', 'Format', 'Zobacz', 'Narzędzia', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
   };
-  const [plikAnchor, setPlikAnchor] = useState<null | HTMLElement>(null);
-  const [nowyAnchor, setNowyAnchor] = useState<null | HTMLElement>(null);
-  const [eksportAnchor, setEksportAnchor] = useState<null | HTMLElement>(null);
   const [open, setOpen] = useState<{ name: string; el: HTMLElement } | null>(null);
-  const closeAll = () => { setPlikAnchor(null); setNowyAnchor(null); setEksportAnchor(null); setOpen(null); };
+  const closeAll = () => { setOpen(null); };
   const fs = !formatOps.hasSel, es = !editOps.hasSel;
   return (
     <Box sx={{ height: 40, flexShrink: 0, bgcolor: C.bar, borderBottom: `1px solid ${C.barBorder}`, display: 'flex', alignItems: 'center', px: 1.5, ...HSCROLL_SX }}>
       {menus[editor].map((m) => (
-        <Box key={m} onClick={(e) => { if (m === 'Plik') setPlikAnchor(e.currentTarget as HTMLElement); else if (m === 'Edycja' || m === 'Umieść' || m === 'Format') setOpen({ name: m, el: e.currentTarget as HTMLElement }); }}
+        <Box key={m} onClick={(e) => { if (m === 'Edycja' || m === 'Umieść' || m === 'Format') setOpen({ name: m, el: e.currentTarget as HTMLElement }); }}
           sx={{ px: 1, py: 0.5, fontSize: 13.5, color: C.menuText, cursor: 'default', borderRadius: 0.5, '&:hover': { bgcolor: '#eef1f4' } }}>{m}</Box>
       ))}
-      <Menu anchorEl={plikAnchor} open={Boolean(plikAnchor)} onClose={closeAll}>
-        <MenuItem onClick={(e) => setNowyAnchor(e.currentTarget as HTMLElement)} sx={{ fontSize: 13.5, gap: 2 }}>Nowy <KeyboardArrowRightIcon sx={{ fontSize: 18, ml: 'auto' }} /></MenuItem>
-        <MenuItem sx={{ fontSize: 13.5 }} onClick={() => { onOpenProject(); closeAll(); }}>Otwórz…</MenuItem>
-        <MenuItem sx={{ fontSize: 13.5 }} onClick={() => { onImport(); closeAll(); }}>Importuj…</MenuItem>
-        <Divider />
-        <MenuItem disabled={saving} sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onSaveProject(); closeAll(); }}><SaveOutlinedIcon sx={{ fontSize: 17 }} />{saving ? 'Zapisywanie…' : 'Zapisz'}</MenuItem>
-        <MenuItem disabled={saving} sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onSaveProjectAs(); closeAll(); }}><SaveOutlinedIcon sx={{ fontSize: 17 }} />Zapisz jako…</MenuItem>
-        {onSave && <MenuItem sx={{ fontSize: 13.5 }} onClick={() => { onSave(); closeAll(); }}>{editor === 'footprint' ? 'Zapisz jako Footprint…' : 'Zapisz jako Symbol…'}</MenuItem>}
-        <Divider />
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onPrint(); closeAll(); }}><PrintOutlinedIcon sx={{ fontSize: 17, color: C.icon }} />Drukuj… (A4)</MenuItem>
-        <MenuItem onClick={(e) => setEksportAnchor(e.currentTarget as HTMLElement)} sx={{ fontSize: 13.5, gap: 2 }}>Eksport <KeyboardArrowRightIcon sx={{ fontSize: 18, ml: 'auto' }} /></MenuItem>
-      </Menu>
-      <Menu anchorEl={eksportAnchor} open={Boolean(eksportAnchor)} onClose={closeAll} anchorOrigin={{ vertical: 'top', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'left' }}>
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onExportObj(); closeAll(); }}><ViewInArIcon sx={{ fontSize: 17, color: '#c9a227' }} />OBJ (model 3D płytki)…</MenuItem>
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onExportGerber(); closeAll(); }}><GridOnIcon sx={{ fontSize: 17, color: '#c9a227' }} />Gerber (ZIP)…</MenuItem>
-      </Menu>
-      <Menu anchorEl={nowyAnchor} open={Boolean(nowyAnchor)} onClose={closeAll} anchorOrigin={{ vertical: 'top', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'left' }}>
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onNewProject(); closeAll(); }}><FolderOpenIcon sx={{ fontSize: 17, color: C.icon }} />Projekt…</MenuItem>
-        <Divider />
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onNewSchematic(); closeAll(); }}><DescriptionOutlinedIcon sx={{ fontSize: 17, color: '#2f7fe0' }} />Schemat</MenuItem>
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onNewPcb(); closeAll(); }}><GridOnIcon sx={{ fontSize: 17, color: '#3aa757' }} />PCB</MenuItem>
-        <Divider />
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onNewSymbol(); closeAll(); }}><MemoryOutlinedIcon sx={{ fontSize: 17, color: '#3b82d6' }} />Symbol</MenuItem>
-        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onNewFootprint(); closeAll(); }}><DeveloperBoardIcon sx={{ fontSize: 17, color: '#e0533d' }} />Footprint</MenuItem>
-      </Menu>
       {/* Edycja */}
       <Menu anchorEl={open?.name === 'Edycja' ? open.el : null} open={open?.name === 'Edycja'} onClose={closeAll}>
         <MI label="Cofnij" sc="Cmd+Z" icon={<UndoIcon sx={{ fontSize: 17, color: editOps.canUndo ? C.icon : C.iconDisabled }} />} disabled={!editOps.canUndo} onClick={() => { editOps.undo(); closeAll(); }} />
@@ -3105,9 +3079,30 @@ function boardLayerRows(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerStat
   for (const c of placed) { if (c.fp) present.add(c.layer === 'Dolna warstwa' ? 'body-bot' : 'body-top'); }
   return BOARD_ROWS.filter((r) => present.has(r.key)).map((r) => ({ key: r.key, label: r.label, color: (r.layerName && layers?.[r.layerName]?.color) || r.fallback }));
 }
+// ── Modele 3D EasyEDA ────────────────────────────────────────────────────────
+// uuid + transformacja modelu są zapisane w footprincie EasyEDA jako `SVGNODE~{json}`
+// (attrs.uuid + c_origin/c_rotation/z). Surowy .obj pobieramy z /api/easyeda/model3d/{uuid}.
+export interface Model3dInfo { uuid: string; ox: number; oy: number; z: number; rx: number; ry: number; rz: number }
+function parseFp3dModel(fp?: EasyEdaSym): Model3dInfo | null {
+  if (!fp?.shapes) return null;
+  for (const s of fp.shapes) {
+    if (!s.startsWith('SVGNODE')) continue;
+    try {
+      const node = JSON.parse(s.slice(s.indexOf('~') + 1)) as { attrs?: Record<string, string> };
+      const a = node.attrs ?? {};
+      if (!a.uuid) continue;
+      const [ox, oy] = String(a.c_origin ?? '0,0').split(',').map(Number);
+      const [rx, ry, rz] = String(a.c_rotation ?? '0,0,0').split(',').map(Number);
+      return { uuid: a.uuid, ox: ox || 0, oy: oy || 0, z: Number(a.z ?? 0) || 0, rx: rx || 0, ry: ry || 0, rz: rz || 0 };
+    } catch { /* pomiń wadliwy węzeł */ }
+  }
+  return null;
+}
+const deg = (d: number) => (d * Math.PI) / 180;
+
 // THREE.Group modelu płytki: podłoże z otworami (ExtrudeGeometry) + miedź/silk (pady/ścieżki) + obudowy komponentów.
 // Jednostki mm, wyśrodkowane w (0,0); kolory z warstw PCB; `hidden` ukrywa wiersze wg klucza.
-function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerState, hidden?: Set<string>): THREE.Group {
+function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerState, hidden?: Set<string>, compModels?: Map<string, { group: THREE.Group; m3d: Model3dInfo }>): THREE.Group {
   const g = new THREE.Group();
   const allEls = [...pcbEls, ...placed.flatMap(placedFpEls)];
   const outline = pcbEls.filter((e) => (e.t === 'frect' || e.t === 'fcircle') && e.layer === 'Obrys płyty');
@@ -3196,15 +3191,45 @@ function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerSta
       ring.position.set(X(e.cx), Y(e.cy), z + CU_THICK_MM / 2); g.add(ring);
     }
   }
-  // Obudowy komponentów (uproszczone bryły z bbox footprintu)
+  // Obudowy komponentów — realny model 3D EasyEDA jeśli załadowany, inaczej uproszczona bryła z bbox.
   for (const c of placed) {
     if (!c.fp) continue;
     const bottom = c.layer === 'Dolna warstwa', key = bottom ? 'body-bot' : 'body-top';
     if (isHidden(key)) continue;
     const bb = pcbPartBBox(c);
+    const cx = X(bb.x + bb.w / 2), cy = Y(bb.y + bb.h / 2);
+    const entry = compModels?.get(c.id);
+    if (entry) {
+      // Model 3D: obrót własny (c_rotation EasyEDA) + obrót footprintu (Z) + lustro dolnej strony;
+      // wyśrodkowany na footprincie w XY i posadzony na powierzchni płytki w Z.
+      const obj = entry.group.clone(true);
+      obj.rotation.set(deg(entry.m3d.rx), deg(entry.m3d.ry), deg(entry.m3d.rz));
+      // Auto-skala: surowy .obj z EasyEDA bywa w nierealnej skali — dopasuj rozpiętość XY modelu
+      // do rozmiaru footprintu (świat mil → mm). Skala jednorodna, więc proporcje modelu zostają.
+      obj.updateMatrixWorld(true);
+      const mb = new THREE.Box3().setFromObject(obj);
+      const mDiag = Math.hypot(mb.max.x - mb.min.x, mb.max.y - mb.min.y);
+      const fpDiag = Math.hypot(Math.max(bb.w * W2MM, 0.2), Math.max(bb.h * W2MM, 0.2));
+      if (mDiag > 1e-4 && Number.isFinite(mDiag)) { const s = fpDiag / mDiag; if (s > 0 && Number.isFinite(s)) obj.scale.setScalar(s); }
+      const holder = new THREE.Group();
+      holder.add(obj);
+      holder.rotation.z = deg(-(c.rotation || 0));
+      if (bottom) holder.scale.x = -1;
+      holder.updateMatrixWorld(true);
+      const bx = new THREE.Box3().setFromObject(holder);
+      if (Number.isFinite(bx.min.x)) {
+        holder.position.x = cx - (bx.min.x + bx.max.x) / 2;
+        holder.position.y = cy - (bx.min.y + bx.max.y) / 2;
+        holder.position.z = bottom ? (-CU_THICK_MM - bx.max.z) : (BOARD_THICK_MM - bx.min.z);
+      } else {
+        holder.position.set(cx, cy, bottom ? -CU_THICK_MM : BOARD_THICK_MM);
+      }
+      g.add(holder);
+      continue;
+    }
     const w = Math.max(bb.w * W2MM, 0.3), h = Math.max(bb.h * W2MM, 0.3);
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, BODY_H_MM), matFor(colorByKey(key), 'body'));
-    m.position.set(X(bb.x + bb.w / 2), Y(bb.y + bb.h / 2), bottom ? -CU_THICK_MM - BODY_H_MM / 2 : BOARD_THICK_MM + BODY_H_MM / 2);
+    m.position.set(cx, cy, bottom ? -CU_THICK_MM - BODY_H_MM / 2 : BOARD_THICK_MM + BODY_H_MM / 2);
     g.add(m);
   }
   return g;
@@ -3239,17 +3264,69 @@ function Board3DDialog({ open, onClose, pcbEls, placed, name, layers }: { open: 
   useEffect(() => { if (open) setHidden(new Set()); }, [open]);
   const rows = useMemo(() => (open ? boardLayerRows(pcbEls, placed, layers) : []), [open, pcbEls, placed, layers]);
   const hiddenKey = [...hidden].sort().join(',');
-  const group = useMemo(() => (open ? buildBoardGroup(pcbEls, placed, layers, hidden) : null), [open, pcbEls, placed, layers, hiddenKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Modele 3D EasyEDA: dla komponentów z footprintem zawierającym uuid modelu pobieramy .obj,
+  // parsujemy raz (cache po uuid) i podmieniamy uproszczoną bryłę na realny model.
+  const modelCacheRef = useRef<Map<string, THREE.Group>>(new Map());
+  const [modelsVer, setModelsVer] = useState(0);
+  const [loadingModels, setLoadingModels] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const jobs = placed.map((c) => ({ id: c.id, m3d: parseFp3dModel(c.fp) })).filter((j): j is { id: string; m3d: Model3dInfo } => !!j.m3d);
+    const uuids = [...new Set(jobs.map((j) => j.m3d.uuid))].filter((u) => !modelCacheRef.current.has(u));
+    if (!uuids.length) return;
+    setLoadingModels(true);
+    (async () => {
+      const loader = new OBJLoader();
+      await Promise.all(uuids.map(async (uuid) => {
+        try {
+          const r = await fetch(`/api/easyeda/model3d/${encodeURIComponent(uuid)}`);
+          if (!r.ok) return;
+          const text = await r.text();
+          const grp = loader.parse(text);
+          grp.traverse((o) => {
+            const mesh = o as THREE.Mesh;
+            if ((mesh as unknown as { isMesh?: boolean }).isMesh && mesh.geometry) {
+              if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
+              mesh.material = new THREE.MeshStandardMaterial({ color: 0x9aa4ad, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide });
+            }
+          });
+          modelCacheRef.current.set(uuid, grp);
+        } catch { /* model niedostępny — zostaje uproszczona bryła */ }
+      }));
+      if (!cancelled) { setModelsVer((v) => v + 1); setLoadingModels(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [open, placed]);
+
+  // Mapa compId → {załadowany model, transform} — budowana z cache przy każdym rebuildzie.
+  const compModels = useMemo(() => {
+    const map = new Map<string, { group: THREE.Group; m3d: Model3dInfo }>();
+    for (const c of placed) { const m3d = parseFp3dModel(c.fp); if (m3d) { const grp = modelCacheRef.current.get(m3d.uuid); if (grp) map.set(c.id, { group: grp, m3d }); } }
+    return map;
+  }, [placed, modelsVer]);
+
+  // Przełącznik renderowania realnych modeli 3D (np. z EasyEDA); wyłączony → uproszczone bryły.
+  const [showModels, setShowModels] = useState(true);
+  const hasModels = compModels.size > 0;
+  const group = useMemo(() => (open ? buildBoardGroup(pcbEls, placed, layers, hidden, showModels ? compModels : undefined) : null), [open, pcbEls, placed, layers, hiddenKey, compModels, showModels]); // eslint-disable-line react-hooks/exhaustive-deps
   const emptyGraph = useMemo(() => new SceneGraph(), []);
   const fitRef = useRef<(() => void) | null>(null);
   useEffect(() => { if (open && group) { const id = setTimeout(() => fitRef.current?.(), 80); return () => clearTimeout(id); } }, [open, group]);
   const toggle = (key: string) => setHidden((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth PaperProps={{ sx: { height: '84vh' } }}>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#f2f3f5', py: 1.25, fontSize: 15 }}>Podgląd 3D — {name}<IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton></DialogTitle>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#f2f3f5', py: 1.25, fontSize: 15 }}><Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>Podgląd 3D — {name}{loadingModels && <><CircularProgress size={14} /><Typography sx={{ fontSize: 12, color: '#6b7178' }}>ładowanie modeli 3D…</Typography></>}</Box><IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton></DialogTitle>
       <DialogContent sx={{ p: 0, bgcolor: '#1a1d21', display: 'flex' }}>
         <Box sx={{ width: 208, flexShrink: 0, bgcolor: '#22262b', borderRight: '1px solid #333', p: 1, overflowY: 'auto' }}>
-          <Box sx={{ fontSize: 12, fontWeight: 700, color: '#aeb4bb', px: 0.5, py: 0.5, letterSpacing: 0.3 }}>WARSTWY</Box>
+          <Box sx={{ fontSize: 12, fontWeight: 700, color: '#aeb4bb', px: 0.5, py: 0.5, letterSpacing: 0.3 }}>MODELE 3D</Box>
+          <Box onClick={() => setShowModels((v) => !v)} title={hasModels ? '' : 'Brak modeli 3D w tym projekcie'} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.75, py: 0.6, borderRadius: 0.75, cursor: 'pointer', opacity: hasModels ? (showModels ? 1 : 0.5) : 0.4, '&:hover': { bgcolor: '#2c3138' } }}>
+            {showModels ? <VisibilityOutlinedIcon sx={{ fontSize: 17, color: '#cfd4d9' }} /> : <VisibilityOffOutlinedIcon sx={{ fontSize: 17, color: '#8a9096' }} />}
+            <ViewInArIcon sx={{ fontSize: 15, color: '#c9a227', flexShrink: 0 }} />
+            <Box sx={{ fontSize: 12.5, color: '#dfe3e7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Modele EasyEDA{hasModels ? ` (${compModels.size})` : ''}</Box>
+          </Box>
+          <Box sx={{ fontSize: 12, fontWeight: 700, color: '#aeb4bb', px: 0.5, py: 0.5, mt: 1, letterSpacing: 0.3 }}>WARSTWY</Box>
           {rows.map((r) => (
             <Box key={r.key} onClick={() => toggle(r.key)} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.75, py: 0.6, borderRadius: 0.75, cursor: 'pointer', opacity: hidden.has(r.key) ? 0.4 : 1, '&:hover': { bgcolor: '#2c3138' } }}>
               {hidden.has(r.key) ? <VisibilityOffOutlinedIcon sx={{ fontSize: 17, color: '#8a9096' }} /> : <VisibilityOutlinedIcon sx={{ fontSize: 17, color: '#cfd4d9' }} />}
@@ -3300,40 +3377,6 @@ function NewPcbDialog({ open, onClose, onApply }: { open: boolean; onClose: () =
       <DialogActions sx={{ px: 3, pb: 2 }}>
         <Button variant="contained" onClick={() => onApply({ units, copper: num(copper), outline, x: num(x), y: num(y), w: num(w), h: outline === 'Okrągły' ? num(w) : num(h) })} sx={{ textTransform: 'none' }}>Zastosuj</Button>
         <Button variant="contained" onClick={onClose} sx={{ textTransform: 'none', bgcolor: '#5b8def', '&:hover': { bgcolor: '#4a7fe0' } }}>Anuluj</Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
-// ── Dialog „Otwórz projekt" (lista projektów zapisanych na serwerze) ──────────
-function OpenProjectDialog({ open, onClose, onOpen }: { open: boolean; onClose: () => void; onOpen: (name: string) => void }) {
-  const [projects, setProjects] = useState<{ name: string; title: string; savedAt?: string }[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [sel, setSel] = useState<string | null>(null);
-  const reload = () => { setLoading(true); listFilesRecursive(userProjectsDir(), PCB_EXT).then((fs) => setProjects(fs.map((f) => ({ name: f.name, title: f.name })))).catch(() => setProjects([])).finally(() => setLoading(false)); };
-  useEffect(() => { if (open) { setSel(null); reload(); } }, [open]);
-  const del = async (name: string) => { if (!window.confirm(`Usunąć projekt „${name}" z serwera?`)) return; try { await deleteFileAt(userProjectsDir(), name, PCB_EXT); } catch { /* ignore */ } reload(); };
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 1 } }}>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#f2f3f5', py: 1.25, fontSize: 15 }}>Otwórz projekt (serwer)<IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton></DialogTitle>
-      <DialogContent sx={{ p: 0 }}>
-        {loading && <Box sx={{ p: 3, textAlign: 'center' }}><CircularProgress size={22} /></Box>}
-        {!loading && projects.length === 0 && <Box sx={{ px: 2, py: 2, fontSize: 13, color: '#8a9096' }}>Brak zapisanych projektów. Zapisz projekt przez Plik → Zapisz.</Box>}
-        <List dense sx={{ maxHeight: 380, overflow: 'auto' }}>
-          {projects.map((p) => (
-            <ListItemButton key={p.name} selected={sel === p.name} onClick={() => setSel(p.name)} onDoubleClick={() => { onOpen(p.name); onClose(); }}>
-              <FolderOpenIcon sx={{ fontSize: 18, color: '#e0a83a', mr: 1.5 }} />
-              <ListItemText primary={p.title || p.name} secondary={p.savedAt ? new Date(p.savedAt).toLocaleString() : ''} primaryTypographyProps={{ fontSize: 13.5 }} secondaryTypographyProps={{ fontSize: 11.5 }} />
-              <IconButton size="small" onClick={(e) => { e.stopPropagation(); del(p.name); }}><DeleteOutlineIcon sx={{ fontSize: 17, color: C.icon }} /></IconButton>
-            </ListItemButton>
-          ))}
-        </List>
-      </DialogContent>
-      <DialogActions sx={{ px: 2, pb: 1.5 }}>
-        <Button onClick={reload} sx={{ textTransform: 'none' }}>Odśwież</Button>
-        <Box sx={{ flex: 1 }} />
-        <Button variant="contained" disabled={!sel} onClick={() => { if (sel) { onOpen(sel); onClose(); } }} sx={{ textTransform: 'none' }}>Otwórz</Button>
-        <Button onClick={onClose} sx={{ textTransform: 'none' }}>Anuluj</Button>
       </DialogActions>
     </Dialog>
   );
@@ -3499,7 +3542,8 @@ export function PcbView() {
   const [findSimOpen, setFindSimOpen] = useState(false);
   const [annotOpen, setAnnotOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [openProjOpen, setOpenProjOpen] = useState(false);
+  const [serverBrowser, setServerBrowser] = useState<'open' | 'save' | null>(null);
+  const [currentFile, setCurrentFile] = useState<{ dir: string; name: string } | null>(null);
   const [newPcbOpen, setNewPcbOpen] = useState(false);
   const [board3dOpen, setBoard3dOpen] = useState(false);
   const [myElementsOpen, setMyElementsOpen] = useState(false);
@@ -3682,6 +3726,11 @@ export function PcbView() {
     const res = await fetch('/api/symbols', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...meta, elements }) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
+    // Zaktualizuj nazwę zakładki + zapamiętaną nazwę (domyślna przy kolejnym Zapisz).
+    if (activeSymbolId) {
+      setSymbols((s) => s.map((x) => (x.id === activeSymbolId ? { ...x, name: meta.title } : x)));
+      setSymbolMeta((m) => ({ ...m, [activeSymbolId]: { ...(m[activeSymbolId] ?? emptySymMeta()), name: meta.title, footprint: meta.footprint } }));
+    }
   };
   const [fpSaveOpen, setFpSaveOpen] = useState(false);
   const [docOpen, setDocOpen] = useState(false);
@@ -3691,6 +3740,11 @@ export function PcbView() {
     const res = await fetch('/api/footprints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...meta, elements }) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
+    // Zaktualizuj nazwę zakładki + zapamiętaną nazwę (domyślna przy kolejnym Zapisz).
+    if (activeFootprintId) {
+      setFootprints((s) => s.map((x) => (x.id === activeFootprintId ? { ...x, name: meta.title } : x)));
+      setFootprintMeta((m) => ({ ...m, [activeFootprintId]: { ...(m[activeFootprintId] ?? emptyFpMeta()), footprint: meta.title, symbol: meta.symbol } }));
+    }
   };
 
   // Współrzędne myszy w konwencji linijek (oś Y do góry; footprint w mm: 1 jedn = 1 mil)
@@ -3710,7 +3764,40 @@ export function PcbView() {
   const activeSymbol = symbols.find((s) => s.id === activeSymbolId) || null;
   const activeFootprint = footprints.find((s) => s.id === activeFootprintId) || null;
   const currentName = editor === 'pcb' ? `*${pcbName}` : editor === 'symbol' ? (activeSymbol?.name ?? '*New_Symbol') : editor === 'footprint' ? (activeFootprint?.name ?? '*NEW_FOOTPRINT') : sheetName;
-  useRegisterFileOps('pcb', { currentName }, [currentName]);
+  // Najświeższe handlery w ref → zarejestrowane akcje File działają zawsze na aktualnym stanie,
+  // bez potrzeby wpisywania całego stanu projektu do deps useRegisterFileOps.
+  const fileHandlersRef = useRef<Record<string, () => void>>({});
+  fileHandlersRef.current = {
+    newProject: () => newProject(), newSchematic: () => addSheet(), newPcb: () => setNewPcbOpen(true),
+    newSymbol: () => addSymbol(), newFootprint: () => addFootprint(),
+    open: () => setServerBrowser('open'), save: () => saveProject(), saveAs: () => saveProjectAs(),
+    saveSymbol: () => setSaveOpen(true), saveFootprint: () => setFpSaveOpen(true),
+    import: () => setImportOpen(true), print: () => printCurrent(),
+    exportObj: () => exportObj(), exportGerber: () => exportGerber(),
+  };
+  useRegisterFileOps('pcb', {
+    currentName,
+    newItems: [
+      { label: 'New project…', run: () => fileHandlersRef.current.newProject() },
+      { label: 'New schematic', run: () => fileHandlersRef.current.newSchematic() },
+      { label: 'New PCB', run: () => fileHandlersRef.current.newPcb() },
+      { label: 'New symbol', run: () => fileHandlersRef.current.newSymbol() },
+      { label: 'New footprint', run: () => fileHandlersRef.current.newFootprint() },
+    ],
+    server: [
+      { label: 'Open…', run: () => fileHandlersRef.current.open() },
+      { label: 'Save', run: () => fileHandlersRef.current.save(), disabled: saving },
+      { label: 'Save as…', run: () => fileHandlersRef.current.saveAs(), disabled: saving },
+      ...(editor === 'symbol' ? [{ label: 'Save as Symbol…', run: () => fileHandlersRef.current.saveSymbol() }] : []),
+      ...(editor === 'footprint' ? [{ label: 'Save as Footprint…', run: () => fileHandlersRef.current.saveFootprint() }] : []),
+    ],
+    importItems: [{ label: 'Import…', run: () => fileHandlersRef.current.import() }],
+    exportItems: [
+      { label: 'Print… (A4)', run: () => fileHandlersRef.current.print() },
+      { label: 'Export OBJ (3D board)…', run: () => fileHandlersRef.current.exportObj() },
+      { label: 'Export Gerber (ZIP)…', run: () => fileHandlersRef.current.exportGerber() },
+    ],
+  }, [currentName, editor, saving]);
 
   // ── Akcje panelu Workspace (drzewo projektu) ──
   const closeTreeMenus = () => { setTreeCtx(null); setMgrSub(null); setVerSub(null); setColSub(null); };
@@ -4095,16 +4182,17 @@ export function PcbView() {
   const annotateReset = () => { setSheetPlaced((m) => { const nm = { ...m }; for (const s of sheets) nm[s.id] = (nm[s.id] ?? []).map((c) => ({ ...c, ref: `${c.ref.match(/^[A-Za-z]+/)?.[0] ?? 'U'}?` })); return nm; }); toast('Adnotacje zresetowane'); };
   // Pełny zapis projektu na serwer (wszystkie dokumenty + historia)
   const buildProjectData = (name: string) => ({ name, project: name, version: 1, sheets: sheets.map((s) => ({ id: s.id, name: s.name, desc: s.desc, elements: sheetEls[s.id] ?? [], placed: sheetPlaced[s.id] ?? [] })), activeSheetId, pcb: { name: pcbName, elements: pcbEls, meta: pcbMeta }, schWork, symbols: symbols.map((s) => ({ id: s.id, name: s.name, elements: symbolEls[s.id] ?? [], meta: symbolMeta[s.id] })), footprints: footprints.map((s) => ({ id: s.id, name: s.name, elements: footprintEls[s.id] ?? [], meta: footprintMeta[s.id] })), history: undoStack });
-  const saveProject = async (nameArg?: string) => {
-    const name = (nameArg ?? projectName).trim() || 'project'; setSaving(true);
+  // Zapis do konkretnego katalogu VFS (wybieranego przez ServerFileBrowser — drzewo + foldery).
+  const saveProjectTo = async (dir: string, name: string) => {
+    setSaving(true);
     try {
-      // Zapis do per-user VFS (/users/{userId}/projects/{name}.pcb.json) — spójnie z pozostałymi
-      // trybami (CAD/Electronics), widoczne w Drive, izolowane per-user.
-      await writeFileAt(userProjectsDir(), name, PCB_EXT, JSON.stringify(buildProjectData(name)));
-      if (nameArg) setProjectName(name); toast(`Projekt zapisany: „${name}"`);
-    } catch (e) { toast(`Błąd zapisu: ${e instanceof Error ? e.message : String(e)}`); } finally { setSaving(false); }
+      await writeFileAt(dir, name, PCB_EXT, JSON.stringify(buildProjectData(name)));
+      setProjectName(name); setCurrentFile({ dir, name }); toast(`Projekt zapisany: „${name}"`);
+    } catch (e) { toast(`Błąd zapisu: ${e instanceof Error ? e.message : String(e)}`); throw e; } finally { setSaving(false); }
   };
-  const saveProjectAs = () => { const v = window.prompt('Zapisz projekt jako:', projectName); if (v && v.trim()) saveProject(v.trim()); };
+  // „Zapisz": nadpisz w zapamiętanym miejscu; jeśli projekt nie był zapisany → otwórz przeglądarkę.
+  const saveProject = () => { if (currentFile) void saveProjectTo(currentFile.dir, currentFile.name); else setServerBrowser('save'); };
+  const saveProjectAs = () => setServerBrowser('save');
   // Plik → Nowy → Projekt…: świeży, pusty projekt (kasuje bieżącą zawartość)
   const newProject = () => {
     if (!window.confirm('Utworzyć nowy projekt? Niezapisane zmiany zostaną utracone.')) return;
@@ -4120,10 +4208,11 @@ export function PcbView() {
     toast(`Utworzono nowy projekt „${v}"`);
   };
   // Plik → Otwórz: wczytanie pełnego projektu z serwera (odtwarza wszystkie dokumenty + historię)
-  const loadProject = async (name: string) => {
+  const loadProject = async (dir: string, name: string) => {
     try {
-      const d = JSON.parse(await readFileAt(userProjectsDir(), name, PCB_EXT));
+      const d = JSON.parse(await readFileAt(dir, name, PCB_EXT));
       if (d.error) throw new Error(d.error);
+      setCurrentFile({ dir, name });
       type PDoc = { id: string; name: string; desc?: string; elements?: unknown[]; placed?: unknown[]; meta?: unknown };
       const rawSheets = (Array.isArray(d.sheets) ? d.sheets : []) as PDoc[];
       const sh: SheetTab[] = rawSheets.length ? rawSheets.map((s) => ({ id: s.id, name: s.name, desc: s.desc || '' })) : [{ id: 'sheet1', name: 'Sheet_1', desc: '' }];
@@ -4288,7 +4377,7 @@ export function PcbView() {
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, bgcolor: '#fff', fontFamily: 'sans-serif' }}>
-      <TopMenuBar editor={editor} onNewProject={newProject} onNewSymbol={addSymbol} onNewSchematic={addSheet} onNewPcb={() => setNewPcbOpen(true)} onNewFootprint={addFootprint} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} onImport={() => setImportOpen(true)} onOpenProject={() => setOpenProjOpen(true)} editOps={editOps} formatOps={formatOps} placeTools={placeTools} onPlaceTool={setActiveTool} onPanTool={panTool} onFind={findAction} onFindSimilar={findSimilar} onSaveProject={() => saveProject()} onSaveProjectAs={saveProjectAs} saving={saving} onExportObj={exportObj} onExportGerber={exportGerber} onPrint={printCurrent} />
+      <TopMenuBar editor={editor} editOps={editOps} formatOps={formatOps} placeTools={placeTools} onPlaceTool={setActiveTool} onPanTool={panTool} onFind={findAction} onFindSimilar={findSimilar} />
       <Toolbar editor={editor} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} ops={editOps} fmt={formatOps} onZoomIn={() => zoomAround(1.25)} onZoomOut={() => zoomAround(1 / 1.25)} onFit={fitToWindow} onFind={findAction} onFindSimilar={findSimilar} onAnnotate={() => setAnnotOpen(true)} on3dView={() => setBoard3dOpen(true)} onMyElements={() => setMyElementsOpen(true)} onBom={() => setBomOpen(true)} />
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {showLeft && <ProjectPanel width={leftW} projectName={projectName} sheets={sheets} activeSheetId={activeSheetId} pcbName={pcbName} editor={editor}
@@ -4583,7 +4672,19 @@ export function PcbView() {
         <Alert severity="info" variant="filled" onClose={() => setSnack(null)} sx={{ fontSize: 13.5 }}>{snack}</Alert>
       </Snackbar>
 
-      <OpenProjectDialog open={openProjOpen} onClose={() => setOpenProjOpen(false)} onOpen={loadProject} />
+      {serverBrowser && (
+        <ServerFileBrowser
+          open
+          mode={serverBrowser}
+          title={serverBrowser === 'open' ? 'Otwórz projekt PCB' : 'Zapisz projekt PCB'}
+          extension={PCB_EXT}
+          defaultName={projectName}
+          storageKey="cad.pcbBrowser.dir"
+          onClose={() => setServerBrowser(null)}
+          onOpen={loadProject}
+          onSave={saveProjectTo}
+        />
+      )}
       <NewPcbDialog open={newPcbOpen} onClose={() => setNewPcbOpen(false)} onApply={(c) => { applyNewPcb(c); setNewPcbOpen(false); }} />
       <PlaceComponentDialog open={placeOpen} onClose={() => setPlaceOpen(false)} onPick={startPlacing} onEditSymbol={importSymbol} onEditFootprint={importFootprint} />
       <SaveSymbolDialog open={saveOpen} onClose={() => setSaveOpen(false)} onSave={saveSymbol} initialTitle={symMeta.name} initialFootprint={symMeta.footprint} />

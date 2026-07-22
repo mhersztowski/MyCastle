@@ -8,3 +8,5 @@ export { LegoViewerPage } from './pages/LegoViewerPage';
 export { PcbViewerPage } from './pages/PcbViewerPage';
 
 export { setViewerUserId, setViewerApiBase } from './vfs';
+
+export { Pcb3DView, buildBoardGroup, boardLayerRows, parseFp3dModel, type Model3dInfo } from './pcb/board3d';

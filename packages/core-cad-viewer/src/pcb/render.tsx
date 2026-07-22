@@ -478,6 +478,6 @@ export interface PcbProject {
   activeSheetId?: string;
   sheets?: { id: string; name: string; desc?: string; elements?: El[]; placed?: PlacedComp[] }[];
   pcb?: { name?: string; elements?: FpEl[]; meta?: FpMeta };
-  symbols?: { id: string; name: string; elements?: El[] }[];
-  footprints?: { id: string; name: string; elements?: FpEl[] }[];
+  symbols?: { id: string; name: string; elements?: El[]; meta?: SymMeta }[];
+  footprints?: { id: string; name: string; elements?: FpEl[]; meta?: FpMeta }[];
 }

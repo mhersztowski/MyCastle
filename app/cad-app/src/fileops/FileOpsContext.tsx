@@ -22,6 +22,8 @@ export interface FileOps {
   currentName?: string | null;
   /** Start a new/empty document. */
   newDoc?: () => void;
+  /** Multiple "New …" actions (e.g. PCB: Project/Schematic/PCB/Symbol/Footprint). */
+  newItems?: FileMenuItem[];
   /** Server (VFS) open/save and any companion actions. */
   server?: FileMenuItem[];
   /** Import actions (local files, external sources). */

@@ -91,6 +91,14 @@ export async function readPcbProject(dir: string, name: string): Promise<unknown
   return JSON.parse(await readFileAt(dir, name, PCB_EXT));
 }
 
+/** Surowy model 3D EasyEDA (.obj) z backendu (/api/easyeda/model3d/{uuid}). */
+export async function readModel3dObj(uuid: string): Promise<string> {
+  const url = new URL(`/api/easyeda/model3d/${encodeURIComponent(uuid)}`, apiOrigin());
+  const res = await vfsFetch(url.toString());
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
 // ── scene3d API ─────────────────────────────────────────────────────────────
 
 function scene3dUrl(path: string): string {

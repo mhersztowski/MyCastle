@@ -698,9 +698,56 @@ async function handleLdraw(req: http.IncomingMessage, res: http.ServerResponse, 
 const EASYEDA_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 const easyedaHeaders = { Accept: 'application/json', 'User-Agent': EASYEDA_UA };
 
+// Model 3D EasyEDA jest opisany w footprincie jako `SVGNODE~{json}` z attrs.uuid
+// (id modelu) + transformacją (c_origin/c_rotation/z). Zwracamy uuid + transform,
+// a surowy .obj serwuje osobny endpoint /api/easyeda/model3d/{uuid}.
+function parseEasyEda3dModel(shapes: string[]): { uuid: string; ox: number; oy: number; z: number; rx: number; ry: number; rz: number; title: string } | null {
+  for (const s of shapes) {
+    if (!s.startsWith('SVGNODE')) continue;
+    try {
+      const node = JSON.parse(s.slice(s.indexOf('~') + 1)) as { attrs?: Record<string, string>; c_para?: Record<string, string> };
+      const a = node.attrs ?? {};
+      if (!a.uuid) continue;
+      const [ox, oy] = String(a.c_origin ?? '0,0').split(',').map(Number);
+      const [rx, ry, rz] = String(a.c_rotation ?? '0,0,0').split(',').map(Number);
+      return { uuid: a.uuid, ox: ox || 0, oy: oy || 0, z: Number(a.z ?? 0) || 0, rx: rx || 0, ry: ry || 0, rz: rz || 0, title: node.c_para?.['3DModel'] ?? a.title ?? '' };
+    } catch { /* pomiń wadliwy węzeł */ }
+  }
+  return null;
+}
+
+// Cache surowych modeli 3D (obj text) — EasyEDA rate-limituje, a modele bywają duże.
+const model3dCache = new Map<string, { obj: string; at: number }>();
+const MODEL3D_TTL_MS = 3600_000;
+
 async function handleEasyEda(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   const p = url.pathname;
   if (!p.startsWith('/api/easyeda')) return false;
+
+  // GET /api/easyeda/model3d/:uuid → surowy model .obj (proxy + cache)
+  const m3d = p.match(/^\/api\/easyeda\/model3d\/([^/]+)$/);
+  if (m3d && req.method === 'GET') {
+    const uuid = decodeURIComponent(m3d[1]);
+    try {
+      const cached = model3dCache.get(uuid);
+      let obj: string;
+      if (cached && Date.now() - cached.at < MODEL3D_TTL_MS) obj = cached.obj;
+      else {
+        // Dwa znane hosty EasyEDA na surowy .obj — próbujemy po kolei.
+        const urls = [`https://modules.easyeda.com/3dmodel/${encodeURIComponent(uuid)}`, `https://modules.easyeda.com/qAxj6KHrDKw4blvCG8QJPs7Y/${encodeURIComponent(uuid)}`];
+        obj = '';
+        for (const u of urls) {
+          const r = await fetch(u, { headers: { 'User-Agent': EASYEDA_UA } });
+          if (r.ok) { const t = await r.text(); if (t.includes('v ') || t.includes('vertex')) { obj = t; break; } }
+        }
+        if (!obj) throw new Error('brak modelu 3D');
+        model3dCache.set(uuid, { obj, at: Date.now() });
+      }
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+      res.end(obj);
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 502); }
+    return true;
+  }
 
   // GET /api/easyeda/search?q=... → lista części (LCSC number + MPN + package)
   if (p === '/api/easyeda/search' && req.method === 'GET') {
@@ -743,6 +790,7 @@ async function handleEasyEda(req: http.IncomingMessage, res: http.ServerResponse
         prefix: rr.dataStr.head?.c_para?.pre ?? 'U?',
         symbol: { shapes: rr.dataStr.shape ?? [], bbox: rr.dataStr.BBox ?? null },
         footprint: rr.packageDetail?.dataStr ? { shapes: rr.packageDetail.dataStr.shape ?? [], bbox: rr.packageDetail.dataStr.BBox ?? null } : null,
+        model3d: parseEasyEda3dModel(rr.packageDetail?.dataStr?.shape ?? []),
       });
     } catch (err) {
       json(res, { error: err instanceof Error ? err.message : String(err) }, 502);

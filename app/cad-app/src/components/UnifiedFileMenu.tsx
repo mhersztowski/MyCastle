@@ -66,6 +66,9 @@ export function FileMenu({ mode }: { mode: string }) {
           </MenuItem>
         )}
 
+        {(ops?.newItems?.length ?? 0) > 0 && <Divider />}
+        {renderItems(ops?.newItems, ArticleOutlinedIcon)}
+
         {hasServer && <Divider />}
         {ops?.server?.map((it, i) => {
           const Icon = /save/i.test(it.label) ? CloudUploadOutlinedIcon : CloudDownloadOutlinedIcon;
