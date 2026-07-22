@@ -34,23 +34,25 @@ import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
 import ElectricalServicesIcon from '@mui/icons-material/ElectricalServices';
 import {
   CadViewerPage, Cad3dViewerPage, Scene3dViewerPage, ElectronicsViewerPage,
-  MapViewerPage, NotesViewerPage, LegoViewerPage,
+  MapViewerPage, NotesViewerPage, LegoViewerPage, PcbViewerPage,
   setViewerApiBase, setViewerUserId,
 } from '@mhersztowski/core-cad-viewer';
 import MapIcon from '@mui/icons-material/Map';
 import GestureIcon from '@mui/icons-material/Gesture';
 import WidgetsIcon from '@mui/icons-material/Widgets';
+import DeveloperBoardIcon from '@mui/icons-material/DeveloperBoard';
 import { useMdViewSettings } from '../mdViewSettings';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type CadViewMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'map' | 'notes' | 'lego';
+export type CadViewMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics' | 'pcb' | 'map' | 'notes' | 'lego';
 
 const MODE_LABELS: Record<CadViewMode, string> = {
   cad: 'CAD 2D',
   cad3d: 'CAD 3D',
   scene3d: 'Scene 3D',
   electronics: 'Electronics',
+  pcb: 'PCB',
   map: 'Map',
   notes: 'Notes',
   lego: 'Lego',
@@ -61,6 +63,7 @@ const MODE_ICONS: Record<CadViewMode, React.ReactNode> = {
   cad3d: <ViewInArOutlinedIcon sx={{ fontSize: 16 }} />,
   scene3d: <ViewInArIcon sx={{ fontSize: 16 }} />,
   electronics: <ElectricalServicesIcon sx={{ fontSize: 16 }} />,
+  pcb: <DeveloperBoardIcon sx={{ fontSize: 16 }} />,
   map: <MapIcon sx={{ fontSize: 16 }} />,
   notes: <GestureIcon sx={{ fontSize: 16 }} />,
   lego: <WidgetsIcon sx={{ fontSize: 16 }} />,
@@ -108,7 +111,33 @@ async function fetchProjects(mode: CadViewMode): Promise<ProjectEntry[]> {
   const base = getCadBaseUrl().replace(/\/$/, '');
   const userId = 'default';
   try {
-    if (mode === 'scene3d') {
+    if (mode === 'pcb') {
+      // Projekty PCB żyją w /api/projects (REST), nie w VFS. Dla każdego projektu
+      // rozwijamy pozycje: PCB (płytka), Sheets/*, Symbols/*, Footprints/*.
+      // `path` to vfsPath oczekiwany przez PcbViewerPage: `{projekt}/{view}[/{id}]`.
+      const listRes = await fetch(`${base}/api/projects`, { signal: AbortSignal.timeout(4000) });
+      if (!listRes.ok) return [];
+      const listData = (await listRes.json()) as { projects?: string[] };
+      const names = listData.projects ?? [];
+      const entries: ProjectEntry[] = [];
+      await Promise.all(names.map(async (pname) => {
+        try {
+          const res = await fetch(`${base}/api/projects/${encodeURIComponent(pname)}`, { signal: AbortSignal.timeout(4000) });
+          if (!res.ok) return;
+          const d = (await res.json()) as {
+            sheets?: { id: string; name?: string }[];
+            symbols?: { id: string; name?: string }[];
+            footprints?: { id: string; name?: string }[];
+          };
+          entries.push({ name: `${pname}/PCB`, path: `${pname}/pcb` });
+          for (const s of d.sheets ?? []) entries.push({ name: `${pname}/Sheets/${s.name || s.id}`, path: `${pname}/sheet/${s.id}` });
+          for (const s of d.symbols ?? []) entries.push({ name: `${pname}/Symbols/${s.name || s.id}`, path: `${pname}/symbol/${s.id}` });
+          for (const s of d.footprints ?? []) entries.push({ name: `${pname}/Footprints/${s.name || s.id}`, path: `${pname}/footprint/${s.id}` });
+        } catch { /* pomiń projekt */ }
+      }));
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      return entries;
+    } else if (mode === 'scene3d') {
       // Flat list: project/file — each JSON file is a separate entry
       const projRes = await fetch(`${base}/api/scene3d/projects?user=${userId}`, { signal: AbortSignal.timeout(4000) });
       if (!projRes.ok) return [];
@@ -390,6 +419,7 @@ function NativeCadViewer({ mode, vfsPath, apiBase }: { mode: CadViewMode; vfsPat
     case 'cad':         return <CadViewerPage {...common} />;
     case 'cad3d':       return <Cad3dViewerPage {...common} />;
     case 'electronics': return <ElectronicsViewerPage {...common} />;
+    case 'pcb':         return <PcbViewerPage {...common} />;
     case 'map':         return <MapViewerPage {...common} />;
     case 'notes':       return <NotesViewerPage {...common} />;
     case 'lego':        return <LegoViewerPage {...common} />;

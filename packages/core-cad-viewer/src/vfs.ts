@@ -83,6 +83,17 @@ export async function readFileAt(dir: string, name: string, extension: string): 
   return base64ToText(res.data);
 }
 
+// ── PCB projects API ──────────────────────────────────────────────────────────
+
+/** Read a full PCB project by name from the cad-backend (/api/projects/{name}). */
+export async function readPcbProject(name: string): Promise<unknown> {
+  const url = new URL(`/api/projects/${encodeURIComponent(name)}`, apiOrigin());
+  const res = await vfsFetch(url.toString());
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  return data;
+}
+
 // ── scene3d API ─────────────────────────────────────────────────────────────
 
 function scene3dUrl(path: string): string {

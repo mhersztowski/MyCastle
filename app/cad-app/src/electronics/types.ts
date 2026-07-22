@@ -33,7 +33,20 @@ export type BodyShape =
   | 'transistor'
   | 'dip'
   | 'buzzer'
-  | 'joystick';
+  | 'joystick'
+  | 'symbol';   // osadzony symbol schematyczny (z PcbView) — geometria w `symbolShapes`
+
+/**
+ * Prymityw rysunkowy osadzonego symbolu. Wszystkie współrzędne są w
+ * jednostkach siatki (tak jak `Pin.x/y`), mnożone przez GRID przy renderowaniu.
+ * `lead` to „schodki" łączące realny (nierówny) punkt pinu z węzłem siatki.
+ */
+export type SymShape =
+  | { k: 'poly'; pts: WirePoint[]; closed?: boolean; color?: string; width?: number; fill?: string }
+  | { k: 'rect'; x: number; y: number; w: number; h: number; color?: string; width?: number; fill?: string }
+  | { k: 'ellipse'; cx: number; cy: number; rx: number; ry: number; color?: string; width?: number; fill?: string }
+  | { k: 'text'; x: number; y: number; text: string; size: number; color?: string; anchor?: 'start' | 'middle' | 'end' }
+  | { k: 'lead'; pts: WirePoint[]; color?: string };
 
 export interface PartDef {
   id: string;
@@ -50,6 +63,8 @@ export interface PartDef {
   label?: string;
   /** LED/indicator color (for led shape) */
   indicatorColor?: string;
+  /** Geometria osadzonego symbolu (tylko dla bodyShape === 'symbol'). */
+  symbolShapes?: SymShape[];
 }
 
 export interface ComponentPlacement {
@@ -82,6 +97,8 @@ export interface ElectronicsSchema {
   version: 1;
   components: ComponentPlacement[];
   wires: Wire[];
+  /** Definicje osadzonych symboli, do których odwołują się komponenty przez partId. */
+  embeddedParts?: PartDef[];
 }
 
 export const WIRE_COLORS = [

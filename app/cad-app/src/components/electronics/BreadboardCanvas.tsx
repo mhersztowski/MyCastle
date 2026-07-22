@@ -1,5 +1,6 @@
 import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Tooltip, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import { Box, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Tooltip, ToggleButton, ToggleButtonGroup, Dialog, DialogTitle, DialogContent, DialogActions, List, ListItemButton, TextField, CircularProgress, Typography, Button } from '@mui/material';
+import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
 import NearMeIcon from '@mui/icons-material/NearMe';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
@@ -13,9 +14,10 @@ import UndoIcon from '@mui/icons-material/Undo';
 import Rotate90DegreesCwIcon from '@mui/icons-material/Rotate90DegreesCw';
 import FlipToFrontIcon from '@mui/icons-material/FlipToFront';
 import FlipToBackIcon from '@mui/icons-material/FlipToBack';
-import { GRID, SNAP_RADIUS, WIRE_COLORS, pinWorldCenter, rotationOffset, type ComponentPlacement, type Wire, type WirePoint, type InteractionMode, type ElectronicsSchema } from '../../electronics/types';
-import { getPartDef } from '../../electronics/partLibrary';
+import { GRID, SNAP_RADIUS, WIRE_COLORS, pinWorldCenter, rotationOffset, type ComponentPlacement, type Wire, type WirePoint, type InteractionMode, type ElectronicsSchema, type SymShape } from '../../electronics/types';
+import { getPartDef, registerEmbeddedPart } from '../../electronics/partLibrary';
 import type { PartDef } from '../../electronics/types';
+import { buildEmbeddedPart } from '../../electronics/symbolEmbed';
 import { ServerFileBrowser } from '../ServerFileBrowser';
 import { ElectronicsPropertiesPanel } from './ElectronicsPropertiesPanel';
 import { ELEC_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../../vfs/cadProjectApi';
@@ -25,10 +27,40 @@ import type { ActiveTemplate } from '../RepositoryPanel';
 
 // ── Part renderer ─────────────────────────────────────────────────────────────
 
+/** Rysuje pojedynczy prymityw osadzonego symbolu (współrzędne w komórkach → px). */
+function renderSymShape(s: SymShape, i: number) {
+  const p = (v: number) => v * GRID;
+  const sw = (v: number | undefined) => Math.max(1, (v || 0.08) * GRID); // grubość w komórkach → px (min 1 px)
+  if (s.k === 'poly') {
+    const pts = s.pts.map((q) => `${p(q.x)},${p(q.y)}`).join(' ');
+    return s.closed
+      ? <polygon key={i} points={pts} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} strokeLinejoin="round" strokeLinecap="round" />
+      : <polyline key={i} points={pts} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} strokeLinejoin="round" strokeLinecap="round" />;
+  }
+  if (s.k === 'lead') {
+    const pts = s.pts.map((q) => `${p(q.x)},${p(q.y)}`).join(' ');
+    return <polyline key={i} points={pts} fill="none" stroke={s.color || '#4fc3f7'} strokeWidth={1.4} strokeDasharray="3 2" strokeLinejoin="round" strokeLinecap="round" />;
+  }
+  if (s.k === 'rect') return <rect key={i} x={p(s.x)} y={p(s.y)} width={p(s.w)} height={p(s.h)} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} />;
+  if (s.k === 'ellipse') return <ellipse key={i} cx={p(s.cx)} cy={p(s.cy)} rx={p(s.rx)} ry={p(s.ry)} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} />;
+  if (s.k === 'text') return <text key={i} x={p(s.x)} y={p(s.y)} fontSize={p(s.size)} fill={s.color || '#1c4fd6'} textAnchor={s.anchor || 'start'} fontFamily="sans-serif" style={{ userSelect: 'none' }}>{s.text}</text>;
+  return null;
+}
+
 function PartBody({ part, w, h, selected }: { part: PartDef; w: number; h: number; selected: boolean }) {
   const px = (v: number) => v * GRID;
   const strokeColor = selected ? '#4fc3f7' : '#555';
   const strokeWidth = selected ? 2 : 1;
+
+  // Osadzony symbol schematyczny — rysujemy jego własną geometrię.
+  if (part.bodyShape === 'symbol' && part.symbolShapes) {
+    return (
+      <g>
+        {selected && <rect x={-2} y={-2} width={px(w) + 4} height={px(h) + 4} rx={3} fill="rgba(79,195,247,0.08)" stroke="#4fc3f7" strokeWidth={1.5} strokeDasharray="4 3" />}
+        {part.symbolShapes.map((s, i) => renderSymShape(s, i))}
+      </g>
+    );
+  }
 
   if (part.bodyShape === 'breadboard') {
     const cols = 63, railH = 2, mainH = 5, gapH = 1;
@@ -513,10 +545,32 @@ export function BreadboardCanvas({
   const [components, setComponents] = useState<ComponentPlacement[]>([]);
   const [wires, setWires] = useState<Wire[]>([]);
 
+  // Osadzanie symboli (z /api/symbols). Wewnętrzny „pending part" pozwala wejść
+  // w tryb umieszczania bez udziału rodzica; embeddedParts trzyma definicje do
+  // zapisu w schemacie.
+  const [embedOpen, setEmbedOpen] = useState(false);
+  const [embeddedParts, setEmbeddedParts] = useState<PartDef[]>([]);
+  const [localPendingId, setLocalPendingId] = useState<string | null>(null);
+  const localPendingIdRef = useRef(localPendingId);
+  localPendingIdRef.current = localPendingId;
+  const embeddedPartsRef = useRef(embeddedParts);
+  embeddedPartsRef.current = embeddedParts;
+  // Rejestruje definicje osadzone przy wczytaniu schematu (żeby getPartDef je znało).
+  const registerEmbedded = useCallback((parts?: PartDef[]) => {
+    if (!parts?.length) return;
+    parts.forEach(registerEmbeddedPart);
+    setEmbeddedParts(prev => {
+      const byId = new Map(prev.map(p => [p.id, p]));
+      parts.forEach(p => byId.set(p.id, p));
+      return [...byId.values()];
+    });
+  }, []);
+
   // Imperative merge API for external template insertion
   useEffect(() => {
     if (!mergeSchemaRef) return;
     mergeSchemaRef.current = (incoming: ElectronicsSchema) => {
+      registerEmbedded(incoming.embeddedParts);
       setComponents(prev => [
         ...prev,
         ...(incoming.components ?? []).map(c => ({ ...c, id: crypto.randomUUID() })),
@@ -630,9 +684,10 @@ export function BreadboardCanvas({
     return () => ro.disconnect();
   }, []);
 
-  // Switch to place mode when a part is selected in the library
+  // Switch to place mode when a part is selected in the library, or when an
+  // embedded symbol was just chosen (localPendingId).
   useEffect(() => {
-    if (pendingPartId) {
+    if (pendingPartId || localPendingId) {
       setMode('place');
       setSelectedId(null);
       setSelectedType(null);
@@ -640,7 +695,10 @@ export function BreadboardCanvas({
       setWireJunctions([]);
       setPlaceRotation(0);
     }
-  }, [pendingPartId]);
+  }, [pendingPartId, localPendingId]);
+
+  // Nowy wybór z biblioteki (pendingPartId) unieważnia trwający osadzony symbol.
+  useEffect(() => { if (pendingPartId) setLocalPendingId(null); }, [pendingPartId]);
 
   // Coordinate conversion
   const clientToGrid = useCallback((clientX: number, clientY: number): { gx: number; gy: number } => {
@@ -668,6 +726,7 @@ export function BreadboardCanvas({
     fetch(url)
       .then(r => r.json())
       .then((schema: ElectronicsSchema) => {
+        registerEmbedded(schema.embeddedParts);
         const comps = schema.components ?? [];
         if (comps.length === 0) return;
         const cx = comps.reduce((s, c) => s + c.x, 0) / comps.length;
@@ -738,6 +797,7 @@ export function BreadboardCanvas({
       } else if (modeRef.current === 'place') {
         setMode('select');
         onPendingPartConsumed();
+        setLocalPendingId(null);
       } else {
         setSelectedId(null);
         setSelectedType(null);
@@ -870,12 +930,13 @@ export function BreadboardCanvas({
   const handleSvgTap = useCallback((clientX: number, clientY: number, doubleTap = false) => {
     const { gx, gy } = clientToGrid(clientX, clientY);
 
-    if (modeRef.current === 'place' && pendingPartIdRef.current) {
-      const part = getPartDef(pendingPartIdRef.current);
+    const placingId = localPendingIdRef.current ?? pendingPartIdRef.current;
+    if (modeRef.current === 'place' && placingId) {
+      const part = getPartDef(placingId);
       if (!part) return;
       const newComp: ComponentPlacement = {
         id: crypto.randomUUID(),
-        partId: pendingPartIdRef.current,
+        partId: placingId,
         x: Math.round(gx),
         y: Math.round(gy),
         rotation: placeRotationRef.current,
@@ -1132,7 +1193,7 @@ export function BreadboardCanvas({
   // ── Save / Load ──────────────────────────────────────────────────────────────
 
   const handleSave = useCallback(() => {
-    const schema: ElectronicsSchema = { version: 1, components, wires };
+    const schema: ElectronicsSchema = { version: 1, components, wires, embeddedParts };
     const blob = new Blob([JSON.stringify(schema, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1140,7 +1201,7 @@ export function BreadboardCanvas({
     a.download = 'breadboard.elec.json';
     a.click();
     URL.revokeObjectURL(url);
-  }, [components, wires]);
+  }, [components, wires, embeddedParts]);
 
   const handleLoad = useCallback(() => {
     const input = document.createElement('input');
@@ -1153,6 +1214,7 @@ export function BreadboardCanvas({
       reader.onload = (ev) => {
         try {
           const schema = JSON.parse(ev.target!.result as string) as ElectronicsSchema;
+          registerEmbedded(schema.embeddedParts);
           setComponents(schema.components ?? []);
           setWires(schema.wires ?? []);
           setSelectedId(null);
@@ -1216,6 +1278,7 @@ export function BreadboardCanvas({
   const handleServerOpen = useCallback(async (dir: string, name: string) => {
     const text = await readFileAt(dir, name, ELEC_EXT);
     const schema = JSON.parse(text) as ElectronicsSchema;
+    registerEmbedded(schema.embeddedParts);
     setComponents(schema.components ?? []);
     setWires(schema.wires ?? []);
     setSelectedId(null);
@@ -1223,10 +1286,10 @@ export function BreadboardCanvas({
     setWirePoints([]);
     setWireJunctions([]);
     setCurrentFile({ dir, name });
-  }, []);
+  }, [registerEmbedded]);
 
   const handleServerSave = useCallback(async (dir: string, name: string) => {
-    const schema: ElectronicsSchema = { version: 1, components: componentsRef.current, wires: wiresRef.current };
+    const schema: ElectronicsSchema = { version: 1, components: componentsRef.current, wires: wiresRef.current, embeddedParts: embeddedPartsRef.current };
     await writeFileAt(dir, name, ELEC_EXT, JSON.stringify(schema, null, 2));
     setCurrentFile({ dir, name });
   }, []);
@@ -1255,8 +1318,8 @@ export function BreadboardCanvas({
     return out;
   }, [wires]);
 
-  // Pending part ghost (follows cursor)
-  const pendingPart = pendingPartId ? getPartDef(pendingPartId) : null;
+  // Pending part ghost (follows cursor) — osadzony symbol lub biblioteczny.
+  const pendingPart = (localPendingId ?? pendingPartId) ? getPartDef((localPendingId ?? pendingPartId)!) : null;
   const ghostOffset = pendingPart
     ? rotationOffset(pendingPart.width, pendingPart.height, placeRotation)
     : { x: 0, y: 0 };
@@ -1268,6 +1331,14 @@ export function BreadboardCanvas({
   const selectedComponentPart = selectedComponent
     ? getPartDef(selectedComponent.partId) ?? null
     : null;
+
+  // Osadzenie wybranego symbolu: rejestracja + wejście w tryb umieszczania.
+  const handleEmbed = useCallback((part: PartDef) => {
+    registerEmbeddedPart(part);
+    setEmbeddedParts(prev => { const m = new Map(prev.map(p => [p.id, p])); m.set(part.id, part); return [...m.values()]; });
+    setLocalPendingId(part.id);
+    setEmbedOpen(false);
+  }, []);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'row', flex: 1, overflow: 'hidden' }}>
@@ -1294,7 +1365,7 @@ export function BreadboardCanvas({
           onChange={(_, v: InteractionMode | null) => {
             if (v) {
               setMode(v);
-              if (v !== 'place') onPendingPartConsumed();
+              if (v !== 'place') { onPendingPartConsumed(); setLocalPendingId(null); }
               if (v !== 'wire') { setWirePoints([]); setWireJunctions([]); }
             }
           }}
@@ -1308,6 +1379,12 @@ export function BreadboardCanvas({
             <ToggleButton value="wire"><CableIcon sx={{ fontSize: 16 }} /></ToggleButton>
           </Tooltip>
         </ToggleButtonGroup>
+
+        <Tooltip title="Embed schematic symbol (from PCB)">
+          <IconButton size="small" onClick={() => setEmbedOpen(true)} sx={{ ml: 0.5 }}>
+            <MemoryOutlinedIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
 
         {/* Wire color picker */}
         {inWireMode && (
@@ -1707,6 +1784,90 @@ export function BreadboardCanvas({
           onSave={handleServerSave}
         />
       )}
+
+      <EmbedSymbolDialog open={embedOpen} onClose={() => setEmbedOpen(false)} onEmbed={handleEmbed} />
     </Box>
+  );
+}
+
+// ── Dialog osadzania symbolu ────────────────────────────────────────────────────
+// Lista symboli z /api/symbols (te same, których używa edytor PCB). Po wyborze
+// pobiera geometrię z /api/symbols/{name} i buduje PartDef ze schodkami pinów.
+
+interface SymRow { name: string; title: string }
+
+function EmbedSymbolDialog({ open, onClose, onEmbed }: { open: boolean; onClose: () => void; onEmbed: (part: PartDef) => void }) {
+  const [rows, setRows] = useState<SymRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true); setError(null); setNote(null);
+    fetch('/api/symbols')
+      .then(r => r.json())
+      .then((d: unknown) => {
+        const list = Array.isArray(d) ? d : ((d as { items?: unknown[]; symbols?: unknown[] }).items ?? (d as { symbols?: unknown[] }).symbols ?? []);
+        const mapped = (list as Array<Record<string, unknown>>)
+          .map((s) => ({ name: String(s.name ?? s.title ?? ''), title: String(s.title ?? s.name ?? '') }))
+          .filter((s) => s.name);
+        setRows(mapped);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const pick = async (row: SymRow) => {
+    setBusy(row.name); setError(null); setNote(null);
+    try {
+      const d = await (await fetch(`/api/symbols/${encodeURIComponent(row.name)}`)).json();
+      const { part, offGrid } = buildEmbeddedPart(row.name, row.title, (d as { elements?: unknown }).elements);
+      if (!part.pins.length) { setError('This symbol has no pins to connect.'); return; }
+      if (offGrid > 0) { setNote(`${offGrid} pin(s) off-grid — connected with step leads.`); }
+      onEmbed(part);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const filtered = rows.filter(r => (r.title || r.name).toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ pb: 1 }}>Embed Symbol</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1, minHeight: 320 }}>
+        <TextField size="small" placeholder="Search symbols…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus fullWidth />
+        {note && <Typography variant="caption" sx={{ color: 'info.main' }}>{note}</Typography>}
+        {error && <Typography variant="caption" sx={{ color: 'error.main' }}>{error}</Typography>}
+        <Box sx={{ flex: 1, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}><CircularProgress size={22} /></Box>
+          ) : filtered.length === 0 ? (
+            <Typography variant="body2" sx={{ p: 2, color: 'text.secondary' }}>No symbols found. Create one in the PCB editor first.</Typography>
+          ) : (
+            <List dense disablePadding>
+              {filtered.map((r) => (
+                <ListItemButton key={r.name} onClick={() => pick(r)} disabled={busy !== null}>
+                  <ListItemIcon sx={{ minWidth: 32 }}><MemoryOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary={r.title || r.name} secondary={r.title && r.title !== r.name ? r.name : undefined} />
+                  {busy === r.name && <CircularProgress size={16} />}
+                </ListItemButton>
+              ))}
+            </List>
+          )}
+        </Box>
+        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          After selecting, click on the canvas to place the symbol. Its pins snap to the grid — pins with irregular spacing get short step leads.
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
   );
 }

@@ -825,6 +825,14 @@ async function handleSymbols(req: http.IncomingMessage, res: http.ServerResponse
     } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 404); }
     return true;
   }
+  // DELETE /api/symbols/:name → usuń zapisany symbol
+  if (m && req.method === 'DELETE') {
+    try {
+      fs.rmSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`), { force: true });
+      json(res, { ok: true });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 500); }
+    return true;
+  }
   return false;
 }
 
@@ -858,6 +866,14 @@ async function handleFootprints(req: http.IncomingMessage, res: http.ServerRespo
   if (m && req.method === 'GET') {
     try { json(res, JSON.parse(fs.readFileSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`), 'utf8'))); }
     catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 404); }
+    return true;
+  }
+  // DELETE /api/footprints/:name → usuń zapisany footprint
+  if (m && req.method === 'DELETE') {
+    try {
+      fs.rmSync(resolve(dir, `${safeName(decodeURIComponent(m[1]))}.json`), { force: true });
+      json(res, { ok: true });
+    } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err) }, 500); }
     return true;
   }
   return false;

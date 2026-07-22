@@ -461,8 +461,23 @@ export const PART_LIBRARY: PartDef[] = [
   lcd1602i2c,
 ];
 
+// ── Osadzone symbole ──────────────────────────────────────────────────────────
+// Symbole schematyczne wstawione ze strony PCB nie są w statycznej bibliotece —
+// trzymamy je w runtime'owym rejestrze, żeby `getPartDef` (używane przez snap,
+// render i piny) mogło je rozwiązać po `partId`. Persystencja: schema.embeddedParts.
+
+const EMBEDDED_PARTS = new Map<string, PartDef>();
+
+export function registerEmbeddedPart(def: PartDef): void {
+  EMBEDDED_PARTS.set(def.id, def);
+}
+
+export function allEmbeddedParts(): PartDef[] {
+  return [...EMBEDDED_PARTS.values()];
+}
+
 export function getPartDef(id: string): PartDef | undefined {
-  return PART_LIBRARY.find(p => p.id === id);
+  return EMBEDDED_PARTS.get(id) ?? PART_LIBRARY.find(p => p.id === id);
 }
 
 export const CATEGORY_ORDER: PartCategory[] = [

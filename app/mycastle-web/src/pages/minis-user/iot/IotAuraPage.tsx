@@ -57,6 +57,8 @@ import { App } from '../../../App';
 import { AudioRecorder, createBrowserRecognition, RealtimeSttService } from '../../../modules/speech';
 import type { TtsProviderType, SttProviderType, SpeechConfigModel } from '../../../modules/speech';
 import type { AiProviderType, AiConfigModel } from '../../../modules/ai';
+import type { AiChatMessage } from '../../../modules/ai/models/AiModels';
+import { VFS_TOOLS, executeVfsTool } from './auraVfsTools';
 import { codeFromXml, readVfsFile, runVfsJsonQuery, setGlobalFunctionNames, extractGlobalFunctionNames, ComponentHost } from '../../../modules/voiceactions';
 import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig, ShowComponentConfig } from '../../../modules/voiceactions';
 import { useMqtt } from '../../../modules/mqttclient/MqttContext';
@@ -86,6 +88,8 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   component?: ShowComponentConfig;
+  /** 'info' = drobna notka o aktywności agenta (np. odczyt/zapis pliku), renderowana dyskretnie. */
+  kind?: 'info';
 }
 
 // ---- Modele AI (ChatGPT + Claude) ----
@@ -415,6 +419,10 @@ const IotAuraPage: React.FC = () => {
   const appendUser = useCallback((text: string) => {
     setMessages(prev => [...prev, { id: `${Date.now()}-u-${Math.random().toString(36).slice(2, 5)}`, role: 'user', content: text, timestamp: Date.now() }]);
   }, []);
+  // Dyskretna notka o aktywności agenta (odczyt/zapis pliku) — NIE jest wypowiadana przez TTS.
+  const appendInfo = useCallback((text: string) => {
+    setMessages(prev => [...prev, { id: `${Date.now()}-i-${Math.random().toString(36).slice(2, 5)}`, role: 'assistant', kind: 'info', content: text, timestamp: Date.now() }]);
+  }, []);
 
   // ---- Dopasowanie wypowiedzi do akcji głosowej (aktywatory) ----
   const matchAction = useCallback((utteranceRaw: string): VoiceAction | null => {
@@ -584,6 +592,51 @@ const IotAuraPage: React.FC = () => {
     await ttsChainRef.current; // poczekaj aż mowa się dokończy
     return full;
   }, [aiService, enqueueTts]);
+
+  // ---- Pętla agentowa z narzędziami VFS (dostęp do plików Drive użytkownika) ----
+  // Model może wołać list_files/read_file/write_file; wyniki wracają do niego, a w czacie
+  // pojawiają się dyskretne notki (📖/📝/📁). Odpowiedź końcowa jest wypowiadana zdaniami.
+  const runAiTurnWithTools = useCallback(async (baseMessages: AiChatMessage[]): Promise<string> => {
+    const model = ALL_AI_MODELS.find(m => m.id === aiModelId) || CLAUDE_MODELS[0];
+    const messages: AiChatMessage[] = [...baseMessages];
+    // Dopisz do wiadomości systemowej informację o dostępie do plików.
+    const fileHint = ' Masz dostęp do plików użytkownika na Drive przez narzędzia list_files/read_file/write_file — używaj ich, gdy pytanie dotyczy plików, notatek lub danych na dysku.';
+    const sysIdx = messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0 && typeof messages[sysIdx].content === 'string') {
+      messages[sysIdx] = { ...messages[sysIdx], content: (messages[sysIdx].content as string) + fileHint };
+    } else {
+      messages.unshift({ role: 'system', content: fileHint.trim() });
+    }
+
+    let finalText = '';
+    for (let step = 0; step < 6; step++) {
+      const resp = await aiService.chat({ provider: model.provider, model: model.id, messages, tools: VFS_TOOLS, tool_choice: 'auto' });
+      if (resp.toolCalls && resp.toolCalls.length) {
+        messages.push({ role: 'assistant', content: resp.content || '', tool_calls: resp.toolCalls });
+        for (const tc of resp.toolCalls) {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* zły JSON → puste argumenty */ }
+          const { result, info } = await executeVfsTool(userName || '', tc.function.name, args);
+          appendInfo(info);
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: typeof result === 'string' ? result : JSON.stringify(result) });
+        }
+        continue; // odeślij wyniki narzędzi do modelu i powtórz
+      }
+      finalText = resp.content || '';
+      break;
+    }
+
+    if (finalText) {
+      appendAssistant(finalText);
+      // Wypowiedz odpowiedź zdaniami (jak w streamie).
+      const parts = finalText.split(/(?<=[.!?…\n])/);
+      let buf = '';
+      for (const p of parts) { buf += p; if (/[.!?…\n]\s*$/.test(p) && buf.trim()) { enqueueTts(buf.trim()); buf = ''; } }
+      if (buf.trim()) enqueueTts(buf.trim());
+      await ttsChainRef.current;
+    }
+    return finalText;
+  }, [aiService, aiModelId, userName, appendInfo, appendAssistant, enqueueTts]);
 
   // ---- Wykonanie logiki konwersacji (wariant Blockly) ----
   const runVoiceActionRef = useRef<(a: VoiceAction, u: string) => Promise<void>>(async () => {});
@@ -767,22 +820,16 @@ const IotAuraPage: React.FC = () => {
         return;
       }
 
-      // 2) Fallback: rozmowa z modelem AI (streaming + mowa zdaniami)
-      const model = ALL_AI_MODELS.find(m => m.id === aiModelId) || CLAUDE_MODELS[0];
+      // 2) Fallback: rozmowa z modelem AI (agent z narzędziami VFS + mowa zdaniami)
       setState('thinking');
-      const history = historyRef.current.slice(-20).map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
-      await streamAiResponse({
-        provider: model.provider,
-        model: model.id,
-        messages: [
-          { role: 'system', content: DEFAULT_SYSTEM_PROMPT },
-          ...history,
-          { role: 'user', content: trimmed },
-        ],
-      });
+      const history = historyRef.current.slice(-20)
+        .filter(m => m.kind !== 'info') // notki o plikach nie idą do modelu
+        .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+      await runAiTurnWithTools([
+        { role: 'system', content: DEFAULT_SYSTEM_PROMPT },
+        ...history,
+        { role: 'user', content: trimmed },
+      ]);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       setError(errMsg);
@@ -793,7 +840,7 @@ const IotAuraPage: React.FC = () => {
       resumeListeningRef.current();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiModelId, matchAction, appendUser, appendAssistant, streamAiResponse]);
+  }, [matchAction, appendUser, appendAssistant, runAiTurnWithTools]);
 
   useEffect(() => { processUserInputRef.current = processUserInput; }, [processUserInput]);
 
@@ -1277,6 +1324,14 @@ const IotAuraPage: React.FC = () => {
 
   // ---- Renderowanie wiadomości ----
   const renderMessage = (msg: ChatMessage) => (
+    msg.kind === 'info' ? (
+      // Dyskretna notka o aktywności agenta (odczyt/zapis pliku).
+      <Box key={msg.id} sx={{ display: 'flex', justifyContent: 'center', my: 0.25 }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', bgcolor: 'action.hover', px: 1, py: 0.25, borderRadius: 1, fontSize: 11 }}>
+          {msg.content}
+        </Typography>
+      </Box>
+    ) : (
     <Box
       key={msg.id}
       sx={{ display: 'flex', gap: 1, justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}
@@ -1302,6 +1357,7 @@ const IotAuraPage: React.FC = () => {
       </Paper>
       {msg.role === 'user' && <PersonIcon sx={{ color: 'primary.main', mt: 0.5, fontSize: 20 }} />}
     </Box>
+    )
   );
 
   return (

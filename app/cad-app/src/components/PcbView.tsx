@@ -53,6 +53,7 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import GridOnIcon from '@mui/icons-material/GridOn';
+import PrintOutlinedIcon from '@mui/icons-material/PrintOutlined';
 import RemoveIcon from '@mui/icons-material/Remove';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
@@ -282,7 +283,7 @@ const SYMBOL_SHORTCUTS: Record<string, string> = { p: 'pin', l: 'line', q: 'bezi
 function MI({ label, sc, icon, disabled, onClick }: { label: string; sc?: string; icon?: React.ReactNode; disabled?: boolean; onClick?: () => void }) {
   return <MenuItem disabled={disabled} onClick={onClick} sx={{ fontSize: 13.5, gap: 1.5, minWidth: 240 }}>{icon}<span>{label}</span>{sc && <span style={{ marginLeft: 'auto', color: '#9aa0a6', fontSize: 12.5, paddingLeft: 24 }}>{sc}</span>}</MenuItem>;
 }
-function TopMenuBar({ editor, onNewProject, onNewSymbol, onNewSchematic, onNewPcb, onNewFootprint, onSave, onImport, onOpenProject, editOps, formatOps, placeTools, onPlaceTool, onPanTool, onFind, onFindSimilar, onSaveProject, onSaveProjectAs, saving, onExportObj, onExportGerber }: { editor: Editor; onNewProject: () => void; onNewSymbol: () => void; onNewSchematic: () => void; onNewPcb: () => void; onNewFootprint: () => void; onSave?: () => void; onImport: () => void; onOpenProject: () => void; editOps: EditOps; formatOps: FormatOps; placeTools: Tool[]; onPlaceTool: (id: string) => void; onPanTool: () => void; onFind: () => void; onFindSimilar: () => void; onSaveProject: () => void; onSaveProjectAs: () => void; saving: boolean; onExportObj: () => void; onExportGerber: () => void }) {
+function TopMenuBar({ editor, onNewProject, onNewSymbol, onNewSchematic, onNewPcb, onNewFootprint, onSave, onImport, onOpenProject, editOps, formatOps, placeTools, onPlaceTool, onPanTool, onFind, onFindSimilar, onSaveProject, onSaveProjectAs, saving, onExportObj, onExportGerber, onPrint }: { editor: Editor; onNewProject: () => void; onNewSymbol: () => void; onNewSchematic: () => void; onNewPcb: () => void; onNewFootprint: () => void; onSave?: () => void; onImport: () => void; onOpenProject: () => void; editOps: EditOps; formatOps: FormatOps; placeTools: Tool[]; onPlaceTool: (id: string) => void; onPanTool: () => void; onFind: () => void; onFindSimilar: () => void; onSaveProject: () => void; onSaveProjectAs: () => void; saving: boolean; onExportObj: () => void; onExportGerber: () => void; onPrint: () => void }) {
   const menus: Record<Editor, string[]> = {
     schematic: ['Plik', 'Edycja', 'Umieść', 'Format', 'Zobacz', 'Design', 'Narzędzia', 'Fabrication', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
     pcb: ['Plik', 'Edycja', 'Umieść', 'Format', 'Zobacz', 'Design', 'Trasa', 'Narzędzia', 'Fabrication', 'Zaawansowane', 'Ustawienia', 'Pomoc'],
@@ -310,6 +311,7 @@ function TopMenuBar({ editor, onNewProject, onNewSymbol, onNewSchematic, onNewPc
         <MenuItem disabled={saving} sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onSaveProjectAs(); closeAll(); }}><SaveOutlinedIcon sx={{ fontSize: 17 }} />Zapisz jako…</MenuItem>
         {onSave && <MenuItem sx={{ fontSize: 13.5 }} onClick={() => { onSave(); closeAll(); }}>{editor === 'footprint' ? 'Zapisz jako Footprint…' : 'Zapisz jako Symbol…'}</MenuItem>}
         <Divider />
+        <MenuItem sx={{ fontSize: 13.5, gap: 1.5 }} onClick={() => { onPrint(); closeAll(); }}><PrintOutlinedIcon sx={{ fontSize: 17, color: C.icon }} />Drukuj… (A4)</MenuItem>
         <MenuItem onClick={(e) => setEksportAnchor(e.currentTarget as HTMLElement)} sx={{ fontSize: 13.5, gap: 2 }}>Eksport <KeyboardArrowRightIcon sx={{ fontSize: 18, ml: 'auto' }} /></MenuItem>
       </Menu>
       <Menu anchorEl={eksportAnchor} open={Boolean(eksportAnchor)} onClose={closeAll} anchorOrigin={{ vertical: 'top', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'left' }}>
@@ -1341,6 +1343,10 @@ function CField({ label, value, onChange, disabled }: { label: string; value: st
 // znaku (kursor skakał, nie dało się wpisać liczby).
 function NumUnitField({ label, value, onCommit, disabled }: { label: string; value: string; onCommit: (v: string) => void; disabled?: boolean }) {
   const [edit, setEdit] = useState<string | null>(null);
+  // Zmiana `value` z zewnątrz = zaznaczono INNY element (albo commit) → porzuć lokalny bufor,
+  // inaczej wpisana wartość „przeskoczyłaby" na nowo zaznaczony obiekt (canvas robi preventDefault,
+  // więc input nie traci focusu i onBlur nie zdąża zacommitować na stary element).
+  useEffect(() => { setEdit(null); }, [value]);
   return (
     <Row label={label}>
       <input
@@ -2336,6 +2342,8 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
   const [selKey, setSelKey] = useState<string | null>(null);
   const [prev, setPrev] = useState<LibPrev>(null);
   const [prevLoading, setPrevLoading] = useState(false);
+  const [linkedPrev, setLinkedPrev] = useState<LibPrev>(null);   // podgląd powiązanego footprintu/symbolu
+  const [linkedLabel, setLinkedLabel] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [moreAnchor, setMoreAnchor] = useState<null | HTMLElement>(null);
@@ -2392,12 +2400,30 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
 
   // Pobranie danych podglądu przy wyborze wiersza
   useEffect(() => {
-    if (!sel) { setPrev(null); return; }
-    let cancel = false; setPrevLoading(true); setPrev(null);
+    if (!sel) { setPrev(null); setLinkedPrev(null); setLinkedLabel(''); return; }
+    let cancel = false; setPrevLoading(true); setPrev(null); setLinkedPrev(null); setLinkedLabel('');
     (async () => {
       try {
-        if (sel.source === 'ws-sym') { const r = await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`); const d = await r.json(); if (!cancel) setPrev({ kind: 'sym-el', els: Array.isArray(d.elements) ? d.elements : [] }); }
-        else if (sel.source === 'ws-fp') { const r = await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`); const d = await r.json(); if (!cancel) setPrev({ kind: 'fp-el', els: Array.isArray(d.elements) ? d.elements : [] }); }
+        if (sel.source === 'ws-sym') {
+          const r = await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`); const d = await r.json();
+          if (!cancel) setPrev({ kind: 'sym-el', els: Array.isArray(d.elements) ? d.elements : [] });
+          // Powiązany footprint: z linku symbolu, z pola d.footprint lub odwrotnym wyszukiwaniem po fp.symbol
+          const fpName = sel.linkedFp || d.footprint || wsFp.find((f) => f.symbol && f.symbol === sel.name)?.name;
+          if (fpName) {
+            try { const fr = await fetch(`/api/footprints/${encodeURIComponent(fpName)}`); const fd = await fr.json();
+              if (!cancel && Array.isArray(fd.elements)) { setLinkedPrev({ kind: 'fp-el', els: fd.elements }); setLinkedLabel(`Footprint: ${fpName}`); } } catch { /* brak powiązanego */ }
+          }
+        }
+        else if (sel.source === 'ws-fp') {
+          const r = await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`); const d = await r.json();
+          if (!cancel) setPrev({ kind: 'fp-el', els: Array.isArray(d.elements) ? d.elements : [] });
+          // Powiązany symbol: z linku footprintu, z pola d.symbol lub odwrotnym wyszukiwaniem po sym.footprint
+          const symName = sel.linkedSym || d.symbol || wsSym.find((s) => s.footprint && s.footprint === sel.name)?.name;
+          if (symName) {
+            try { const sr = await fetch(`/api/symbols/${encodeURIComponent(symName)}`); const sd = await sr.json();
+              if (!cancel && Array.isArray(sd.elements)) { setLinkedPrev({ kind: 'sym-el', els: sd.elements }); setLinkedLabel(`Symbol: ${symName}`); } } catch { /* brak powiązanego */ }
+          }
+        }
         else if (sel.source === 'lcsc' && sel.lcsc) { const r = await fetch(`/api/easyeda/component/${encodeURIComponent(sel.lcsc)}`); const d = await r.json(); if (!cancel) setPrev({ kind: 'easy', sym: d.symbol || undefined, fp: d.footprint || undefined, prefix: d.prefix }); }
       } catch { if (!cancel) setPrev(null); } finally { if (!cancel) setPrevLoading(false); }
     })();
@@ -2448,6 +2474,19 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
   };
   const editRow = async (r: LibRow) => { setBusy(true); setError(null); try { if (r.source === 'ws-sym') { onEditSymbol(r.title, await rowEls(r) as El[], r.linkedFp); onClose(); } else if (r.source === 'ws-fp') { onEditFootprint(r.title, await rowEls(r) as FpEl[], r.linkedSym); onClose(); } else setError('Edycja dostępna dla elementów z serwera (Work Space).'); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } };
   const cloneRow = async (r: LibRow) => { setBusy(true); setError(null); try { if (r.source === 'lcsc') { setError('Klonowanie dostępne dla elementów z serwera.'); return; } const url = r.source === 'ws-fp' ? '/api/footprints' : '/api/symbols'; await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: `${r.title}_kopia`, elements: await rowEls(r) }) }); await reloadWs(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } };
+  const deleteRow = async (r: LibRow) => {
+    if (r.source === 'lcsc') { setError('Usuwanie dostępne dla elementów z Work Space.'); return; }
+    const kind = r.source === 'ws-fp' ? 'footprint' : 'symbol';
+    if (!window.confirm(`Usunąć ${kind} „${r.title}" z Work Space? Tej operacji nie można cofnąć.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const url = r.source === 'ws-fp' ? '/api/footprints' : '/api/symbols';
+      const res = await fetch(`${url}/${encodeURIComponent(r.name)}`, { method: 'DELETE' });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error((d as { error?: string }).error || `HTTP ${res.status}`); }
+      setSelKey(null); setPrev(null);
+      await reloadWs();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
   const viewDatasheet = (r: LibRow) => window.open(r.lcsc ? `https://www.lcsc.com/product-detail/${encodeURIComponent(r.lcsc)}.html` : `https://www.google.com/search?q=${encodeURIComponent(r.title + ' datasheet')}`, '_blank');
 
   const TYPES = ['Symbol', 'Footprint', 'Symbol Spice', 'SCH Module', 'Moduł PCB', '3D Model'];
@@ -2524,6 +2563,12 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
           {/* Podgląd */}
           <Box sx={{ width: 200, flexShrink: 0, borderLeft: `1px solid ${C.barBorder}`, display: 'flex', flexDirection: 'column', bgcolor: '#fbfbfc' }}>
             <Box sx={{ flex: 1, position: 'relative', display: 'flex', minHeight: 0 }}>{prevLoading ? <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={20} /></Box> : <LibraryPreview prev={prev} type={type} />}</Box>
+            {linkedPrev && !prevLoading && (
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, borderTop: `1px solid ${C.barBorder}` }}>
+                <Typography sx={{ fontSize: 11, fontWeight: 600, color: '#666', px: 0.75, py: 0.5, bgcolor: '#f0f1f3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={linkedLabel}>Powiązane — {linkedLabel}</Typography>
+                <Box sx={{ flex: 1, position: 'relative', display: 'flex', minHeight: 0 }}><LibraryPreview prev={linkedPrev} type={linkedPrev.kind === 'fp-el' ? 'Footprint' : 'Symbol'} /></Box>
+              </Box>
+            )}
           </Box>
         </Box>
         {/* Breadcrumb + stany magazynowe + błąd */}
@@ -2549,7 +2594,9 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
         <Menu anchorEl={moreAnchor} open={!!moreAnchor} onClose={() => setMoreAnchor(null)}>
           <MenuItem disabled={!canEdit} onClick={() => { doEdit(); setMoreAnchor(null); }} sx={{ fontSize: 13.5 }}>Edytuj kopię</MenuItem>
           <MenuItem disabled={!sel} onClick={() => { doPlace(); setMoreAnchor(null); }} sx={{ fontSize: 13.5 }}>Umieść i kontynuuj</MenuItem>
-          <MenuItem onClick={() => setMoreAnchor(null)} sx={{ fontSize: 13.5 }}>Odśwież listę</MenuItem>
+          <MenuItem onClick={() => { reloadWs(); setMoreAnchor(null); }} sx={{ fontSize: 13.5 }}>Odśwież listę</MenuItem>
+          <Divider />
+          <MenuItem disabled={!sel || sel.source === 'lcsc' || busy} onClick={() => { const r = sel; setMoreAnchor(null); if (r) deleteRow(r); }} sx={{ fontSize: 13.5, gap: 1.5, color: 'error.main' }}><DeleteOutlineIcon sx={{ fontSize: 17 }} />Usuń</MenuItem>
         </Menu>
         <Button variant="contained" color="inherit" startIcon={<CloseIcon sx={{ fontSize: 16 }} />} onClick={onClose} sx={{ textTransform: 'none', bgcolor: '#5b8def', color: '#fff', '&:hover': { bgcolor: '#4a7fe0' } }}>Anuluj</Button>
       </DialogActions>
@@ -2561,6 +2608,7 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
           return [
             mi('Edycja', () => editRow(r), <EditOutlinedIcon sx={{ fontSize: 17, color: '#2f7fe0' }} />, r.source === 'lcsc'),
             mi('Klonuj', () => cloneRow(r), <ContentCopyOutlinedIcon sx={{ fontSize: 17, color: C.icon }} />, r.source === 'lcsc'),
+            mi('Usuń', () => deleteRow(r), <DeleteOutlineIcon sx={{ fontSize: 17, color: '#e05656' }} />, r.source === 'lcsc'),
             mi(fav ? 'Usuń z ulubionych' : 'Dodaj do ulubionych', () => toggleFav(r), fav ? <FavoriteIcon sx={{ fontSize: 17, color: '#e05656' }} /> : <FavoriteBorderIcon sx={{ fontSize: 17, color: '#e05656' }} />),
             mi('Odśwież', () => reloadWs(), <RefreshIcon sx={{ fontSize: 17, color: '#3aa757' }} />),
             <Divider key="d" />,
@@ -4143,6 +4191,50 @@ export function PcbView() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${base}.obj`; a.click(); URL.revokeObjectURL(a.href);
     toast('Wyeksportowano model 3D (.obj)');
   };
+  // Drukowanie bieżącej zakładki (schemat/PCB/symbol/footprint) dopasowane do A4.
+  const printCurrent = () => {
+    const svg = canvasRef.current?.querySelector('svg');
+    if (!svg) { toast('Brak rysunku do wydruku'); return; }
+    // Grupa treści = pierwszy <g transform> (translate(view) scale(zoom)); jej getBBox() daje
+    // granice rysunku w koordach treści, niezależnie od aktualnego pan/zoom.
+    const contentG = svg.querySelector('g[transform]') as SVGGraphicsElement | null;
+    let inner: string, vb: string;
+    if (contentG) {
+      let bb: { x: number; y: number; width: number; height: number };
+      try { bb = contentG.getBBox(); } catch { bb = { x: 0, y: 0, width: 0, height: 0 }; }
+      if (!bb.width || !bb.height) { toast('Pusty widok — nie ma czego drukować'); return; }
+      const pad = Math.max(6, Math.max(bb.width, bb.height) * 0.03);
+      vb = `${bb.x - pad} ${bb.y - pad} ${bb.width + 2 * pad} ${bb.height + 2 * pad}`;
+      inner = contentG.innerHTML;
+    } else {
+      vb = svg.getAttribute('viewBox') || `0 0 ${svg.clientWidth || 800} ${svg.clientHeight || 600}`;
+      inner = svg.innerHTML;
+    }
+    // SKALA 1:1 — fizyczny rozmiar w mm = wymiar w jednostkach świata × W2MM
+    // (1 jedn. świata = 1 mil = 0.0254 mm), więc milimetry na wydruku się zgadzają.
+    const parts = vb.split(/\s+/).map(Number);
+    const vbW = parts[2] || 1, vbH = parts[3] || 1;
+    const wmm = vbW * W2MM, hmm = vbH * W2MM;
+    const landscape = wmm > hmm; // dłuższy bok → A4 poziomo (lepsze dopasowanie)
+    const dark = editor === 'pcb' || editor === 'footprint';
+    const bg = dark ? '#000000' : '#ffffff';
+    const title = editor === 'schematic' ? (projectName || 'Schemat')
+      : editor === 'pcb' ? (pcbName || 'PCB')
+      : editor === 'symbol' ? (symMeta.name || 'Symbol')
+      : (fpMeta.footprint || 'Footprint');
+    const maxW = landscape ? 277 : 190, maxH = landscape ? 190 : 277; // pole zadruku A4 (10mm marginesy)
+    if (wmm > maxW + 1 || hmm > maxH + 1) toast(`Rysunek ${wmm.toFixed(0)}×${hmm.toFixed(0)} mm nie mieści się na A4 przy skali 1:1 — część może zostać przycięta`);
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>`
+      + `<style>@page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:10mm}`
+      + `html,body{margin:0;padding:0}`
+      + `.page{display:inline-block;background:${bg};line-height:0}`
+      + `svg{display:block}</style></head>`
+      + `<body><div class="page"><svg xmlns="http://www.w3.org/2000/svg" width="${wmm.toFixed(3)}mm" height="${hmm.toFixed(3)}mm" viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${inner}</svg></div>`
+      + `<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},150);};<\/script></body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast('Nie udało się otworzyć okna druku (popup zablokowany?)'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  };
   const panTool = () => setActiveTool('pan');
   const formatOps: FormatOps = { rotL: () => rotateSel(false), rotR: () => rotateSel(true), flipH: () => flipSel(true), flipV: () => flipSel(false), alignLeft: () => alignSel('left'), alignRight: () => alignSel('right'), alignTop: () => alignSel('top'), alignBottom: () => alignSel('bottom'), centerH: () => alignSel('cx'), centerV: () => alignSel('cy'), gridAlign: gridAlignSel, distH: () => distributeSel('h', false), distV: () => distributeSel('v', false), distLeft: () => distributeSel('h', true), distTop: () => distributeSel('v', true), distArray: () => toast('Distribute Array — parametry macierzy (wkrótce)'), front: () => zOrderSel(true), back: () => zOrderSel(false), hasSel: fmtCount > 0 || selPlacedAll.length > 0 };
   const placeTools: Tool[] = editor === 'schematic' ? [...WIRING_TOOLS, ...SYMBOL_TOOLS.slice(1)] : editor === 'pcb' ? FOOTPRINT_TOOLS : editor === 'symbol' ? SYMBOL_TOOLS : FOOTPRINT_TOOLS;
@@ -4181,7 +4273,7 @@ export function PcbView() {
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, bgcolor: '#fff', fontFamily: 'sans-serif' }}>
-      <TopMenuBar editor={editor} onNewProject={newProject} onNewSymbol={addSymbol} onNewSchematic={addSheet} onNewPcb={() => setNewPcbOpen(true)} onNewFootprint={addFootprint} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} onImport={() => setImportOpen(true)} onOpenProject={() => setOpenProjOpen(true)} editOps={editOps} formatOps={formatOps} placeTools={placeTools} onPlaceTool={setActiveTool} onPanTool={panTool} onFind={findAction} onFindSimilar={findSimilar} onSaveProject={() => saveProject()} onSaveProjectAs={saveProjectAs} saving={saving} onExportObj={exportObj} onExportGerber={exportGerber} />
+      <TopMenuBar editor={editor} onNewProject={newProject} onNewSymbol={addSymbol} onNewSchematic={addSheet} onNewPcb={() => setNewPcbOpen(true)} onNewFootprint={addFootprint} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} onImport={() => setImportOpen(true)} onOpenProject={() => setOpenProjOpen(true)} editOps={editOps} formatOps={formatOps} placeTools={placeTools} onPlaceTool={setActiveTool} onPanTool={panTool} onFind={findAction} onFindSimilar={findSimilar} onSaveProject={() => saveProject()} onSaveProjectAs={saveProjectAs} saving={saving} onExportObj={exportObj} onExportGerber={exportGerber} onPrint={printCurrent} />
       <Toolbar editor={editor} onSave={editor === 'symbol' ? () => setSaveOpen(true) : editor === 'footprint' ? () => setFpSaveOpen(true) : undefined} ops={editOps} fmt={formatOps} onZoomIn={() => zoomAround(1.25)} onZoomOut={() => zoomAround(1 / 1.25)} onFit={fitToWindow} onFind={findAction} onFindSimilar={findSimilar} onAnnotate={() => setAnnotOpen(true)} on3dView={() => setBoard3dOpen(true)} onMyElements={() => setMyElementsOpen(true)} onBom={() => setBomOpen(true)} />
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {showLeft && <ProjectPanel width={leftW} projectName={projectName} sheets={sheets} activeSheetId={activeSheetId} pcbName={pcbName} editor={editor}

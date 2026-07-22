@@ -109,6 +109,14 @@ function ThumbShape({ part }: { part: PartDef }) {
         )}
       </g>
     ),
+    // Osadzony symbol schematyczny nie pojawia się w bibliotece — placeholder dla kompletności typu.
+    symbol: (
+      <g>
+        <rect x={2} y={2} width={W - 4} height={H - 4} rx={2} fill="none" stroke="#9b1c1c" strokeWidth={1} />
+        <line x1={0} y1={H / 2} x2={2} y2={H / 2} stroke="#9b1c1c" strokeWidth={1.5} />
+        <line x1={W - 2} y1={H / 2} x2={W} y2={H / 2} stroke="#9b1c1c" strokeWidth={1.5} />
+      </g>
+    ),
     buzzer: (
       <g>
         <circle cx={W / 2} cy={H * 0.42} r={Math.min(W, H) * 0.4} fill={part.bodyColor} stroke="#212121" strokeWidth={1} />

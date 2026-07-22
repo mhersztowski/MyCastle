@@ -13,6 +13,7 @@ import {
   MapViewerPage,
   NotesViewerPage,
   LegoViewerPage,
+  PcbViewerPage,
 } from '@mhersztowski/core-cad-viewer';
 import 'allotment/dist/style.css';
 import '@mhersztowski/ui-components-scene3d/styles.css';
@@ -49,6 +50,7 @@ const scene3dMatch     = /^\/viewer\/scene3d\/(.+)$/.exec(path);
 const cadMatch         = /^\/viewer\/cad\/(.+)$/.exec(path);
 const cad3dMatch       = /^\/viewer\/cad3d\/(.+)$/.exec(path);
 const electronicsMatch = /^\/viewer\/electronics\/(.+)$/.exec(path);
+const pcbMatch         = /^\/viewer\/pcb\/(.+)$/.exec(path);
 const mapMatch         = /^\/viewer\/map\/(.+)$/.exec(path);
 const notesMatch       = /^\/viewer\/notes\/(.+)$/.exec(path);
 const legoMatch        = /^\/viewer\/lego\/(.+)$/.exec(path);
@@ -61,6 +63,7 @@ function Root() {
   if (cadMatch)         return <CadViewerPage         vfsPath={decodeURIComponent(cadMatch[1])} />;
   if (cad3dMatch)       return <Cad3dViewerPage        vfsPath={decodeURIComponent(cad3dMatch[1])} />;
   if (electronicsMatch) return <ElectronicsViewerPage  vfsPath={decodeURIComponent(electronicsMatch[1])} />;
+  if (pcbMatch)         return <PcbViewerPage          vfsPath={decodeURIComponent(pcbMatch[1])} />;
   if (mapMatch)         return <MapViewerPage          vfsPath={decodeURIComponent(mapMatch[1])} />;
   if (notesMatch)       return <NotesViewerPage        vfsPath={decodeURIComponent(notesMatch[1])} />;
   if (legoMatch)        return <LegoViewerPage         vfsPath={decodeURIComponent(legoMatch[1])} />;

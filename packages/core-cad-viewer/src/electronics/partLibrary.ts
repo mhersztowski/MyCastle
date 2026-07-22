@@ -461,8 +461,15 @@ export const PART_LIBRARY: PartDef[] = [
   lcd1602i2c,
 ];
 
+// Osadzone symbole (z PcbView) — runtime rejestr, persystencja: schema.embeddedParts.
+const EMBEDDED_PARTS = new Map<string, PartDef>();
+
+export function registerEmbeddedPart(def: PartDef): void {
+  EMBEDDED_PARTS.set(def.id, def);
+}
+
 export function getPartDef(id: string): PartDef | undefined {
-  return PART_LIBRARY.find(p => p.id === id);
+  return EMBEDDED_PARTS.get(id) ?? PART_LIBRARY.find(p => p.id === id);
 }
 
 export const CATEGORY_ORDER: PartCategory[] = [

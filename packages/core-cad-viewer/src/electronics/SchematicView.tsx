@@ -1,13 +1,38 @@
-import { useEffect, useRef, useState } from 'react';
-import { GRID, rotationOffset, type ElectronicsSchema, type PartDef } from './types';
-import { getPartDef } from './partLibrary';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { GRID, rotationOffset, type ElectronicsSchema, type PartDef, type SymShape } from './types';
+import { getPartDef, registerEmbeddedPart } from './partLibrary';
 
 // ── component body renderer (ported read-only from BreadboardCanvas) ────────────
+
+/** Rysuje prymityw osadzonego symbolu (współrzędne w komórkach → px). */
+function renderSymShape(s: SymShape, i: number) {
+  const p = (v: number) => v * GRID;
+  const sw = (v: number | undefined) => Math.max(1, (v || 0.08) * GRID);
+  if (s.k === 'poly') {
+    const pts = s.pts.map((q) => `${p(q.x)},${p(q.y)}`).join(' ');
+    return s.closed
+      ? <polygon key={i} points={pts} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} strokeLinejoin="round" strokeLinecap="round" />
+      : <polyline key={i} points={pts} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} strokeLinejoin="round" strokeLinecap="round" />;
+  }
+  if (s.k === 'lead') {
+    const pts = s.pts.map((q) => `${p(q.x)},${p(q.y)}`).join(' ');
+    return <polyline key={i} points={pts} fill="none" stroke={s.color || '#4fc3f7'} strokeWidth={1.4} strokeDasharray="3 2" strokeLinejoin="round" strokeLinecap="round" />;
+  }
+  if (s.k === 'rect') return <rect key={i} x={p(s.x)} y={p(s.y)} width={p(s.w)} height={p(s.h)} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} />;
+  if (s.k === 'ellipse') return <ellipse key={i} cx={p(s.cx)} cy={p(s.cy)} rx={p(s.rx)} ry={p(s.ry)} fill={s.fill || 'none'} stroke={s.color || '#333'} strokeWidth={sw(s.width)} />;
+  if (s.k === 'text') return <text key={i} x={p(s.x)} y={p(s.y)} fontSize={p(s.size)} fill={s.color || '#1c4fd6'} textAnchor={s.anchor || 'start'} fontFamily="sans-serif">{s.text}</text>;
+  return null;
+}
 
 function PartBody({ part, w, h }: { part: PartDef; w: number; h: number }) {
   const px = (v: number) => v * GRID;
   const strokeColor = '#555';
   const strokeWidth = 1;
+
+  // Osadzony symbol schematyczny — jego własna geometria.
+  if (part.bodyShape === 'symbol' && part.symbolShapes) {
+    return <g>{part.symbolShapes.map((s, i) => renderSymShape(s, i))}</g>;
+  }
 
   if (part.bodyShape === 'breadboard') {
     const cols = 63, railH = 2, mainH = 5, gapH = 1;
@@ -268,6 +293,9 @@ function contentBoundsPx(schema: ElectronicsSchema) {
 }
 
 export function SchematicView({ schema }: { schema: ElectronicsSchema }) {
+  // Rejestruj osadzone symbole zanim getPartDef zostanie użyte w tym renderze.
+  useMemo(() => { (schema.embeddedParts ?? []).forEach(registerEmbeddedPart); }, [schema]);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });

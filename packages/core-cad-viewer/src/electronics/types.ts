@@ -33,7 +33,19 @@ export type BodyShape =
   | 'transistor'
   | 'dip'
   | 'buzzer'
-  | 'joystick';
+  | 'joystick'
+  | 'symbol';   // osadzony symbol schematyczny (z PcbView) — geometria w `symbolShapes`
+
+/**
+ * Prymityw rysunkowy osadzonego symbolu. Współrzędne w jednostkach siatki
+ * (jak `Pin.x/y`), mnożone przez GRID przy renderowaniu. `lead` to „schodki".
+ */
+export type SymShape =
+  | { k: 'poly'; pts: WirePoint[]; closed?: boolean; color?: string; width?: number; fill?: string }
+  | { k: 'rect'; x: number; y: number; w: number; h: number; color?: string; width?: number; fill?: string }
+  | { k: 'ellipse'; cx: number; cy: number; rx: number; ry: number; color?: string; width?: number; fill?: string }
+  | { k: 'text'; x: number; y: number; text: string; size: number; color?: string; anchor?: 'start' | 'middle' | 'end' }
+  | { k: 'lead'; pts: WirePoint[]; color?: string };
 
 export interface PartDef {
   id: string;
