@@ -33,7 +33,6 @@ import { LayerPanel } from './components/LayerPanel';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Scene3DView } from './components/Scene3DView';
 import { LegoView } from './components/LegoView';
-import { CadNewView } from './pages/CadNewView';
 import { PcbView } from './components/PcbView';
 import { StatusBar } from './components/StatusBar';
 import { ActionBar } from './components/ActionBar';
@@ -60,7 +59,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cadnew' | 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes' | 'drive';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes' | 'drive';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -347,12 +346,6 @@ export default function App() {
           sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0, fontSize: 12 } }}
         >
           <Tab
-            value="cadnew"
-            label="CAD NEW"
-            icon={<ViewInArOutlinedIcon sx={{ fontSize: 16, color: '#2f6fd0' }} />}
-            iconPosition="start"
-          />
-          <Tab
             value="cad"
             label="CAD"
             icon={<PentagonOutlinedIcon sx={{ fontSize: 16 }} />}
@@ -621,10 +614,6 @@ export default function App() {
         <FileSystemPanel rootPath={`/users/${getCurrentUserId()}`} title="Project Files" />
       </Box>
 
-      {/* Lego panel — parametric Lego-set designer (scene tree + viewport + properties) */}
-      <Box sx={{ flex: 1, display: mode === 'cadnew' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-        {mode === 'cadnew' && <CadNewView />}
-      </Box>
 
       <Box sx={{ flex: 1, display: mode === 'lego' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
         {mode === 'lego' && <LegoView />}

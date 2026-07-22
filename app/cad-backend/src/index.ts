@@ -794,7 +794,7 @@ async function handleSymbols(req: http.IncomingMessage, res: http.ServerResponse
       fs.mkdirSync(dir, { recursive: true });
       const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
       const symbols = files.map((f) => {
-        try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.title ?? f.slice(0, -5), owner: d.owner ?? '', manufacturer: d.manufacturer ?? '', mfrPart: d.mfrPart ?? '', tags: d.tags ?? '' }; }
+        try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.title ?? f.slice(0, -5), owner: d.owner ?? '', manufacturer: d.manufacturer ?? '', mfrPart: d.mfrPart ?? '', tags: d.tags ?? '', footprint: d.footprint ?? '' }; }
         catch { return { name: f.slice(0, -5), title: f.slice(0, -5) }; }
       });
       json(res, { symbols });
@@ -838,7 +838,7 @@ async function handleFootprints(req: http.IncomingMessage, res: http.ServerRespo
     try {
       fs.mkdirSync(dir, { recursive: true });
       const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-      const footprints = files.map((f) => { try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.title ?? f.slice(0, -5), tags: d.tags ?? '' }; } catch { return { name: f.slice(0, -5), title: f.slice(0, -5) }; } });
+      const footprints = files.map((f) => { try { const d = JSON.parse(fs.readFileSync(resolve(dir, f), 'utf8')); return { name: f.slice(0, -5), title: d.title ?? f.slice(0, -5), tags: d.tags ?? '', symbol: d.symbol ?? '' }; } catch { return { name: f.slice(0, -5), title: f.slice(0, -5) }; } });
       json(res, { footprints });
     } catch (err) { json(res, { error: err instanceof Error ? err.message : String(err), footprints: [] }, 500); }
     return true;

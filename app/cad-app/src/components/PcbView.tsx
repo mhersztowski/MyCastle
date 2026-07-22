@@ -511,6 +511,7 @@ interface EasyEdaSym { shapes: string[]; bbox: { x: number; y: number; width: nu
 interface PlacedComp {
   id: string; defId: string; x: number; y: number; ref: string; label: string; pins: number;
   octopart?: boolean; easyeda?: EasyEdaSym; fp?: EasyEdaSym; savedEls?: El[]; fpEls?: FpEl[];
+  pcbX?: number; pcbY?: number; // pozycja footprintu na PCB (niezależna od pozycji symbolu x/y na schemacie)
   // Właściwości komponentu (sheet/PCB) — prezentacja + atrybuty
   layer?: string; rotation?: number; showPrefix?: string; showName?: string; addToBom?: string; locked?: string; convertToPcb?: string; displayFootprint?: string;
   footprint?: string; supplier?: string; supplierPart?: string; manufacturer?: string; mfrPart?: string; jlcpcb?: string; link?: string; model3d?: string;
@@ -570,7 +571,9 @@ function renderPcbPart(comp: PlacedComp, key: React.Key, preview = false, layers
       // Footprint z Work Space (własne FpEl na warstwach) — wyśrodkowany w (0,0), renderowany z kolorami warstw.
       ? (() => { const bb = unionBB(comp.fpEls, elBBoxFp); return <g transform={`translate(${-(bb.x + bb.w / 2)},${-(bb.y + bb.h / 2)})`}>{comp.fpEls.map((el, i) => renderFpEl(el, i, preview, layers))}</g>; })()
       : <g><rect x={-14} y={-10} width={28} height={20} fill="none" stroke="#e8c84a" strokeWidth={1} strokeDasharray={preview ? '3 2' : undefined} /></g>;
-  const tf = `translate(${comp.x},${comp.y}) rotate(${rot})${bottom ? ' scale(-1,1)' : ''}`;
+  // Footprint na PCB ma WŁASNĄ pozycję (pcbX/pcbY), niezależną od symbolu na schemacie (x/y).
+  const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y;
+  const tf = `translate(${px},${py}) rotate(${rot})${bottom ? ' scale(-1,1)' : ''}`;
   return <g key={key} transform={tf} opacity={preview ? 0.7 : 1}>{body}
     {comp.showPrefix !== 'Nie' && <text x={0} y={-14} fontSize={7} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, -14, rot, bottom)}>{comp.ref}</text>}
     {comp.showName === 'Tak' && <text x={0} y={16} fontSize={6} fill={bottom ? '#3a6bd6' : '#e8c84a'} stroke="none" textAnchor="middle" fontFamily="sans-serif" transform={uprightT(0, 16, rot, bottom)}>{comp.label}</text>}
@@ -711,10 +714,11 @@ function placedBBox(comp: PlacedComp): { x: number; y: number; w: number; h: num
 }
 // Obrys komponentu na PCB (renderPcbPart: footprint wyśrodkowany w (x,y), skala ×4)
 function pcbPartBBox(comp: PlacedComp): { x: number; y: number; w: number; h: number } {
+  const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y; // pozycja footprintu na PCB (niezależna od symbolu)
   const b = comp.fp?.bbox;
-  if (b) return { x: comp.x - b.width * 2, y: comp.y - b.height * 2, w: b.width * 4, h: b.height * 4 };
-  if (comp.fpEls && comp.fpEls.length) { const bb = unionBB(comp.fpEls, elBBoxFp); return { x: comp.x - bb.w / 2, y: comp.y - bb.h / 2, w: bb.w, h: bb.h }; }
-  return { x: comp.x - 16, y: comp.y - 12, w: 32, h: 24 };
+  if (b) return { x: px - b.width * 2, y: py - b.height * 2, w: b.width * 4, h: b.height * 4 };
+  if (comp.fpEls && comp.fpEls.length) { const bb = unionBB(comp.fpEls, elBBoxFp); return { x: px - bb.w / 2, y: py - bb.h / 2, w: bb.w, h: bb.h }; }
+  return { x: px - 16, y: py - 12, w: 32, h: 24 };
 }
 function hitTestPcbPart(arr: PlacedComp[], p: { x: number; y: number }, pad = 6): number | null {
   for (let i = arr.length - 1; i >= 0; i--) { const b = pcbPartBBox(arr[i]); if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) return i; }
@@ -1332,6 +1336,25 @@ function WorkspaceAttrs({ work, onChange }: { work?: SymWork; onChange?: (p: Par
 function CField({ label, value, onChange, disabled }: { label: string; value: string; onChange: (v: string) => void; disabled?: boolean }) {
   return <Row label={label}><TxtInput value={value} onChange={onChange} disabled={disabled} /></Row>;
 }
+// Pole liczbowe z jednostką (np. „2.540mm"). Edytuje LOKALNY tekst i commituje dopiero
+// na blur/Enter — inaczej round-trip parse↔format przeformatowywał wartość przy każdym
+// znaku (kursor skakał, nie dało się wpisać liczby).
+function NumUnitField({ label, value, onCommit, disabled }: { label: string; value: string; onCommit: (v: string) => void; disabled?: boolean }) {
+  const [edit, setEdit] = useState<string | null>(null);
+  return (
+    <Row label={label}>
+      <input
+        value={edit ?? value}
+        disabled={disabled}
+        onChange={(e) => setEdit(e.target.value)}
+        onFocus={(e) => { setEdit(value); const t = e.currentTarget; requestAnimationFrame(() => { try { t.select(); } catch { /* ignore */ } }); }}
+        onBlur={() => { if (edit != null) { onCommit(edit); setEdit(null); } }}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setEdit(null); e.currentTarget.blur(); } }}
+        style={inStyle(disabled)}
+      />
+    </Row>
+  );
+}
 function CSelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
   return <Row label={label}><SelInput value={value} options={options} onChange={onChange} /></Row>;
 }
@@ -1364,16 +1387,16 @@ function ShapeProps({ el, onChange }: { el: El; onChange: (p: Patch) => void }) 
       return <><SectionHeader title={title} /><StyleFields el={el} onChange={onChange} /><LockId el={el} onChange={onChange} /></>;
     case 'rect':
       return <><SectionHeader title={title} /><StyleFields el={el} onChange={onChange} />
-        <CField label="Round Radius" value={String(el.roundRadius)} onChange={(v) => onChange({ roundRadius: num(v) })} />
-        <CField label="Szerokość" value={String(Math.round(Math.abs(el.w)))} onChange={(v) => onChange({ w: num(v) })} />
-        <CField label="Wysokość" value={String(Math.round(Math.abs(el.h)))} onChange={(v) => onChange({ h: num(v) })} />
+        <NumUnitField label="Round Radius" value={String(el.roundRadius)} onCommit={(v) => onChange({ roundRadius: num(v) })} />
+        <NumUnitField label="Szerokość" value={String(Math.round(Math.abs(el.w)))} onCommit={(v) => onChange({ w: num(v) })} />
+        <NumUnitField label="Wysokość" value={String(Math.round(Math.abs(el.h)))} onCommit={(v) => onChange({ h: num(v) })} />
         <LockId el={el} onChange={onChange} /></>;
     case 'ellipse': case 'arc': case 'pie':
       return <><SectionHeader title={title} /><StyleFields el={el} onChange={onChange} />
-        <CField label="Środek X" value={String(Math.round(el.cx))} onChange={(v) => onChange({ cx: num(v) })} />
-        <CField label="Środek Y" value={String(Math.round(-el.cy))} onChange={(v) => onChange({ cy: -num(v) })} />
-        <CField label="X Radius" value={String(Math.round(Math.abs(el.rx)))} onChange={(v) => onChange({ rx: num(v) })} />
-        <CField label="Y Radius" value={String(Math.round(Math.abs(el.ry)))} onChange={(v) => onChange({ ry: num(v) })} />
+        <NumUnitField label="Środek X" value={String(Math.round(el.cx))} onCommit={(v) => onChange({ cx: num(v) })} />
+        <NumUnitField label="Środek Y" value={String(Math.round(-el.cy))} onCommit={(v) => onChange({ cy: -num(v) })} />
+        <NumUnitField label="X Radius" value={String(Math.round(Math.abs(el.rx)))} onCommit={(v) => onChange({ rx: num(v) })} />
+        <NumUnitField label="Y Radius" value={String(Math.round(Math.abs(el.ry)))} onCommit={(v) => onChange({ ry: num(v) })} />
         <LockId el={el} onChange={onChange} /></>;
     case 'arrow':
       return <><SectionHeader title={title} />
@@ -1397,10 +1420,10 @@ function ShapeProps({ el, onChange }: { el: El; onChange: (p: Patch) => void }) 
     case 'image':
       return <><SectionHeader title={title} />
         <CField label="URL Obrazka" value={el.url} onChange={(v) => onChange({ url: v })} />
-        <CField label="Lokalizacja X" value={String(Math.round(el.x))} onChange={(v) => onChange({ x: num(v) })} />
-        <CField label="Lokalizacja Y" value={String(Math.round(el.y))} onChange={(v) => onChange({ y: num(v) })} />
-        <CField label="Szerokość" value={String(Math.round(el.w))} onChange={(v) => onChange({ w: num(v) })} />
-        <CField label="Wysokość" value={String(Math.round(el.h))} onChange={(v) => onChange({ h: num(v) })} />
+        <NumUnitField label="Lokalizacja X" value={String(Math.round(el.x))} onCommit={(v) => onChange({ x: num(v) })} />
+        <NumUnitField label="Lokalizacja Y" value={String(Math.round(el.y))} onCommit={(v) => onChange({ y: num(v) })} />
+        <NumUnitField label="Szerokość" value={String(Math.round(el.w))} onCommit={(v) => onChange({ w: num(v) })} />
+        <NumUnitField label="Wysokość" value={String(Math.round(el.h))} onCommit={(v) => onChange({ h: num(v) })} />
         <CSelect label="Orientacja" value={`${el.rotation}°`} options={['0°', '90°', '180°', '270°']} onChange={(v) => onChange({ rotation: parseInt(v, 10) || 0 })} />
         <LockId el={el} onChange={onChange} /></>;
     // ── Elementy sieciowe arkusza ──
@@ -1463,10 +1486,10 @@ function PinAttrs({ pin, onChange }: { pin: PinEl; onChange: (patch: Patch) => v
       <CField label="Spice Number" value={pin.spice} onChange={(v) => onChange({ spice: v })} />
       <CSelect label="Wyświetlana …" value={pin.showName ? 'Tak' : 'Nie'} options={['Tak', 'Nie']} onChange={(v) => onChange({ showName: v === 'Tak' })} />
       <CSelect label="Wyświetl Numer" value={pin.showNumber ? 'Tak' : 'Nie'} options={['Tak', 'Nie']} onChange={(v) => onChange({ showNumber: v === 'Tak' })} />
-      <CField label="Długość" value={String(pin.length)} onChange={(v) => onChange({ length: Number(v) || 0 })} />
+      <NumUnitField label="Długość" value={String(pin.length)} onCommit={(v) => onChange({ length: Number(v) || 0 })} />
       <CSelect label="Orientacja" value={`${pin.rotation}°`} options={['0°', '90°', '180°', '270°']} onChange={(v) => onChange({ rotation: parseInt(v, 10) || 0 })} />
-      <CField label="Początek X" value={String(pin.x)} onChange={(v) => onChange({ x: Number(v) || 0 })} />
-      <CField label="Początek Y" value={String(-pin.y)} onChange={(v) => onChange({ y: -(Number(v) || 0) })} />
+      <NumUnitField label="Początek X" value={String(pin.x)} onCommit={(v) => onChange({ x: Number(v) || 0 })} />
+      <NumUnitField label="Początek Y" value={String(-pin.y)} onCommit={(v) => onChange({ y: -(Number(v) || 0) })} />
       <CColor label="Pin Color" value={pin.pinColor} onChange={(v) => onChange({ pinColor: v })} />
       <CColor label="Name Color" value={pin.nameColor} onChange={(v) => onChange({ nameColor: v })} />
       <CColor label="Number Color" value={pin.numberColor} onChange={(v) => onChange({ numberColor: v })} />
@@ -1493,7 +1516,7 @@ function SchematicProperties({ mouse, sel, selPart, onSelChange, work, onWork }:
   return <PropsShell count={0}><WorkspaceAttrs work={work} onChange={onWork} /><MouseBlock rows={mouse} /></PropsShell>;
 }
 interface SymMeta { addToBom: string; convertTo: string; name: string; footprint: string; pre: string; supplier: string; supplierPart: string; manufacturer: string; mfrPart: string }
-const emptySymMeta = (): SymMeta => ({ addToBom: 'Tak', convertTo: 'Tak', name: 'NowySymbol', footprint: 'NOWY SYMBOL', pre: 'U?', supplier: 'Nieznany', supplierPart: '', manufacturer: '', mfrPart: '' });
+const emptySymMeta = (): SymMeta => ({ addToBom: 'Tak', convertTo: 'Tak', name: 'NowySymbol', footprint: '', pre: 'U?', supplier: 'Nieznany', supplierPart: '', manufacturer: '', mfrPart: '' });
 function SymbolProperties({ mouse, sel, onSelChange, meta, onMeta, work, onWork }: { mouse: [string, string][]; sel: El | null; onSelChange: (patch: Patch) => void; meta: SymMeta; onMeta: (patch: Partial<SymMeta>) => void; work: SymWork; onWork: (patch: Partial<SymWork>) => void }) {
   if (sel) {
     return <PropsShell count={1}>{sel.t === 'pin' ? <PinAttrs pin={sel} onChange={onSelChange} /> : <ShapeProps el={sel} onChange={onSelChange} />}<MouseBlock rows={mouse} /></PropsShell>;
@@ -1522,8 +1545,8 @@ function SymbolProperties({ mouse, sel, onSelChange, meta, onMeta, work, onWork 
 }
 
 // ── Edytor Footprint (EasyEDA 1:1) ────────────────────────────────────────────
-interface FpMeta { units: string; bg: string; gridShow: string; gridColor: string; gridStyle: string; snap: string; gridSize: string; snapSize: string; dragAlt: string; routeWidth: string; routeAngle: string; removeLoop: string; cutSilk: string; footprint: string; pre: string; model3d: string }
-const emptyFpMeta = (): FpMeta => ({ units: 'mm', bg: '#000000', gridShow: 'Tak', gridColor: '#FFFFFF', gridStyle: 'linia', snap: 'Tak', gridSize: '2.540mm', snapSize: '0.127mm', dragAlt: '0.127mm', routeWidth: '0.254mm', routeAngle: 'Linia 45°', removeLoop: 'Nie', cutSilk: 'Tak', footprint: '', pre: 'U?', model3d: '' });
+interface FpMeta { units: string; bg: string; gridShow: string; gridColor: string; gridStyle: string; snap: string; gridSize: string; snapSize: string; dragAlt: string; routeWidth: string; routeAngle: string; removeLoop: string; cutSilk: string; footprint: string; pre: string; model3d: string; symbol: string }
+const emptyFpMeta = (): FpMeta => ({ units: 'mm', bg: '#000000', gridShow: 'Tak', gridColor: '#FFFFFF', gridStyle: 'linia', snap: 'Tak', gridSize: '2.540mm', snapSize: '0.127mm', dragAlt: '0.127mm', routeWidth: '0.254mm', routeAngle: 'Linia 45°', removeLoop: 'Nie', cutSilk: 'Tak', footprint: '', pre: 'U?', model3d: '', symbol: '' });
 // mm ⇄ jednostki świata (1 jedn = 1 mil); Y w konwencji „do góry"
 const W2MM = 0.0254;
 const toMm = (v: number) => `${(v * W2MM).toFixed(3)}mm`;
@@ -1592,7 +1615,7 @@ function GroupProps({ els, onChange }: { els: Record<string, unknown>[]; onChang
         const cv = common(f.key);
         if (f.kind === 'color') return <CColor key={f.key} label={f.label} value={String(cv ?? '')} onChange={(v) => onChange({ [f.key]: v })} />;
         if (f.kind === 'text') return <CField key={f.key} label={f.label} value={String(cv ?? '')} onChange={(v) => onChange({ [f.key]: v })} />;
-        if (f.kind === 'num') return <CField key={f.key} label={f.label} value={cv == null ? '' : String(cv)} onChange={(v) => onChange({ [f.key]: Number(v) || 0 })} />;
+        if (f.kind === 'num') return <NumUnitField key={f.key} label={f.label} value={cv == null ? '' : String(cv)} onCommit={(v) => onChange({ [f.key]: Number(v) || 0 })} />;
         if (f.kind === 'boolsel') return <CSelect key={f.key} label={f.label} value={cv === true ? 'Tak' : cv === false ? 'Nie' : ''} options={['Nie', 'Tak']} onChange={(v) => onChange({ [f.key]: v === 'Tak' })} />;
         return <CSelect key={f.key} label={f.label} value={cv == null ? '' : String(cv)} options={f.opts!} onChange={(v) => onChange({ [f.key]: f.num ? Number(v) || 0 : v })} />;
       })}
@@ -1932,18 +1955,18 @@ function FpElProps({ el, onChange, layerNames }: { el: FpEl; onChange: (p: Patch
   const layerSel = (l: string) => <CSelect label="Warstwy" value={l} options={layerNames ?? FP_LAYERS} onChange={(v) => onChange({ layer: v })} />;
   const locked = <CSelect label="Locked" value={el.locked ? 'Tak' : 'Nie'} options={['Nie', 'Tak']} onChange={(v) => onChange({ locked: v === 'Tak' })} />;
   const idf = <CField label="ID" value={el.id} onChange={() => { }} disabled />;
-  const mm = (lbl: string, val: number, key: string, yup = false) => <CField label={lbl} value={toMm(yup ? -val : val)} onChange={(v) => onChange({ [key]: yup ? -fromMm(v) : fromMm(v) })} />;
+  const mm = (lbl: string, val: number, key: string, yup = false) => <NumUnitField label={lbl} value={toMm(yup ? -val : val)} onCommit={(v) => onChange({ [key]: yup ? -fromMm(v) : fromMm(v) })} />;
   const expose = <Box sx={{ px: 1.5, py: 1 }}><Button variant="outlined" size="small" sx={{ textTransform: 'none', color: C.green, borderColor: C.green, fontSize: 13, width: '100%' }}>Expose Copper</Button></Box>;
   switch (el.t) {
     case 'track': { const p0 = el.pts[0] ?? { x: 0, y: 0 }, pN = el.pts[el.pts.length - 1] ?? { x: 0, y: 0 }; const len = el.pts.reduce((a, p, i) => (i ? a + Math.hypot(p.x - el.pts[i - 1].x, p.y - el.pts[i - 1].y) : 0), 0); const setP = (idx: number, nx: number, ny: number) => onChange({ pts: el.pts.map((p, i) => (i === idx ? { x: nx, y: ny } : p)) });
       return <><SectionHeader title="Właściwości ścieżki" />{layerSel(el.layer)}{mm('Szerokość', el.width, 'width')}
-        <CField label="Początek X" value={toMm(p0.x)} onChange={(v) => setP(0, fromMm(v), p0.y)} /><CField label="Początek Y" value={toMm(-p0.y)} onChange={(v) => setP(0, p0.x, -fromMm(v))} />
-        <CField label="Koniec X" value={toMm(pN.x)} onChange={(v) => setP(el.pts.length - 1, fromMm(v), pN.y)} /><CField label="Koniec Y" value={toMm(-pN.y)} onChange={(v) => setP(el.pts.length - 1, pN.x, -fromMm(v))} />
+        <NumUnitField label="Początek X" value={toMm(p0.x)} onCommit={(v) => setP(0, fromMm(v), p0.y)} /><NumUnitField label="Początek Y" value={toMm(-p0.y)} onCommit={(v) => setP(0, p0.x, -fromMm(v))} />
+        <NumUnitField label="Koniec X" value={toMm(pN.x)} onCommit={(v) => setP(el.pts.length - 1, fromMm(v), pN.y)} /><NumUnitField label="Koniec Y" value={toMm(-pN.y)} onCommit={(v) => setP(el.pts.length - 1, pN.x, -fromMm(v))} />
         <CField label="Długość" value={toMm(len)} onChange={() => { }} disabled />{idf}{locked}{expose}</>; }
     case 'pad':
       return <><SectionHeader title="Właściwości pola lutowniczego" />{layerSel(el.layer)}
         <CField label="Numer" value={el.num} onChange={(v) => onChange({ num: v })} /><CSelect label="Kształt" value={el.shape} options={['Okrąg', 'Prostokąt', 'Owal']} onChange={(v) => onChange({ shape: v })} />
-        {mm('Szerokość', el.w, 'w')}{mm('Wysokość', el.h, 'h')}<CField label="Obrót" value={String(el.rot)} onChange={(v) => onChange({ rot: Number(v) || 0 })} />
+        {mm('Szerokość', el.w, 'w')}{mm('Wysokość', el.h, 'h')}<NumUnitField label="Obrót" value={String(el.rot)} onCommit={(v) => onChange({ rot: Number(v) || 0 })} />
         <CSelect label="Kształt Otworu" value={el.holeShape} options={['Okrąg', 'Slot']} onChange={(v) => onChange({ holeShape: v })} />{mm('Otwór', el.hole, 'hole')}<CSelect label="Powlekany" value={el.plated} options={['Tak', 'Nie']} onChange={(v) => onChange({ plated: v })} />
         {mm('Środek X', el.x, 'x')}{mm('Środek Y', el.y, 'y', true)}{mm('Ekspancja Ma…', el.expansion, 'expansion')}{idf}{locked}</>;
     case 'via':
@@ -1951,10 +1974,10 @@ function FpElProps({ el, onChange, layerNames }: { el: FpEl; onChange: (p: Patch
     case 'ftext':
       return <><SectionHeader title="Właściwości tekstu" />{layerSel(el.layer)}<CField label="Tekst" value={el.text} onChange={(v) => onChange({ text: v })} /><CSelect label="Rodzina czcio…" value={el.font} options={['domyślny', 'NotoSans', 'NotoSerif']} onChange={(v) => onChange({ font: v })} />
         <Box sx={{ px: 1.5, py: 0.5 }}><Button variant="outlined" size="small" sx={{ textTransform: 'none', color: C.green, borderColor: C.green, fontSize: 13, width: '100%' }}>Fonts Management</Button></Box>
-        {mm('Szerokość linii', el.lineWidth, 'lineWidth')}{mm('Wysokość', el.height, 'height')}<CField label="Obrót" value={String(el.rot)} onChange={(v) => onChange({ rot: Number(v) || 0 })} />{locked}{idf}</>;
+        {mm('Szerokość linii', el.lineWidth, 'lineWidth')}{mm('Wysokość', el.height, 'height')}<NumUnitField label="Obrót" value={String(el.rot)} onCommit={(v) => onChange({ rot: Number(v) || 0 })} />{locked}{idf}</>;
     case 'arc': { const len = Math.abs((el.a1 - el.a0) * Math.PI / 180) * el.r;
       return <><SectionHeader title="Właściwości łuku" /><CSelect label="Typ łuku" value={el.arcType} options={['Center Point Arc', 'Three Point Arc']} onChange={(v) => onChange({ arcType: v })} />{layerSel(el.layer)}{mm('Szerokość', el.width, 'width')}{mm('Promień', el.r, 'r')}
-        <CField label="Długość" value={toMm(len)} onChange={() => { }} disabled /><CField label="Kąt Rozpoczę…" value={String(el.a0)} onChange={(v) => onChange({ a0: Number(v) || 0 })} /><CField label="Kąt Zakończe…" value={String(el.a1)} onChange={(v) => onChange({ a1: Number(v) || 0 })} />
+        <CField label="Długość" value={toMm(len)} onChange={() => { }} disabled /><NumUnitField label="Kąt Rozpoczę…" value={String(el.a0)} onCommit={(v) => onChange({ a0: Number(v) || 0 })} /><NumUnitField label="Kąt Zakończe…" value={String(el.a1)} onCommit={(v) => onChange({ a1: Number(v) || 0 })} />
         {mm('Środek X', el.cx, 'cx')}{mm('Środek Y', el.cy, 'cy', true)}<CSelect label="Kierunek Obrotu" value={el.dir} options={['Anti-Clockwise', 'Clockwise']} onChange={(v) => onChange({ dir: v })} />{locked}{expose}{idf}</>; }
     case 'fcircle':
       return <><SectionHeader title="Właściwości okręgu" />{layerSel(el.layer)}{mm('Szerokość', el.width, 'width')}{mm('Środek X', el.cx, 'cx')}{mm('Środek Y', el.cy, 'cy', true)}{mm('Promień', el.r, 'r')}{locked}{idf}</>;
@@ -1965,7 +1988,7 @@ function FpElProps({ el, onChange, layerNames }: { el: FpEl; onChange: (p: Patch
         <Box sx={{ px: 1.5, py: 0.5, display: 'flex', flexDirection: 'column', gap: 0.75 }}><Button variant="outlined" size="small" sx={{ textTransform: 'none', color: C.green, borderColor: C.green, fontSize: 13 }}>Edycja punktów</Button><Button variant="outlined" size="small" sx={{ textTransform: 'none', color: C.green, borderColor: C.green, fontSize: 13 }}>Expose Copper</Button></Box>{idf}</>;
     case 'dimension': { const len = Math.hypot(el.x2 - el.x1, el.y2 - el.y1);
       return <><SectionHeader title="Właściwości wymiarów" />{layerSel(el.layer)}<CSelect label="jednostka" value={el.unit} options={['mm', 'mil', 'inch']} onChange={(v) => onChange({ unit: v })} />
-        <CField label="Długość" value={toMm(len)} onChange={() => { }} disabled /><CField label="Wysokość" value={toMm(Math.abs(el.y2 - el.y1))} onChange={() => { }} disabled />{mm('Szerokość', el.width, 'width')}<CField label="Dokładność" value={String(el.precision)} onChange={(v) => onChange({ precision: Number(v) || 0 })} />
+        <CField label="Długość" value={toMm(len)} onChange={() => { }} disabled /><CField label="Wysokość" value={toMm(Math.abs(el.y2 - el.y1))} onChange={() => { }} disabled />{mm('Szerokość', el.width, 'width')}<NumUnitField label="Dokładność" value={String(el.precision)} onCommit={(v) => onChange({ precision: Number(v) || 0 })} />
         {mm('Początek X', el.x1, 'x1')}{mm('Początek Y', el.y1, 'y1', true)}{mm('Koniec X', el.x2, 'x2')}{mm('Koniec Y', el.y2, 'y2', true)}{locked}{idf}</>; }
     case 'frect':
       return <><SectionHeader title="Właściwości prostokątu" />{layerSel(el.layer)}{mm('Początek X', el.x, 'x')}{mm('Początek Y', el.y, 'y', true)}{mm('Szerokość', el.w, 'w')}{mm('Wysokość', el.h, 'h')}<CSelect label="Fill" value={el.fill} options={['Nie', 'Tak']} onChange={(v) => onChange({ fill: v })} />{mm('Szerokość kr…', el.width, 'width')}{locked}{idf}</>;
@@ -2024,9 +2047,9 @@ function PlacedProps({ comp, onChange, mouse }: { comp: PlacedComp; onChange: (p
       <CSelect label="Wyświetl Prefiks" value={comp.showPrefix || 'Tak'} options={['Tak', 'Nie']} onChange={(v) => onChange({ showPrefix: v })} />
       <CField label="Nazwa" value={comp.label} onChange={(v) => onChange({ label: v })} />
       <CSelect label="Wyświetlana …" value={comp.showName || 'Nie'} options={['Tak', 'Nie']} onChange={(v) => onChange({ showName: v })} />
-      <CField label="Lokalizacja X" value={toMm(comp.x)} onChange={(v) => onChange({ x: fromMm(v) })} />
-      <CField label="Lokalizacja Y" value={toMm(-comp.y)} onChange={(v) => onChange({ y: -fromMm(v) })} />
-      <CField label="Obrót" value={String(comp.rotation || 0)} onChange={(v) => onChange({ rotation: num(v) })} />
+      <NumUnitField label="Lokalizacja X" value={toMm(comp.pcbX ?? comp.x)} onCommit={(v) => onChange({ pcbX: fromMm(v) })} />
+      <NumUnitField label="Lokalizacja Y" value={toMm(-(comp.pcbY ?? comp.y))} onCommit={(v) => onChange({ pcbY: -fromMm(v) })} />
+      <NumUnitField label="Obrót" value={String(comp.rotation || 0)} onCommit={(v) => onChange({ rotation: num(v) })} />
       <CSelect label="Dodaj do BOM" value={comp.addToBom || 'Tak'} options={['Tak', 'Nie']} onChange={(v) => onChange({ addToBom: v })} />
       <CSelect label="Locked" value={comp.locked || 'Nie'} options={['Nie', 'Tak']} onChange={(v) => onChange({ locked: v })} />
       <CField label="ID" value={comp.id} onChange={() => { }} disabled />
@@ -2247,9 +2270,9 @@ function ImportDialog({ open, onClose, onSymbol, onFootprint }: { open: boolean;
   );
 }
 
-interface SavedSym { name: string; title: string; owner?: string; manufacturer?: string; mfrPart?: string; tags?: string }
+interface SavedSym { name: string; title: string; owner?: string; manufacturer?: string; mfrPart?: string; tags?: string; footprint?: string; symbol?: string }
 // ── Okno „Library" (EasyEDA 1:1): wyszukiwarka symboli/footprintów + podgląd ──
-interface LibRow { key: string; name: string; title: string; pkg: string; owner: string; source: 'ws-sym' | 'ws-fp' | 'lcsc'; lcsc?: string; stock?: number; smtStock?: number; price?: string }
+interface LibRow { key: string; name: string; title: string; pkg: string; owner: string; source: 'ws-sym' | 'ws-fp' | 'lcsc'; lcsc?: string; stock?: number; smtStock?: number; price?: string; linkedFp?: string; linkedSym?: string }
 interface Fav { key: string; source: 'ws-sym' | 'ws-fp' | 'lcsc'; name: string; title: string; lcsc?: string; category: string }
 const loadFavs = (): Fav[] => { try { return JSON.parse(localStorage.getItem('pcb-favorites') || '[]'); } catch { return []; } };
 type LibPrev = { kind: 'sym-el'; els: El[] } | { kind: 'fp-el'; els: FpEl[] } | { kind: 'easy-sym'; sym: EasyEdaSym } | { kind: 'easy-fp'; fp: EasyEdaSym } | { kind: 'easy'; sym?: EasyEdaSym; fp?: EasyEdaSym; prefix?: string } | null;
@@ -2300,7 +2323,7 @@ function LibraryPreview({ prev, type }: { prev: LibPrev; type: string }) {
 // Jasny motyw dla okna biblioteki (aplikacja działa w trybie dark → hardcodowane jasne kolory
 // zlewałyby się z ciemnym Paper i pola tekstowe miałyby biały tekst na białym tle).
 const libLightTheme = createTheme({ palette: { mode: 'light', background: { paper: '#ffffff', default: '#ffffff' } } });
-function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootprint }: { open: boolean; onClose: () => void; onPick: (r: PickResult) => void; onEditSymbol: (title: string, els: El[]) => void; onEditFootprint: (title: string, els: FpEl[]) => void }) {
+function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootprint }: { open: boolean; onClose: () => void; onPick: (r: PickResult) => void; onEditSymbol: (title: string, els: El[], footprint?: string) => void; onEditFootprint: (title: string, els: FpEl[], symbol?: string) => void }) {
   const [engine, setEngine] = useState<'EasyEDA' | 'LCSC' | 'My'>('EasyEDA');
   const [type, setType] = useState('Symbol');
   const [cls, setCls] = useState('Work Space');
@@ -2345,8 +2368,8 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
 
   const kwl = kw.trim().toLowerCase(), ql = query.trim().toLowerCase();
   const match = (s: string) => { const l = s.toLowerCase(); return (!kwl || l.includes(kwl)) && (!ql || l.includes(ql)); };
-  const wsSymRows = (): LibRow[] => wsSym.filter((s) => match(s.title || s.name)).map((s) => ({ key: `ws:${s.name}`, name: s.name, title: s.title || s.name, pkg: (s as { footprint?: string }).footprint || s.mfrPart || '', owner: s.owner || 'mhersztowski', source: 'ws-sym' as const }));
-  const wsFpRows = (): LibRow[] => wsFp.filter((s) => match(s.title || s.name)).map((s) => ({ key: `wf:${s.name}`, name: s.name, title: s.title || s.name, pkg: s.tags || '', owner: s.owner || 'mhersztowski', source: 'ws-fp' as const }));
+  const wsSymRows = (): LibRow[] => wsSym.filter((s) => match(s.title || s.name)).map((s) => ({ key: `ws:${s.name}`, name: s.name, title: s.title || s.name, pkg: s.footprint || s.mfrPart || '', owner: s.owner || 'mhersztowski', source: 'ws-sym' as const, linkedFp: s.footprint }));
+  const wsFpRows = (): LibRow[] => wsFp.filter((s) => match(s.title || s.name)).map((s) => ({ key: `wf:${s.name}`, name: s.name, title: s.title || s.name, pkg: s.tags || '', owner: s.owner || 'mhersztowski', source: 'ws-fp' as const, linkedSym: s.symbol }));
   // Budowa wierszy zależnie od Typu + Klasy (lub lewego panelu: My Libraries / kategoria ulubionych)
   const ONLINE_CLS = ['LCSC', 'System', 'JLCPCB Assembled', 'Wkład użytkownika', 'Śledź'];
   const rows: LibRow[] = (() => {
@@ -2384,16 +2407,37 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
   const doPlace = async () => {
     if (!sel) return; setBusy(true); setError(null);
     try {
-      if (sel.source === 'ws-sym') { const els = prev && prev.kind === 'sym-el' ? prev.els : (await (await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`)).json()).elements as El[]; onPick({ defId: 'saved', label: sel.title, pins: 0, savedEls: els || [], refPrefix: 'U' }); onClose(); }
+      if (sel.source === 'ws-sym') {
+        const d = await (await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`)).json();
+        const els = (Array.isArray(d.elements) ? d.elements : (prev && prev.kind === 'sym-el' ? prev.els : [])) as El[];
+        // Powiązany footprint (ustawiony przy zapisie symbolu) → dołącz jego geometrię, by na PCB pokazał się właściwy footprint.
+        // Link może być ustawiony po którejkolwiek stronie — więc szukamy dwukierunkowo:
+        //  1) symbol.footprint,  2) footprint, który wskazuje na ten symbol (footprint.symbol === nazwa symbolu).
+        let fpName = sel.linkedFp || d.footprint;
+        if (!fpName) { const rev = wsFp.find((fp) => fp.symbol && fp.symbol === sel.name); if (rev) fpName = rev.name; }
+        let fpEls: FpEl[] | undefined;
+        if (fpName) { try { const fd = await (await fetch(`/api/footprints/${encodeURIComponent(fpName)}`)).json(); if (Array.isArray(fd.elements)) fpEls = fd.elements; } catch { /* brak/niedostępny footprint */ } }
+        onPick({ defId: 'saved', label: sel.title, pins: 0, savedEls: els, fpEls, refPrefix: 'U' }); onClose();
+      }
       else if (sel.source === 'lcsc' && sel.lcsc) { const d = prev && prev.kind === 'easy' ? prev : await (await fetch(`/api/easyeda/component/${encodeURIComponent(sel.lcsc)}`)).json(); onPick({ defId: 'easyeda', label: sel.title, pins: 0, easyeda: d.sym || d.symbol, fp: d.fp || d.footprint, refPrefix: d.prefix, lcsc: sel.lcsc, supplier: 'LCSC', manufacturer: sel.owner, footprint: sel.pkg }); onClose(); }
-      else if (sel.source === 'ws-fp') { const els = prev && prev.kind === 'fp-el' ? prev.els : (await (await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`)).json()).elements as FpEl[]; onPick({ defId: 'ic-generic', label: sel.title, pins: 0, fpEls: els || [], refPrefix: 'U' }); onClose(); }
+      else if (sel.source === 'ws-fp') {
+        const d = await (await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`)).json();
+        const els = (Array.isArray(d.elements) ? d.elements : (prev && prev.kind === 'fp-el' ? prev.els : [])) as FpEl[];
+        // Powiązany symbol (ustawiony przy zapisie footprintu) → dołącz jego geometrię, by na schemacie pokazał się właściwy symbol.
+        // Dwukierunkowo: 1) footprint.symbol, 2) symbol, który wskazuje na ten footprint (symbol.footprint === nazwa footprintu).
+        let symName = sel.linkedSym || d.symbol;
+        if (!symName) { const rev = wsSym.find((sy) => sy.footprint && sy.footprint === sel.name); if (rev) symName = rev.name; }
+        let savedEls: El[] | undefined;
+        if (symName) { try { const sd = await (await fetch(`/api/symbols/${encodeURIComponent(symName)}`)).json(); if (Array.isArray(sd.elements)) savedEls = sd.elements; } catch { /* brak/niedostępny symbol */ } }
+        onPick({ defId: savedEls ? 'saved' : 'ic-generic', label: sel.title, pins: 0, fpEls: els, savedEls, refPrefix: 'U' }); onClose();
+      }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
   const doEdit = async () => {
     if (!sel) return; setBusy(true); setError(null);
     try {
-      if (sel.source === 'ws-sym') { const els = prev && prev.kind === 'sym-el' ? prev.els : (await (await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`)).json()).elements as El[]; onEditSymbol(sel.title, els || []); onClose(); }
-      else if (sel.source === 'ws-fp') { const els = prev && prev.kind === 'fp-el' ? prev.els : (await (await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`)).json()).elements as FpEl[]; onEditFootprint(sel.title, els || []); onClose(); }
+      if (sel.source === 'ws-sym') { const d = await (await fetch(`/api/symbols/${encodeURIComponent(sel.name)}`)).json(); const els = (Array.isArray(d.elements) ? d.elements : (prev && prev.kind === 'sym-el' ? prev.els : [])) as El[]; onEditSymbol(sel.title, els, d.footprint || sel.linkedFp); onClose(); }
+      else if (sel.source === 'ws-fp') { const d = await (await fetch(`/api/footprints/${encodeURIComponent(sel.name)}`)).json(); const els = (Array.isArray(d.elements) ? d.elements : (prev && prev.kind === 'fp-el' ? prev.els : [])) as FpEl[]; onEditFootprint(sel.title, els, d.symbol || sel.linkedSym); onClose(); }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
   // Akcje menu kontekstowego wiersza (na konkretnym elemencie r)
@@ -2402,7 +2446,7 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
     if (r.source === 'ws-fp') return (await (await fetch(`/api/footprints/${encodeURIComponent(r.name)}`)).json()).elements || [];
     return [];
   };
-  const editRow = async (r: LibRow) => { setBusy(true); setError(null); try { if (r.source === 'ws-sym') { onEditSymbol(r.title, await rowEls(r) as El[]); onClose(); } else if (r.source === 'ws-fp') { onEditFootprint(r.title, await rowEls(r) as FpEl[]); onClose(); } else setError('Edycja dostępna dla elementów z serwera (Work Space).'); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } };
+  const editRow = async (r: LibRow) => { setBusy(true); setError(null); try { if (r.source === 'ws-sym') { onEditSymbol(r.title, await rowEls(r) as El[], r.linkedFp); onClose(); } else if (r.source === 'ws-fp') { onEditFootprint(r.title, await rowEls(r) as FpEl[], r.linkedSym); onClose(); } else setError('Edycja dostępna dla elementów z serwera (Work Space).'); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } };
   const cloneRow = async (r: LibRow) => { setBusy(true); setError(null); try { if (r.source === 'lcsc') { setError('Klonowanie dostępne dla elementów z serwera.'); return; } const url = r.source === 'ws-fp' ? '/api/footprints' : '/api/symbols'; await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: `${r.title}_kopia`, elements: await rowEls(r) }) }); await reloadWs(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } };
   const viewDatasheet = (r: LibRow) => window.open(r.lcsc ? `https://www.lcsc.com/product-detail/${encodeURIComponent(r.lcsc)}.html` : `https://www.google.com/search?q=${encodeURIComponent(r.title + ' datasheet')}`, '_blank');
 
@@ -2533,15 +2577,17 @@ function PlaceComponentDialog({ open, onClose, onPick, onEditSymbol, onEditFootp
 }
 
 // ── Dialog „Zapisz jako Symbol" (zapis do współdzielonej biblioteki) ──────────
-interface SymbolMeta { title: string; owner: string; supplier: string; supplierOther: string; supplierPart: string; manufacturer: string; mfrPart: string; link: string; tags: string; description: string }
-const emptyMeta = (): SymbolMeta => ({ title: 'NowySymbol', owner: 'mhersztowski', supplier: 'Unknown', supplierOther: '', supplierPart: '', manufacturer: '', mfrPart: '', link: '', tags: '', description: '' });
+interface SymbolMeta { title: string; owner: string; supplier: string; supplierOther: string; supplierPart: string; manufacturer: string; mfrPart: string; link: string; tags: string; description: string; footprint: string }
+const emptyMeta = (): SymbolMeta => ({ title: 'NowySymbol', owner: 'mhersztowski', supplier: 'Unknown', supplierOther: '', supplierPart: '', manufacturer: '', mfrPart: '', link: '', tags: '', description: '', footprint: '' });
 
-function SaveSymbolDialog({ open, onClose, onSave, initialTitle }: { open: boolean; onClose: () => void; onSave: (m: SymbolMeta) => Promise<void>; initialTitle?: string }) {
+function SaveSymbolDialog({ open, onClose, onSave, initialTitle, initialFootprint }: { open: boolean; onClose: () => void; onSave: (m: SymbolMeta) => Promise<void>; initialTitle?: string; initialFootprint?: string }) {
   const [m, setM] = useState<SymbolMeta>(emptyMeta);
+  const [fpList, setFpList] = useState<{ name: string; title: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Domyślny tytuł = nazwa otwartego symbolu (Place Component → Edycja), by Save szedł „na siebie".
-  useEffect(() => { if (open) { setM({ ...emptyMeta(), title: initialTitle?.trim() || emptyMeta().title }); setErr(null); } }, [open, initialTitle]);
+  // Pobieramy listę footprintów z Work Space do comboboxa powiązania.
+  useEffect(() => { if (open) { setM({ ...emptyMeta(), title: initialTitle?.trim() || emptyMeta().title, footprint: initialFootprint || '' }); setErr(null); fetch('/api/footprints').then((r) => r.json()).then((d) => setFpList(Array.isArray(d.footprints) ? d.footprints : [])).catch(() => { }); } }, [open, initialTitle, initialFootprint]);
   const upd = (k: keyof SymbolMeta, v: string) => setM((s) => ({ ...s, [k]: v }));
   const doSave = async () => { setSaving(true); setErr(null); try { await onSave(m); onClose(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); } };
 
@@ -2557,6 +2603,12 @@ function SaveSymbolDialog({ open, onClose, onSave, initialTitle }: { open: boole
       <DialogContent sx={{ pt: '16px !important', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Właściciel:')}<TextField {...tf} value={m.owner} disabled /><Link href="#" onClick={(e) => e.preventDefault()} sx={{ fontSize: 13, whiteSpace: 'nowrap' }}>Utwórz zespół</Link></Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Tytuł:')}<TextField {...tf} autoFocus value={m.title} onChange={(e) => upd('title', e.target.value)} onFocus={(e) => e.target.select()} /></Box>
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Footprint:')}
+          <select value={m.footprint} onChange={(e) => upd('footprint', e.target.value)} style={{ height: 34, width: '100%', border: `1px solid ${C.fieldBorder}`, borderRadius: 4, fontSize: 13.5, padding: '0 6px', background: '#fff' }}>
+            <option value="">— brak powiązania —</option>
+            {fpList.map((f) => <option key={f.name} value={f.name}>{f.title || f.name}</option>)}
+          </select>
+        </Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Dostawca:')}
           <select value={m.supplier} onChange={(e) => upd('supplier', e.target.value)} style={{ height: 34, border: `1px solid ${C.fieldBorder}`, borderRadius: 4, fontSize: 13.5, padding: '0 6px', background: '#fff' }}>{['Unknown', 'LCSC', 'Mouser', 'DigiKey', 'Farnell', 'Inne'].map((o) => <option key={o} value={o}>{o}</option>)}</select>
           <Typography sx={{ fontSize: 13, color: '#6b7177' }}>Lub</Typography><TextField {...tf} placeholder="Inne" value={m.supplierOther} onChange={(e) => upd('supplierOther', e.target.value)} />
@@ -2578,14 +2630,16 @@ function SaveSymbolDialog({ open, onClose, onSave, initialTitle }: { open: boole
 }
 
 // ── Dialog „Zapisz jako Footprint" ────────────────────────────────────────────
-interface FpSaveMeta { title: string; owner: string; tags: string; link: string; description: string }
-const emptyFpSave = (): FpSaveMeta => ({ title: 'NEW_FOOTPRINT', owner: 'mhersztowski', tags: '', link: '', description: '' });
-function SaveFootprintDialog({ open, onClose, onSave, initialTitle }: { open: boolean; onClose: () => void; onSave: (m: FpSaveMeta) => Promise<void>; initialTitle?: string }) {
+interface FpSaveMeta { title: string; owner: string; tags: string; link: string; description: string; symbol: string }
+const emptyFpSave = (): FpSaveMeta => ({ title: 'NEW_FOOTPRINT', owner: 'mhersztowski', tags: '', link: '', description: '', symbol: '' });
+function SaveFootprintDialog({ open, onClose, onSave, initialTitle, initialSymbol }: { open: boolean; onClose: () => void; onSave: (m: FpSaveMeta) => Promise<void>; initialTitle?: string; initialSymbol?: string }) {
   const [m, setM] = useState<FpSaveMeta>(emptyFpSave);
+  const [symList, setSymList] = useState<{ name: string; title: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Domyślny tytuł = nazwa otwartego footprintu (Place Component → Edycja), by Save szedł „na siebie".
-  useEffect(() => { if (open) { setM({ ...emptyFpSave(), title: initialTitle?.trim() || emptyFpSave().title }); setErr(null); } }, [open, initialTitle]);
+  // Pobieramy listę symboli z Work Space do comboboxa powiązania.
+  useEffect(() => { if (open) { setM({ ...emptyFpSave(), title: initialTitle?.trim() || emptyFpSave().title, symbol: initialSymbol || '' }); setErr(null); fetch('/api/symbols').then((r) => r.json()).then((d) => setSymList(Array.isArray(d.symbols) ? d.symbols : [])).catch(() => { }); } }, [open, initialTitle, initialSymbol]);
   const upd = (k: keyof FpSaveMeta, v: string) => setM((s) => ({ ...s, [k]: v }));
   const doSave = async () => { setSaving(true); setErr(null); try { await onSave(m); onClose(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); } };
   const label = (t: string) => <Typography sx={{ width: 96, fontSize: 13.5, color: '#3a3f45', pt: 0.9, flexShrink: 0, textAlign: 'right' }}>{t}</Typography>;
@@ -2596,6 +2650,12 @@ function SaveFootprintDialog({ open, onClose, onSave, initialTitle }: { open: bo
       <DialogContent sx={{ pt: '16px !important', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Właściciel:')}<TextField {...tf} value={m.owner} disabled /><Link href="#" onClick={(e) => e.preventDefault()} sx={{ fontSize: 13, whiteSpace: 'nowrap' }}>Utwórz zespół</Link></Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Tytuł:')}<TextField {...tf} autoFocus value={m.title} onChange={(e) => upd('title', e.target.value)} onFocus={(e) => e.target.select()} /><Link href="#" onClick={(e) => e.preventDefault()} sx={{ fontSize: 13, whiteSpace: 'nowrap' }}>Footprint Naming Reference</Link></Box>
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Symbol:')}
+          <select value={m.symbol} onChange={(e) => upd('symbol', e.target.value)} style={{ height: 34, width: '100%', border: `1px solid ${C.fieldBorder}`, borderRadius: 4, fontSize: 13.5, padding: '0 6px', background: '#fff' }}>
+            <option value="">— brak powiązania —</option>
+            {symList.map((s) => <option key={s.name} value={s.name}>{s.title || s.name}</option>)}
+          </select>
+        </Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Tags:')}<TextField {...tf} placeholder="Split by ';' for multi tags" value={m.tags} onChange={(e) => upd('tags', e.target.value)} /></Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>{label('Łącze:')}<TextField {...tf} value={m.link} onChange={(e) => upd('link', e.target.value)} /></Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>{label('Opis:')}<TextField {...tf} multiline minRows={4} value={m.description} onChange={(e) => upd('description', e.target.value)} /></Box>
@@ -2835,10 +2895,11 @@ function placedFpEls(comp: PlacedComp): FpEl[] {
   const rad = ((comp.rotation || 0) * Math.PI) / 180;
   const cos = Math.cos(rad), sin = Math.sin(rad);
   const ortho = Math.abs(sin) > Math.abs(cos); // obrót ~90/270° → zamiana wymiarów prostokątów
+  const px = comp.pcbX ?? comp.x, py = comp.pcbY ?? comp.y; // pozycja footprintu na PCB
   const tp = (sx: number, sy: number): Pt => {
     let x = (sx - cx) * SC; const y = (sy - cy) * SC;
     if (bottom) x = -x;
-    return { x: comp.x + (x * cos - y * sin), y: comp.y + (x * sin + y * cos) };
+    return { x: px + (x * cos - y * sin), y: py + (x * sin + y * cos) };
   };
   const out: FpEl[] = [];
   fp.shapes.forEach((s) => {
@@ -3424,7 +3485,8 @@ export function PcbView() {
   const placeAt = (p: { x: number; y: number }) => {
     if (!placing) return;
     placedSnapshotRef.current();
-    setPlaced((arr) => [...arr, { ...placing, x: snapTo(p.x), y: snapTo(p.y) }]);
+    // pcbX/pcbY inicjalizujemy tą samą pozycją co symbol — od tej chwili footprint (PCB) i symbol (schemat) ruszają się niezależnie.
+    setPlaced((arr) => [...arr, { ...placing, x: snapTo(p.x), y: snapTo(p.y), pcbX: snapTo(p.x), pcbY: snapTo(p.y) }]);
     setPlacing(null); // jednorazowe postawienie
   };
   const moveGhost = (p: { x: number; y: number }) => { if (placing) setPlacing((c) => (c ? { ...c, x: snapTo(p.x), y: snapTo(p.y) } : c)); };
@@ -3480,7 +3542,8 @@ export function PcbView() {
     const sid = sheets.find((s) => (sheetPlaced[s.id] ?? []).some((c) => c.id === comp.id))?.id;
     if (!sid) return;
     snapshotColl('schematic', `pl:${sid}`);
-    setSheetPlaced((m) => ({ ...m, [sid]: (m[sid] ?? []).map((c) => (c.id === comp.id ? { ...c, x: c.x + dx, y: c.y + dy } : c)) }));
+    // Na PCB przesuwamy tylko pozycję footprintu (pcbX/pcbY) — pozycja symbolu na schemacie (x/y) bez zmian.
+    setSheetPlaced((m) => ({ ...m, [sid]: (m[sid] ?? []).map((c) => (c.id === comp.id ? { ...c, pcbX: (c.pcbX ?? c.x) + dx, pcbY: (c.pcbY ?? c.y) + dy } : c)) }));
   };
   // Przesunięcie wielu komponentów (multi-selekcja marquee) — po indeksach w allPlaced/placed
   const moveManyPlaced = (idxs: number[], dx: number, dy: number, src: PlacedComp[]) => {
@@ -3488,7 +3551,7 @@ export function PcbView() {
     if (!ids.size) return;
     const sids = sheets.filter((s) => (sheetPlaced[s.id] ?? []).some((c) => ids.has(c.id))).map((s) => s.id);
     sids.forEach((sid) => snapshotColl('schematic', `pl:${sid}`));
-    setSheetPlaced((m) => { const n = { ...m }; sids.forEach((sid) => { n[sid] = (m[sid] ?? []).map((c) => (ids.has(c.id) ? { ...c, x: c.x + dx, y: c.y + dy } : c)); }); return n; });
+    setSheetPlaced((m) => { const n = { ...m }; sids.forEach((sid) => { n[sid] = (m[sid] ?? []).map((c) => (ids.has(c.id) ? { ...c, pcbX: (c.pcbX ?? c.x) + dx, pcbY: (c.pcbY ?? c.y) + dy } : c)); }); return n; });
   };
   // Edycja właściwości zaznaczonego komponentu (panel Właściwości Komponentu na PCB)
   const selectedPlacedComp: PlacedComp | null = selPlaced == null ? null : editor === 'pcb' ? (allPlaced[selPlaced] ?? null) : editor === 'schematic' ? (placed[selPlaced] ?? null) : null;
@@ -3676,16 +3739,16 @@ export function PcbView() {
   };
   // Import → nowa zakładka symbolu/footprintu z wczytanymi elementami
   const [importOpen, setImportOpen] = useState(false);
-  const importSymbol = (name: string, els: El[]) => {
+  const importSymbol = (name: string, els: El[], footprint?: string) => {
     symSeq.current += 1; const id = `sym_${Date.now().toString(36)}_${symSeq.current}`;
     setSymbols((s) => [...s, { id, name: `*${name || 'Imported'}` }]);
-    setSymbolEls((m) => ({ ...m, [id]: els })); setSymbolMeta((m) => ({ ...m, [id]: { ...emptySymMeta(), name } }));
+    setSymbolEls((m) => ({ ...m, [id]: els })); setSymbolMeta((m) => ({ ...m, [id]: { ...emptySymMeta(), name, footprint: footprint || '' } }));
     setActiveSymbolId(id); setEditor('symbol'); setActiveTool('');
   };
-  const importFootprint = (name: string, els: FpEl[]) => {
+  const importFootprint = (name: string, els: FpEl[], symbol?: string) => {
     fpSeq.current += 1; const id = `fp_${Date.now().toString(36)}_${fpSeq.current}`;
     setFootprints((s) => [...s, { id, name: `*${name || 'Imported'}` }]);
-    setFootprintEls((m) => ({ ...m, [id]: els })); setFootprintMeta((m) => ({ ...m, [id]: { ...emptyFpMeta(), footprint: name } }));
+    setFootprintEls((m) => ({ ...m, [id]: els })); setFootprintMeta((m) => ({ ...m, [id]: { ...emptyFpMeta(), footprint: name, symbol: symbol || '' } }));
     setActiveFootprintId(id); setEditor('footprint'); setActiveTool('');
   };
   const activeFpEls = activeFootprintId ? (footprintEls[activeFootprintId] ?? []) : [];
@@ -4165,9 +4228,9 @@ export function PcbView() {
                 onPlacedMove={(idx, dx, dy) => { setPlacedMove({ idx, dx, dy }); if (!selPlacedIdxs.includes(idx)) { setSelPlaced(idx); setSelPlacedIdxs([]); } setSelectedIdx(null); setSelectedIdxs([]); }}
                 onPlacedMoveEnd={(idx, dx, dy) => { if (dx || dy) { const grp = selPlacedAll.includes(idx) ? selPlacedAll : [idx]; grp.length > 1 ? moveManyPlaced(grp, dx, dy, allPlaced) : moveAllPlaced(idx, dx, dy); } setPlacedMove(null); }}
                 overlay={objVis['Komponent'] !== false ? <>
-                  {allPlaced.map((c, i) => renderPcbPart(placedMove && placedDrag.includes(i) ? { ...c, x: c.x + placedMove.dx, y: c.y + placedMove.dy } : c, c.id, false, layers))}
+                  {allPlaced.map((c, i) => renderPcbPart(placedMove && placedDrag.includes(i) ? { ...c, pcbX: (c.pcbX ?? c.x) + placedMove.dx, pcbY: (c.pcbY ?? c.y) + placedMove.dy } : c, c.id, false, layers))}
                   {placing && renderPcbPart(placing, 'placing', true, layers)}
-                  {selPlacedAll.filter((i) => allPlaced[i]).map((i) => <g key={`plhl${i}`}>{selHighlight(pcbPartBBox(placedMove && placedDrag.includes(i) ? { ...allPlaced[i], x: allPlaced[i].x + placedMove.dx, y: allPlaced[i].y + placedMove.dy } : allPlaced[i]), view.zoom, '#4fc3f7')}</g>)}
+                  {selPlacedAll.filter((i) => allPlaced[i]).map((i) => <g key={`plhl${i}`}>{selHighlight(pcbPartBBox(placedMove && placedDrag.includes(i) ? { ...allPlaced[i], pcbX: (allPlaced[i].pcbX ?? allPlaced[i].x) + placedMove.dx, pcbY: (allPlaced[i].pcbY ?? allPlaced[i].y) + placedMove.dy } : allPlaced[i]), view.zoom, '#4fc3f7')}</g>)}
                 </> : (placing ? <>{placing && renderPcbPart(placing, 'placing', true, layers)}</> : null)} placing={placing} onPlace={placeAt} onContextMenu={(e) => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY }); }} />}
               {editor === 'symbol' && activeSymbolId && (
                 <SymbolEditorCanvas key={activeSymbolId} elements={activeEls} onChange={(e) => { snapshot(); setSymbolEls((m) => ({ ...m, [activeSymbolId]: e })); }} activeTool={activeTool} setActiveTool={setActiveTool} view={view} setView={setView} origin={symOrigin} setOrigin={setSymOrigin} selectedIdx={selectedIdx} selectedIdxs={selectedIdxs} onSelect={selectEl} onMouse={onCanvasMouse} work={symWork} marqueeMode={marqueeMode} onSelectMany={onSelectManyIdx} />
@@ -4416,8 +4479,8 @@ export function PcbView() {
       <OpenProjectDialog open={openProjOpen} onClose={() => setOpenProjOpen(false)} onOpen={loadProject} />
       <NewPcbDialog open={newPcbOpen} onClose={() => setNewPcbOpen(false)} onApply={(c) => { applyNewPcb(c); setNewPcbOpen(false); }} />
       <PlaceComponentDialog open={placeOpen} onClose={() => setPlaceOpen(false)} onPick={startPlacing} onEditSymbol={importSymbol} onEditFootprint={importFootprint} />
-      <SaveSymbolDialog open={saveOpen} onClose={() => setSaveOpen(false)} onSave={saveSymbol} initialTitle={symMeta.name} />
-      <SaveFootprintDialog open={fpSaveOpen} onClose={() => setFpSaveOpen(false)} onSave={saveFootprint} initialTitle={fpMeta.footprint} />
+      <SaveSymbolDialog open={saveOpen} onClose={() => setSaveOpen(false)} onSave={saveSymbol} initialTitle={symMeta.name} initialFootprint={symMeta.footprint} />
+      <SaveFootprintDialog open={fpSaveOpen} onClose={() => setFpSaveOpen(false)} onSave={saveFootprint} initialTitle={fpMeta.footprint} initialSymbol={fpMeta.symbol} />
       <DocSettingsDialog open={docOpen} onClose={() => setDocOpen(false)} initial={docSettings} onPlace={setDocSettings} />
       <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} onSymbol={importSymbol} onFootprint={importFootprint} />
     </Box>
