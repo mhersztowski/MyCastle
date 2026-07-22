@@ -1675,6 +1675,21 @@ type FpEl =
 
 const fpTrack = (p: Pt): FpEl => ({ t: 'track', pts: [p], width: 10, layer: 'Górna warstwa', locked: false, id: newId() });
 const fpCopper = (p: Pt): FpEl => ({ t: 'copper', pts: [p], layer: 'Górna warstwa', name: newId(), net: '', clearance: 10, connect: 'Obramowanie', spokeWidth: 0, keepIsland: 'Nie', fillStyle: 'Stałe', copperToRa: 10, improveProd: 'Tak', locked: false, id: newId() });
+// Trasowanie ścieżki: pierwszy segment prosto — poziomo LUB pionowo, zależnie od dominującego
+// wychylenia kursora — a drugi pod kątem 45° do kursora („Linia 45°"). „Linia 90°" = róg prosty;
+// „Dowolny kąt" = linia prosta. Zwraca punkty do DODANIA po ostatnim (corner + koniec, lub sam koniec).
+function routePts(from: Pt, to: Pt, mode: string): Pt[] {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  if (mode === 'Dowolny kąt' || (adx < 1e-6 && ady < 1e-6)) return [to];
+  const sx = Math.sign(dx), sy = Math.sign(dy);
+  const corner = mode === 'Linia 90°'
+    ? (adx >= ady ? { x: to.x, y: from.y } : { x: from.x, y: to.y })
+    : (adx >= ady ? { x: from.x + sx * (adx - ady), y: from.y } : { x: from.x, y: from.y + sy * (ady - adx) });
+  if ((Math.abs(corner.x - from.x) < 1e-6 && Math.abs(corner.y - from.y) < 1e-6)
+    || (Math.abs(corner.x - to.x) < 1e-6 && Math.abs(corner.y - to.y) < 1e-6)) return [to];
+  return [corner, to];
+}
 const fpPad = (x: number, y: number, no: number): FpEl => ({ t: 'pad', x, y, shape: 'Okrąg', w: 60, h: 60, rot: 0, holeShape: 'Okrąg', hole: 36, plated: 'Tak', num: String(no), expansion: 2, layer: 'Wielowastwa', locked: false, id: newId() });
 const fpVia = (x: number, y: number): FpEl => ({ t: 'via', x, y, dia: 24, holeW: 12, locked: false, id: newId() });
 const fpText = (x: number, y: number, text: string): FpEl => ({ t: 'ftext', x, y, text, font: 'domyślny', lineWidth: 8, height: 80, rot: 0, layer: 'Górna warstwa', locked: false, id: newId() });
@@ -1946,7 +1961,7 @@ function FootprintCanvas({ elements, onChange, activeTool, setActiveTool, view, 
       case 'via': commit(fpVia(p.x, p.y)); break;
       case 'hole': commit(fpHole(p.x, p.y)); break;
       case 'ftext': { const s = window.prompt('Tekst:', 'TEXT'); if (s !== null) commit(fpText(p.x, p.y, s || 'TEXT')); break; }
-      case 'track': setDraft((d) => (d && d.t === 'track' ? { ...d, pts: [...d.pts, p] } : fpTrack(p))); break;
+      case 'track': setDraft((d) => (d && d.t === 'track' ? { ...d, pts: [...d.pts, ...routePts(d.pts[d.pts.length - 1], p, meta.routeAngle)] } : fpTrack(p))); break;
       case 'fill': setDraft((d) => (d && d.t === 'fill' ? { ...d, pts: [...d.pts, p] } : { t: 'fill', pts: [p], fillType: 'Stałe', layer: 'Górna warstwa', locked: false, id: newId() })); break;
       case 'copper': setDraft((d) => (d && d.t === 'copper' ? { ...d, pts: [...d.pts, p] } : fpCopper(p))); break;
     }
@@ -1966,7 +1981,11 @@ function FootprintCanvas({ elements, onChange, activeTool, setActiveTool, view, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const g = parseFloat(meta.gridSize) ? (parseFloat(meta.gridSize) / W2MM) * view.zoom : 100 * view.zoom;
-  const preview = draft && (draft.t === 'track' || draft.t === 'fill' || draft.t === 'copper') && mouse ? ({ ...draft, pts: [...draft.pts, mouse] } as FpEl) : draft;
+  const preview = draft && draft.t === 'track' && mouse && draft.pts.length
+    ? ({ ...draft, pts: [...draft.pts, ...routePts(draft.pts[draft.pts.length - 1], mouse, meta.routeAngle)] } as FpEl)
+    : draft && (draft.t === 'fill' || draft.t === 'copper') && mouse
+      ? ({ ...draft, pts: [...draft.pts, mouse] } as FpEl)
+      : draft;
   return (
     <svg ref={svgRef} width="100%" height="100%" style={{ display: 'block', touchAction: 'none', cursor: panMode ? (grab ? 'grabbing' : 'grab') : 'crosshair', userSelect: 'none', WebkitUserSelect: 'none' }}
       onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onClick={onClk} onDoubleClick={finish} onContextMenu={onContextMenu ?? ((e) => { e.preventDefault(); finish(); })}>
@@ -3306,13 +3325,21 @@ function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: LayerSta
       // wyśrodkowany na footprincie w XY i posadzony na powierzchni płytki w Z.
       const obj = entry.group.clone(true);
       obj.rotation.set(deg(entry.m3d.rx), deg(entry.m3d.ry), deg(entry.m3d.rz));
-      // Auto-skala: surowy .obj z EasyEDA bywa w nierealnej skali — dopasuj rozpiętość XY modelu
-      // do rozmiaru footprintu (świat mil → mm). Skala jednorodna, więc proporcje modelu zostają.
+      // Auto-skala: model .obj EasyEDA jest w realnych mm, a footprint renderowany jest w skali SC=4
+      // (~40% realu). Dopasowujemy rzut XY modelu (po c_rotation model leży bazą na płytce) do rozmiaru
+      // footprintu; skala jednorodna zachowuje proporcje. Zabezpieczenie przed rozdmuchaniem, gdyby model
+      // był źle zorientowany (mały rzut XY).
       obj.updateMatrixWorld(true);
       const mb = new THREE.Box3().setFromObject(obj);
-      const mDiag = Math.hypot(mb.max.x - mb.min.x, mb.max.y - mb.min.y);
+      const mW = mb.max.x - mb.min.x, mH = mb.max.y - mb.min.y, mZ = mb.max.z - mb.min.z;
+      const mDiag = Math.hypot(mW, mH);
       const fpDiag = Math.hypot(Math.max(bb.w * W2MM, 0.2), Math.max(bb.h * W2MM, 0.2));
-      if (mDiag > 1e-4 && Number.isFinite(mDiag)) { const s = fpDiag / mDiag; if (s > 0 && Number.isFinite(s)) obj.scale.setScalar(s); }
+      if (mDiag > 1e-4 && Number.isFinite(mDiag)) {
+        let s = fpDiag / mDiag;
+        const maxDim = Math.max(mW, mH, mZ) * s;
+        if (maxDim > 4 * fpDiag) s *= (4 * fpDiag) / maxDim; // nie pozwól urosnąć absurdalnie
+        if (s > 0 && Number.isFinite(s)) obj.scale.setScalar(s);
+      }
       const holder = new THREE.Group();
       holder.add(obj);
       holder.rotation.z = deg(-(c.rotation || 0));
@@ -3360,6 +3387,30 @@ function object3dToObj(root: THREE.Object3D, name = 'pcb'): string {
   });
   return lines.join('\n');
 }
+// EasyEDA osadza materiały (newmtl/Kd) WEWNĄTRZ pliku .obj (niestandardowo) — three OBJLoader
+// tego nie czyta, więc modele wychodzą szare. Parsujemy kolory sami i nakładamy per-materiał.
+function parseObjMtl(text: string): Map<string, THREE.Color> {
+  const map = new Map<string, THREE.Color>();
+  let cur: THREE.Color | null = null;
+  for (const raw of text.split('\n')) {
+    const p = raw.trim().split(/\s+/);
+    if (p[0] === 'newmtl') { cur = new THREE.Color(0.6, 0.6, 0.6); map.set(p[1], cur); }
+    else if (cur && p[0] === 'Kd') cur.setRGB(+p[1] || 0, +p[2] || 0, +p[3] || 0);
+    // `d` (przezroczystość) pomijamy — EasyEDA bywa niespójne (d=0 dla widocznych częci)
+  }
+  return map;
+}
+function applyObjColors(grp: THREE.Group, mtl: Map<string, THREE.Color>): void {
+  const mk = (name?: string) => new THREE.MeshStandardMaterial({ color: (name && mtl.get(name)) ? mtl.get(name)!.clone() : new THREE.Color(0x9aa4ad), roughness: 0.5, metalness: 0.25, side: THREE.DoubleSide });
+  grp.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!(mesh as unknown as { isMesh?: boolean }).isMesh || !mesh.geometry) return;
+    if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
+    const cur = mesh.material;
+    mesh.material = Array.isArray(cur) ? cur.map((m) => mk((m as THREE.Material).name)) : mk((cur as THREE.Material).name);
+  });
+}
+
 // Dialog podglądu 3D płytki (Scene3D / SimpleViewer) — z panelem widoczności warstw
 function Board3DDialog({ open, onClose, pcbEls, placed, name, layers }: { open: boolean; onClose: () => void; pcbEls: FpEl[]; placed: PlacedComp[]; name: string; layers?: LayerState }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -3387,13 +3438,7 @@ function Board3DDialog({ open, onClose, pcbEls, placed, name, layers }: { open: 
           if (!r.ok) return;
           const text = await r.text();
           const grp = loader.parse(text);
-          grp.traverse((o) => {
-            const mesh = o as THREE.Mesh;
-            if ((mesh as unknown as { isMesh?: boolean }).isMesh && mesh.geometry) {
-              if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
-              mesh.material = new THREE.MeshStandardMaterial({ color: 0x9aa4ad, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide });
-            }
-          });
+          applyObjColors(grp, parseObjMtl(text)); // kolory z wbudowanych materiałów EasyEDA
           modelCacheRef.current.set(uuid, grp);
         } catch { /* model niedostępny — zostaje uproszczona bryła */ }
       }));

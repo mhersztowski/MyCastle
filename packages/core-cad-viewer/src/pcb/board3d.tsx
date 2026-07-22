@@ -324,13 +324,20 @@ export function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: L
       // wyśrodkowany na footprincie w XY i posadzony na powierzchni płytki w Z.
       const obj = entry.group.clone(true);
       obj.rotation.set(deg(entry.m3d.rx), deg(entry.m3d.ry), deg(entry.m3d.rz));
-      // Auto-skala: surowy .obj z EasyEDA bywa w nierealnej skali — dopasuj rozpiętość XY modelu
-      // do rozmiaru footprintu (świat mil → mm). Skala jednorodna, więc proporcje modelu zostają.
+      // Auto-skala: model .obj EasyEDA jest w realnych mm, footprint renderowany jest w skali SC=4
+      // (~40% realu). Dopasowujemy rzut XY modelu (po c_rotation baza leży na płytce) do footprintu;
+      // skala jednorodna zachowuje proporcje. Zabezpieczenie przed rozdmuchaniem przy złej orientacji.
       obj.updateMatrixWorld(true);
       const mb = new THREE.Box3().setFromObject(obj);
-      const mDiag = Math.hypot(mb.max.x - mb.min.x, mb.max.y - mb.min.y);
+      const mW = mb.max.x - mb.min.x, mH = mb.max.y - mb.min.y, mZ = mb.max.z - mb.min.z;
+      const mDiag = Math.hypot(mW, mH);
       const fpDiag = Math.hypot(Math.max(bb.w * W2MM, 0.2), Math.max(bb.h * W2MM, 0.2));
-      if (mDiag > 1e-4 && Number.isFinite(mDiag)) { const s = fpDiag / mDiag; if (s > 0 && Number.isFinite(s)) obj.scale.setScalar(s); }
+      if (mDiag > 1e-4 && Number.isFinite(mDiag)) {
+        let s = fpDiag / mDiag;
+        const maxDim = Math.max(mW, mH, mZ) * s;
+        if (maxDim > 4 * fpDiag) s *= (4 * fpDiag) / maxDim;
+        if (s > 0 && Number.isFinite(s)) obj.scale.setScalar(s);
+      }
       const holder = new THREE.Group();
       holder.add(obj);
       holder.rotation.z = deg(-(c.rotation || 0));
@@ -358,6 +365,29 @@ export function buildBoardGroup(pcbEls: FpEl[], placed: PlacedComp[], layers?: L
 // ── Read-only podgląd 3D płytki (Scene3D / SimpleViewer) ─────────────────────────
 // Bez panelu warstw — wszystkie warstwy widoczne (hidden = pusty Set). Ładuje modele
 // 3D EasyEDA asynchronicznie (cache po uuid) i przebudowuje grupę po pobraniu.
+// EasyEDA osadza materiały (newmtl/Kd) wewnątrz .obj (niestandardowo) — three OBJLoader tego nie
+// czyta, więc modele wychodzą szare. Parsujemy kolory sami i nakładamy per-materiał.
+function parseObjMtl(text: string): Map<string, THREE.Color> {
+  const map = new Map<string, THREE.Color>();
+  let cur: THREE.Color | null = null;
+  for (const raw of text.split('\n')) {
+    const p = raw.trim().split(/\s+/);
+    if (p[0] === 'newmtl') { cur = new THREE.Color(0.6, 0.6, 0.6); map.set(p[1], cur); }
+    else if (cur && p[0] === 'Kd') cur.setRGB(+p[1] || 0, +p[2] || 0, +p[3] || 0);
+  }
+  return map;
+}
+function applyObjColors(grp: THREE.Group, mtl: Map<string, THREE.Color>): void {
+  const mk = (name?: string) => new THREE.MeshStandardMaterial({ color: (name && mtl.get(name)) ? mtl.get(name)!.clone() : new THREE.Color(0x9aa4ad), roughness: 0.5, metalness: 0.25, side: THREE.DoubleSide });
+  grp.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!(mesh as unknown as { isMesh?: boolean }).isMesh || !mesh.geometry) return;
+    if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
+    const cur = mesh.material;
+    mesh.material = Array.isArray(cur) ? cur.map((m) => mk((m as THREE.Material).name)) : mk((cur as THREE.Material).name);
+  });
+}
+
 export function Pcb3DView({ pcbEls, placed, layers }: { pcbEls: FpEl[]; placed: PlacedComp[]; layers?: LayerState }): JSX.Element {
   const hidden = useMemo(() => new Set<string>(), []);
 
@@ -378,13 +408,7 @@ export function Pcb3DView({ pcbEls, placed, layers }: { pcbEls: FpEl[]; placed: 
         try {
           const text = await readModel3dObj(uuid);
           const grp = loader.parse(text);
-          grp.traverse((o) => {
-            const mesh = o as THREE.Mesh;
-            if ((mesh as unknown as { isMesh?: boolean }).isMesh && mesh.geometry) {
-              if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
-              mesh.material = new THREE.MeshStandardMaterial({ color: 0x9aa4ad, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide });
-            }
-          });
+          applyObjColors(grp, parseObjMtl(text)); // kolory z wbudowanych materiałów EasyEDA
           modelCacheRef.current.set(uuid, grp);
         } catch { /* model niedostępny — zostaje uproszczona bryła */ }
       }));
