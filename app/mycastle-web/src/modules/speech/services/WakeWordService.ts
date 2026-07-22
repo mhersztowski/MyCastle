@@ -43,48 +43,60 @@ export class WakeWordService {
   }
 
   start(): boolean {
-    if (this._isListening) return true;
+    // Już nasłuchujemy i rozpoznawanie żyje — nic nie rób.
+    if (this._isListening && this.recognition) return true;
+    this.clearRestart();
+    this.setListening(true);
+    this.beginRecognition();
+    return this._isListening; // false tylko gdy API niedostępne
+  }
+
+  // Tworzy ŚWIEŻĄ instancję rozpoznawania i uruchamia ją. Świeża instancja unika
+  // zawieszonego stanu Web Speech API po stop/abort/onend — typowego źródła „nie włącza się".
+  private beginRecognition(): void {
+    if (this.recognition) { try { this.recognition.abort(); } catch { /* ignore */ } this.recognition = null; }
 
     this.recognition = createBrowserRecognition({
       lang: this._lang,
       continuous: true,
       interimResults: true,
-      onResult: (transcript, isFinal) => {
-        this.checkWakeWord(transcript, isFinal);
-      },
+      onResult: (transcript, isFinal) => this.checkWakeWord(transcript, isFinal),
       onError: (error) => {
         console.warn('[WakeWord] Recognition error:', error);
         this._onLog?.(`onError: ${error}`);
-        // Restart on recoverable errors
-        if (error !== 'aborted' && error !== 'not-allowed') {
-          this.scheduleRestart();
-        } else {
+        // Twardy błąd uprawnień → zatrzymaj. Pozostałe (aborted/no-speech/network/audio-capture)
+        // są przejściowe — wznawiamy, jeśli nadal mamy nasłuchiwać.
+        if (error === 'not-allowed' || error === 'service-not-allowed') {
           this.setListening(false);
+        } else if (this._isListening) {
+          this.scheduleRestart();
         }
       },
       onEnd: () => {
-        this._onLog?.(`onEnd (mikrofon STOP)${this._isListening ? ' → restart za 150ms' : ''}`);
-        // Auto-restart if still supposed to be listening
-        if (this._isListening) {
-          this.scheduleRestart();
-        }
+        this._onLog?.(`onEnd (mikrofon STOP)${this._isListening ? ' → restart' : ''}`);
+        if (this._isListening) this.scheduleRestart();
       },
     });
 
     if (!this.recognition) {
       console.error('[WakeWord] SpeechRecognition not supported');
       this._onLog?.('SpeechRecognition NIEDOSTĘPNE');
-      return false;
+      this.setListening(false);
+      return;
     }
 
     try {
       this.recognition.start();
       this._onLog?.('recognition.start() (mikrofon START)');
-      this.setListening(true);
-      return true;
     } catch (err) {
-      console.error('[WakeWord] Failed to start:', err);
-      return false;
+      // „InvalidStateError" = rozpoznawanie już działa → OK. Inny błąd → ponów start.
+      if ((err as { name?: string })?.name === 'InvalidStateError') {
+        this._onLog?.('start(): już uruchomione (OK)');
+      } else {
+        console.error('[WakeWord] Failed to start:', err);
+        this._onLog?.(`start() błąd → restart: ${String(err)}`);
+        this.scheduleRestart();
+      }
     }
   }
 
@@ -129,17 +141,10 @@ export class WakeWordService {
 
   private scheduleRestart(): void {
     this.clearRestart();
+    // Świeża instancja przy każdym wznowieniu — najpewniejsze wyjście z zawieszonego stanu.
     this.restartTimeout = setTimeout(() => {
-      if (this._isListening && this.recognition) {
-        try {
-          this.recognition.start();
-          this._onLog?.('restart → recognition.start() (mikrofon START ponownie)');
-        } catch {
-          // Recognition might still be active, retry later
-          this.scheduleRestart();
-        }
-      }
-    }, 150);
+      if (this._isListening) this.beginRecognition();
+    }, 300);
   }
 
   private clearRestart(): void {
