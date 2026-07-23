@@ -126,12 +126,14 @@ export class SpeechService {
 
   private ttsProviderConfig(): Record<string, unknown> {
     const tts = this.config.tts;
-    return (tts[tts.provider] ?? tts.browser) as unknown as Record<string, unknown>;
+    const base = (tts[tts.provider] ?? tts.browser) as unknown as Record<string, unknown>;
+    return { ...base, outputVolume: tts.outputVolume ?? 1 };
   }
 
   private sttProviderConfig(): Record<string, unknown> {
     const stt = this.config.stt;
-    return (stt[stt.provider] ?? stt.browser) as unknown as Record<string, unknown>;
+    const base = (stt[stt.provider] ?? stt.browser) as unknown as Record<string, unknown>;
+    return { ...base, inputGain: stt.inputGain ?? 1 };
   }
 
   isTtsConfigured(): boolean {

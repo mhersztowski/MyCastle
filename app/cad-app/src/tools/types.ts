@@ -48,8 +48,16 @@ export type ToolName =
   | 'select'
   | 'line'
   | 'circle'
+  | 'circle3p'
+  | 'point'
   | 'arc'
+  | 'arc3p'
   | 'rect'
+  | 'rectCenter'
+  | 'polygon'
+  | 'slot'
+  | 'arcSlot'
+  | 'bspline'
   | 'polyline'
   | 'freehand'
   | 'text'
@@ -89,6 +97,12 @@ export interface PreviewGeometry {
 
 /** A live dimension annotation rendered as an HTML overlay while drawing/editing. */
 export interface DimensionLabel {
+  /**
+   * Stable identity of this parameter (e.g. 'radius', 'startAngle', 'endAngle').
+   * Lets the overlay track the active field across phase changes (np. arc:
+   * promień+kąt początkowy → kąt końcowy). Falls back to array index when omitted.
+   */
+  id?: string;
   /** Position in CAD world space */
   worldX: number;
   worldY: number;
@@ -99,6 +113,8 @@ export interface DimensionLabel {
   offsetY?: number;
   /** Visual variant */
   variant?: 'primary' | 'secondary';
+  /** Jednostka wyświetlana obok wartości. Domyślnie 'mm' (lub '°' gdy tekst zawiera °). Ustaw '' by ukryć. */
+  unit?: string;
   /** If true, clicking this label opens an inline input for direct numeric entry */
   editable?: boolean;
   /** Called with the new numeric value after the user commits an inline edit */
@@ -115,4 +131,10 @@ export interface Tool {
   onPointerUp(point: Point2D, ctx: ToolContext): void;
   onKeyDown(key: string, ctx: ToolContext): void;
   reset(): void;
+  /**
+   * Finalizuje bieżący szkic z wpisanych parametrów (Enter w polu wymiaru).
+   * Zwraca true, gdy kształt został zatwierdzony. Parametry ustawiane są przez
+   * `onEdit` etykiet wymiarów (które BLOKUJĄ wartość zamiast od razu commitować).
+   */
+  commitDraft?(ctx: ToolContext): boolean;
 }

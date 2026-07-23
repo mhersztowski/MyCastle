@@ -1,41 +1,116 @@
 import type { Point2D } from '@mhersztowski/core-cad';
-import { normalizeAngle } from '@mhersztowski/core-cad';
 import type { DimensionLabel, PreviewGeometry, Tool, ToolContext } from './types';
 
 type ArcState = 'idle' | 'center' | 'start';
 
+/** Znormalizuj kąt do zakresu (−180°, 180°] w stopniach. */
+function toDegNorm(rad: number): number {
+  let d = (rad * 180) / Math.PI;
+  while (d > 180) d -= 360;
+  while (d <= -180) d += 360;
+  return d;
+}
+
 /**
- * Arc tool: center → start point (defines radius + start angle) → end angle (CCW).
- * Three clicks: 1=center, 2=start point on arc, 3=end point on arc.
+ * Arc tool — dwie fazy edycji parametrów:
+ *  1. faza 'center' (po 1. kliku): promień + kąt początkowy (podgląd pełnego okręgu + promień).
+ *  2. faza 'start'  (po zatwierdzeniu): kąt końcowy (podgląd łuku).
+ * Zatwierdzenie fazy: klik, Enter lub przycisk ✓.
  */
 export class ArcTool implements Tool {
   name = 'arc' as const;
   private state: ArcState = 'idle';
   private center: Point2D | null = null;
-  private radius = 0;
-  private startAngle = 0;
+  private radius = 0;       // ustalony po fazie 'center'
+  private startAngle = 0;   // ustalony po fazie 'center'
   private cursor: Point2D = { x: 0, y: 0 };
+  private lockR: number | null = null;      // wpisany promień (faza 'center')
+  private lockStart: number | null = null;  // wpisany kąt początkowy w rad (faza 'center')
+  private lockEnd: number | null = null;    // wpisany kąt końcowy w rad (faza 'start')
+
+  /** Kąt kursora względem środka. */
+  private cursorAngle(): number {
+    if (!this.center) return 0;
+    return Math.atan2(this.cursor.y - this.center.y, this.cursor.x - this.center.x);
+  }
+
+  /** Promień w fazie 'center' (blokada lub odległość kursora). */
+  private effRadius(): number {
+    if (this.lockR != null) return this.lockR;
+    if (!this.center) return 0;
+    return Math.hypot(this.cursor.x - this.center.x, this.cursor.y - this.center.y);
+  }
+
+  /** Kąt początkowy w fazie 'center' (blokada lub kierunek kursora). */
+  private effStart(): number {
+    return this.lockStart != null ? this.lockStart : this.cursorAngle();
+  }
+
+  /** Kąt końcowy w fazie 'start' (blokada lub kierunek kursora). */
+  private effEnd(): number {
+    return this.lockEnd != null ? this.lockEnd : this.cursorAngle();
+  }
+
+  private ptOnCircle(angle: number, r: number): Point2D {
+    return { x: this.center!.x + Math.cos(angle) * r, y: this.center!.y + Math.sin(angle) * r };
+  }
+
+  /** Segmenty pełnego okręgu jako pary punktów (dla podglądu typu 'ghost'). */
+  private circleSegments(r: number): Array<{ a: Point2D; b: Point2D }> {
+    const segs: Array<{ a: Point2D; b: Point2D }> = [];
+    const N = 64;
+    let prev = this.ptOnCircle(0, r);
+    for (let i = 1; i <= N; i++) {
+      const p = this.ptOnCircle((i / N) * Math.PI * 2, r);
+      segs.push({ a: prev, b: p });
+      prev = p;
+    }
+    return segs;
+  }
+
+  /** Segmenty łuku start→end (CCW) jako pary punktów. */
+  private arcSegments(sa: number, ea: number, r: number): Array<{ a: Point2D; b: Point2D }> {
+    let sweep = ea - sa;
+    if (sweep <= 0) sweep += Math.PI * 2;
+    const N = Math.max(8, Math.ceil(sweep / (Math.PI / 32)));
+    const segs: Array<{ a: Point2D; b: Point2D }> = [];
+    let prev = this.ptOnCircle(sa, r);
+    for (let i = 1; i <= N; i++) {
+      const p = this.ptOnCircle(sa + (i / N) * sweep, r);
+      segs.push({ a: prev, b: p });
+      prev = p;
+    }
+    return segs;
+  }
 
   getPreview(): PreviewGeometry | null {
     if (!this.center) return null;
 
     if (this.state === 'center') {
-      // Show radial line from center to cursor
-      return { type: 'line', points: [this.center, this.cursor] };
+      // Pełny okrąg (promień) + linia promienia do punktu początkowego — jak w FreeCAD.
+      const r = this.effRadius();
+      if (r < 0.01) return { type: 'ghost', points: [], ghostSegments: [] };
+      const startPt = this.ptOnCircle(this.effStart(), r);
+      return {
+        type: 'ghost',
+        points: [],
+        ghostSegments: [...this.circleSegments(r), { a: this.center, b: startPt }],
+      };
     }
 
     if (this.state === 'start') {
-      // Show arc from startAngle to cursor angle (CCW sweep)
-      const endAngle = Math.atan2(
-        this.cursor.y - this.center.y,
-        this.cursor.x - this.center.x,
-      );
+      // Łuk start→koniec + dwie linie promieni.
+      const ea = this.effEnd();
+      const startPt = this.ptOnCircle(this.startAngle, this.radius);
+      const endPt = this.ptOnCircle(ea, this.radius);
       return {
-        type: 'arc',
-        points: [this.center],
-        radius: this.radius,
-        startAngle: this.startAngle,
-        endAngle,
+        type: 'ghost',
+        points: [],
+        ghostSegments: [
+          ...this.arcSegments(this.startAngle, ea, this.radius),
+          { a: this.center, b: startPt },
+          { a: this.center, b: endPt },
+        ],
       };
     }
 
@@ -44,64 +119,88 @@ export class ArcTool implements Tool {
 
   getDimensionLabels(): DimensionLabel[] {
     if (!this.center) return [];
-    const labels: DimensionLabel[] = [];
 
-    if (this.state === 'center' && this.radius > 0.01) {
-      // Showing radial line → display radius near cursor
-      labels.push({
-        worldX: this.cursor.x,
-        worldY: this.cursor.y,
-        text: `R: ${this.radius.toFixed(2)}`,
-        offsetX: 24, offsetY: -10,
-        variant: 'primary',
-      });
-    } else if (this.state === 'start') {
-      // Arc preview → show radius and angular span
-      const endAngle = Math.atan2(this.cursor.y - this.center.y, this.cursor.x - this.center.x);
-      let sweep = normalizeAngle(endAngle - this.startAngle);
-      const sweepDeg = (sweep * 180 / Math.PI).toFixed(1);
-      labels.push(
-        { worldX: this.cursor.x, worldY: this.cursor.y, text: `R: ${this.radius.toFixed(2)}`, offsetX: 24, offsetY: -22, variant: 'primary' },
-        { worldX: this.cursor.x, worldY: this.cursor.y, text: `∠ ${sweepDeg}°`, offsetX: 24, offsetY: -6, variant: 'secondary' },
-      );
+    if (this.state === 'center') {
+      const r = this.effRadius();
+      if (r < 0.01) return [];
+      const startPt = this.ptOnCircle(this.effStart(), r);
+      return [
+        {
+          id: 'radius',
+          worldX: startPt.x, worldY: startPt.y, text: `${r.toFixed(2)}`,
+          offsetX: 0, offsetY: 18, variant: 'primary',
+          editable: true, onEdit: (v: number) => { this.lockR = v; },
+        },
+        {
+          id: 'startAngle',
+          worldX: startPt.x, worldY: startPt.y, text: `${toDegNorm(this.effStart()).toFixed(2)} °`,
+          offsetX: 74, offsetY: -30, variant: 'secondary',
+          editable: true, onEdit: (deg: number) => { this.lockStart = (deg * Math.PI) / 180; },
+        },
+      ];
     }
 
-    return labels;
+    if (this.state === 'start') {
+      const ea = this.effEnd();
+      const endPt = this.ptOnCircle(ea, this.radius);
+      return [
+        {
+          id: 'endAngle',
+          worldX: endPt.x, worldY: endPt.y, text: `${toDegNorm(ea).toFixed(2)} °`,
+          offsetX: 40, offsetY: -8, variant: 'primary',
+          editable: true, onEdit: (deg: number) => { this.lockEnd = (deg * Math.PI) / 180; },
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  /** Zatwierdź fazę 'center' → ustal promień i kąt początkowy, przejdź do fazy 'start'. */
+  private confirmCenter(): boolean {
+    const r = this.effRadius();
+    if (r < 0.1) return false;
+    this.radius = r;
+    this.startAngle = this.effStart();
+    this.lockR = null;
+    this.lockStart = null;
+    this.state = 'start';
+    return true;
   }
 
   onPointerDown(point: Point2D, ctx: ToolContext): void {
     if (this.state === 'idle') {
       this.center = point;
+      this.cursor = point;
       this.state = 'center';
     } else if (this.state === 'center') {
-      const dx = point.x - this.center!.x;
-      const dy = point.y - this.center!.y;
-      this.radius = Math.sqrt(dx * dx + dy * dy);
-      if (this.radius < 0.1) return;
-      this.startAngle = Math.atan2(dy, dx);
-      this.state = 'start';
+      // Klik zatwierdza promień + kąt początkowy (uwzględnia ewentualne blokady z klawiatury).
+      this.cursor = point;
+      this.confirmCenter();
     } else if (this.state === 'start') {
-      const endAngle = Math.atan2(
-        point.y - this.center!.y,
-        point.x - this.center!.x,
-      );
-      ctx.project.addEntity({
-        type: 'arc',
-        cx: this.center!.x,
-        cy: this.center!.y,
-        radius: this.radius,
-        startAngle: this.startAngle,
-        endAngle,
-        layerId: ctx.project.layerSystem.getActiveId(),
-        color: 'bylayer',
-        lineType: 'bylayer',
-        lineWidth: 'bylayer',
-        visible: true,
-        locked: false,
-        extrudeHeight: 0,
-      });
-      this.reset();
+      this.cursor = point;
+      this.commitArc(this.effEnd(), ctx);
     }
+  }
+
+  private commitArc(endAngle: number, ctx: ToolContext): void {
+    if (!this.center) return;
+    ctx.project.addEntity({
+      type: 'arc',
+      cx: this.center.x, cy: this.center.y,
+      radius: this.radius, startAngle: this.startAngle, endAngle,
+      layerId: ctx.project.layerSystem.getActiveId(),
+      color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
+      visible: true, locked: false, extrudeHeight: 0,
+    });
+    this.reset();
+  }
+
+  /** Enter / ✓ — zatwierdza bieżącą fazę (center→start) lub finalizuje łuk (start). */
+  commitDraft(ctx: ToolContext): boolean {
+    if (this.state === 'center') return this.confirmCenter();
+    if (this.state === 'start' && this.center) { this.commitArc(this.effEnd(), ctx); return true; }
+    return false;
   }
 
   onPointerMove(point: Point2D, _ctx: ToolContext): void {
@@ -120,5 +219,8 @@ export class ArcTool implements Tool {
     this.radius = 0;
     this.startAngle = 0;
     this.cursor = { x: 0, y: 0 };
+    this.lockR = null;
+    this.lockStart = null;
+    this.lockEnd = null;
   }
 }

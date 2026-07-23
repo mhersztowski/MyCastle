@@ -1,5 +1,5 @@
 import type { BoundingBox2D, Point2D } from '../types';
-import type { ArcEntity, Box3dEntity, CircleEntity, Cylinder3dEntity, DimensionEntity, Entity, FreehandEntity, ImageEntity, LineEntity, PolylineEntity, RectEntity, Sphere3dEntity, TextEntity } from './types';
+import type { ArcEntity, Box3dEntity, CircleEntity, Cylinder3dEntity, DimensionEntity, Entity, FreehandEntity, ImageEntity, LineEntity, PointEntity, PolylineEntity, RectEntity, Sphere3dEntity, TextEntity } from './types';
 
 function boundsFromPoints(points: Point2D[]): BoundingBox2D {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -18,6 +18,10 @@ function lineBox(e: LineEntity): BoundingBox2D {
 
 function circleBox(e: CircleEntity): BoundingBox2D {
   return { minX: e.cx - e.radius, minY: e.cy - e.radius, maxX: e.cx + e.radius, maxY: e.cy + e.radius };
+}
+
+function pointBox(e: PointEntity): BoundingBox2D {
+  return { minX: e.x, minY: e.y, maxX: e.x, maxY: e.y };
 }
 
 function polylineBox(e: PolylineEntity): BoundingBox2D {
@@ -77,6 +81,7 @@ export function computeBoundingBox(entity: Entity): BoundingBox2D {
   switch (entity.type) {
     case 'line': return lineBox(entity);
     case 'circle': return circleBox(entity);
+    case 'point': return pointBox(entity);
     case 'polyline': return polylineBox(entity);
     case 'rect': return rectBox(entity);
     case 'arc': return arcBox(entity);

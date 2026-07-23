@@ -54,6 +54,7 @@ export function shiftEntity(entity: Entity, dx: number, dy: number): Entity {
   switch (entity.type) {
     case 'line': return { ...entity, x1: entity.x1 + dx, y1: entity.y1 + dy, x2: entity.x2 + dx, y2: entity.y2 + dy };
     case 'circle': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'point': return { ...entity, x: entity.x + dx, y: entity.y + dy };
     case 'arc': return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
     case 'rect': return { ...entity, x: entity.x + dx, y: entity.y + dy };
     case 'polyline': return { ...entity, points: entity.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
@@ -164,6 +165,12 @@ function dxfEntityLines(lines: string[], entity: Entity, layer: Layer | undefine
       pushCommon();
       lines.push('10', String(entity.cx), '20', String(entity.cy), '30', '0.0');
       lines.push('40', String(entity.radius));
+      break;
+
+    case 'point':
+      lines.push('0', 'POINT');
+      pushCommon();
+      lines.push('10', String(entity.x), '20', String(entity.y), '30', '0.0');
       break;
 
     case 'arc':
@@ -288,6 +295,14 @@ function entityToSvgElement(entity: Entity, layer: Layer | undefined): string {
 
     case 'circle':
       return `<circle cx="${entity.cx}" cy="${entity.cy}" r="${entity.radius}" ${stroke}/>`;
+
+    case 'point': {
+      const s = 3;
+      return [
+        `<line x1="${entity.x - s}" y1="${entity.y}" x2="${entity.x + s}" y2="${entity.y}" ${stroke}/>`,
+        `<line x1="${entity.x}" y1="${entity.y - s}" x2="${entity.x}" y2="${entity.y + s}" ${stroke}/>`,
+      ].join('\n');
+    }
 
     case 'arc': {
       const { cx, cy, radius, startAngle, endAngle } = entity;

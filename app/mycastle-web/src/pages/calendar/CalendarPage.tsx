@@ -21,6 +21,8 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import PsychologyIcon from '@mui/icons-material/Psychology';
+import SpaceDashboardOutlinedIcon from '@mui/icons-material/SpaceDashboardOutlined';
+import { useNavigate, useParams } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/pl';
 import { useMqtt } from '../../modules/mqttclient';
@@ -40,6 +42,8 @@ const CalendarPage: React.FC = () => {
   const { aiService } = App.instance;
   const { isConnected, isConnecting } = useMqtt();
   const { dataSource, isLoading, isDataLoaded, error, writeFile, readFile } = useFilesystem();
+  const navigate = useNavigate();
+  const { userName } = useParams<{ userName: string }>();
 
   const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
   const [currentEvent, setCurrentEvent] = useState<CurrentEvent | null>(null);
@@ -542,6 +546,15 @@ const CalendarPage: React.FC = () => {
 
           <Box sx={{ flexGrow: 1 }} />
 
+          <Tooltip title="Open Pulpit">
+            <IconButton
+              color="secondary"
+              onClick={() => userName && navigate(`/user/${userName}/pim/pulpit`)}
+              size="small"
+            >
+              <SpaceDashboardOutlinedIcon />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Save as template">
             <span>
               <IconButton

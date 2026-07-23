@@ -18,6 +18,8 @@ export class EventNode extends NodeBase<EventModel> {
   endTime?: string;
   components?: EventComponentModel[];
   recurrence?: RecurrenceModel;
+  /** Daty (YYYY-MM-DD) anulowanych wystąpień. */
+  exceptions?: string[];
 
   // Task reference
   private _taskRef: TaskNodeRef = null;
@@ -35,6 +37,7 @@ export class EventNode extends NodeBase<EventModel> {
     this.endTime = model.endTime;
     this.components = model.components;
     this.recurrence = model.recurrence;
+    this.exceptions = model.exceptions ? [...model.exceptions] : undefined;
     this.parseDates();
   }
 
@@ -222,6 +225,7 @@ export class EventNode extends NodeBase<EventModel> {
     this.endTime = model.endTime;
     this.components = model.components;
     this.recurrence = model.recurrence;
+    this.exceptions = model.exceptions ? [...model.exceptions] : undefined;
     this.parseDates();
     this.markDirty();
     return this;
@@ -281,6 +285,29 @@ export class EventNode extends NodeBase<EventModel> {
       default:
         return start.isSame(target, 'day');
     }
+  }
+
+  /** Klucz dnia (YYYY-MM-DD) na liście anulowanych wystąpień. */
+  private dayKey(date: Dayjs | Date): string { return dayjs(date).format('YYYY-MM-DD'); }
+
+  /** Czy wystąpienie w danym dniu zostało anulowane (nie usuwa z kalendarza — do wyszarzenia). */
+  isCancelledOn(date: Dayjs | Date): boolean {
+    return !!this.exceptions?.includes(this.dayKey(date));
+  }
+
+  /** Anuluj wystąpienie w danym dniu (dla eventów powtarzalnych). */
+  cancelOccurrence(date: Dayjs | Date): this {
+    const key = this.dayKey(date);
+    if (!this.exceptions) this.exceptions = [];
+    if (!this.exceptions.includes(key)) { this.exceptions.push(key); this.markDirty(); }
+    return this;
+  }
+
+  /** Przywróć wcześniej anulowane wystąpienie. */
+  restoreOccurrence(date: Dayjs | Date): this {
+    const key = this.dayKey(date);
+    if (this.exceptions?.includes(key)) { this.exceptions = this.exceptions.filter(d => d !== key); this.markDirty(); }
+    return this;
   }
 
   /** Start eventu z porą dnia z modelu, ale w dniu `date` (dla wystąpień powtarzalnych). */
@@ -378,6 +405,7 @@ export class EventNode extends NodeBase<EventModel> {
       endTime: this.endTime,
       components: this.components,
       recurrence: this.recurrence,
+      exceptions: this.exceptions && this.exceptions.length ? [...this.exceptions] : undefined,
     };
   }
 

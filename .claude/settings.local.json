@@ -97,7 +97,11 @@
       "WebFetch(domain:www.altium.com)",
       "Bash(python3 -c \"import sys,json; v=json.load\\(sys.stdin\\); print\\('name:', v['name']\\); print\\('version:', v['version']\\); print\\('type:', v.get\\('type'\\)\\); print\\('main:', v.get\\('main'\\)\\); print\\('exports:', json.dumps\\(v.get\\('exports'\\), indent=1\\)\\); print\\('dependencies:', v.get\\('dependencies'\\)\\); print\\('peerDeps:', v.get\\('peerDependencies'\\)\\)\")",
       "Bash(awk 'NR>=4326 && NR<=4420 && /<\\\\/Dialog>/{print NR\": \"$0}' DrivePage.tsx)",
-      "Bash(awk 'NR>=1760 && NR<=1960 && \\(/\\\\{elements\\\\.map/ || /\\\\{overlay\\\\}/ || /\\\\{preview /|| /<svg/ || /renderFpEl\\\\\\(/\\)' components/PcbView.tsx)"
+      "Bash(awk 'NR>=1760 && NR<=1960 && \\(/\\\\{elements\\\\.map/ || /\\\\{overlay\\\\}/ || /\\\\{preview /|| /<svg/ || /renderFpEl\\\\\\(/\\)' components/PcbView.tsx)",
+      "Bash(pnpm --filter cad-app typecheck)",
+      "Bash(pnpm --filter @mhersztowski/core-cad typecheck)",
+      "Bash(perl -0pi -e \"s/const unit = label\\\\.text\\\\.includes\\\\\\('°'\\\\\\) \\\\? '°' : 'mm';/const unit = label.unit ?? \\(label.text.includes\\('°'\\) ? '°' : 'mm'\\);/g\" src/components/DimensionOverlay.tsx)",
+      "Bash(bash -n app/cad-app/scripts/fetch-freecad-icons.sh)"
     ]
   }
 }

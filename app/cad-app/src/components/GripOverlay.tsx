@@ -15,7 +15,7 @@ function getHandles(project: Project): GripHandle[] {
     const e = project.entityRegistry.get(id);
     if (!e) continue;
     const layer = project.layerSystem.get(e.layerId);
-    if (!layer?.visible) continue;
+    if (layer && !layer.visible) continue; // pomiń tylko gdy warstwa jawnie ukryta
     switch (e.type) {
       case 'line':
         handles.push({ entityId: id, key: 'p1', wx: e.x1, wy: e.y1 });
@@ -26,6 +26,9 @@ function getHandles(project: Project): GripHandle[] {
         handles.push({ entityId: id, key: 'tr', wx: e.x + e.width,  wy: e.y });
         handles.push({ entityId: id, key: 'br', wx: e.x + e.width,  wy: e.y + e.height });
         handles.push({ entityId: id, key: 'bl', wx: e.x,            wy: e.y + e.height });
+        break;
+      case 'point':
+        handles.push({ entityId: id, key: 'pos', wx: e.x, wy: e.y });
         break;
       case 'circle':
         handles.push({ entityId: id, key: 'c',  wx: e.cx,              wy: e.cy });
@@ -113,6 +116,9 @@ function applyDrag(project: Project, entityId: string, key: string, wx: number, 
       changes = { points: pts };
       break;
     }
+    case 'point':
+      changes = { x: wx, y: wy };
+      break;
     case 'text':
       changes = { x: wx, y: wy };
       break;
@@ -138,10 +144,13 @@ interface Props {
   visible: boolean;
 }
 
-const HANDLE_SIZE = 9;
+const HANDLE_SIZE = 10;   // rozmiar widocznego kwadracika gripu
+const HIT_SIZE = 26;      // większy niewidoczny obszar trafienia — wygodny dla dotyku/pióra
 
 export function GripOverlay({ project, renderer, version: _version, visible }: Props) {
   const [, forceUpdate] = useState(0);
+  // Odczyt współrzędnych przeciąganego wierzchołka (pokazywany na żywo przy gripie).
+  const [readout, setReadout] = useState<{ sx: number; sy: number; wx: number; wy: number } | null>(null);
   const dragRef = useRef<{
     entityId: string;
     key: string;
@@ -155,6 +164,22 @@ export function GripOverlay({ project, renderer, version: _version, visible }: P
     renderer.onViewChange = () => { prev?.(); forceUpdate(v => v + 1); };
     return () => { renderer.onViewChange = prev; };
   }, [renderer]);
+
+  // Re-render on selection / entity changes — gripy muszą pojawić się natychmiast po zaznaczeniu
+  // (selekcja żyje poza stanem CadCanvas, więc bez tego nie było re-renderu aż do pan/zoom).
+  useEffect(() => {
+    const bus = project.eventBus;
+    if (!bus?.on) return;
+    const bump = () => forceUpdate(v => v + 1);
+    const unsubs = [
+      bus.on('selection:changed', bump),
+      bus.on('entity:updated', bump),
+      bus.on('entity:added', bump),
+      bus.on('entity:removed', bump),
+      bus.on('project:loaded', bump),
+    ];
+    return () => { for (const u of unsubs) u(); };
+  }, [project]);
 
   const handlePointerDown = useCallback((
     e: React.PointerEvent<HTMLDivElement>,
@@ -182,6 +207,7 @@ export function GripOverlay({ project, renderer, version: _version, visible }: P
     const { x: wx, y: wy } = renderer.screenToWorld(sx, sy);
     applyDrag(project, dragRef.current.entityId, dragRef.current.key, wx, wy);
     renderer.syncAll();
+    setReadout({ sx, sy, wx, wy });
     forceUpdate(v => v + 1);
   }, [renderer, project]);
 
@@ -209,6 +235,7 @@ export function GripOverlay({ project, renderer, version: _version, visible }: P
     });
     project.eventBus.emit('history:changed', undefined as never);
     dragRef.current = null;
+    setReadout(null);
   }, [renderer, project]);
 
   if (!visible || !renderer) return null;
@@ -228,20 +255,47 @@ export function GripOverlay({ project, renderer, version: _version, visible }: P
             onPointerUp={handlePointerUp}
             style={{
               position: 'absolute',
-              left: sx - HANDLE_SIZE / 2,
-              top:  sy - HANDLE_SIZE / 2,
-              width:  HANDLE_SIZE,
-              height: HANDLE_SIZE,
-              background: '#1e1e1e',
-              border: '1.5px solid #4fc3f7',
-              boxSizing: 'border-box',
+              left: sx - HIT_SIZE / 2,
+              top:  sy - HIT_SIZE / 2,
+              width:  HIT_SIZE,
+              height: HIT_SIZE,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'transparent',
               cursor: 'grab',
               pointerEvents: 'auto',
               touchAction: 'none',
             }}
-          />
+          >
+            {/* Widoczny znacznik gripu (mniejszy niż obszar trafienia) */}
+            <div style={{
+              width: HANDLE_SIZE,
+              height: HANDLE_SIZE,
+              background: '#1e1e1e',
+              border: '1.5px solid #4fc3f7',
+              boxSizing: 'border-box',
+            }} />
+          </div>
         );
       })}
+
+      {/* Odczyt współrzędnych przeciąganego wierzchołka. */}
+      {readout && (
+        <div style={{
+          position: 'absolute',
+          left: readout.sx + 16,
+          top: readout.sy - 34,
+          display: 'inline-flex', gap: 6,
+          background: 'rgba(10,20,30,0.9)', border: '1px solid rgba(79,195,247,0.5)',
+          borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap',
+          fontFamily: 'monospace', fontSize: 12, color: '#e8eef2',
+          pointerEvents: 'none', zIndex: 30,
+        }}>
+          <span>X: <b style={{ color: '#4fc3f7' }}>{readout.wx.toFixed(2)}</b></span>
+          <span>Y: <b style={{ color: '#4fc3f7' }}>{readout.wy.toFixed(2)}</b></span>
+        </div>
+      )}
     </div>
   );
 }

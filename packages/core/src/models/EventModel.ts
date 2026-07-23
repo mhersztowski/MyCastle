@@ -21,6 +21,8 @@ export interface EventModel {
     components?: EventComponentModel[];
     /** Reguła powtarzania. Brak = event jednorazowy. */
     recurrence?: RecurrenceModel;
+    /** Daty (YYYY-MM-DD) anulowanych wystąpień powtarzającego się eventu. */
+    exceptions?: string[];
 }
 
 export interface EventsModel {

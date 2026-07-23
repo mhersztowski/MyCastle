@@ -9,40 +9,48 @@ export class CircleTool implements Tool {
   name = 'circle' as const;
   private center: Point2D | null = null;
   private current: Point2D | null = null;
-  private lastCtx: ToolContext | null = null;
+  private lockR: number | null = null; // wpisany z klawiatury promień
+
+  private effRadius(): number {
+    if (this.lockR != null) return this.lockR;
+    return this.center && this.current ? dist(this.center, this.current) : 0;
+  }
 
   getPreview(): PreviewGeometry | null {
     if (!this.center || !this.current) return null;
-    return { type: 'circle', points: [this.center, this.current], radius: dist(this.center, this.current) };
+    return { type: 'circle', points: [this.center, this.current], radius: this.effRadius() };
   }
 
   getDimensionLabels(): DimensionLabel[] {
     if (!this.center || !this.current) return [];
-    const r = dist(this.center, this.current);
+    const r = this.effRadius();
     if (r < 0.01) return [];
     const angle = Math.atan2(this.current.y - this.center.y, this.current.x - this.center.x);
     const midX = this.center.x + Math.cos(angle) * r * 0.6;
     const midY = this.center.y + Math.sin(angle) * r * 0.6;
     return [
       {
+        id: 'radius',
         worldX: midX, worldY: midY,
         text: `R: ${r.toFixed(2)}`,
         offsetY: -14,
         variant: 'primary',
         editable: true,
-        onEdit: (newR: number) => {
-          if (!this.center || !this.lastCtx) return;
-          this.lastCtx.project.addEntity({
-            type: 'circle',
-            layerId: this.lastCtx.project.layerSystem.getActiveId(),
-            cx: this.center.x, cy: this.center.y, radius: newR,
-            color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
-            visible: true, locked: false, extrudeHeight: 0,
-          });
-          this.reset();
-        },
+        onEdit: (newR: number) => { this.lockR = newR; }, // blokuj promień (bez commitu)
       },
     ];
+  }
+
+  private commitCircle(radius: number, ctx: ToolContext): void {
+    if (!this.center || radius <= 0) { this.reset(); return; }
+    ctx.project.addEntity({
+      type: 'circle',
+      layerId: ctx.project.layerSystem.getActiveId(),
+      cx: this.center.x, cy: this.center.y, radius,
+      color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
+      visible: true, locked: false, extrudeHeight: 0,
+    });
+    this.reset();
   }
 
   onPointerDown(point: Point2D, ctx: ToolContext): void {
@@ -50,23 +58,20 @@ export class CircleTool implements Tool {
       this.center = point;
       this.current = point;
     } else {
-      const radius = dist(this.center, point);
-      if (radius > 0) {
-        ctx.project.addEntity({
-          type: 'circle',
-          layerId: ctx.project.layerSystem.getActiveId(),
-          cx: this.center.x, cy: this.center.y, radius,
-          color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
-          visible: true, locked: false, extrudeHeight: 0,
-        });
-      }
-      this.reset();
+      this.commitCircle(this.lockR ?? dist(this.center, point), ctx);
     }
   }
 
-  onPointerMove(point: Point2D, ctx: ToolContext): void {
+  commitDraft(ctx: ToolContext): boolean {
+    if (!this.center) return false;
+    const r = this.effRadius();
+    if (r <= 0) return false;
+    this.commitCircle(r, ctx);
+    return true;
+  }
+
+  onPointerMove(point: Point2D, _ctx: ToolContext): void {
     this.current = point;
-    this.lastCtx = ctx;
   }
 
   onPointerUp(): void {}
@@ -78,6 +83,6 @@ export class CircleTool implements Tool {
   reset(): void {
     this.center = null;
     this.current = null;
-    this.lastCtx = null;
+    this.lockR = null;
   }
 }

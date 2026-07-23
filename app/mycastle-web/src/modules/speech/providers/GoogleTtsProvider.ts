@@ -52,6 +52,7 @@ export class GoogleTtsProvider implements TtsProvider {
 
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio(audioUrl);
+      audio.volume = Math.max(0, Math.min(1, Number(config.outputVolume ?? 1)));
       this.currentAudio = audio;
       this._isSpeaking = true;
 

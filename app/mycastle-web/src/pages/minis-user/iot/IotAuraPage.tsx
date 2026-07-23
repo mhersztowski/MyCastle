@@ -33,6 +33,7 @@ import {
   InputLabel,
   FormControl,
   Grid,
+  Slider,
   Button,
   Divider,
   Collapse,
@@ -359,6 +360,24 @@ const IotAuraPage: React.FC = () => {
     });
   }, [ttsProvider]);
 
+  // ---- Głośność wejścia (gain mikrofonu) / wyjścia (TTS) — pola górnego poziomu stt/tts ----
+  const applyInputGain = useCallback((v: number, save: boolean) => {
+    setSpeechCfg(prev => {
+      const base = prev ?? speechService.getConfig();
+      const up: SpeechConfigModel = { ...base, stt: { ...base.stt, inputGain: v } };
+      if (save) speechService.saveConfig(up).catch(() => {});
+      return up;
+    });
+  }, [speechService]);
+  const applyOutputVolume = useCallback((v: number, save: boolean) => {
+    setSpeechCfg(prev => {
+      const base = prev ?? speechService.getConfig();
+      const up: SpeechConfigModel = { ...base, tts: { ...base.tts, outputVolume: v } };
+      if (save) speechService.saveConfig(up).catch(() => {});
+      return up;
+    });
+  }, [speechService]);
+
   // ---- Zapis wszystkich kluczy / konfiguracji ----
   const saveAll = useCallback(async () => {
     setSaving(true);
@@ -515,7 +534,7 @@ const IotAuraPage: React.FC = () => {
           },
           duration: 800,
           minRecordingTime: 500,
-        }, inputDeviceRef.current || undefined).catch(() => done(''));
+        }, inputDeviceRef.current || undefined, fullCfg.inputGain ?? 1).catch(() => done(''));
       }
     });
   }, [speechService]);
@@ -950,6 +969,7 @@ const IotAuraPage: React.FC = () => {
         await recorder.start(
           { onSilenceDetected: () => finishCloudUtteranceRef.current(), duration: 800, minRecordingTime: 500 },
           inputDeviceRef.current || undefined,
+          sttFull.inputGain ?? 1,
         );
       } catch (err) {
         console.warn('[Aura] Brak dostępu do mikrofonu:', err);
@@ -1193,7 +1213,7 @@ const IotAuraPage: React.FC = () => {
         },
         duration: 700,
         minRecordingTime: 400,
-      }, inputDeviceRef.current || undefined).catch((e) => {
+      }, inputDeviceRef.current || undefined, fullCfg.inputGain ?? 1).catch((e) => {
         dbgRef.current(`cloudWake recorder błąd: ${e instanceof Error ? e.message : String(e)}`);
         cloudWakeRecorderRef.current = null;
         setWakeActive(false);
@@ -1548,6 +1568,38 @@ const IotAuraPage: React.FC = () => {
                 ))}
               </Select>
             </FormControl>
+          </Grid>
+
+          {/* Siła sygnału: wzmocnienie wejścia (mikrofon) + głośność wyjścia (TTS). */}
+          <Grid item xs={12} sm={6} md={6}>
+            <Typography variant="caption" color="text.secondary">
+              Wzmocnienie mikrofonu (wejście): {(speechCfg?.stt.inputGain ?? 1).toFixed(1)}×
+            </Typography>
+            <Slider
+              size="small"
+              min={0}
+              max={3}
+              step={0.1}
+              marks={[{ value: 1, label: '1×' }]}
+              value={speechCfg?.stt.inputGain ?? 1}
+              onChange={(_, v) => applyInputGain(v as number, false)}
+              onChangeCommitted={(_, v) => applyInputGain(v as number, true)}
+            />
+          </Grid>
+
+          <Grid item xs={12} sm={6} md={6}>
+            <Typography variant="caption" color="text.secondary">
+              Głośność mowy (wyjście): {Math.round((speechCfg?.tts.outputVolume ?? 1) * 100)}%
+            </Typography>
+            <Slider
+              size="small"
+              min={0}
+              max={1}
+              step={0.05}
+              value={speechCfg?.tts.outputVolume ?? 1}
+              onChange={(_, v) => applyOutputVolume(v as number, false)}
+              onChangeCommitted={(_, v) => applyOutputVolume(v as number, true)}
+            />
           </Grid>
         </Grid>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>

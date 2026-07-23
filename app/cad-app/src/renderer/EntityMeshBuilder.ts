@@ -287,6 +287,22 @@ export function buildEntityObject(entity: Entity, layer: Layer | undefined, isSe
       return line;
     }
 
+    case 'point': {
+      // Marker „+×" (mały krzyżyk) w jednostkach świata.
+      const s = 3;
+      const d = s * 0.7071;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([
+        entity.x - s, entity.y, 0, entity.x + s, entity.y, 0,
+        entity.x, entity.y - s, 0, entity.x, entity.y + s, 0,
+        entity.x - d, entity.y - d, 0, entity.x + d, entity.y + d, 0,
+        entity.x - d, entity.y + d, 0, entity.x + d, entity.y - d, 0,
+      ], 3));
+      const seg = new THREE.LineSegments(geo, mat);
+      seg.userData['entityId'] = entity.id;
+      return seg;
+    }
+
     case 'rect': {
       const { x, y, width: w, height: h } = entity;
       const geo = new THREE.BufferGeometry();

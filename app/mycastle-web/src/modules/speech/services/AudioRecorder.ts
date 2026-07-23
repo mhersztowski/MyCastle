@@ -23,6 +23,8 @@ export class AudioRecorder {
   // Silence detection
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
+  // Wzmocnienie wejścia (gain) — osobny kontekst przetwarzania mikrofonu.
+  private gainContext: AudioContext | null = null;
   private silenceCheckTimer: number | null = null;
   private silenceStart: number | null = null;
   private recordingStartTime = 0;
@@ -38,7 +40,7 @@ export class AudioRecorder {
     return this._speechDetected;
   }
 
-  async start(silenceOptions?: SilenceDetectionOptions, deviceId?: string): Promise<void> {
+  async start(silenceOptions?: SilenceDetectionOptions, deviceId?: string, inputGain = 1): Promise<void> {
     if (this._isRecording) return;
 
     const audioConstraints: MediaTrackConstraints | boolean = deviceId
@@ -50,7 +52,23 @@ export class AudioRecorder {
       ? 'audio/webm;codecs=opus'
       : 'audio/webm';
 
-    this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
+    // Wzmocnienie sygnału: routujemy mikrofon przez GainNode i nagrywamy wzmocniony strumień.
+    // Detekcja ciszy działa dalej na surowym `this.stream`.
+    let recordStream: MediaStream = this.stream;
+    if (inputGain && Math.abs(inputGain - 1) > 0.01) {
+      try {
+        this.gainContext = new AudioContext();
+        const src = this.gainContext.createMediaStreamSource(this.stream);
+        const gainNode = this.gainContext.createGain();
+        gainNode.gain.value = Math.max(0, Math.min(4, inputGain));
+        const dest = this.gainContext.createMediaStreamDestination();
+        src.connect(gainNode);
+        gainNode.connect(dest);
+        recordStream = dest.stream;
+      } catch { recordStream = this.stream; }
+    }
+
+    this.mediaRecorder = new MediaRecorder(recordStream, { mimeType });
     this.chunks = [];
 
     this.mediaRecorder.ondataavailable = (e) => {
@@ -160,6 +178,10 @@ export class AudioRecorder {
     if (this.audioContext) {
       this.audioContext.close().catch(() => {});
       this.audioContext = null;
+    }
+    if (this.gainContext) {
+      this.gainContext.close().catch(() => {});
+      this.gainContext = null;
     }
     this.analyser = null;
     this.silenceStart = null;

@@ -421,6 +421,8 @@ function outlineDistanceToEntity(pt: Pt, entity: Entity): number {
     case 'cylinder3d':
     case 'sphere3d':
       return Math.abs(Math.hypot(pt.x - entity.cx, pt.y - entity.cy) - entity.radius);
+    case 'point':
+      return Math.hypot(pt.x - entity.x, pt.y - entity.y);
     case 'arc':
       return Math.abs(Math.hypot(pt.x - entity.cx, pt.y - entity.cy) - entity.radius);
     case 'rect':

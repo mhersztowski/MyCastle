@@ -88,7 +88,11 @@ import {
   EmailRounded as EmailIcon,
   CheckRounded as CheckIcon,
   FormatSizeRounded as TextSizeIcon,
+  VolumeUpRounded as VolumeUpIcon,
+  VolumeOffRounded as VolumeOffIcon,
 } from '@mui/icons-material';
+import { App } from '../../App';
+import { setOccurrenceCancelled } from '../calendar/eventOccurrence';
 import { readUserJson, readUserFileText } from '../../services/userJson';
 import { runBrowserComponent, type RunHandle } from '../../modules/component-runner/runBrowserComponent';
 
@@ -626,11 +630,24 @@ const imgTileSx = (glow: string) => ({
 /* ================================================================== *
  *  Widget: Kalendarz + zbliżające się eventy
  * ================================================================== */
-function CalendarWidget({ userName, config }: { userName: string; config?: WidgetConfig }) {
+function CalendarWidget({ userName, config, custom }: { userName: string; config?: WidgetConfig; custom?: boolean }) {
   const navigate = useNavigate();
   const pal = usePal();
-  const { dataSource } = useFilesystem();
+  const { dataSource, writeFile } = useFilesystem();
+  // Menu kontekstowe wystąpienia (aktywne tylko poza trybem Custom).
+  const [evtMenu, setEvtMenu] = useState<{ x: number; y: number; event: EventNode; date: Dayjs } | null>(null);
+  const cancelOcc = async (cancel: boolean) => {
+    if (!evtMenu) return;
+    const { event, date } = evtMenu; setEvtMenu(null);
+    try { await setOccurrenceCancelled(writeFile, dataSource.events, event, date, cancel); } catch { /* ignore */ }
+  };
   const [month, setMonth] = useState<Dayjs>(() => dayjs().startOf('month'));
+  // Tik co minutę — odświeża listę „zbliżających się", by eventy z minioną godziną same znikały.
+  const [nowTick, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((t) => t + 1), 60000);
+    return () => clearInterval(id);
+  }, []);
   const today = dayjs();
 
   // eventy z bieżącego miesiąca → kropki na dniach (uwzględnia powtórzenia)
@@ -645,20 +662,25 @@ function CalendarWidget({ userName, config }: { userName: string; config?: Widge
     return map;
   }, [dataSource.events, month]);
 
-  // zbliżające się eventy (od dziś), z rozwinięciem powtórzeń na najbliższe 60 dni
+  // zbliżające się eventy (od dziś), z rozwinięciem powtórzeń na najbliższe 60 dni.
+  // Eventy z konkretną godziną, która już minęła, są pomijane (całodniowe dzisiejsze zostają).
   const upcoming = useMemo(() => {
-    const startOfToday = today.startOf('day');
+    const now = dayjs();
+    const startOfToday = now.startOf('day');
     const out: { event: EventNode; date: Dayjs }[] = [];
     for (let i = 0; i < 60 && out.length < 30; i++) {
       const day = startOfToday.add(i, 'day');
       for (const e of dataSource.events) {
-        if (e.occursOn(day)) out.push({ event: e, date: e.getStartOn(day) ?? day });
+        if (!e.occursOn(day)) continue;
+        const start = e.getStartOn(day);
+        if (start && start.isBefore(now)) continue; // godzina już minęła → usuń z listy
+        out.push({ event: e, date: start ?? day });
       }
     }
     out.sort((a, b) => a.date.diff(b.date));
     return out.slice(0, 6);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataSource.events]);
+  }, [dataSource.events, nowTick]);
 
   // siatka dni miesiąca (pon–niedz)
   const days = useMemo(() => {
@@ -670,6 +692,62 @@ function CalendarWidget({ userName, config }: { userName: string; config?: Widge
     for (let d = 1; d <= total; d++) cells.push(first.date(d));
     return cells;
   }, [month]);
+
+  // ── Zapowiedzi głosowe (TTS) ──────────────────────────────────────────────
+  // Używa TEGO SAMEGO serwisu co Iot/Aura (App.instance.speechService → wspólna konfiguracja:
+  // provider/model TTS, głos, a pośrednio STT/AI). Mówi 5 minut przed startem eventu oraz w momencie
+  // startu: nazwę eventu (lub opis, jeśli nazwa pusta).
+  const TTS_KEY = `pulpit.calendarTts.${userName}`;
+  const [ttsOn, setTtsOn] = useState<boolean>(() => { try { return localStorage.getItem(TTS_KEY) !== '0'; } catch { return true; } });
+  const toggleTts = () => {
+    const nv = !ttsOn;
+    setTtsOn(nv);
+    try { localStorage.setItem(TTS_KEY, nv ? '1' : '0'); } catch { /* ignore */ }
+    // Kliknięcie = gest użytkownika → odblokowuje audio (autoplay) i potwierdza, że TTS działa.
+    if (nv) App.instance.speechService.speak({ text: 'Zapowiedzi kalendarza włączone' }).catch(() => {});
+  };
+  const announcedRef = useRef<Set<string>>(new Set());
+  const eventsRef = useRef(dataSource.events); eventsRef.current = dataSource.events;
+  // Kolejka TTS: zapowiedzi odtwarzane SEKWENCYJNIE (łańcuch obietnic, jak w Iot/Aura), żeby dwa
+  // eventy w tym samym czasie nie przerywały się nawzajem (co powodowało ciszę).
+  const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
+  const enqueueTts = useCallback((text: string) => {
+    ttsChainRef.current = ttsChainRef.current
+      .then(() => App.instance.speechService.speak({ text }))
+      .catch(() => { /* provider niedostępny/niekonfigurowany */ });
+  }, []);
+  useEffect(() => {
+    if (!ttsOn) return;
+    App.instance.speechService.loadConfig().catch(() => {}); // upewnij się, że konfiguracja TTS jest wczytana
+    const check = () => {
+      const now = dayjs();
+      // dziś i jutro (obejmuje okno tuż przed północą)
+      for (const day of [now.startOf('day'), now.add(1, 'day').startOf('day')]) {
+        for (const e of eventsRef.current) {
+          if (!e.occursOn(day)) continue;
+          if (e.isCancelledOn(day)) continue; // anulowane wystąpienie — nie zapowiadamy
+          const start = e.getStartOn(day);
+          if (!start) continue; // event całodniowy (bez godziny) — pomijamy
+          const content = (e.name?.trim() || e.description?.trim() || 'Wydarzenie').slice(0, 200);
+          const key = `${e.name}|${start.format('YYYY-MM-DDTHH:mm')}`;
+          const diffMin = start.diff(now, 'minute', true);
+          // 5 minut przed (okno ~1 min; interwał 30 s → zawsze trafi)
+          if (diffMin <= 5 && diffMin > 4 && !announcedRef.current.has(`${key}:5`)) {
+            announcedRef.current.add(`${key}:5`);
+            enqueueTts(`Za 5 min zaczynasz Event: ${content}`);
+          }
+          // start eventu
+          if (diffMin <= 0 && diffMin > -1 && !announcedRef.current.has(`${key}:0`)) {
+            announcedRef.current.add(`${key}:0`);
+            enqueueTts(`Zaczyna się Event: ${content}`);
+          }
+        }
+      }
+    };
+    check();
+    const id = setInterval(check, 30000);
+    return () => clearInterval(id);
+  }, [ttsOn, enqueueTts]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1.5, gap: 1 }}>
@@ -726,18 +804,27 @@ function CalendarWidget({ userName, config }: { userName: string; config?: Widge
       <Divider sx={{ borderColor: pal.subtle }} />
 
       {/* zbliżające się eventy */}
-      <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.55, letterSpacing: 0.4 }}>
-        {config?.title?.toUpperCase() || 'ZBLIŻAJĄCE SIĘ'}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.55, letterSpacing: 0.4, flex: 1 }}>
+          {config?.title?.toUpperCase() || 'ZBLIŻAJĄCE SIĘ'}
+        </Typography>
+        <Tooltip title={ttsOn ? 'Zapowiedzi głosowe: wł. (5 min przed i o starcie)' : 'Zapowiedzi głosowe: wył.'}>
+          <IconButton size="small" onClick={toggleTts} sx={{ color: ttsOn ? '#7fd1ff' : 'text.disabled', p: 0.25 }}>
+            {ttsOn ? <VolumeUpIcon sx={{ fontSize: 16 }} /> : <VolumeOffIcon sx={{ fontSize: 16 }} />}
+          </IconButton>
+        </Tooltip>
+      </Box>
       <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
         {upcoming.length === 0 && (
           <Typography variant="body2" sx={{ opacity: 0.5, mt: 1 }}>Brak nadchodzących wydarzeń.</Typography>
         )}
         {upcoming.map(({ event: e, date: d }, i) => {
+          const cancelled = e.isCancelledOn(d);
           return (
             <Box
               key={i}
               onClick={() => navigate(`/user/${userName}/pim/calendar`)}
+              onContextMenu={custom ? undefined : (ev) => { ev.preventDefault(); ev.stopPropagation(); setEvtMenu({ x: ev.clientX, y: ev.clientY, event: e, date: d }); }}
               sx={{
                 display: 'flex',
                 alignItems: 'center',
@@ -746,6 +833,8 @@ function CalendarWidget({ userName, config }: { userName: string; config?: Widge
                 borderRadius: 2,
                 cursor: 'pointer',
                 border: `1px solid ${pal.subtle}`,
+                opacity: cancelled ? 0.4 : 1, // anulowane wystąpienie — wyszarzone (kanał alfa)
+                textDecoration: cancelled ? 'line-through' : 'none',
                 '&:hover': { background: pal.hover },
               }}
             >
@@ -774,6 +863,18 @@ function CalendarWidget({ userName, config }: { userName: string; config?: Widge
           );
         })}
       </Box>
+
+      {/* Menu kontekstowe wystąpienia (poza trybem Custom): anuluj/przywróć dany dzień. */}
+      <Menu
+        open={!!evtMenu}
+        onClose={() => setEvtMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={evtMenu ? { top: evtMenu.y, left: evtMenu.x } : undefined}
+      >
+        {evtMenu && (evtMenu.event.isCancelledOn(evtMenu.date)
+          ? <MenuItem onClick={() => void cancelOcc(false)}><ListItemIcon><CheckIcon fontSize="small" /></ListItemIcon><ListItemText>Przywróć wystąpienie</ListItemText></MenuItem>
+          : <MenuItem onClick={() => void cancelOcc(true)}><ListItemIcon><DeleteIcon fontSize="small" /></ListItemIcon><ListItemText>Usuń wystąpienie</ListItemText></MenuItem>)}
+      </Menu>
     </Box>
   );
 }
@@ -1628,7 +1729,7 @@ function WidgetFrame({
         {widget.kind === 'drive-fav' && <DriveFavWidget userName={userName} />}
         {widget.kind === 'immich' && <ImmichWidget config={widget.config} />}
         {widget.kind === 'gphotos' && <GPhotosWidget config={widget.config} />}
-        {widget.kind === 'calendar' && <CalendarWidget userName={userName} config={widget.config} />}
+        {widget.kind === 'calendar' && <CalendarWidget userName={userName} config={widget.config} custom={custom} />}
         {widget.kind === 'rss' && <RssWidget config={widget.config} />}
         {widget.kind === 'clock' && <ClockWidget config={widget.config} />}
         {widget.kind === 'weather' && <WeatherWidget config={widget.config} />}

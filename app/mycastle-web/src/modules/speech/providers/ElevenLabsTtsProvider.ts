@@ -18,6 +18,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
   private currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private currentUrl: string | null = null;
   private _isSpeaking = false;
+  private volume = 1; // głośność wyjścia (0–1), ustawiana z config przy speak()
 
   get isSpeaking(): boolean {
     return this._isSpeaking;
@@ -25,6 +26,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
 
   async speak(request: TtsRequest, config: Record<string, unknown>): Promise<void> {
     this.stop();
+    this.volume = Math.max(0, Math.min(1, Number(config.outputVolume ?? 1)));
 
     const apiKey = config.apiKey as string;
     if (!apiKey) throw new Error('ElevenLabs TTS: brak klucza API');
@@ -68,6 +70,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
     return new Promise<void>((resolve, reject) => {
       const mediaSource = new MediaSource();
       const audio = new Audio();
+      audio.volume = this.volume;
       const url = URL.createObjectURL(mediaSource);
       this.currentAudio = audio;
       this.currentUrl = url;
@@ -136,6 +139,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
     const audioUrl = URL.createObjectURL(blob);
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio(audioUrl);
+      audio.volume = this.volume;
       this.currentAudio = audio;
       this.currentUrl = audioUrl;
       this._isSpeaking = true;

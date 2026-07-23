@@ -7,6 +7,8 @@ export type SttProviderType = 'openai' | 'browser' | 'google' | 'elevenlabs';
 
 export interface TtsConfig {
   provider: TtsProviderType;
+  /** Głośność odtwarzania TTS (0–1). Domyślnie 1. */
+  outputVolume?: number;
   openai: {
     apiKey: string;
     baseUrl: string;
@@ -38,6 +40,8 @@ export interface TtsConfig {
 
 export interface SttConfig {
   provider: SttProviderType;
+  /** Wzmocnienie sygnału mikrofonu (gain). 1 = bez zmian; >1 głośniej, <1 ciszej. Domyślnie 1. */
+  inputGain?: number;
   openai: {
     apiKey: string;
     baseUrl: string;
@@ -99,6 +103,7 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfigModel = {
   type: 'speech_config',
   tts: {
     provider: 'browser',
+    outputVolume: 1,
     openai: {
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
@@ -127,6 +132,7 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfigModel = {
   },
   stt: {
     provider: 'browser',
+    inputGain: 1,
     openai: {
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',

@@ -12,8 +12,16 @@ import { ScaleBar } from './ScaleBar';
 import { SelectTool } from '../tools/SelectTool';
 import { LineTool } from '../tools/LineTool';
 import { CircleTool } from '../tools/CircleTool';
+import { Circle3PointTool } from '../tools/Circle3PointTool';
+import { PointTool } from '../tools/PointTool';
 import { ArcTool } from '../tools/ArcTool';
+import { Arc3PointTool } from '../tools/Arc3PointTool';
 import { RectTool } from '../tools/RectTool';
+import { RectCenterTool } from '../tools/RectCenterTool';
+import { polygonTool } from '../tools/PolygonTool';
+import { SlotTool } from '../tools/SlotTool';
+import { ArcSlotTool } from '../tools/ArcSlotTool';
+import { bsplineTool } from '../tools/BSplineTool';
 import { PolylineTool } from '../tools/PolylineTool';
 import { MoveTool } from '../tools/MoveTool';
 import { CopyTool } from '../tools/CopyTool';
@@ -28,7 +36,7 @@ import { Sphere3dTool } from '../tools/Sphere3dTool';
 import { freehandTool } from '../tools/FreehandTool';
 import { textTool } from '../tools/TextTool';
 import { imageTool } from '../tools/ImageTool';
-import type { DimensionLabel, PenInput, Tool, ToolName } from '../tools/types';
+import type { DimensionLabel, PenInput, PreviewGeometry, Tool, ToolName } from '../tools/types';
 import { DEFAULT_PEN_INPUT } from '../tools/types';
 import type { ActiveTemplate } from './RepositoryPanel';
 
@@ -60,8 +68,16 @@ const tools: Record<ToolName, Tool> = {
   select: new SelectTool(),
   line: new LineTool(),
   circle: new CircleTool(),
+  circle3p: new Circle3PointTool(),
+  point: new PointTool(),
   arc: new ArcTool(),
+  arc3p: new Arc3PointTool(),
   rect: new RectTool(),
+  rectCenter: new RectCenterTool(),
+  polygon: polygonTool,
+  slot: new SlotTool(),
+  arcSlot: new ArcSlotTool(),
+  bspline: bsplineTool,
   polyline: new PolylineTool(),
   freehand: freehandTool,
   text: textTool,
@@ -83,6 +99,8 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   const rendererRef = useRef<CadRenderer | null>(null);
   const prevToolRef = useRef<ToolName>(activeTool);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
+  const [cursorActive, setCursorActive] = useState(false); // kursor nad kanwą (do krzyżyka)
+  const [previewGeom, setPreviewGeom] = useState<PreviewGeometry | null>(null); // podgląd rysowanego kształtu (kropki wierzchołków)
   const placementDataRef = useRef<PlacementData | null>(null);
 
   const mouseRef = useRef({ isPanning: false, lastX: 0, lastY: 0, isDown: false });
@@ -175,6 +193,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       tools[prevToolRef.current].reset();
       prevToolRef.current = activeTool;
       setDimLabels([]);
+      setPreviewGeom(null);
     }
   }, [activeTool]);
 
@@ -293,9 +312,12 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       renderer.movePlacement(snap.point.x, snap.point.y);
     }
 
+    setCursorActive(true);
     const tool = tools[activeTool];
     tool.onPointerMove(snap.point, { project, snapResult: snap, pen, pixelToWorld: rendererRef.current?.getPixelToWorld() ?? 1 });
-    renderer.setPreview(tool.getPreview());
+    const prev = tool.getPreview();
+    renderer.setPreview(prev);
+    setPreviewGeom(prev);
     setDimLabels(tool.getDimensionLabels?.() ?? []);
   }, [activeTool, project, getSnapPoint, placementTemplate]);
 
@@ -358,7 +380,9 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     const tool = tools[activeTool];
     tool.onPointerDown(snap.point, { project, snapResult: snap, pen, pixelToWorld: rendererRef.current?.getPixelToWorld() ?? 1 });
-    renderer.setPreview(tool.getPreview());
+    const prev = tool.getPreview();
+    renderer.setPreview(prev);
+    setPreviewGeom(prev);
     renderer.syncAll();
     setDimLabels(tool.getDimensionLabels?.() ?? []);
     onLastPoint?.(snap.point);
@@ -455,6 +479,23 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     });
   const overlayLabels = [...committedDimLabels, ...dimLabels];
 
+  // Krzyżyk kursora (przy narzędziach rysowania) + kropki wierzchołków polyline/rect. Rzutowane
+  // z world→screen na żywo, więc podążają za pan/zoom przy re-renderze (cursorWorld/zoomTick).
+  const rendererNow = rendererRef.current;
+  const crosshair = (!is3d && rendererNow && cursorActive && activeTool !== 'select')
+    ? rendererNow.worldToScreen(cursorWorld.x, cursorWorld.y) : null;
+  const vertexDots: { x: number; y: number }[] = [];
+  if (!is3d && rendererNow && previewGeom) {
+    if (previewGeom.type === 'polyline') {
+      for (const p of previewGeom.points) vertexDots.push(rendererNow.worldToScreen(p.x, p.y));
+    } else if (previewGeom.type === 'rect' && previewGeom.points.length >= 2) {
+      const a = previewGeom.points[0], b = previewGeom.points[1];
+      for (const c of [[a.x, a.y], [b.x, a.y], [b.x, b.y], [a.x, b.y]] as [number, number][]) {
+        vertexDots.push(rendererNow.worldToScreen(c[0], c[1]));
+      }
+    }
+  }
+
   return (
     <Box
       sx={{ width: '100%', height: '100%', position: 'relative', outline: 'none' }}
@@ -467,7 +508,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
-        onPointerLeave={() => setPenInput(null)}
+        onPointerLeave={() => { setPenInput(null); setCursorActive(false); }}
         onContextMenu={e => e.preventDefault()}
       />
       {!is3d && (
@@ -490,6 +531,23 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
             renderer.setPreview(tool.getPreview());
             renderer.syncAll();
             setDimLabels(tool.getDimensionLabels?.() ?? []);
+          }}
+          onCommitDraft={() => {
+            const renderer = rendererRef.current;
+            const tool = tools[activeTool];
+            if (!renderer) return;
+            const ok = tool.commitDraft?.({
+              project,
+              snapResult: { point: { x: 0, y: 0 }, mode: 'nearest' },
+              pen: penInput ?? DEFAULT_PEN_INPUT,
+              pixelToWorld: renderer.getPixelToWorld() ?? 1,
+            });
+            if (ok) {
+              renderer.setPreview(tool.getPreview());
+              renderer.syncAll();
+              setPreviewGeom(null);
+              setDimLabels(tool.getDimensionLabels?.() ?? []);
+            }
           }}
         />
       )}
@@ -539,6 +597,22 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         {cursorWorld.x.toFixed(2)}, {cursorWorld.y.toFixed(2)}
         {is3d && <span style={{ marginLeft: 8, color: '#4fc3f7' }}>3D</span>}
       </Box>
+
+      {/* Krzyżyk kursora + odczyt pozycji we współrzędnych układu (przy narzędziach rysowania) */}
+      {crosshair && (
+        <>
+          <Box sx={{ position: 'absolute', left: 0, top: crosshair.y, width: '100%', borderTop: '1px dashed rgba(120,200,255,0.4)', pointerEvents: 'none' }} />
+          <Box sx={{ position: 'absolute', top: 0, left: crosshair.x, height: '100%', borderLeft: '1px dashed rgba(120,200,255,0.4)', pointerEvents: 'none' }} />
+          <Box sx={{ position: 'absolute', left: crosshair.x + 12, top: crosshair.y + 10, bgcolor: 'rgba(0,0,0,0.72)', color: '#7fd1ff', fontFamily: 'monospace', fontSize: 11, px: 0.75, py: '1px', borderRadius: 1, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+            X {cursorWorld.x.toFixed(2)}  Y {cursorWorld.y.toFixed(2)}
+          </Box>
+        </>
+      )}
+
+      {/* Kropki wierzchołków rysowanej polyline / prostokąta */}
+      {vertexDots.map((d, i) => (
+        <Box key={i} sx={{ position: 'absolute', left: d.x - 3.5, top: d.y - 3.5, width: 7, height: 7, borderRadius: '50%', bgcolor: '#7fd1ff', border: '1.5px solid #fff', boxSizing: 'border-box', pointerEvents: 'none' }} />
+      ))}
     </Box>
   );
 }

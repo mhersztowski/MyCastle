@@ -28,6 +28,12 @@ export interface CircleEntity extends EntityBase {
   radius: number;
 }
 
+export interface PointEntity extends EntityBase {
+  type: 'point';
+  x: number;
+  y: number;
+}
+
 export interface PolylineEntity extends EntityBase {
   type: 'polyline';
   points: Point2D[];
@@ -136,6 +142,7 @@ export interface Sphere3dEntity extends EntityBase {
 export type Entity =
   | LineEntity
   | CircleEntity
+  | PointEntity
   | PolylineEntity
   | RectEntity
   | ArcEntity
@@ -151,6 +158,7 @@ export type Entity =
 export type EntityInput =
   | Omit<LineEntity, 'id' | 'boundingBox'>
   | Omit<CircleEntity, 'id' | 'boundingBox'>
+  | Omit<PointEntity, 'id' | 'boundingBox'>
   | Omit<PolylineEntity, 'id' | 'boundingBox'>
   | Omit<RectEntity, 'id' | 'boundingBox'>
   | Omit<ArcEntity, 'id' | 'boundingBox'>

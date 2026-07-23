@@ -24,6 +24,7 @@ export class BrowserTtsProvider implements TtsProvider {
     utterance.lang = config.lang as string || 'pl-PL';
     utterance.rate = request.speed ?? config.rate as number ?? 1.0;
     utterance.pitch = config.pitch as number ?? 1.0;
+    utterance.volume = Math.max(0, Math.min(1, Number(config.outputVolume ?? 1)));
 
     const voiceURI = config.voiceURI as string;
     if (voiceURI) {

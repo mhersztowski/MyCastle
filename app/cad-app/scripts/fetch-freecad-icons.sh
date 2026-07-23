@@ -11,6 +11,8 @@ mkdir -p "$OUT_DIR"
 BASES=(
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/PartDesign/Gui/Resources/icons"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons"
+  "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons/geometry"
+  "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons/tools"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Part/Gui/Resources/icons"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Draft/Resources/icons"
 )
@@ -41,6 +43,30 @@ declare -a ENTRIES=(
   "datum_plane|PartDesign_Plane.svg,Draft_Plane.svg"
   "datum_cs|PartDesign_CoordinateSystem.svg,PartDesign_LocalCoordinateSystem.svg,Draft_WorkingPlaneProxy.svg"
   "sketch|Sketcher_NewSketch.svg,PartDesign_NewSketch.svg,Sketcher_Sketch.svg,Draft_Sketch.svg"
+
+  # ── Narzędzia 2D Sketchera (Toolbar edytora szkicu) ──────────────────────────
+  "line|Sketcher_CreateLine.svg"
+  "point|Sketcher_CreatePoint.svg"
+  "circle|Sketcher_CreateCircle.svg"
+  "circle_3p|Sketcher_Create3PointCircle.svg,Sketcher_CreateCircle_3points.svg"
+  "arc|Sketcher_CreateArc.svg"
+  "arc_3p|Sketcher_Create3PointArc.svg,Sketcher_CreateArc_3points.svg"
+  "rect|Sketcher_CreateRectangle.svg"
+  "rect_center|Sketcher_CreateRectangle_Center.svg,Sketcher_CreateRectangleCenter.svg,Sketcher_CreateCenteredRectangle.svg"
+  "polyline|Sketcher_CreatePolyline.svg"
+  "polygon_triangle|Sketcher_CreateTriangle.svg"
+  "polygon_square|Sketcher_CreateSquare.svg"
+  "polygon_pentagon|Sketcher_CreatePentagon.svg"
+  "polygon_hexagon|Sketcher_CreateHexagon.svg"
+  "polygon_heptagon|Sketcher_CreateHeptagon.svg"
+  "polygon_octagon|Sketcher_CreateOctagon.svg"
+  "polygon_regular|Sketcher_CreateRegularPolygon.svg"
+  "slot|Sketcher_CreateSlot.svg"
+  "arc_slot|Sketcher_CreateArcSlot.svg"
+  "bspline|Sketcher_CreateBSpline.svg"
+  "bspline_periodic|Sketcher_Create_Periodic_BSpline.svg,Sketcher_CreatePeriodicBSpline.svg"
+  "bspline_knots|Sketcher_CreateBSplineByInterpolation.svg"
+  "bspline_knots_periodic|Sketcher_CreatePeriodicBSplineByInterpolation.svg"
 )
 
 ok=0

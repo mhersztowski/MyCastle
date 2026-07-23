@@ -21,9 +21,12 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import RepeatIcon from '@mui/icons-material/Repeat';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import EventBusyIcon from '@mui/icons-material/EventBusy';
+import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import { EventNode, TaskSequenceComponentModel } from '@mhersztowski/core';
 import { Dayjs } from 'dayjs';
 import { useFilesystem } from '../../modules/filesystem';
+import { setOccurrenceCancelled } from './eventOccurrence';
 
 interface EventListItemProps {
   event: EventNode;
@@ -38,12 +41,14 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onIns
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [expanded, setExpanded] = useState(false);
   const menuOpen = Boolean(anchorEl);
-  const { dataSource } = useFilesystem();
+  const { dataSource, writeFile } = useFilesystem();
 
   // Dla wystąpień powtarzalnych „przeszłość"/„teraz" liczymy względem
   // wyświetlanego dnia, a nie oryginalnej daty startu eventu.
   const isPast = displayDate ? event.isPastOn(displayDate) : event.isPast();
   const isNow = displayDate ? event.isNowOn(displayDate) : event.isNow();
+  // Anulowane wystąpienie (dla wyświetlanego dnia) — pokazujemy wyszarzone (kanał alfa) z przekreśleniem.
+  const cancelled = displayDate ? event.isCancelledOn(displayDate) : false;
 
   const sequenceTasks = useMemo(() => {
     if (!event.taskId) return null;
@@ -83,6 +88,13 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onIns
     onDelete?.(event);
   };
 
+  // Anuluj/przywróć wystąpienie w wyświetlanym dniu (dla eventów powtarzalnych).
+  const handleToggleOccurrence = async () => {
+    handleClose();
+    if (!displayDate) return;
+    try { await setOccurrenceCancelled(writeFile, dataSource.events, event, displayDate, !cancelled); } catch { /* ignore */ }
+  };
+
   return (
     <>
     <Paper
@@ -90,11 +102,13 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onIns
       onClick={handleClick}
       sx={{
         p: 2,
-        opacity: isPast ? 0.7 : 1,
+        opacity: cancelled ? 0.4 : isPast ? 0.7 : 1,
         borderColor: isNow ? 'primary.main' : 'divider',
         borderWidth: isNow ? 2 : 1,
+        borderStyle: cancelled ? 'dashed' : 'solid',
         bgcolor: isNow ? 'primary.lighter' : 'background.paper',
         cursor: 'pointer',
+        '& .event-title': cancelled ? { textDecoration: 'line-through' } : undefined,
         '&:hover': {
           bgcolor: isNow ? 'primary.lighter' : 'action.hover',
         },
@@ -120,6 +134,7 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onIns
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
             <Typography
+              className="event-title"
               variant="subtitle1"
               sx={{
                 fontWeight: 600,
@@ -128,6 +143,7 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onIns
             >
               {event.getDisplayName()}
             </Typography>
+            {cancelled && <Chip label="Anulowane" size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
             {isNow && (
               <Chip label="Now" size="small" color="primary" />
             )}
@@ -278,6 +294,14 @@ const EventListItem: React.FC<EventListItemProps> = ({ event, displayDate, onIns
         </ListItemIcon>
         <ListItemText>Insert After</ListItemText>
       </MenuItem>
+      {displayDate && (event.recurrence || cancelled) && (
+        <MenuItem onClick={handleToggleOccurrence}>
+          <ListItemIcon>
+            {cancelled ? <EventAvailableIcon fontSize="small" /> : <EventBusyIcon fontSize="small" />}
+          </ListItemIcon>
+          <ListItemText>{cancelled ? 'Przywróć wystąpienie' : 'Usuń wystąpienie'}</ListItemText>
+        </MenuItem>
+      )}
       {onDelete && (
         <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
           <ListItemIcon>
