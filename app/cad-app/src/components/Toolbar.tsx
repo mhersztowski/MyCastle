@@ -12,6 +12,7 @@ import type { ViewMode } from '@mhersztowski/core-cad';
 import type { ToolName } from '../tools/types';
 import { polygonTool } from '../tools/PolygonTool';
 import { bsplineTool } from '../tools/BSplineTool';
+import { freecadIconUrl } from '../assets/freecadIcons';
 
 interface Props {
   activeTool: ToolName;
@@ -19,9 +20,24 @@ interface Props {
   viewMode: ViewMode;
 }
 
-/** Ikona narzędzia z FreeCAD (public/icons/freecad/<name>.svg — pobrane skryptem fetch-freecad-icons.sh). */
-function FcIcon({ name, size = 18 }: { name: string; size?: number }) {
-  return <img src={`/icons/freecad/${name}.svg`} width={size} height={size} alt="" style={{ display: 'block' }} />;
+/**
+ * Ikona narzędzia z FreeCAD (importowana przez Vite z src/assets/freecad-icons).
+ * Renderowana na jasnym „chipie", bo ikony FreeCAD mają ciemne elementy (obrysy, punkty),
+ * które na ciemnym pasku byłyby niewidoczne.
+ */
+function FcIcon({ name, size = 20 }: { name: string; size?: number }) {
+  const url = freecadIconUrl(name);
+  return (
+    <Box sx={{
+      width: size + 6, height: size + 6, borderRadius: 0.75,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      // Na ciemnym motywie jasny chip (ikony FreeCAD mają ciemne elementy); na jasnym — bez tła,
+      // żeby pasowały do UI (ciemne obrysy ikon i tak są widoczne na jasnym pasku).
+      bgcolor: (theme) => theme.palette.mode === 'dark' ? 'rgba(236,239,241,0.94)' : 'transparent',
+    }}>
+      {url && <img src={url} width={size} height={size} alt="" style={{ display: 'block' }} />}
+    </Box>
+  );
 }
 
 type Variant = {

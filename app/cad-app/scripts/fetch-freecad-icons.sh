@@ -4,7 +4,7 @@
 
 set -e
 
-OUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/public/icons/freecad"
+OUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/src/assets/freecad-icons"
 mkdir -p "$OUT_DIR"
 
 # FreeCAD ma ikony rozproszone po różnych modułach — sprawdzamy wszystkie.
@@ -12,6 +12,7 @@ BASES=(
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/PartDesign/Gui/Resources/icons"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons/geometry"
+  "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons/constraints"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Sketcher/Gui/Resources/icons/tools"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Part/Gui/Resources/icons"
   "https://raw.githubusercontent.com/FreeCAD/FreeCAD/main/src/Mod/Draft/Resources/icons"
@@ -67,6 +68,24 @@ declare -a ENTRIES=(
   "bspline_periodic|Sketcher_Create_Periodic_BSpline.svg,Sketcher_CreatePeriodicBSpline.svg"
   "bspline_knots|Sketcher_CreateBSplineByInterpolation.svg"
   "bspline_knots_periodic|Sketcher_CreatePeriodicBSplineByInterpolation.svg"
+
+  # ── Ikony constraintów (panel + toolbar) ─────────────────────────────────────
+  "c_dimension|Constraint_Dimension.svg"
+  "c_coincident|Constraint_Coincident.svg,Constraint_PointOnPoint.svg"
+  "c_horizontal|Constraint_Horizontal.svg"
+  "c_vertical|Constraint_Vertical.svg"
+  "c_parallel|Constraint_Parallel.svg"
+  "c_perpendicular|Constraint_Perpendicular.svg"
+  "c_equal|Constraint_EqualLength.svg"
+  "c_symmetric|Constraint_Symmetric.svg"
+  "c_tangent|Constraint_Tangent.svg"
+  "c_distance|Constraint_Length.svg"
+  "c_horizontal_distance|Constraint_HorizontalDistance.svg"
+  "c_vertical_distance|Constraint_VerticalDistance.svg"
+  "c_radius|Constraint_Radius.svg"
+  "c_diameter|Constraint_Diameter.svg"
+  "c_angle|Constraint_InternalAngle.svg"
+  "c_fixed|Constraint_Lock.svg,Constraint_Block.svg"
 )
 
 ok=0

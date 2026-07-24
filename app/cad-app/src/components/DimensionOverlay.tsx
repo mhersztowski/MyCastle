@@ -9,6 +9,12 @@ interface Props {
   onCommit?: () => void;
   /** Enter / ✓ → confirm the current phase (advance) or finalize the shape. */
   onCommitDraft?: () => void;
+  /**
+   * Tryb dotykowy/pióro — pigułki są klikalne (tap = edycja). Dla myszy (false) pigułki
+   * są „przezroczyste" dla kliknięć, żeby nie przeszkadzały w klikaniu punktów na kanwie
+   * (klawiatura dalej działa dzięki auto-focusowi).
+   */
+  touchMode?: boolean;
 }
 
 /** Extract the trailing numeric part from a dimension text such as "L: 45.23" or "∠ 45.0°". */
@@ -17,7 +23,7 @@ function extractNumber(text: string): string {
   return m ? m[1] : '0';
 }
 
-export function DimensionOverlay({ labels, renderer, onCommit, onCommitDraft }: Props) {
+export function DimensionOverlay({ labels, renderer, onCommit, onCommitDraft, touchMode = false }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   // „Świeże" pole = użytkownik jeszcze nic nie wpisał. Wtedy wartość podąża za myszą,
@@ -134,7 +140,7 @@ export function DimensionOverlay({ labels, renderer, onCommit, onCommitDraft }: 
             style={{
               position: 'absolute', left: x, top: y,
               transform: 'translate(-50%, -50%)',
-              pointerEvents: isEditable ? 'auto' : 'none', zIndex: 1,
+              pointerEvents: (isEditable && touchMode) ? 'auto' : 'none', zIndex: 1,
             }}
           >
             <div
@@ -169,7 +175,7 @@ export function DimensionOverlay({ labels, renderer, onCommit, onCommitDraft }: 
         return (
           <div style={{
             position: 'absolute', left: x, top: y,
-            transform: 'translate(-50%, -50%)', pointerEvents: 'auto', zIndex: 20,
+            transform: 'translate(-50%, -50%)', pointerEvents: touchMode ? 'auto' : 'none', zIndex: 20,
           }}>
             <div style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,

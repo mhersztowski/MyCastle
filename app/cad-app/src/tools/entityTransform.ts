@@ -13,6 +13,8 @@ export function translateEntity(entity: Entity, dx: number, dy: number): Partial
       return { x1: entity.x1 + dx, y1: entity.y1 + dy, x2: entity.x2 + dx, y2: entity.y2 + dy };
     case 'circle':
       return { cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'point':
+      return { x: entity.x + dx, y: entity.y + dy };
     case 'rect':
       return { x: entity.x + dx, y: entity.y + dy };
     case 'polyline':

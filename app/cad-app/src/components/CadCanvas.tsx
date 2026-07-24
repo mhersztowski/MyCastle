@@ -6,8 +6,11 @@ import type { ViewMode } from '@mhersztowski/core-cad';
 import { CadRenderer } from '../renderer/CadRenderer';
 import { buildEntityObject } from '../renderer/EntityMeshBuilder';
 import { shiftEntity, computeEntitiesCentroid } from '../io/CadExporter';
+import { translateEntity } from '../tools/entityTransform';
+import { pickSub, subElementsInRect } from '../tools/sketchPick';
 import { DimensionOverlay } from './DimensionOverlay';
 import { GripOverlay } from './GripOverlay';
+import { ConstraintSymbolsOverlay, type SketchConstraintLite } from './ConstraintSymbolsOverlay';
 import { ScaleBar } from './ScaleBar';
 import { SelectTool } from '../tools/SelectTool';
 import { LineTool } from '../tools/LineTool';
@@ -54,6 +57,29 @@ interface Props {
   onCancelPlacement?: () => void;
   /** Motyw kanwy — 'light' daje białe tło + jasną siatkę (np. edytor szkicu CAD NEW). */
   theme?: 'light' | 'dark';
+  /** Tryb sub-selekcji (szkic): klik zaznacza wierzchołki/krawędzie do constraintów. */
+  subSelect?: boolean;
+  /** Callback z aktualnymi refami zaznaczonych pod-elementów (format solvera). */
+  onSubSelect?: (refs: string[]) => void;
+  /** Zmiana tej wartości czyści sub-selekcję (np. po zastosowaniu constraintu). */
+  subSelectClear?: number;
+  /** Czysty klik na wymiar (select) → otwórz dialog wartości. Wykrywane na pointerup z tolerancją. */
+  onDimensionClick?: (id: string) => void;
+  /** Constrainty szkicu — renderowane jako symbole na canvasie przy elementach. */
+  constraints?: SketchConstraintLite[];
+}
+
+/** Odległość punktu do linii wymiarowej (na offsecie) — do wykrywania kliknięcia wymiaru. */
+function dimensionPickDistance(dim: { x1: number; y1: number; x2: number; y2: number; offset: number }, p: Point2D): number {
+  const dx = dim.x2 - dim.x1, dy = dim.y2 - dim.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = (-dy / len) * dim.offset, ny = (dx / len) * dim.offset;
+  const a = { x: dim.x1 + nx, y: dim.y1 + ny }, b = { x: dim.x2 + nx, y: dim.y2 + ny };
+  const ex = b.x - a.x, ey = b.y - a.y;
+  const l2 = ex * ex + ey * ey;
+  let t = l2 < 1e-9 ? 0 : ((p.x - a.x) * ex + (p.y - a.y) * ey) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * ex), p.y - (a.y + t * ey));
 }
 
 interface PlacementData {
@@ -94,7 +120,7 @@ const tools: Record<ToolName, Tool> = {
   sphere3d: new Sphere3dTool(),
 };
 
-export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement, theme }: Props) {
+export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement, theme, subSelect, onSubSelect, subSelectClear, onDimensionClick, constraints }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CadRenderer | null>(null);
   const prevToolRef = useRef<ToolName>(activeTool);
@@ -104,6 +130,24 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   const placementDataRef = useRef<PlacementData | null>(null);
 
   const mouseRef = useRef({ isPanning: false, lastX: 0, lastY: 0, isDown: false });
+  // Przeciąganie zaznaczonych encji w trybie select (klik+drag na krawędzi/ciele).
+  const selectDragRef = useRef<{ base: Point2D; orig: Map<string, Entity>; moved: boolean } | null>(null);
+  // Sub-selekcja (szkic): wybrane pod-elementy do constraintów.
+  const subSelRef = useRef<Array<{ ref: string; segs: Array<{ a: Point2D; b: Point2D }>; vertex?: Point2D }>>([]);
+  // Rysuje podświetlenie sub-selekcji (wybrane + opcjonalny hover) na osobnej warstwie renderera.
+  const renderSubHighlight = (hover?: { segs: Array<{ a: Point2D; b: Point2D }>; vertex?: Point2D } | null) => {
+    const r = rendererRef.current;
+    if (!r) return;
+    const items = hover ? [...subSelRef.current, hover] : subSelRef.current;
+    const segs = items.flatMap(s => s.segs);
+    const verts = items.map(s => s.vertex).filter((v): v is Point2D => !!v);
+    if (segs.length || verts.length) r.setHighlight(segs, verts);
+    else r.clearHighlight();
+  };
+  // Początek kliknięcia (select) — do rozróżnienia kliknięcia od przeciągnięcia (dialog wymiaru).
+  const clickStartRef = useRef<Point2D | null>(null);
+  // Zaznaczanie ramką (box select) w trybie sub-selekcji.
+  const boxSelRef = useRef<{ start: Point2D } | null>(null);
   const [dimLabels, setDimLabels] = useState<DimensionLabel[]>([]);
   const [penInput, setPenInput] = useState<PenInput | null>(null);
   const [zoomTick, setZoomTick] = useState(0); // bumps on zoom so dimension labels re-project
@@ -187,6 +231,36 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     };
   }, [placementTemplate]);
 
+  // Zewnętrzne wyczyszczenie sub-selekcji (np. po zastosowaniu constraintu).
+  useEffect(() => {
+    if (subSelectClear === undefined) return;
+    subSelRef.current = [];
+    rendererRef.current?.clearHighlight();
+    rendererRef.current?.syncAll();
+  }, [subSelectClear]);
+
+  // Usunięcie encji (np. Delete) → od razu odśwież widok: skasuj podświetlenie usuniętych
+  // pod-elementów i przebuduj meshe (bez tego trzeba było kliknąć, by zniknęły).
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bus = (project as any).eventBus;
+    if (!bus?.on) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onRemoved = (payload: any) => {
+      const id = typeof payload === 'string' ? payload : payload?.id;
+      if (id) {
+        const before = subSelRef.current.length;
+        subSelRef.current = subSelRef.current.filter(s => s.ref.split('.')[0] !== id);
+        if (subSelRef.current.length !== before) onSubSelect?.(subSelRef.current.map(s => s.ref));
+      }
+      renderSubHighlight();
+      rendererRef.current?.syncAll();
+    };
+    const unsub = bus.on('entity:removed', onRemoved);
+    return () => { if (typeof unsub === 'function') unsub(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, onSubSelect]);
+
   // Reset previous tool when tool changes
   useEffect(() => {
     if (prevToolRef.current !== activeTool) {
@@ -194,7 +268,12 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       prevToolRef.current = activeTool;
       setDimLabels([]);
       setPreviewGeom(null);
+      subSelRef.current = [];          // wyczyść sub-selekcję przy zmianie narzędzia
+      onSubSelect?.([]);
+      rendererRef.current?.clearHighlight();
+      rendererRef.current?.setPreview(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool]);
 
   // Handle injected point from CommandLine
@@ -303,8 +382,38 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     const { snapResult: snap, pen } = result;
     setCursorWorld(snap.point);
     setPenInput(pen);
+
+    // Przeciąganie zaznaczonych encji w trybie select — przesuwa całe zaznaczenie za kursorem.
+    if (selectDragRef.current && mouseRef.current.isDown) {
+      const d = selectDragRef.current;
+      const dx = snap.point.x - d.base.x, dy = snap.point.y - d.base.y;
+      if (!d.moved && Math.hypot(dx, dy) < (renderer.getPixelToWorld?.() ?? 1) * 3) return; // próg
+      d.moved = true;
+      for (const [id, orig] of d.orig) {
+        project.entityRegistry.update(id, translateEntity(orig, dx, dy));
+        const ent = project.entityRegistry.get(id);
+        if (ent) project.eventBus.emit('entity:updated', ent); // → odświeża powiązane wymiary
+      }
+      renderer.syncAll();
+      return;
+    }
+
     if (renderer.getViewMode() !== '3d') {
       renderer.showSnapMarker(snap.mode !== 'nearest' ? snap.point : null);
+    }
+
+    // Zaznaczanie ramką — rysuj prostokąt.
+    if (boxSelRef.current && mouseRef.current.isDown) {
+      renderer.setPreview({ type: 'rect', points: [boxSelRef.current.start, snap.point] });
+      return;
+    }
+
+    // Sub-selekcja (szkic): podświetl najbliższy pod-element + utrzymaj podświetlenie wybranych.
+    if (activeTool === 'select' && subSelect && renderer.getViewMode() !== '3d') {
+      const th = (rendererRef.current?.getPixelToWorld() ?? 1) * 12;
+      const hit = pickSub(snap.point, project.entityRegistry.getAll(), th);
+      renderSubHighlight(hit ? { segs: hit.segs, vertex: hit.vertex } : null);
+      return;
     }
 
     // Move placement ghost if armed
@@ -319,7 +428,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     renderer.setPreview(prev);
     setPreviewGeom(prev);
     setDimLabels(tool.getDimensionLabels?.() ?? []);
-  }, [activeTool, project, getSnapPoint, placementTemplate]);
+  }, [activeTool, project, getSnapPoint, placementTemplate, subSelect, onSubSelect]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     canvasRef.current?.setPointerCapture(e.pointerId);
@@ -344,6 +453,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     if (!result) return;
     const { snapResult: snap, pen } = result;
     setPenInput(pen);
+    clickStartRef.current = activeTool === 'select' ? snap.point : null;
 
     // Placement mode: stamp entities at clicked world position
     if (placementTemplate && placementDataRef.current && e.button === 0 && !is3d) {
@@ -363,6 +473,37 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
       return;
     }
 
+    // Sub-selekcja (szkic): klik zaznacza wierzchołek/krawędź do constraintów (toggle, akumuluje).
+    if (activeTool === 'select' && subSelect && !is3d) {
+      const th = (rendererRef.current?.getPixelToWorld() ?? 1) * 12;
+      const hit = pickSub(snap.point, project.entityRegistry.getAll(), th);
+      if (hit) {
+        const cur = subSelRef.current;
+        const i = cur.findIndex(s => s.ref === hit.ref);
+        if (i >= 0) cur.splice(i, 1);                                       // ponowny klik → odznacz
+        else cur.push({ ref: hit.ref, segs: hit.segs, vertex: hit.vertex }); // akumuluj
+        // Przebuduj zaznaczenie encji nadrzędnych (gripy/drag) z aktualnego zestawu pod-elementów.
+        project.selectionManager.clear();
+        for (const id of new Set(cur.map(s => s.ref.split('.')[0]))) if (!id.startsWith('#')) project.selectionManager.select(id, true);
+        project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
+        onSubSelect?.(cur.map(s => s.ref));
+        renderSubHighlight();
+        renderer.syncAll();
+        clickStartRef.current = null; // wybór pod-elementu → nie otwieraj dialogu wymiaru na pointerup
+        return;
+      }
+      // Brak pod-elementu: jeśli pusto → rozpocznij zaznaczanie ramką; jeśli encja (wymiar) → fall-through.
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const pickedHere = renderer.pickEntity(e.clientX - rect.left, e.clientY - rect.top);
+      if (!pickedHere) {
+        boxSelRef.current = { start: snap.point };
+        clickStartRef.current = null;
+        return;
+      }
+      // Encja pod kursorem (np. wymiar) → pozwól normalnej selekcji (dialog wartości).
+      if (subSelRef.current.length) { subSelRef.current = []; onSubSelect?.([]); renderer.clearHighlight(); }
+    }
+
     if (activeTool === 'select') {
       const rect = canvasRef.current!.getBoundingClientRect();
       const sx = e.clientX - rect.left;
@@ -371,10 +512,29 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         ? renderer.pickEntity3d(sx, sy)
         : renderer.pickEntity(sx, sy);
       if (picked) {
-        project.selectionManager.select(picked, e.shiftKey);
+        // Klik na już zaznaczonej (bez Shift) zachowuje całe zaznaczenie do przeciągnięcia grupy.
+        if (!(project.selectionManager.isSelected(picked) && !e.shiftKey)) {
+          project.selectionManager.select(picked, e.shiftKey);
+        }
+        // Zawsze emituj — nawet gdy zaznaczenie się nie zmieniło (ponowny klik wymiaru → dialog).
         project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
         renderer.syncAll();
+        // Uzbrój przeciąganie zaznaczonych encji (2D) — przesuwanie krawędziami/ciałem.
+        if (!is3d) {
+          const orig = new Map<string, Entity>();
+          for (const id of project.selectionManager.getSelected()) {
+            const en = project.entityRegistry.get(id);
+            if (en && !en.locked) orig.set(id, en);
+          }
+          if (orig.size) selectDragRef.current = { base: snap.point, orig, moved: false };
+        }
         return;
+      }
+      // Klik w pustym miejscu (bez Shift) → wyczyść zaznaczenie.
+      if (!e.shiftKey && project.selectionManager.count() > 0) {
+        project.selectionManager.clear();
+        project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
+        renderer.syncAll();
       }
     }
 
@@ -386,7 +546,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     renderer.syncAll();
     setDimLabels(tool.getDimensionLabels?.() ?? []);
     onLastPoint?.(snap.point);
-  }, [activeTool, project, getSnapPoint, onLastPoint, placementTemplate]);
+  }, [activeTool, project, getSnapPoint, onLastPoint, placementTemplate, subSelect, onSubSelect]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     canvasRef.current?.releasePointerCapture(e.pointerId);
@@ -394,6 +554,85 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     if (mouseRef.current.isPanning) {
       mouseRef.current.isPanning = false;
+      return;
+    }
+
+    // Zakończenie zaznaczania ramką — dodaj pod-elementy w środku (albo wyczyść, gdy to był klik).
+    if (boxSelRef.current && renderer) {
+      const bs = boxSelRef.current;
+      boxSelRef.current = null;
+      mouseRef.current.isDown = false;
+      renderer.setPreview(null);
+      const up = getSnapPoint(e)?.snapResult.point ?? bs.start;
+      const pxw = renderer.getPixelToWorld?.() ?? 1;
+      if (Math.hypot(up.x - bs.start.x, up.y - bs.start.y) < pxw * 4) {
+        // Klik na pusto → wyczyść sub-selekcję.
+        subSelRef.current = []; onSubSelect?.([]);
+        project.selectionManager.clear();
+        project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
+        renderer.clearHighlight();
+      } else {
+        const min = { x: Math.min(bs.start.x, up.x), y: Math.min(bs.start.y, up.y) };
+        const max = { x: Math.max(bs.start.x, up.x), y: Math.max(bs.start.y, up.y) };
+        const picks = subElementsInRect(project.entityRegistry.getAll(), min, max, pxw * 5);
+        const cur = subSelRef.current;
+        for (const p of picks) if (!cur.some(s => s.ref === p.ref)) cur.push({ ref: p.ref, segs: p.segs, vertex: p.vertex });
+        project.selectionManager.clear();
+        for (const id of new Set(cur.map(s => s.ref.split('.')[0]))) if (!id.startsWith('#')) project.selectionManager.select(id, true);
+        project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
+        onSubSelect?.(cur.map(s => s.ref));
+        renderSubHighlight();
+      }
+      renderer.syncAll();
+      return;
+    }
+
+    // Czysty klik na wymiar (select) → otwórz dialog wartości. Wykrywane na pointerup (koniec gestu,
+    // nie w trakcie — zapobiega miganiu na mobile) z generatywną tolerancją (łatwiej trafić palcem).
+    if (activeTool === 'select' && onDimensionClick && renderer) {
+      const up = getSnapPoint(e)?.snapResult.point;
+      const start = clickStartRef.current;
+      clickStartRef.current = null;
+      const pxw = renderer.getPixelToWorld?.() ?? 1;
+      const moved = !!selectDragRef.current?.moved || (!!up && !!start && Math.hypot(up.x - start.x, up.y - start.y) > pxw * 4);
+      if (up && start && !moved) {
+        let bestId: string | null = null, bestD = pxw * 18; // ~18 px tolerancji
+        for (const dim of project.entityRegistry.getByType('dimension')) {
+          const d = dimensionPickDistance(dim as unknown as { x1: number; y1: number; x2: number; y2: number; offset: number }, up);
+          if (d < bestD) { bestD = d; bestId = dim.id; }
+        }
+        if (bestId) {
+          selectDragRef.current = null;
+          mouseRef.current.isDown = false;
+          onDimensionClick(bestId);
+          return;
+        }
+      }
+    }
+
+    // Zakończenie przeciągania zaznaczenia — jeden wpis historii na cały ruch.
+    if (selectDragRef.current) {
+      const d = selectDragRef.current;
+      selectDragRef.current = null;
+      mouseRef.current.isDown = false;
+      if (d.moved && renderer) {
+        const finals = new Map<string, Entity>();
+        for (const id of d.orig.keys()) { const en = project.entityRegistry.get(id); if (en) finals.set(id, en); }
+        const apply = (m: Map<string, Entity>) => {
+          for (const [id, ent] of m) {
+            project.entityRegistry.update(id, ent as unknown as Record<string, unknown>);
+            const e2 = project.entityRegistry.get(id);
+            if (e2) project.eventBus.emit('entity:updated', e2);
+          }
+          renderer.syncAll();
+        };
+        project.historyManager.push({
+          type: 'update', description: 'Move (drag)',
+          undo: () => apply(d.orig),
+          redo: () => apply(finals),
+        });
+        project.eventBus.emit('history:changed', undefined as never);
+      }
       return;
     }
 
@@ -406,7 +645,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     renderer?.setPreview(tool.getPreview());
     renderer?.syncAll();
     mouseRef.current.isDown = false;
-  }, [activeTool, project, getSnapPoint]);
+  }, [activeTool, project, getSnapPoint, onDimensionClick]);
 
   const handleWheel = useCallback((e: WheelEvent) => {
     const renderer = rendererRef.current;
@@ -519,11 +758,20 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
           visible={activeTool === 'select'}
         />
       )}
+      {!is3d && constraints && constraints.length > 0 && (
+        <ConstraintSymbolsOverlay
+          constraints={constraints}
+          project={project}
+          renderer={rendererRef.current}
+          version={version}
+        />
+      )}
       {!is3d && rendererRef.current && <ScaleBar renderer={rendererRef.current} />}
       {!is3d && rendererRef.current && overlayLabels.length > 0 && (
         <DimensionOverlay
           labels={overlayLabels}
           renderer={rendererRef.current}
+          touchMode={penInput?.pointerType === 'touch' || penInput?.pointerType === 'pen'}
           onCommit={() => {
             const renderer = rendererRef.current;
             const tool = tools[activeTool];

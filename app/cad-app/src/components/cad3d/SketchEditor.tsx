@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Chip, Divider, Menu, MenuItem, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Divider, Tooltip, Typography } from '@mui/material';
 import { ThemeProvider, createTheme, useTheme } from '@mui/material/styles';
 import CheckIcon from '@mui/icons-material/Check';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import { IconButton } from '@mui/material';
 import type { Project } from '@mhersztowski/core-cad';
 import type { Point2D } from '@mhersztowski/core-cad';
 import { ActionBar } from '../ActionBar';
@@ -16,6 +19,10 @@ import type { SketchPlane } from '../../cad3d/types';
 import type { ToolName } from '../../tools/types';
 import { ConstraintsPanel, ElementsPanel } from './ConstraintsPanel';
 import type { ConstraintType, SketchConstraint, SketchEntity } from '../../cad3d/sketchConstraints';
+import { DimensionValueDialog } from './DimensionValueDialog';
+import { applyDimensionValue, dimRefs } from '../../tools/dimensionDrive';
+import { freecadIconUrl } from '../../assets/freecadIcons';
+import type { DimensionEntity } from '@mhersztowski/core-cad';
 import { constraintTypeLabel, solveConstraints } from '../../cad3d/sketchConstraints';
 
 interface Props {
@@ -31,20 +38,86 @@ const PLANE_LABEL: Record<SketchPlane, string> = {
   face: 'Face plane',
 };
 
+/** Rzut prostopadły punktu P na prostą przez L0 o kierunku dir. */
+function projectOnLine(P: { x: number; y: number }, L0: { x: number; y: number }, dir: { x: number; y: number }): { x: number; y: number } {
+  const dlen = Math.hypot(dir.x, dir.y) || 1;
+  const ux = dir.x / dlen, uy = dir.y / dlen;
+  const t = (P.x - L0.x) * ux + (P.y - L0.y) * uy;
+  return { x: L0.x + t * ux, y: L0.y + t * uy };
+}
+
+/** Odbicie punktu P względem prostej przez L0 o kierunku dir. */
+function reflectAcrossLine(P: { x: number; y: number }, L0: { x: number; y: number }, dir: { x: number; y: number }): { x: number; y: number } {
+  const dlen = Math.hypot(dir.x, dir.y) || 1;
+  const ux = dir.x / dlen, uy = dir.y / dlen;
+  const t = (P.x - L0.x) * ux + (P.y - L0.y) * uy;
+  const footx = L0.x + t * ux, footy = L0.y + t * uy;
+  return { x: 2 * footx - P.x, y: 2 * footy - P.y };
+}
+
+type PointHandle = { id: string; xKey: string; yKey: string; x: number; y: number };
+
+/** Rozwiąż ref pod-elementu (`id`, `id.p1/p2`, `id.center`) na współrzędne encji. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveRefPoint(project: any, ref: string): PointHandle | null {
+  const [id, part] = ref.split('.');
+  const e = project.entityRegistry.get(id);
+  if (!e) return null;
+  if (e.type === 'line') return part === 'p2'
+    ? { id, xKey: 'x2', yKey: 'y2', x: e.x2, y: e.y2 }
+    : { id, xKey: 'x1', yKey: 'y1', x: e.x1, y: e.y1 };
+  if (e.type === 'circle' || e.type === 'arc') return { id, xKey: 'cx', yKey: 'cy', x: e.cx, y: e.cy };
+  if (e.type === 'point') return { id, xKey: 'x', yKey: 'y', x: e.x, y: e.y };
+  return null;
+}
+
+/**
+ * Utrzymanie constraintu coincident przy edycji: point-on-edge (rzut punktu na prostą krawędzi)
+ * lub point-point (nieprzesunięty punkt podąża za przesuniętym). `movedId` = id zmienionej encji.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function enforceCoincident(project: any, refs: string[], movedId: string): void {
+  const edgeRef = refs.find(r => !r.includes('.') && !r.startsWith('#') && project.entityRegistry.get(r)?.type === 'line');
+  const ptRefs = refs.filter(r => r.includes('.') || project.entityRegistry.get(r)?.type === 'point');
+  if (edgeRef && ptRefs.length >= 1) {
+    const A = resolveRefPoint(project, ptRefs[0]);
+    const L = project.entityRegistry.get(edgeRef);
+    if (!A || !L) return;
+    const proj = projectOnLine({ x: A.x, y: A.y }, { x: L.x1, y: L.y1 }, { x: L.x2 - L.x1, y: L.y2 - L.y1 });
+    project.updateEntity(A.id, { [A.xKey]: proj.x, [A.yKey]: proj.y });
+  } else if (ptRefs.length >= 2) {
+    const A = resolveRefPoint(project, ptRefs[0]);
+    const B = resolveRefPoint(project, ptRefs[1]);
+    if (!A || !B) return;
+    // Nieprzesunięty punkt podąża za przesuniętym.
+    if (A.id === movedId) project.updateEntity(B.id, { [B.xKey]: A.x, [B.yKey]: A.y });
+    else project.updateEntity(A.id, { [A.xKey]: B.x, [A.yKey]: B.y });
+  }
+}
+
 export function SketchEditor({ project, plane, onExit }: Props) {
   const { version } = useProject(project);
   // Domyślnie 'select' — user musi klikać elements w scenie żeby applikować constraints.
   // Przełączenie na 'line' / 'circle' etc. wchodzi w tryb rysowania.
   const [activeTool, setActiveTool] = useState<ToolName>('select');
   const [rightTab, setRightTab] = useState<'layers' | 'properties' | 'constraints' | 'elements'>('constraints');
+  const [panelOpen, setPanelOpen] = useState(true);
   const [injectedPoint, setInjectedPoint] = useState<Point2D | null>(null);
   const [injectedAngle, setInjectedAngle] = useState<number | null>(null);
   const lastPointRef = useRef<Point2D | null>(null);
 
   // Constraints state (local w editorze; przy Exit Sketch zapisuje się do SketchFeature.constraints).
   const [constraints, setConstraints] = useState<SketchConstraint[]>([]);
+  const constraintsRef = useRef<SketchConstraint[]>([]);
+  constraintsRef.current = constraints;
+  const coincEnforcingRef = useRef(false);
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [selectedConstraintId, setSelectedConstraintId] = useState<string | null>(null);
+  // Otwarte okno edycji wartości wymiaru (id encji dimension).
+  const [dimDialogId, setDimDialogId] = useState<string | null>(null);
+  // Refy pod-elementów (wierzchołki/krawędzie) zaznaczonych do constraintów.
+  const [subRefs, setSubRefs] = useState<string[]>([]);
+  const [subSelClear, setSubSelClear] = useState(0);
 
   const handleToolChange = useCallback((tool: ToolName) => {
     setActiveTool(tool);
@@ -66,6 +139,93 @@ export function SketchEditor({ project, plane, onExit }: Props) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const current = (project as any).selectionManager?.getSelected?.() ?? [];
     if (current.length > 0) setSelectedElementIds([...current]);
+    return () => { if (typeof unsub === 'function') unsub(); };
+  }, [project]);
+
+  // Dodanie wymiaru (DimensionTool) → wpis constraintu na liście. Referencje zwymiarowanych
+  // encji odczytujemy z wyłączonych kotwic wymiaru (anchor1/anchor2.entityId).
+  const processedDimsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = (project as any).eventBus;
+    if (!eventBus?.on) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onAdded = (e: any) => {
+      if (!e || e.type !== 'dimension' || processedDimsRef.current.has(e.id)) return;
+      processedDimsRef.current.add(e.id);
+      const value = Math.hypot((e.x2 ?? 0) - (e.x1 ?? 0), (e.y2 ?? 0) - (e.y1 ?? 0));
+      const refs = [e.anchor1?.entityId, e.anchor2?.entityId]
+        .filter((x: unknown, i: number, arr: unknown[]) => !!x && arr.indexOf(x) === i) as string[];
+      // Średnica: obie kotwice na tej samej encji będącej okręgiem/łukiem.
+      const sameEnt = e.anchor1?.entityId && e.anchor1.entityId === e.anchor2?.entityId;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const refEnt = sameEnt ? (project as any).entityRegistry?.get?.(e.anchor1.entityId) : null;
+      const isDia = !!refEnt && (refEnt.type === 'circle' || refEnt.type === 'arc');
+      const type: ConstraintType = isDia ? 'diameter' : 'distance';
+      setConstraints(prev => [...prev, {
+        id: `dim-${e.id}`,
+        type, refs,
+        value: Number(value.toFixed(3)),
+        visible: true,
+        name: `${constraintTypeLabel(type)}${prev.length + 1}`,
+      }]);
+    };
+    const unsub = eventBus.on('entity:added', onAdded);
+    return () => { if (typeof unsub === 'function') unsub(); };
+  }, [project]);
+
+  // Utrzymywanie wartości wymiarów napędzających (driving): przy każdej zmianie encji
+  // ponownie wymuszamy ich wartość, więc zwymiarowany wymiar pozostaje stały, a pozostałe
+  // stopnie swobody (np. inne wierzchołki prostokąta) można swobodnie przesuwać.
+  const enforcingRef = useRef(false);
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = (project as any).eventBus;
+    if (!eventBus?.on) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onUpd = (e: any) => {
+      if (enforcingRef.current || !e || e.type === 'dimension') return;
+      const dims = (project.entityRegistry.getByType('dimension') as DimensionEntity[])
+        .filter(d => d.driving && d.value && dimRefs(d).includes(e.id));
+      if (!dims.length) return;
+      enforcingRef.current = true;
+      try { for (const d of dims) applyDimensionValue(project, d, d.value as number); }
+      finally { enforcingRef.current = false; }
+    };
+    const unsub = eventBus.on('entity:updated', onUpd);
+    return () => { if (typeof unsub === 'function') unsub(); };
+  }, [project]);
+
+  // Usunięcie encji → skasuj powiązane constrainty z listy (odwołują się do niej przez refs).
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = (project as any).eventBus;
+    if (!eventBus?.on) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onRemoved = (payload: any) => {
+      const id = typeof payload === 'string' ? payload : payload?.id;
+      if (!id) return;
+      setConstraints(prev => prev.filter(c => !c.refs.some(r => r.split('.')[0] === id)));
+    };
+    const unsub = eventBus.on('entity:removed', onRemoved);
+    return () => { if (typeof unsub === 'function') unsub(); };
+  }, [project]);
+
+  // Utrzymanie constraintów coincident (point-on-edge / point-point) przy przesuwaniu geometrii.
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventBus = (project as any).eventBus;
+    if (!eventBus?.on) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onUpd = (e: any) => {
+      if (coincEnforcingRef.current || !e || e.type === 'dimension') return;
+      const cons = constraintsRef.current.filter(c => c.type === 'coincident' && c.refs.some(r => r.split('.')[0] === e.id));
+      if (!cons.length) return;
+      coincEnforcingRef.current = true;
+      try { for (const c of cons) enforceCoincident(project, c.refs, e.id); }
+      finally { coincEnforcingRef.current = false; }
+    };
+    const unsub = eventBus.on('entity:updated', onUpd);
     return () => { if (typeof unsub === 'function') unsub(); };
   }, [project]);
 
@@ -125,13 +285,181 @@ export function SketchEditor({ project, plane, onExit }: Props) {
     { type: 'parallel', label: 'Parallel (2 linie)', refsRequired: 2 },
     { type: 'perpendicular', label: 'Perpendicular (2 linie)', refsRequired: 2 },
     { type: 'equal', label: 'Equal (2 linie równej długości)', refsRequired: 2 },
+    { type: 'symmetric', label: 'Symmetric (2 punkty + oś/linia)', refsRequired: 3 },
     { type: 'distance', label: 'Distance (odległość)', refsRequired: 2, needsValue: true },
     { type: 'fixed', label: 'Fixed (zablokuj punkt)', refsRequired: 1 },
   ];
 
+    // Rozwiąż ref pod-elementu (`id`, `id.p1/p2`, `id.center`) na współrzędne encji.
+    const resolvePoint = (ref: string) => resolveRefPoint(project, ref);
+
   const applyConstraintFromToolbar = (type: ConstraintType, refsRequired: number, needsValue: boolean = false) => {
-    if (selectedElementIds.length < refsRequired) {
-      alert(`${constraintTypeLabel(type)} wymaga ${refsRequired} zaznaczonych elementów. Zaznaczono: ${selectedElementIds.length}`);
+    // Preferuj refy pod-elementów (wierzchołki/krawędzie), inaczej całe encje.
+    const refsPool = subRefs.length ? subRefs : selectedElementIds;
+
+    // Horizontal/Vertical — bezpośrednio na geometrii (pewne, bez solvera):
+    //  • każda zaznaczona KRAWĘDŹ-linia → staje się pozioma/pionowa,
+    //  • kilka zaznaczonych PUNKTÓW → wyrównuje się w jednej linii (wspólne Y lub X).
+    if (type === 'horizontal' || type === 'vertical') {
+      const horiz = type === 'horizontal';
+      const edgeLines: string[] = [];
+      const pointRefs: string[] = [];
+      for (const ref of refsPool) {
+        const [id, part] = ref.split('.');
+        const e = project.entityRegistry.get(id);
+        if (!e) continue;
+        if (!part && e.type === 'line') edgeLines.push(id);
+        else pointRefs.push(ref);
+      }
+      const additions: SketchConstraint[] = [];
+      // Każda zaznaczona linia (krawędź) → pozioma/pionowa + wpis constraintu.
+      for (const id of edgeLines) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e = project.entityRegistry.get(id) as any;
+        if (horiz) { const ty = (e.y1 + e.y2) / 2; project.updateEntity(id, { y1: ty, y2: ty } as never); }
+        else { const tx = (e.x1 + e.x2) / 2; project.updateEntity(id, { x1: tx, x2: tx } as never); }
+        additions.push({ id: `hv-${Date.now()}-${additions.length}`, type, refs: [id], visible: true });
+      }
+      // Kilka punktów → wspólne Y/X + wpisy między kolejnymi punktami (jak w FreeCAD).
+      const resolvedRefs = pointRefs.filter(r => !!resolvePoint(r));
+      if (resolvedRefs.length >= 2) {
+        const pts = resolvedRefs.map(r => resolvePoint(r)!) ;
+        const target = pts.reduce((s, p) => s + (horiz ? p.y : p.x), 0) / pts.length;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const p of pts) project.updateEntity(p.id, { [horiz ? p.yKey : p.xKey]: target } as any);
+        for (let i = 0; i < resolvedRefs.length - 1; i++) {
+          additions.push({ id: `hv-${Date.now()}-${additions.length}-p`, type, refs: [resolvedRefs[i], resolvedRefs[i + 1]], visible: true });
+        }
+      }
+      if (additions.length) {
+        setConstraints(prev => [...prev, ...additions]); // wpisy na liście Constraints (bez nazwy → „ConstraintN")
+        setSubRefs([]);
+        setSubSelClear(v => v + 1);
+        return;
+      }
+      alert(`${constraintTypeLabel(type)}: zaznacz linię/krawędź albo co najmniej 2 punkty.`);
+      return;
+    }
+
+    // Parallel / Perpendicular / Equal — bezpośrednio na N liniach (każda względem pierwszej).
+    if (type === 'parallel' || type === 'perpendicular' || type === 'equal') {
+      const lineIds = [...new Set(refsPool.filter(r => !r.includes('.') && project.entityRegistry.get(r)?.type === 'line'))];
+      if (lineIds.length < 2) {
+        alert(`${constraintTypeLabel(type)}: zaznacz co najmniej 2 krawędzie (linie).`);
+        return;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const A = project.entityRegistry.get(lineIds[0]) as any;
+      const angA = Math.atan2(A.y2 - A.y1, A.x2 - A.x1);
+      const lenA = Math.hypot(A.x2 - A.x1, A.y2 - A.y1);
+      const additions: SketchConstraint[] = [];
+      for (let i = 1; i < lineIds.length; i++) {
+        const id = lineIds[i];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const B = project.entityRegistry.get(id) as any;
+        const angB = Math.atan2(B.y2 - B.y1, B.x2 - B.x1);
+        const lenB = Math.hypot(B.x2 - B.x1, B.y2 - B.y1);
+        const mx = (B.x1 + B.x2) / 2, my = (B.y1 + B.y2) / 2;
+        const setB = (dir: number, len: number) => {
+          const hx = Math.cos(dir) * len / 2, hy = Math.sin(dir) * len / 2;
+          project.updateEntity(id, { x1: mx - hx, y1: my - hy, x2: mx + hx, y2: my + hy } as never);
+        };
+        if (type === 'parallel') {
+          let dir = angA; if (Math.cos(angB - angA) < 0) dir = angA + Math.PI; // zachowaj orientację B
+          setB(dir, lenB);
+        } else if (type === 'perpendicular') {
+          let dir = angA + Math.PI / 2; if (Math.cos(angB - dir) < 0) dir += Math.PI;
+          setB(dir, lenB);
+        } else { // equal — długość := długość pierwszej
+          setB(angB, lenA);
+        }
+        additions.push({ id: `pp-${Date.now()}-${i}`, type, refs: [lineIds[0], id], visible: true });
+      }
+      setConstraints(prev => [...prev, ...additions]);
+      setSubRefs([]);
+      setSubSelClear(v => v + 1);
+      return;
+    }
+
+    // Fixed — zablokuj zaznaczone encje (nie da się ich przesuwać) + wpis per encja.
+    if (type === 'fixed') {
+      const ids = [...new Set(refsPool.map(r => r.split('.')[0]))].filter(id => !!project.entityRegistry.get(id));
+      if (!ids.length) { alert('Fixed: zaznacz element(y).'); return; }
+      const additions: SketchConstraint[] = [];
+      for (const id of ids) {
+        project.updateEntity(id, { locked: true } as never);
+        additions.push({ id: `fx-${Date.now()}-${additions.length}`, type: 'fixed', refs: [id], visible: true });
+      }
+      setConstraints(prev => [...prev, ...additions]);
+      setSubRefs([]);
+      setSubSelClear(v => v + 1);
+      return;
+    }
+
+    // Symmetric — 2 punkty symetryczne względem osi układu (#axisX/#axisY) lub linii.
+    if (type === 'symmetric') {
+      // Punkt = ref z kropką (`id.p1/.center`) lub encja typu point. Goła linia to KRAWĘDŹ (lustro), nie punkt.
+      const isPointRef = (r: string) => r.includes('.') || project.entityRegistry.get(r)?.type === 'point';
+      const pointRefs = refsPool.filter(isPointRef);
+      const axisRef = refsPool.find(r => r === '#axisX' || r === '#axisY');
+      const lineRef = refsPool.find(r => !r.includes('.') && !r.startsWith('#') && project.entityRegistry.get(r)?.type === 'line');
+      const mirror = axisRef ?? lineRef;
+      if (pointRefs.length < 2 || !mirror) {
+        alert('Symmetric: zaznacz 2 punkty i oś układu lub linię.');
+        return;
+      }
+      const A = resolvePoint(pointRefs[0])!;
+      const B = resolvePoint(pointRefs[1])!;
+      let refl: { x: number; y: number };
+      if (axisRef === '#axisX') refl = { x: A.x, y: -A.y };
+      else if (axisRef === '#axisY') refl = { x: -A.x, y: A.y };
+      else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const L = project.entityRegistry.get(lineRef as string) as any;
+        refl = reflectAcrossLine({ x: A.x, y: A.y }, { x: L.x1, y: L.y1 }, { x: L.x2 - L.x1, y: L.y2 - L.y1 });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      project.updateEntity(B.id, { [B.xKey]: refl.x, [B.yKey]: refl.y } as any);
+      setConstraints(prev => [...prev, { id: `sym-${Date.now()}`, type: 'symmetric', refs: [pointRefs[0], pointRefs[1], mirror], visible: true }]);
+      setSubRefs([]);
+      setSubSelClear(v => v + 1);
+      return;
+    }
+
+    // Coincident — 2 punkty w tym samym miejscu, LUB punkt na krawędzi (point-on-edge).
+    // Utrzymywany przez efekt enforceCoincident przy przesuwaniu.
+    if (type === 'coincident') {
+      const isPointRef = (r: string) => r.includes('.') || project.entityRegistry.get(r)?.type === 'point';
+      const pointRefs = refsPool.filter(isPointRef);
+      const edgeRef = refsPool.find(r => !r.includes('.') && !r.startsWith('#') && project.entityRegistry.get(r)?.type === 'line');
+      if (pointRefs.length >= 2) {
+        const A = resolvePoint(pointRefs[0]); const B = resolvePoint(pointRefs[1]);
+        if (A && B) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          project.updateEntity(B.id, { [B.xKey]: A.x, [B.yKey]: A.y } as any);
+          setConstraints(prev => [...prev, { id: `co-${Date.now()}`, type: 'coincident', refs: [pointRefs[0], pointRefs[1]], visible: true }]);
+        }
+      } else if (pointRefs.length === 1 && edgeRef) {
+        const A = resolvePoint(pointRefs[0]);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const L = project.entityRegistry.get(edgeRef) as any;
+        if (A && L) {
+          const proj = projectOnLine({ x: A.x, y: A.y }, { x: L.x1, y: L.y1 }, { x: L.x2 - L.x1, y: L.y2 - L.y1 });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          project.updateEntity(A.id, { [A.xKey]: proj.x, [A.yKey]: proj.y } as any);
+          setConstraints(prev => [...prev, { id: `co-${Date.now()}`, type: 'coincident', refs: [pointRefs[0], edgeRef], visible: true }]);
+        }
+      } else {
+        alert('Coincident: zaznacz 2 punkty, albo punkt i krawędź.');
+        return;
+      }
+      setSubRefs([]);
+      setSubSelClear(v => v + 1);
+      return;
+    }
+
+    if (refsPool.length < refsRequired) {
+      alert(`${constraintTypeLabel(type)} wymaga ${refsRequired} zaznaczonych elementów. Zaznaczono: ${refsPool.length}`);
       return;
     }
     let value: number | undefined = undefined;
@@ -141,62 +469,89 @@ export function SketchEditor({ project, plane, onExit }: Props) {
       value = parseFloat(input);
       if (isNaN(value)) return;
     }
-    addConstraint(type, selectedElementIds.slice(0, refsRequired), value);
+    addConstraint(type, refsPool.slice(0, refsRequired), value);
+    setSubRefs([]);
+    setSubSelClear(v => v + 1);
   };
 
-  // Dimension dropdown menu
-  const [dimAnchor, setDimAnchor] = useState<HTMLElement | null>(null);
-
-  const dimensionOptions: Array<{ type: ConstraintType | 'auto'; label: string }> = [
-    { type: 'auto', label: 'Dimension (intelligent)' },
-    { type: 'horizontal_distance', label: 'Horizontal Dimension' },
-    { type: 'vertical_distance', label: 'Vertical Dimension' },
-    { type: 'distance', label: 'Distance Dimension' },
-    { type: 'radius', label: 'Radius Dimension' },
-    { type: 'diameter', label: 'Diameter Dimension' },
-    { type: 'angle', label: 'Angle Dimension' },
-    { type: 'fixed', label: 'Lock Position' },
+  // ── Dimension dropdown (FreeCAD-style) ────────────────────────────────────────
+  type DimKey = 'auto' | 'horizontal_distance' | 'vertical_distance' | 'distance'
+    | 'auto_radius_diameter' | 'radius' | 'diameter' | 'angle' | 'lock';
+  const dimensionOptions: Array<{ key: DimKey; label: string; sc: string; icon: string }> = [
+    { key: 'auto', label: 'Dimension', sc: 'D', icon: 'c_dimension' },
+    { key: 'horizontal_distance', label: 'Constrain horizontal distance', sc: 'L', icon: 'c_horizontal_distance' },
+    { key: 'vertical_distance', label: 'Constrain vertical distance', sc: 'I', icon: 'c_vertical_distance' },
+    { key: 'distance', label: 'Constrain distance', sc: 'K, D', icon: 'c_distance' },
+    { key: 'auto_radius_diameter', label: 'Constrain auto radius/diameter', sc: 'K, S', icon: 'c_radius' },
+    { key: 'radius', label: 'Constrain radius', sc: 'K, R', icon: 'c_radius' },
+    { key: 'diameter', label: 'Constrain diameter', sc: 'K, O', icon: 'c_diameter' },
+    { key: 'angle', label: 'Constrain angle', sc: 'K, A', icon: 'c_angle' },
+    { key: 'lock', label: 'Constrain lock', sc: 'K, L', icon: 'c_fixed' },
   ];
 
-  const applyDimension = (type: ConstraintType | 'auto') => {
-    setDimAnchor(null);
-    if (type === 'auto') {
-      // Intelligent — na podstawie liczby i typu zaznaczonych elementów wybierz najlepszy typ
-      const selEntities = selectedElementIds.map(id => entities.find(e => e.id === id)).filter(Boolean) as Array<{ id: string; type: string }>;
-      if (selEntities.length === 0) {
-        alert('Zaznacz element(y) najpierw');
-        return;
-      }
-      if (selEntities.length === 1) {
-        const e = selEntities[0];
-        if (e.type === 'circle') applyConstraintFromToolbar('radius', 1, true);
-        else if (e.type === 'line') applyConstraintFromToolbar('distance', 1, true);  // długość linii — wymaga refów p1/p2
-        else applyConstraintFromToolbar('fixed', 1);
-      } else if (selEntities.length === 2) {
-        const [a, b] = selEntities;
-        if (a.type === 'line' && b.type === 'line') applyConstraintFromToolbar('angle', 2, true);
-        else applyConstraintFromToolbar('distance', 2, true);
-      } else {
-        alert('Intelligent Dimension obsługuje 1-2 elementy. Wybierz konkretny typ z menu.');
-      }
-      return;
+  const askValue = (msg = 'Wartość (mm):'): number => {
+    const v = prompt(msg);
+    return v == null ? NaN : parseFloat(v);
+  };
+
+  const applyDimension = (key: DimKey) => {
+    const refs = subRefs.length ? subRefs : selectedElementIds;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const get = (id: string) => project.entityRegistry.get(id) as any;
+    const addDim = (type: ConstraintType, r: string[], val: number) =>
+      setConstraints(prev => [...prev, { id: `dim-${Date.now()}`, type, refs: r, value: val, visible: true }]);
+    const done = () => { setSubRefs([]); setSubSelClear(v => v + 1); };
+
+    if (key === 'lock') { applyConstraintFromToolbar('fixed', 1); return; }
+
+    // radius / diameter / auto
+    if (key === 'radius' || key === 'diameter' || key === 'auto_radius_diameter') {
+      const cid = refs.map(r => r.split('.')[0]).find(id => ['circle', 'arc'].includes(get(id)?.type));
+      if (!cid) { alert('Zaznacz okrąg lub łuk.'); return; }
+      const e = get(cid);
+      const v = askValue(); if (!isFinite(v) || v <= 0) return;
+      const isDia = key === 'diameter' || (key === 'auto_radius_diameter' && e.type === 'circle');
+      project.updateEntity(cid, { radius: isDia ? v / 2 : v } as never);
+      addDim(isDia ? 'diameter' : 'radius', [cid], v); done(); return;
     }
 
-    // Konkretne typy
-    switch (type) {
-      case 'horizontal_distance':
-      case 'vertical_distance':
-      case 'distance':
-      case 'angle':
-        applyConstraintFromToolbar(type, 2, true);
-        break;
-      case 'radius':
-      case 'diameter':
-        applyConstraintFromToolbar(type, 1, true);
-        break;
-      case 'fixed':
-        applyConstraintFromToolbar('fixed', 1);
-        break;
+    // horizontal_distance / vertical_distance / distance — 2 punkty
+    if (key === 'horizontal_distance' || key === 'vertical_distance' || key === 'distance') {
+      const pr = refs.filter(r => r.includes('.') || get(r)?.type === 'point');
+      const A = resolvePoint(pr[0]); const B = resolvePoint(pr[1]);
+      if (!A || !B) { alert('Zaznacz 2 punkty.'); return; }
+      const v = askValue(); if (!isFinite(v) || v <= 0) return;
+      if (key === 'horizontal_distance') project.updateEntity(B.id, { [B.xKey]: A.x + (B.x >= A.x ? v : -v) } as never);
+      else if (key === 'vertical_distance') project.updateEntity(B.id, { [B.yKey]: A.y + (B.y >= A.y ? v : -v) } as never);
+      else {
+        const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1;
+        project.updateEntity(B.id, { [B.xKey]: A.x + dx / len * v, [B.yKey]: A.y + dy / len * v } as never);
+      }
+      addDim(key, [pr[0], pr[1]], v); done(); return;
+    }
+
+    // angle — 2 linie
+    if (key === 'angle') {
+      const lids = [...new Set(refs.filter(r => !r.includes('.') && get(r)?.type === 'line'))];
+      if (lids.length < 2) { alert('Zaznacz 2 linie.'); return; }
+      const v = askValue('Kąt (°):'); if (!isFinite(v)) return;
+      const A = get(lids[0]); const B = get(lids[1]);
+      const angA = Math.atan2(A.y2 - A.y1, A.x2 - A.x1);
+      const target = angA + v * Math.PI / 180;
+      const lenB = Math.hypot(B.x2 - B.x1, B.y2 - B.y1);
+      const mx = (B.x1 + B.x2) / 2, my = (B.y1 + B.y2) / 2;
+      const hx = Math.cos(target) * lenB / 2, hy = Math.sin(target) * lenB / 2;
+      project.updateEntity(lids[1], { x1: mx - hx, y1: my - hy, x2: mx + hx, y2: my + hy } as never);
+      addDim('angle', [lids[0], lids[1]], v); done(); return;
+    }
+
+    // auto — wybór na podstawie zaznaczenia
+    if (key === 'auto') {
+      const cid = refs.map(r => r.split('.')[0]).find(id => ['circle', 'arc'].includes(get(id)?.type));
+      if (cid) { applyDimension(get(cid).type === 'circle' ? 'diameter' : 'radius'); return; }
+      const lids = [...new Set(refs.filter(r => !r.includes('.') && get(r)?.type === 'line'))];
+      if (lids.length >= 2) { applyDimension('angle'); return; }
+      applyDimension('distance'); return;
     }
   };
 
@@ -239,7 +594,35 @@ export function SketchEditor({ project, plane, onExit }: Props) {
         </Button>
       </Box>
 
-      <ActionBar activeTool={activeTool} onToolChange={handleToolChange} project={project} />
+      <ActionBar
+        activeTool={activeTool}
+        onToolChange={handleToolChange}
+        project={project}
+        dimensionOptions={dimensionOptions}
+        onDimensionOption={(key) => applyDimension(key as typeof dimensionOptions[number]['key'])}
+      >
+        {/* Constrainty — w tym samym rzędzie co Move/Copy/... */}
+        {constraintHandlers.map(h => (
+          <Tooltip key={h.type} title={h.label}>
+            <Box
+              onClick={() => applyConstraintFromToolbar(h.type, h.refsRequired, !!h.needsValue)}
+              sx={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 30, height: 30, cursor: 'pointer', borderRadius: 0.5, flexShrink: 0,
+                '&:hover': { bgcolor: 'action.selected' },
+              }}
+            >
+              <ConstraintToolbarIcon type={h.type} />
+            </Box>
+          </Tooltip>
+        ))}
+        <Box sx={{ flex: 1, minWidth: 8 }} />
+        <Tooltip title={panelOpen ? 'Ukryj panel' : 'Pokaż panel'}>
+          <IconButton size="small" sx={{ width: 30, height: 30, flexShrink: 0 }} onClick={() => setPanelOpen(o => !o)}>
+            {panelOpen ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+      </ActionBar>
 
       <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <Toolbar activeTool={activeTool} onToolChange={handleToolChange} viewMode="2d" />
@@ -253,71 +636,19 @@ export function SketchEditor({ project, plane, onExit }: Props) {
             injectedPoint={injectedPoint}
             injectedAngle={injectedAngle}
             onLastPoint={p => { lastPointRef.current = p; }}
+            subSelect
+            onSubSelect={setSubRefs}
+            subSelectClear={subSelClear}
+            onDimensionClick={setDimDialogId}
+            constraints={constraints}
           />
         </Box>
 
+        {panelOpen && (
         <Box sx={{
           width: 260, display: 'flex', flexDirection: 'column',
           bgcolor: 'background.paper', borderLeft: '1px solid rgba(0,0,0,0.12)',
         }}>
-          {/* Dimension dropdown — osobny wiersz, wyraźnie widoczny */}
-          <Box sx={{
-            display: 'flex', p: 0.5, borderBottom: '1px solid rgba(0,0,0,0.12)',
-            bgcolor: 'background.paper',
-          }}>
-            <Button
-              size="small"
-              variant="outlined"
-              fullWidth
-              onClick={e => setDimAnchor(e.currentTarget)}
-              sx={{
-                borderColor: '#c62828', color: '#c62828',
-                justifyContent: 'flex-start', gap: 1, fontSize: 12,
-                '&:hover': { borderColor: '#c62828', bgcolor: 'rgba(198,40,40,0.08)' },
-              }}
-              startIcon={<DimensionIcon />}
-              endIcon={<span style={{ fontSize: 10 }}>▾</span>}
-            >
-              Dimension
-            </Button>
-            <Menu anchorEl={dimAnchor} open={!!dimAnchor} onClose={() => setDimAnchor(null)}
-              anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-              transformOrigin={{ vertical: 'top', horizontal: 'left' }}>
-              {dimensionOptions.map(opt => (
-                <MenuItem key={opt.type} dense onClick={() => applyDimension(opt.type)}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <DimensionSubIcon type={opt.type} />
-                    <Typography variant="body2">{opt.label}</Typography>
-                  </Box>
-                </MenuItem>
-              ))}
-            </Menu>
-          </Box>
-
-          {/* Toolbar constraints — 8 buttons w stylu FreeCAD */}
-          <Box sx={{
-            display: 'flex', flexWrap: 'wrap', gap: 0.25, p: 0.5,
-            borderBottom: '1px solid rgba(0,0,0,0.12)',
-            bgcolor: 'action.hover',
-          }}>
-            {constraintHandlers.map(h => (
-              <Tooltip key={h.type} title={h.label}>
-                <Box
-                  onClick={() => applyConstraintFromToolbar(h.type, h.refsRequired, !!h.needsValue)}
-                  sx={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 28, height: 28, cursor: 'pointer',
-                    borderRadius: 0.5,
-                    color: '#c62828',
-                    '&:hover': { bgcolor: 'action.selected' },
-                  }}
-                >
-                  <ConstraintToolbarIcon type={h.type} />
-                </Box>
-              </Tooltip>
-            ))}
-          </Box>
-
           {/* Tabs (4 zakładki) */}
           <Box sx={{ display: 'flex', borderBottom: '1px solid rgba(0,0,0,0.12)' }}>
             {(['constraints', 'elements', 'layers', 'properties'] as const).map(tab => (
@@ -344,6 +675,15 @@ export function SketchEditor({ project, plane, onExit }: Props) {
                 onToggleVisibility={(id, visible) =>
                   setConstraints(constraints.map(c => c.id === id ? { ...c, visible } : c))}
                 onDelete={id => {
+                  const removed = constraints.find(c => c.id === id);
+                  // Usunięcie Fixed → odblokuj encję.
+                  if (removed?.type === 'fixed') {
+                    for (const ref of removed.refs) {
+                      const eid = ref.split('.')[0];
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      if (project.entityRegistry.get(eid)) project.updateEntity(eid, { locked: false } as any);
+                    }
+                  }
                   const next = constraints.filter(c => c.id !== id);
                   setConstraints(next);
                   runSolver(next);
@@ -380,14 +720,16 @@ export function SketchEditor({ project, plane, onExit }: Props) {
           </Box>
 
           {/* Info: selected elements count */}
-          {selectedElementIds.length > 0 && (
+          {(subRefs.length || selectedElementIds.length) > 0 && (
             <Box sx={{ p: 0.5, borderTop: '1px solid rgba(0,0,0,0.12)', bgcolor: 'primary.dark' }}>
               <Typography variant="caption" sx={{ color: 'primary.contrastText', fontSize: 10 }}>
-                {selectedElementIds.length} zaznaczonych elementów
+                {subRefs.length || selectedElementIds.length} zaznaczonych elementów
+                {subRefs.length ? ` (${subRefs.join(', ')})` : ''}
               </Typography>
             </Box>
           )}
         </Box>
+        )}
       </Box>
 
       <Divider />
@@ -399,6 +741,13 @@ export function SketchEditor({ project, plane, onExit }: Props) {
         onAngle={deg => setInjectedAngle(deg + Math.random() * 1e-10)}
         lastPoint={lastPointRef.current}
       />
+      {dimDialogId && (
+        <DimensionValueDialog
+          project={project}
+          dimId={dimDialogId}
+          onClose={() => setDimDialogId(null)}
+        />
+      )}
     </Box>
     </ThemeProvider>
   );
@@ -406,6 +755,8 @@ export function SketchEditor({ project, plane, onExit }: Props) {
 
 /** Ikony constraint toolbar w stylu FreeCAD (czerwone SVG). */
 function ConstraintToolbarIcon({ type }: { type: ConstraintType }) {
+  const url = freecadIconUrl(`c_${type}`);
+  if (url) return <Box component="img" src={url} alt={type} sx={{ width: 20, height: 20, objectFit: 'contain' }} />;
   const c = '#c62828';
   const s = { width: 20, height: 20, viewBox: '0 0 20 20', xmlns: 'http://www.w3.org/2000/svg' };
   switch (type) {
@@ -430,39 +781,3 @@ function ConstraintToolbarIcon({ type }: { type: ConstraintType }) {
   }
 }
 
-/** Dimension toolbar icon — czerwony trójkąt-strzałka jak w FreeCAD. */
-function DimensionIcon() {
-  const c = '#c62828';
-  return (
-    <svg width={20} height={20} viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-      <path d="M 2 15 L 18 5 L 15 3 L 2 12 Z" fill={c} stroke={c} strokeWidth="1" />
-      <line x1="4" y1="17" x2="18" y2="17" stroke={c} strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-/** Ikony dla poszczególnych typów dimension w submenu. */
-function DimensionSubIcon({ type }: { type: ConstraintType | 'auto' }) {
-  const c = '#c62828';
-  const s = { width: 16, height: 16, viewBox: '0 0 16 16', xmlns: 'http://www.w3.org/2000/svg' };
-  switch (type) {
-    case 'auto':
-      return <svg {...s}><path d="M 1 12 L 15 4 L 12 2 L 1 10 Z" fill={c} /></svg>;
-    case 'horizontal_distance':
-      return <svg {...s}><line x1="2" y1="8" x2="14" y2="8" stroke={c} strokeWidth="1.5" /><line x1="2" y1="5" x2="2" y2="11" stroke={c} strokeWidth="2" /><line x1="14" y1="5" x2="14" y2="11" stroke={c} strokeWidth="2" /></svg>;
-    case 'vertical_distance':
-      return <svg {...s}><line x1="8" y1="2" x2="8" y2="14" stroke={c} strokeWidth="1.5" /><line x1="5" y1="2" x2="11" y2="2" stroke={c} strokeWidth="2" /><line x1="5" y1="14" x2="11" y2="14" stroke={c} strokeWidth="2" /></svg>;
-    case 'distance':
-      return <svg {...s}><path d="M 3 12 L 13 4" stroke={c} strokeWidth="1.5" /><circle cx="3" cy="12" r="1.5" fill={c} /><circle cx="13" cy="4" r="1.5" fill={c} /></svg>;
-    case 'radius':
-      return <svg {...s}><circle cx="8" cy="8" r="5" fill="none" stroke={c} strokeWidth="1.5" /><line x1="8" y1="8" x2="12.5" y2="4.5" stroke={c} strokeWidth="1.5" /></svg>;
-    case 'diameter':
-      return <svg {...s}><circle cx="8" cy="8" r="5" fill="none" stroke={c} strokeWidth="1.5" /><text x="6" y="11" fontSize="9" fill={c}>Ø</text></svg>;
-    case 'angle':
-      return <svg {...s}><path d="M 2 14 L 14 14 M 2 14 L 12 4" stroke={c} strokeWidth="1.5" fill="none" /><path d="M 5 12 A 3 3 0 0 0 4 10" stroke={c} strokeWidth="1" fill="none" /></svg>;
-    case 'fixed':
-      return <svg {...s}><rect x="4" y="7" width="8" height="6" fill="none" stroke={c} strokeWidth="1.5" /><path d="M 6 7 L 6 5 A 2 2 0 0 1 10 5 L 10 7" stroke={c} strokeWidth="1.5" fill="none" /></svg>;
-    default:
-      return null;
-  }
-}

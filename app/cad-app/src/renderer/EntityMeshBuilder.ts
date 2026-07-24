@@ -188,9 +188,11 @@ function arrowHeadLines(
 function buildDimensionObject(entity: DimensionEntity, layer: Layer | undefined, isSelected: boolean): THREE.Group {
   const colorHex = isSelected
     ? '#4fc3f7'
-    : entity.color !== 'bylayer'
-      ? (entity.color as string)
-      : (layer?.color ?? DIM_COLOR_DEFAULT);
+    : entity.driving
+      ? '#3ecf68'   // driving (stały) constraint — wyróżniony kolor
+      : entity.color !== 'bylayer'
+        ? (entity.color as string)
+        : (layer?.color ?? DIM_COLOR_DEFAULT);
   const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(colorHex), linewidth: 1 });
 
   const { x1, y1, x2, y2, offset } = entity;
@@ -246,6 +248,15 @@ function buildDimensionObject(entity: DimensionEntity, layer: Layer | undefined,
   return group;
 }
 
+/** Znacznik środka (okrąg/łuk) — biała kropka o stałym rozmiarze ekranowym, zawsze widoczna. */
+function centerDot(cx: number, cy: number, isSelected: boolean): THREE.Points {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([cx, cy, 0.1], 3));
+  return new THREE.Points(g, new THREE.PointsMaterial({
+    color: isSelected ? SELECTION_COLOR : 0xffffff, size: 6, sizeAttenuation: false,
+  }));
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export function buildEntityObject(entity: Entity, layer: Layer | undefined, isSelected: boolean): THREE.Object3D {
@@ -284,7 +295,11 @@ export function buildEntityObject(entity: Entity, layer: Layer | undefined, isSe
       ));
       const line = new THREE.Line(geo, mat);
       line.userData['entityId'] = entity.id;
-      return line;
+      // Zawsze pokazuj wierzchołek środka (widoczny + wymiarowalny).
+      const group = new THREE.Group();
+      group.userData['entityId'] = entity.id;
+      group.add(line, centerDot(entity.cx, entity.cy, isSelected));
+      return group;
     }
 
     case 'point': {
@@ -343,7 +358,11 @@ export function buildEntityObject(entity: Entity, layer: Layer | undefined, isSe
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
       const line = new THREE.Line(geo, mat);
       line.userData['entityId'] = entity.id;
-      return line;
+      // Zawsze pokazuj wierzchołek środka łuku (widoczny + wymiarowalny).
+      const group = new THREE.Group();
+      group.userData['entityId'] = entity.id;
+      group.add(line, centerDot(entity.cx, entity.cy, isSelected));
+      return group;
     }
 
     default: {

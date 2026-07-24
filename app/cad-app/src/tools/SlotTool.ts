@@ -85,6 +85,7 @@ export class SlotTool implements Tool {
     if (!this.a || !this.b || r < 0.01) { this.reset(); return; }
     ctx.project.addEntity({
       type: 'polyline', points: this.outline(r), closed: true,
+      construction: { kind: 'slot', ctrl: [{ ...this.a }, { ...this.b }], radius: r },
       layerId: ctx.project.layerSystem.getActiveId(),
       color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
       visible: true, locked: false, extrudeHeight: 0,

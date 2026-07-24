@@ -27,6 +27,7 @@ export type ConstraintType =
   | 'perpendicular'
   | 'tangent'
   | 'equal'
+  | 'symmetric'             // 2 punkty symetryczne względem osi/linii
   // Dimensions (constraint z wartością)
   | 'distance'              // ogólna odległość między 2 punktami == value
   | 'horizontal_distance'   // |xa - xb| == value
@@ -127,12 +128,22 @@ function residuals(constraint: SketchConstraint, entities: SketchEntity[]): numb
         return [a.x - b.x, a.y - b.y];
       }
       case 'horizontal': {
-        // Linia horyzontalna: y1 == y2
+        // 2 punkty → wspólne Y; 1 linia → y1 == y2.
+        if (constraint.refs.length >= 2) {
+          const a = getPoint(entities, constraint.refs[0]);
+          const b = getPoint(entities, constraint.refs[1]);
+          return [a.y - b.y];
+        }
         const line = getLineVec(entities, constraint.refs[0]);
         return [line.p1.y - line.p2.y];
       }
       case 'vertical': {
-        // Linia wertykalna: x1 == x2
+        // 2 punkty → wspólne X; 1 linia → x1 == x2.
+        if (constraint.refs.length >= 2) {
+          const a = getPoint(entities, constraint.refs[0]);
+          const b = getPoint(entities, constraint.refs[1]);
+          return [a.x - b.x];
+        }
         const line = getLineVec(entities, constraint.refs[0]);
         return [line.p1.x - line.p2.x];
       }
@@ -414,6 +425,7 @@ export function constraintTypeLabel(type: ConstraintType): string {
     diameter: 'Diameter',
     angle: 'Angle',
     fixed: 'Fixed',
+    symmetric: 'Symmetric',
   };
   return labels[type] ?? type;
 }

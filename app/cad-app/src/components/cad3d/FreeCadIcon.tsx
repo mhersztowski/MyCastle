@@ -1,7 +1,8 @@
 import { Box } from '@mui/material';
+import { freecadIconUrl } from '../../assets/freecadIcons';
 
 /**
- * Ikony FreeCAD-style dla ops toolbar. Ładuje SVG z /icons/freecad/{name}.svg
+ * Ikony FreeCAD-style dla ops toolbar. SVG importowane przez Vite z src/assets/freecad-icons
  * (pobrane skryptem scripts/fetch-freecad-icons.sh z repo FreeCAD, LGPL).
  * Dla 'sketch' używamy inline SVG (bo Sketcher_NewSketch.svg jest w Sketcher module
  * i nie zawsze pobiera się prawidłowo).
@@ -40,10 +41,12 @@ function SketchInlineIcon({ size }: { size: number }) {
 export function FreeCadIcon({ name, size = 20 }: { name: FreeCadIconName; size?: number }) {
   // Sketch — inline SVG (nie polegamy na pobranym pliku)
   if (name === 'sketch') return <SketchInlineIcon size={size} />;
+  const url = freecadIconUrl(name);
+  if (!url) return <Box sx={{ width: size, height: size }} />;
   return (
     <Box
       component="img"
-      src={`/icons/freecad/${name}.svg`}
+      src={url}
       alt={name}
       sx={{
         width: size,

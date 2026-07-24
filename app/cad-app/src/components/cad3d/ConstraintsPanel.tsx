@@ -2,6 +2,7 @@ import { Box, TextField, Typography, Checkbox } from '@mui/material';
 import { useState } from 'react';
 import type { SketchConstraint } from '../../cad3d/sketchConstraints';
 import { constraintTypeLabel } from '../../cad3d/sketchConstraints';
+import { freecadIconUrl } from '../../assets/freecadIcons';
 
 interface Props {
   constraints: SketchConstraint[];
@@ -69,6 +70,8 @@ export function ConstraintsPanel({ constraints, onToggleVisibility, onDelete, on
 
 /** Mały czerwony glyph dla typu constraint (jak w FreeCAD). */
 function ConstraintGlyph({ type }: { type: SketchConstraint['type'] }) {
+  const url = freecadIconUrl(`c_${type}`);
+  if (url) return <Box component="img" src={url} alt={type} sx={{ width: 14, height: 14, objectFit: 'contain', display: 'block' }} />;
   const color = '#c62828';
   const size = 14;
   const commonProps = { width: size, height: size, viewBox: '0 0 16 16', xmlns: 'http://www.w3.org/2000/svg' };

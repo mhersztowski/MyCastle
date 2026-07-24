@@ -60,6 +60,7 @@ export class BSplineTool implements Tool {
     const curve = sampleSpline(this.points, { interpolating: this.interpolating, periodic: this.periodic });
     ctx.project.addEntity({
       type: 'polyline', points: curve, closed: this.periodic,
+      construction: { kind: 'bspline', ctrl: this.points.map(p => ({ ...p })), interpolating: this.interpolating, periodic: this.periodic },
       layerId: ctx.project.layerSystem.getActiveId(),
       color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
       visible: true, locked: false, extrudeHeight: 0,

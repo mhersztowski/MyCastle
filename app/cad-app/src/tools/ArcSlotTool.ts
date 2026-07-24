@@ -119,8 +119,10 @@ export class ArcSlotTool implements Tool {
   private commit(ctx: ToolContext): void {
     const w = this.effWidth();
     if (!this.center || w < 0.01) { this.reset(); return; }
+    const sPt = this.pt(this.a1, this.rc), ePt = this.pt(this.a2, this.rc);
     ctx.project.addEntity({
       type: 'polyline', points: this.outline(w), closed: true,
+      construction: { kind: 'arcSlot', ctrl: [{ ...this.center }, sPt, ePt], radius: w },
       layerId: ctx.project.layerSystem.getActiveId(),
       color: 'bylayer', lineType: 'bylayer', lineWidth: 'bylayer',
       visible: true, locked: false, extrudeHeight: 0,

@@ -18,6 +18,7 @@ function endpoints(e: Entity): Point2D[] {
       { x: e.cx + e.radius * Math.cos(e.startAngle), y: e.cy + e.radius * Math.sin(e.startAngle) },
       { x: e.cx + e.radius * Math.cos(e.endAngle), y: e.cy + e.radius * Math.sin(e.endAngle) },
     ];
+    case 'point': return [{ x: e.x, y: e.y }];
     default: return [];
   }
 }
@@ -100,6 +101,10 @@ function closestPointOn(e: Entity, p: Point2D): { point: Point2D; dist: number; 
       const point = { x: e.cx + e.radius * Math.cos(ang), y: e.cy + e.radius * Math.sin(ang) };
       return { point, dist: Math.abs(dist(p, { x: e.cx, y: e.cy }) - e.radius), anchor: { entityId: e.id, kind: 'point-on', angle: ang } };
     }
+    case 'point': {
+      const q = { x: e.x, y: e.y };
+      return { point: q, dist: dist(p, q), anchor: { entityId: e.id, kind: 'endpoint', index: 0 } };
+    }
     default: return null;
   }
 }
@@ -133,13 +138,21 @@ export function makeDimAnchor(
     }
   }
 
-  // point-on: ride the nearest entity outline within threshold.
-  let best: { dist: number; anchor: DimAnchor } | null = null;
+  // Wybierz najbliższą cechę w promieniu `threshold`: wierzchołek (endpoint) i środek (center)
+  // mają pierwszeństwo przed „point-on" (są stabilniejsze i pozwalają kotwiczyć środek okręgu/łuku
+  // oraz encje typu point).
+  const cands: Array<{ dist: number; anchor: DimAnchor }> = [];
   for (const e of entities) {
-    const c = closestPointOn(e, point);
-    if (c && c.dist <= threshold && (!best || c.dist < best.dist)) best = { dist: c.dist, anchor: c.anchor };
+    const eps = endpoints(e);
+    for (let i = 0; i < eps.length; i++) { const d = dist(eps[i], point); if (d <= threshold) cands.push({ dist: d, anchor: { entityId: e.id, kind: 'endpoint', index: i } }); }
+    const c = center(e);
+    if (c) { const d = dist(c, point); if (d <= threshold) cands.push({ dist: d, anchor: { entityId: e.id, kind: 'center' } }); }
+    const po = closestPointOn(e, point);
+    if (po && po.dist <= threshold) cands.push({ dist: po.dist, anchor: po.anchor });
   }
-  return best?.anchor ?? null;
+  if (!cands.length) return null;
+  cands.sort((a, b) => a.dist - b.dist);
+  return cands[0].anchor;
 }
 
 function nearestIndex(pts: Point2D[], p: Point2D): number {

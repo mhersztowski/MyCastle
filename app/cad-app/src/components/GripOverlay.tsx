@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Project } from '@mhersztowski/core-cad';
 import type { CadRenderer } from '../renderer/CadRenderer';
+import { rebuildConstruction, type Construction } from '../tools/shapeRebuild';
 
 type GripHandle = {
   entityId: string;
@@ -14,6 +15,7 @@ function getHandles(project: Project): GripHandle[] {
   for (const id of project.selectionManager.getSelected()) {
     const e = project.entityRegistry.get(id);
     if (!e) continue;
+    if (e.locked) continue; // zwymiarowana/zablokowana encja — brak gripów (nie edytowalna)
     const layer = project.layerSystem.get(e.layerId);
     if (layer && !layer.visible) continue; // pomiń tylko gdy warstwa jawnie ukryta
     switch (e.type) {
@@ -42,11 +44,27 @@ function getHandles(project: Project): GripHandle[] {
         handles.push({ entityId: id, key: 'start',  wx: e.cx + e.radius * Math.cos(e.startAngle), wy: e.cy + e.radius * Math.sin(e.startAngle) });
         handles.push({ entityId: id, key: 'end',    wx: e.cx + e.radius * Math.cos(e.endAngle),   wy: e.cy + e.radius * Math.sin(e.endAngle) });
         break;
-      case 'polyline':
-        e.points.forEach((p: { x: number; y: number }, i: number) => {
-          handles.push({ entityId: id, key: `p${i}`, wx: p.x, wy: p.y });
-        });
+      case 'polyline': {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const con = (e as any).construction;
+        if (con?.ctrl) {
+          // Kształt parametryczny (slot/arcSlot/bspline) → gripy punktów kontrolnych + uchwyt promienia.
+          con.ctrl.forEach((p: { x: number; y: number }, i: number) => {
+            handles.push({ entityId: id, key: `k${i}`, wx: p.x, wy: p.y });
+          });
+          if ((con.kind === 'slot' || con.kind === 'arcSlot') && con.ctrl.length >= 2) {
+            const a = con.ctrl[0], b = con.ctrl[1];
+            const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+            const nx = -dy / len, ny = dx / len, r = con.radius ?? 1;
+            handles.push({ entityId: id, key: 'kr', wx: a.x + nx * r, wy: a.y + ny * r });
+          }
+        } else {
+          e.points.forEach((p: { x: number; y: number }, i: number) => {
+            handles.push({ entityId: id, key: `p${i}`, wx: p.x, wy: p.y });
+          });
+        }
         break;
+      }
       case 'freehand':
         e.points.forEach((p: { x: number; y: number }, i: number) => {
           handles.push({ entityId: id, key: `p${i}`, wx: p.x, wy: p.y });
@@ -103,10 +121,32 @@ function applyDrag(project: Project, entityId: string, key: string, wx: number, 
       }
       break;
     case 'polyline': {
-      const idx = parseInt(key.slice(1));
-      const pts = [...e.points];
-      pts[idx] = { x: wx, y: wy };
-      changes = { points: pts };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const con = (e as any).construction as Construction | undefined;
+      if (con?.ctrl && key.startsWith('k')) {
+        const nc: Construction = { ...con, ctrl: con.ctrl.map(p => ({ ...p })) };
+        if (key === 'kr') {
+          if (con.kind === 'slot') {
+            const a = con.ctrl[0], b = con.ctrl[1];
+            const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+            const nx = -dy / len, ny = dx / len;
+            nc.radius = Math.max(1, Math.abs((wx - a.x) * nx + (wy - a.y) * ny));
+          } else {
+            const c = con.ctrl[0];
+            const rc = Math.hypot(con.ctrl[1].x - c.x, con.ctrl[1].y - c.y);
+            nc.radius = Math.max(1, Math.abs(Math.hypot(wx - c.x, wy - c.y) - rc));
+          }
+        } else {
+          nc.ctrl[parseInt(key.slice(1))] = { x: wx, y: wy };
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        changes = { construction: nc as any, points: rebuildConstruction(nc) };
+      } else {
+        const idx = parseInt(key.slice(1));
+        const pts = [...e.points];
+        pts[idx] = { x: wx, y: wy };
+        changes = { points: pts };
+      }
       break;
     }
     case 'freehand': {

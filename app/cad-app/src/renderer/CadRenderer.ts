@@ -14,6 +14,7 @@ export class CadRenderer {
   private meshMap = new Map<string, THREE.Object3D>();
   private entitiesGroup: THREE.Group;
   private previewGroup: THREE.Group;
+  private highlightGroup: THREE.Group;
   private placementGroup: THREE.Group;
   private placementCentroid = { x: 0, y: 0 };
   private gridGroup: THREE.Group;
@@ -69,10 +70,11 @@ export class CadRenderer {
     this.gridGroup = new THREE.Group();
     this.entitiesGroup = new THREE.Group();
     this.previewGroup = new THREE.Group();
+    this.highlightGroup = new THREE.Group();
     this.placementGroup = new THREE.Group();
     this.placementGroup.visible = false;
     this.lightsGroup = new THREE.Group();
-    this.scene.add(this.gridGroup, this.entitiesGroup, this.previewGroup, this.placementGroup, this.lightsGroup);
+    this.scene.add(this.gridGroup, this.entitiesGroup, this.previewGroup, this.highlightGroup, this.placementGroup, this.lightsGroup);
 
     // Snap marker
     const markerGeo = new THREE.BufferGeometry();
@@ -123,6 +125,13 @@ export class CadRenderer {
       0, -extent, -0.4, 0, extent, -0.4,
     ], 3));
     this.gridGroup.add(new THREE.LineSegments(yGeo, new THREE.LineBasicMaterial({ color: light ? 0x8fca8f : 0x44cc44 })));
+
+    // Punkt początku układu współrzędnych (0,0,0) — jak w FreeCAD. Stały rozmiar ekranowy.
+    const originGeo = new THREE.BufferGeometry();
+    originGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, -0.3], 3));
+    this.gridGroup.add(new THREE.Points(originGeo, new THREE.PointsMaterial({
+      color: light ? 0x333333 : 0xffffff, size: 7, sizeAttenuation: false,
+    })));
   }
 
   private buildLights(): void {
@@ -258,6 +267,36 @@ export class CadRenderer {
       endAngle: preview.endAngle,
     });
     if (obj) this.previewGroup.add(obj);
+  }
+
+  /**
+   * Podświetlenie sub-selekcji (wierzchołki/krawędzie) — osobna warstwa niezależna od
+   * podglądu narzędzi. `segments` to pary punktów; `vertices` rysowane jako kropki.
+   */
+  setHighlight(
+    segments: Array<{ a: Point2D; b: Point2D }>,
+    vertices: Point2D[] = [],
+    color = 0xffb300,
+  ): void {
+    while (this.highlightGroup.children.length) this.highlightGroup.remove(this.highlightGroup.children[0]);
+    if (segments.length) {
+      const pts: number[] = [];
+      for (const s of segments) { pts.push(s.a.x, s.a.y, 0.2); pts.push(s.b.x, s.b.y, 0.2); }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      this.highlightGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })));
+    }
+    if (vertices.length) {
+      const vp: number[] = [];
+      for (const v of vertices) vp.push(v.x, v.y, 0.3);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(vp, 3));
+      this.highlightGroup.add(new THREE.Points(geo, new THREE.PointsMaterial({ color, size: 9, sizeAttenuation: false })));
+    }
+  }
+
+  clearHighlight(): void {
+    while (this.highlightGroup.children.length) this.highlightGroup.remove(this.highlightGroup.children[0]);
   }
 
   setPlacementObjects(objs: THREE.Object3D[] | null, centroidX: number, centroidY: number): void {

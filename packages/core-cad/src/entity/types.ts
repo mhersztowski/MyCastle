@@ -38,6 +38,17 @@ export interface PolylineEntity extends EntityBase {
   type: 'polyline';
   points: Point2D[];
   closed: boolean;
+  /**
+   * Metadane kształtu parametrycznego (slot / arc slot / b-spline). Gdy obecne, edytor pokazuje
+   * gripy dla `ctrl` (punktów kontrolnych), a przy przeciąganiu odbudowuje `points` z tych parametrów.
+   */
+  construction?: {
+    kind: 'slot' | 'arcSlot' | 'bspline';
+    ctrl: Point2D[];         // punkty kontrolne (grips)
+    radius?: number;         // slot / arcSlot — promień/szerokość
+    interpolating?: boolean; // bspline — przez punkty (by knots)
+    periodic?: boolean;      // bspline — zamknięty
+  };
 }
 
 export interface RectEntity extends EntityBase {
@@ -112,6 +123,16 @@ export interface DimensionEntity extends EntityBase {
   anchor1?: DimAnchor;
   /** When set, x2,y2 are resolved live from this anchor (follows the shape). */
   anchor2?: DimAnchor;
+  /** Driving (stały) constraint — geometria jest utrzymywana tak, by wymiar == `value`. */
+  driving?: boolean;
+  /** Docelowa wartość wymiaru napędzającego (mm). */
+  value?: number;
+  /**
+   * Wymiar do osi układu: 'x' = do osi X (y=0), 'y' = do osi Y (x=0).
+   * Stopa prostopadłej (x2,y2) jest wyliczana z zakotwiczonego końca (x1,y1),
+   * więc podąża za wierzchołkiem — pomiar odległości od CAŁEJ linii osi, nie od punktu.
+   */
+  axis?: 'x' | 'y';
 }
 
 // 3D primitive entities — placed in XY plane, extruding along +Z
