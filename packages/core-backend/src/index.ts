@@ -36,6 +36,48 @@ export type { RpcHandler, RpcContext } from './rpc/index';
 export { ScriptsService } from './scripts/ScriptsService';
 export type { ScriptInfo, RunResult } from './scripts/ScriptsService';
 
+// api — fasada klienta dla skryptów backendowych (Drive scripts)
+export {
+  ConnType,
+  Conn,
+  Auth,
+  Person,
+  AgentAiModel,
+  AiChat,
+  conn_http_connect,
+  conn_http_disconnect,
+  conn_mqtt_connect,
+  conn_mqtt_disconnect,
+  conn_mqtt_topic_cmd,
+  conn_mqtt_topic_cmd_res,
+  conn_on_error,
+  conn_on_res,
+  conn_path_user,
+  file_read_string,
+  file_write_string,
+  git_clone,
+  git_add_all,
+  git_commit,
+  git_push,
+  git_pull,
+  git_diff,
+  git_history,
+  git_commit_current,
+} from './api';
+export type { ConnResponse, ResCallback, ErrCallback } from './api';
+
+// server — realizacja API backendu (HTTP + MQTT)
+export { ServerApi, ServerLogic, GitTool, SERVER_CMD_TOPIC, clientResTopic } from './server/api';
+export type {
+  MqttBus,
+  ServerCommand,
+  ServerResponse,
+  ServerCmdBody,
+  GitResult,
+  GitDiffResult,
+  GitCommit,
+} from './server/api';
+
 // interfaces
 export type {
   IAutomateService,

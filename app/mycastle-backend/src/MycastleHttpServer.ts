@@ -1,4 +1,4 @@
-import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth } from '@mhersztowski/core-backend';
+import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi } from '@mhersztowski/core-backend';
 import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
@@ -115,6 +115,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private rootDir: string | null;
   private ownStaticDir: string | null = null;
   private scriptsService: ScriptsService | null = null;
+  private serverApi: ServerApi | null = null;
   // shareUrl → { assets (id+description), baseUrl, key, cachedAt }
   private immichAlbumCache = new Map<string, { assets: { id: string; description: string; lat?: number; lng?: number }[]; baseUrl: string; key: string; cachedAt: number }>();
   private static readonly IMMICH_CACHE_TTL = 3_600_000; // 1 hour
@@ -156,6 +157,8 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (rootDir) {
       this.vfs.mount('/data', new NodeFS({ rootDir: path.resolve(rootDir) }));
       this.scriptsService = new ScriptsService(path.resolve(rootDir));
+      // Realizacja API backendu (server_filename relatywny do katalogu data).
+      this.serverApi = new ServerApi(path.resolve(rootDir));
     }
 
     // Mount MyCastle source tree at /mycastle-code (read by ReadOnlyFS wrapper in the editor).
@@ -187,6 +190,9 @@ export class MycastleHttpServer extends HttpUploadServer {
   }
 
   getRpcRouter(): RpcRouter { return this.rpcRouter; }
+
+  /** Realizacja API backendu (do podłączenia transportu MQTT w App.init). */
+  getServerApi(): ServerApi | null { return this.serverApi; }
 
   setTerminalService(service: TerminalService): void {
     this.terminalService = service;
@@ -1201,6 +1207,15 @@ export class MycastleHttpServer extends HttpUploadServer {
     // Next available serial number: GET /api/next-sn
     if (method === 'GET' && apiPath === '/next-sn') {
       await this.handleNextSn(res);
+      return;
+    }
+
+    // Server API dla skryptów Drive: POST /api/server/cmd  { op, args } → { ok, result?, error? }
+    if (method === 'POST' && apiPath === '/server/cmd') {
+      if (!this.serverApi) { this.sendJsonResponse(res, 503, { error: 'Server API unavailable' }); return; }
+      const body = await this.parseRequestBody(req) as { op?: string; args?: Record<string, unknown> };
+      const result = await this.serverApi.handleHttp(body);
+      this.sendJsonResponse(res, 200, result);
       return;
     }
 

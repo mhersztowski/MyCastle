@@ -18,7 +18,9 @@
       }
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -32,6 +34,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "mqtt": "^5.3.0",
     "ts-json-schema-generator": "^2.3.0",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",

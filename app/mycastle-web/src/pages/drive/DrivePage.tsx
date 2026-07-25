@@ -1189,10 +1189,15 @@ export default function DrivePage(): React.JSX.Element {
       // re-exports the Qt Node wrappers); `lit` → the bundled Lit. Unknown
       // modules are dropped (their symbols stay undefined).
       const minislib = await import('@mhersztowski/minislib');
+      // Fasada API backendu dla skryptów przeglądarkowych Drive (conn_*/file_*/git_*).
+      // Import z monorepo (Vite bundluje źródło + mqtt). Specyfikator w skrypcie:
+      //   import { conn_http_connect, ... } from 'mycastle/packages/core/browser/server/api';
+      const serverApi = await import('../../../../../packages/core/browser/server/api');
       const resolveNs = (spec: string): unknown | null =>
         spec === 'lit' ? lit
           : (spec === '@mhersztowski/minislib' || /minislib/.test(spec)) ? minislib
-            : null;
+            : /core\/browser\/server\/api$/.test(spec) ? serverApi
+              : null;
       const nsMap: Record<string, unknown> = {};
       const bindings: string[] = [];
       let nsIdx = 0;

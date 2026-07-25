@@ -289,6 +289,16 @@ export class App {
     });
     console.log('IoT service started (SQLite + MQTT)');
 
+    // Server API dla skryptów Drive: HTTP (POST /api/server/cmd) + kanał MQTT
+    // (/server/cmd → /client/{clientId}). Uruchamiane przy każdym starcie backendu.
+    const serverApi = this.httpServer.getServerApi();
+    if (serverApi) {
+      serverApi.attachMqtt(this._mqttServer);
+      console.log('Server API started (HTTP /api/server/cmd + MQTT /server/cmd → /client/{clientId})');
+    } else {
+      console.warn('Server API not started — rootDir not configured');
+    }
+
     // Server-logic layer (server/user/client MQTT control plane).
     // Auto-start is OFF by default — run it yourself from a backend script
     // (`import 'mycastle/packages/server-logic/src/index.ts'`). The Server Logic
