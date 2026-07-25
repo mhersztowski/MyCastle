@@ -145,12 +145,29 @@ export function SketchEditor({ project, plane, onExit }: Props) {
   // Dodanie wymiaru (DimensionTool) → wpis constraintu na liście. Referencje zwymiarowanych
   // encji odczytujemy z wyłączonych kotwic wymiaru (anchor1/anchor2.entityId).
   const processedDimsRef = useRef<Set<string>>(new Set());
+  const processedRectsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const eventBus = (project as any).eventBus;
     if (!eventBus?.on) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const onAdded = (e: any) => {
+      // Nowy prostokąt → automatycznie dodaj 8 constraintów (jak FreeCAD):
+      // 4× coincident (rogi), 2× vertical (boki pionowe), 2× horizontal (boki poziome).
+      // W naszym modelu rect to pojedyncza encja (rogi z natury coincydentne, boki
+      // osiowo wyrównane), więc są to wpisy display-only — refs wskazują na encję rect.
+      if (e && e.type === 'rect' && !processedRectsRef.current.has(e.id)) {
+        processedRectsRef.current.add(e.id);
+        const mk = (type: ConstraintType, i: number): SketchConstraint =>
+          ({ id: `rect-${e.id}-${type}-${i}`, type, refs: [e.id], visible: true });
+        const adds: SketchConstraint[] = [
+          mk('coincident', 0), mk('coincident', 1), mk('coincident', 2), mk('coincident', 3),
+          mk('vertical', 0), mk('vertical', 1),
+          mk('horizontal', 0), mk('horizontal', 1),
+        ];
+        setConstraints(prev => [...prev, ...adds]);
+        return;
+      }
       if (!e || e.type !== 'dimension' || processedDimsRef.current.has(e.id)) return;
       processedDimsRef.current.add(e.id);
       const value = Math.hypot((e.x2 ?? 0) - (e.x1 ?? 0), (e.y2 ?? 0) - (e.y1 ?? 0));

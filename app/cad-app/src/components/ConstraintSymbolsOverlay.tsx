@@ -10,6 +10,25 @@ export interface SketchConstraintLite {
   visible?: boolean;
 }
 
+/**
+ * Punkt zaczepienia dla auto-constraintów prostokąta (id `rect-<id>-<type>-<i>`):
+ * coincident → 4 rogi, vertical → boki L/R, horizontal → boki T/B. Dzięki temu
+ * symbole rozkładają się jak w FreeCAD, mimo że rect to pojedyncza encja.
+ */
+function rectAutoAnchor(project: Project, c: { id: string; type: string; refs: string[] }): Point2D | null {
+  const m = /^rect-(.+)-(coincident|vertical|horizontal)-(\d+)$/.exec(c.id);
+  if (!m) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const e = project.entityRegistry.get(m[1]) as any;
+  if (!e || e.type !== 'rect') return null;
+  const i = Number(m[3]);
+  const x0 = e.x, y0 = e.y, x1 = e.x + e.width, y1 = e.y + e.height;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  if (c.type === 'coincident') return [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }][i] ?? null;
+  if (c.type === 'vertical') return i === 0 ? { x: x0, y: cy } : { x: x1, y: cy };   // boki pionowe
+  return i === 0 ? { x: cx, y: y0 } : { x: cx, y: y1 };                              // horizontal: boki poziome
+}
+
 /** Punkt zaczepienia symbolu dla danego ref-a (środek krawędzi / wierzchołek / środek okręgu). */
 function refAnchor(project: Project, ref: string): Point2D | null {
   if (ref.startsWith('#')) return null; // oś układu — bez symbolu
@@ -61,13 +80,14 @@ export function ConstraintSymbolsOverlay({ constraints, project, renderer, versi
     if (c.visible === false) continue;
     const url = freecadIconUrl(`c_${c.type}`);
     if (!url) continue;
-    const anchor = refAnchor(project, c.refs[0]);
+    const rectAnchor = rectAutoAnchor(project, c);
+    const anchor = rectAnchor ?? refAnchor(project, c.refs[0]);
     if (!anchor) continue;
-    const elKey = c.refs[0].split('.')[0];
-    const idx = perElement.get(elKey) ?? 0;
-    perElement.set(elKey, idx + 1);
+    // Auto-constrainty rect mają już odrębne kotwice (rogi/boki) → nie stackuj.
+    const idx = rectAnchor ? 0 : (perElement.get(c.refs[0].split('.')[0]) ?? 0);
+    if (!rectAnchor) perElement.set(c.refs[0].split('.')[0], idx + 1);
     const s = renderer.worldToScreen(anchor.x, anchor.y);
-    glyphs.push({ sx: s.x + 8 + idx * 15, sy: s.y - 14, url, key: c.id });
+    glyphs.push({ sx: s.x + 4 + idx * 15, sy: s.y - 14, url, key: c.id });
   }
 
   return (

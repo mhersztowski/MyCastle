@@ -827,7 +827,13 @@ export default function DrivePage(): React.JSX.Element {
   const { openNav } = useLayoutChrome();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [cwd, setCwd] = useState('');                       // relative under /drive/
+  // Inicjalizacja z `?cwd=` (wejście z Pulpitu do ulubionego katalogu) — dzięki temu PIERWSZY
+  // refresh ładuje właściwy katalog (a nie root, który potem trzeba by nadpisać → wyścig).
+  const [cwd, setCwd] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get('cwd') ?? ''; } catch { return ''; }
+  });                                                       // relative under /drive/
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   // Upload progress dialog state. `done` counts files already finished,
@@ -1473,17 +1479,19 @@ export default function DrivePage(): React.JSX.Element {
   // ── Initial mkdir + refresh ─────────────────────────────────────────────
   const refresh = useCallback(async () => {
     setLoading(true);
+    const requested = cwd; // snapshot — odrzuć wynik, jeśli cwd zmienił się w międzyczasie
     try {
       // Make sure /drive/ exists at all — first-time users won't have it.
       if (cwd === '') {
         await vfsMkdir(userName, '').catch(() => {/* already exists */});
       }
       const list = await vfsListDir(userName, cwd);
-      setEntries(list);
+      // Guard przeciw wyścigowi: nie nadpisuj listy, jeśli użytkownik jest już w innym katalogu.
+      if (cwdRef.current === requested) setEntries(list);
     } catch (err) {
       toast((err as Error).message, 'error');
     } finally {
-      setLoading(false);
+      if (cwdRef.current === requested) setLoading(false);
     }
   }, [userName, cwd, toast]);
 
@@ -1643,7 +1651,13 @@ export default function DrivePage(): React.JSX.Element {
     const fileName = lastSlash >= 0 ? rel.slice(lastSlash + 1) : rel;
     const exists = await vfsStat(userName, rel);
     if (!exists) {
-      toast(`Ulubiony plik już nie istnieje: ${rel} — usuń z listy`, 'error');
+      toast(`Ulubiony element już nie istnieje: ${rel} — usuń z listy`, 'error');
+      return;
+    }
+    // Katalog w ulubionych → po prostu wejdź do niego (nie otwieraj jako plik).
+    if (exists.type === DIR_TYPE) {
+      resetPanels();
+      setCwd(rel);
       return;
     }
     setCwd(folder);
@@ -2054,6 +2068,15 @@ export default function DrivePage(): React.JSX.Element {
   // full-page /editor/md/… view so it lands in Drive with the file open. The
   // param is cleared afterwards so it doesn't re-open on later navigation.
   useEffect(() => {
+    // `?cwd=<katalog>` (np. z widgetu „Ulubione" na Pulpicie dla katalogu) → wejdź do niego.
+    const cwdParam = searchParams.get('cwd');
+    if (cwdParam != null) {
+      setCwd(cwdParam);
+      const next = new URLSearchParams(searchParams);
+      next.delete('cwd');
+      setSearchParams(next, { replace: true });
+      return;
+    }
     const openRel = searchParams.get('open');
     if (!openRel) return;
     // `?fullscreen=1` (np. z widgetu „Ulubione" na Pulpicie) otwiera plik
@@ -3192,7 +3215,7 @@ export default function DrivePage(): React.JSX.Element {
                   <Chip
                     key={rel}
                     size="small"
-                    icon={<InsertDriveFileIcon fontSize="small" />}
+                    icon={fileName.includes('.') ? <InsertDriveFileIcon fontSize="small" /> : <FolderIcon fontSize="small" />}
                     label={fileName}
                     title={folder ? `${folder}/${fileName}` : fileName}
                     onClick={() => { void goToFavorite(rel); }}
@@ -3281,7 +3304,7 @@ export default function DrivePage(): React.JSX.Element {
                             itself lives in the row's context menu (`⋯`); having
                             both a clickable toggle here and the same item in
                             the menu was redundant. */}
-                        {e.type === FILE_TYPE && isFavorite(rel) && (
+                        {isFavorite(rel) && (
                           <Tooltip title="Ulubiony — zarządzaj przez menu (⋯)">
                             <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
                           </Tooltip>
@@ -3891,9 +3914,10 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText primary="npm install" secondary="Zależności dla tego katalogu (node_modules)" />
           </MenuItem>
         )}
-        {menuFor && menuFor.entry.type === FILE_TYPE && (() => {
+        {menuFor && (() => {
           const rel = cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name;
           const isFav = isFavorite(rel);
+          const isDir = menuFor.entry.type === DIR_TYPE;
           return (
             <MenuItem onClick={() => { toggleFavorite(menuFor.entry); setMenuFor(null); }}>
               <ListItemIcon>
@@ -3901,7 +3925,7 @@ export default function DrivePage(): React.JSX.Element {
                   ? <StarIcon fontSize="small" sx={{ color: 'warning.main' }} />
                   : <StarBorderIcon fontSize="small" />}
               </ListItemIcon>
-              <ListItemText>{isFav ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}</ListItemText>
+              <ListItemText>{isFav ? 'Usuń z ulubionych' : `Dodaj do ulubionych${isDir ? ' (katalog)' : ''}`}</ListItemText>
             </MenuItem>
           );
         })()}

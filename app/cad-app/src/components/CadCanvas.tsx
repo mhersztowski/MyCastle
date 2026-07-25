@@ -410,8 +410,13 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     // Sub-selekcja (szkic): podświetl najbliższy pod-element + utrzymaj podświetlenie wybranych.
     if (activeTool === 'select' && subSelect && renderer.getViewMode() !== '3d') {
+      // Trafianie liczymy na SUROWYM kursorze (nie na snap.point) — snap robi fallback
+      // na grid, przez co punkt przeskakuje o ~pół komórki i przy części zoomów
+      // wypada poza tolerancję. Raw + próg 12px daje selekcję niezależną od zoomu/siatki.
+      const rawRect = canvasRef.current!.getBoundingClientRect();
+      const raw = renderer.screenToWorld(e.clientX - rawRect.left, e.clientY - rawRect.top);
       const th = (rendererRef.current?.getPixelToWorld() ?? 1) * 12;
-      const hit = pickSub(snap.point, project.entityRegistry.getAll(), th);
+      const hit = pickSub(raw, project.entityRegistry.getAll(), th);
       renderSubHighlight(hit ? { segs: hit.segs, vertex: hit.vertex } : null);
       return;
     }
@@ -475,8 +480,11 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     // Sub-selekcja (szkic): klik zaznacza wierzchołek/krawędź do constraintów (toggle, akumuluje).
     if (activeTool === 'select' && subSelect && !is3d) {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      // Trafianie na SUROWYM kursorze (nie snap.point) — patrz komentarz w handlePointerMove.
+      const raw = renderer.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const th = (rendererRef.current?.getPixelToWorld() ?? 1) * 12;
-      const hit = pickSub(snap.point, project.entityRegistry.getAll(), th);
+      const hit = pickSub(raw, project.entityRegistry.getAll(), th);
       if (hit) {
         const cur = subSelRef.current;
         const i = cur.findIndex(s => s.ref === hit.ref);
@@ -493,7 +501,6 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         return;
       }
       // Brak pod-elementu: jeśli pusto → rozpocznij zaznaczanie ramką; jeśli encja (wymiar) → fall-through.
-      const rect = canvasRef.current!.getBoundingClientRect();
       const pickedHere = renderer.pickEntity(e.clientX - rect.left, e.clientY - rect.top);
       if (!pickedHere) {
         boxSelRef.current = { start: snap.point };

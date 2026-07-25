@@ -387,10 +387,14 @@ function DriveFavWidget({ userName }: { userName: string }) {
         {favs?.map((rel) => {
           const name = rel.split('/').pop() ?? rel;
           const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+          // Heurystyka: brak rozszerzenia w nazwie → katalog (wchodzimy do niego, nie otwieramy jako plik).
+          const isDir = !name.includes('.');
           return (
             <Box
               key={rel}
-              onClick={() => navigate(`/user/${userName}/pim/drive?open=${encodeURIComponent(rel)}&fullscreen=1`)}
+              onClick={() => navigate(isDir
+                ? `/user/${userName}/pim/drive?cwd=${encodeURIComponent(rel)}`
+                : `/user/${userName}/pim/drive?open=${encodeURIComponent(rel)}&fullscreen=1`)}
               sx={{
                 display: 'flex',
                 alignItems: 'center',
@@ -422,7 +426,7 @@ function DriveFavWidget({ userName }: { userName: string }) {
                   '& svg': { fontSize: 18 },
                 }}
               >
-                {fileIconFor(rel)}
+                {isDir ? <FolderIcon /> : fileIconFor(rel)}
               </Box>
               <Box sx={{ minWidth: 0, flex: 1 }}>
                 <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>{name}</Typography>
@@ -673,7 +677,10 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
       for (const e of dataSource.events) {
         if (!e.occursOn(day)) continue;
         const start = e.getStartOn(day);
-        if (start && start.isBefore(now)) continue; // godzina już minęła → usuń z listy
+        // Usuwaj tylko eventy, które JUŻ SIĘ ZAKOŃCZYŁY (koniec przed teraz) — trwający event
+        // (start w przeszłości, ale jeszcze się nie skończył) MA być widoczny.
+        const end = e.getEndOn(day) ?? (start ? start.add(1, 'hour') : null);
+        if (end && end.isBefore(now)) continue;
         out.push({ event: e, date: start ?? day });
       }
     }
@@ -774,7 +781,7 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
           return (
             <Box
               key={i}
-              onClick={() => navigate(`/user/${userName}/pim/calendar`)}
+              onClick={() => navigate(`/user/${userName}/pim/calendar?date=${d.format('YYYY-MM-DD')}`)}
               sx={{
                 aspectRatio: '1 / 1',
                 display: 'flex',

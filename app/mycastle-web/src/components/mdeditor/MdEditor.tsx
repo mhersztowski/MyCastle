@@ -258,6 +258,33 @@ const MdEditor: React.FC<MdEditorProps> = ({
   useEffect(() => { onCreatePageRef.current = onCreatePage; }, [onCreatePage]);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
 
+  // ── Pen-drag-to-scroll ──────────────────────────────────────────────
+  // Na tablecie z piórem przeciąganie po treści (contenteditable) domyślnie ZAZNACZA tekst
+  // zamiast przewijać (przeglądarka traktuje pióro jak mysz). Na dotyku przeglądarka sama
+  // przewija — dlatego tam działa. Tu przechwytujemy pointer 'pen' i ręcznie przewijamy
+  // kontener, anulując zaznaczanie. Tap (bez ruchu) nadal ustawia kursor.
+  const penScrollRef = useRef<{ y: number; top: number; moved: boolean } | null>(null);
+  const onPenPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'pen') return;
+    const el = contentWrapperRef.current;
+    if (!el) return;
+    penScrollRef.current = { y: e.clientY, top: el.scrollTop, moved: false };
+  }, []);
+  const onPenPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const st = penScrollRef.current;
+    if (!st || e.pointerType !== 'pen') return;
+    const el = contentWrapperRef.current;
+    if (!el) return;
+    const dy = e.clientY - st.y;
+    if (!st.moved && Math.abs(dy) < 6) return; // próg — mały ruch to nadal tap
+    st.moved = true;
+    el.scrollTop = st.top - dy;
+    e.preventDefault();
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) sel.removeAllRanges(); // anuluj zaznaczenie zrobione piórem
+  }, []);
+  const onPenPointerEnd = useCallback(() => { penScrollRef.current = null; }, []);
+
   // ── "Today" detection — drives the "now" marker overlay ──────────────
   // Only rendered when filePath points at today's daily journal in any
   // `…/{yyyy}/{mm}/{dd}.md` layout (Calendar/yyyy/… is the canonical one
@@ -2082,6 +2109,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
         onMouseOver={handleEditorMouseOver}
         onMouseOut={handleEditorMouseOut}
         onScroll={handleScroll}
+        onPointerDown={onPenPointerDown}
+        onPointerMove={onPenPointerMove}
+        onPointerUp={onPenPointerEnd}
+        onPointerCancel={onPenPointerEnd}
         sx={{
           flexGrow: 1,
           overflow: 'auto',

@@ -22,7 +22,7 @@ import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import SpaceDashboardOutlinedIcon from '@mui/icons-material/SpaceDashboardOutlined';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/pl';
 import { useMqtt } from '../../modules/mqttclient';
@@ -44,8 +44,24 @@ const CalendarPage: React.FC = () => {
   const { dataSource, isLoading, isDataLoaded, error, writeFile, readFile } = useFilesystem();
   const navigate = useNavigate();
   const { userName } = useParams<{ userName: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
+  // `?date=YYYY-MM-DD` (np. z klika w dzień na widgecie Pulpit) → otwórz ten dzień.
+  const initialDate = (() => {
+    const d = searchParams.get('date');
+    const parsed = d ? dayjs(d) : null;
+    return parsed && parsed.isValid() ? parsed : dayjs();
+  })();
+  const [selectedDate, setSelectedDate] = useState<Dayjs>(initialDate);
+
+  // Wyczyść parametr `date` po zastosowaniu (żeby nie nadpisywał ręcznej nawigacji).
+  useEffect(() => {
+    if (!searchParams.get('date')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('date');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [currentEvent, setCurrentEvent] = useState<CurrentEvent | null>(null);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [modalInitialStartTime, setModalInitialStartTime] = useState<Dayjs | undefined>(undefined);
