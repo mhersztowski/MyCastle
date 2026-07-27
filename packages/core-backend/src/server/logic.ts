@@ -13,6 +13,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
@@ -53,6 +54,65 @@ export interface ServerResponse {
   error?: string;
 }
 
+/**
+ * Wiadomość wypchnięta z serwera do klienta poza cyklem żądanie-odpowiedź
+ * (kanał ten sam: `/client/{MqttClientId}`). Pole `event` odróżnia ją od
+ * `ServerResponse`, które klient koreluje po `id`.
+ */
+export interface ServerPush {
+  event: 'http_endpoint_request';
+  request: HttpEndpointRequest;
+}
+
+/** Poziomy komunikatów `iot_log_*`. */
+export type IotLogLevel = 'info' | 'warning' | 'error';
+
+/**
+ * Komunikat logu rozgłaszany na kanale komend (`SERVER_CMD_TOPIC`). Nie jest
+ * komendą — nie ma `id`/`op`, więc serwer własnego pakietu nie próbuje wykonać;
+ * odbiorcami są warstwa server-logic, automatyzacje i podglądy na żywo.
+ */
+export interface IotLogPacket {
+  type: 'log';
+  level: IotLogLevel;
+  message: string;
+  /** Użytkownik, w którego imieniu działa skrypt. */
+  userName: string;
+  /** `Conn.MqttClientId` nadawcy — gdy log poszedł przez MQTT. */
+  clientId?: string;
+  /** Nazwa nadawcy do wyświetlenia (np. nazwa skryptu). */
+  source?: string;
+  ts: string;
+}
+
+/** Żądanie HTTP przekazane skryptowi, który zarejestrował endpoint. */
+export interface HttpEndpointRequest {
+  /** Id korelujące odpowiedź skryptu z oczekującym żądaniem HTTP. */
+  requestId: string;
+  /** Ścieżka endpointu (bez wiodącego `/`), np. `webhook/github`. */
+  path: string;
+  method: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  /** Ciało: sparsowany JSON, gdy się dało — inaczej tekst. */
+  body?: unknown;
+}
+
+/** Odpowiedź skryptu na żądanie HTTP. */
+export interface HttpEndpointResponse {
+  status: number;
+  headers: Record<string, string>;
+  body?: unknown;
+}
+
+/** Błąd wywołania endpointu — niesie status HTTP do odesłania klientowi. */
+export class HttpEndpointError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'HttpEndpointError';
+  }
+}
+
 export interface GitResult {
   ok: boolean;
   output: string;
@@ -79,6 +139,8 @@ export interface MqttBus {
 /** Kontekst wykonania komendy — `owner` to zweryfikowany użytkownik (JWT po HTTP). */
 export interface DispatchContext {
   owner?: string;
+  /** `Conn.MqttClientId` nadawcy — kanał zwrotny dla komend wymagających push. */
+  clientId?: string;
 }
 
 /** Dostawca sekretów per-user (implementowany przez SecretsService aplikacji). */
@@ -235,6 +297,10 @@ export interface ServerLogicOptions {
   picosdk?: PicoSdkService | null;
   /** Dostęp do urządzeń IoT (wymagany dla iot_*). */
   iot?: IotProvider | null;
+  /** Ile czekać na odpowiedź skryptu obsługującego endpoint HTTP (domyślnie 30 s). */
+  httpEndpointTimeoutMs?: number;
+  /** Ile wywołań na minutę wolno publicznemu endpointowi (domyślnie 120). */
+  publicRateLimitPerMinute?: number;
 }
 
 export class ServerLogic {
@@ -244,6 +310,28 @@ export class ServerLogic {
   private readonly arduino: ArduinoService | null;
   private readonly picosdk: PicoSdkService | null;
   private readonly iot: IotProvider | null;
+  private readonly httpEndpointTimeoutMs: number;
+  private readonly publicRateLimitPerMinute: number;
+
+  /** Kanał MQTT — ustawiany przez `attachServerMqtt`; bez niego nie ma pushy do skryptów. */
+  private bus: MqttBus | null = null;
+  /** Zarejestrowane endpointy skryptów: `{owner}::{path}` → klient obsługujący. */
+  private readonly endpoints = new Map<string, {
+    clientId: string;
+    owner: string;
+    path: string;
+    /** Osiągalny bez JWT (webhooki zewnętrznych usług). */
+    isPublic: boolean;
+  }>();
+  /** Okno licznika wywołań publicznych: ścieżka → {do kiedy, ile}. */
+  private readonly publicHits = new Map<string, { until: number; count: number }>();
+  /** Żądania HTTP czekające na odpowiedź skryptu, po `requestId`. */
+  private readonly pendingEndpointCalls = new Map<string, {
+    resolve: (res: HttpEndpointResponse) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private endpointSeq = 0;
 
   constructor(dataDir: string, opts: ServerLogicOptions = {}) {
     this.dataDir = path.resolve(dataDir);
@@ -251,6 +339,13 @@ export class ServerLogic {
     this.arduino = opts.arduino ?? null;
     this.picosdk = opts.picosdk ?? null;
     this.iot = opts.iot ?? null;
+    this.httpEndpointTimeoutMs = opts.httpEndpointTimeoutMs ?? 30_000;
+    this.publicRateLimitPerMinute = opts.publicRateLimitPerMinute ?? 120;
+  }
+
+  /** Podpina kanał MQTT (woła `attachServerMqtt`) — potrzebny do pushy do skryptów. */
+  attachBus(bus: MqttBus): void {
+    this.bus = bus;
   }
 
   /** Rozwiązuje `server_filename` do ścieżki bezwzględnej wewnątrz `data`. */
@@ -751,6 +846,253 @@ export class ServerLogic {
     return await this.iotDeviceExtCommand(owner, device, 'vfs', op, params);
   }
 
+  // ── Log (`iot_log_*`) ──────────────────────────────────────────────────────
+
+  /** Sprowadza poziom do jednego z trzech dozwolonych; `warn` bywa nawykiem z konsoli. */
+  private normalizeLogLevel(value: string): IotLogLevel {
+    const level = String(value ?? '').trim().toLowerCase();
+    if (level === 'info') return 'info';
+    if (level === 'warning' || level === 'warn') return 'warning';
+    if (level === 'error') return 'error';
+    throw new Error(`iot_log: nieznany poziom "${value}" (dozwolone: info, warning, error)`);
+  }
+
+  /**
+   * Rozgłasza komunikat logu na kanale komend. Publikacja jest jednostronna —
+   * nadawca nie czeka na potwierdzenie od odbiorców, dostaje tylko informację,
+   * że pakiet trafił na szynę.
+   */
+  iotLog(
+    level: string,
+    message: string,
+    meta: { userName?: string; clientId?: string; source?: string } = {},
+  ): { ok: true; packet: IotLogPacket } {
+    const normalized = this.normalizeLogLevel(level);
+    const text = String(message ?? '');
+    if (!text) throw new Error('iot_log: `message` nie może być puste');
+    if (!this.bus) throw new Error('iot_log: kanał MQTT niedostępny');
+
+    const packet: IotLogPacket = {
+      type: 'log',
+      level: normalized,
+      message: text,
+      userName: meta.userName ?? '',
+      ...(meta.clientId ? { clientId: meta.clientId } : {}),
+      ...(meta.source ? { source: meta.source } : {}),
+      ts: new Date().toISOString(),
+    };
+    this.bus.publishMessage(SERVER_CMD_TOPIC, JSON.stringify(packet));
+    return { ok: true, packet };
+  }
+
+  // ── Endpointy HTTP wystawiane przez skrypty (`http_add_endpoint`) ──────────
+
+  /**
+   * Normalizuje ścieżkę endpointu do postaci `a/b` (bez wiodących i końcowych `/`).
+   * Odrzuca puste i takie, które próbują wyjść poza przestrzeń endpointów lub
+   * przemycić query/fragment — ścieżka trafia do klucza rejestru, więc musi być
+   * jednoznaczna.
+   */
+  private normalizeEndpointPath(value: string): string {
+    const clean = String(value ?? '').trim().replace(/^\/+|\/+$/g, '');
+    if (!clean) throw new Error('http_add_endpoint: ścieżka nie może być pusta');
+    if (clean.split('/').some((seg) => seg === '..' || seg === '.') || /[?#\s]/.test(clean)) {
+      throw new Error(`http_add_endpoint: niedozwolona ścieżka (${value})`);
+    }
+    return clean;
+  }
+
+  private endpointKey(owner: string, endpointPath: string): string {
+    return `${owner}::${endpointPath}`;
+  }
+
+  /**
+   * Rejestruje endpoint obsługiwany przez skrypt. Ponowna rejestracja tej samej
+   * ścieżki przez tego samego właściciela nadpisuje klienta — po restarcie skryptu
+   * żądania trafiają do nowego procesu, a nie do martwego `clientId`.
+   */
+  httpAddEndpoint(
+    endpointPath: string,
+    clientId: string,
+    owner: string,
+    opts: { public?: boolean } = {},
+  ): { path: string; public: boolean } {
+    if (!owner) throw new Error('http_add_endpoint: brak właściciela');
+    if (!clientId) throw new Error('http_add_endpoint: wymagane połączenie MQTT (brak clientId)');
+    const normalized = this.normalizeEndpointPath(endpointPath);
+    const isPublic = !!opts.public;
+
+    // Publiczna ścieżka nie ma właściciela w adresie, więc musi być globalnie
+    // jednoznaczna — inaczej cudza rejestracja przejęłaby czyjś webhook.
+    if (isPublic) {
+      const clash = [...this.endpoints.values()].find(
+        (e) => e.isPublic && e.path === normalized && e.owner !== owner,
+      );
+      if (clash) throw new Error(`http_add_endpoint: publiczna ścieżka "${normalized}" jest już zajęta`);
+    }
+
+    this.endpoints.set(this.endpointKey(owner, normalized), { clientId, owner, path: normalized, isPublic });
+    return { path: normalized, public: isPublic };
+  }
+
+  /** Czy pod tą ścieżką stoi endpoint osiągalny bez uwierzytelnienia. */
+  hasPublicHttpEndpoint(endpointPath: string): boolean {
+    try {
+      return !!this.findPublicEndpoint(this.normalizeEndpointPath(endpointPath));
+    } catch {
+      return false;
+    }
+  }
+
+  private findPublicEndpoint(normalized: string) {
+    return [...this.endpoints.values()].find((e) => e.isPublic && e.path === normalized);
+  }
+
+  /** Licznik w oknie minuty — tania zapora przed zalaniem publicznego adresu. */
+  private checkPublicRate(normalized: string): void {
+    const now = Date.now();
+    const hit = this.publicHits.get(normalized);
+    if (!hit || hit.until <= now) {
+      this.publicHits.set(normalized, { until: now + 60_000, count: 1 });
+      return;
+    }
+    if (++hit.count > this.publicRateLimitPerMinute) {
+      throw new HttpEndpointError(429, `Przekroczony limit wywołań endpointu ${normalized}`);
+    }
+  }
+
+  /** Usuwa rejestrację; `false`, gdy nie było czego usuwać. */
+  httpRemoveEndpoint(endpointPath: string, owner: string): { path: string; removed: boolean } {
+    if (!owner) throw new Error('http_remove_endpoint: brak właściciela');
+    const normalized = this.normalizeEndpointPath(endpointPath);
+    return { path: normalized, removed: this.endpoints.delete(this.endpointKey(owner, normalized)) };
+  }
+
+  /** Ścieżki endpointów zarejestrowanych przez danego właściciela. */
+  httpListEndpoints(owner: string): string[] {
+    return [...this.endpoints.values()].filter((e) => e.owner === owner).map((e) => e.path);
+  }
+
+  /**
+   * Wywołuje endpoint skryptu: push żądania na topik jego klienta i oczekiwanie
+   * na komendę `http_endpoint_response`. Endpointy cudzych użytkowników są
+   * nieodróżnialne od nieistniejących (404), żeby nie zdradzać ich istnienia.
+   */
+  callHttpEndpoint(
+    owner: string,
+    req: {
+      method: string;
+      path: string;
+      query?: Record<string, string>;
+      headers?: Record<string, string>;
+      body?: unknown;
+    },
+  ): Promise<HttpEndpointResponse> {
+    let normalized: string;
+    try {
+      normalized = this.normalizeEndpointPath(req.path);
+    } catch (err) {
+      return Promise.reject(new HttpEndpointError(404, err instanceof Error ? err.message : String(err)));
+    }
+
+    const entry = owner ? this.endpoints.get(this.endpointKey(owner, normalized)) : undefined;
+    if (!entry) {
+      return Promise.reject(new HttpEndpointError(404, `Brak endpointu: ${normalized}`));
+    }
+    return this.invokeEndpoint(entry.clientId, normalized, req);
+  }
+
+  /**
+   * Wywołanie BEZ uwierzytelnienia — dla endpointów zarejestrowanych z
+   * `{ public: true }` (webhooki usług, które nie potrafią wysłać JWT).
+   * Endpointy prywatne pozostają niewidoczne (404), a tempo jest limitowane,
+   * bo publiczny adres może wywołać każdy, kto go zna.
+   */
+  callPublicHttpEndpoint(req: {
+    method: string;
+    path: string;
+    query?: Record<string, string>;
+    headers?: Record<string, string>;
+    body?: unknown;
+  }): Promise<HttpEndpointResponse> {
+    let normalized: string;
+    try {
+      normalized = this.normalizeEndpointPath(req.path);
+    } catch (err) {
+      return Promise.reject(new HttpEndpointError(404, err instanceof Error ? err.message : String(err)));
+    }
+
+    const entry = this.findPublicEndpoint(normalized);
+    if (!entry) return Promise.reject(new HttpEndpointError(404, `Brak endpointu: ${normalized}`));
+
+    try {
+      this.checkPublicRate(normalized);
+    } catch (err) {
+      return Promise.reject(err as Error);
+    }
+    return this.invokeEndpoint(entry.clientId, normalized, req);
+  }
+
+  /** Wspólna część: push żądania do skryptu i oczekiwanie na jego odpowiedź. */
+  private invokeEndpoint(
+    clientId: string,
+    normalized: string,
+    req: {
+      method: string;
+      path: string;
+      query?: Record<string, string>;
+      headers?: Record<string, string>;
+      body?: unknown;
+    },
+  ): Promise<HttpEndpointResponse> {
+    if (!this.bus) {
+      return Promise.reject(new HttpEndpointError(503, 'Kanał MQTT niedostępny — endpointy skryptów nie działają'));
+    }
+
+    const requestId = `${++this.endpointSeq}-${randomUUID()}`;
+    const push: ServerPush = {
+      event: 'http_endpoint_request',
+      request: {
+        requestId,
+        path: normalized,
+        method: (req.method || 'GET').toUpperCase(),
+        query: req.query ?? {},
+        headers: req.headers ?? {},
+        body: req.body,
+      },
+    };
+
+    return new Promise<HttpEndpointResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingEndpointCalls.delete(requestId);
+        reject(new HttpEndpointError(504, `Skrypt nie odpowiedział na ${normalized} w ${this.httpEndpointTimeoutMs} ms`));
+      }, this.httpEndpointTimeoutMs);
+      this.pendingEndpointCalls.set(requestId, { resolve, reject, timer });
+      this.bus!.publishMessage(clientResTopic(clientId), JSON.stringify(push));
+    });
+  }
+
+  /** Domyka żądanie odpowiedzią skryptu (komenda `http_endpoint_response`). */
+  resolveHttpEndpointResponse(args: Record<string, unknown>): { ok: boolean } {
+    const requestId = String(args.requestId ?? '');
+    const pending = this.pendingEndpointCalls.get(requestId);
+    // Brak wpisu = żądanie już wygasło (timeout) — nie jest to błąd skryptu.
+    if (!pending) return { ok: false };
+    this.pendingEndpointCalls.delete(requestId);
+    clearTimeout(pending.timer);
+
+    if (args.error) {
+      pending.reject(new HttpEndpointError(500, `Endpoint zgłosił błąd: ${String(args.error)}`));
+      return { ok: true };
+    }
+    pending.resolve({
+      status: Number(args.status ?? 200),
+      headers: (args.headers as Record<string, string>) ?? {},
+      body: args.body,
+    });
+    return { ok: true };
+  }
+
   /** Wykonuje operację po nazwie (wspólne dla HTTP i MQTT). */
   async dispatch(
     op: string,
@@ -812,6 +1154,23 @@ export class ServerLogic {
         return await this.projectPicosdkBuild(owner, s('projectId'), s('sketch'), s('boardKey') || undefined);
       case 'project_picosdk_get_output':
         return this.projectPicosdkGetOutput(owner, s('projectId'), s('sketch'), s('boardKey') || undefined);
+      case 'iot_log':
+        return this.iotLog(s('level'), s('message'), {
+          userName: owner,
+          clientId: ctx.clientId ?? (args.clientId ? String(args.clientId) : undefined),
+          source: args.source ? String(args.source) : undefined,
+        });
+      case 'http_add_endpoint':
+        // Kanał zwrotny istnieje tylko nad MQTT — po HTTP nie ma jak wywołać callbacku.
+        return this.httpAddEndpoint(s('path'), ctx.clientId ?? String(args.clientId ?? ''), owner, {
+          public: args.public === true || args.public === 'true',
+        });
+      case 'http_remove_endpoint':
+        return this.httpRemoveEndpoint(s('path'), owner);
+      case 'http_list_endpoints':
+        return this.httpListEndpoints(owner);
+      case 'http_endpoint_response':
+        return this.resolveHttpEndpointResponse(args);
       case 'iot_get_devices':
         return await this.iotGetDevices(owner);
       case 'iot_device_command':

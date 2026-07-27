@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import { EventNode } from '@mhersztowski/core';
 import { useFilesystem } from '../../modules/filesystem';
+import { useMqtt } from '../../modules/mqttclient';
 import { useLayoutChrome } from '../../components/Layout';
 import {
   Box,
@@ -91,6 +92,9 @@ import {
   VolumeUpRounded as VolumeUpIcon,
   VolumeOffRounded as VolumeOffIcon,
   RecordVoiceOverRounded as AuraIcon,
+  TerminalRounded as LogIcon,
+  PauseRounded as PauseIcon,
+  PlayArrowRounded as PlayIcon,
 } from '@mui/icons-material';
 import { App } from '../../App';
 import { setOccurrenceCancelled } from '../calendar/eventOccurrence';
@@ -108,7 +112,7 @@ import { runBrowserComponent, type RunHandle } from '../../modules/component-run
  *  w localStorage.
  * ------------------------------------------------------------------ */
 
-type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component' | 'aura';
+type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component' | 'aura' | 'iot-log';
 
 interface RssFeed { name?: string; url: string; }
 interface Contact { name: string; detail?: string; hue?: number; }
@@ -127,6 +131,9 @@ interface WidgetConfig {
   weatherCity?: string;           // weather: miasto
   contacts?: Contact[];           // contacts: lista kontaktów
   componentId?: string;           // component: id wpisu z Programming/Components
+  logLevels?: IotLogLevel[];      // iot-log: pokazywane poziomy (brak ⇒ wszystkie)
+  logOnlyMine?: boolean;          // iot-log: tylko wpisy zalogowanego użytkownika
+  logLimit?: number;              // iot-log: ile ostatnich wpisów trzymać
 }
 
 /* --- motyw (jasny/ciemny) współdzielony przez widgety --------------- */
@@ -202,6 +209,7 @@ const WIDGET_CATALOG: { kind: WidgetKind; label: string; icon: React.ReactNode; 
   { kind: 'contacts', label: 'Kontakty', icon: <ContactsIcon fontSize="small" />, w: 320, h: 360 },
   { kind: 'component', label: 'Komponent (Programming/Components)', icon: <ComponentIcon fontSize="small" />, w: 420, h: 360 },
   { kind: 'aura', label: 'Aura — asystent głosowy', icon: <AuraIcon fontSize="small" />, w: 360, h: 240 },
+  { kind: 'iot-log', label: 'IoT Log (iot_log_* z MQTT)', icon: <LogIcon fontSize="small" />, w: 460, h: 300 },
 ];
 
 const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> = {
@@ -216,6 +224,7 @@ const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> 
   'contacts': { title: 'Kontakty', icon: <ContactsIcon sx={{ fontSize: 16 }} /> },
   'component': { title: 'Komponent', icon: <ComponentIcon sx={{ fontSize: 16 }} /> },
   'aura': { title: 'Aura', icon: <AuraIcon sx={{ fontSize: 16 }} /> },
+  'iot-log': { title: 'IoT Log', icon: <LogIcon sx={{ fontSize: 16 }} /> },
 };
 
 /* --- typ wpisu z Programming/Components (do widgetu Komponent) ------------- */
@@ -1314,6 +1323,148 @@ function ComponentWidget({ userName, config }: { userName: string; config?: Widg
   );
 }
 
+/* --- iot-log: podgląd komunikatów `iot_log_*` z kanału komend --------------
+   Skrypty backendu (patrz drive/server/logic/log.ts) rozgłaszają na SERVER_TOPIC
+   pakiety `{ type: 'log', level, message, userName, clientId?, source?, ts }`.
+   Widget subskrybuje ten sam topik wprost z przeglądarki — nie ma tu żadnego
+   REST-a ani historii, więc pokazuje wpisy od momentu otwarcia pulpitu. */
+const SERVER_CMD_TOPIC = '/server/cmd';
+const LOG_LIMIT_DEFAULT = 200;
+
+type IotLogLevel = 'info' | 'warning' | 'error';
+
+interface IotLogEntry {
+  id: number;
+  level: IotLogLevel;
+  message: string;
+  userName: string;
+  clientId?: string;
+  source?: string;
+  ts: string;
+}
+
+const LOG_STYLE: Record<IotLogLevel, { color: string; label: string }> = {
+  info: { color: '#7ea6ff', label: 'INFO' },
+  warning: { color: '#ffb547', label: 'WARN' },
+  error: { color: '#ff6b6b', label: 'ERR' },
+};
+
+/** Rozpoznaje pakiet logu; komendy (`{id, op, args}`) na tym samym topiku pomijamy. */
+function parseLogPacket(payload: string, seq: number): IotLogEntry | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  const p = parsed as Partial<IotLogEntry> & { type?: string };
+  if (p?.type !== 'log' || typeof p.message !== 'string') return null;
+  const level: IotLogLevel = p.level === 'error' || p.level === 'warning' ? p.level : 'info';
+  return {
+    id: seq,
+    level,
+    message: p.message,
+    userName: p.userName ?? '',
+    clientId: p.clientId,
+    source: p.source,
+    ts: p.ts ?? new Date().toISOString(),
+  };
+}
+
+function IotLogWidget({ userName, config }: { userName: string; config?: WidgetConfig }) {
+  const pal = usePal();
+  const { rawSubscribe, isConnected } = useMqtt();
+  const [entries, setEntries] = useState<IotLogEntry[]>([]);
+  const [paused, setPaused] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const seqRef = useRef(0);
+  const pausedRef = useRef(false);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+
+  const limit = Math.max(20, config?.logLimit ?? LOG_LIMIT_DEFAULT);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    return rawSubscribe(SERVER_CMD_TOPIC, (payload) => {
+      // Pauza zamraża widok, ale subskrypcja zostaje — inaczej po wznowieniu
+      // brakowałoby wpisów, a MQTT nie ma dla nas bufora.
+      if (pausedRef.current) return;
+      const entry = parseLogPacket(payload, ++seqRef.current);
+      if (!entry) return;
+      setEntries((prev) => {
+        const next = [...prev, entry];
+        return next.length > limit ? next.slice(next.length - limit) : next;
+      });
+    });
+  }, [isConnected, rawSubscribe, limit]);
+
+  const levels = config?.logLevels;
+  const visible = useMemo(() => entries.filter((e) => {
+    if (levels?.length && !levels.includes(e.level)) return false;
+    if (config?.logOnlyMine && e.userName && e.userName !== userName) return false;
+    return true;
+  }), [entries, levels, config?.logOnlyMine, userName]);
+
+  // Autoscroll tylko wtedy, gdy użytkownik jest przy końcu listy — inaczej
+  // przewijanie historii walczyłoby z napływającymi wpisami.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }, [visible]);
+
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, borderBottom: `1px solid ${pal.subtle}` }}>
+        <Box sx={{
+          width: 8, height: 8, borderRadius: '50%',
+          background: isConnected ? '#4caf50' : '#ff6b6b',
+        }} />
+        <Typography variant="caption" sx={{ flex: 1, opacity: 0.7 }} noWrap>
+          {isConnected ? `${SERVER_CMD_TOPIC} · ${visible.length}` : 'brak połączenia MQTT'}
+        </Typography>
+        <Tooltip title={paused ? 'Wznów' : 'Wstrzymaj'}>
+          <IconButton size="small" onClick={() => setPaused((p) => !p)} sx={{ color: paused ? '#ffb547' : 'inherit' }}>
+            {paused ? <PlayIcon sx={{ fontSize: 16 }} /> : <PauseIcon sx={{ fontSize: 16 }} />}
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Wyczyść">
+          <IconButton size="small" onClick={() => setEntries([])}>
+            <DeleteIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      <Box ref={listRef} sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 1, py: 0.5, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>
+        {visible.length === 0 && (
+          <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', textAlign: 'center', px: 2 }}>
+            <Typography variant="caption" sx={{ opacity: 0.55 }}>
+              Czekam na wpisy <b>iot_log_*</b> z kanału {SERVER_CMD_TOPIC}.
+            </Typography>
+          </Box>
+        )}
+        {visible.map((e) => {
+          const style = LOG_STYLE[e.level];
+          const who = [e.source, e.userName].filter(Boolean).join('/');
+          return (
+            <Box key={e.id} sx={{ display: 'flex', gap: 0.75, py: 0.15, alignItems: 'baseline' }}>
+              <Box component="span" sx={{ opacity: 0.5, flexShrink: 0 }} title={e.ts}>
+                {dayjs(e.ts).format('HH:mm:ss')}
+              </Box>
+              <Box component="span" sx={{ color: style.color, fontWeight: 700, flexShrink: 0, width: 34 }}>
+                {style.label}
+              </Box>
+              {who && <Box component="span" sx={{ opacity: 0.6, flexShrink: 0 }} title={e.clientId}>{who}</Box>}
+              <Box component="span" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.message}</Box>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
 /* --- aura: asystent głosowy ------------------------------------------------
    Strona Aury jest ciężka (mikrofon, MQTT, AI), więc ładujemy ją leniwie —
    pulpit bez tego widgetu nie płaci za jej bundle. Instancja pozostaje ta sama
@@ -1642,6 +1793,56 @@ function WidgetSettingsDialog({
             )}
           </>
         )}
+
+        {/* --- iot-log: filtry strumienia komunikatów ------------------------ */}
+        {widget.kind === 'iot-log' && (
+          <>
+            <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
+              Pokazywane poziomy (brak zaznaczenia = wszystkie):
+            </Typography>
+            {(['info', 'warning', 'error'] as IotLogLevel[]).map((level) => {
+              const selected = cfg.logLevels ?? [];
+              return (
+                <FormControlLabel
+                  key={level}
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={selected.includes(level)}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...selected, level]
+                          : selected.filter((l) => l !== level);
+                        patch({ logLevels: next.length ? next : undefined });
+                      }}
+                    />
+                  }
+                  label={LOG_STYLE[level].label}
+                />
+              );
+            })}
+            <FormControlLabel
+              sx={{ display: 'block', mt: 1 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={!!cfg.logOnlyMine}
+                  onChange={(e) => patch({ logOnlyMine: e.target.checked || undefined })}
+                />
+              }
+              label="Tylko moje wpisy"
+            />
+            <TextField
+              sx={{ mt: 1 }}
+              size="small"
+              type="number"
+              label="Ile wpisów trzymać"
+              value={cfg.logLimit ?? LOG_LIMIT_DEFAULT}
+              onChange={(e) => patch({ logLimit: Number(e.target.value) || undefined })}
+              inputProps={{ min: 20, max: 2000, step: 20 }}
+            />
+          </>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Anuluj</Button>
@@ -1774,6 +1975,7 @@ function WidgetFrame({
         {widget.kind === 'weather' && <WeatherWidget config={widget.config} />}
         {widget.kind === 'contacts' && <ContactsWidget config={widget.config} />}
         {widget.kind === 'component' && <ComponentWidget userName={userName} config={widget.config} />}
+        {widget.kind === 'iot-log' && <IotLogWidget userName={userName} config={widget.config} />}
         {widget.kind === 'aura' && (
           <AuraWidget userName={userName} fullscreen={fullscreen} onToggleFullscreen={() => setFullscreen((f) => !f)} />
         )}

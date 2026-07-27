@@ -17,6 +17,9 @@
 import { randomUUID } from 'node:crypto';
 import mqtt, { type MqttClient as MqttJsClient } from 'mqtt';
 import type {
+  HttpEndpointRequest,
+  IotLogLevel,
+  IotLogPacket,
   GitResult,
   GitDiffResult,
   GitCommit,
@@ -30,6 +33,9 @@ import type {
 } from './server/logic';
 
 export type {
+  HttpEndpointRequest,
+  IotLogLevel,
+  IotLogPacket,
   GitResult,
   GitDiffResult,
   GitCommit,
@@ -150,6 +156,8 @@ export class Conn {
   _pending = new Map<string, PendingRequest>();
   _resCallbacks: ResCallback[] = [];
   _errCallbacks: ErrCallback[] = [];
+  /** @internal Handlery endpointów HTTP (`http_add_endpoint`), po ścieżce. */
+  _endpoints = new Map<string, HttpEndpointHandler>();
 
   constructor(type: ConnType) {
     this.Type = type;
@@ -164,6 +172,64 @@ function emitError(conn: Conn, error: Error): void {
       /* callback nie może wywrócić przetwarzania */
     }
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Konfiguracja skryptu (server_get_config)
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Dane potrzebne skryptowi do połączenia z własnym backendem. */
+export interface ServerConfig {
+  /** Właściciel skryptu — użytkownik, w którego katalogu Drive skrypt leży. */
+  username: string;
+  /**
+   * JWT właściciela skryptu wstrzyknięty przez runner — backend nie zna hasła
+   * (trzyma jego hash), a `conn_*_connect` przyjmuje token w miejscu hasła.
+   */
+  token: string;
+  /** Adres HTTP backendu, bez końcowego ukośnika. */
+  url: string;
+  /** Adres WebSocket brokera MQTT. */
+  mqtt_url: string;
+}
+
+/** Nazwy zmiennych, którymi runner Drive przekazuje konfigurację do procesu skryptu. */
+export const SCRIPT_ENV = {
+  url: 'MYCASTLE_SERVER_URL',
+  mqttUrl: 'MYCASTLE_MQTT_URL',
+  user: 'MYCASTLE_USER',
+  token: 'MYCASTLE_TOKEN',
+  port: 'PORT',
+} as const;
+
+/** `http://host` → `ws://host/mqtt`, `https://host` → `wss://host/mqtt`. */
+function mqttUrlFromHttp(httpUrl: string): string {
+  return `${httpUrl.replace(/^http/, 'ws')}/mqtt`;
+}
+
+/**
+ * Konfiguracja połączenia z backendem dla skryptu Drive.
+ *
+ * Wartości wstrzykuje runner (zna właściciela skryptu — pliki leżą w
+ * `Minis/Users/{user}/drive/…` — oraz własny adres), więc skrypt nie musi trzymać
+ * loginu, hasła ani URL-a w kodzie:
+ *
+ *     const cfg = server_get_config();
+ *     const conn = await conn_mqtt_connect(cfg.mqtt_url, cfg.username, cfg.token);
+ *
+ * Uruchomiony poza runnerem (ręczne `node`) zwraca lokalne domyślne adresy
+ * i puste poświadczenia — wtedy podaj je samodzielnie.
+ */
+export function server_get_config(): ServerConfig {
+  const env = process.env;
+  const port = env[SCRIPT_ENV.port] || '1894';
+  const url = (env[SCRIPT_ENV.url] || `http://localhost:${port}`).replace(/\/+$/, '');
+  return {
+    username: env[SCRIPT_ENV.user] ?? '',
+    token: env[SCRIPT_ENV.token] ?? '',
+    url,
+    mqtt_url: env[SCRIPT_ENV.mqttUrl] || mqttUrlFromHttp(url),
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -188,6 +254,14 @@ function handleMqttResponse(conn: Conn, raw: string): void {
   try {
     res = JSON.parse(raw) as ConnResponse;
   } catch {
+    return;
+  }
+
+  // Tym samym kanałem serwer wypycha żądania do endpointów skryptu — te nie mają
+  // odpowiednika w `_pending`, więc rozpoznajemy je po polu `event`.
+  const push = res as unknown as { event?: string; request?: HttpEndpointRequest };
+  if (push.event === 'http_endpoint_request' && push.request) {
+    void dispatchEndpointRequest(conn, push.request);
     return;
   }
 
@@ -331,12 +405,26 @@ export function conn_mqtt_disconnect(conn: Conn): void {
 }
 
 /** Łączy się przez HTTP: loguje się (`POST /api/auth/login`) i zapamiętuje JWT. */
+/**
+ * Rozpoznaje gotowe poświadczenie: JWT (`a.b.c`) albo klucz API (`minis_…`).
+ * `server_get_config()` wstrzykuje właśnie token, a nie hasło — backend hasła
+ * nie zna — więc logowanie trzeba wtedy pominąć.
+ */
+function looksLikeToken(secret: string): boolean {
+  return secret.startsWith('minis_') || /^[\w-]+\.[\w-]+\.[\w-]+$/.test(secret);
+}
+
 export async function conn_http_connect(url: string, username: string, password: string): Promise<Conn> {
   const conn = new Conn(ConnType.Http);
   conn.HttpUrl = url.replace(/\/+$/, '');
   conn.HttpUsername = username;
   conn.HttpPassword = password;
   conn.userName = username;
+
+  if (looksLikeToken(password)) {
+    conn.token = password;
+    return conn;
+  }
 
   const res = await fetch(`${conn.HttpUrl}/api/auth/login`, {
     method: 'POST',
@@ -445,6 +533,172 @@ export async function git_diff(
     commit_from,
     commit_to,
   })) as GitDiffResult;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Log (`iot_log_*`)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Rozgłasza komunikat logu jako pakiet `{ type: 'log', … }` na kanale komend
+ * (`/server/cmd`). Nad MQTT publikujemy wprost ze skryptu — log jest
+ * jednostronny, więc round-trip przez serwer tylko dokładałby opóźnienia;
+ * przez HTTP robi to za nas serwer (komenda `iot_log`).
+ */
+async function iotLog(conn: Conn, level: IotLogLevel, message: string): Promise<void> {
+  if (!message) throw new Error('iot_log: `message` nie może być puste');
+
+  if (conn.Type === ConnType.Mqtt) {
+    if (!conn._mqtt) throw new Error('Conn nie jest aktywnym połączeniem MQTT');
+    const packet: IotLogPacket = {
+      type: 'log',
+      level,
+      message,
+      userName: conn.userName,
+      clientId: conn.MqttClientId,
+      ts: new Date().toISOString(),
+    };
+    await new Promise<void>((resolve, reject) => {
+      conn._mqtt!.publish(TOPIC_CMD, JSON.stringify(packet), { qos: 1 }, (err) =>
+        err ? reject(err instanceof Error ? err : new Error(String(err))) : resolve(),
+      );
+    });
+    return;
+  }
+
+  await sendCommand(conn, 'iot_log', { level, message, owner: conn.userName });
+}
+
+/** Log informacyjny. */
+export async function iot_log_info(conn: Conn, msg: string): Promise<void> {
+  await iotLog(conn, 'info', msg);
+}
+
+/** Ostrzeżenie. Nazwa zgodna z API opisanym w `docs/backend_api.md`. */
+export async function iot_log_warnning(conn: Conn, msg: string): Promise<void> {
+  await iotLog(conn, 'warning', msg);
+}
+
+/** Alias `iot_log_warnning` bez literówki. */
+export const iot_log_warning = iot_log_warnning;
+
+/** Błąd. */
+export async function iot_log_error(conn: Conn, msg: string): Promise<void> {
+  await iotLog(conn, 'error', msg);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Endpointy HTTP wystawiane przez skrypt
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Odpowiedź handlera. Zwrócenie obiektu z którymkolwiek z pól `status`/`headers`/
+ * `body` opisuje odpowiedź HTTP; każda inna wartość (string, tablica, zwykły
+ * obiekt, `undefined`) trafia wprost do ciała ze statusem 200.
+ */
+export interface HttpEndpointReply {
+  status?: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+export type HttpEndpointHandler = (req: HttpEndpointRequest) => unknown | Promise<unknown>;
+
+/** Ujednolica zwrotkę handlera do koperty `{status, headers, body}`. */
+function normalizeReply(value: unknown): Required<HttpEndpointReply> {
+  const isEnvelope =
+    !!value && typeof value === 'object' && !Array.isArray(value)
+    && ('status' in value || 'headers' in value || 'body' in value);
+  const reply = (isEnvelope ? value : { body: value }) as HttpEndpointReply;
+  return {
+    status: reply.status ?? 200,
+    headers: reply.headers ?? {},
+    body: reply.body,
+  };
+}
+
+/**
+ * Wywołuje handler dla żądania wypchniętego przez serwer i odsyła wynik.
+ * Błąd handlera nie może wywrócić skryptu — wraca do serwera jako 500.
+ */
+async function dispatchEndpointRequest(conn: Conn, request: HttpEndpointRequest): Promise<void> {
+  const handler = conn._endpoints.get(request.path);
+  const answer = async (args: Record<string, unknown>) => {
+    try {
+      await sendCommand(conn, 'http_endpoint_response', { requestId: request.requestId, ...args });
+    } catch (err) {
+      emitError(conn, err instanceof Error ? err : new Error(String(err)));
+    }
+  };
+
+  if (!handler) {
+    // Serwer wciąż ma rejestrację, której skrypt już nie obsługuje (np. po
+    // `http_remove_endpoint` w locie) — nie zostawiamy żądania wiszącego.
+    await answer({ error: `Skrypt nie obsługuje ścieżki ${request.path}` });
+    return;
+  }
+
+  try {
+    const reply = normalizeReply(await handler(request));
+    await answer(reply as unknown as Record<string, unknown>);
+  } catch (err) {
+    await answer({ error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * Rejestruje endpoint HTTP obsługiwany przez ten skrypt.
+ *
+ * Po rejestracji żądanie na `POST|GET|… /api/server/ep/{path}` trafia do
+ * `callback`, a jego wynik wraca do klienta HTTP.
+ *
+ *     await http_add_endpoint(conn, 'webhook/github', async (req) => {
+ *       console.log(req.method, req.body);
+ *       return { status: 202, body: { ok: true } };
+ *     });
+ *
+ * Domyślnie endpoint jest prywatny — wymaga JWT właściciela, a cudze wywołania
+ * dostają 404. `{ public: true }` otwiera go dla wszystkich (webhooki usług,
+ * które nie potrafią wysłać nagłówka Authorization): wtedy WYSTARCZY ZNAJOMOŚĆ
+ * ADRESU, więc ścieżka powinna być długa i nieodgadywalna, a serwer limituje
+ * tempo wywołań. Publiczne ścieżki są globalnie unikalne.
+ *
+ * Wymaga połączenia MQTT — po HTTP serwer nie ma jak wywołać callbacku.
+ * Rejestracja żyje tak długo, jak proces skryptu; ponowne uruchomienie
+ * nadpisuje wpis, więc żądania nie trafiają do martwego klienta.
+ */
+export async function http_add_endpoint(
+  conn: Conn,
+  path: string,
+  callback: HttpEndpointHandler,
+  opts: { public?: boolean } = {},
+): Promise<{ path: string; public: boolean }> {
+  if (conn.Type !== ConnType.Mqtt) {
+    throw new Error('http_add_endpoint wymaga połączenia MQTT (kanał zwrotny do callbacku)');
+  }
+  const result = (await sendCommand(conn, 'http_add_endpoint', {
+    path,
+    owner: conn.userName,
+    public: !!opts.public,
+  })) as { path: string; public: boolean };
+  // Klucz z serwera (znormalizowany), żeby push trafiał w ten sam wpis.
+  conn._endpoints.set(result.path, callback);
+  return result;
+}
+
+/** Usuwa endpoint zarejestrowany przez `http_add_endpoint`. */
+export async function http_remove_endpoint(conn: Conn, path: string): Promise<{ path: string; removed: boolean }> {
+  const result = (await sendCommand(conn, 'http_remove_endpoint', {
+    path,
+    owner: conn.userName,
+  })) as { path: string; removed: boolean };
+  conn._endpoints.delete(result.path);
+  return result;
+}
+
+/** Ścieżki endpointów zarejestrowanych przez skrypty tego użytkownika. */
+export async function http_list_endpoints(conn: Conn): Promise<string[]> {
+  return (await sendCommand(conn, 'http_list_endpoints', { owner: conn.userName })) as string[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────

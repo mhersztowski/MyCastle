@@ -94,6 +94,7 @@ export class MycastleHttpServer extends HttpUploadServer {
   private swaggerUiDir: string | null = null;
   private iotService: IotService | null;
   private terminalService: TerminalService | null = null;
+  private httpPort: number;
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
   private rpcRouter: RpcRouter;
@@ -130,6 +131,7 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   constructor(port: number, fileSystem: FileSystem, jwtService: JwtService, apiKeyService: ApiKeyService, iotService?: IotService, staticDir?: string, rootDir?: string, arduinoService?: ArduinoService, upythonService?: MicroPythonService, pygameService?: PygameService, picoSdkService?: PicoSdkService | null, pluginService?: PluginService, backendPluginService?: BackendPluginService, secretsService?: SecretsService, arduinoWasmBuilder?: ArduinoWasmBuilder | null, driveScriptScheduler?: DriveScriptScheduler, gitService?: GitService) {
     super(port, fileSystem, undefined, undefined, undefined, staticDir);
+    this.httpPort = port;
     this.jwtService = jwtService;
     this.apiKeyService = apiKeyService;
     this.iotService = iotService ?? null;
@@ -488,6 +490,69 @@ export class MycastleHttpServer extends HttpUploadServer {
       };
     });
     return { title: feedTitle, items };
+  }
+
+  /**
+   * Przekazuje żądanie do skryptu, który zarejestrował ścieżkę przez
+   * `http_add_endpoint`, i odsyła jego odpowiedź. Ciało bez poprawnego JSON-a
+   * trafia do skryptu jako tekst — webhooki bywają form-encoded albo puste.
+   */
+  private async handleScriptEndpoint(
+    req: IncomingMessage,
+    res: ServerResponse,
+    fullApiPath: string,
+    apiPath: string,
+    method: string,
+    owner: string,
+  ): Promise<void> {
+    const endpointPath = apiPath.slice('/server/ep/'.length);
+    const query: Record<string, string> = {};
+    const qs = fullApiPath.split('?')[1];
+    if (qs) for (const [k, v] of new URLSearchParams(qs)) query[k] = v;
+
+    let body: unknown;
+    if (method !== 'GET' && method !== 'HEAD') {
+      try {
+        body = await this.parseRequestBody(req);
+      } catch {
+        body = undefined;   // nieparsowalne ciało nie może wywrócić wywołania
+      }
+    }
+
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      // Authorization zostaje po stronie serwera — skrypt nie potrzebuje tokenu usera.
+      if (k === 'authorization' || k === 'cookie') continue;
+      if (typeof v === 'string') headers[k] = v;
+    }
+
+    // Pusty `owner` → tryb publiczny (bez JWT); logika sięgnie tylko po endpointy
+    // jawnie oznaczone jako publiczne.
+    const result = await this.serverApi!.handleEndpoint(
+      { method, path: endpointPath, query, headers, body },
+      owner ? { owner } : {},
+    );
+
+    // Skrypt może narzucić własne nagłówki (np. content-type dla HTML/CSV).
+    const custom = result.headers ?? {};
+    const hasContentType = Object.keys(custom).some((h) => h.toLowerCase() === 'content-type');
+    for (const [k, v] of Object.entries(custom)) res.setHeader(k, String(v));
+    this.setCorsHeaders(res);
+
+    if (typeof result.body === 'string' || Buffer.isBuffer(result.body)) {
+      if (!hasContentType) res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.writeHead(result.status);
+      res.end(result.body);
+      return;
+    }
+    if (result.body === undefined || result.body === null) {
+      res.writeHead(result.status);
+      res.end();
+      return;
+    }
+    if (!hasContentType) res.setHeader('Content-Type', 'application/json');
+    res.writeHead(result.status);
+    res.end(JSON.stringify(result.body));
   }
 
   private async handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1044,6 +1109,17 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Endpointy skryptów zarejestrowane jako publiczne (`http_add_endpoint(..., { public: true })`)
+    // — webhooki usług, które nie potrafią wysłać JWT. Ścieżki nieoznaczone jako
+    // publiczne przechodzą dalej i trafiają na normalną trasę za uwierzytelnieniem.
+    if (apiPath.startsWith('/server/ep/') && this.serverApi) {
+      const epPath = apiPath.slice('/server/ep/'.length);
+      if (this.serverApi.hasPublicEndpoint(epPath)) {
+        await this.handleScriptEndpoint(req, res, fullApiPath, apiPath, method, '');
+        return;
+      }
+    }
+
     // Backend plugin routes marked `public` (e.g. OAuth callbacks) — handled before auth.
     if (await this.tryBackendPlugin(req, res, apiPath, method, null)) return;
 
@@ -1221,6 +1297,15 @@ export class MycastleHttpServer extends HttpUploadServer {
       // owner ze zweryfikowanego JWT — autorytatywny dla operacji email (per-user secrets).
       const result = await this.serverApi.handleHttp(body, { owner: user.userName });
       this.sendJsonResponse(res, 200, result);
+      return;
+    }
+
+    // Endpointy skryptów: ANY /api/server/ep/{path} → callback zarejestrowany
+    // przez `http_add_endpoint`. Widoczne są wyłącznie endpointy zalogowanego
+    // użytkownika (owner z JWT), więc skrypt jednego usera nie odbiera cudzych żądań.
+    if (apiPath.startsWith('/server/ep/')) {
+      if (!this.serverApi) { this.sendJsonResponse(res, 503, { error: 'Server API unavailable' }); return; }
+      await this.handleScriptEndpoint(req, res, fullApiPath, apiPath, method, user.userName);
       return;
     }
 
@@ -4612,6 +4697,38 @@ const { password, ...safeBody } = body;
    * traversal outside the drive dir is rejected. cwd = the script's directory so
    * relative requires / fs paths resolve naturally.
    */
+  /**
+   * Konfiguracja wstrzykiwana skryptom Drive (czyta ją `server_get_config()`).
+   * Zamiast hasła idzie podpisany JWT właściciela — backend hasła nie zna,
+   * a token działa i w MQTT (jako hasło), i w HTTP (jako Bearer).
+   */
+  async scriptEnvFor(userName: string): Promise<Record<string, string>> {
+    const url = process.env.MYCASTLE_PUBLIC_URL?.replace(/\/+$/, '') ?? `http://localhost:${this.httpPort}`;
+
+    // Token musi nieść prawdziwe `userId`/`roles` — część endpointów patrzy na nie,
+    // a nie tylko na nazwę. Gdy pliku z użytkownikami nie ma, zostaje sama nazwa.
+    let payload: AuthTokenPayload = { userId: userName, userName, isAdmin: false, roles: [] };
+    try {
+      const data = await this.readJsonFile(`${MINIS_ROOT}/Admin/Users.json`) as Record<string, any>;
+      const found = (data?.items ?? []).find((u: any) => u?.name === userName);
+      if (found) {
+        payload = {
+          userId: found.id ?? userName,
+          userName: found.name,
+          isAdmin: found.isAdmin ?? false,
+          roles: found.roles ?? [],
+        };
+      }
+    } catch { /* brak pliku → token z samą nazwą */ }
+
+    return {
+      MYCASTLE_SERVER_URL: url,
+      MYCASTLE_MQTT_URL: `${url.replace(/^http/, 'ws')}/mqtt`,
+      MYCASTLE_USER: userName,
+      MYCASTLE_TOKEN: this.jwtService.sign(payload),
+    };
+  }
+
   private async handleDriveRunScript(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
     if (!this.rootDir) {
       this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
@@ -4673,7 +4790,13 @@ const { password, ...safeBody } = body;
 
     // shell:false — node + the absolute path are passed as argv, no shell injection.
     // cwd stays the original script's dir so its relative fs access is unchanged.
-    const proc = spawn('node', [prepared.runFile], { cwd: path.dirname(file), shell: false });
+    // Env niesie konfigurację dla `server_get_config()` — ta sama, co przy uruchomieniu
+    // z schedulera, żeby skrypt zachowywał się identycznie w obu trybach.
+    const proc = spawn('node', [prepared.runFile], {
+      cwd: path.dirname(file),
+      shell: false,
+      env: { ...process.env, ...(await this.scriptEnvFor(userName)) },
+    });
 
     proc.stdout.on('data', (chunk: Buffer) => { const s = chunk.toString(); logBuf += s; sendEvent('output', { chunk: s }); });
     proc.stderr.on('data', (chunk: Buffer) => { const s = chunk.toString(); logBuf += s; sendEvent('output', { chunk: s }); });

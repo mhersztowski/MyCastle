@@ -29,6 +29,13 @@ export class DriveScriptScheduler {
    *  output in order and stops chunk writes from racing the size-trim). */
   private appendChains = new Map<string, Promise<void>>();
 
+  /**
+   * Zmienne przekazywane skryptowi danego użytkownika (adresy + token) —
+   * ustawiane przez aplikację, bo tylko ona zna port i potrafi podpisać JWT.
+   * Odczytuje je `server_get_config()` w skrypcie.
+   */
+  scriptEnv: ((user: string) => Promise<Record<string, string>>) | null = null;
+
   constructor(private readonly rootDir: string) {}
 
   private userDriveDir(user: string): string {
@@ -165,7 +172,11 @@ export class DriveScriptScheduler {
       return;
     }
 
-    const proc = spawn('node', [prepared.runFile], { cwd: path.dirname(file), shell: false });
+    const proc = spawn('node', [prepared.runFile], {
+      cwd: path.dirname(file),
+      shell: false,
+      env: { ...process.env, ...(this.scriptEnv ? await this.scriptEnv(user) : {}) },
+    });
     this.running.set(key, proc);
     // Only clear the map entry if it's still THIS process (a Restart may have
     // already replaced it with a newer one).

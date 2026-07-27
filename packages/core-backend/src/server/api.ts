@@ -17,7 +17,7 @@ import {
   type ServerResponse,
   type DispatchContext,
 } from './logic';
-import { handleServerCmd, type ServerCmdBody } from './http';
+import { handleServerCmd, handleEndpointCall, type ServerCmdBody, type EndpointCallResult } from './http';
 import { attachServerMqtt } from './mqtt';
 
 export class ServerApi {
@@ -40,11 +40,30 @@ export class ServerApi {
   handleHttp(body: ServerCmdBody, ctx: DispatchContext = {}): Promise<ServerResponse> {
     return handleServerCmd(this.logic, body, ctx);
   }
+
+  /**
+   * Obsługuje `ANY /api/server/ep/{path}` — przekazuje żądanie skryptowi, który
+   * zarejestrował ścieżkę przez `http_add_endpoint`. `ctx.owner` (JWT) decyduje,
+   * czyje endpointy są widoczne; bez `owner` widoczne są tylko publiczne.
+   * Nigdy nie rzuca.
+   */
+  /** Czy pod tą ścieżką stoi endpoint dostępny bez JWT (router pyta przed auth). */
+  hasPublicEndpoint(path: string): boolean {
+    return this.logic.hasPublicHttpEndpoint(path);
+  }
+
+  handleEndpoint(
+    req: { method: string; path: string; query?: Record<string, string>; headers?: Record<string, string>; body?: unknown },
+    ctx: DispatchContext = {},
+  ): Promise<EndpointCallResult> {
+    return handleEndpointCall(this.logic, req, ctx);
+  }
 }
 
 export {
   ServerLogic,
   GitTool,
+  HttpEndpointError,
   SERVER_CMD_TOPIC,
   clientResTopic,
 } from './logic';
@@ -58,6 +77,11 @@ export type {
   MqttBus,
   ServerCommand,
   ServerResponse,
+  ServerPush,
+  HttpEndpointRequest,
+  HttpEndpointResponse,
+  IotLogLevel,
+  IotLogPacket,
   GitResult,
   GitDiffResult,
   GitCommit,
@@ -70,4 +94,4 @@ export type {
   ZipResult,
   ProjectBuildResult,
 } from './logic';
-export type { ServerCmdBody } from './http';
+export type { ServerCmdBody, EndpointCallResult } from './http';

@@ -16,6 +16,10 @@ import {
 
 /** Podłącza obsługę komend do brokera MQTT. Zwraca tę samą instancję logiki. */
 export function attachServerMqtt(logic: ServerLogic, bus: MqttBus): void {
+  // Logika zapamiętuje szynę, bo część operacji (endpointy HTTP skryptów) wypycha
+  // wiadomości do klienta poza cyklem żądanie-odpowiedź.
+  logic.attachBus(bus);
+
   bus.onMessage((topic, payload) => {
     if (topic !== SERVER_CMD_TOPIC) return;
 
@@ -31,7 +35,8 @@ export function attachServerMqtt(logic: ServerLogic, bus: MqttBus): void {
       bus.publishMessage(clientResTopic(cmd.clientId), JSON.stringify(res));
 
     logic
-      .dispatch(cmd.op, cmd.args ?? {})
+      // clientId jest potrzebny operacjom z kanałem zwrotnym (`http_add_endpoint`).
+      .dispatch(cmd.op, cmd.args ?? {}, { clientId: cmd.clientId })
       .then((result) => reply({ id: cmd.id, ok: true, result }))
       .catch((err) =>
         reply({ id: cmd.id, ok: false, error: err instanceof Error ? err.message : String(err) }),

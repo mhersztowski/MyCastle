@@ -88,14 +88,24 @@ export {
   iot_device_ext_vfs_delete,
   iot_device_ext_vfs_rename,
   iot_device_ext_vfs_mkdir,
+  server_get_config,
+  SCRIPT_ENV,
+  iot_log_info,
+  iot_log_warnning,
+  iot_log_warning,
+  iot_log_error,
+  http_add_endpoint,
+  http_remove_endpoint,
+  http_list_endpoints,
 } from './api';
 export type {
-  ConnResponse, ResCallback, ErrCallback, IotDevice,
+  ConnResponse, ResCallback, ErrCallback, IotDevice, ServerConfig,
+  HttpEndpointHandler, HttpEndpointReply,
   IotCommandStatus, IotVfsStat, IotVfsEntry, IotVfsFileData, IotVfsOk,
 } from './api';
 
 // server — realizacja API backendu (HTTP + MQTT)
-export { ServerApi, ServerLogic, GitTool, SERVER_CMD_TOPIC, clientResTopic } from './server/api';
+export { ServerApi, ServerLogic, GitTool, HttpEndpointError, SERVER_CMD_TOPIC, clientResTopic } from './server/api';
 export type {
   ServerLogicOptions,
   SecretsProvider,
@@ -106,7 +116,13 @@ export type {
   MqttBus,
   ServerCommand,
   ServerResponse,
+  ServerPush,
   ServerCmdBody,
+  EndpointCallResult,
+  HttpEndpointRequest,
+  HttpEndpointResponse,
+  IotLogLevel,
+  IotLogPacket,
   GitResult,
   GitDiffResult,
   GitCommit,

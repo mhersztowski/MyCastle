@@ -163,6 +163,8 @@ export class Conn {
   /** @internal */ _pending = new Map<string, PendingRequest>();
   _resCallbacks: ResCallback[] = [];
   _errCallbacks: ErrCallback[] = [];
+  /** @internal Handlery endpointów HTTP (`http_add_endpoint`), po ścieżce. */
+  _endpoints = new Map<string, HttpEndpointHandler>();
 
   constructor(type: ConnType) {
     this.Type = type;
@@ -201,6 +203,14 @@ function handleMqttResponse(conn: Conn, raw: string): void {
   try {
     res = JSON.parse(raw) as ConnResponse;
   } catch {
+    return;
+  }
+
+  // Tym samym kanałem serwer wypycha żądania do endpointów skryptu — te nie mają
+  // odpowiednika w `_pending`, więc rozpoznajemy je po polu `event`.
+  const push = res as unknown as { event?: string; request?: HttpEndpointRequest };
+  if (push.event === 'http_endpoint_request' && push.request) {
+    void dispatchEndpointRequest(conn, push.request);
     return;
   }
 
@@ -710,4 +720,158 @@ export async function iot_device_ext_vfs_rename(
 
 export async function iot_device_ext_vfs_mkdir(conn: Conn, device: string, path: string): Promise<IotVfsOk> {
   return (await sendCommand(conn, 'iot_device_ext_vfs_mkdir', { owner: conn.userName, device, path })) as IotVfsOk;
+}
+
+// ── Log (`iot_log_*`) ────────────────────────────────────────────────────────
+
+/** Poziomy komunikatów (kontrakt z `core-backend/src/server/logic.ts`). */
+export type IotLogLevel = 'info' | 'warning' | 'error';
+
+/** Pakiet logu rozgłaszany na kanale komend. */
+export interface IotLogPacket {
+  type: 'log';
+  level: IotLogLevel;
+  message: string;
+  userName: string;
+  clientId?: string;
+  source?: string;
+  ts: string;
+}
+
+/**
+ * Rozgłasza komunikat logu jako pakiet `{ type: 'log', … }` na kanale komend
+ * (`/server/cmd`). Nad MQTT publikujemy wprost ze skryptu (log jest jednostronny),
+ * przez HTTP robi to serwer komendą `iot_log`.
+ */
+async function iotLog(conn: Conn, level: IotLogLevel, message: string): Promise<void> {
+  if (!message) throw new Error('iot_log: `message` nie może być puste');
+
+  if (conn.Type === ConnType.Mqtt) {
+    if (!conn._mqtt) throw new Error('Conn nie jest aktywnym połączeniem MQTT');
+    const packet: IotLogPacket = {
+      type: 'log',
+      level,
+      message,
+      userName: conn.userName,
+      clientId: conn.MqttClientId,
+      ts: new Date().toISOString(),
+    };
+    conn._mqtt.publish(TOPIC_CMD, JSON.stringify(packet), { qos: 1 });
+    return;
+  }
+
+  await sendCommand(conn, 'iot_log', { level, message, owner: conn.userName });
+}
+
+/** Log informacyjny. */
+export async function iot_log_info(conn: Conn, msg: string): Promise<void> {
+  await iotLog(conn, 'info', msg);
+}
+
+/** Ostrzeżenie. Nazwa zgodna z API opisanym w `docs/backend_api.md`. */
+export async function iot_log_warnning(conn: Conn, msg: string): Promise<void> {
+  await iotLog(conn, 'warning', msg);
+}
+
+/** Alias `iot_log_warnning` bez literówki. */
+export const iot_log_warning = iot_log_warnning;
+
+/** Błąd. */
+export async function iot_log_error(conn: Conn, msg: string): Promise<void> {
+  await iotLog(conn, 'error', msg);
+}
+
+// ── Endpointy HTTP wystawiane przez skrypt ───────────────────────────────────
+
+/** Żądanie HTTP przekazane skryptowi (kontrakt z `core-backend/src/server/logic.ts`). */
+export interface HttpEndpointRequest {
+  requestId: string;
+  path: string;
+  method: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  body?: unknown;
+}
+
+/**
+ * Odpowiedź handlera: obiekt z którymkolwiek z pól `status`/`headers`/`body`
+ * opisuje odpowiedź HTTP, każda inna wartość trafia wprost do ciała (status 200).
+ */
+export interface HttpEndpointReply {
+  status?: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+export type HttpEndpointHandler = (req: HttpEndpointRequest) => unknown | Promise<unknown>;
+
+function normalizeReply(value: unknown): Required<HttpEndpointReply> {
+  const isEnvelope =
+    !!value && typeof value === 'object' && !Array.isArray(value)
+    && ('status' in value || 'headers' in value || 'body' in value);
+  const reply = (isEnvelope ? value : { body: value }) as HttpEndpointReply;
+  return { status: reply.status ?? 200, headers: reply.headers ?? {}, body: reply.body };
+}
+
+/** Wywołuje handler i odsyła wynik; błąd handlera wraca do serwera jako 500. */
+async function dispatchEndpointRequest(conn: Conn, request: HttpEndpointRequest): Promise<void> {
+  const handler = conn._endpoints.get(request.path);
+  const answer = async (args: Record<string, unknown>) => {
+    try {
+      await sendCommand(conn, 'http_endpoint_response', { requestId: request.requestId, ...args });
+    } catch (err) {
+      emitError(conn, err instanceof Error ? err : new Error(String(err)));
+    }
+  };
+
+  if (!handler) {
+    await answer({ error: `Skrypt nie obsługuje ścieżki ${request.path}` });
+    return;
+  }
+  try {
+    await answer(normalizeReply(await handler(request)) as unknown as Record<string, unknown>);
+  } catch (err) {
+    await answer({ error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * Rejestruje endpoint HTTP obsługiwany przez ten skrypt. Żądanie na
+ * `/api/server/ep/{path}` (z JWT właściciela) trafia do `callback`.
+ *
+ * `{ public: true }` znosi wymóg JWT — endpoint może wywołać każdy, kto zna
+ * adres (webhooki usług zewnętrznych), dlatego ścieżka powinna być długa
+ * i nieodgadywalna; serwer limituje tempo takich wywołań.
+ *
+ * Wymaga połączenia MQTT — po HTTP nie ma kanału zwrotnego. Rejestracja żyje
+ * tak długo, jak połączenie skryptu.
+ */
+export async function http_add_endpoint(
+  conn: Conn,
+  path: string,
+  callback: HttpEndpointHandler,
+  opts: { public?: boolean } = {},
+): Promise<{ path: string; public: boolean }> {
+  if (conn.Type !== ConnType.Mqtt) {
+    throw new Error('http_add_endpoint wymaga połączenia MQTT (kanał zwrotny do callbacku)');
+  }
+  const result = (await sendCommand(conn, 'http_add_endpoint', {
+    path, owner: conn.userName, public: !!opts.public,
+  })) as { path: string; public: boolean };
+  conn._endpoints.set(result.path, callback);
+  return result;
+}
+
+/** Usuwa endpoint zarejestrowany przez `http_add_endpoint`. */
+export async function http_remove_endpoint(conn: Conn, path: string): Promise<{ path: string; removed: boolean }> {
+  const result = (await sendCommand(conn, 'http_remove_endpoint', {
+    path, owner: conn.userName,
+  })) as { path: string; removed: boolean };
+  conn._endpoints.delete(result.path);
+  return result;
+}
+
+/** Ścieżki endpointów zarejestrowanych przez skrypty tego użytkownika. */
+export async function http_list_endpoints(conn: Conn): Promise<string[]> {
+  return (await sendCommand(conn, 'http_list_endpoints', { owner: conn.userName })) as string[];
 }

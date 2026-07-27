@@ -162,6 +162,10 @@ export class App {
       this.driveScriptScheduler,
       this.gitService,
     );
+
+    // Skrypty Drive dostają adresy i token właściciela (czyta je `server_get_config()`).
+    // Podpinamy po utworzeniu serwera, bo to on zna port i podpisuje JWT.
+    this.driveScriptScheduler.scriptEnv = (user) => this.httpServer.scriptEnvFor(user);
   }
 
   static create(config: AppConfig): App {
