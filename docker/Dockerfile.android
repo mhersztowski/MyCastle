@@ -65,7 +65,11 @@ RUN export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java)))) \
         "platform-tools" \
         "platforms;android-34" \
         "build-tools;34.0.0" \
-        "cmake;3.22.1"
+        "cmake;3.22.1" \
+        # expo-modules-core (C++/JSI) requires the NDK. Pre-install it here so Gradle does not
+        # try to auto-download it mid-build — that download is unreliable (truncated/corrupt zip,
+        # "Archive is not a ZIP archive"), especially under QEMU x86_64 emulation on ARM64 hosts.
+        "ndk;26.1.10909125"
 
 # Persist JAVA_HOME for runtime
 RUN echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> /etc/environment
