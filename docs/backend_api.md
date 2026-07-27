@@ -78,6 +78,35 @@ git_commit_current()
 git_history(conn, server_filename)
 git_diff(conn, server_filename, commit_from, commit_to)
 
+iot_get_devices(conn) : IotDevice[]
+
+iot_device_command(conn, device, command, ...)
+iot_device_telemetry(conn, device, key) : { value, unit}
+
+iot_device_ext_command(conn, device, ext, command, ...) : result
+
+iot_device_ext_vfs_stat(conn, device, ...) : result
+iot_device_ext_vfs_readdir(conn, device, ...) : result
+iot_device_ext_vfs_readfile(conn, device, ...) : result
+iot_device_ext_vfs_writefile(conn, device, ...) : result
+iot_device_ext_vfs_delete(conn, device, ...) : result
+iot_device_ext_vfs_rename(conn, device, ...) : result
+iot_device_ext_vfs_mkdir(conn, device, ...) : result
+
+// IoT — szczegóły sygnatur (implementacja: core-backend/src/server/logic.ts)
+//   iot_get_devices(conn) → IotDevice[]  { deviceId, userId, status, lastSeenAt, extensions[] }
+//   iot_device_command(conn, device, command, params?)         → rekord komendy (id, status)
+//   iot_device_telemetry(conn, device, key)                    → { value, unit } albo null
+//   iot_device_ext_command(conn, device, ext, command, params?) → wynik rozszerzenia
+//   iot_device_ext_vfs_stat/readdir/mkdir(conn, device, path)
+//   iot_device_ext_vfs_readfile(conn, device, path)            → { data: base64 }
+//   iot_device_ext_vfs_writefile(conn, device, path, base64, options?)
+//   iot_device_ext_vfs_delete(conn, device, path, options?)
+//   iot_device_ext_vfs_rename(conn, device, path, newPath, options?)
+// Wszystkie operacje działają wyłącznie na urządzeniach właściciela (userId z JWT).
+// Dziś generyczny kanał ext obsługuje rozszerzenie `vfs`; pozostałe (vkbd/vmouse/
+// display) mają własne, wąskie API i zgłaszają błąd przy wywołaniu przez iot_device_ext_command.
+
 // zip - wszsytko z server_filename
 zip_pack(input, ouiput)
 zip_unpack(input, output)

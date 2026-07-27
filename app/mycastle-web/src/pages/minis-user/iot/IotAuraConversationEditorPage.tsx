@@ -54,6 +54,9 @@ import { AutomateDocumentProvider } from '../../../components/mdeditor/extension
 // Ten sam pełnoekranowy edytor, którego używa blok ```automate``` w notatkach —
 // logika akcji i skrypt w markdownie to dokładnie to samo narzędzie.
 const AutomateScriptEditorDialog = lazy(() => import('../../../components/mdeditor/extensions/AutomateScriptEditorDialog'));
+const AutomateScriptEditor = lazy(() => import('../../../components/mdeditor/extensions/AutomateScriptEditorDialog')
+  .then(m => ({ default: m.AutomateScriptEditor })));
+import type { AutomateScriptSettings } from '../../../components/mdeditor/extensions/AutomateScriptEditorDialog';
 
 const LANGUAGES = [
   { code: 'pl', label: 'Polski (pl)' },
@@ -127,6 +130,46 @@ const IotAuraConversationEditorPage: React.FC = () => {
     setDirty(true);
   }, []);
 
+  /** Zapis skryptu idzie prosto do pliku — konfiguracja akcji trzyma tylko ścieżkę. */
+  const persistScript = useCallback(async (next: AuraScriptFile, scriptPath: string) => {
+    setScriptFile(next);
+    if (!userName) return;
+    try {
+      await writeAuraScript(userName, scriptPath, next);
+    } catch (err) {
+      setMessage({ ok: false, text: `Błąd zapisu skryptu: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [userName]);
+
+  /** Propsy edytora wspólne dla wariantu osadzonego w panelu i pełnoekranowego. */
+  const scriptEditorProps = useCallback((variant: VoiceActionVariant) => ({
+    open: true,
+    onClose: () => setScriptEditorOpen(false),
+    blockId: `aura:${variant.id}`,
+    code: scriptFile?.code ?? '',
+    onCodeChange: (next: string) => {
+      const base = scriptFile ?? { ...EMPTY_AURA_SCRIPT };
+      void persistScript({ ...base, code: next }, variant.scriptPath!);
+    },
+    settings: {
+      autorun: scriptFile?.settings.autorun ?? false,
+      viewMode: scriptFile?.settings.viewMode ?? ('code' as const),
+      tags: scriptFile?.settings.tags ?? [],
+      windowHeight: scriptFile?.settings.windowHeight ?? null,
+      umlProjects: scriptFile?.settings.umlProjects ?? [],
+      scenePath: scriptFile?.settings.scenePath ?? '',
+      // Plik wariantu obsługuje sama strona — edytor nie wiąże go po raz drugi.
+      scriptFile: '',
+    },
+    onSettingsChange: (patch: Partial<AutomateScriptSettings>) => {
+      const base = scriptFile ?? { ...EMPTY_AURA_SCRIPT };
+      void persistScript({ ...base, settings: { ...base.settings, ...patch } }, variant.scriptPath!);
+    },
+    userName: userName || '',
+    subtitle: `drive/${variant.scriptPath}`,
+    auraBlocks: true,
+  }), [scriptFile, persistScript, userName]);
+
   // ---- Wybór akcji / wariantu ----
   // Logika akcji to zawsze skrypt Automate, więc wybór od razu prowadzi do
   // edytora: zapewniamy plik i otwieramy go bez dodatkowego kliknięcia.
@@ -141,7 +184,6 @@ const IotAuraConversationEditorPage: React.FC = () => {
       if (variantLogicMode(variant) !== 'automate' || variant.scriptPath !== path) {
         patchVariant(variant.id, { mode: 'automate', scriptPath: path });
       }
-      setScriptEditorOpen(true);
     } catch (err) {
       setMessage({ ok: false, text: `Nie udało się otworzyć skryptu: ${err instanceof Error ? err.message : String(err)}` });
     } finally {
@@ -236,17 +278,6 @@ const IotAuraConversationEditorPage: React.FC = () => {
       .finally(() => { if (alive) setScriptLoading(false); });
     return () => { alive = false; };
   }, [selectedVariantId, variants, userName]);
-
-  /** Zapis skryptu idzie prosto do pliku — konfiguracja akcji trzyma tylko ścieżkę. */
-  const persistScript = useCallback(async (next: AuraScriptFile, scriptPath: string) => {
-    setScriptFile(next);
-    if (!userName) return;
-    try {
-      await writeAuraScript(userName, scriptPath, next);
-    } catch (err) {
-      setMessage({ ok: false, text: `Błąd zapisu skryptu: ${err instanceof Error ? err.message : String(err)}` });
-    }
-  }, [userName]);
 
   // Workspace globalny nadal jest w Blockly — zmiany trafiają wprost do XML-a.
   const saveAll = useCallback(async () => {
@@ -521,41 +552,24 @@ const IotAuraConversationEditorPage: React.FC = () => {
                   onChange={(xml) => handleGlobalChange(xml)}
                 />
               </Paper>
-            ) : selectedVariant ? (
-              <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', p: 2, gap: 1 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CodeIcon color="primary" />
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="subtitle1" fontWeight={600}>Skrypt automatyzacji</Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                      drive/{selectedVariant.scriptPath}
-                    </Typography>
-                  </Box>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    startIcon={<EditIcon />}
-                    disabled={scriptLoading || !selectedVariant.scriptPath}
-                    onClick={() => setScriptEditorOpen(true)}
-                  >
-                    Edytuj skrypt
-                  </Button>
-                </Box>
-                <Divider />
+            ) : selectedVariant?.scriptPath ? (
+              // Edytor Automate osadzony wprost w panelu — bez pośredniego
+              // podglądu; pełny ekran to ten sam komponent w oknie (niżej).
+              <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {scriptLoading ? (
-                  <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={24} /></Box>
-                ) : (
-                  <Box
-                    component="pre"
-                    sx={{
-                      flex: 1, m: 0, p: 1, overflow: 'auto', bgcolor: 'grey.900', color: 'grey.100',
-                      fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap', borderRadius: 1,
-                    }}
-                  >
-                    {scriptFile?.code?.trim()
-                      ? scriptFile.code
-                      : '// Pusty skrypt — kliknij „Edytuj skrypt".\n// Dostępne: aura.say / aura.ask / aura.listen / aura.callAction oraz api.* i display.*'}
+                  <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <CircularProgress size={24} />
                   </Box>
+                ) : (
+                  <Suspense fallback={<Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={24} /></Box>}>
+                    <AutomateScriptEditor
+                      key={`inline:${selectedVariant.id}`}
+                      {...scriptEditorProps(selectedVariant)}
+                      hideClose
+                      fullscreen={false}
+                      onToggleFullscreen={() => setScriptEditorOpen(true)}
+                    />
+                  </Suspense>
                 )}
               </Paper>
             ) : (
@@ -582,38 +596,14 @@ const IotAuraConversationEditorPage: React.FC = () => {
         current={jsonDialog?.current || null}
         onClose={(c) => { jsonDialog?.resolve(c); setJsonDialog(null); }}
       />
-      {/* Pełnoekranowy edytor skryptu — ten sam komponent co w notatkach. */}
+      {/* Pełny ekran — ta sama zawartość co w panelu, tylko w oknie. */}
       <Suspense fallback={null}>
         {scriptEditorOpen && selectedVariant?.scriptPath && (
           <AutomateScriptEditorDialog
-            open={scriptEditorOpen}
-            onClose={() => setScriptEditorOpen(false)}
-            blockId={`aura:${selectedVariant.id}`}
-            code={scriptFile?.code ?? ''}
-            onCodeChange={(next: string) => {
-              const base = scriptFile ?? { ...EMPTY_AURA_SCRIPT };
-              void persistScript({ ...base, code: next }, selectedVariant.scriptPath!);
-            }}
-            settings={{
-              autorun: scriptFile?.settings.autorun ?? false,
-              viewMode: scriptFile?.settings.viewMode ?? 'code',
-              tags: scriptFile?.settings.tags ?? [],
-              windowHeight: scriptFile?.settings.windowHeight ?? null,
-              umlProjects: scriptFile?.settings.umlProjects ?? [],
-              scenePath: scriptFile?.settings.scenePath ?? '',
-              // Plik wariantu obsługuje sama strona — edytor nie wiąże go po raz drugi.
-              scriptFile: '',
-            }}
-            onSettingsChange={(patch) => {
-              const base = scriptFile ?? { ...EMPTY_AURA_SCRIPT };
-              void persistScript(
-                { ...base, settings: { ...base.settings, ...patch } },
-                selectedVariant.scriptPath!,
-              );
-            }}
-            userName={userName || ''}
-            subtitle={`drive/${selectedVariant.scriptPath}`}
-            auraBlocks
+            key={`fullscreen:${selectedVariant.id}`}
+            {...scriptEditorProps(selectedVariant)}
+            fullscreen
+            onToggleFullscreen={() => setScriptEditorOpen(false)}
           />
         )}
       </Suspense>

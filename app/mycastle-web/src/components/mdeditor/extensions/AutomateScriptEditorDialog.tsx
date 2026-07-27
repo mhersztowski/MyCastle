@@ -13,7 +13,7 @@
 
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Badge, Box, Button, CircularProgress, Dialog, DialogContent, DialogTitle, Divider,
+  Alert, Badge, Box, Button, CircularProgress, Dialog, Divider,
   IconButton, List, ListItem, ListItemIcon, ListItemText, Tab, Tabs, ToggleButton,
   ToggleButtonGroup, Tooltip, Typography,
 } from '@mui/material';
@@ -32,6 +32,8 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import CodeIcon from '@mui/icons-material/Code';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import Editor from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import type { editor as MonacoEditorTypes } from 'monaco-editor';
@@ -105,11 +107,18 @@ export interface AutomateScriptEditorDialogProps {
   /** Dokłada do palety Blockly kategorie „Aura: …" — używane przez Edytor
    *  Konwersacji, gdzie skrypt steruje rozmową. */
   auraBlocks?: boolean;
+  /** Czy edytor stoi na pełnym ekranie (w oknie) — steruje ikoną przełącznika. */
+  fullscreen?: boolean;
+  /** Podane = w pasku pojawia się przycisk pełnego ekranu. Bufor jest zapisywany
+   *  przed przełączeniem, bo zmiana miejsca w drzewie przemontowuje edytor. */
+  onToggleFullscreen?: () => void;
+  /** Ukrywa „Wyjdź" — w wariancie osadzonym nie ma czego zamykać. */
+  hideClose?: boolean;
 }
 
 const OUTPUT_PANEL_KEY = 'automate-output-panel-height';
 
-const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = ({
+export const AutomateScriptEditor: React.FC<AutomateScriptEditorDialogProps> = ({
   open,
   onClose,
   blockId,
@@ -120,6 +129,9 @@ const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = ({
   userName,
   subtitle,
   auraBlocks,
+  fullscreen,
+  onToggleFullscreen,
+  hideClose,
 }) => {
   const {
     updateBlockCode,
@@ -424,19 +436,18 @@ const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = ({
     if (logs.length > 0 && !hasVisible) setDialogTab('logs');
   }, [open, status, logs.length, output.length, result]);
 
+  /** Zapis przed zmianą miejsca w drzewie — remount wyczyściłby bufor edycji. */
+  const handleToggleFullscreen = useCallback(() => {
+    if (dialogCode !== code) persistCode(dialogCode);
+    onToggleFullscreen?.();
+  }, [code, dialogCode, persistCode, onToggleFullscreen]);
+
+  if (!open) return null;
+
   return (
     <>
-      <Dialog
-        open={open}
-        onClose={onClose}
-        fullScreen
-        // Blockly renderuje edytory pól w WidgetDiv/DropDownDiv doklejanym do
-        // document.body — focus trap MUI blokowałby w nich pisanie.
-        disableEnforceFocus
-        disableAutoFocus
-        disableRestoreFocus
-      >
-        <DialogTitle sx={{ py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
+        <Box sx={{ py: 1, px: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: 1, borderColor: 'divider' }}>
           <SmartToyIcon sx={{ color: '#4caf50' }} />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography variant="subtitle1" fontWeight={600} noWrap>Edytor Automate</Typography>
@@ -530,10 +541,17 @@ const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = ({
               </Button>
             </span>
           </Tooltip>
-          <Button onClick={onClose} size="small">Wyjdź</Button>
-        </DialogTitle>
+          {onToggleFullscreen && (
+            <Tooltip title={fullscreen ? 'Zmniejsz edytor' : 'Pełny ekran'}>
+              <IconButton size="small" onClick={handleToggleFullscreen}>
+                {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+          )}
+          {!hideClose && <Button onClick={onClose} size="small">Wyjdź</Button>}
+        </Box>
 
-        <DialogContent dividers sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
             {/* minWidth:0 pozwala Monaco skurczyć się, gdy obok stoi inspektor QObject. */}
             <Box sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
@@ -786,8 +804,8 @@ const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = ({
               </Box>
             )}
           </Box>
-        </DialogContent>
-      </Dialog>
+        </Box>
+      </Box>
 
       <Suspense fallback={null}>
         {helpBrowserOpen && (
@@ -858,5 +876,24 @@ const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = ({
     </>
   );
 };
+
+/**
+ * Wariant okienkowy — ta sama zawartość w pełnoekranowym `Dialog`. Używa go blok
+ * w notatce; Edytor Konwersacji osadza `AutomateScriptEditor` wprost w panelu.
+ */
+const AutomateScriptEditorDialog: React.FC<AutomateScriptEditorDialogProps> = (props) => (
+  <Dialog
+    open={props.open}
+    onClose={props.onClose}
+    fullScreen
+    // Blockly renderuje edytory pól w WidgetDiv/DropDownDiv doklejanym do
+    // document.body — focus trap MUI blokowałby w nich pisanie.
+    disableEnforceFocus
+    disableAutoFocus
+    disableRestoreFocus
+  >
+    <AutomateScriptEditor {...props} />
+  </Dialog>
+);
 
 export default AutomateScriptEditorDialog;

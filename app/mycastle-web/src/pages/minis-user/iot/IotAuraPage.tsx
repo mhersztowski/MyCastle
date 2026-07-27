@@ -43,6 +43,8 @@ import MicOffIcon from '@mui/icons-material/MicOff';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PersonIcon from '@mui/icons-material/Person';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
@@ -163,8 +165,30 @@ const DEFAULT_SYSTEM_PROMPT =
   'Odpowiadaj krótko, naturalnie i pomocnie, tak jakbyś mówił na głos. ' +
   'Mów po polsku, chyba że użytkownik mówi w innym języku.';
 
-const IotAuraPage: React.FC = () => {
-  const { userName } = useParams<{ userName: string }>();
+export interface IotAuraPageProps {
+  /** Nadpisuje użytkownika z trasy — widget na pulpicie nie ma parametrów routingu. */
+  userName?: string;
+  /**
+   * Widok kompaktowy: ostatnia wiadomość zamiast całej rozmowy, bez paneli
+   * konfiguracji. Używany przez widget „Aura" na pulpicie.
+   */
+  embedded?: boolean;
+  /** Czy widget jest rozwinięty na pełny ekran (wtedy pokazujemy pełną konwersację). */
+  fullscreen?: boolean;
+  /** Podane = w nagłówku pojawia się przycisk pełnego ekranu. */
+  onToggleFullscreen?: () => void;
+}
+
+const IotAuraPage: React.FC<IotAuraPageProps> = ({
+  userName: userNameProp,
+  embedded = false,
+  fullscreen = false,
+  onToggleFullscreen,
+}) => {
+  const { userName: userNameFromRoute } = useParams<{ userName: string }>();
+  const userName = userNameProp ?? userNameFromRoute;
+  // Kompaktowy widok obowiązuje tylko w widgecie i tylko poza pełnym ekranem.
+  const compact = embedded && !fullscreen;
   const navigate = useNavigate();
   const { aiService, speechService, voiceActionService, wakeWordService } = App.instance;
   const { isConnected } = useMqtt();
@@ -1376,15 +1400,23 @@ const IotAuraPage: React.FC = () => {
   );
 
   return (
-    <Box sx={{ maxWidth: 900, mx: 'auto', height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={embedded
+      ? { height: '100%', display: 'flex', flexDirection: 'column', p: fullscreen ? 2 : 1, minHeight: 0 }
+      : { maxWidth: 900, mx: 'auto', height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
       {/* Nagłówek */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
-        <RecordVoiceOverIcon sx={{ fontSize: 34, color: '#7e57c2' }} />
-        <Box sx={{ flex: 1 }}>
-          <Typography variant="h5" fontWeight={600} sx={{ lineHeight: 1.1 }}>Aura</Typography>
-          <Typography variant="caption" color="text.secondary">
-            Głosowy asystent {userName ? `· ${userName}` : ''}
-          </Typography>
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: compact ? 0.5 : 1.5, mb: 1,
+        // W wąskim kafelku pasek musi się zawijać, inaczej przyciski wypadają poza widget.
+        flexWrap: compact ? 'wrap' : 'nowrap',
+      }}>
+        <RecordVoiceOverIcon sx={{ fontSize: compact ? 22 : 34, color: '#7e57c2' }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant={compact ? 'subtitle2' : 'h5'} fontWeight={600} sx={{ lineHeight: 1.1 }}>Aura</Typography>
+          {!compact && (
+            <Typography variant="caption" color="text.secondary">
+              Głosowy asystent {userName ? `· ${userName}` : ''}
+            </Typography>
+          )}
         </Box>
 
         <Chip
@@ -1419,7 +1451,7 @@ const IotAuraPage: React.FC = () => {
         </Tooltip>
 
         {/* Język słowa aktywacyjnego (gdy skonfigurowano >1 język) */}
-        {wakeWords.length > 1 && (
+        {!compact && wakeWords.length > 1 && (
           <Select
             value={wakeLang}
             onChange={(e) => setWakeLang(e.target.value)}
@@ -1432,25 +1464,37 @@ const IotAuraPage: React.FC = () => {
           </Select>
         )}
 
-        <Tooltip title="Edytor Konwersacji">
-          <IconButton onClick={() => navigate(`/user/${userName}/iot/aura/conversation-editor`)} size="small">
-            <AccountTreeIcon />
-          </IconButton>
-        </Tooltip>
+        {!compact && (
+          <Tooltip title="Edytor Konwersacji">
+            <IconButton onClick={() => navigate(`/user/${userName}/iot/aura/conversation-editor`)} size="small">
+              <AccountTreeIcon />
+            </IconButton>
+          </Tooltip>
+        )}
 
         <Tooltip title="Wyczyść historię">
           <IconButton onClick={clearHistory} size="small"><DeleteSweepIcon /></IconButton>
         </Tooltip>
 
-        <Tooltip title="Panel debug mikrofonu">
-          <IconButton onClick={() => setDebugOpen(o => !o)} size="small" color={debugOpen ? 'secondary' : 'default'}>
-            <BugReportIcon />
-          </IconButton>
-        </Tooltip>
+        {!compact && (
+          <Tooltip title="Panel debug mikrofonu">
+            <IconButton onClick={() => setDebugOpen(o => !o)} size="small" color={debugOpen ? 'secondary' : 'default'}>
+              <BugReportIcon />
+            </IconButton>
+          </Tooltip>
+        )}
+
+        {onToggleFullscreen && (
+          <Tooltip title={fullscreen ? 'Zmniejsz' : 'Pełny ekran'}>
+            <IconButton onClick={onToggleFullscreen} size="small">
+              {fullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {/* Panel debug — diagnostyka cyklu mikrofonu (mobile/Android) */}
-      {debugOpen && (
+      {!compact && debugOpen && (
         <Paper variant="outlined" sx={{ mb: 1, bgcolor: '#0d1117', color: '#e6edf3' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, borderBottom: '1px solid #30363d' }}>
             <BugReportIcon sx={{ fontSize: 18, color: '#f0883e' }} />
@@ -1478,7 +1522,8 @@ const IotAuraPage: React.FC = () => {
         </Paper>
       )}
 
-      {/* Panel konfiguracji */}
+      {/* Panel konfiguracji — w widgecie zbędny, ustawienia zmienia się na stronie Aury. */}
+      {!compact && (<>
       <Paper variant="outlined" sx={{ p: 1.5, mb: 1 }}>
         <Grid container spacing={1.5}>
           <Grid item xs={12} sm={6} md={4}>
@@ -1724,6 +1769,7 @@ const IotAuraPage: React.FC = () => {
           )}
         </Collapse>
       </Paper>
+      </>)}
 
       {!micSupported && (
         <Alert severity="warning" sx={{ mb: 1 }}>
@@ -1749,18 +1795,25 @@ const IotAuraPage: React.FC = () => {
         <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError(null)}>{error}</Alert>
       )}
 
-      {/* Konwersacja */}
-      <Paper sx={{ flex: 1, overflow: 'auto', p: 2, mb: 2, bgcolor: 'grey.50', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {/* Konwersacja — w widgecie pokazujemy tylko ostatnią wypowiedź, żeby
+          kafelek nie zamieniał się w nieczytelny pasek tekstu. */}
+      <Paper sx={{
+        flex: 1, overflow: 'auto', p: compact ? 1 : 2, mb: compact ? 1 : 2,
+        bgcolor: 'grey.50', display: 'flex', flexDirection: 'column', gap: 1.5,
+        minHeight: 0,
+      }}>
         {messages.length === 0 && !interimText && (
-          <Box sx={{ textAlign: 'center', mt: 8 }}>
-            <RecordVoiceOverIcon sx={{ fontSize: 64, color: 'grey.300', mb: 2 }} />
-            <Typography variant="body1" color="text.secondary">
-              Włącz „Nasłuch”, aby Aura stale słuchała — lub naciśnij mikrofon i mów.
+          <Box sx={{ textAlign: 'center', mt: compact ? 2 : 8 }}>
+            <RecordVoiceOverIcon sx={{ fontSize: compact ? 32 : 64, color: 'grey.300', mb: compact ? 1 : 2 }} />
+            <Typography variant={compact ? 'caption' : 'body1'} color="text.secondary">
+              {compact
+                ? 'Naciśnij mikrofon i mów.'
+                : 'Włącz „Nasłuch”, aby Aura stale słuchała — lub naciśnij mikrofon i mów.'}
             </Typography>
           </Box>
         )}
 
-        {messages.map(renderMessage)}
+        {(compact ? messages.slice(-1) : messages).map(renderMessage)}
 
         {interimText && (
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
@@ -1796,7 +1849,7 @@ const IotAuraPage: React.FC = () => {
               onClick={handleMicClick}
               disabled={!micSupported || state === 'processing_stt' || state === 'thinking'}
               sx={{
-                width: 56, height: 56,
+                width: compact ? 44 : 56, height: compact ? 44 : 56,
                 bgcolor: state === 'listening' ? 'error.main' : state === 'speaking' ? 'success.main' : 'primary.main',
                 color: 'white',
                 '&:hover': { bgcolor: state === 'listening' ? 'error.dark' : state === 'speaking' ? 'success.dark' : 'primary.dark' },

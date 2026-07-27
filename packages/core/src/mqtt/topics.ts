@@ -252,12 +252,33 @@ export const twinReported = defineMqttTopic({
   payloadSchema: z.record(z.unknown()),
 });
 
+export const registerRequest = defineMqttTopic({
+  pattern: 'minis/{userName}/{deviceName}/register-request',
+  description: 'Urządzenie prosi o dopisanie do listy użytkownika; zgłoszenie czeka na akceptację w Electronics → Devices',
+  direction: 'device→server',
+  tags: ['IoT', 'Presence'],
+  payloadSchema: z.object({
+    /** Nazwa pokazywana w panelu zgłoszeń; brak = `deviceName` z topiku. */
+    label: z.string().optional(),
+    /** Rodzaj klienta — pozwala odróżnić firmware od aplikacji desktop/mobile. */
+    kind: z.enum(['firmware', 'desktop', 'mobile', 'web', 'service']).optional(),
+    /** Numer seryjny (firmware wstrzykuje `MINIS_DEVICE_SN`). */
+    sn: z.string().optional(),
+    description: z.string().optional(),
+    /** Wersja firmware/klienta — ułatwia rozpoznanie, co się zgłasza. */
+    version: z.string().optional(),
+    /** Adres IP/host widziany przez klienta — pomocniczy w identyfikacji. */
+    address: z.string().optional(),
+  }),
+});
+
 // --- Registry ---
 
 export const mqttTopics = {
   telemetry,
   heartbeat,
   hello,
+  registerRequest,
   command,
   commandAck,
   status,

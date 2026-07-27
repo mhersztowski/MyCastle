@@ -21,6 +21,13 @@ export class ArduinoWasmBuilder {
     private readonly hostDataDir: string,
     /** Path to data dir as seen by the backend process. */
     private readonly backendDataDir: string = hostDataDir,
+    /**
+     * Katalog z mockiem Arduino na hoście (`docker/arduino-mock`). Gdy podany,
+     * jest montowany do kontenera zamiast kopii wpieczonej w obraz — inaczej
+     * każda zmiana mocka wymagałaby przebudowania obrazu, a rozjazd objawia się
+     * dopiero błędem linkera o brakującym symbolu.
+     */
+    private readonly hostMockDir?: string,
   ) {}
 
   private toContainer(backendPath: string): string {
@@ -121,6 +128,8 @@ export class ArduinoWasmBuilder {
     const dockerArgs = [
       'run', '--rm',
       '-v', `${this.hostDataDir}:${this.containerDataDir}`,
+      // Mock tylko do odczytu — kompilacja go czyta, nie modyfikuje.
+      ...(this.hostMockDir ? ['-v', `${this.hostMockDir}:/arduino-mock:ro`] : []),
       this.dockerImage,
       'emcc',
       ...emccArgs,
@@ -165,7 +174,16 @@ export class ArduinoWasmBuilder {
     let libDirs: string[];
     try {
       const entries = await fs.readdir(librariesDir, { withFileTypes: true });
-      libDirs = entries.filter(e => e.isDirectory()).map(e => path.join(librariesDir, e.name));
+      // Dowiązania traktujemy jak katalogi — biblioteka bywa podlinkowana z
+      // repozytorium w drive zamiast kopiowana do projektu (jedno źródło prawdy).
+      // `Dirent.isDirectory()` na symlinku zwraca false, więc bez tego cicho by
+      // znikała z include'ów i sketch nie znalazłby nagłówków.
+      const candidates = entries.filter(e => e.isDirectory() || e.isSymbolicLink());
+      libDirs = [];
+      for (const entry of candidates) {
+        const full = path.join(librariesDir, entry.name);
+        if (entry.isDirectory() || await this.dirExists(full)) libDirs.push(full);
+      }
     } catch {
       return { includeArgs, sourceArgs }; // no libraries/ dir
     }

@@ -30,6 +30,8 @@ import {
   Terminal,
 } from '@mui/icons-material';
 
+import { createDisplayRenderer, type DisplayRenderer, type RendererKind } from './displayRenderer';
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface PinState {
@@ -195,15 +197,29 @@ export function CppWasmRuntime({
   // flips hasDisplay → the pane renders next tick); stash it and flush on mount.
   const pendingFrameRef = useRef<{ data: Uint8Array; w: number; h: number } | null>(null);
 
+  // Renderer tworzony leniwie przy pierwszej klatce — canvas montuje się
+  // dopiero, gdy `hasDisplay` przełączy panel na widoczny.
+  const rendererRef = useRef<DisplayRenderer | null>(null);
+  const [rendererKind, setRendererKind] = useState<RendererKind | null>(null);
+
   const drawFrame = useCallback((data: Uint8Array, w: number, h: number) => {
     const canvas = canvasRef.current;
-    if (!canvas) { pendingFrameRef.current = { data, w, h }; return; }
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    // Copy into a fresh ArrayBuffer-backed array — the WASM heap view may be
-    // SharedArrayBuffer-backed (ArrayBufferLike), which ImageData rejects.
-    if (ctx) ctx.putImageData(new ImageData(new Uint8ClampedArray(data), w, h), 0, 0);
+    if (!canvas) {
+      // Klatka przyszła przed montażem canvasu — tu kopia jest konieczna,
+      // bo `data` może być widokiem na stertę WASM, którą szkic zaraz nadpisze.
+      pendingFrameRef.current = { data: new Uint8Array(data), w, h };
+      return;
+    }
+    if (!rendererRef.current) {
+      rendererRef.current = createDisplayRenderer(canvas);
+      setRendererKind(rendererRef.current?.kind ?? null);
+    }
+    rendererRef.current?.draw(data, w, h);
+  }, []);
+
+  useEffect(() => () => {
+    rendererRef.current?.dispose();
+    rendererRef.current = null;
   }, []);
 
   // Flush a frame that arrived before the canvas mounted.
@@ -605,7 +621,7 @@ export function CppWasmRuntime({
             bgcolor: '#1a1a1a', p: 1.5, gap: 1,
           }}>
             <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1 }}>
-              DISPLAY
+              DISPLAY{rendererKind === 'webgl2' ? ' · WebGL' : rendererKind === 'canvas2d' ? ' · 2D' : ''}
             </Typography>
             <canvas
               ref={canvasRef}

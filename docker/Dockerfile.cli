@@ -113,7 +113,9 @@ ENV PATH="/emsdk/upstream/emscripten:/emsdk/upstream/bin:${PATH}"
 
 WORKDIR /workspace
 
-# Copy Arduino mock headers into the image so every build can reference them
+# Kopia mocka jako fallback dla deploymentu, gdzie repo nie jest dostępne.
+# Przy pracy lokalnej backend montuje `docker/arduino-mock/` przez `-v` (patrz
+# ArduinoWasmBuilder), więc zmiany w mocku działają bez przebudowy obrazu.
 COPY docker/arduino-mock/ /arduino-mock/
 
 CMD ["tail", "-f", "/dev/null"]

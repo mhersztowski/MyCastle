@@ -581,3 +581,170 @@ export async function project_picosdk_get_output(
     boardKey,
   })) as string;
 }
+
+// ── IoT ──────────────────────────────────────────────────────────────────────
+
+/** Status komendy: `ACKNOWLEDGED`/`FAILED` z urządzenia, `TIMEOUT` gdy nie odpowiedziało. */
+export type IotCommandStatus = 'PENDING' | 'SENT' | 'ACKNOWLEDGED' | 'FAILED' | 'TIMEOUT';
+
+/** Wynik komendy — zwracany PO potwierdzeniu przez urządzenie (albo po timeoucie). */
+export interface IotCommandResult {
+  id: string;
+  deviceId: string;
+  name: string;
+  payload: Record<string, unknown>;
+  status: IotCommandStatus;
+  createdAt: number;
+  resolvedAt?: number;
+  failureReason?: string;
+}
+
+/** Typ wpisu w systemie plików urządzenia: 1 = plik, 2 = katalog. */
+export type IotVfsFileType = 1 | 2;
+
+export interface IotVfsStat {
+  type: IotVfsFileType;
+  size: number;
+  ctime: number;
+  mtime: number;
+}
+
+export interface IotVfsEntry {
+  name: string;
+  type: IotVfsFileType;
+}
+
+/** Zawartość pliku zakodowana base64. */
+export interface IotVfsFileData {
+  data: string;
+}
+
+/** Potwierdzenie operacji zapisu/kasowania/zmiany nazwy. */
+export interface IotVfsOk {
+  ok: true;
+}
+
+/** Urządzenie IoT użytkownika. */
+export interface IotDevice {
+  deviceId: string;
+  userId: string;
+  status?: string;
+  lastSeenAt?: number;
+  /** Typy aktywnych rozszerzeń (`vfs`, `vkbd`, `vmouse`, …). */
+  extensions?: string[];
+}
+
+/** Urządzenia IoT zalogowanego użytkownika. */
+export async function iot_get_devices(conn: Conn): Promise<IotDevice[]> {
+  return (await sendCommand(conn, 'iot_get_devices', { owner: conn.userName })) as IotDevice[];
+}
+
+/**
+ * Wysyła komendę i **czeka na potwierdzenie urządzenia** (`command/ack`).
+ * Po przekroczeniu czasu zwraca status `TIMEOUT` zamiast rzucać wyjątkiem.
+ */
+export async function iot_device_command(
+  conn: Conn,
+  device: string,
+  command: string,
+  params: Record<string, unknown> = {},
+): Promise<IotCommandResult> {
+  return (await sendCommand(conn, 'iot_device_command', {
+    owner: conn.userName, device, command, params,
+  })) as IotCommandResult;
+}
+
+/** Ostatnia wartość metryki telemetrycznej; `null`, gdy urządzenie jej nie przysłało. */
+export async function iot_device_telemetry(
+  conn: Conn,
+  device: string,
+  key: string,
+): Promise<{ value: unknown; unit?: string } | null> {
+  return (await sendCommand(conn, 'iot_device_telemetry', {
+    owner: conn.userName, device, key,
+  })) as { value: unknown; unit?: string } | null;
+}
+
+/**
+ * Request-response do rozszerzenia urządzenia (`ext/{ext}/req` → `.../res`).
+ * Czeka na odpowiedź urządzenia. Kształt wyniku zależy od rozszerzenia, więc
+ * typ podaje wywołujący: `iot_device_ext_command<IotVfsStat>(…)`.
+ */
+export async function iot_device_ext_command<T = unknown>(
+  conn: Conn,
+  device: string,
+  ext: string,
+  command: string,
+  params: Record<string, unknown> = {},
+): Promise<T> {
+  return (await sendCommand(conn, 'iot_device_ext_command', {
+    owner: conn.userName, device, ext, command, params,
+  })) as T;
+}
+
+// Skróty na rozszerzenie `vfs` — kształt odpowiedzi jak w protokole ext/vfs.
+
+export async function iot_device_ext_vfs_stat(conn: Conn, device: string, path: string): Promise<IotVfsStat> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_stat', { owner: conn.userName, device, path })) as IotVfsStat;
+}
+
+export async function iot_device_ext_vfs_readdir(
+  conn: Conn,
+  device: string,
+  path: string,
+): Promise<{ entries: IotVfsEntry[] }> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_readdir', {
+    owner: conn.userName, device, path,
+  })) as { entries: IotVfsEntry[] };
+}
+
+/** Zwraca zawartość pliku zakodowaną base64 (`{ data }`). */
+export async function iot_device_ext_vfs_readfile(
+  conn: Conn,
+  device: string,
+  path: string,
+): Promise<IotVfsFileData> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_readfile', {
+    owner: conn.userName, device, path,
+  })) as IotVfsFileData;
+}
+
+/** `data` to base64; `options` przyjmuje `{ create, overwrite }`. */
+export async function iot_device_ext_vfs_writefile(
+  conn: Conn,
+  device: string,
+  path: string,
+  data: string,
+  options: Record<string, unknown> = { create: true, overwrite: true },
+): Promise<IotVfsOk> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_writefile', {
+    owner: conn.userName, device, path, data, options,
+  })) as IotVfsOk;
+}
+
+export async function iot_device_ext_vfs_delete(
+  conn: Conn,
+  device: string,
+  path: string,
+  options: Record<string, unknown> = {},
+): Promise<IotVfsOk> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_delete', {
+    owner: conn.userName, device, path, options,
+  })) as IotVfsOk;
+}
+
+export async function iot_device_ext_vfs_rename(
+  conn: Conn,
+  device: string,
+  path: string,
+  newPath: string,
+  options: Record<string, unknown> = {},
+): Promise<IotVfsOk> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_rename', {
+    owner: conn.userName, device, path, newPath, options,
+  })) as IotVfsOk;
+}
+
+export async function iot_device_ext_vfs_mkdir(conn: Conn, device: string, path: string): Promise<IotVfsOk> {
+  return (await sendCommand(conn, 'iot_device_ext_vfs_mkdir', { owner: conn.userName, device, path })) as IotVfsOk;
+}

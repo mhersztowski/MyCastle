@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import { EventNode } from '@mhersztowski/core';
@@ -90,6 +90,7 @@ import {
   FormatSizeRounded as TextSizeIcon,
   VolumeUpRounded as VolumeUpIcon,
   VolumeOffRounded as VolumeOffIcon,
+  RecordVoiceOverRounded as AuraIcon,
 } from '@mui/icons-material';
 import { App } from '../../App';
 import { setOccurrenceCancelled } from '../calendar/eventOccurrence';
@@ -107,7 +108,7 @@ import { runBrowserComponent, type RunHandle } from '../../modules/component-run
  *  w localStorage.
  * ------------------------------------------------------------------ */
 
-type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component';
+type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component' | 'aura';
 
 interface RssFeed { name?: string; url: string; }
 interface Contact { name: string; detail?: string; hue?: number; }
@@ -200,6 +201,7 @@ const WIDGET_CATALOG: { kind: WidgetKind; label: string; icon: React.ReactNode; 
   { kind: 'weather', label: 'Pogoda', icon: <WeatherIcon fontSize="small" />, w: 340, h: 300 },
   { kind: 'contacts', label: 'Kontakty', icon: <ContactsIcon fontSize="small" />, w: 320, h: 360 },
   { kind: 'component', label: 'Komponent (Programming/Components)', icon: <ComponentIcon fontSize="small" />, w: 420, h: 360 },
+  { kind: 'aura', label: 'Aura — asystent głosowy', icon: <AuraIcon fontSize="small" />, w: 360, h: 240 },
 ];
 
 const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> = {
@@ -213,6 +215,7 @@ const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> 
   'weather': { title: 'Pogoda', icon: <WeatherIcon sx={{ fontSize: 16 }} /> },
   'contacts': { title: 'Kontakty', icon: <ContactsIcon sx={{ fontSize: 16 }} /> },
   'component': { title: 'Komponent', icon: <ComponentIcon sx={{ fontSize: 16 }} /> },
+  'aura': { title: 'Aura', icon: <AuraIcon sx={{ fontSize: 16 }} /> },
 };
 
 /* --- typ wpisu z Programming/Components (do widgetu Komponent) ------------- */
@@ -1311,6 +1314,25 @@ function ComponentWidget({ userName, config }: { userName: string; config?: Widg
   );
 }
 
+/* --- aura: asystent głosowy ------------------------------------------------
+   Strona Aury jest ciężka (mikrofon, MQTT, AI), więc ładujemy ją leniwie —
+   pulpit bez tego widgetu nie płaci za jej bundle. Instancja pozostaje ta sama
+   przy przełączaniu na pełny ekran: konwersacja żyje tylko w pamięci, więc
+   remount skasowałby rozmowę i przerwał nasłuch. */
+const IotAuraPage = lazy(() => import('../minis-user/iot/IotAuraPage'));
+
+function AuraWidget({ userName, fullscreen, onToggleFullscreen }: {
+  userName: string;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+}) {
+  return (
+    <Suspense fallback={<Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress size={22} /></Box>}>
+      <IotAuraPage userName={userName} embedded fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} />
+    </Suspense>
+  );
+}
+
 /* ================================================================== *
  *  Dialog ustawień widgetu
  * ================================================================== */
@@ -1652,6 +1674,16 @@ function WidgetFrame({
 }) {
   const pal = usePal();
   const meta = WIDGET_META[widget.kind];
+  // Pełny ekran realizujemy stylami tej samej ramki (fixed inset 0), a nie
+  // przeniesieniem treści do dialogu — dzięki temu widget nie jest odmontowywany
+  // i zachowuje swój stan (np. trwającą rozmowę z Aurą).
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
   const CORNERS: ('nw' | 'ne' | 'sw' | 'se')[] = ['nw', 'ne', 'sw', 'se'];
   const cornerPos: Record<string, object> = {
     nw: { top: -5, left: -5, cursor: 'nwse-resize' },
@@ -1663,25 +1695,25 @@ function WidgetFrame({
   return (
     <Box
       sx={{
-        position: 'absolute',
-        left: widget.x,
-        top: widget.y,
-        width: widget.w,
-        height: widget.h,
+        ...(fullscreen
+          ? { position: 'fixed', inset: 0, width: 'auto', height: 'auto', zIndex: (t: { zIndex: { modal: number } }) => t.zIndex.modal }
+          : { position: 'absolute', left: widget.x, top: widget.y, width: widget.w, height: widget.h }),
         display: 'flex',
         flexDirection: 'column',
-        borderRadius: '18px',
-        border: '1px solid',
+        borderRadius: fullscreen ? 0 : '18px',
+        border: fullscreen ? 'none' : '1px solid',
         borderColor: custom ? pal.borderStrong : pal.border,
         background: pal.card,
-        backdropFilter: 'blur(14px)',
+        // backdrop-filter tworzy containing block — na pełnym ekranie zbędny,
+        // a tło i tak zasłania cały ekran.
+        backdropFilter: fullscreen ? 'none' : 'blur(14px)',
         boxShadow: custom
           ? '0 18px 48px -18px rgba(80,110,255,0.55)'
           : pal.mode === 'dark' ? '0 16px 40px -20px rgba(0,0,0,0.7)' : '0 16px 40px -22px rgba(30,50,120,0.35)',
         transition: 'border-color .2s ease, box-shadow .2s ease',
       }}
     >
-      {custom && (
+      {custom && !fullscreen && (
         <Box
           onPointerDown={(e) => onDragStart(e, { mode: 'move', id: widget.id })}
           sx={{
@@ -1731,7 +1763,7 @@ function WidgetFrame({
         </Box>
       )}
 
-      <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', containerType: 'size', borderRadius: custom ? '0 0 18px 18px' : '18px' }}>
+      <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', containerType: fullscreen ? 'normal' : 'size', borderRadius: fullscreen ? 0 : (custom ? '0 0 18px 18px' : '18px') }}>
         {widget.kind === 'pages' && <PagesWidget userName={userName} config={widget.config} />}
         {widget.kind === 'drive-fav' && <DriveFavWidget userName={userName} />}
         {widget.kind === 'immich' && <ImmichWidget config={widget.config} />}
@@ -1742,12 +1774,15 @@ function WidgetFrame({
         {widget.kind === 'weather' && <WeatherWidget config={widget.config} />}
         {widget.kind === 'contacts' && <ContactsWidget config={widget.config} />}
         {widget.kind === 'component' && <ComponentWidget userName={userName} config={widget.config} />}
+        {widget.kind === 'aura' && (
+          <AuraWidget userName={userName} fullscreen={fullscreen} onToggleFullscreen={() => setFullscreen((f) => !f)} />
+        )}
       </Box>
 
       {/* Resize handles — visible 12px marker w środku, niewidoczny 32x32 hitbox
           na zewnątrz żeby palec trafiał bez pixel-perfect precision. Bez tego
           na mobile praktycznie nie da się złapać narożnika (target ~44px). */}
-      {custom && CORNERS.map((c) => {
+      {custom && !fullscreen && CORNERS.map((c) => {
         const pos = cornerPos[c] as Record<string, number | string>;
         // Hitbox offset — rozciągnij hitbox 10px poza widget, ale wycentruj tak
         // żeby wizualny marker (12px) pozostał w tej samej pozycji.

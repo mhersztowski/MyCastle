@@ -56,6 +56,7 @@ class IotTopics {
   /** Bazowy prefiks urządzenia: `minis/{user}/{device}`. */
   static prefix(user, device) { return `minis/${user}/${device}`; }
   static hello(user, device) { return `${IotTopics.prefix(user, device)}/hello`; }
+  static registerRequest(user, device) { return `${IotTopics.prefix(user, device)}/register-request`; }
   static heartbeat(user, device) { return `${IotTopics.prefix(user, device)}/heartbeat`; }
   static telemetry(user, device) { return `${IotTopics.prefix(user, device)}/telemetry`; }
   static command(user, device) { return `${IotTopics.prefix(user, device)}/command`; }
@@ -431,6 +432,7 @@ class IotDevice extends QObject {
   start() { return IotDevice.start(this); }
   stop() { return IotDevice.stop(this); }
   sendHello() { return IotDevice.sendHello(this); }
+  sendRegisterRequest() { return IotDevice.sendRegisterRequest(this); }
   sendHeartbeat() { return IotDevice.sendHeartbeat(this); }
   sendTelemetry(metrics) { return IotDevice.sendTelemetry(this, metrics); }
   publish(topic, obj) { return IotDevice.publish(this, topic, obj); }
@@ -468,7 +470,8 @@ class IotDevice extends QObject {
     // 2) requesty rozszerzeń
     for (const ext of dev._extensions.values()) IotDevice._subscribeExt(dev, ext);
 
-    // 3) ogłoś się i uruchom cykliczne wysyłki
+    // 3) poproś o dopisanie do listy, ogłoś się i uruchom cykliczne wysyłki
+    IotDevice.sendRegisterRequest(dev);
     IotDevice.sendHello(dev);
     if (dev._heartbeatSec > 0) {
       IotDevice.sendHeartbeat(dev);
@@ -492,6 +495,18 @@ class IotDevice extends QObject {
   }
 
   // ═════════════════ STATIC: wysyłki (device→server) ═════════════════
+  /**
+   * Prosi o dopisanie urządzenia do listy użytkownika (Electronics → Devices).
+   * Wysyłane przy każdym starcie — backend trzyma jedno zgłoszenie na urządzenie,
+   * a wpis powstaje dopiero po akceptacji w panelu.
+   */
+  static sendRegisterRequest(dev) {
+    const body = { kind: dev._platform === 'web' ? 'web' : 'firmware' };
+    if (dev._label) body.label = dev._label;
+    if (dev._sn) body.sn = dev._sn;
+    IotDevice.publish(dev, IotTopics.registerRequest(dev._userName, dev._deviceName), body);
+    return dev;
+  }
   static sendHello(dev) {
     const body = {
       uptime: dev.uptime(),

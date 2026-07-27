@@ -19,6 +19,7 @@ TOPIC_PREFIX = f"minis/{MQTT_USER}/{MQTT_DEVICE}"
 TOPICS = {
     # device → server
     "HELLO":                   f"{TOPIC_PREFIX}/hello",
+    "REGISTER_REQUEST":        f"{TOPIC_PREFIX}/register-request",
     "HEARTBEAT":               f"{TOPIC_PREFIX}/heartbeat",
     "TELEMETRY":               f"{TOPIC_PREFIX}/telemetry",
     "COMMAND_ACK":             f"{TOPIC_PREFIX}/command/ack",

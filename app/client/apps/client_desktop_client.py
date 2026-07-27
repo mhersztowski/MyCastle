@@ -24,6 +24,8 @@ import time
 import uuid
 
 import paho.mqtt.client as mqtt
+
+from extensions.vfs import VfsExtension
 from PySide6.QtCore import QObject, Signal
 
 from .client_desktop_devices import Device
@@ -66,9 +68,14 @@ class ServerLogicClient:
         self.ws_path = "/mqtt"
         self.password: str | None = None
         self.client_id = _default_client_id()
+        # Katalog wystawiany jako VFS urządzenia. Domyślnie katalog roboczy
+        # skryptu (`run_client_desktop.sh` robi cd do app/client).
+        self.vfs_root = os.getenv("CLIENT_DESKTOP_VFS_ROOT") or os.getcwd()
 
         self._client: mqtt.Client | None = None
         self._connected = False
+        self._started_at = time.time()
+        self._vfs: VfsExtension | None = None
         # The server prunes clients unseen for ~60s; refresh well under that.
         self._hb_interval = 25
         self._hb_timer: threading.Timer | None = None
@@ -91,6 +98,10 @@ class ServerLogicClient:
     def _device_outbox(self, device_id: str) -> str:
         return f"{self._client_key}/device/{device_id}/outbox"
 
+    def _iot_topic(self, suffix: str) -> str:
+        """Topik warstwy IoT — nazwa urządzenia ta sama co w zgłoszeniu."""
+        return f"minis/{self.user}/{self.client_id}/{suffix}"
+
     def _client_identity(self) -> dict:
         return {"userName": self.user, "device": DEVICE_KIND,
                 "clientType": CLIENT_TYPE, "id": self.client_id}
@@ -103,13 +114,15 @@ class ServerLogicClient:
 
     def configure(self, *, user: str, host: str, port: int,
                   transport: str = "tcp", ws_path: str = "/mqtt",
-                  password: str | None = None) -> None:
+                  password: str | None = None, vfs_root: str | None = None) -> None:
         self.user = user
         self.host = host
         self.port = port
         self.transport = transport
         self.ws_path = ws_path
         self.password = password or None
+        if vfs_root:
+            self.vfs_root = vfs_root
 
     def connect(self) -> None:
         if self._client is not None:
@@ -184,6 +197,9 @@ class ServerLogicClient:
         self._connected = True
         self.signals.connectionChanged.emit(True)
         self.signals.logLine.emit("Connected.")
+        self._publish_register_request()            # prośba o dopisanie do listy
+        self._start_vfs()                           # rozszerzenie IoT: ext/vfs
+        self._publish_iot_hello()                   # obecność w IoT (status online)
         self._publish_client(logout=False)          # client-login
         for d in self.devices.values():
             if d.enabled:
@@ -198,6 +214,7 @@ class ServerLogicClient:
         if not self._connected:
             return
         self._publish_env(self._client_outbox(), {"type": "heartbeat"})
+        self._publish_iot_heartbeat()
         self._hb_timer = threading.Timer(self._hb_interval, self._schedule_heartbeat)
         self._hb_timer.daemon = True
         self._hb_timer.start()
@@ -219,6 +236,13 @@ class ServerLogicClient:
         except (json.JSONDecodeError, UnicodeDecodeError):
             self.signals.logLine.emit(f"Bad payload on {msg.topic}")
             return
+        # Rozszerzenia IoT mają własną przestrzeń topików (minis/…), niezależną
+        # od warstwy server-logic obsługiwanej niżej.
+        if msg.topic == self._iot_topic("ext/vfs/req"):
+            if self._vfs is not None:
+                self._vfs.handle_request(env)
+            return
+
         # {user}/desktop-native/{clientId}/device/{deviceId}/inbox
         parts = msg.topic.split("/")
         if len(parts) < 6 or parts[-1] != "inbox" or parts[-3] != "device":
@@ -262,6 +286,75 @@ class ServerLogicClient:
         env.setdefault("from", self._client_key)
         env.setdefault("ts", int(time.time() * 1000))
         self._client.publish(topic, json.dumps(env), qos=1)
+
+    def _publish_register_request(self) -> None:
+        """Prosi o dopisanie do Electronics → Devices.
+
+        Warstwa server-logic (`client-login`) ma własny rejestr, który nie jest
+        widoczny na liście urządzeń — bez tego zgłoszenia klient nigdzie się nie
+        pokazuje. Wpis powstaje dopiero po akceptacji w panelu.
+        """
+        topic = f"minis/{self.user}/{self.client_id}/register-request"
+        payload = {
+            "label": f"{DEVICE_KIND} ({CLIENT_TYPE})",
+            "kind": "desktop",
+            "description": "Klient desktop: wirtualna mysz, klawiatura i ekran",
+        }
+        try:
+            self._client.publish(topic, json.dumps(payload), qos=1)
+            self.signals.logLine.emit("Wysłano prośbę o dodanie urządzenia.")
+        except Exception as exc:                     # noqa: BLE001 — log i jedziemy dalej
+            self.signals.logLine.emit(f"Register request failed: {exc}")
+
+    def _start_vfs(self) -> None:
+        """Uruchamia rozszerzenie IoT `vfs` — udostępnia lokalny katalog.
+
+        Backend montuje je pod `/devices/{deviceName}` w swoim CompositeFS, gdy
+        zobaczy wpis `vfs` w `hello`, i rozmawia z nim przez `ext/vfs/req|res`.
+        """
+        try:
+            self._vfs = VfsExtension(
+                root_dir=self.vfs_root,
+                publish_fn=lambda payload: self._client.publish(
+                    self._iot_topic("ext/vfs/res"), payload, qos=1,
+                ),
+            )
+            self._client.subscribe(self._iot_topic("ext/vfs/req"), qos=1)
+            self.signals.logLine.emit(f"VFS udostępnia: {self._vfs.root_dir}")
+        except Exception as exc:                     # noqa: BLE001 — brak VFS nie blokuje reszty
+            self._vfs = None
+            self.signals.logLine.emit(f"VFS start failed: {exc}")
+
+    def _publish_iot_hello(self) -> None:
+        """Ogłasza obecność w warstwie IoT.
+
+        Status online/offline na liście urządzeń liczy się z `hello`/`heartbeat`
+        na topikach `minis/{user}/{device}/…`. Warstwa server-logic
+        (`client-login`) ma własny rejestr i nie wpływa na ten status — bez tej
+        wiadomości urządzenie stoi na liście jako offline mimo połączenia.
+        """
+        payload = {
+            "uptime": int(time.time() - self._started_at),
+            "extensions": [
+                {"type": "vmouse", "enabled": True},
+                {"type": "vkbd", "enabled": True},
+                {"type": "vfs", "enabled": True},
+            ],
+        }
+        try:
+            self._client.publish(self._iot_topic("hello"), json.dumps(payload), qos=1)
+        except Exception as exc:                     # noqa: BLE001 — log i jedziemy dalej
+            self.signals.logLine.emit(f"IoT hello failed: {exc}")
+
+    def _publish_iot_heartbeat(self) -> None:
+        try:
+            self._client.publish(
+                self._iot_topic("heartbeat"),
+                json.dumps({"uptime": int(time.time() - self._started_at)}),
+                qos=1,
+            )
+        except Exception as exc:                     # noqa: BLE001
+            self.signals.logLine.emit(f"IoT heartbeat failed: {exc}")
 
     def _publish_client(self, *, logout: bool) -> None:
         self._publish_env(self._client_outbox(), {

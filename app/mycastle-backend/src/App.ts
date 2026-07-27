@@ -121,8 +121,19 @@ export class App {
 
     const arduinoWasmDockerImage = process.env.ARDUINO_WASM_DOCKER_IMAGE;
     const hostDataDir = config.hostDataDir ? path.resolve(config.hostDataDir) : path.resolve(config.rootDir);
+    // Mock Arduino montujemy z repo zamiast polegać na kopii w obrazie —
+    // zmiana w `docker/arduino-mock/` działa wtedy od razu, bez przebudowy
+    // obrazu (rozjazd objawiał się dopiero błędem linkera o brakującym symbolu).
+    // ARDUINO_MOCK_DIR nadpisuje ścieżkę; brak katalogu = kopia z obrazu.
+    const mockDir = process.env.ARDUINO_MOCK_DIR
+      ? path.resolve(process.env.ARDUINO_MOCK_DIR)
+      : path.resolve(process.cwd(), '..', '..', 'docker', 'arduino-mock');
+    const hostMockDir = fs.existsSync(path.join(mockDir, 'Arduino.cpp')) ? mockDir : undefined;
+    if (!hostMockDir) {
+      console.log(`Arduino mock: using image copy (nie znaleziono ${mockDir})`);
+    }
     this.arduinoWasmBuilder = arduinoWasmDockerImage
-      ? new ArduinoWasmBuilder(arduinoWasmDockerImage, hostDataDir, path.resolve(config.rootDir))
+      ? new ArduinoWasmBuilder(arduinoWasmDockerImage, hostDataDir, path.resolve(config.rootDir), hostMockDir)
       : null;
     if (!arduinoWasmDockerImage) console.log('Arduino WASM builder: not configured (set ARDUINO_WASM_DOCKER_IMAGE)');
 
@@ -286,6 +297,18 @@ export class App {
         console.log(`SchedulerService reloaded (file: ${event.path}): ${this.schedulerService.getActiveJobs().length} active schedules`);
       }
     });
+
+    // Zgłoszenia rejestracji: urządzenie już zaakceptowane nie ma wracać do
+    // panelu przy kolejnym połączeniu — IotService pyta o to warstwę plików.
+    this.iotService.isDeviceKnown = async (userId, deviceName) => {
+      try {
+        const data = await this.fileSystem.readFile(`Minis/Users/${userId}/Device.json`);
+        const parsed = JSON.parse(data.content) as { devices?: Array<{ name?: string }> };
+        return (parsed.devices ?? []).some((d) => d.name === deviceName);
+      } catch {
+        return false;   // brak pliku = użytkownik nie ma jeszcze żadnych urządzeń
+      }
+    };
 
     // Wire IoT service to MQTT
     this.iotService.start((topic, payload) => {

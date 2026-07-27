@@ -1,5 +1,5 @@
 import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi, ArduinoWasmBuilder } from '@mhersztowski/core-backend';
-import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, PicoSdkService } from '@mhersztowski/core-backend';
+import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, PicoSdkService, IotProvider, IotDeviceInfo } from '@mhersztowski/core-backend';
 import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import AdmZip from 'adm-zip';
 import type { IotService } from './modules/iot/IotService.js';
+import type { VfsExtension } from './modules/iot/extensions/VfsExtension.js';
 import type { TerminalService } from './modules/terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
@@ -158,6 +159,9 @@ export class MycastleHttpServer extends HttpUploadServer {
         secrets: this.secretsService ?? undefined,
         arduino: this.arduinoService,
         picosdk: this.picoSdkService,
+        // Adapter warstwy IoT dla operacji `iot_*` — core-backend zna tylko
+        // kontrakt, konkretny IotService (SQLite + MQTT) mieszka tutaj.
+        iot: this.iotService ? this.createIotProvider(this.iotService) : undefined,
       });
     }
 
@@ -1546,6 +1550,20 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Zgłoszenia urządzeń: /users/{userName}/device-requests[/{deviceName}[/approve]]
+    const deviceRequestsMatch = apiPath.match(/^\/users\/([^/]+)\/device-requests(?:\/([^/]+))?(\/approve)?$/);
+    if (deviceRequestsMatch) {
+      const userName = decodeURIComponent(deviceRequestsMatch[1]);
+      const deviceName = deviceRequestsMatch[2] ? decodeURIComponent(deviceRequestsMatch[2]) : undefined;
+      const approve = Boolean(deviceRequestsMatch[3]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: can only manage your own device requests' });
+        return;
+      }
+      await this.handleDeviceRequests(res, method, userName, deviceName, approve);
+      return;
+    }
+
     // User devices: /users/{userName}/devices and /users/{userName}/devices/{deviceName}
     const userDevicesMatch = apiPath.match(/^\/users\/([^/]+)\/devices(?:\/([^/]+))?$/);
     if (userDevicesMatch) {
@@ -2467,14 +2485,39 @@ export class MycastleHttpServer extends HttpUploadServer {
       } catch { return null; }
     };
 
+    // Biblioteki bywają schowane głęboko w repo (np. `MinisProjects/libs/MinisLib`),
+    // więc schodzimy do skutku. Limit jest tylko bezpiecznikiem przed patologicznie
+    // zagnieżdżonym drzewem — realne układy mieszczą się w 2–4 poziomach.
+    const MAX_DEPTH = 8;
+    // Katalogi, w których biblioteki Arduino nie występują, a potrafią mieć
+    // dziesiątki tysięcy plików — wejście w nie zamieniłoby listę w zawieszkę.
+    const SKIP_DIRS = new Set(['node_modules', 'build', 'dist', '.pio', '.vscode']);
+    // Realpath odwiedzonych katalogów — chroni przed pętlą, gdy repo ma
+    // dowiązanie wskazujące na katalog nadrzędny.
+    const visited = new Set<string>();
+
     const scanDir = async (dir: string, depth: number): Promise<LibEntry[]> => {
+      if (depth > MAX_DEPTH) return [];
+      let real: string;
+      try { real = await fs.promises.realpath(dir); } catch { return []; }
+      if (visited.has(real)) return [];
+      visited.add(real);
+
       let entries: fs.Dirent[];
       try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
       catch { return []; }
       const result: LibEntry[] = [];
       for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith('.')) continue;
+        if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
         const fullPath = path.join(dir, e.name);
+        // Dowiązania traktujemy jak katalogi — biblioteka bywa podlinkowana
+        // z innego repo, a `Dirent.isDirectory()` zwraca dla nich false.
+        if (!e.isDirectory()) {
+          if (!e.isSymbolicLink()) continue;
+          try {
+            if (!(await fs.promises.stat(fullPath)).isDirectory()) continue;
+          } catch { continue; }
+        }
         const relPath = path.relative(this.rootDir!, fullPath).replace(/\\/g, '/');
         const props = await parseLibProps(fullPath);
         const isLib = props !== null;
@@ -2483,7 +2526,9 @@ export class MycastleHttpServer extends HttpUploadServer {
           if (props.libName) entry.libName = props.libName;
           if (props.depends?.length) entry.depends = props.depends;
         }
-        if (!isLib && depth < 2) {
+        // We wnętrze biblioteki nie wchodzimy — `src/`, `examples/` itd. nie są
+        // osobnymi bibliotekami, a tylko zaśmieciłyby drzewo wyboru.
+        if (!isLib) {
           const children = await scanDir(fullPath, depth + 1);
           if (children.length) entry.children = children;
         }
@@ -4937,6 +4982,186 @@ const { password, ...safeBody } = body;
       }
       const config = await this.resolveMinisConfig(userName, deviceName);
       this.sendJsonResponse(res, 200, { deviceName: config.deviceName, serialNumber: config.serialNumber, wifiSsid: config.wifiSsid, wifiPassword: config.wifiPassword });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
+    }
+  }
+
+  /**
+   * Zgłoszenia urządzeń proszących o dopisanie do listy:
+   *   GET    /users/{u}/device-requests                  → lista oczekujących
+   *   POST   /users/{u}/device-requests/{name}/approve   → dopisz do Device.json
+   *   DELETE /users/{u}/device-requests/{name}           → odrzuć
+   */
+  /**
+   * Adapter `IotProvider` dla API skryptów. Każda operacja jest ograniczona do
+   * urządzeń właściciela — `userId` z kontekstu, nie z argumentów wywołania.
+   */
+  private createIotProvider(iot: IotService): IotProvider {
+    const assertOwned = (userId: string, deviceId: string) => {
+      const config = iot.telemetry.getConfig(deviceId);
+      if (!config) throw new Error(`Nieznane urządzenie: ${deviceId}`);
+      if (config.userId !== userId) throw new Error(`Brak dostępu do urządzenia: ${deviceId}`);
+      return config;
+    };
+
+    return {
+      listDevices: (userId) => {
+        const statuses = iot.presence.getAllStatuses();
+        const devices: IotDeviceInfo[] = [];
+        for (const [deviceId, info] of statuses) {
+          const config = iot.telemetry.getConfig(deviceId);
+          if (!config || config.userId !== userId) continue;
+          devices.push({
+            deviceId,
+            userId,
+            status: info.status,
+            lastSeenAt: info.lastSeenAt,
+            extensions: iot.extensions.getActiveExtensions(deviceId),
+          });
+        }
+        return devices;
+      },
+
+      sendCommand: async (userId, deviceId, command, params) => {
+        assertOwned(userId, deviceId);
+        // Czekamy na `command/ack` — skrypt ma dostać wynik, nie samo „wysłano".
+        return await iot.sendCommandAndWait(deviceId, command, params);
+      },
+
+      getTelemetry: async (userId, deviceId, key) => {
+        assertOwned(userId, deviceId);
+        const record = iot.telemetry.getLatest(deviceId);
+        const metric = record?.metrics?.find((m) => m.key === key);
+        return metric ? { value: metric.value, unit: metric.unit } : null;
+      },
+
+      extRequest: async (userId, deviceId, ext, op, params) => {
+        assertOwned(userId, deviceId);
+        if (ext !== 'vfs') {
+          // Pozostałe rozszerzenia (vkbd/vmouse/display) mają własne, wąskie
+          // API — generyczny kanał request-response istnieje dziś tylko dla VFS.
+          throw new Error(`Rozszerzenie „${ext}" nie obsługuje wywołań przez API`);
+        }
+        const vfs = iot.extensions.getVfs(deviceId);
+        if (!vfs) throw new Error(`Urządzenie ${deviceId} nie udostępnia rozszerzenia vfs`);
+        return await this.callDeviceVfs(vfs.fs, op, params);
+      },
+    };
+  }
+
+  /** Mapuje operację protokołu ext/vfs na metodę `MqttFS`. */
+  private async callDeviceVfs(
+    fs: VfsExtension['fs'],
+    op: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const uri = String(params.path ?? '/');
+    switch (op) {
+      case 'stat':
+        return await fs.stat(uri);
+      case 'readdir':
+        return { entries: await fs.readDirectory(uri) };
+      case 'readfile': {
+        const bytes = await fs.readFile(uri);
+        return { data: Buffer.from(bytes).toString('base64') };
+      }
+      case 'writefile': {
+        const data = Buffer.from(String(params.data ?? ''), 'base64');
+        await fs.writeFile(uri, new Uint8Array(data), (params.options as { create?: boolean; overwrite?: boolean }) ?? { create: true, overwrite: true });
+        return { ok: true };
+      }
+      case 'delete':
+        await fs.delete(uri, (params.options as { recursive?: boolean }) ?? {});
+        return { ok: true };
+      case 'rename':
+        await fs.rename(uri, String(params.newPath ?? ''), (params.options as { overwrite?: boolean }) ?? {});
+        return { ok: true };
+      case 'mkdir':
+        await fs.mkdir(uri);
+        return { ok: true };
+      default:
+        throw new Error(`Nieznana operacja VFS: ${op}`);
+    }
+  }
+
+  private async handleDeviceRequests(
+    res: ServerResponse,
+    method: string,
+    userName: string,
+    deviceName?: string,
+    approve = false,
+  ): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+    if (!await this.userExistsByName(userName)) {
+      this.sendJsonResponse(res, 404, { error: 'User not found' });
+      return;
+    }
+
+    try {
+      if (method === 'GET' && !deviceName) {
+        // Zgłoszenia urządzeń już obecnych na liście są bezprzedmiotowe —
+        // sprzątamy je przy odczycie, żeby panel nie prosił o dodanie czegoś,
+        // co użytkownik dawno zaakceptował (dotyczy wpisów sprzed tej kontroli).
+        const data = await this.readJsonFile(`${MINIS_ROOT}/Users/${userName}/Device.json`)
+          .catch(() => ({})) as Record<string, unknown>;
+        const known = new Set(
+          ((data['devices'] as Record<string, unknown>[] | undefined) ?? [])
+            .map((d) => String(d['name'] ?? '')),
+        );
+        const items = this.iotService.deviceRequests.list(userName).filter((r) => {
+          if (!known.has(r.deviceName)) return true;
+          this.iotService!.deviceRequests.remove(userName, r.deviceName);
+          return false;
+        });
+        this.sendJsonResponse(res, 200, { items });
+        return;
+      }
+
+      if (method === 'POST' && deviceName && approve) {
+        const request = this.iotService.deviceRequests.get(userName, deviceName);
+        if (!request) { this.sendJsonResponse(res, 404, { error: 'Request not found' }); return; }
+
+        const filePath = `${MINIS_ROOT}/Users/${userName}/Device.json`;
+        const data = await this.readJsonFile(filePath) as Record<string, unknown>;
+        const devices = (data['devices'] as Record<string, unknown>[] | undefined) ?? [];
+
+        // Ponowna akceptacja tego samego urządzenia nie ma tworzyć duplikatu —
+        // wpis mógł już powstać ręcznie albo z wcześniejszego zgłoszenia.
+        const exists = devices.some((d) => d['name'] === request.deviceName);
+        if (!exists) {
+          devices.push({
+            type: 'device',
+            id: randomUUID(),
+            name: request.deviceName,
+            // Definicja urządzenia jest wyborem użytkownika — zgłoszenie jej nie zna,
+            // więc wpis powstaje bez niej i czeka na uzupełnienie w formularzu.
+            deviceDefId: '',
+            isAssembled: false,
+            isIot: true,
+            sn: request.sn ?? '',
+            description: request.description ?? [request.label, request.kind, request.version]
+              .filter(Boolean).join(' · '),
+          });
+          data['devices'] = devices;
+          await this.writeJsonFile(filePath, data);
+        }
+
+        this.iotService.deviceRequests.remove(userName, deviceName);
+        this.sendJsonResponse(res, 200, { approved: request.deviceName, created: !exists });
+        return;
+      }
+
+      if (method === 'DELETE' && deviceName) {
+        const removed = this.iotService.deviceRequests.remove(userName, deviceName);
+        this.sendJsonResponse(res, removed ? 200 : 404, removed ? { rejected: deviceName } : { error: 'Request not found' });
+        return;
+      }
+
+      this.sendJsonResponse(res, 405, { error: `Method ${method} not allowed` });
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: this.errorMessage(err) });
     }

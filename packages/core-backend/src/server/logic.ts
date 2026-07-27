@@ -182,6 +182,50 @@ export class GitTool {
 
 // ── Realizacja operacji API ──────────────────────────────────────────────────
 
+/** Urządzenie IoT widziane przez API skryptów. */
+export interface IotDeviceInfo {
+  deviceId: string;
+  userId: string;
+  status?: string;
+  lastSeenAt?: number;
+  /** Typy aktywnych rozszerzeń (`vfs`, `vkbd`, `vmouse`, …). */
+  extensions?: string[];
+}
+
+/**
+ * Dostęp do warstwy IoT. Interfejs, nie implementacja — `IotService` żyje w
+ * `app/mycastle-backend`, więc core-backend zna tylko kontrakt, a backend
+ * wstrzykuje adapter (tak samo jak przy `secrets`/`arduino`/`picosdk`).
+ */
+/** Wynik komendy — dostępny dopiero po potwierdzeniu przez urządzenie. */
+export interface IotCommandResult {
+  id: string;
+  deviceId: string;
+  name: string;
+  payload: Record<string, unknown>;
+  status: 'PENDING' | 'SENT' | 'ACKNOWLEDGED' | 'FAILED' | 'TIMEOUT';
+  createdAt: number;
+  resolvedAt?: number;
+  failureReason?: string;
+}
+
+export interface IotProvider {
+  /** Urządzenia użytkownika wraz ze statusem obecności. */
+  listDevices(userId: string): IotDeviceInfo[] | Promise<IotDeviceInfo[]>;
+  /**
+   * Wysyła komendę i czeka na potwierdzenie urządzenia (`command/ack`).
+   * Brak odpowiedzi w limicie czasu → status `TIMEOUT`.
+   */
+  sendCommand(userId: string, deviceId: string, command: string, params: Record<string, unknown>): Promise<IotCommandResult>;
+  /** Ostatnia wartość metryki telemetrycznej. */
+  getTelemetry(userId: string, deviceId: string, key: string): Promise<{ value: unknown; unit?: string } | null>;
+  /**
+   * Request-response do rozszerzenia urządzenia (`ext/{ext}/req` → `.../res`).
+   * Operacje VFS (`stat`, `readdir`, `readfile`, …) idą tą samą drogą.
+   */
+  extRequest(userId: string, deviceId: string, ext: string, op: string, params: Record<string, unknown>): Promise<unknown>;
+}
+
 export interface ServerLogicOptions {
   /** Dostawca sekretów per-user (wymagany dla operacji email). */
   secrets?: SecretsProvider;
@@ -189,6 +233,8 @@ export interface ServerLogicOptions {
   arduino?: ArduinoService | null;
   /** Serwis Pico SDK (wymagany dla project_picosdk_*). */
   picosdk?: PicoSdkService | null;
+  /** Dostęp do urządzeń IoT (wymagany dla iot_*). */
+  iot?: IotProvider | null;
 }
 
 export class ServerLogic {
@@ -197,12 +243,14 @@ export class ServerLogic {
   private readonly secrets: SecretsProvider | null;
   private readonly arduino: ArduinoService | null;
   private readonly picosdk: PicoSdkService | null;
+  private readonly iot: IotProvider | null;
 
   constructor(dataDir: string, opts: ServerLogicOptions = {}) {
     this.dataDir = path.resolve(dataDir);
     this.secrets = opts.secrets ?? null;
     this.arduino = opts.arduino ?? null;
     this.picosdk = opts.picosdk ?? null;
+    this.iot = opts.iot ?? null;
   }
 
   /** Rozwiązuje `server_filename` do ścieżki bezwzględnej wewnątrz `data`. */
@@ -629,8 +677,78 @@ export class ServerLogic {
     };
   }
 
+  /** Parametry operacji: jawne `params` albo reszta argumentów (bez pól sterujących). */
+  private argParams(args: Record<string, unknown>): Record<string, unknown> {
+    if (args.params && typeof args.params === 'object') return args.params as Record<string, unknown>;
+    const { owner, device, ext, command, key, ...rest } = args;
+    void owner; void device; void ext; void command; void key;
+    return rest;
+  }
+
   private argFiles(args: Record<string, unknown>): string[] {
     return Array.isArray(args.files) ? args.files.map(String) : [];
+  }
+
+  // ── IoT ──────────────────────────────────────────────────────────────────
+
+  private requireIot(): IotProvider {
+    if (!this.iot) throw new Error('Operacje iot_* wymagają skonfigurowanej warstwy IoT');
+    return this.iot;
+  }
+
+  /** Urządzenia użytkownika (id, status, aktywne rozszerzenia). */
+  async iotGetDevices(owner: string): Promise<IotDeviceInfo[]> {
+    if (!owner) throw new Error('iot_get_devices: brak właściciela');
+    return await this.requireIot().listDevices(owner);
+  }
+
+  /** Wysyła komendę i czeka na potwierdzenie urządzenia; `TIMEOUT` gdy nie odpowie. */
+  async iotDeviceCommand(
+    owner: string,
+    device: string,
+    command: string,
+    params: Record<string, unknown> = {},
+  ): Promise<IotCommandResult> {
+    if (!device || !command) throw new Error('iot_device_command: wymagane `device` i `command`');
+    return await this.requireIot().sendCommand(owner, device, command, params);
+  }
+
+  /** Ostatnia wartość metryki telemetrycznej urządzenia. */
+  async iotDeviceTelemetry(
+    owner: string,
+    device: string,
+    key: string,
+  ): Promise<{ value: unknown; unit?: string } | null> {
+    if (!device || !key) throw new Error('iot_device_telemetry: wymagane `device` i `key`');
+    return await this.requireIot().getTelemetry(owner, device, key);
+  }
+
+  /** Request-response do dowolnego rozszerzenia urządzenia. */
+  async iotDeviceExtCommand(
+    owner: string,
+    device: string,
+    ext: string,
+    command: string,
+    params: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    if (!device || !ext || !command) {
+      throw new Error('iot_device_ext_command: wymagane `device`, `ext` i `command`');
+    }
+    return await this.requireIot().extRequest(owner, device, ext, command, params);
+  }
+
+  /**
+   * Operacje na systemie plików urządzenia. To cukier na `ext_command` z
+   * `ext='vfs'` — nazwy operacji i kształt odpowiedzi są takie same jak
+   * w protokole `ext/vfs/req` (patrz IotDeviceVfsExtension).
+   */
+  async iotDeviceExtVfs(
+    owner: string,
+    device: string,
+    op: string,
+    params: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    return await this.iotDeviceExtCommand(owner, device, 'vfs', op, params);
   }
 
   /** Wykonuje operację po nazwie (wspólne dla HTTP i MQTT). */
@@ -694,6 +812,28 @@ export class ServerLogic {
         return await this.projectPicosdkBuild(owner, s('projectId'), s('sketch'), s('boardKey') || undefined);
       case 'project_picosdk_get_output':
         return this.projectPicosdkGetOutput(owner, s('projectId'), s('sketch'), s('boardKey') || undefined);
+      case 'iot_get_devices':
+        return await this.iotGetDevices(owner);
+      case 'iot_device_command':
+        return await this.iotDeviceCommand(owner, s('device'), s('command'), this.argParams(args));
+      case 'iot_device_telemetry':
+        return await this.iotDeviceTelemetry(owner, s('device'), s('key'));
+      case 'iot_device_ext_command':
+        return await this.iotDeviceExtCommand(owner, s('device'), s('ext'), s('command'), this.argParams(args));
+      // Skróty VFS — nazwa operacji wynika wprost z nazwy komendy API.
+      case 'iot_device_ext_vfs_stat':
+      case 'iot_device_ext_vfs_readdir':
+      case 'iot_device_ext_vfs_readfile':
+      case 'iot_device_ext_vfs_writefile':
+      case 'iot_device_ext_vfs_delete':
+      case 'iot_device_ext_vfs_rename':
+      case 'iot_device_ext_vfs_mkdir':
+        return await this.iotDeviceExtVfs(
+          owner,
+          s('device'),
+          op.slice('iot_device_ext_vfs_'.length),
+          this.argParams(args),
+        );
       default:
         throw new Error(`Nieznana operacja API: ${op}`);
     }

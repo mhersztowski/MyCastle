@@ -7,6 +7,7 @@ import type { DeviceStatusChange } from './DevicePresence.js';
 import { CommandDispatcher } from './CommandDispatcher.js';
 import { AlertEngine } from './AlertEngine.js';
 import { DeviceShareStore } from './DeviceShareStore.js';
+import { DeviceRequestStore } from './DeviceRequestStore.js';
 import { IotExtensionRegistry } from './IotExtensionRegistry.js';
 import { AppSessionStore } from './AppSessionStore.js';
 import { RateLimiter } from './RateLimiter.js';
@@ -32,6 +33,15 @@ export class IotService {
   readonly commands: CommandDispatcher;
   readonly alerts: AlertEngine;
   readonly shares: DeviceShareStore;
+  /** Zgłoszenia urządzeń czekających na akceptację w Electronics → Devices. */
+  readonly deviceRequests: DeviceRequestStore;
+  /**
+   * Sprawdza, czy urządzenie jest już na liście użytkownika (`Device.json`).
+   * Wstrzykiwane przez App — IotService nie zna warstwy plików. Bez tego
+   * urządzenie prosiłoby o dodanie po każdym reconnekcie, mimo że dawno
+   * zostało zaakceptowane.
+   */
+  isDeviceKnown?: (userId: string, deviceName: string) => boolean | Promise<boolean>;
   readonly extensions: IotExtensionRegistry;
   readonly appSessions: AppSessionStore;
   readonly rateLimiter: RateLimiter;
@@ -44,6 +54,12 @@ export class IotService {
   readonly downsampling: DownsamplingService;
 
   private publishFn: MqttPublishFn | null = null;
+  /** Komendy czekające na `command/ack` (id → uchwyt obietnicy). */
+  private readonly pendingAcks = new Map<string, {
+    resolve: (command: DeviceCommand) => void;
+    timer: NodeJS.Timeout;
+    command: DeviceCommand;
+  }>();
   private commandTimeoutTimer: NodeJS.Timeout | null = null;
   private retentionTimer: NodeJS.Timeout | null = null;
 
@@ -54,6 +70,7 @@ export class IotService {
     this.commands = new CommandDispatcher(this.db);
     this.alerts = new AlertEngine(this.db);
     this.shares = new DeviceShareStore(this.db);
+    this.deviceRequests = new DeviceRequestStore(this.db);
     this.extensions = new IotExtensionRegistry((topic, payload) => this.publishFn?.(topic, payload));
     this.appSessions = new AppSessionStore(this.db);
     this.rateLimiter = new RateLimiter({ maxMessages: 120, windowMs: 60_000 });
@@ -163,6 +180,33 @@ export class IotService {
   }
 
   // ---------------------------------------------------------------------------
+  // Prośba o dopisanie do listy urządzeń
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Urządzenie prosi o dodanie do listy użytkownika. Zgłoszenie tylko czeka —
+   * wpis powstaje dopiero po akceptacji w Electronics → Devices, więc samo
+   * podłączenie się do brokera nie wystarcza, by trafić na listę.
+   */
+  async handleRegisterRequest(userId: string, deviceId: string, payload: {
+    label?: string;
+    kind?: 'firmware' | 'desktop' | 'mobile' | 'web' | 'service';
+    sn?: string;
+    description?: string;
+    version?: string;
+    address?: string;
+  }): Promise<void> {
+    // Urządzenie zgłasza się przy każdym połączeniu — jeśli użytkownik już je
+    // zaakceptował, prośba jest bezprzedmiotowa i nie może wracać do panelu.
+    if (await this.isDeviceKnown?.(userId, deviceId)) {
+      this.deviceRequests.remove(userId, deviceId);
+      return;
+    }
+    this.deviceRequests.upsert(userId, { deviceName: deviceId, ...payload });
+    console.log(`[IoT] register-request: userId=${userId} deviceId=${deviceId} kind=${payload.kind ?? '?'}`);
+  }
+
+  // ---------------------------------------------------------------------------
   // Hello
   // ---------------------------------------------------------------------------
 
@@ -261,6 +305,41 @@ export class IotService {
 
   handleCommandAck(_deviceId: string, payload: { id: string; status: 'ACKNOWLEDGED' | 'FAILED'; reason?: string }): void {
     this.commands.updateStatus(payload.id, payload.status, payload.reason);
+    // Odblokuj `sendCommandAndWait`, jeśli ktoś czeka na to potwierdzenie.
+    const pending = this.pendingAcks.get(payload.id);
+    if (pending) {
+      this.pendingAcks.delete(payload.id);
+      clearTimeout(pending.timer);
+      pending.resolve({ ...pending.command, status: payload.status, failureReason: payload.reason });
+    }
+  }
+
+  /**
+   * Wysyła komendę i czeka na potwierdzenie urządzenia (`command/ack`).
+   *
+   * `sendCommand` wraca od razu ze statusem `SENT` — dobre dla „wystrzel
+   * i zapomnij", bezużyteczne dla skryptu, który potrzebuje wyniku. Tu czekamy
+   * na odpowiedź; po przekroczeniu czasu zwracamy komendę ze statusem `TIMEOUT`
+   * zamiast rzucać, żeby wywołujący mógł zdecydować, co z tym zrobić.
+   */
+  sendCommandAndWait(
+    deviceId: string,
+    name: string,
+    cmdPayload: Record<string, unknown>,
+    timeoutMs = 15_000,
+  ): Promise<DeviceCommand> {
+    const command = this.sendCommand(deviceId, name, cmdPayload);
+    if (command.status !== 'SENT') {
+      // Urządzenie nieznane albo brak połączenia MQTT — nie ma na co czekać.
+      return Promise.resolve(command);
+    }
+    return new Promise<DeviceCommand>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingAcks.delete(command.id);
+        resolve({ ...command, status: 'TIMEOUT' as DeviceCommand['status'] });
+      }, timeoutMs);
+      this.pendingAcks.set(command.id, { resolve, timer, command });
+    });
   }
 
   sendCommand(deviceId: string, name: string, cmdPayload: Record<string, unknown>): DeviceCommand {
@@ -312,7 +391,7 @@ export class IotService {
     // traffic (e.g. a VFS folder read answering N requests), which makes MqttFS
     // time out (15 s), the HTTP call hang, the client retry, and the whole thing
     // snowball into a readfile storm. Never rate-limit `ext/*` or `command/ack`.
-    const isUnsolicited = ['telemetry', 'heartbeat', 'hello'].includes(msgType) || msgType === 'twin/reported';
+    const isUnsolicited = ['telemetry', 'heartbeat', 'hello', 'register-request'].includes(msgType) || msgType === 'twin/reported';
     if (isUnsolicited && !this.rateLimiter.allow(deviceName)) return;
 
     let raw: unknown;
@@ -340,6 +419,12 @@ export class IotService {
         const result = mqttTopics.hello.payloadSchema.safeParse(raw);
         if (!result.success) { console.warn(`[IoT] hello schema mismatch:`, result.error.issues); return; }
         this.handleHello(userName, deviceName, result.data);
+        break;
+      }
+      case 'register-request': {
+        const result = mqttTopics.registerRequest.payloadSchema.safeParse(raw);
+        if (!result.success) { console.warn(`[IoT] register-request schema mismatch:`, result.error.issues); return; }
+        void this.handleRegisterRequest(userName, deviceName, result.data);
         break;
       }
       case 'command/ack': {

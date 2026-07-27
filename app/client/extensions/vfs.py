@@ -21,6 +21,8 @@ Supported operations:
   mkdir
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -71,38 +73,39 @@ class VfsExtension:
 
     # --- Dispatch ---
 
-    def _dispatch(self, op: str, path: str | None, payload: dict) -> dict:
-        match op:
-            case "stat":
-                return self._stat(self._resolve(path))
-            case "readdir":
-                return self._readdir(self._resolve(path))
-            case "readfile":
-                return self._readfile(self._resolve(path))
-            case "writefile":
-                return self._writefile(
-                    self._resolve(path),
-                    payload.get("data", ""),
-                    payload.get("options") or {},
-                )
-            case "delete":
-                return self._delete(
-                    self._resolve(path),
-                    payload.get("options") or {},
-                )
-            case "rename":
-                new_path = payload.get("newPath")
-                if not new_path:
-                    raise ValueError("rename requires 'newPath'")
-                return self._rename(
-                    self._resolve(path),
-                    self._resolve(new_path),
-                    payload.get("options") or {},
-                )
-            case "mkdir":
-                return self._mkdir(self._resolve(path))
-            case _:
-                raise ValueError(f"Unknown VFS operation: {op!r}")
+    def _dispatch(self, op, path, payload: dict) -> dict:
+        # if/elif zamiast `match` — venv klienta bywa na Pythonie 3.9
+        # (macOS ships 3.9), a `match` wymaga 3.10+. Import tego modułu padał
+        # wtedy na SyntaxError i wywracał całego klienta, nie tylko VFS.
+        if op == "stat":
+            return self._stat(self._resolve(path))
+        if op == "readdir":
+            return self._readdir(self._resolve(path))
+        if op == "readfile":
+            return self._readfile(self._resolve(path))
+        if op == "writefile":
+            return self._writefile(
+                self._resolve(path),
+                payload.get("data", ""),
+                payload.get("options") or {},
+            )
+        if op == "delete":
+            return self._delete(
+                self._resolve(path),
+                payload.get("options") or {},
+            )
+        if op == "rename":
+            new_path = payload.get("newPath")
+            if not new_path:
+                raise ValueError("rename requires 'newPath'")
+            return self._rename(
+                self._resolve(path),
+                self._resolve(new_path),
+                payload.get("options") or {},
+            )
+        if op == "mkdir":
+            return self._mkdir(self._resolve(path))
+        raise ValueError("Unknown VFS operation: {!r}".format(op))
 
     # --- Operations ---
 

@@ -77,8 +77,22 @@ export {
   project_arduino_get_output,
   project_picosdk_build,
   project_picosdk_get_output,
+  iot_get_devices,
+  iot_device_command,
+  iot_device_telemetry,
+  iot_device_ext_command,
+  iot_device_ext_vfs_stat,
+  iot_device_ext_vfs_readdir,
+  iot_device_ext_vfs_readfile,
+  iot_device_ext_vfs_writefile,
+  iot_device_ext_vfs_delete,
+  iot_device_ext_vfs_rename,
+  iot_device_ext_vfs_mkdir,
 } from './api';
-export type { ConnResponse, ResCallback, ErrCallback } from './api';
+export type {
+  ConnResponse, ResCallback, ErrCallback, IotDevice,
+  IotCommandStatus, IotVfsStat, IotVfsEntry, IotVfsFileData, IotVfsOk,
+} from './api';
 
 // server — realizacja API backendu (HTTP + MQTT)
 export { ServerApi, ServerLogic, GitTool, SERVER_CMD_TOPIC, clientResTopic } from './server/api';
@@ -86,6 +100,9 @@ export type {
   ServerLogicOptions,
   SecretsProvider,
   DispatchContext,
+  IotProvider,
+  IotDeviceInfo,
+  IotCommandResult,
   MqttBus,
   ServerCommand,
   ServerResponse,

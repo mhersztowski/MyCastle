@@ -66,8 +66,11 @@ int arduino_serial_available() {
 EM_JS(void, em_canvas_present, (const uint32_t* ptr, int w, int h), {
   if (typeof Module.onCanvasPresent !== 'function') return;
   var bytes = w * h * 4;
-  // Copy out of the WASM heap — the caller reuses its framebuffer next frame.
-  var data = HEAPU8.slice(ptr, ptr + bytes);
+  // Widok na stertę zamiast kopii — przy 60 FPS kopiowanie całego framebuffera
+  // co klatkę to czysta strata. Odbiorca MUSI zużyć dane synchronicznie
+  // (renderer wrzuca je od razu do tekstury); gdy trzyma je na później,
+  // sam robi kopię — patrz `pendingFrameRef` w CppWasmRuntime.
+  var data = HEAPU8.subarray(ptr, ptr + bytes);
   Module.onCanvasPresent(data, w, h);
 });
 

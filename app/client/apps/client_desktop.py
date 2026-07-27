@@ -21,7 +21,7 @@ import sys
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QGridLayout, QGroupBox,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPlainTextEdit,
     QPushButton, QSpinBox, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
@@ -281,6 +281,17 @@ class MainWindow(QMainWindow):
         self.transport_input.setCurrentText(DEFAULT_TRANSPORT)
         grid.addWidget(self.transport_input, 1, 3)
 
+        # Katalog wystawiany jako VFS urządzenia (rozszerzenie IoT `ext/vfs`).
+        # Domyślnie katalog roboczy skryptu; backend zamontuje go pod
+        # /devices/{nazwa-urządzenia} po zaakceptowaniu urządzenia.
+        grid.addWidget(QLabel("VFS"), 2, 0)
+        self.vfs_input = QLineEdit(self.client.vfs_root)
+        self.vfs_input.setToolTip("Katalog udostępniany przez rozszerzenie VFS urządzenia")
+        grid.addWidget(self.vfs_input, 2, 1, 1, 2)
+        vfs_btn = QPushButton("Wybierz…")
+        vfs_btn.clicked.connect(self._pick_vfs_dir)
+        grid.addWidget(vfs_btn, 2, 3)
+
         bottom = QHBoxLayout()
         self.conn_status = QLabel("● disconnected")
         self.conn_status.setStyleSheet("color: #888;")
@@ -289,8 +300,15 @@ class MainWindow(QMainWindow):
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self._toggle_connection)
         bottom.addWidget(self.connect_btn)
-        grid.addLayout(bottom, 2, 0, 1, 4)
+        grid.addLayout(bottom, 3, 0, 1, 4)
         return box
+
+    def _pick_vfs_dir(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Katalog udostępniany przez VFS", self.vfs_input.text().strip() or ".",
+        )
+        if chosen:
+            self.vfs_input.setText(chosen)
 
     def _toggle_connection(self):
         if self.client.connected:
@@ -303,6 +321,7 @@ class MainWindow(QMainWindow):
             transport=self.transport_input.currentText(),
             ws_path=config.MQTT_WS_PATH,
             password=None,
+            vfs_root=self.vfs_input.text().strip() or None,
         )
         try:
             self.client.connect()

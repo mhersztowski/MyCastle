@@ -4,6 +4,7 @@ import type {
   LoginResponse,
   MinisDeviceDefModel,
   MinisDeviceModel,
+  DeviceRegistrationRequest,
   MinisLocalizationModel,
   MinisProjectModel,
   MinisProjectLibrary,
@@ -252,6 +253,23 @@ class MinisApiService {
 
   async deleteUserDevice(userName: string, deviceName: string): Promise<void> {
     await this.request('DELETE', `/users/${encodeURIComponent(userName)}/devices/${encodeURIComponent(deviceName)}`);
+  }
+
+  // User - Device requests (urządzenia proszące o dopisanie do listy)
+  async getDeviceRequests(userName: string): Promise<DeviceRegistrationRequest[]> {
+    const data = await this.request<{ items: DeviceRegistrationRequest[] }>(
+      'GET', `/users/${encodeURIComponent(userName)}/device-requests`,
+    );
+    return data.items;
+  }
+
+  /** Akceptacja tworzy wpis w Electronics → Devices i kasuje zgłoszenie. */
+  async approveDeviceRequest(userName: string, deviceName: string): Promise<void> {
+    await this.request('POST', `/users/${encodeURIComponent(userName)}/device-requests/${encodeURIComponent(deviceName)}/approve`);
+  }
+
+  async rejectDeviceRequest(userName: string, deviceName: string): Promise<void> {
+    await this.request('DELETE', `/users/${encodeURIComponent(userName)}/device-requests/${encodeURIComponent(deviceName)}`);
   }
 
   async getNextSn(): Promise<{ sn: string }> {

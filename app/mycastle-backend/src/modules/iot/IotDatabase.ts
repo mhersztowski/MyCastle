@@ -96,6 +96,24 @@ export class IotDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_device_share_device ON device_share(device_id);
       CREATE INDEX IF NOT EXISTS idx_device_share_target ON device_share(target_user_id);
+
+      -- Zgłoszenia urządzeń proszących o dopisanie do listy użytkownika.
+      -- Klucz (user_id, device_name): ponowne zgłoszenie tego samego urządzenia
+      -- odświeża wpis zamiast mnożyć duplikaty przy każdym reconnect.
+      CREATE TABLE IF NOT EXISTS device_request (
+        user_id       TEXT NOT NULL,
+        device_name   TEXT NOT NULL,
+        label         TEXT,
+        kind          TEXT,
+        sn            TEXT,
+        description   TEXT,
+        version       TEXT,
+        address       TEXT,
+        requested_at  INTEGER NOT NULL,
+        last_seen_at  INTEGER NOT NULL,
+        PRIMARY KEY (user_id, device_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_request_user ON device_request(user_id, last_seen_at DESC);
     `);
 
     // App sessions — web/mobile/desktop presence & time tracking (admin only)

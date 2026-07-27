@@ -55,6 +55,28 @@ export class IotDeviceClient {
 
   constructor(readonly options: IotDeviceClientOptions) {}
 
+  /**
+   * Prosi o dopisanie urządzenia do listy użytkownika (Electronics → Devices).
+   *
+   * Wysyłane przy każdym połączeniu — backend trzyma jedno zgłoszenie na
+   * urządzenie, więc powtórki tylko odświeżają wpis. Samo zgłoszenie niczego
+   * nie tworzy: wpis powstaje dopiero po akceptacji w panelu, więc podłączenie
+   * się do brokera nie wystarcza, by trafić na listę.
+   */
+  requestRegistration(info: {
+    label?: string;
+    kind?: 'firmware' | 'desktop' | 'mobile' | 'web' | 'service';
+    sn?: string;
+    description?: string;
+    version?: string;
+    address?: string;
+  } = {}): void {
+    this.options.publishFn(
+      `${this.options.topicPrefix}/register-request`,
+      JSON.stringify(info),
+    );
+  }
+
   /** Register a device-side extension (e.g. IotDeviceVfsExtension). */
   addExtension(ext: IotDeviceExtension): this {
     this.extensions.set(ext.type, ext);

@@ -137,6 +137,7 @@ class ClientAgent:
             if self.smart_display_ext is not None and self._display_req_topic:
                 client.subscribe(self._display_req_topic, qos=1)
             log.info(f"Subscribed | prefix={config.TOPIC_PREFIX} | vfs root={config.DATA_DIR}")
+            self._send_register_request()
             self._send_hello()
             self._presence.send_hello(client)
             self._send_heartbeat()
@@ -210,6 +211,26 @@ class ClientAgent:
         if reason:
             packet["reason"] = reason
         self.client.publish(config.TOPICS["COMMAND_ACK"], json.dumps(packet), qos=1)
+
+    # --- Prośba o dopisanie do listy urządzeń użytkownika ---
+
+    def _send_register_request(self):
+        """Prosi o dodanie do Electronics → Devices.
+
+        Wysyłane przy każdym połączeniu — backend trzyma jedno zgłoszenie na
+        urządzenie, więc powtórki tylko odświeżają wpis. Samo zgłoszenie niczego
+        nie tworzy: dopiero użytkownik akceptuje je w panelu.
+        """
+        packet = {
+            "label": config.MQTT_DEVICE,
+            "kind": "desktop",
+            "version": getattr(config, "CLIENT_VERSION", None) or "client.py",
+        }
+        sn = os.getenv("MINIS_DEVICE_SN")
+        if sn:
+            packet["sn"] = sn
+        self.client.publish(config.TOPICS["REGISTER_REQUEST"], json.dumps(packet), qos=1)
+        log.info("Register request sent (czeka na akceptację w Electronics → Devices)")
 
     # --- Hello (state announcement on connect) ---
 

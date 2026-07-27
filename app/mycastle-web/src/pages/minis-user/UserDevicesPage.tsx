@@ -5,15 +5,15 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, FormControlLabel, Switch, Alert, CircularProgress,
   Select, MenuItem, InputLabel, FormControl, Stack,
-  Drawer, Divider,
+  Drawer, Divider, List, ListItem, ListItemText,
 } from '@mui/material';
-import { Delete, Add, Build, SmartToy, Share, LocationOn, Close, OpenInNew } from '@mui/icons-material';
+import { Delete, Add, Build, SmartToy, Share, LocationOn, Close, OpenInNew, NotificationsActive } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { minisApi } from '../../services/MinisApiService';
 import type { UserPublic } from '../../services/MinisApiService';
 import { DEVICE_PRESETS } from '@modules/iot-emulator';
 import type { EmulatedDeviceConfig } from '@modules/iot-emulator';
-import type { MinisDeviceModel, MinisDeviceDefModel, IotCapability, DeviceShare, MinisLocalizationModel } from '@mhersztowski/core';
+import type { MinisDeviceModel, MinisDeviceDefModel, IotCapability, DeviceShare, MinisLocalizationModel, DeviceRegistrationRequest } from '@mhersztowski/core';
 
 const EMULATOR_STORAGE_KEY = 'minis-iot-emulator-configs';
 
@@ -69,17 +69,22 @@ function UserDevicesPage() {
   const [editPanelForm, setEditPanelForm] = useState<EditPanelForm>({ name: '', sn: '', description: '', isAssembled: true, isIot: false });
   const [editPanelSaving, setEditPanelSaving] = useState(false);
   const [snLoading, setSnLoading] = useState(false);
+  // Urządzenia, które przez MQTT poprosiły o dopisanie do listy.
+  const [deviceRequests, setDeviceRequests] = useState<DeviceRegistrationRequest[]>([]);
+  const [requestBusy, setRequestBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!userName) return;
     setLoading(true);
     try {
-      const [devices, defs, myShares, sharedDevices, locs] = await Promise.all([
+      const [devices, defs, myShares, sharedDevices, locs, requests] = await Promise.all([
         minisApi.getUserDevices(userName),
         minisApi.getDeviceDefs(userName),
         minisApi.getMyShares(userName),
         minisApi.getSharedDevices(userName),
         minisApi.getLocalizations(userName),
+        // Zgłoszenia są dodatkiem — brak usługi IoT nie może wywrócić listy urządzeń.
+        minisApi.getDeviceRequests(userName).catch(() => [] as DeviceRegistrationRequest[]),
       ]);
       setItems(devices);
       setDeviceDefs(defs);
@@ -87,6 +92,7 @@ function UserDevicesPage() {
       setSharedDeviceIds(new Set(myShares.map((s) => s.deviceId)));
       setSharedWithMe(sharedDevices);
       setLocalizations(locs);
+      setDeviceRequests(requests);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
@@ -96,6 +102,21 @@ function UserDevicesPage() {
   }, [userName]);
 
   useEffect(() => { load(); }, [load]);
+
+  /** Akceptacja tworzy wpis urządzenia; odrzucenie tylko kasuje zgłoszenie. */
+  const resolveRequest = useCallback(async (deviceName: string, accept: boolean) => {
+    if (!userName) return;
+    setRequestBusy(deviceName);
+    try {
+      if (accept) await minisApi.approveDeviceRequest(userName, deviceName);
+      else await minisApi.rejectDeviceRequest(userName, deviceName);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nie udało się obsłużyć zgłoszenia');
+    } finally {
+      setRequestBusy(null);
+    }
+  }, [userName, load]);
 
   const handleSave = async () => {
     if (!userName) return;
@@ -303,6 +324,60 @@ function UserDevicesPage() {
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {loading && <CircularProgress />}
+
+      {/* Urządzenia proszące o dopisanie do listy. Zgłoszenie przychodzi po MQTT
+          (`minis/{user}/{device}/register-request`) — dopiero akceptacja tworzy wpis,
+          więc samo podłączenie do brokera nie wystarcza, by trafić na listę. */}
+      {deviceRequests.length > 0 && (
+        <Paper variant="outlined" sx={{ mb: 3, p: 2, borderColor: 'warning.main' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <NotificationsActive color="warning" />
+            <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
+              Urządzenia proszą o dodanie ({deviceRequests.length})
+            </Typography>
+          </Box>
+          <List dense disablePadding>
+            {deviceRequests.map((request) => (
+              <ListItem
+                key={request.deviceName}
+                divider
+                secondaryAction={
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={<Add />}
+                      disabled={requestBusy === request.deviceName}
+                      onClick={() => void resolveRequest(request.deviceName, true)}
+                    >
+                      Dodaj
+                    </Button>
+                    <Button
+                      size="small"
+                      color="inherit"
+                      disabled={requestBusy === request.deviceName}
+                      onClick={() => void resolveRequest(request.deviceName, false)}
+                    >
+                      Odrzuć
+                    </Button>
+                  </Box>
+                }
+              >
+                <ListItemText
+                  primary={request.label ? `${request.label} (${request.deviceName})` : request.deviceName}
+                  secondary={[
+                    request.kind,
+                    request.sn ? `SN ${request.sn}` : null,
+                    request.version,
+                    request.address,
+                    `ostatnio: ${new Date(request.lastSeenAt).toLocaleString()}`,
+                  ].filter(Boolean).join(' · ')}
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
+      )}
 
       <TableContainer component={Paper}>
         <Table>
