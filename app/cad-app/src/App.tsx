@@ -22,6 +22,7 @@ import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import MinimizeIcon from '@mui/icons-material/Minimize';
 import HeadphonesIcon from '@mui/icons-material/Headphones';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import AutoStoriesOutlinedIcon from '@mui/icons-material/AutoStoriesOutlined';
 import { Project } from '@mhersztowski/core-cad';
 import type { Point2D, ViewMode } from '@mhersztowski/core-cad';
 import { CadCanvas } from './components/CadCanvas';
@@ -42,6 +43,7 @@ import { BreadboardCanvas } from './components/electronics/BreadboardCanvas';
 import { ComponentLibrary } from './components/electronics/ComponentLibrary';
 import { MapView } from './components/MapView';
 import { SpenNotesView } from './components/SpenNotesView';
+const RysikView = lazy(() => import('./rysik/ui/RysikView').then(m => ({ default: m.RysikView })));
 import { ResizeDivider } from './components/ResizeDivider';
 import { RepositoryPanel } from './components/RepositoryPanel';
 import { AudioPanel } from './components/AudioPanel';
@@ -59,7 +61,7 @@ import type { ToolName } from './tools/types';
 
 const project = new Project();
 
-type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes' | 'drive';
+type AppMode = 'cad' | 'cad3d' | 'scene3d' | 'lego' | 'electronics' | 'pcb' | 'map' | 'audio' | 'repository' | 'notes' | 'rysik' | 'drive';
 type RightTab = 'layers' | 'properties';
 
 export default function App() {
@@ -394,6 +396,12 @@ export default function App() {
             iconPosition="start"
           />
           <Tab
+            value="rysik"
+            label="Rysik"
+            icon={<AutoStoriesOutlinedIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+          />
+          <Tab
             value="audio"
             label="Audio"
             icon={<HeadphonesIcon sx={{ fontSize: 16 }} />}
@@ -667,6 +675,15 @@ export default function App() {
       {mode === 'notes' && (
         <Box sx={{ flex: 1, overflow: 'hidden' }}>
           <SpenNotesView />
+        </Box>
+      )}
+
+      {/* Rysik — dokumenty .qmd z blokami scen (inspektor generowany z manifestu) */}
+      {mode === 'rysik' && (
+        <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          <Suspense fallback={<Box sx={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={24} /></Box>}>
+            <RysikView />
+          </Suspense>
         </Box>
       )}
 

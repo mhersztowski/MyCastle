@@ -119,6 +119,14 @@ export interface DimensionEntity extends EntityBase {
   x2: number;
   y2: number;
   offset: number; // signed perpendicular distance from p1-p2 line to dimension line
+  /**
+   * Rodzaj wymiaru. 'diameter' → rysowany wewnętrznie jako dwustronna strzałka przez
+   * środek okręgu (p1,p2 to końce średnicy), a opis „⌀value" leży w kierunku linii
+   * w odległości `labelDist` od środka. Brak = zwykły wymiar liniowy.
+   */
+  dimType?: 'diameter';
+  /** Dla `dimType:'diameter'` — odległość opisu (⌀value) od środka wzdłuż linii wymiarowej. */
+  labelDist?: number;
   /** When set, x1,y1 are resolved live from this anchor (follows the shape). */
   anchor1?: DimAnchor;
   /** When set, x2,y2 are resolved live from this anchor (follows the shape). */

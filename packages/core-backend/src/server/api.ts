@@ -10,16 +10,22 @@
  *   • w routerze HTTP: `await serverApi.handleHttp(body)` dla `POST /api/server/cmd`.
  */
 
-import { ServerLogic, type MqttBus, type ServerResponse } from './logic';
+import {
+  ServerLogic,
+  type ServerLogicOptions,
+  type MqttBus,
+  type ServerResponse,
+  type DispatchContext,
+} from './logic';
 import { handleServerCmd, type ServerCmdBody } from './http';
 import { attachServerMqtt } from './mqtt';
 
 export class ServerApi {
-  /** Warstwa logiki (operacje na plikach/git). Dostępna, gdy potrzebny bezpośredni dostęp. */
+  /** Warstwa logiki (operacje na plikach/git/email). Dostępna, gdy potrzebny bezpośredni dostęp. */
   readonly logic: ServerLogic;
 
-  constructor(dataDir: string) {
-    this.logic = new ServerLogic(dataDir);
+  constructor(dataDir: string, opts: ServerLogicOptions = {}) {
+    this.logic = new ServerLogic(dataDir, opts);
   }
 
   /** Podłącza kanał komend MQTT (`/server/cmd` → `/client/{clientId}`). */
@@ -27,9 +33,12 @@ export class ServerApi {
     attachServerMqtt(this.logic, bus);
   }
 
-  /** Obsługuje ciało `POST /api/server/cmd`. Nigdy nie rzuca. */
-  handleHttp(body: ServerCmdBody): Promise<ServerResponse> {
-    return handleServerCmd(this.logic, body);
+  /**
+   * Obsługuje ciało `POST /api/server/cmd`. Nigdy nie rzuca.
+   * `ctx.owner` (zweryfikowany JWT) jest autorytatywny dla operacji email.
+   */
+  handleHttp(body: ServerCmdBody, ctx: DispatchContext = {}): Promise<ServerResponse> {
+    return handleServerCmd(this.logic, body, ctx);
   }
 }
 
@@ -40,11 +49,22 @@ export {
   clientResTopic,
 } from './logic';
 export type {
+  ServerLogicOptions,
+  SecretsProvider,
+  DispatchContext,
   MqttBus,
   ServerCommand,
   ServerResponse,
   GitResult,
   GitDiffResult,
   GitCommit,
+  EmailSummary,
+  EmailMessage,
+  EmailAttachmentMeta,
+  EmailSendResult,
+  EmailSendOptions,
+  Mail,
+  ZipResult,
+  ProjectBuildResult,
 } from './logic';
 export type { ServerCmdBody } from './http';

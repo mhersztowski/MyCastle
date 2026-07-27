@@ -82,6 +82,28 @@ export async function readUserFileText(userName: string, relPath: string): Promi
 }
 
 /**
+ * Write a file as raw UTF-8 text (markdown, skrypty). Creates the file and
+ * nadpisuje istniejącą treść. Rzuca na błędach HTTP.
+ */
+export async function writeUserFileText(userName: string, relPath: string, text: string): Promise<void> {
+  if (!userName) throw new Error('writeUserFileText: empty userName');
+  const u = new URL(
+    `/api/users/${encodeURIComponent(userName)}/vfs/writeFile`,
+    window.location.origin,
+  );
+  u.searchParams.set('path', fullPath(userName, relPath));
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const r = await fetch(u.pathname + u.search, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ data: btoa(binary), options: { create: true, overwrite: true } }),
+  });
+  if (!r.ok) throw new Error(`writeUserFileText ${relPath}: HTTP ${r.status}`);
+}
+
+/**
  * Write a JSON file. Creates the file (and parent dirs implicitly via VFS)
  * and overwrites existing content. Throws on HTTP errors.
  */

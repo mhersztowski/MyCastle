@@ -20,13 +20,28 @@ export interface VoiceAction {
   language: string;
 }
 
-/** Wariant językowy akcji głosowej — logika konwersacji w Blockly. */
+/**
+ * Sposób definiowania logiki wariantu:
+ *  - `blockly` — bloczki w edytorze konwersacji (pole `blocklyXml`),
+ *  - `automate` — skrypt automatyzacji w pliku Drive (pole `scriptPath`),
+ *    zapisany w tym samym formacie co blok ```automate``` w edytorze markdown.
+ */
+export type VoiceActionLogicMode = 'blockly' | 'automate';
+
+/** Wariant językowy akcji głosowej — logika w Blockly albo w skrypcie automatyzacji. */
 export interface VoiceActionVariant {
   id: string;
   voiceActionId: string;
   language: string;
   /** Serializacja workspace edytora Blockly (XML). */
   blocklyXml: string;
+  /** Brak wartości = `blockly` (zgodność wsteczna ze starymi konfiguracjami). */
+  mode?: VoiceActionLogicMode;
+  /**
+   * Ścieżka pliku ze skryptem względem katalogu drive użytkownika,
+   * np. `automate/aura/powitanie-pl.automate`. Używana gdy `mode === 'automate'`.
+   */
+  scriptPath?: string;
 }
 
 /** Słowo aktywacyjne (wake word) dla danego języka — konfigurowane w Edytorze Konwersacji. */
@@ -83,5 +98,33 @@ export function createVoiceActionVariant(
   language: string,
   blocklyXml = '',
 ): VoiceActionVariant {
-  return { id, voiceActionId, language, blocklyXml };
+  return { id, voiceActionId, language, blocklyXml, mode: 'blockly' };
+}
+
+/** Tryb logiki wariantu z domyślną wartością dla starych zapisów bez pola `mode`. */
+export function variantLogicMode(variant: Pick<VoiceActionVariant, 'mode'>): VoiceActionLogicMode {
+  return variant.mode === 'automate' ? 'automate' : 'blockly';
+}
+
+/** Katalog skryptów Aury względem drive użytkownika. */
+export const AURA_SCRIPT_DIR = 'automate/aura';
+
+/** Rozszerzenie plików skryptów Automate (wspólne dla Aury i bloków w notatkach). */
+export const AUTOMATE_EXT = '.automate';
+
+/**
+ * Domyślna ścieżka pliku skryptu dla wariantu: `automate/aura/{akcja}-{język}.automate`.
+ * Nazwa akcji jest sprowadzana do bezpiecznego sluga, żeby ścieżka nie zależała
+ * od polskich znaków ani spacji wpisanych przez użytkownika.
+ */
+export function auraScriptPath(actionName: string, language: string, fallbackId: string): string {
+  const slug = actionName
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')   // znaki diakrytyczne po NFD
+    .replace(/ł/g, 'l')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const base = slug || fallbackId;
+  return `${AURA_SCRIPT_DIR}/${base}-${language}${AUTOMATE_EXT}`;
 }

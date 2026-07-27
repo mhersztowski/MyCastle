@@ -1,0 +1,62 @@
+/**
+ * Dokument startowy — pokazuje wszystkie trzy postacie wartości (literał,
+ * wiązanie do zmiennej, wyrażenie) i oba typy bloków.
+ */
+
+export const STARTER_DOCUMENT = `---
+title: Model terenu
+---
+
+Dokument Rysika jest zwykłym plikiem \`.qmd\`. Blok poniżej to blok kodu
+z klasą — bez naszego narzędzia Quarto wyrenderuje go jako listing, z filtrem
+\`rysik\` dostaniesz interaktywną scenę (HTML) albo zrzut (PDF).
+
+\`\`\`{.rysik-vars}
+- {name: azimuth, label: Azymut Słońca, value: 210, min: 0, max: 360, step: 1}
+- {name: dayOfYear, label: Dzień roku, value: 172, min: 1, max: 365, step: 1}
+- {name: hour, label: Godzina, value: 14, min: 0, max: 23, step: 1}
+\`\`\`
+
+Przy przewyższeniu 2,4× dolina jest czytelna nawet bez warstwic — patrz @fig-teren.
+
+\`\`\`{.scene3d-terrain}
+#| label: fig-teren
+#| fig-cap: "Model terenu z cieniowaniem o zadanej porze dnia."
+
+exaggeration: 2.4
+palette: hypsometric
+showContours: true
+sunAzimuth: {ref: azimuth}
+sunElevation: {expr: "solarElevation(dayOfYear, hour, 49.6)"}
+markers:
+  - id: barania
+    label: Barania Góra
+    lon: 18.9825
+    lat: 49.6089
+  - id: skrzyczne
+    label: Skrzyczne
+    lon: 19.0361
+    lat: 49.7028
+    color: "#42a5f5"
+\`\`\`
+
+Ten sam suwak steruje drugim blokiem — jeden graf, dwa widoki.
+
+\`\`\`{.chart-bars}
+#| label: fig-naslonecznienie
+#| fig-cap: "Nasłonecznienie stoków w zależności od ekspozycji."
+
+title: Ekspozycja stoków
+unit: "%"
+showValues: true
+scale: {expr: "1 + azimuth / 360"}
+bars:
+  - {id: n, label: N, value: 18}
+  - {id: e, label: E, value: 34}
+  - {id: s, label: S, value: 62}
+  - {id: w, label: W, value: 41}
+\`\`\`
+
+Tekst zamykający: numerację rysunków i odsyłacze robi Quarto, interaktywność —
+runtime Rysika.
+`;

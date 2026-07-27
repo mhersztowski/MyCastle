@@ -80,6 +80,52 @@ export interface GitCommit {
   message: string;
 }
 
+export interface EmailSummary {
+  uid: number;
+  from: string;
+  subject: string;
+  date: string;
+  seen: boolean;
+}
+export interface EmailAttachmentMeta {
+  filename: string;
+  contentType: string;
+  size: number;
+}
+export interface EmailMessage {
+  uid: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  text: string;
+  html: string;
+  attachments: EmailAttachmentMeta[];
+}
+export interface EmailSendResult {
+  ok: boolean;
+  messageId: string;
+}
+export interface EmailSendOptions {
+  html?: string;
+  cc?: string;
+}
+export interface Mail {
+  from: string;
+  to: string[];
+  topic: string;
+  content: string;
+}
+export interface ZipResult {
+  ok: boolean;
+  output: string;
+}
+export interface ProjectBuildResult {
+  success: boolean;
+  output: string;
+  outputFiles?: string[];
+}
+
 export interface ConnResponse {
   id: string;
   ok: boolean;
@@ -382,4 +428,118 @@ export async function git_diff(
     commit_from,
     commit_to,
   })) as GitDiffResult;
+}
+
+// ── Email (konto z SecretsService użytkownika po stronie backendu) ────────────
+
+export async function email_list(conn: Conn, mailbox = 'INBOX', limit = 20): Promise<EmailSummary[]> {
+  return (await sendCommand(conn, 'email_list', { owner: conn.userName, mailbox, limit })) as EmailSummary[];
+}
+
+export async function email_read(conn: Conn, uid: string | number, mailbox = 'INBOX'): Promise<EmailMessage> {
+  return (await sendCommand(conn, 'email_read', {
+    owner: conn.userName,
+    uid: String(uid),
+    mailbox,
+  })) as EmailMessage;
+}
+
+export async function email_send(
+  conn: Conn,
+  to: string,
+  subject: string,
+  body: string,
+  opts: EmailSendOptions = {},
+): Promise<EmailSendResult> {
+  return (await sendCommand(conn, 'email_send', {
+    owner: conn.userName,
+    to,
+    subject,
+    body,
+    html: opts.html,
+    cc: opts.cc,
+  })) as EmailSendResult;
+}
+
+// ── Mail ──────────────────────────────────────────────────────────────────────
+
+export async function mail_send(conn: Conn, mail: Mail): Promise<EmailSendResult> {
+  return (await sendCommand(conn, 'mail_send', { owner: conn.userName, mail })) as EmailSendResult;
+}
+
+export async function mail_inbox(conn: Conn, limit = 20): Promise<Mail[]> {
+  return (await sendCommand(conn, 'mail_inbox', { owner: conn.userName, limit })) as Mail[];
+}
+
+export async function mail_outbox(conn: Conn, limit = 20): Promise<Mail[]> {
+  return (await sendCommand(conn, 'mail_outbox', { owner: conn.userName, limit })) as Mail[];
+}
+
+// ── Zip ───────────────────────────────────────────────────────────────────────
+
+export async function zip_pack(conn: Conn, input: string, output: string): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_pack', { input, output })) as ZipResult;
+}
+
+export async function zip_unpack(conn: Conn, input: string, output: string): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_unpack', { input, output })) as ZipResult;
+}
+
+export async function zip_update(conn: Conn, path: string, files: string[]): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_update', { path, files })) as ZipResult;
+}
+
+export async function zip_delete(conn: Conn, path: string, files: string[]): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_delete', { path, files })) as ZipResult;
+}
+
+// ── Projekty ──────────────────────────────────────────────────────────────────
+
+export async function project_arduino_build(
+  conn: Conn,
+  projectId: string,
+  sketch: string,
+  fqbn: string,
+): Promise<ProjectBuildResult> {
+  return (await sendCommand(
+    conn,
+    'project_arduino_build',
+    { owner: conn.userName, projectId, sketch, fqbn },
+    600_000,
+  )) as ProjectBuildResult;
+}
+
+export async function project_arduino_get_output(conn: Conn, projectId: string): Promise<string> {
+  return (await sendCommand(conn, 'project_arduino_get_output', {
+    owner: conn.userName,
+    projectId,
+  })) as string;
+}
+
+export async function project_picosdk_build(
+  conn: Conn,
+  projectId: string,
+  sketch: string,
+  boardKey = '',
+): Promise<ProjectBuildResult> {
+  return (await sendCommand(
+    conn,
+    'project_picosdk_build',
+    { owner: conn.userName, projectId, sketch, boardKey },
+    600_000,
+  )) as ProjectBuildResult;
+}
+
+export async function project_picosdk_get_output(
+  conn: Conn,
+  projectId: string,
+  sketch: string,
+  boardKey = '',
+): Promise<string> {
+  return (await sendCommand(conn, 'project_picosdk_get_output', {
+    owner: conn.userName,
+    projectId,
+    sketch,
+    boardKey,
+  })) as string;
 }

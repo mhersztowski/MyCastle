@@ -3,7 +3,7 @@
  * Format markdown: ```automate:blockId\ncode\n```
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, NodeViewProps } from '@tiptap/react';
 import {
@@ -11,78 +11,24 @@ import {
   Paper,
   IconButton,
   Tooltip,
-  Divider,
   Typography,
   CircularProgress,
   Alert,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  Button,
-  Tab,
-  Tabs,
-  Badge,
-  ToggleButton,
-  ToggleButtonGroup,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import StopIcon from '@mui/icons-material/Stop';
-import ExtensionIcon from '@mui/icons-material/Extension';
-import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
-import MenuBookIcon from '@mui/icons-material/MenuBook';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import ViewQuiltIcon from '@mui/icons-material/ViewQuilt';
-import AttachFileIcon from '@mui/icons-material/AttachFile';
-import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LabelIcon from '@mui/icons-material/Label';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import CodeIcon from '@mui/icons-material/Code';
 import Editor from '@monaco-editor/react';
-import type { Monaco } from '@monaco-editor/react';
-import type { editor as MonacoEditorTypes } from 'monaco-editor';
 
-import { useAuth } from '../../../modules/auth/AuthContext';
-
-// Lazy — the docs string (`docs/MDScript.md`) is in its own chunk so users
-// who never click help don't pay for it.
-// Help browser (filesystem tree of drive/public/doc + markdown viewer) — lazy
-// so its react-markdown chunk loads only when the user opens the help window.
-const AutomateHelpBrowserDialog = lazy(() => import('./AutomateHelpBrowserDialog'));
-// Inspektor QObject (drzewo obiektów parsowanych ze źródła) — lazy.
-const AutomateQObjectPanel = lazy(() => import('./AutomateQObjectPanel'));
-
-// Wizualny builder sceny QWidget — lazy, ciężki komponent.
-const QObjectSceneBuilderDialog = lazy(() => import('./QObjectSceneBuilderDialog'));
-
-// Lazy — file picker only loads when the user clicks "Dołącz plik".
-const AutomateIncludeFileDialog = lazy(() => import('./AutomateIncludeFileDialog'));
-
-// Lazy — Blockly is heavy; only loaded when the user switches to block mode.
-const AutomateBlocklyEditor = lazy(() => import('./AutomateBlocklyEditor'));
-
-import { listUmlProjects, loadUmlClasses, type UmlClassDef } from './umlBlockly';
-import { parseQObjects } from './qobjectSource';
+import { listUmlProjects } from './umlBlockly';
 import { emptyScene, normalizeScene, type QObjectScene } from './qobjectScene';
-import { readUserJson, writeUserJson } from '../../../services/userJson';
+import { readUserJson } from '../../../services/userJson';
 
-import { setupAutomateMonaco, mergeExtraLibs } from '../../../modules/automate/designer/automateMonacoSetup';
 import { editorOverlay } from '../editorOverlayState';
-import { MonacoSelectionHandles } from '../../../pages/drive/MonacoSelectionHandles';
-import { LIBRARIES, parseLibrariesFromCode, preloadLibrariesForCode } from './automateLibraries';
+import { useAuth } from '../../../modules/auth/AuthContext';
+import { preloadLibrariesForCode } from './automateLibraries';
 
 // Lazy — picker only loads when the user clicks "Użyj biblioteki".
 const AutomateLibraryPickerDialog = lazy(() => import('./AutomateLibraryPickerDialog'));
@@ -92,382 +38,21 @@ const AutomateLibraryPickerDialog = lazy(() => import('./AutomateLibraryPickerDi
 const AutomateScriptSettingsDialog = lazy(() => import('./AutomateScriptSettingsDialog'));
 // Update Script dialog — lazy, opens only when user clicks the button in settings.
 const AutomateUpdateScriptDialog = lazy(() => import('./AutomateUpdateScriptDialog'));
-import { useAutomateDocument, DisplayItem } from './AutomateDocumentContext';
+// Pełnoekranowy edytor skryptu — ten sam komponent obsługuje logikę akcji w Aurze.
+const AutomateScriptEditorDialog = lazy(() => import('./AutomateScriptEditorDialog'));
+import type { AutomateScriptSettings } from './AutomateScriptEditorDialog';
+import { useAutomateDocument } from './AutomateDocumentContext';
+// Wspólny rdzeń (Monaco setup, markery Blockly, lista dołączonych plików,
+// renderer wyników) — dzielony z edytorem skryptu używanym poza TipTapem.
+import {
+  DisplayOutput,
+  buildRuntimeCode,
+  joinBlockly,
+  registerLibraryTypes,
+  setupAutomateMonacoWithDisplay,
+  splitBlockly,
+} from './automateScriptCore';
 import { useMdViewSettings } from '../mdViewSettings';
-
-const DISPLAY_API_TYPES = `
-/**
- * API wyswietlania wynikow w panelu output bloku skryptowego.
- * Dostepne tylko w blokach skryptowych osadzonych w markdown.
- */
-interface DisplayApi {
-  /**
-   * Wyswietl tekst w panelu output.
-   * @param str - Tekst do wyswietlenia
-   * @example display.text('Wynik: 42');
-   */
-  text(str: string): void;
-
-  /**
-   * Wyswietl tabele w panelu output.
-   * @param data - Tablica obiektow lub tablica tablic
-   * @example
-   * display.table([
-   *   { imie: 'Jan', wiek: 30 },
-   *   { imie: 'Anna', wiek: 25 },
-   * ]);
-   */
-  table(data: Record<string, any>[] | any[][]): void;
-
-  /**
-   * Wyswietl liste w panelu output.
-   * @param items - Tablica elementow
-   * @example display.list(['Element 1', 'Element 2', 'Element 3']);
-   */
-  list(items: any[]): void;
-
-  /**
-   * Wyswietl sformatowany JSON w panelu output.
-   * @param obj - Obiekt do wyswietlenia
-   * @example display.json({ klucz: 'wartosc', nested: { a: 1 } });
-   */
-  json(obj: any): void;
-
-  /**
-   * Wyswietl surowy fragment HTML. Renderowany przez dangerouslySetInnerHTML.
-   * @param markup - String HTML do wyswietlenia
-   * @example display.html('<div style="color:red">Alert!</div>');
-   */
-  html(markup: string): void;
-
-  /**
-   * Zamontuj zywy element DOM (z animacjami, event handlerami).
-   * Idealny dla Three.js — przekaz \`renderer.domElement\` zeby zachowac
-   * animacje w trybie HTML widoku.
-   * @param element - HTMLElement do zamontowania
-   * @example
-   * const r = new THREE.WebGLRenderer();
-   * r.setSize(400, 300);
-   * r.setAnimationLoop(() => r.render(scene, camera));
-   * display.dom(r.domElement);
-   */
-  dom(element: HTMLElement): void;
-}
-
-/**
- * API wyswietlania wynikow - renderuje dane bezposrednio pod blokiem skryptowym.
- *
- * Dostepne metody:
- * - \`display.text(str)\` - tekst
- * - \`display.table(data)\` - tabela
- * - \`display.list(items)\` - lista
- * - \`display.json(obj)\` - sformatowany JSON
- * - \`display.html(markup)\` - raw HTML
- * - \`display.dom(element)\` - zywy element DOM (np. canvas Three.js)
- */
-declare const display: DisplayApi;
-`;
-
-/**
- * Register Automate API + `display` API types so Monaco offers completions
- * for `api.*`, `input`, `variables`, and `display.*` inside the script
- * dialog. Goes through the merge helper so we don't wipe out libs added by
- * other plugins (TypeScriptIntelliSensePlugin in particular). Safe to call
- * on every `beforeMount` — the merge is idempotent.
- */
-function setupAutomateMonacoWithDisplay(monaco: Monaco): void {
-  setupAutomateMonaco(monaco);
-  mergeExtraLibs(monaco, new Map([
-    ['file:///automate-display-api.d.ts', DISPLAY_API_TYPES],
-  ]));
-}
-
-/**
- * Pull in the .d.ts stubs for every library referenced by `// @library: foo`
- * in the current code. Re-uses the same model-based registration as the
- * Automate API types so re-registering is a no-op (no worker restart) when
- * the same set of libraries comes back. Called from the Monaco editor's
- * `onMount` and after each user edit that might add a new marker.
- */
-function registerLibraryTypes(monaco: Monaco, code: string): void {
-  const libs = parseLibrariesFromCode(code);
-  if (libs.length === 0) return;
-  const map = new Map<string, string>();
-  for (const libId of libs) {
-    const entry = LIBRARIES[libId];
-    if (entry) map.set(entry.typesDtsPath, entry.typesDtsContent);
-  }
-  if (map.size > 0) mergeExtraLibs(monaco, map);
-}
-
-// ── Embedded-file helpers ──────────────────────────────────────────────────
-// Parses blocks delimited by the markers that AutomateIncludeFileDialog and
-// handleIncludeImport insert, so the "Included" tab can list them and let the
-// author remove specific blocks in one click.
-//
-// Inline include markers (inserted by AutomateIncludeFileDialog):
-//   // ─── included: PATH ───
-//   <file content>
-//   // ----- PATH
-//
-// Module import markers (inserted by handleIncludeImport):
-//   // ─── import: PATH ───
-//   const xModule = await import('url');
-//   const { … } = xModule;
-//   // ----- import PATH
-
-interface EmbeddedFile {
-  path: string;
-  type: 'included' | 'import';
-  startLine: number;   // index of the opening marker line
-  endLine: number;     // index of the closing marker line
-}
-
-function parseEmbeddedFiles(code: string): EmbeddedFile[] {
-  if (!code) return [];
-  const lines = code.split('\n');
-  const result: EmbeddedFile[] = [];
-  const BOX = '─'; // ─ (U+2500 BOX DRAWINGS LIGHT HORIZONTAL)
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Inline include start: // ─── included: PATH ───
-    const incMatch = line.match(new RegExp(`^// ${BOX}{3} included: (.+?) ${BOX}{3}\\s*$`));
-    if (incMatch) {
-      const path = incMatch[1];
-      const endMarker = `// ----- ${path}`;
-      for (let j = i + 1; j < lines.length; j++) {
-        if (lines[j].trimEnd() === endMarker) {
-          result.push({ path, type: 'included', startLine: i, endLine: j });
-          break;
-        }
-      }
-      continue;
-    }
-
-    // Module import start: // ─── import: PATH ───
-    const impMatch = line.match(new RegExp(`^// ${BOX}{3} import: (.+?) ${BOX}{3}\\s*$`));
-    if (impMatch) {
-      const path = impMatch[1];
-      const endMarker = `// ----- import ${path}`;
-      for (let j = i + 1; j < lines.length; j++) {
-        if (lines[j].trimEnd() === endMarker) {
-          result.push({ path, type: 'import', startLine: i, endLine: j });
-          break;
-        }
-      }
-    }
-  }
-
-  return result;
-}
-
-// Remove the lines from startLine to endLine inclusive, plus any empty line
-// immediately preceding the block (the snippet is inserted with a leading \n).
-function removeEmbeddedBlock(code: string, file: EmbeddedFile): string {
-  const lines = code.split('\n');
-  let from = file.startLine;
-  if (from > 0 && lines[from - 1].trim() === '') from--;
-  return [...lines.slice(0, from), ...lines.slice(file.endLine + 1)].join('\n');
-}
-
-// ── Blockly persistence + runtime combination ────────────────────────────────
-// The Blockly side (block layout + the JS it generates) is stored OUT of the
-// visible script, in a trailing `//@blockly <base64>` comment marker holding
-// `{ s: workspaceState, c: generatedCode }`. The code editor only ever shows
-// the user's *normal* hand-written body — Blockly never overwrites it. At run
-// time the two are combined (`buildRuntimeCode`): the Blockly-generated code is
-// concatenated with the normal body. External libraries (`// @library: …`) live
-// only in the normal body and so appear once in the combined runtime code.
-const BLOCKLY_MARKER_RE = /\n*\/\/@blockly\s+([A-Za-z0-9+/=]+)\s*$/;
-
-interface BlocklySplit { body: string; state: string | null; blocklyCode: string }
-
-/** Splits script text into the normal body and the stored Blockly state + generated code. */
-function splitBlockly(full: string): BlocklySplit {
-  const m = full.match(BLOCKLY_MARKER_RE);
-  if (!m || m.index === undefined) return { body: full, state: null, blocklyCode: '' };
-  let state: string | null = null;
-  let blocklyCode = '';
-  try {
-    const json = decodeURIComponent(escape(atob(m[1])));
-    const obj = JSON.parse(json) as { s?: string | null; c?: string; blocks?: unknown; languageVersion?: unknown };
-    if (obj && (obj.s !== undefined || obj.c !== undefined)) {
-      state = obj.s ?? null;
-      blocklyCode = obj.c ?? '';
-    } else if (obj && (obj.blocks !== undefined || obj.languageVersion !== undefined)) {
-      // Legacy marker: the payload was the raw workspace state (generated code
-      // lived inline in the body back then). Keep the layout editable.
-      state = json;
-    }
-  } catch { /* malformed marker → ignore */ }
-  return { body: full.slice(0, m.index).replace(/\n+$/, ''), state, blocklyCode };
-}
-
-/** Re-attaches the Blockly marker to a normal body (no-op when there's nothing to store). */
-function joinBlockly(body: string, state: string | null, blocklyCode: string): string {
-  if (!state && !blocklyCode) return body;
-  try {
-    const payload = JSON.stringify({ s: state ?? null, c: blocklyCode ?? '' });
-    return `${body}\n//@blockly ${btoa(unescape(encodeURIComponent(payload)))}`;
-  } catch { return body; }
-}
-
-/** The actual script to execute: the normal body first (it usually declares the
- *  classes/functions/setup), then the Blockly-generated code which uses them.
- *  Body-first avoids `class`/`const` temporal-dead-zone errors when the blocks
- *  reference something defined in the normal code. */
-function buildRuntimeCode(full: string): string {
-  const { body, blocklyCode } = splitBlockly(full);
-  if (!blocklyCode) return body;
-  return body ? `${body}\n${blocklyCode}` : blocklyCode;
-}
-
-// Komponent renderujacy wyniki display
-const DisplayOutput: React.FC<{ items: DisplayItem[] }> = ({ items }) => {
-  if (items.length === 0) return null;
-
-  return (
-    <Box sx={{ p: 1 }}>
-      {items.map((item) => {
-        switch (item.type) {
-          case 'text':
-            return (
-              <Typography key={item.id} variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                {String(item.data)}
-              </Typography>
-            );
-
-          case 'table': {
-            const data = item.data as Record<string, unknown>[] | unknown[][];
-            if (!Array.isArray(data) || data.length === 0) return null;
-
-            // Detect if array of objects or array of arrays
-            const isObjectArray = typeof data[0] === 'object' && data[0] !== null && !Array.isArray(data[0]);
-            const headers = isObjectArray
-              ? Object.keys(data[0] as Record<string, unknown>)
-              : (data[0] as unknown[]).map((_, idx) => `${idx}`);
-
-            return (
-              <Table key={item.id} size="small" sx={{ my: 0.5 }}>
-                <TableHead>
-                  <TableRow>
-                    {headers.map((h, hi) => (
-                      <TableCell key={hi} sx={{ fontWeight: 600, fontSize: '0.75rem', py: 0.5 }}>
-                        {h}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {data.map((row, ri) => (
-                    <TableRow key={ri}>
-                      {isObjectArray
-                        ? headers.map((h, hi) => (
-                            <TableCell key={hi} sx={{ fontSize: '0.75rem', py: 0.25 }}>
-                              {String((row as Record<string, unknown>)[h] ?? '')}
-                            </TableCell>
-                          ))
-                        : (row as unknown[]).map((cell, ci) => (
-                            <TableCell key={ci} sx={{ fontSize: '0.75rem', py: 0.25 }}>
-                              {String(cell ?? '')}
-                            </TableCell>
-                          ))
-                      }
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            );
-          }
-
-          case 'list': {
-            const listItems = item.data as unknown[];
-            if (!Array.isArray(listItems)) return null;
-
-            return (
-              <List key={item.id} dense disablePadding sx={{ my: 0.5 }}>
-                {listItems.map((li, idx) => (
-                  <ListItem key={idx} disablePadding sx={{ pl: 1 }}>
-                    <ListItemText
-                      primary={String(li)}
-                      primaryTypographyProps={{ variant: 'body2', fontFamily: 'monospace' }}
-                    />
-                  </ListItem>
-                ))}
-              </List>
-            );
-          }
-
-          case 'json':
-            return (
-              <Box
-                key={item.id}
-                sx={{
-                  bgcolor: '#f5f5f5',
-                  borderRadius: 0.5,
-                  p: 1,
-                  my: 0.5,
-                  overflow: 'auto',
-                  maxHeight: 200,
-                }}
-              >
-                <Typography
-                  variant="body2"
-                  component="pre"
-                  sx={{ fontFamily: 'monospace', fontSize: '0.75rem', m: 0, whiteSpace: 'pre-wrap' }}
-                >
-                  {JSON.stringify(item.data, null, 2)}
-                </Typography>
-              </Box>
-            );
-
-          case 'html':
-            // `display.html(str)` — raw HTML rendered as-is. Trusted input (the
-            // author wrote it themselves), so dangerouslySetInnerHTML is OK.
-            return (
-              <Box
-                key={item.id}
-                sx={{ my: 0.5, p: 0.5 }}
-                dangerouslySetInnerHTML={{ __html: String(item.data ?? '') }}
-              />
-            );
-
-          case 'dom':
-            // `display.dom(element)` — mount a live HTMLElement. We use a ref
-            // callback + appendChild so the element keeps its event listeners
-            // and animation loops (essential for Three.js: the WebGLRenderer's
-            // canvas needs to remain in the DOM to keep painting).
-            return (
-              <Box
-                key={item.id}
-                // `min-width: 0` na dziecku flexa jest kluczowe dla komponentów
-                // rysujących na <canvas> (qt-canvas, Three.js): bez tego
-                // min-content flex-itema = intrinsic szerokość backing-bufora
-                // canvasu (w*devicePixelRatio = 2× na Retinie), więc element
-                // rośnie do 2× szerokości panelu → współrzędne myszy w osi X
-                // rozjeżdżają się o połowę. `min-width: 0` pozwala uszanować
-                // width:100% zamiast min-content.
-                sx={{ my: 0.5, display: 'flex', justifyContent: 'center', '& > *': { minWidth: 0, maxWidth: '100%' } }}
-                ref={(host: HTMLDivElement | null) => {
-                  if (!host) return;
-                  const el = item.data as HTMLElement | null;
-                  if (el && host.firstChild !== el) {
-                    host.innerHTML = '';
-                    host.appendChild(el);
-                  }
-                }}
-              />
-            );
-
-          default:
-            return null;
-        }
-      })}
-    </Box>
-  );
-};
 
 // Node View Component
 // Akcje bloczka automatyzacji wyzwalane z menu bloczka (⋮): Run / Editor / Ustawienia.
@@ -486,12 +71,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     unregisterBlock,
     updateBlockCode,
     setBlockScene,
-    restoreScene,
-    stopBlock,
     runBlock,
     getBlockState,
-    clearBlockOutput,
-    getScriptRoots,
     blocks,
   } = useAutomateDocument();
 
@@ -503,10 +84,6 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     editorOverlay.enter();
     return () => editorOverlay.exit();
   }, [editorDialogOpen]);
-  const [helpBrowserOpen, setHelpBrowserOpen] = useState(false);
-  // Panel inspektora QObject (drzewo obiektów ze źródła) — domyślnie ukryty.
-  const [qobjectPanelOpen, setQobjectPanelOpen] = useState(false);
-  const [includeOpen, setIncludeOpen] = useState(false);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   // Consolidated settings dialog (Auto / view mode / library / tags) opened
   // from a single ⚙ button — both in the in-doc header and the fullscreen
@@ -515,99 +92,14 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
   // home at all. One button, one dialog.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateScriptOpen, setUpdateScriptOpen] = useState(false);
-  const [sceneBuilderOpen, setSceneBuilderOpen] = useState(false);
   // viewMode controls how the block renders inside the markdown document.
   // 'code' = current full UI (header + textarea + output panel).
   // 'html' = compact view that only shows the script's result rendered as HTML
   //         — useful for blocks that mostly produce a visual (Three.js scene,
   //         report-style table) where the code itself is just plumbing.
   const viewMode = (node.attrs.viewMode as 'code' | 'html') || 'code';
-  // Hold on to the Monaco editor instance so the include-file picker can
-  // insert text at the actual cursor position (rather than blind-appending
-  // to `dialogCode`, which would lose cursor context the user just set).
-  const monacoEditorRef = useRef<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
-  // Editor instance held in state (not just the ref) so MonacoSelectionHandles
-  // re-renders and mounts its touch pins once the editor is ready.
-  const [monacoEditorInstance, setMonacoEditorInstance] = useState<MonacoEditorTypes.IStandaloneCodeEditor | null>(null);
-  // The full Monaco namespace — needed to re-register library .d.ts stubs
-  // when the user types a `// @library:` marker into the editor by hand
-  // (or pastes code that already has one).
-  const monacoRef = useRef<Monaco | null>(null);
   const { currentUser } = useAuth();
   const userName = (currentUser as { name?: string } | null)?.name ?? '';
-  const [dialogCode, setDialogCode] = useState('');
-  // Fullscreen editor view: 'code' = Monaco source editor, 'blockly' = visual
-  // block editor (default JS blocks) that generates the JS into dialogCode.
-  const [dialogEditMode, setDialogEditMode] = useState<'code' | 'blockly' | 'blocklyCode'>('code');
-  // Active tab in the dialog's bottom panel — 'output' shows display.* /
-  // return value, 'logs' shows api.log.*. Default to output because that's
-  // where most scripts surface visible results.
-  const [dialogTab, setDialogTab] = useState<'output' | 'logs' | 'included'>('output');
-  // Whether the output/logs panel is visible in fullscreen dialog.
-  const [outputPanelVisible, setOutputPanelVisible] = useState(true);
-  // Output panel height — persisted across dialog opens. Initialised once
-  // from localStorage; the actual clamp (min 80 / max 80% of viewport) is
-  // applied during drag, so a previously-saved-then-shrunken-viewport value
-  // can't lock the user out of the editor.
-  const OUTPUT_PANEL_KEY = 'automate-output-panel-height';
-  const [outputPanelHeight, setOutputPanelHeight] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(OUTPUT_PANEL_KEY);
-      const n = saved ? parseInt(saved, 10) : NaN;
-      return Number.isFinite(n) && n > 0 ? n : 300;
-    } catch { return 300; }
-  });
-  // Persist after the drag settles, not on every move — avoids hammering
-  // localStorage during fast drags.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try { localStorage.setItem(OUTPUT_PANEL_KEY, String(outputPanelHeight)); } catch { /* full storage */ }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [outputPanelHeight]);
-  // Refs for the drag — kept out of state so move events don't re-render.
-  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
-
-  const onDividerMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragRef.current = { startY: e.clientY, startHeight: outputPanelHeight };
-    // Document-level cursor + select disable so the experience matches
-    // VSCode's split bars (cursor doesn't flicker when sliding over the
-    // editor or empty areas).
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
-  }, [outputPanelHeight]);
-
-  // Mouse/Touch move + up handlers — installed on window so a drag started
-  // on the divider keeps tracking even if the cursor leaves it. Cleanup
-  // restores cursor/select when the user releases.
-  useEffect(() => {
-    const onMove = (e: MouseEvent | TouchEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const y = 'touches' in e ? e.touches[0]?.clientY ?? d.startY : e.clientY;
-      const delta = d.startY - y;   // dragging up grows the panel
-      const max = Math.max(160, window.innerHeight * 0.8);
-      const next = Math.max(80, Math.min(max, d.startHeight + delta));
-      setOutputPanelHeight(next);
-    };
-    const onUp = () => {
-      if (!dragRef.current) return;
-      dragRef.current = null;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup',   onUp);
-    window.addEventListener('touchmove', onMove);
-    window.addEventListener('touchend',  onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup',   onUp);
-      window.removeEventListener('touchmove', onMove);
-      window.removeEventListener('touchend',  onUp);
-    };
-  }, []);
   const autorun = node.attrs.autorun as boolean;
   // Tags — empty array fallback (older saved blocks won't have the attr).
   // The settings dialog edits this array via updateAttributes({ tags: … })
@@ -620,24 +112,16 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     ? node.attrs.windowHeight : null;
   // Selected UML projects (Programming/Uml) whose classes become Blockly blocks.
   const umlProjects: string[] = Array.isArray(node.attrs.umlProjects) ? (node.attrs.umlProjects as string[]) : [];
-  const umlProjectsKey = umlProjects.join(',');
 
   // Ścieżka pliku JSON ze sceną obiektów QObject (wybierana w ustawieniach).
   const scenePath: string = typeof node.attrs.scenePath === 'string' ? node.attrs.scenePath : '';
+  // Plik `.automate`, z którego blok bierze kod (pusty = kod żyje w dokumencie).
+  const scriptFile: string = typeof node.attrs.scriptFile === 'string' ? node.attrs.scriptFile : '';
   // Scena wczytana z pliku — edytowana w panelu QObject, zapisywana przy „Zapisz".
   const [qobjScene, setQobjScene] = useState<QObjectScene>(() => emptyScene());
-  // Czy scena ma niezapisane zmiany (edycja w panelu nie zmienia kodu, więc
-  // potrzebny osobny flag, żeby aktywować przycisk „Zapisz").
-  const [sceneDirty, setSceneDirty] = useState(false);
-  // Snapshot sceny (JSON) z momentu ostatniego Run — Stop przywraca do niego.
-  const sceneSnapshotRef = useRef<string | null>(null);
-  // Czy trwa przebieg (od Run do Stop) — steruje aktywnością przycisku Stop.
-  const [running, setRunning] = useState(false);
 
   // Available UML projects (for the settings picker) — loaded when the dialog opens.
   const [availableUmlProjects, setAvailableUmlProjects] = useState<string[]>([]);
-  // Parsed UML classes from the selected projects — fed to the Blockly editor.
-  const [umlClasses, setUmlClasses] = useState<UmlClassDef[]>([]);
 
   useEffect(() => {
     if (!settingsOpen || !userName) return;
@@ -646,22 +130,14 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     return () => { alive = false; };
   }, [settingsOpen, userName]);
 
-  useEffect(() => {
-    if (!userName || !umlProjectsKey) { setUmlClasses([]); return; }
-    let alive = true;
-    loadUmlClasses(userName, umlProjectsKey.split(',')).then((classes) => { if (alive) setUmlClasses(classes); });
-    return () => { alive = false; };
-  }, [userName, umlProjectsKey]);
-
   // Wczytaj scenę QObject z pliku: przy montażu bloku (żeby autorun/Run miały
   // scenę dla api.scripts.getRoot()) oraz przy otwarciu edytora / zmianie pliku.
   // Brak pliku → pusta scena.
   useEffect(() => {
-    setSceneDirty(false);
     if (!userName || !scenePath) { setQobjScene(emptyScene()); return; }
     let alive = true;
     readUserJson<unknown>(userName, scenePath)
-      .then((raw) => { if (alive) { setQobjScene(raw ? normalizeScene(raw) : emptyScene()); setSceneDirty(false); } })
+      .then((raw) => { if (alive) setQobjScene(raw ? normalizeScene(raw) : emptyScene()); })
       .catch(() => { if (alive) setQobjScene(emptyScene()); });
     return () => { alive = false; };
   }, [editorDialogOpen, userName, scenePath]);
@@ -741,14 +217,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     void runBlock(blockId.current, buildRuntimeCode(code));
   }, [code, runBlock]);
 
-  const handleClear = useCallback(() => {
-    clearBlockOutput(blockId.current);
-  }, [clearBlockOutput]);
-
-  const openEditorDialog = useCallback(() => {
-    setDialogCode(code);
-    setEditorDialogOpen(true);
-  }, [code]);
+  const openEditorDialog = useCallback(() => setEditorDialogOpen(true), []);
 
   // Akcje z menu bloczka (⋮): odpal właściwy handler, gdy zdarzenie dotyczy TEGO węzła.
   useEffect(() => {
@@ -763,220 +232,23 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
     return () => window.removeEventListener(AUTOMATE_ACTION_EVENT, onAction);
   }, [getPos, handleRun, openEditorDialog]);
 
-  // Dirty = there are unsaved changes. `code` is the last-persisted version
-  // (the source of truth in TipTap attrs); `dialogCode` is the in-flight
-  // edit buffer in the fullscreen dialog. They diverge as soon as the user
-  // types and converge again when Save (or Save+Run) lands.
-  const isDirty = editorDialogOpen && dialogCode !== code;
+  /** Wywoływane przez picker bibliotek i „Aktualizuj skrypt" (dostępne też
+   *  spod ⚙ w nagłówku bloku) — zapis idzie od razu do atrybutów węzła. */
+  const persistCode = useCallback((newCode: string) => {
+    setCode(newCode);
+    updateAttributes({ code: newCode });
+    updateBlockCode(blockId.current, buildRuntimeCode(newCode));
+  }, [updateAttributes, updateBlockCode]);
 
-  const handleEditorDialogSave = useCallback(() => {
-    // Save WITHOUT closing — user explicitly asked to keep the dialog open
-    // so they can hit Run / continue editing right after persisting. Exit
-    // is a separate button now. `setCode` syncs local state with the
-    // freshly-saved value so isDirty flips back to false next render.
-    setCode(dialogCode);
-    updateAttributes({ code: dialogCode });
-    updateBlockCode(blockId.current, buildRuntimeCode(dialogCode));
-    // Zapisz też scenę QObject do wybranego pliku JSON (jeśli ustawiony).
-    if (userName && scenePath) {
-      writeUserJson(userName, scenePath, qobjScene)
-        .then(() => setSceneDirty(false))
-        .catch((e) => console.warn('Zapis sceny QObject nie powiódł się:', e));
-    } else {
-      setSceneDirty(false);
-    }
-  }, [dialogCode, updateAttributes, updateBlockCode, userName, scenePath, qobjScene]);
-
-  /** Save + run inside the fullscreen dialog — keeps the dialog open so the
-   *  user sees the output panel below the editor without losing context. */
-  const handleEditorDialogRun = useCallback(() => {
-    setCode(dialogCode);
-    updateAttributes({ code: dialogCode });
-    const runtime = buildRuntimeCode(dialogCode);
-    updateBlockCode(blockId.current, runtime);
-    // Snapshot sceny QObject (zapisany stan) — Stop przywróci scenę do tej formy.
-    sceneSnapshotRef.current = JSON.stringify(qobjScene);
-    setRunning(true);
-    // Pass the combined runtime code (Blockly blocks + normal body) as override
-    // so runBlock executes the freshly-edited buffer regardless of whether the
-    // context's block.code has committed yet.
-    // Library preload happens inside runBlock now (uniform error path).
-    void runBlock(blockId.current, runtime);
-  }, [dialogCode, updateAttributes, updateBlockCode, runBlock, qobjScene]);
-
-  /** Stop — przywraca scenę QObject do stanu zapisanego przy ostatnim Run
-   *  (snapshot). Nie ubija samego skryptu (runtime nie wspiera przerwania), ale
-   *  cofa zmiany sceny do zapisanej formy i odświeża panel. */
-  const handleStop = useCallback(() => {
-    // 1) Przerwij wykonanie skryptu: abort + wyczyszczenie timerów/rAF/onStop.
-    stopBlock(blockId.current);
-    // 2) Cofnij zmiany na ŻYWYCH obiektach sceny (te z getRoot, na canvasie).
-    restoreScene();
-    // 3) Przywróć też dane sceny w panelu/edytorze do snapshotu z Run.
-    const snap = sceneSnapshotRef.current;
-    if (snap) {
-      try {
-        setQobjScene(normalizeScene(JSON.parse(snap)));
-        setSceneDirty(true);
-      } catch { /* uszkodzony snapshot — ignoruj */ }
-    }
-    setRunning(false);
-  }, [restoreScene, stopBlock]);
-
-  /** Library picker callback — receives a fresh code body with `// @library:`
-   *  marker(s) inserted. Mirror the change into both the local `dialogCode`
-   *  (so the editor reflects it immediately) and the TipTap attribute (so the
-   *  marker survives save / reload). */
   const handleLibraryChange = useCallback((newCode: string) => {
-    setDialogCode(newCode);
-    setCode(newCode);
-    updateAttributes({ code: newCode });
-    updateBlockCode(blockId.current, buildRuntimeCode(newCode));
-    // Best-effort: also kick off a CDN preload so the runtime is ready by
-    // the time the user clicks Run. Ignored on failure — the actual run
-    // path retries and surfaces errors properly.
+    persistCode(newCode);
+    // Wstępne pobranie z CDN, żeby runtime był gotowy zanim ktoś kliknie Run.
     void preloadLibrariesForCode(newCode);
-  }, [updateAttributes, updateBlockCode]);
+  }, [persistCode]);
 
-  /** Called by AutomateUpdateScriptDialog when a browser script is
-   *  embedded or updated in-place. Persists immediately (same as library
-   *  change) so the block is saved without requiring the fullscreen editor. */
-  const handleUpdateScript = useCallback((newCode: string) => {
-    setDialogCode(newCode);
-    setCode(newCode);
-    updateAttributes({ code: newCode });
-    updateBlockCode(blockId.current, buildRuntimeCode(newCode));
-  }, [updateAttributes, updateBlockCode]);
-
-  /** Called by QObjectSceneBuilderDialog — inserts generated init/modify code
-   *  at the top of the script body so the user can review and run it. */
-  const handleSceneBuilderCode = useCallback((generated: string) => {
-    const editor = monacoEditorRef.current;
-    const separator = '\n\n';
-    if (editor) {
-      const pos = editor.getPosition();
-      const range = pos
-        ? { startLineNumber: pos.lineNumber, startColumn: pos.column, endLineNumber: pos.lineNumber, endColumn: pos.column }
-        : { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 };
-      editor.executeEdits('scene-builder', [{ range, text: generated + separator, forceMoveMarkers: true }]);
-      const newCode = editor.getValue();
-      setDialogCode(newCode);
-      setCode(newCode);
-      updateAttributes({ code: newCode });
-      updateBlockCode(blockId.current, buildRuntimeCode(newCode));
-    } else {
-      const newCode = generated + separator + (dialogCode || '');
-      setDialogCode(newCode);
-      setCode(newCode);
-      updateAttributes({ code: newCode });
-      updateBlockCode(blockId.current, buildRuntimeCode(newCode));
-    }
-  }, [dialogCode, updateAttributes, updateBlockCode]);
-
-  /** Insert the picker's chosen file contents at the cursor (or replace
-   *  current selection). Goes through `executeEdits` so it lands in Monaco's
-   *  undo stack — the author can Ctrl+Z out of an accidental include. */
-  const handleIncludeInsert = useCallback((content: string) => {
-    const editor = monacoEditorRef.current;
-    if (!editor) {
-      // Fallback if editor ref wasn't captured (shouldn't happen post-mount):
-      // append at end so the file isn't lost.
-      setDialogCode(prev => prev + content);
-      return;
-    }
-    const sel = editor.getSelection();
-    const model = editor.getModel();
-    if (!sel || !model) return;
-    editor.executeEdits('automate-include', [{
-      range: sel,
-      text: content,
-      forceMoveMarkers: true,
-    }]);
-    editor.focus();
-    // Synchronise our React mirror — onChange will fire too, but updating
-    // here avoids a one-frame race where dialogCode is stale.
-    setDialogCode(model.getValue());
-  }, []);
-
-  /** Paste from the system clipboard into the editor at the cursor.
-   *  Monaco's built-in paste is unreliable on mobile (Android) — the hidden
-   *  textarea often never receives the clipboard event — so we read the
-   *  clipboard explicitly and insert via executeEdits. Falls back to a prompt
-   *  when the Clipboard API is blocked (no permission / insecure context). */
-  const handlePasteFromClipboard = useCallback(async () => {
-    let text = '';
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      const manual = window.prompt('Schowek niedostępny — wklej tekst ręcznie:', '');
-      if (manual == null) return;
-      text = manual;
-    }
-    if (!text) return;
-    const editor = monacoEditorRef.current;
-    const model = editor?.getModel();
-    if (!editor || !model) { setDialogCode(prev => prev + text); return; }
-    // Insert at the current selection, or at end-of-document if the user
-    // hasn't placed a cursor yet (common right after opening on mobile).
-    const sel = editor.getSelection();
-    const full = model.getFullModelRange();
-    const range = sel ?? {
-      startLineNumber: full.endLineNumber, startColumn: full.endColumn,
-      endLineNumber: full.endLineNumber, endColumn: full.endColumn,
-    };
-    editor.executeEdits('automate-paste', [{ range, text, forceMoveMarkers: true }]);
-    editor.focus();
-    setDialogCode(model.getValue());
-  }, []);
-
-  /** Insert a `await import(url)` snippet at the cursor. Picker passes the
-   *  HTTP URL (already pointing at `/public/drive/users/{u}/...`), the
-   *  source filename for the marker comment, and the list of named exports
-   *  it detected by parsing the file. We generate a module-variable name
-   *  (filename → camelCase) plus a destructure line listing every export —
-   *  the author doesn't have to copy names by hand. */
-  const handleIncludeImport = useCallback((url: string, sourcePath: string, exports: string[]) => {
-    // 'drive/public/lit/components/clock.module.js' → 'clockModule'
-    const basename = sourcePath.split('/').pop() ?? 'mod';
-    const stem = basename.replace(/\.(module\.)?(m?js|ts)$/i, '').replace(/\.module$/, '');
-    const varName = stem
-      .replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase())
-      .replace(/[^a-zA-Z0-9]/g, '')
-      + 'Module';
-
-    // If the picker found named exports, generate the destructure line so
-    // identifiers like CLOCK_TAG are immediately in scope. Otherwise leave a
-    // hint comment — the author can add by hand once they know the shape.
-    const destructure = exports.length > 0
-      ? `const { ${exports.join(', ')} } = ${varName};\n`
-      : `// dostęp: ${varName}.<nazwa eksportu> — destrukturyzuj wg potrzeb\n`;
-
-    const snippet =
-      `\n// ─── import: ${sourcePath} ───\n` +
-      `const ${varName} = await import('${url}');\n` +
-      destructure +
-      `// ----- import ${sourcePath}\n`;
-    handleIncludeInsert(snippet);
-  }, [handleIncludeInsert]);
-
-  // When a run produces logs but no visible output, auto-switch to the Logs
-  // tab so users don't think the script silently did nothing. Only triggers
-  // on transitions (new logs since last status change), not while the user
-  // is manually browsing tabs.
-  useEffect(() => {
-    if (!editorDialogOpen) return;
-    if (status !== 'completed' && status !== 'error') return;
-    const hasVisible = output.length > 0 || result !== undefined;
-    if (logs.length > 0 && !hasVisible) {
-      setDialogTab('logs');
-    }
-  }, [editorDialogOpen, status, logs.length, output.length, result]);
+  const handleUpdateScript = useCallback((newCode: string) => persistCode(newCode), [persistCode]);
 
   const hasOutput = output.length > 0 || logs.length > 0 || !!error || result !== undefined;
-
-  // Parse embedded file blocks from the live editor code so the Included tab
-  // stays in sync with edits without requiring a separate "scan" action.
-  const embeddedFiles = useMemo(() => parseEmbeddedFiles(dialogCode), [dialogCode]);
 
   return (
     <NodeViewWrapper data-block-id={node.attrs.blockId || undefined}>
@@ -1017,7 +289,7 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
         }}>
           <SmartToyIcon sx={{ fontSize: 16, color: '#4caf50' }} />
           <Typography variant="caption" sx={{ color: '#d4d4d4' }}>
-            Skrypt automatyzacji
+            Skrypt Automate
           </Typography>
           {/* Inline status chips — make it visible at a glance whether
               autorun is on, the block is in HTML view mode, and what tags
@@ -1289,566 +561,30 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
         )}
       </Paper>
 
-      {/* Monaco editor dialog — fullScreen so the user has the entire viewport
-          for editing. The 80vh + lg dialog felt cramped for longer scripts and
-          left awkward dead space on wide monitors. */}
-      <Dialog
-        open={editorDialogOpen}
-        onClose={() => setEditorDialogOpen(false)}
-        fullScreen
-        // Blockly renders its field editors (text input, variable dropdown,
-        // etc.) in a WidgetDiv/DropDownDiv appended to document.body — OUTSIDE
-        // this dialog. MUI's focus trap would block typing/selecting in them,
-        // so disable it (and auto/restore focus) while the dialog is open.
-        disableEnforceFocus
-        disableAutoFocus
-        disableRestoreFocus
-      >
-        <DialogTitle sx={{ py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <SmartToyIcon sx={{ color: '#4caf50' }} />
-          <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
-            Edytor skryptu
-          </Typography>
-          {/* View toggle (icons only):
-              Code        — normal source editor (the hand-written body)
-              Blockly     — visual block editor
-              Blockly Code— read/edit the JS generated by the blocks */}
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={dialogEditMode}
-            onChange={(_e, v) => { if (v) setDialogEditMode(v); }}
-            sx={{ mr: 0.5, '& .MuiToggleButton-root': { py: 0.25, px: 0.75 } }}
-          >
-            <ToggleButton value="code">
-              <Tooltip title="Kod źródłowy"><CodeIcon fontSize="small" /></Tooltip>
-            </ToggleButton>
-            <ToggleButton value="blockly">
-              <Tooltip title="Blockly (programowanie graficzne)"><ExtensionIcon fontSize="small" /></Tooltip>
-            </ToggleButton>
-            <ToggleButton value="blocklyCode">
-              <Tooltip title="Połączony kod wyjściowy (źródłowy + Blockly) — podgląd"><IntegrationInstructionsIcon fontSize="small" /></Tooltip>
-            </ToggleButton>
-          </ToggleButtonGroup>
-          {/* "Include file" button — pulls from drive/mdscript/, inserts at
-              cursor. Disabled when we don't yet know the user (rare race
-              during initial auth load). */}
-          <Tooltip title="Wklej ze schowka (działa na mobile)">
-            <IconButton size="small" onClick={() => void handlePasteFromClipboard()}>
-              <ContentPasteIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Dołącz plik z drive/mdscript/">
-            <span>
-              <IconButton size="small" onClick={() => setIncludeOpen(true)} disabled={!userName}>
-                <AttachFileIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          {/* Settings — same dialog as the in-doc header button. The
-              dedicated Library button used to live here; it moved into
-              the settings dialog so all per-block knobs are reachable
-              from a single ⚙. */}
-          <Tooltip title="Ustawienia skryptu">
-            <IconButton size="small" onClick={() => setSettingsOpen(true)}>
-              <SettingsIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={qobjectPanelOpen ? 'Ukryj drzewo obiektów QObject' : 'Pokaż drzewo obiektów QObject'}>
-            <IconButton
-              size="small"
-              onClick={() => setQobjectPanelOpen((v) => !v)}
-              color={qobjectPanelOpen ? 'primary' : 'default'}
-            >
-              <AccountTreeIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="QWidget Scene Builder — wizualny konstruktor GUI (QLabel, QPushButton, QSlider…)">
-            <IconButton size="small" onClick={() => setSceneBuilderOpen(true)}>
-              <ViewQuiltIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Pomoc — przeglądarka dokumentacji (drive/public/doc)">
-            <span>
-              <IconButton size="small" onClick={() => setHelpBrowserOpen(true)} disabled={!userName}>
-                <MenuBookIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          {/* Primary actions moved up here from the bottom DialogActions —
-              users on long scripts no longer need to scroll past code +
-              output to hit Run/Save. Divider gives them visual weight so
-              they don't blend with the icon-only utilities to the left. */}
-          <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 1 }} />
-          {/* Run / Stop — tylko ikony. Run robi snapshot sceny QObject i uruchamia;
-              Stop przywraca scenę do zapisanego stanu (snapshotu z momentu Run). */}
-          <Tooltip title="Uruchom (Ctrl+Enter) — zapisuje snapshot sceny">
-            <span>
-              <IconButton
-                onClick={handleEditorDialogRun}
-                disabled={status === 'running'}
-                size="small"
-                sx={{ color: '#4caf50' }}
-              >
-                {status === 'running'
-                  ? <CircularProgress size={16} sx={{ color: '#4caf50' }} />
-                  : <PlayArrowIcon fontSize="small" />}
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="Stop — przerwij skrypt i przywróć scenę QObject">
-            <span>
-              <IconButton
-                onClick={handleStop}
-                disabled={!running}
-                size="small"
-                sx={{ color: '#e57373' }}
-              >
-                <StopIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title={(isDirty || sceneDirty) ? 'Zapisz zmiany — kod i scenę QObject (dialog pozostanie otwarty)' : 'Brak niezapisanych zmian'}>
-            <span>
-              <Button
-                onClick={handleEditorDialogSave}
-                variant="contained"
-                size="small"
-                disabled={!isDirty && !sceneDirty}
-              >
-                Zapisz
-              </Button>
-            </span>
-          </Tooltip>
-          <Button
-            onClick={() => setEditorDialogOpen(false)}
-            size="small"
-          >
-            Wyjdź
-          </Button>
-        </DialogTitle>
-        <DialogContent dividers sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
-          {/* Wiersz: [edytor] [opcjonalny panel inspektora QObject po prawej]. */}
-          <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
-          {/* Box wrapper ensures the Editor expands to fill remaining flex space
-              regardless of fullScreen dialog's inner padding/border math.
-              minWidth:0 pozwala edytorowi skurczyć się w wierszu flex, gdy obok
-              jest panel inspektora QObject (bez tego Monaco trzyma intrinsic
-              szerokość i wypycha panel poza ekran). */}
-          <Box sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-            {dialogEditMode === 'blockly' ? (
-              <Suspense fallback={<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><CircularProgress /></Box>}>
-                <AutomateBlocklyEditor
-                  // Re-mount when the UML selection changes so block defs + toolbox refresh.
-                  key={`uml:${umlProjectsKey}:${umlClasses.length}`}
-                  initialState={splitBlockly(dialogCode).state}
-                  onChange={(js, state) => {
-                    // Blockly never overwrites the normal code — it only stores
-                    // its workspace state + generated code in the marker. The two
-                    // are combined at run time (buildRuntimeCode). External
-                    // libraries stay in the normal body only.
-                    const body = splitBlockly(dialogCode).body;
-                    setDialogCode(joinBlockly(body, state, js));
-                  }}
-                  umlClasses={umlClasses}
-                />
-              </Suspense>
-            ) : (
-            <Editor
-              // Remount when switching Code ↔ Blockly Code so Monaco swaps the
-              // shown content cleanly instead of fighting the controlled value.
-              key={dialogEditMode}
-              height="100%"
-              // Even though the script runs as plain JavaScript at runtime,
-              // we use the TypeScript language service here so that ambient
-              // declarations from `automate-api.d.ts` (registered as TS models
-              // via createModel) are visible. The JS service treats JS and TS
-              // models as separate compilation contexts — `declare const api`
-              // in a .ts model is invisible from a .js model, which is why
-              // user-defined classes (handled locally) showed completions but
-              // `api.*` (resolved through the ambient .d.ts) did not.
-              defaultLanguage="typescript"
-              // 'code' shows the editable hand-written body. 'blocklyCode' shows
-              // the FINAL combined source that actually runs — the hand-written
-              // body joined with the Blockly-generated code (buildRuntimeCode),
-              // i.e. the output script. It's a read-only preview (you can't
-              // unambiguously split an edited merge back into body + blocks).
-              value={dialogEditMode === 'blocklyCode' ? buildRuntimeCode(dialogCode) : splitBlockly(dialogCode).body}
-              onChange={value => {
-                // 'blocklyCode' is a read-only preview of the merged output —
-                // ignore stray change events. Only the 'code' view edits the body.
-                if (dialogEditMode === 'blocklyCode') return;
-                const prev = splitBlockly(dialogCode);
-                const v = joinBlockly(value || '', prev.state, prev.blocklyCode);
-                setDialogCode(v);
-                // Refresh library .d.ts stubs in case the user just typed a
-                // `// @library: foo` marker (or removed one). Cheap because
-                // the underlying createModel paths are idempotent.
-                if (monacoRef.current) registerLibraryTypes(monacoRef.current, v);
-              }}
-              beforeMount={setupAutomateMonacoWithDisplay}
-              onMount={(editor, monaco) => {
-                // Capture the editor + Monaco singleton so the include-file
-                // picker can insert at cursor and the library picker can
-                // re-register .d.ts stubs without going through beforeMount.
-                monacoEditorRef.current = editor;
-                monacoRef.current = monaco;
-                // Expose the instance to React so the touch selection handles
-                // (Android-style drag pins) mount. Cleared on dispose.
-                setMonacoEditorInstance(editor);
-                editor.onDidDispose(() => setMonacoEditorInstance(null));
-
-                // Register .d.ts stubs for any `// @library: foo` markers
-                // already in the script so completions on `THREE.…` etc.
-                // light up immediately on open.
-                registerLibraryTypes(monaco, dialogCode);
-
-                // Ctrl+Enter inside the editor runs the script without forcing
-                // the user back to the toolbar — matches the in-block textarea
-                // shortcut and the convention every code editor in the app
-                // uses (Plugin Script, Jupyter-style cells, …).
-                editor.addCommand(
-                  monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
-                  () => { handleEditorDialogRun(); },
-                );
-
-                // Diagnostic probe (kept from the previous debug session — it
-                // surfaces worker setup issues in the console so we don't have
-                // to manually re-instrument when something goes sideways).
-                const model = editor.getModel();
-                if (!model) { console.warn('[AutomateMonaco] onMount: no model'); return; }
-                // eslint-disable-next-line no-console
-                console.log('[AutomateMonaco] onMount: model uri=', model.uri.toString(),
-                  '| lang=', model.getLanguageId());
-                void (async () => {
-                  try {
-                    // Probe the worker matching the model's actual language.
-                    // The editor now defaults to TypeScript (so ambient .d.ts
-                    // declarations are visible), and calling getJavaScriptWorker
-                    // for a TS model returns undefined → the old probe always
-                    // failed with `(err as Error).message === undefined`, even
-                    // though IntelliSense was fine.
-                    const lang = model.getLanguageId();
-                    const getWorker = lang === 'typescript'
-                      ? await monaco.languages.typescript.getTypeScriptWorker()
-                      : await monaco.languages.typescript.getJavaScriptWorker();
-                    const proxy = await Promise.race([
-                      getWorker(model.uri),
-                      new Promise<never>((_, reject) =>
-                        setTimeout(() => reject(new Error('worker getProxy timeout')), 5000)),
-                    ]);
-                    // eslint-disable-next-line no-console
-                    console.log(`[AutomateMonaco] ${lang} worker responsive:`, typeof proxy);
-                  } catch (err) {
-                    console.warn('[AutomateMonaco] worker probe FAILED:', (err as Error).message);
-                  }
-                })();
-              }}
-              options={{
-                minimap: { enabled: true },
-                fontSize: 14,
-                lineNumbers: 'on',
-                scrollBeyondLastLine: false,
-                wordWrap: 'on',
-                tabSize: 2,
-                automaticLayout: true,
-                // Połączony kod wyjściowy to tylko podgląd — nie do edycji.
-                readOnly: dialogEditMode === 'blocklyCode',
-              }}
-              theme="vs-dark"
-            />
-            )}
-          </Box>
-
-          {/* Panel inspektora QObject — po prawej, domyślnie ukryty. Parsuje
-              body skryptu i pozwala na operacje na hierarchii (edytują body). */}
-          {qobjectPanelOpen && (
-            <Suspense fallback={null}>
-              <AutomateQObjectPanel
-                scene={qobjScene}
-                onSceneChange={(s) => { setQobjScene(s); setSceneDirty(true); }}
-                {...(() => { const p = parseQObjects(splitBlockly(dialogCode).body); return { classes: p.classes, classProperties: p.classProperties }; })()}
-                onClose={() => setQobjectPanelOpen(false)}
-              />
-            </Suspense>
-          )}
-          </Box>
-
-          {/* Touch-friendly draggable selection handles (Android-style pins) —
-              the same component used by the Drive Monaco editor. */}
-          <MonacoSelectionHandles editor={monacoEditorInstance} />
-
-          {/* Resizer — only visible when the output panel is open. */}
-          {outputPanelVisible && (
-            <Box
-              onMouseDown={onDividerMouseDown}
-              onTouchStart={(e) => {
-                const t = e.touches[0];
-                if (!t) return;
-                dragRef.current = { startY: t.clientY, startHeight: outputPanelHeight };
-              }}
-              sx={{
-                flex: '0 0 auto',
-                height: 5,
-                cursor: 'ns-resize',
-                bgcolor: 'divider',
-                opacity: 0.5,
-                transition: 'opacity 0.15s, background 0.15s',
-                '&:hover, &:active': { opacity: 1, bgcolor: 'primary.main' },
-                position: 'relative',
-                '&::before': {
-                  content: '""',
-                  position: 'absolute',
-                  inset: '-4px 0',
-                },
-              }}
-            />
-          )}
-
-          {/* Bottom panel — tabbed Output / Logs. Collapsible via the
-              ExpandMore/ExpandLess toggle in the tabs header. Height is
-              user-resizable via the divider above. */}
-          <Box
-            sx={{
-              flex: '0 0 auto',
-              height: outputPanelVisible ? outputPanelHeight : 'auto',
-              minHeight: outputPanelVisible ? 80 : 0,
-              overflow: 'hidden',
-              bgcolor: 'background.paper',
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            {/* Tabs header with "Wyczyść" action on the right. The Tabs no
-                longer own the bottom border — the parent row does — so the
-                clear button shares the same baseline without a visible seam. */}
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                borderBottom: 1,
-                borderColor: 'divider',
-              }}
-            >
-              <Tabs
-                value={dialogTab}
-                onChange={(_, v) => setDialogTab(v)}
-                variant="standard"
-                sx={{
-                  minHeight: 36,
-                  flex: 1,
-                  '& .MuiTab-root': { minHeight: 36, py: 0.5, textTransform: 'none' },
-                }}
-              >
-                {/* Badge shows count of "interesting" items so the user can see
-                    at a glance whether there's anything in the inactive tab. */}
-                <Tab
-                  value="output"
-                  label={
-                    <Badge
-                      color="primary"
-                      badgeContent={output.length + (result !== undefined ? 1 : 0) + (error ? 1 : 0)}
-                      sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
-                    >
-                      Output
-                    </Badge>
-                  }
-                />
-                <Tab
-                  value="logs"
-                  label={
-                    <Badge
-                      color="secondary"
-                      badgeContent={logs.length}
-                      sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
-                    >
-                      Logi
-                    </Badge>
-                  }
-                />
-                <Tab
-                  value="included"
-                  label={
-                    <Badge
-                      color="success"
-                      badgeContent={embeddedFiles.length || undefined}
-                      sx={{ '& .MuiBadge-badge': { right: -14, top: 4 } }}
-                    >
-                      Included
-                    </Badge>
-                  }
-                />
-              </Tabs>
-              {/* Clear — wipes BOTH tabs at once (display items, logs, result,
-                  error). Disabled when there's nothing to clear so accidental
-                  clicks while writing a script don't fire. */}
-              <Tooltip title="Wyczyść output i logi">
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={handleClear}
-                    disabled={!hasOutput && logs.length === 0}
-                    sx={{ mx: 0.5 }}
-                  >
-                    <DeleteOutlineIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <Tooltip title={outputPanelVisible ? 'Hide output panel' : 'Show output panel'}>
-                <IconButton
-                  size="small"
-                  onClick={() => setOutputPanelVisible(v => !v)}
-                  sx={{ mr: 1 }}
-                >
-                  {outputPanelVisible ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-            </Box>
-
-            {/* Error banner — ALWAYS shown above the tab content (not gated by
-                the active tab or hasOutput), so a failure is never hidden no
-                matter which tab the author is on. */}
-            {outputPanelVisible && error && (
-              <Alert severity="error" sx={{ borderRadius: 0, py: 0.25 }}>{error}</Alert>
-            )}
-
-            {/* Output tab — display.* items, return value. */}
-            {outputPanelVisible && dialogTab === 'output' && (
-              <Box sx={{ flex: 1, overflow: 'auto' }}>
-                {!hasOutput && (
-                  <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
-                    Brak wyników. Uruchom skrypt aby zobaczyć output (display.*, return value).
-                  </Typography>
-                )}
-                <DisplayOutput items={output} />
-                {result !== undefined && output.length === 0 && !error && (
-                  <Box sx={{ p: 1 }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                      Wynik: {typeof result === 'object' ? JSON.stringify(result) : String(result)}
-                    </Typography>
-                  </Box>
-                )}
-              </Box>
-            )}
-
-            {/* Logs tab — api.log.* output, colour-coded per level. */}
-            {outputPanelVisible && dialogTab === 'logs' && (
-              <Box sx={{ flex: 1, overflow: 'auto', bgcolor: '#fafafa' }}>
-                {logs.length === 0 ? (
-                  <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
-                    Brak logów. Użyj api.log.info / warn / error / debug w kodzie.
-                  </Typography>
-                ) : (
-                  <Box sx={{ p: 1 }}>
-                    {logs.map((log, i) => (
-                      <Typography
-                        key={i}
-                        variant="caption"
-                        sx={{
-                          display: 'block',
-                          fontFamily: 'monospace',
-                          fontSize: '0.75rem',
-                          lineHeight: 1.5,
-                          color: log.level === 'error' ? 'error.main'
-                            : log.level === 'warn' ? 'warning.main'
-                            : log.level === 'debug' ? 'info.main'
-                            : 'text.primary',
-                        }}
-                      >
-                        <Box component="span" sx={{ color: 'text.disabled', mr: 1 }}>
-                          [{log.level}]
-                        </Box>
-                        {log.message}
-                      </Typography>
-                    ))}
-                  </Box>
-                )}
-              </Box>
-            )}
-
-            {/* Included tab — lists every embedded file block with a Remove button.
-                Removing a block deletes the marker lines from dialogCode; the Monaco
-                editor re-syncs automatically because it's controlled (value={dialogCode}). */}
-            {outputPanelVisible && dialogTab === 'included' && (
-              <Box sx={{ flex: 1, overflow: 'auto' }}>
-                {embeddedFiles.length === 0 ? (
-                  <Typography variant="caption" color="text.disabled" sx={{ p: 1.5, display: 'block', fontStyle: 'italic' }}>
-                    No embedded files. Use the attach button (📎) to include files from drive/mdscript/.
-                  </Typography>
-                ) : (
-                  <List dense disablePadding>
-                    {embeddedFiles.map((file, idx) => (
-                      <ListItem
-                        key={idx}
-                        secondaryAction={
-                          <Tooltip title="Remove embedded block from code">
-                            <IconButton
-                              edge="end"
-                              size="small"
-                              onClick={() => setDialogCode(prev => removeEmbeddedBlock(prev, file))}
-                            >
-                              <DeleteOutlineIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        }
-                        sx={{ borderBottom: '1px solid', borderColor: 'divider' }}
-                      >
-                        <ListItemIcon sx={{ minWidth: 32 }}>
-                          {file.type === 'import'
-                            ? <CodeIcon sx={{ fontSize: 16, color: '#4fc3f7' }} />
-                            : <AttachFileIcon sx={{ fontSize: 16, color: '#81c784' }} />
-                          }
-                        </ListItemIcon>
-                        <ListItemText
-                          primary={file.path}
-                          secondary={file.type === 'import' ? 'module import' : 'inline include'}
-                          primaryTypographyProps={{ variant: 'body2', fontFamily: 'monospace', fontSize: '0.78rem', noWrap: true }}
-                          secondaryTypographyProps={{ variant: 'caption' }}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-              </Box>
-            )}
-          </Box>
-        </DialogContent>
-        {/* DialogActions removed — primary actions (Uruchom / Zapisz / Wyjdź)
-            now live in the DialogTitle row at the top of the dialog so the
-            user doesn't have to scroll past long output to reach them. */}
-      </Dialog>
-
-      {/* ── Help browser (drive/public/doc tree + markdown viewer) ── */}
+      {/* Pełnoekranowy edytor — wspólny komponent, tej samej klasy co edytor
+          logiki akcji w Edytorze Konwersacji. */}
       <Suspense fallback={null}>
-        {helpBrowserOpen && (
-          <AutomateHelpBrowserDialog
-            open={helpBrowserOpen}
-            onClose={() => setHelpBrowserOpen(false)}
+        {editorDialogOpen && (
+          <AutomateScriptEditorDialog
+            open={editorDialogOpen}
+            onClose={() => setEditorDialogOpen(false)}
+            blockId={blockId.current}
+            code={code}
+            onCodeChange={(next: string) => persistCode(next)}
+            settings={{ autorun, viewMode, tags, windowHeight, umlProjects, scenePath, scriptFile }}
+            onSettingsChange={(patch: Partial<AutomateScriptSettings>) => updateAttributes(patch)}
             userName={userName}
           />
         )}
       </Suspense>
 
-      {/* ── Include-file picker ── */}
-      <Suspense fallback={null}>
-        {includeOpen && (
-          <AutomateIncludeFileDialog
-            open={includeOpen}
-            onClose={() => setIncludeOpen(false)}
-            userName={userName}
-            onInsert={(content) => handleIncludeInsert(content)}
-            onInsertImport={(url, sourcePath, exports) => handleIncludeImport(url, sourcePath, exports)}
-          />
-        )}
-      </Suspense>
-
-      {/* ── Library picker ── */}
+      {/* ── Wybór biblioteki (otwierany z dialogu ustawień) ── */}
       <Suspense fallback={null}>
         {libraryPickerOpen && (
           <AutomateLibraryPickerDialog
             open={libraryPickerOpen}
             onClose={() => setLibraryPickerOpen(false)}
-            code={dialogCode || code}
+            code={code}
             onChange={handleLibraryChange}
           />
         )}
@@ -1882,6 +618,8 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             onUmlProjectsChange={(next) => updateAttributes({ umlProjects: next })}
             scenePath={scenePath}
             onScenePathChange={(next) => updateAttributes({ scenePath: next })}
+            scriptFile={scriptFile}
+            onScriptFileChange={(next) => updateAttributes({ scriptFile: next })}
           />
         )}
         {updateScriptOpen && (
@@ -1890,19 +628,6 @@ const AutomateScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttribute
             onClose={() => setUpdateScriptOpen(false)}
             currentCode={code}
             onChange={handleUpdateScript}
-          />
-        )}
-        {sceneBuilderOpen && (
-          <QObjectSceneBuilderDialog
-            open={sceneBuilderOpen}
-            onClose={() => setSceneBuilderOpen(false)}
-            onInsertCode={handleSceneBuilderCode}
-            getLiveRoots={getScriptRoots}
-            initialRoots={qobjScene.roots}
-            onRootsChange={(newRoots) => {
-              setQobjScene(prev => ({ ...prev, roots: newRoots }));
-              setSceneDirty(true);
-            }}
           />
         )}
       </Suspense>
@@ -1943,6 +668,10 @@ export const AutomateScriptBlock = Node.create({
       umlProjects: { default: [] as string[] },
       // Ścieżka pliku JSON ze sceną obiektów QObject (względna do home usera).
       scenePath: { default: '' },
+      // Powiązany plik `.automate` (ścieżka względem drive użytkownika). Gdy
+      // ustawiony, to on jest źródłem kodu — blok trzyma kopię, żeby dokument
+      // dało się otworzyć i uruchomić bez dostępu do pliku.
+      scriptFile: { default: '' },
     };
   },
 
@@ -1983,6 +712,9 @@ export const AutomateScriptBlock = Node.create({
             scenePath: element.getAttribute('data-scene-path')
               ? decodeURIComponent(element.getAttribute('data-scene-path') || '')
               : '',
+            scriptFile: element.getAttribute('data-script-file')
+              ? decodeURIComponent(element.getAttribute('data-script-file') || '')
+              : '',
           };
         },
       },
@@ -2019,6 +751,9 @@ export const AutomateScriptBlock = Node.create({
     }
     if (typeof node.attrs.scenePath === 'string' && node.attrs.scenePath) {
       attrs['data-scene-path'] = encodeURIComponent(node.attrs.scenePath);
+    }
+    if (typeof node.attrs.scriptFile === 'string' && node.attrs.scriptFile) {
+      attrs['data-script-file'] = encodeURIComponent(node.attrs.scriptFile);
     }
 
     return ['div', attrs];

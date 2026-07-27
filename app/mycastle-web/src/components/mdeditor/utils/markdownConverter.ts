@@ -62,7 +62,7 @@ function escapeAutomateScriptsForHtml(content: string): string {
   // tags; selected UML projects whose classes become Blockly block categories.
   // scenePath persists via a `:s=path` token (prefix `s=`) — ścieżka pliku JSON
   // ze sceną obiektów QObject (URL-encoded, jeden segment).
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null; umlProjects: string[]; scenePath: string }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tags: string[]; windowHeight: number | null; umlProjects: string[]; scenePath: string; scriptFile: string }[] = [];
 
   // Match ```automate or ```automate:blockId or ```automate:blockId:autorun:html:t=a,b:h=360:u=p.umlproj.json code fences
   const result = content.replace(/```automate(?::([^\n]*))?\n([\s\S]*?)```/g, (_, params, code) => {
@@ -96,6 +96,10 @@ function escapeAutomateScriptsForHtml(content: string): string {
     const sToken = parts.find((p: string) => p.startsWith('s='));
     let scenePath = '';
     if (sToken) { try { scenePath = decodeURIComponent(sToken.slice(2)); } catch { scenePath = sToken.slice(2); } }
+    // `f=path` — powiązany plik `.automate` (ścieżka względem drive użytkownika).
+    const fToken = parts.find((p: string) => p.startsWith('f='));
+    let scriptFile = '';
+    if (fToken) { try { scriptFile = decodeURIComponent(fToken.slice(2)); } catch { scriptFile = fToken.slice(2); } }
     automateScripts.push({
       code: code.trimEnd(),
       blockId,
@@ -105,6 +109,7 @@ function escapeAutomateScriptsForHtml(content: string): string {
       windowHeight,
       umlProjects,
       scenePath,
+      scriptFile,
     });
     return `%%AUTOMATESCRIPT_${automateScripts.length - 1}%%`;
   });
@@ -227,7 +232,7 @@ function restorePhotoMapsFromHtml(html: string, photoMaps: string[]): string {
 }
 
 // Helper to restore automate script blocks after showdown conversion
-function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null; umlProjects?: string[]; scenePath?: string }[]): string {
+function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: string; blockId: string; autorun: boolean; viewMode?: 'code' | 'html'; tags?: string[]; windowHeight?: number | null; umlProjects?: string[]; scenePath?: string; scriptFile?: string }[]): string {
   let result = html;
 
   automateScripts.forEach((script, index) => {
@@ -249,7 +254,10 @@ function restoreAutomateScriptsFromHtml(html: string, automateScripts: { code: s
     const sceneAttr = script.scenePath
       ? ` data-scene-path="${encodeURIComponent(script.scenePath)}"`
       : '';
-    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr}${umlAttr}${sceneAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
+    const scriptFileAttr = script.scriptFile
+      ? ` data-script-file="${encodeURIComponent(script.scriptFile)}"`
+      : '';
+    const htmlTag = `<div data-type="automate-script-block"${blockIdAttr}${autorunAttr}${viewModeAttr}${tagsAttr}${whAttr}${umlAttr}${sceneAttr}${scriptFileAttr} data-code="${encodeURIComponent(script.code)}"></div>`;
     const placeholder = `%%AUTOMATESCRIPT_${index}%%`;
 
     result = result.replace(`<p>${placeholder}</p>`, htmlTag);
@@ -575,6 +583,7 @@ const turndownService = new TurndownService({
   blankReplacement: (_content, node) =>
     (node as unknown as Node).nodeName === 'P' ? '\n\n&nbsp;\n\n' : ((node as { isBlock?: boolean }).isBlock ? '\n\n' : ''),
 });
+
 
 // Preserve relative hrefs — DOMParser resolves relative URLs to absolute,
 // but getAttribute('href') returns the original attribute value.
@@ -1260,6 +1269,7 @@ turndownService.addRule('automateScriptBlock', {
     let windowHeightRaw = element.getAttribute('data-window-height') || '';
     let umlRaw = element.getAttribute('data-uml-projects') || '';
     let sceneRaw = element.getAttribute('data-scene-path') || '';
+    let scriptFileRaw = element.getAttribute('data-script-file') || '';
 
     const encodedCode = element.getAttribute('data-code');
     if (encodedCode) {
@@ -1279,6 +1289,7 @@ turndownService.addRule('automateScriptBlock', {
         windowHeightRaw = inner.getAttribute('data-window-height') || windowHeightRaw;
         umlRaw = inner.getAttribute('data-uml-projects') || umlRaw;
         sceneRaw = inner.getAttribute('data-scene-path') || sceneRaw;
+        scriptFileRaw = inner.getAttribute('data-script-file') || scriptFileRaw;
       }
     }
 
@@ -1310,6 +1321,10 @@ turndownService.addRule('automateScriptBlock', {
     if (sceneRaw) {
       // sceneRaw is already URL-encoded (data-scene-path) — pass through.
       parts.push(`s=${sceneRaw}`);
+    }
+    if (scriptFileRaw) {
+      // scriptFileRaw is already URL-encoded (data-script-file) — pass through.
+      parts.push(`f=${scriptFileRaw}`);
     }
     // Trim trailing empties so `automate::` (no flags, no id) stays plain `automate`.
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
@@ -1551,7 +1566,50 @@ export function markdownToHtml(markdown: string): string {
   const mathDataStr = escapeMathForHtml(markdownWithoutWikiLinks);
   const { result: escapedMarkdown, mathBlocks, mathInlines } = JSON.parse(mathDataStr);
 
-  let html = showdownConverter.makeHtml(escapedMarkdown);
+  // Protect external-code fences ` ```lang file=path ` — po showdown odtwarzane jako
+  // <pre data-external-src="path"><code class="language-lang"></code></pre> (blok kodu z pliku).
+  const extCodeBlocks: { lang: string; src: string }[] = [];
+  const markdownWithExtCodes = escapedMarkdown.replace(
+    /^```([\w+#.-]*)[ \t]+file=(\S+)[^\n]*\n([\s\S]*?)^```[ \t]*$/gm,
+    (_m: string, lang: string, src: string) => {
+      const i = extCodeBlocks.length;
+      extCodeBlocks.push({ lang, src });
+      return `%%EXTCODE${i}%%`;
+    },
+  );
+
+  // Osadzenia YouTube: ` ```youtube {json} ` → marker → po showdown <iframe data-youtube-id>.
+  const ytBlocks: { videoId: string; start?: number | string; width?: string; align?: string }[] = [];
+  const markdownWithYt = markdownWithExtCodes.replace(
+    /^```youtube[ \t]*\n([\s\S]*?)^```[ \t]*$/gm,
+    (_m: string, body: string) => {
+      try {
+        const cfg = JSON.parse(body.trim());
+        const i = ytBlocks.length;
+        ytBlocks.push(cfg);
+        return `%%YOUTUBE${i}%%`;
+      } catch { return _m; }
+    },
+  );
+
+  let html = showdownConverter.makeHtml(markdownWithYt);
+
+  // Odtworzenie bloków kodu z zewnętrznym plikiem.
+  extCodeBlocks.forEach(({ lang, src }, i) => {
+    const el = `<pre data-external-src="${src}"><code class="language-${lang}"></code></pre>`;
+    html = html.replace(`<p>%%EXTCODE${i}%%</p>`, el).replace(`%%EXTCODE${i}%%`, el);
+  });
+
+  // Odtworzenie osadzeń YouTube.
+  ytBlocks.forEach((cfg, i) => {
+    const start = cfg.start ? Number(cfg.start) : 0;
+    const src = `https://www.youtube.com/embed/${cfg.videoId}${start > 0 ? `?start=${start}` : ''}`;
+    const el = `<iframe src="${src}" class="md-editor-youtube" data-youtube-id="${cfg.videoId}"`
+      + (start > 0 ? ` data-start="${start}"` : '')
+      + ` data-align="${cfg.align || 'center'}" frameborder="0" allowfullscreen="true"`
+      + ` style="aspect-ratio: 16 / 9; width: ${cfg.width || '100%'}; max-width: 100%; display: block"></iframe>`;
+    html = html.replace(`<p>%%YOUTUBE${i}%%</p>`, el).replace(`%%YOUTUBE${i}%%`, el);
+  });
 
   // Process markdown inside column layouts (showdown doesn't process content inside HTML tags)
   html = processColumnLayouts(html);
@@ -1637,11 +1695,41 @@ export function htmlToMarkdown(html: string): string {
     return '';
   }
 
+  // Bloki kodu z zewnętrznym plikiem: zbieramy je i zastępujemy markerem PRZED turndown
+  // (turndown gubi puste <pre><code> + atrybut). Po turndown marker → ` ```lang file=src `.
+  const extCodeMarkers: { lang: string; src: string }[] = [];
+  const ytMarkers: { videoId: string; start?: string; width?: string; align?: string }[] = [];
+
   // Pre-process: extract data-block-id from top-level blocks and insert text placeholders
   // (empty divs are skipped by Turndown's isBlank check, so we use <p> with text content)
   let processedHtml = (() => {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
+    // Najpierw wyłuskaj bloki kodu z pliku (zanim inne przetwarzanie ruszy <pre>).
+    Array.from(doc.querySelectorAll('pre[data-external-src]')).forEach((pre) => {
+      const src = pre.getAttribute('data-external-src') || '';
+      const cls = pre.querySelector('code')?.getAttribute('class') || '';
+      const lang = cls.match(/language-(\S+)/)?.[1] || '';
+      const i = extCodeMarkers.length;
+      extCodeMarkers.push({ lang, src });
+      const marker = doc.createElement('p');
+      marker.textContent = `%%EXTCODE${i}%%`;
+      pre.replaceWith(marker);
+    });
+    // Osadzenia YouTube (turndown gubi <iframe>) → marker.
+    Array.from(doc.querySelectorAll('iframe[data-youtube-id]')).forEach((f) => {
+      const el = f as HTMLElement;
+      const i = ytMarkers.length;
+      ytMarkers.push({
+        videoId: el.getAttribute('data-youtube-id') || '',
+        start: el.getAttribute('data-start') || undefined,
+        align: el.getAttribute('data-align') || undefined,
+        width: el.style.width || undefined,
+      });
+      const marker = doc.createElement('p');
+      marker.textContent = `%%YOUTUBE${i}%%`;
+      f.replaceWith(marker);
+    });
     Array.from(doc.body.children).forEach((el) => {
       const id = el.getAttribute('data-block-id');
       if (id) {
@@ -1877,7 +1965,7 @@ export function htmlToMarkdown(html: string): string {
   );
 
   // Pre-process: Replace automate script blocks with placeholders before Turndown
-  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string; umlRaw: string; sceneRaw: string }[] = [];
+  const automateScripts: { code: string; blockId: string; autorun: boolean; viewMode: 'code' | 'html'; tagsRaw: string; windowHeightRaw: string; umlRaw: string; sceneRaw: string; scriptFileRaw: string }[] = [];
 
   processedHtml = processedHtml.replace(
     /<div[^>]*data-type="automate-script-block"[^>]*?(?:data-block-id="([^"]*)")?[^>]*?(?:data-code="([^"]*)")?[^>]*>[\s\S]*?<\/div>/gi,
@@ -1890,6 +1978,7 @@ export function htmlToMarkdown(html: string): string {
       const whMatch = match.match(/data-window-height="([^"]*)"/);
       const umlMatch = match.match(/data-uml-projects="([^"]*)"/);
       const sceneMatch = match.match(/data-scene-path="([^"]*)"/);
+      const scriptFileMatch = match.match(/data-script-file="([^"]*)"/);
       automateScripts.push({
         code: codeMatch ? decodeURIComponent(codeMatch[1]) : '',
         blockId: blockIdMatch ? blockIdMatch[1] : '',
@@ -1903,6 +1992,8 @@ export function htmlToMarkdown(html: string): string {
         umlRaw: umlMatch ? umlMatch[1] : '',
         // sceneRaw: already-encoded scene JSON path (data-scene-path).
         sceneRaw: sceneMatch ? sceneMatch[1] : '',
+        // scriptFileRaw: already-encoded `.automate` path (data-script-file).
+        scriptFileRaw: scriptFileMatch ? scriptFileMatch[1] : '',
       });
       return `##AUTOMATESCRIPT${automateScripts.length - 1}##`;
     }
@@ -2120,6 +2211,7 @@ export function htmlToMarkdown(html: string): string {
     if (script.windowHeightRaw) parts.push(`h=${script.windowHeightRaw}`);
     if (script.umlRaw) parts.push(`u=${script.umlRaw}`);
     if (script.sceneRaw) parts.push(`s=${script.sceneRaw}`);
+    if (script.scriptFileRaw) parts.push(`f=${script.scriptFileRaw}`);
     while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
     const langTag = parts.join(':');
     const replacement = `\n\`\`\`${langTag}\n${script.code}\n\`\`\`\n`;
@@ -2139,6 +2231,20 @@ export function htmlToMarkdown(html: string): string {
     const placeholder = `##PHOTOMAP${index}##`;
     const replacement = `\n\`\`\`photomap\n${cfg}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: bloki kodu z pliku → ` ```lang file=src ` (puste ciało).
+  extCodeMarkers.forEach(({ lang, src }, i) => {
+    markdown = markdown.split(`%%EXTCODE${i}%%`).join(`\`\`\`${lang} file=${src}\n\`\`\``);
+  });
+
+  // Post-process: osadzenia YouTube → ` ```youtube {json} `.
+  ytMarkers.forEach((yt, i) => {
+    const cfg: Record<string, unknown> = { videoId: yt.videoId };
+    if (yt.start) cfg.start = Number(yt.start);
+    if (yt.width && yt.width !== '100%') cfg.width = yt.width;
+    if (yt.align && yt.align !== 'center') cfg.align = yt.align;
+    markdown = markdown.split(`%%YOUTUBE${i}%%`).join(`\`\`\`youtube\n${JSON.stringify(cfg)}\n\`\`\``);
   });
 
   return markdown;

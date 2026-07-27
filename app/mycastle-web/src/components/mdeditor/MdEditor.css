@@ -457,10 +457,21 @@
 .md-editor-content .ProseMirror table td,
 .md-editor-content .ProseMirror table th {
   border: 1px solid #ddd;
-  padding: 0.5rem 0.75rem;
+  padding: 0.2rem 0.6rem; /* niższe wiersze — pojedyncza linia nie zajmuje 2× wysokości */
   vertical-align: top;
   box-sizing: border-box;
   position: relative;
+}
+
+/* Akapit w komórce nie dokłada dolnego marginesu (globalne .ProseMirror p ma 0.75rem).
+   Dzięki temu wiersz z jedną linią jest niski; komórka z wieloma akapitami rośnie sama. */
+.md-editor-content .ProseMirror table td > p,
+.md-editor-content .ProseMirror table th > p {
+  margin-bottom: 0;
+}
+.md-editor-content .ProseMirror table td > p + p,
+.md-editor-content .ProseMirror table th > p + p {
+  margin-top: 0.35rem; /* odstęp tylko MIĘDZY akapitami w dłuższej komórce */
 }
 
 .md-editor-content .ProseMirror table th {

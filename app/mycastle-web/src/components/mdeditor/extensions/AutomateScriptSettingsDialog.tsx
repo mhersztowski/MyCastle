@@ -12,7 +12,7 @@
  * happen as usual.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useCallback } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -36,6 +36,8 @@ import {
   FormGroup,
 } from '@mui/material';
 import CodeIcon from '@mui/icons-material/Code';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import HtmlIcon from '@mui/icons-material/Html';
 import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
 import AddIcon from '@mui/icons-material/Add';
@@ -43,6 +45,9 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import HeightIcon from '@mui/icons-material/Height';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
+
+// Drzewo katalogów drive z filtrem rozszerzeń — lazy, otwiera się na żądanie.
+const CodeFilePickerDialog = lazy(() => import('./CodeFilePickerDialog'));
 
 /** Sensible bounds for the windowHeight slider. Below 150px the header
  *  alone barely fits; above 1200px the block would scroll the document
@@ -92,6 +97,10 @@ export interface AutomateScriptSettingsDialogProps {
    *  ładowana przy otwarciu edytora i zapisywana przy „Zapisz". '' = brak. */
   scenePath: string;
   onScenePathChange: (next: string) => void;
+
+  /** Powiązany plik `.automate` (ścieżka względem drive). Pusty = kod w dokumencie. */
+  scriptFile: string;
+  onScriptFileChange: (next: string) => void;
 }
 
 const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> = ({
@@ -112,7 +121,10 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
   onUmlProjectsChange,
   scenePath,
   onScenePathChange,
+  scriptFile,
+  onScriptFileChange,
 }) => {
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
   const umlDisplayName = (file: string) => file.replace(/\.umlproj\.json$/i, '');
   const toggleUmlProject = useCallback((file: string, checked: boolean) => {
     if (checked) {
@@ -429,6 +441,39 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
 
           <Divider />
 
+          {/* ── Plik skryptu (.automate) ────────────────────────────── */}
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <InsertDriveFileIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+              <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>
+                Plik skryptu (.automate)
+              </Typography>
+              <Button size="small" startIcon={<FolderOpenIcon />} onClick={() => setFilePickerOpen(true)}>
+                Wybierz
+              </Button>
+              {scriptFile && (
+                <Button size="small" color="inherit" onClick={() => onScriptFileChange('')}>
+                  Odłącz
+                </Button>
+              )}
+            </Box>
+            <TextField
+              value={scriptFile}
+              onChange={(e) => onScriptFileChange(e.target.value)}
+              placeholder="np. automate/raporty/dzienny.automate"
+              size="small"
+              fullWidth
+            />
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+              Po powiązaniu plik jest źródłem kodu: wczytuje się przy otwarciu
+              edytora, a „Zapisz" pisze do niego i do dokumentu. Ten sam plik może
+              zasilać kilka bloków oraz akcje w Edytorze Konwersacji. Puste pole =
+              kod żyje wyłącznie w tej notatce.
+            </Typography>
+          </Box>
+
+          <Divider />
+
           {/* ── Scena QObject (plik JSON) ───────────────────────────── */}
           <Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -457,6 +502,20 @@ const AutomateScriptSettingsDialog: React.FC<AutomateScriptSettingsDialogProps> 
       <DialogActions>
         <Button onClick={onClose} variant="contained">Gotowe</Button>
       </DialogActions>
+
+      <Suspense fallback={null}>
+        {filePickerOpen && (
+          <CodeFilePickerDialog
+            open={filePickerOpen}
+            onClose={() => setFilePickerOpen(false)}
+            onSelect={(path) => onScriptFileChange(path.replace(/^drive\//, ''))}
+            extensions={['automate']}
+            title="Wybierz plik .automate"
+            filterHint="Filtruj pliki .automate"
+            emptyHint="Brak plików .automate w drive — zapisz skrypt, wpisując ścieżkę powyżej."
+          />
+        )}
+      </Suspense>
     </Dialog>
   );
 };

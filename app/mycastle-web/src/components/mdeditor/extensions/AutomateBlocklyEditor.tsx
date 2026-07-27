@@ -18,6 +18,7 @@ import * as Blockly from 'blockly';
 import { javascriptGenerator } from 'blockly/javascript';
 import { defineUmlBlocks, type UmlClassDef } from './umlBlockly';
 import { defineProceduralBlocks } from './proceduralBlocks';
+import { auraToolboxCategories } from '../../../modules/voiceactions/blocks';
 
 export interface AutomateBlocklyEditorProps {
   initialState?: string | null;
@@ -25,6 +26,10 @@ export interface AutomateBlocklyEditorProps {
   onChange: (js: string, state: string) => void;
   /** UML classes (from selected Programming/Uml projects) → extra block categories. */
   umlClasses?: UmlClassDef[];
+  /** Dokłada kategorie „Aura: …" (Konwersacja, VFS, Sieć, Komponenty, funkcje
+   *  globalne). Włączane przez Edytor Konwersacji — w notatkach te bloczki nie
+   *  mają rozmowy, w której mogłyby cokolwiek powiedzieć. */
+  auraBlocks?: boolean;
 }
 
 // Classic Blockly default block palette (categories appended with UML ones at inject time).
@@ -132,7 +137,7 @@ const darkTheme = Blockly.Theme.defineTheme('automate-dark', {
   },
 });
 
-export default function AutomateBlocklyEditor({ initialState, onChange, umlClasses }: AutomateBlocklyEditorProps) {
+export default function AutomateBlocklyEditor({ initialState, onChange, umlClasses, auraBlocks }: AutomateBlocklyEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<Blockly.WorkspaceSvg | null>(null);
   // Keep callback current without re-injecting Blockly.
@@ -142,6 +147,7 @@ export default function AutomateBlocklyEditor({ initialState, onChange, umlClass
   // the component via a `key` set by the host.
   const initialRef = useRef(initialState);
   const umlRef = useRef(umlClasses);
+  const auraRef = useRef(auraBlocks);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -164,9 +170,13 @@ export default function AutomateBlocklyEditor({ initialState, onChange, umlClass
     // Functions → UML categories.
     const procCategories = defineProceduralBlocks();
     const umlCategories = defineUmlBlocks(umlRef.current ?? []);
+    // Bloczki Aury idą na górę palety — w edytorze logiki akcji to one są
+    // treścią, a Tekst/Logika/Pętle tylko obudową.
+    const auraCategories = auraRef.current ? auraToolboxCategories() : [];
     const toolbox = {
       kind: 'categoryToolbox',
       contents: [
+        ...(auraCategories.length ? [...auraCategories, { kind: 'sep' }] : []),
         ...DEFAULT_CATEGORIES,
         ...procCategories,
         ...VARIABLE_FUNCTION_CATEGORIES,

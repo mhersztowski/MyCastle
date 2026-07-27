@@ -1,0 +1,2 @@
+# Artefakt buildu — powstaje z `pnpm --filter cad-app build:rysik-runtime`
+quarto/_extensions/rysik/resources/rysik-runtime.js

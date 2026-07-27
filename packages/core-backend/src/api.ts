@@ -16,9 +16,31 @@
 
 import { randomUUID } from 'node:crypto';
 import mqtt, { type MqttClient as MqttJsClient } from 'mqtt';
-import type { GitResult, GitDiffResult, GitCommit } from './server/logic';
+import type {
+  GitResult,
+  GitDiffResult,
+  GitCommit,
+  EmailSummary,
+  EmailMessage,
+  EmailSendResult,
+  EmailSendOptions,
+  Mail,
+  ZipResult,
+  ProjectBuildResult,
+} from './server/logic';
 
-export type { GitResult, GitDiffResult, GitCommit } from './server/logic';
+export type {
+  GitResult,
+  GitDiffResult,
+  GitCommit,
+  EmailSummary,
+  EmailMessage,
+  EmailSendResult,
+  EmailSendOptions,
+  Mail,
+  ZipResult,
+  ProjectBuildResult,
+} from './server/logic';
 
 // Topiki kanału komend (muszą zgadzać się z realizacją w server/logic.ts).
 const TOPIC_CMD = '/server/cmd';
@@ -423,4 +445,139 @@ export async function git_diff(
     commit_from,
     commit_to,
   })) as GitDiffResult;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Email (IMAP odczyt / SMTP wysyłka; konto z SecretsService użytkownika)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// `owner` (właściciel konta) przekazujemy z `conn.userName` — potrzebny na kanale
+// MQTT (bez JWT). Po HTTP backend i tak nadpisze go zweryfikowanym userem z JWT.
+
+/** Lista ostatnich wiadomości w skrzynce (najnowsze pierwsze). */
+export async function email_list(
+  conn: Conn,
+  mailbox = 'INBOX',
+  limit = 20,
+): Promise<EmailSummary[]> {
+  return (await sendCommand(conn, 'email_list', {
+    owner: conn.userName,
+    mailbox,
+    limit,
+  })) as EmailSummary[];
+}
+
+/** Pełna treść wiadomości o danym UID. */
+export async function email_read(conn: Conn, uid: string | number, mailbox = 'INBOX'): Promise<EmailMessage> {
+  return (await sendCommand(conn, 'email_read', {
+    owner: conn.userName,
+    uid: String(uid),
+    mailbox,
+  })) as EmailMessage;
+}
+
+/** Wysyła wiadomość. `opts.html`/`opts.cc` opcjonalne. */
+export async function email_send(
+  conn: Conn,
+  to: string,
+  subject: string,
+  body: string,
+  opts: EmailSendOptions = {},
+): Promise<EmailSendResult> {
+  return (await sendCommand(conn, 'email_send', {
+    owner: conn.userName,
+    to,
+    subject,
+    body,
+    html: opts.html,
+    cc: opts.cc,
+  })) as EmailSendResult;
+}
+
+// ── Mail (model Mail z docs/backend_api.md) ──────────────────────────────────
+
+/** Wysyła wiadomość opisaną obiektem Mail. */
+export async function mail_send(conn: Conn, mail: Mail): Promise<EmailSendResult> {
+  return (await sendCommand(conn, 'mail_send', { owner: conn.userName, mail })) as EmailSendResult;
+}
+
+/** Skrzynka odbiorcza jako Mail[]. */
+export async function mail_inbox(conn: Conn, limit = 20): Promise<Mail[]> {
+  return (await sendCommand(conn, 'mail_inbox', { owner: conn.userName, limit })) as Mail[];
+}
+
+/** Skrzynka wysłanych jako Mail[]. */
+export async function mail_outbox(conn: Conn, limit = 20): Promise<Mail[]> {
+  return (await sendCommand(conn, 'mail_outbox', { owner: conn.userName, limit })) as Mail[];
+}
+
+// ── Zip (wszystko względem server_filename) ──────────────────────────────────
+
+export async function zip_pack(conn: Conn, input: string, output: string): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_pack', { input, output })) as ZipResult;
+}
+
+export async function zip_unpack(conn: Conn, input: string, output: string): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_unpack', { input, output })) as ZipResult;
+}
+
+/** Dodaje/aktualizuje `files` (server_filenames) w archiwum `path`. */
+export async function zip_update(conn: Conn, path: string, files: string[]): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_update', { path, files })) as ZipResult;
+}
+
+/** Usuwa wpisy `files` (nazwy w archiwum) z archiwum `path`. */
+export async function zip_delete(conn: Conn, path: string, files: string[]): Promise<ZipResult> {
+  return (await sendCommand(conn, 'zip_delete', { path, files })) as ZipResult;
+}
+
+// ── Projekty (build + ścieżka wyniku) ────────────────────────────────────────
+
+export async function project_arduino_build(
+  conn: Conn,
+  projectId: string,
+  sketch: string,
+  fqbn: string,
+): Promise<ProjectBuildResult> {
+  return (await sendCommand(
+    conn,
+    'project_arduino_build',
+    { owner: conn.userName, projectId, sketch, fqbn },
+    600_000, // build bywa długi
+  )) as ProjectBuildResult;
+}
+
+export async function project_arduino_get_output(conn: Conn, projectId: string): Promise<string> {
+  return (await sendCommand(conn, 'project_arduino_get_output', {
+    owner: conn.userName,
+    projectId,
+  })) as string;
+}
+
+export async function project_picosdk_build(
+  conn: Conn,
+  projectId: string,
+  sketch: string,
+  boardKey = '',
+): Promise<ProjectBuildResult> {
+  return (await sendCommand(
+    conn,
+    'project_picosdk_build',
+    { owner: conn.userName, projectId, sketch, boardKey },
+    600_000,
+  )) as ProjectBuildResult;
+}
+
+export async function project_picosdk_get_output(
+  conn: Conn,
+  projectId: string,
+  sketch: string,
+  boardKey = '',
+): Promise<string> {
+  return (await sendCommand(conn, 'project_picosdk_get_output', {
+    owner: conn.userName,
+    projectId,
+    sketch,
+    boardKey,
+  })) as string;
 }

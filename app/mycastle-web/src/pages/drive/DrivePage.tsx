@@ -19,7 +19,7 @@ import { QtUiSceneEditor, type QtUiFs } from '../../modules/qtui/QtUiSceneEditor
 import { useMqtt } from '../../modules/mqttclient';
 import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
-  Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
+  Alert, Backdrop, Box, Breadcrumbs, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, LinearProgress,
   Link, ListItemIcon, ListItemText, Menu, MenuItem, Paper, Select, Snackbar, Stack, Table,
   TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
@@ -28,6 +28,7 @@ import {
 import MenuIcon from '@mui/icons-material/Menu';
 import TuneIcon from '@mui/icons-material/Tune';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import FolderZipIcon from '@mui/icons-material/FolderZip';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ArticleIcon from '@mui/icons-material/Article';
 import { useLayoutChrome } from '../../components/Layout';
@@ -368,7 +369,7 @@ const TEXT_FILE_EXTS = new Set([
   'html', 'htm', 'svg', 'vue', 'svelte',
   // backend / system
   'py', 'rb', 'php', 'go', 'rs', 'java', 'kt', 'scala', 'swift', 'dart',
-  'c', 'cpp', 'cc', 'h', 'hpp', 'cs', 'sh', 'bash', 'zsh', 'fish',
+  'c', 'cpp', 'cc', 'h', 'hpp', 'ino', 'pde', 'cs', 'sh', 'bash', 'zsh', 'fish',
   'sql', 'lua', 'r', 'pl',
 ]);
 
@@ -643,7 +644,7 @@ function isEditableTextFile(name: string, mime: string): boolean {
   // Same set of recognised extensions we'd highlight, minus the markdown
   // variants. Kept inline rather than via a Set so the literal stays a
   // single grep target.
-  return /^(json|jsonc|json5|map|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyi|xml|svg|xsd|xsl|html|htm|css|scss|less|yaml|yml|sh|bash|zsh|sql|c|h|cpp|cc|cxx|hpp|hh|hxx|java|kt|rs|go|rb|php|cs|fs|swift|dart|lua|r|pl|ini|cfg|toml|env|conf|dockerfile|gitignore|gitattributes)$/.test(ext);
+  return /^(json|jsonc|json5|map|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyi|xml|svg|xsd|xsl|html|htm|css|scss|less|yaml|yml|sh|bash|zsh|sql|c|h|cpp|cc|cxx|hpp|hh|hxx|ino|pde|java|kt|rs|go|rb|php|cs|fs|swift|dart|lua|r|pl|ini|cfg|toml|env|conf|dockerfile|gitignore|gitattributes)$/.test(ext);
 }
 
 // Lekkie czyszczenie markdown wyeksportowanego z Notion: dekoduje %20 w lokalnych
@@ -1811,6 +1812,48 @@ export default function DrivePage(): React.JSX.Element {
     try {
       await downloadFile(userName, cwd ? `${cwd}/${entry.name}` : entry.name, entry.name);
     } catch (err) { toast((err as Error).message, 'error'); }
+  }, [userName, cwd, toast]);
+
+  // Nazwa pakowanego katalogu (≠ null ⇒ pokazujemy overlay ze spinnerem).
+  const [zipping, setZipping] = useState<string | null>(null);
+
+  // „Pobierz ZIP" dla katalogu: rekurencyjnie obchodzi drzewo przez VFS, czyta pliki
+  // (base64) i pakuje JSZipem po stronie przeglądarki, a potem pobiera archiwum.
+  const downloadFolderZip = useCallback(async (entry: VfsEntry) => {
+    const baseRel = cwd ? `${cwd}/${entry.name}` : entry.name;
+    setZipping(entry.name);
+    try {
+      const zip = new JSZip();
+      let files = 0;
+      const queue: string[] = [baseRel];
+      while (queue.length) {
+        const dir = queue.shift()!;
+        let entries: VfsEntry[] = [];
+        try { entries = await vfsListDir(userName, dir); } catch { continue; }
+        for (const e of entries) {
+          const rel = `${dir}/${e.name}`;
+          if (e.type === DIR_TYPE) { queue.push(rel); continue; }
+          const r = await fetch(apiUrl(userName, 'readFile', rel), { headers: authHeaders() });
+          if (!r.ok) continue;
+          const j = await r.json() as { data?: string };
+          if (j.data == null) continue;
+          // Ścieżka w archiwum: katalog jest korzeniem zipa (`<nazwa>/…`).
+          const inZip = `${entry.name}/${rel.slice(baseRel.length + 1)}`;
+          zip.file(inZip, j.data, { base64: true });
+          files++;
+        }
+      }
+      if (files === 0) { toast('Katalog jest pusty — nic do spakowania', 'info'); return; }
+      const blob = await zip.generateAsync({
+        type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 },
+      });
+      triggerDownload(blob, `${entry.name}.zip`);
+      toast(`Pobrano ZIP: ${entry.name} (${files} plików)`, 'success');
+    } catch (err) {
+      toast(`Pakowanie ZIP nieudane: ${(err as Error).message}`, 'error');
+    } finally {
+      setZipping(null);
+    }
   }, [userName, cwd, toast]);
 
   const onDelete = useCallback(async (entry: VfsEntry) => {
@@ -3946,6 +3989,15 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText>Pobierz</ListItemText>
           </MenuItem>
         )}
+        {menuFor && menuFor.entry.type === DIR_TYPE && (
+          <MenuItem
+            disabled={zipping !== null}
+            onClick={() => { const e = menuFor.entry; setMenuFor(null); void downloadFolderZip(e); }}
+          >
+            <ListItemIcon><FolderZipIcon fontSize="small" /></ListItemIcon>
+            <ListItemText primary="Pobierz ZIP" secondary="Spakuj katalog i pobierz" />
+          </MenuItem>
+        )}
         {menuFor && !isPublic(cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name) && (
           <MenuItem onClick={() => { void moveToPublic(menuFor.entry); setMenuFor(null); }}>
             <ListItemIcon><DriveFileMoveIcon fontSize="small" /></ListItemIcon>
@@ -4004,6 +4056,16 @@ export default function DrivePage(): React.JSX.Element {
           <ListItemText>Usuń</ListItemText>
         </MenuItem>
       </Menu>
+
+      {/* Overlay podczas pakowania katalogu do ZIP — kółko + informacja. */}
+      <Backdrop
+        open={zipping !== null}
+        sx={{ zIndex: (t) => t.zIndex.modal + 10, color: '#fff', flexDirection: 'column', gap: 2 }}
+      >
+        <CircularProgress color="inherit" />
+        <Typography variant="body1">Pakowanie „{zipping}" do ZIP…</Typography>
+        <Typography variant="caption" sx={{ opacity: 0.8 }}>To może chwilę potrwać przy dużych katalogach.</Typography>
+      </Backdrop>
 
       {/* ── Full-text search dialog ───────────────────────────────────── */}
       {/* `runSearch` is the actual top-level helper bound to the current

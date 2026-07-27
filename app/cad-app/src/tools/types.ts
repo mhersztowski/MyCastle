@@ -108,6 +108,8 @@ export interface DimensionLabel {
   worldY: number;
   /** Text to display (e.g. "L: 50.23", "R: 12.50", "∠ 45.0°") */
   text: string;
+  /** Prefiks przed wartością (np. '⌀' dla średnicy). Renderowany w pigułce overlay. */
+  prefix?: string;
   /** Extra pixel offset from the projected world position (for fine placement) */
   offsetX?: number;
   offsetY?: number;

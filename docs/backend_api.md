@@ -39,8 +39,14 @@ Class agent_ai_model
     ModelName
 
 Class ai_chat
-    Id
+    Id 
     Model
+
+Class Mail
+    from : string
+    to : string[]
+    topic : string
+    content : string
 
 
 // - sciezka relatywna do pliku w katalogu data beckend
@@ -71,4 +77,22 @@ git_pull(conn, server_filename)
 git_commit_current()
 git_history(conn, server_filename)
 git_diff(conn, server_filename, commit_from, commit_to)
+
+// zip - wszsytko z server_filename
+zip_pack(input, ouiput)
+zip_unpack(input, output)
+zip_upadate(path, files[])
+zip_delete(path, files[])
+
+mail_send(conn, Mail)
+mail_inbox() : Mail[]
+mail_outbox() : Mail[]
+
+project_arduino_build()
+project_arduino_get_output() : string // server_filename
+
+project_picosdk_build()
+project_picosdk_get_output() : string // server_filename
+
+
 ```

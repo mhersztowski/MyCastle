@@ -39,6 +39,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useFilesystem } from '../../../modules/filesystem';
+import { useAuth } from '../../../modules/auth/AuthContext';
 import { DirData } from '../../../modules/filesystem/data/DirData';
 import { FileData } from '../../../modules/filesystem/data/FileData';
 
@@ -190,16 +191,32 @@ const DirTreeItem: React.FC<DirTreeItemProps> = ({
   );
 };
 
+/**
+ * Buduje URL HTTP pliku media. Per-user: plik leży w VFS pod
+ * `data/Minis/Users/{u}/drive/public/files/...` i jest serwowany przez trasę
+ * `/public/drive/users/{u}/...` (mapuje `drive/public/...`). Fallback do
+ * globalnego `/files/...` gdy brak usera.
+ */
+function buildMediaUrl(vfsPath: string, userName: string): string {
+  if (userName) {
+    const prefix = `data/Minis/Users/${userName}/drive/public/`;
+    const rel = vfsPath.startsWith(prefix) ? vfsPath.slice(prefix.length) : vfsPath;
+    return `${HTTP_BASE_URL}/public/drive/users/${encodeURIComponent(userName)}/${rel}`;
+  }
+  return `${HTTP_BASE_URL}/files/${vfsPath}`;
+}
+
 // Media item preview component
 interface MediaItemPreviewProps {
   file: FileData;
   isSelected: boolean;
   onClick: () => void;
+  userName: string;
 }
 
-const MediaItemPreview: React.FC<MediaItemPreviewProps> = ({ file, isSelected, onClick }) => {
+const MediaItemPreview: React.FC<MediaItemPreviewProps> = ({ file, isSelected, onClick, userName }) => {
   const fileType = getFileMediaType(file.getExt());
-  const mediaUrl = `${HTTP_BASE_URL}/files/${file.getPath()}`;
+  const mediaUrl = buildMediaUrl(file.getPath(), userName);
 
   return (
     <ImageListItem
@@ -330,6 +347,8 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
   currentPath,
 }) => {
   const { rootDir, isDataLoaded } = useFilesystem();
+  const { currentUser } = useAuth();
+  const userName = currentUser?.name ?? '';
   const [selectedDirPath, setSelectedDirPath] = useState<string>('');
   const [selectedMediaPath, setSelectedMediaPath] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -338,12 +357,17 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
   const [currentDirPath, setCurrentDirPath] = useState<string>('');
   const [mediaType, setMediaType] = useState<MediaType>(initialMediaType);
 
-  const PUBLIC_DIR = 'data/public';
+  // Katalog media per-user: `data/Minis/Users/{u}/drive/public/files` (backend tworzy go przy starcie).
+  const PUBLIC_PARTS = useMemo(
+    () => (userName ? ['data', 'Minis', 'Users', userName, 'drive', 'public', 'files'] : ['data', 'public']),
+    [userName],
+  );
+  const PUBLIC_DIR = PUBLIC_PARTS.join('/');
 
   const publicDir = useMemo(() => {
     if (!rootDir) return null;
-    return rootDir.getSubDir(['data', 'public']) || null;
-  }, [rootDir]);
+    return rootDir.getSubDir(PUBLIC_PARTS) || null;
+  }, [rootDir, PUBLIC_PARTS]);
 
   useEffect(() => {
     if (open && publicDir) {
@@ -423,7 +447,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
 
   const handleConfirm = () => {
     if (selectedMediaPath) {
-      const mediaUrl = `${HTTP_BASE_URL}/files/${selectedMediaPath}`;
+      const mediaUrl = buildMediaUrl(selectedMediaPath, userName);
       const fileExt = selectedMediaPath.split('.').pop() || '';
       const detectedType = getFileMediaType(fileExt);
       onSelect(mediaUrl, selectedMediaPath, detectedType);
@@ -436,9 +460,8 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
     const pathParts = currentDirPath.split('/').filter(Boolean);
     pathParts.pop();
     const newPath = pathParts.join('/');
-    if (newPath.startsWith('data/public') || newPath === 'data') {
-      setCurrentDirPath(newPath.startsWith('data/public') ? newPath : PUBLIC_DIR);
-    }
+    // Nie wychodź powyżej katalogu media użytkownika.
+    setCurrentDirPath(newPath.startsWith(PUBLIC_DIR) ? newPath : PUBLIC_DIR);
     setSelectedMediaPath(null);
   };
 
@@ -473,7 +496,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
         <DialogContent sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
           {!publicDir && isDataLoaded ? (
             <Typography color="text.secondary">
-              Folder data/public nie istnieje. Utwórz go aby przechowywać media.
+              Folder media użytkownika nie istnieje ({PUBLIC_DIR}). Zostanie utworzony przy starcie backendu — odśwież po restarcie.
             </Typography>
           ) : (
             <CircularProgress />
@@ -648,6 +671,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
                         file={file}
                         isSelected={selectedMediaPath === file.getPath()}
                         onClick={() => handleMediaSelect(file.getPath())}
+                        userName={userName}
                       />
                     ))}
                   </ImageList>
@@ -692,6 +716,7 @@ const MediaPickerDialog: React.FC<MediaPickerDialogProps> = ({
                       file={file}
                       isSelected={selectedMediaPath === file.getPath()}
                       onClick={() => handleMediaSelect(file.getPath())}
+                      userName={userName}
                     />
                   ))}
                 </ImageList>

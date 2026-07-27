@@ -1,4 +1,4 @@
-import { MqttServer, FileSystem, JwtService, PasswordService, ApiKeyService, DataSource } from '@mhersztowski/core-backend';
+import { MqttServer, FileSystem, JwtService, PasswordService, ApiKeyService, DataSource, ArduinoService, ArduinoWasmBuilder, MicroPythonService, PygameService, PicoSdkService } from '@mhersztowski/core-backend';
 import * as cron from 'node-cron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -10,10 +10,6 @@ import { SchedulerService, DriveScriptScheduler } from './modules/scheduler';
 import { MycastleHttpServer } from './MycastleHttpServer.js';
 import { IotService } from './modules/iot/IotService.js';
 import { TerminalService } from './modules/terminal/TerminalService.js';
-import { ArduinoService, ArduinoWasmBuilder } from './modules/arduino/index.js';
-import { MicroPythonService } from './modules/upython/index.js';
-import { PygameService } from './modules/pygame/index.js';
-import { PicoSdkService } from './modules/picosdk/index.js';
 import { LspProxyService } from './modules/lsp/LspProxyService.js';
 import { PluginService } from './modules/plugins/PluginService.js';
 import { BackendPluginService } from './modules/plugins/BackendPluginService.js';
@@ -176,8 +172,21 @@ export class App {
     await this.fileSystem.initialize();
     console.log(`FileSystem initialized with root: ${this.config.rootDir}`);
 
+    // Globalny katalog media (`data/public` we frontendzie = `<ROOT_DIR>/public`) —
+    // używany przez picker media edytora Markdown. `data/` jest gitignorowane, więc
+    // na świeżej instalacji/deployu folderu brakuje; tworzymy go, jeśli nie istnieje.
+    const publicDir = path.join(this.config.rootDir, 'public');
+    if (!fs.existsSync(publicDir)) {
+      fs.mkdirSync(publicDir, { recursive: true });
+      console.log(`Created public media directory: ${publicDir}`);
+    }
+
     // Seed default admin user if no users exist
     await this.seedDefaultAdmin();
+
+    // Per-user katalog media edytora Markdown: <ROOT_DIR>/Minis/Users/{u}/drive/public/files
+    // (obraz/wideo/audio/pliki). `data/` jest gitignorowane → tworzymy brakujące przy starcie.
+    await this.ensureUserMediaDirs();
 
     await this.apiKeyService.load();
     console.log('API key service loaded');
@@ -382,6 +391,24 @@ export class App {
     };
     await this.fileSystem.writeFile(usersPath, JSON.stringify(defaultAdmin, null, 2));
     console.log('Seeded default admin user (admin/admin) — change password after first login!');
+  }
+
+  /** Zapewnia katalog media edytora Markdown dla każdego użytkownika (per-user). */
+  private async ensureUserMediaDirs(): Promise<void> {
+    try {
+      const data = await this.fileSystem.readFile('Minis/Admin/Users.json');
+      const parsed = JSON.parse(data.content) as { items?: Array<{ name?: string }> };
+      for (const u of parsed.items ?? []) {
+        if (!u.name || !/^[A-Za-z0-9_-]+$/.test(u.name)) continue;
+        const dir = path.join(this.config.rootDir, 'Minis', 'Users', u.name, 'drive', 'public', 'files');
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+          console.log(`Created user media directory: ${dir}`);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not ensure per-user media directories:', err instanceof Error ? err.message : err);
+    }
   }
 
   private async runOrphanProjectsCleanup(): Promise<void> {

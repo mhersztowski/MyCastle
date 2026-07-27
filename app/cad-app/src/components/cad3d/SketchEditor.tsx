@@ -658,6 +658,7 @@ export function SketchEditor({ project, plane, onExit }: Props) {
             subSelectClear={subSelClear}
             onDimensionClick={setDimDialogId}
             constraints={constraints}
+            onToolChange={handleToolChange}
           />
         </Box>
 

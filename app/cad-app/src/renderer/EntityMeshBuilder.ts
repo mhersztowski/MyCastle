@@ -207,6 +207,18 @@ function buildDimensionObject(entity: DimensionEntity, layer: Layer | undefined,
   const nx = -uy, ny = ux;               // perpendicular unit (left of p1→p2)
   const offSign = offset >= 0 ? 1 : -1;
 
+  // Średnica — rysowana WEWNĘTRZNIE: linia przez środek (p1↔p2 to końce średnicy na
+  // okręgu) z grotami skierowanymi NA ZEWNĄTRZ (do ścianki okręgu). Opis to HTML overlay.
+  if (entity.dimType === 'diameter') {
+    const arrow = Math.max(4, len * 0.04);
+    addLineSegment(group, mat, [x1, y1, 0, x2, y2, 0]);          // linia średnicy
+    const [p1s1, p1s2] = arrowHeadLines({ x: x1, y: y1 }, -ux, -uy, arrow); // grot na zewnątrz w p1
+    addLineSegment(group, mat, p1s1); addLineSegment(group, mat, p1s2);
+    const [p2s1, p2s2] = arrowHeadLines({ x: x2, y: y2 }, ux, uy, arrow);   // grot na zewnątrz w p2
+    addLineSegment(group, mat, p2s1); addLineSegment(group, mat, p2s2);
+    return group;
+  }
+
   // Dimension line endpoints
   const d1 = { x: x1 + nx * offset, y: y1 + ny * offset };
   const d2 = { x: x2 + nx * offset, y: y2 + ny * offset };

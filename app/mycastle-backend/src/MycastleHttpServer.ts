@@ -1,4 +1,5 @@
-import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi } from '@mhersztowski/core-backend';
+import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi, ArduinoWasmBuilder } from '@mhersztowski/core-backend';
+import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, PicoSdkService } from '@mhersztowski/core-backend';
 import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
@@ -12,12 +13,6 @@ import AdmZip from 'adm-zip';
 import type { IotService } from './modules/iot/IotService.js';
 import type { TerminalService } from './modules/terminal/TerminalService.js';
 import { RpcRouter, registerHandlers } from './modules/rpc/index.js';
-import type { ArduinoService } from './modules/arduino/index.js';
-import { ArduinoWasmBuilder } from './modules/arduino/index.js';
-import type { MinisConfig } from './modules/arduino/ArduinoCli.js';
-import type { MicroPythonService } from './modules/upython/index.js';
-import type { PygameService } from './modules/pygame/index.js';
-import type { PicoSdkService } from './modules/picosdk/index.js';
 import { ScriptsService } from '@mhersztowski/core-backend';
 import type { PluginService } from './modules/plugins/PluginService.js';
 import type { BackendPluginService } from './modules/plugins/BackendPluginService.js';
@@ -158,7 +153,12 @@ export class MycastleHttpServer extends HttpUploadServer {
       this.vfs.mount('/data', new NodeFS({ rootDir: path.resolve(rootDir) }));
       this.scriptsService = new ScriptsService(path.resolve(rootDir));
       // Realizacja API backendu (server_filename relatywny do katalogu data).
-      this.serverApi = new ServerApi(path.resolve(rootDir));
+      // Sekrety per-user (SecretsService) zasilają email; serwisy arduino/picosdk — project_*.
+      this.serverApi = new ServerApi(path.resolve(rootDir), {
+        secrets: this.secretsService ?? undefined,
+        arduino: this.arduinoService,
+        picosdk: this.picoSdkService,
+      });
     }
 
     // Mount MyCastle source tree at /mycastle-code (read by ReadOnlyFS wrapper in the editor).
@@ -1214,7 +1214,8 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (method === 'POST' && apiPath === '/server/cmd') {
       if (!this.serverApi) { this.sendJsonResponse(res, 503, { error: 'Server API unavailable' }); return; }
       const body = await this.parseRequestBody(req) as { op?: string; args?: Record<string, unknown> };
-      const result = await this.serverApi.handleHttp(body);
+      // owner ze zweryfikowanego JWT — autorytatywny dla operacji email (per-user secrets).
+      const result = await this.serverApi.handleHttp(body, { owner: user.userName });
       this.sendJsonResponse(res, 200, result);
       return;
     }

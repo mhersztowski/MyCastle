@@ -276,7 +276,8 @@ export class DimensionTool implements Tool {
 
   private commit(ctx: ToolContext): void {
     if (!this.measured) { this.resetSelection(); return; }
-    const { p1, p2, axis } = this.measured;
+    const { p1, p2, axis, kind } = this.measured;
+    const isDiameter = kind === 'diameter';
 
     // AKTYWNE kotwice (nie disabled) → wymiar podąża za geometrią (Project.refreshAnchoredDimensions
     // re-rozwiązuje je przy każdej zmianie encji). makeDimAnchor wybiera właściwą cechę:
@@ -297,6 +298,9 @@ export class DimensionTool implements Tool {
       ...(anchor1 ? { anchor1 } : {}),
       ...(anchor2 ? { anchor2 } : {}),
       ...(axis ? { axis } : {}),
+      // Średnica: rysowana wewnętrznie (dwustronna strzałka przez środek); opis
+      // domyślnie tuż poza okręgiem, potem regulowany przeciągnięciem wymiaru.
+      ...(isDiameter ? { dimType: 'diameter' as const, labelDist: (dist(p1, p2) / 2) * 1.35 } : {}),
     });
 
     this.resetSelection();

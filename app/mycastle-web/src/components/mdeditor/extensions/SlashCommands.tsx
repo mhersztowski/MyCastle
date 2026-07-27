@@ -32,6 +32,7 @@ import GridOnIcon from '@mui/icons-material/GridOn';
 import ImageIcon from '@mui/icons-material/Image';
 import AudiotrackIcon from '@mui/icons-material/Audiotrack';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import YouTubeIcon from '@mui/icons-material/YouTube';
 import FunctionsIcon from '@mui/icons-material/Functions';
 import PersonIcon from '@mui/icons-material/Person';
 import TaskIcon from '@mui/icons-material/Task';
@@ -271,6 +272,19 @@ const commands: CommandItem[] = [
     },
   },
   {
+    title: 'YouTube',
+    description: 'Osadź film z YouTube',
+    icon: <YouTubeIcon sx={{ color: '#c4302b' }} />,
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .setYouTube({ videoId: '' })
+        .run();
+    },
+  },
+  {
     title: 'Math Block',
     description: 'Display math equation (LaTeX)',
     icon: <FunctionsIcon />,
@@ -386,15 +400,21 @@ const commands: CommandItem[] = [
     },
   },
   {
-    title: 'Script',
-    description: 'Blok skryptu wykonywalnego',
+    title: 'Skrypt Automate',
+    description: 'Blok skryptu wykonywalnego (api, display, Blockly)',
     icon: <TerminalIcon color="success" />,
     command: ({ editor, range }) => {
       editor
         .chain()
         .focus()
         .deleteRange(range)
-        .insertAutomateScript('// Wpisz kod tutaj\napi.log.info("Witaj!");\ndisplay.text("Wynik: OK");')
+        .insertAutomateScript(
+          "import { api, display } from 'mycastle/packages/core/browser/api/api';\n"
+          + '\n'
+          + '// Wpisz kod tutaj\n'
+          + 'api.log.info("Witaj!");\n'
+          + 'display.text("Wynik: OK");',
+        )
         .run();
     },
   },
@@ -517,18 +537,29 @@ const CommandList = forwardRef<CommandListRef, CommandListProps>(
     return (
       <Paper
         ref={containerRef}
-        elevation={4}
+        elevation={8}
         sx={{
-          width: 280,
-          maxHeight: 400,
+          width: 300,
+          maxHeight: 380,
           overflow: 'auto',
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: 2,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.22)',
+          bgcolor: 'background.paper',
         }}
       >
         <Typography
-          variant="caption"
-          sx={{ px: 2, py: 1, display: 'block', color: 'text.secondary' }}
+          variant="overline"
+          sx={{
+            px: 1.5, py: 0.75, display: 'block',
+            color: 'text.secondary', fontWeight: 700, letterSpacing: 0.4,
+            position: 'sticky', top: 0, zIndex: 1,
+            bgcolor: 'background.paper',
+            borderBottom: '1px solid', borderColor: 'divider',
+          }}
         >
-          Basic blocks
+          Wstaw komponent
         </Typography>
         <List dense disablePadding>
           {items.length > 0 ? (
@@ -602,6 +633,10 @@ function buildSuggestionConfig(
 
   return {
     char: '/',
+    // Puste linie z wczytanego markdownu zawierają twardą spację (U+00A0, z konwersji
+    // pustego akapitu na `&nbsp;`). Domyślnie paleta wyzwala się tylko na początku bloku
+    // lub po zwykłej spacji — dodajemy twardą spację, by `/` działało też na takich liniach.
+    allowedPrefixes: [' ', '\u00A0'],
     command: ({ editor, range, props }) => {
       props.command({ editor, range });
     },
@@ -632,9 +667,45 @@ function buildSuggestionConfig(
     render: () => {
     let component: ReactRenderer | null = null;
     let popup: TippyInstance[] | null = null;
+    // Aktualna funkcja rectu (zmienia się między onStart a onUpdate) + ostatnia sensowna
+    // pozycja. Zapobiega „skakaniu" palety gdy clientRect chwilowo zwróci pusty rect.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let rectFn: (() => DOMRect | null) | null = null;
+    let lastRect: DOMRect | null = null;
+    const cursorRect = (): DOMRect => {
+      const r = rectFn?.() ?? null;
+      if (r && (r.width || r.height || r.top || r.left || r.right || r.bottom)) lastRect = r;
+      return lastRect ?? new DOMRect(0, 0, 0, 0);
+    };
+    // Widoczny obszar (na mobile pomniejszony o wysuniętą klawiaturę).
+    const vp = () => {
+      const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+      return {
+        left: vv ? vv.offsetLeft : 0,
+        top: vv ? vv.offsetTop : 0,
+        width: vv ? vv.width : (typeof window !== 'undefined' ? window.innerWidth : 0),
+        height: vv ? vv.height : (typeof window !== 'undefined' ? window.innerHeight : 0),
+      };
+    };
+    // Rect referencyjny = PUNKT na środku widoku (poziomo), na wysokości kursora →
+    // paleta jest wyśrodkowana na stronie, a nie doklejona do kursora.
+    const getRect = (): DOMRect => {
+      const c = cursorRect();
+      const v = vp();
+      return new DOMRect(v.left + v.width / 2, c.top, 0, Math.max(0, c.bottom - c.top));
+    };
+    // Kursor w górnej ~35% widocznego obszaru → za mało miejsca nad nim → menu POD
+    // kursorem; w przeciwnym razie NAD kursorem (uwzględnia wysuniętą klawiaturę).
+    const pickPlacement = (): 'top' | 'bottom' => {
+      const c = cursorRect();
+      const v = vp();
+      return (c.top - v.top) < v.height * 0.35 ? 'bottom' : 'top';
+    };
 
     return {
       onStart: (props) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rectFn = props.clientRect as any;
         component = new ReactRenderer(CommandList, {
           props,
           editor: props.editor,
@@ -644,22 +715,16 @@ function buildSuggestionConfig(
           return;
         }
 
-        // Touch devices = virtual keyboard at the bottom. Default `bottom-start`
-        // would put the palette directly under the cursor, smack in the path
-        // of the keyboard. Prefer `top-start` there so the palette opens
-        // ABOVE the cursor, in the visible area.
-        const isTouch = typeof window !== 'undefined'
-          && window.matchMedia('(pointer: coarse)').matches;
-        const initialPlacement: 'bottom-start' | 'top-start' = isTouch ? 'top-start' : 'bottom-start';
-
         popup = tippy('body', {
-          getReferenceClientRect: props.clientRect as () => DOMRect,
+          getReferenceClientRect: getRect,
           appendTo: () => document.body,
           content: component.element,
           showOnCreate: true,
           interactive: true,
           trigger: 'manual',
-          placement: initialPlacement,
+          placement: pickPlacement(),
+          maxWidth: 'none',
+          offset: [0, 6],
           // iOS Safari fixes
           touch: true,
           hideOnClick: false,
@@ -686,7 +751,9 @@ function buildSuggestionConfig(
               {
                 name: 'flip',
                 options: {
-                  fallbackPlacements: ['bottom-start', 'top-end', 'bottom-end'],
+                  // Wyłącznie wyśrodkowane warianty — inaczej flip zepsułby
+                  // wyśrodkowanie palety na stronie (żadnych -start/-end).
+                  fallbackPlacements: ['top', 'bottom'],
                 },
               },
               {
@@ -775,14 +842,11 @@ function buildSuggestionConfig(
 
       onUpdate: (props) => {
         component?.updateProps(props);
-
-        if (!props.clientRect) {
-          return;
-        }
-
-        popup?.[0]?.setProps({
-          getReferenceClientRect: props.clientRect as () => DOMRect,
-        });
+        if (!props.clientRect) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rectFn = props.clientRect as any;
+        // Przelicz pozycję (środek widoku) i stronę (nad/pod kursorem).
+        popup?.[0]?.setProps({ getReferenceClientRect: getRect, placement: pickPlacement() });
       },
 
       onKeyDown: (props) => {

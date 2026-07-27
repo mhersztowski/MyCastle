@@ -63,12 +63,29 @@ export {
   git_diff,
   git_history,
   git_commit_current,
+  email_list,
+  email_read,
+  email_send,
+  mail_send,
+  mail_inbox,
+  mail_outbox,
+  zip_pack,
+  zip_unpack,
+  zip_update,
+  zip_delete,
+  project_arduino_build,
+  project_arduino_get_output,
+  project_picosdk_build,
+  project_picosdk_get_output,
 } from './api';
 export type { ConnResponse, ResCallback, ErrCallback } from './api';
 
 // server — realizacja API backendu (HTTP + MQTT)
 export { ServerApi, ServerLogic, GitTool, SERVER_CMD_TOPIC, clientResTopic } from './server/api';
 export type {
+  ServerLogicOptions,
+  SecretsProvider,
+  DispatchContext,
   MqttBus,
   ServerCommand,
   ServerResponse,
@@ -76,7 +93,41 @@ export type {
   GitResult,
   GitDiffResult,
   GitCommit,
+  EmailSummary,
+  EmailMessage,
+  EmailAttachmentMeta,
+  EmailSendResult,
+  EmailSendOptions,
+  Mail,
+  ZipResult,
+  ProjectBuildResult,
 } from './server/api';
+
+// projects — arduino / upython / pygame / picosdk (przeniesione z app/mycastle-backend)
+export { ArduinoService, ArduinoWasmBuilder, ArduinoCliLocal, ArduinoCliDocker, ArduinoProject } from './projects/arduino/index';
+export type {
+  WasmBuildResult,
+  ArduinoServiceConfig,
+  ArduinoCli,
+  BoardInfo,
+  CompileOptions,
+  CompileResult,
+  PortInfo,
+  UploadOptions,
+  UploadResult,
+} from './projects/arduino/index';
+export type { MinisConfig } from './projects/arduino/ArduinoCli';
+export { MicroPythonService, MicroPythonCliLocal, MicroPythonProject } from './projects/upython/index';
+export type {
+  MicroPythonServiceConfig,
+  MicroPythonCli,
+  DeployOptions,
+  DeployResult,
+} from './projects/upython/index';
+export { PygameService } from './projects/pygame/index';
+export type { PygameBuildResult, PygameServiceConfig } from './projects/pygame/index';
+export { PicoSdkService } from './projects/picosdk/index';
+export type { PicoSdkServiceConfig, PicoSdkBuildResult } from './projects/picosdk/index';
 
 // interfaces
 export type {

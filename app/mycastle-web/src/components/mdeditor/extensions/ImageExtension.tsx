@@ -338,6 +338,11 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
     );
   }
 
+  // SVG-y często mają tylko `viewBox` bez width/height — w <img> renderują się
+  // wtedy malutko (domyślne 300×150) i wyglądają jak „nieosadzone". Wykryj SVG,
+  // by dać mu sensowną domyślną szerokość, gdy autor nie podał własnej.
+  const isSvg = /\.svg(?:[?#].*)?$/i.test(node.attrs.src || '');
+
   // Build image style
   const imageStyle: React.CSSProperties = {
     display: 'block',
@@ -347,8 +352,9 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
     transition: 'opacity 0.2s ease',
   };
 
-  // If wrapper has explicit width, image should fill it
-  if (node.attrs.width) {
+  // If wrapper has explicit width, image should fill it. SVG bez wymiarów też
+  // powinien wypełnić dostępny obszar (inaczej zapadłby się do ~300 px).
+  if (node.attrs.width || isSvg) {
     imageStyle.width = '100%';
   }
 
@@ -387,10 +393,17 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
     nodeWrapperStyle.clear = 'both';
     nodeWrapperStyle.marginLeft = 'auto';
     nodeWrapperStyle.marginRight = 'auto';
-    // Without explicit width, use max-content to shrink to image size
+    // Without explicit width, use max-content to shrink to image size.
+    // SVG (wektor) — daj ograniczoną szerokość zamiast max-content, żeby
+    // dimensionless SVG nie zapadł się do ~300 px; upscaling SVG jest ostry.
     if (!node.attrs.width) {
-      nodeWrapperStyle.width = 'max-content';
-      nodeWrapperStyle.maxWidth = '100%';
+      if (isSvg) {
+        nodeWrapperStyle.width = '100%';
+        nodeWrapperStyle.maxWidth = 520;
+      } else {
+        nodeWrapperStyle.width = 'max-content';
+        nodeWrapperStyle.maxWidth = '100%';
+      }
     }
   }
 

@@ -63,6 +63,18 @@ import { VFS_TOOLS, executeVfsTool } from './auraVfsTools';
 import { codeFromXml, readVfsFile, runVfsJsonQuery, setGlobalFunctionNames, extractGlobalFunctionNames, ComponentHost } from '../../../modules/voiceactions';
 import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig, ShowComponentConfig } from '../../../modules/voiceactions';
 import { useMqtt } from '../../../modules/mqttclient/MqttContext';
+import { useFilesystem } from '@mhersztowski/web-client';
+import { useAuth } from '../../../modules/auth/AuthContext';
+import { variantLogicMode } from '@mhersztowski/core';
+// Logika konwersacji (Konwersacja / VFS / Sieć / Komponenty / Funkcje globalne)
+// — jedno źródło dla bloczków i dla skryptów automatyzacji.
+import { Aura, aura, type AuraHost } from '../../../../../../packages/core/browser/aura/aura';
+import { prepareAutomateScript } from '../../../modules/voiceactions/auraScriptRuntime';
+import { createAutomateApi, createDisplay, type AutomateApi } from '../../../../../../packages/core/browser/api/api';
+import { readAuraScript } from '../../../modules/voiceactions/auraScriptStore';
+import { buildRuntimeCode } from '../../../components/mdeditor/extensions/automateScriptCore';
+import { AutomateSystemApi } from '../../../modules/automate/engine/AutomateSystemApi';
+import { AutomateSandbox } from '../../../modules/automate/engine/AutomateSandbox';
 
 // ---- Stan asystenta ----
 type AuraState = 'idle' | 'listening' | 'processing_stt' | 'thinking' | 'speaking';
@@ -156,6 +168,11 @@ const IotAuraPage: React.FC = () => {
   const navigate = useNavigate();
   const { aiService, speechService, voiceActionService, wakeWordService } = App.instance;
   const { isConnected } = useMqtt();
+  // Skrypty akcji dostają to samo `api`, co blok ```automate``` w notatkach.
+  const { dataSource } = useFilesystem();
+  const { token } = useAuth();
+  const automateApiRef = useRef<AutomateSystemApi | null>(null);
+  const automateVarsRef = useRef<Record<string, unknown>>({});
 
   // Konwersacja
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -253,10 +270,7 @@ const IotAuraPage: React.FC = () => {
   const wakeModeRef = useRef(false);
   const startWakeWordRef = useRef<() => boolean>(() => false);
   const resumeListeningRef = useRef<() => void>(() => {});
-  // Runtime agenta AI (bloki AgentNewChat / AgentSendPrompt / Odpowiedź agenta AI)
-  const agentChatsRef = useRef<Record<string, { role: 'user' | 'assistant'; content: string }[]>>({});
-  const currentAgentChatRef = useRef<string>('default');
-  const agentResponseRef = useRef<string>('');
+  // Konteksty agenta AI trzyma teraz klasa Aura (browser/aura/aura.ts).
   const aiModelIdRef = useRef<string>('claude-haiku-4-5');
 
   // Synchronizacja refów
@@ -666,159 +680,140 @@ const IotAuraPage: React.FC = () => {
       const variant =
         variantsRef.current.find(v => v.voiceActionId === action.id && v.language === action.language) ||
         variantsRef.current.find(v => v.voiceActionId === action.id);
-      if (!variant || !variant.blocklyXml.trim()) {
+      const usesScript = !!variant && variantLogicMode(variant) === 'automate';
+      if (!variant || (!usesScript && !variant.blocklyXml.trim())) {
         appendAssistant(`(Akcja „${action.name}" nie ma jeszcze logiki — dodaj bloczki w Edytorze Konwersacji.)`);
         return;
       }
       const globalCode = codeFromXml(globalXmlRef.current);
-      const code = codeFromXml(variant.blocklyXml);
-      const fullCode = `${globalCode}\n${code}`;
+      // Wariant „skrypt" trzyma logikę w pliku drive/automate/aura/*.md — ten sam
+      // format co blok ```automate``` w notatkach, więc kod bierzemy przez
+      // buildRuntimeCode (skleja ręczny kod z tym wygenerowanym w Blockly).
+      let code: string;
+      if (variantLogicMode(variant) === 'automate') {
+        if (!variant.scriptPath || !userName) {
+          appendAssistant(`(Akcja „${action.name}" nie ma przypisanego pliku skryptu.)`);
+          return;
+        }
+        const file = await readAuraScript(userName, variant.scriptPath);
+        code = buildRuntimeCode(file?.code ?? '');
+        if (!code.trim()) {
+          appendAssistant(`(Skrypt akcji „${action.name}" jest pusty — uzupełnij go w Edytorze Konwersacji.)`);
+          return;
+        }
+      } else {
+        code = codeFromXml(variant.blocklyXml);
+      }
+      // Import modułu Aury jest w skrypcie tylko po to, żeby czytało się jak
+      // moduł — sam symbol wstrzykujemy do zasięgu, więc instrukcję usuwamy.
+      const fullCode = prepareAutomateScript(`${globalCode}\n${code}`).code;
       console.debug('[Aura] uruchamiam akcję:', action.name, '\nkod:\n', fullCode);
-      const handlers: Array<() => Promise<void>> = [];
-      const globals: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
-      const aura = {
-        _globals: globals,
-        callGlobal: async (name: unknown, ...args: unknown[]): Promise<unknown> => {
-          const fn = globals[String(name)];
-          if (typeof fn === 'function') return await fn(...args);
-          console.warn('[Aura] brak funkcji globalnej:', name);
-          return undefined;
-        },
-        onActivator: (_phrase: string, fn: () => Promise<void>) => { handlers.push(fn); },
-        say: async (text: unknown) => {
-          const t = String(text ?? '');
-          appendAssistant(t);
-          if (t.trim()) { enqueueTts(t); await ttsChainRef.current; }
-        },
-        ask: async (text: unknown): Promise<string> => {
-          const t = String(text ?? '');
-          appendAssistant(t);
-          if (t.trim()) { enqueueTts(t); await ttsChainRef.current; }
-          const answer = await captureOneUtterance();
-          if (answer) { appendUser(answer); lastUtteranceRef.current = answer; }
-          return answer;
-        },
-        lastUtterance: () => lastUtteranceRef.current,
-        utteranceContains: (t: unknown) => lastUtteranceRef.current.toLowerCase().includes(String(t ?? '').toLowerCase()),
-        callAction: async (id: unknown) => {
-          const key = String(id);
-          const target = actionsRef.current.find(a => a.id === key || a.name === key || a.tag === key);
-          if (target) await runVoiceActionRef.current(target, lastUtteranceRef.current);
-        },
-        wait: (s: unknown) => new Promise<void>(r => setTimeout(r, (Number(s) || 0) * 1000)),
-        // Zakończ konwersację — pokaż tekst na stronie (bez odczytu głosem)
-        endConversation: (msg: unknown) => {
-          const t = String(msg ?? '').trim();
-          if (t) appendAssistant(t);
-        },
-        // Wyświetl komponent (wbudowany lub z Programming/Components) w czacie — inline lub popup
-        showComponent: async (cfgStr: unknown) => {
-          let cfg: ShowComponentConfig | null = null;
-          try { cfg = JSON.parse(String(cfgStr ?? 'null')); } catch { cfg = null; }
-          if (!cfg || !cfg.id) return;
+      // Logika Aury żyje w packages/core/browser/aura/aura.ts — tu dostarczamy
+      // tylko prymitywy interfejsu (czat, TTS, mikrofon, model AI, VFS).
+      const host: AuraHost = {
+        appendAssistant,
+        appendUser,
+        speak: async (text) => { enqueueTts(text); await ttsChainRef.current; },
+        capture: (timeoutSec) => captureOneUtterance(timeoutSec),
+        setThinking: () => setState('thinking'),
+        showComponent: (cfg) => {
           setMessages(prev => [...prev, {
             id: `${Date.now()}-c-${Math.random().toString(36).slice(2, 5)}`,
-            role: 'assistant', content: '', timestamp: Date.now(), component: cfg!,
+            role: 'assistant', content: '', timestamp: Date.now(),
+            component: cfg as unknown as ShowComponentConfig,
           }]);
         },
-        // Nasłuchuj z limitem czasu — zwraca rozpoznany tekst
-        listen: async (timeout: unknown): Promise<string> => {
-          const secs = Number(timeout) || 0;
-          appendAssistant(`🎧 Słucham${secs ? ` (do ${secs}s)` : ''}... powiedz lub wpisz odpowiedź.`);
-          const t = await captureOneUtterance(secs);
-          if (t) { appendUser(t); lastUtteranceRef.current = t; }
-          else appendAssistant('(nie usłyszałem odpowiedzi)');
-          return t;
+        runAction: async (key, utterance) => {
+          const target = actionsRef.current.find(a => a.id === key || a.name === key || a.tag === key);
+          if (target) await runVoiceActionRef.current(target, utterance);
         },
-        // Nowy kontekst rozmowy z agentem AI
-        agentNewChat: async (id: unknown) => {
-          const key = String(id ?? '') || 'default';
-          agentChatsRef.current[key] = [];
-          currentAgentChatRef.current = key;
-        },
-        // Wyślij prompt do agenta AI (z pamięcią kontekstu), zapisz odpowiedź
-        agentSendPrompt: async (prompt: unknown) => {
-          const p = String(prompt ?? '');
-          const key = currentAgentChatRef.current;
-          const hist = agentChatsRef.current[key] || (agentChatsRef.current[key] = []);
-          hist.push({ role: 'user', content: p });
+        askAi: async (messages) => {
           const model = ALL_AI_MODELS.find(m => m.id === aiModelIdRef.current) || CLAUDE_MODELS[0];
-          setState('thinking');
-          const content = await streamAiResponse({
+          return await streamAiResponse({
             provider: model.provider,
             model: model.id,
-            messages: [{ role: 'system', content: DEFAULT_SYSTEM_PROMPT }, ...hist],
+            messages: [{ role: 'system', content: DEFAULT_SYSTEM_PROMPT }, ...messages],
           });
-          hist.push({ role: 'assistant', content });
-          agentResponseRef.current = content;
         },
-        // Ostatnia odpowiedź agenta AI (zmienna „Odpowiedź agenta AI")
-        agentResponse: () => agentResponseRef.current,
-        // Wygoogluj — zwraca listę adresów URL wyników (Google Custom Search API)
-        googleSearch: async (query: unknown): Promise<string[]> => {
-          const q = String(query ?? '').trim();
-          if (!q) return [];
-          const apiKey = googleSearchRef.current.serperKey;
-          dbgRef.current(`googleSearch: q="${q}" serperKey=${apiKey ? 'jest' : 'BRAK'}`);
-          if (!apiKey) {
-            appendAssistant('⚠️ Wygoogluj: wpisz klucz Serper.dev API w Edytorze Konwersacji (sekcja „Wygoogluj (Serper.dev)").');
-            return [];
-          }
-          try {
-            // przez backendowy proxy (Serper nie pozwala na wywołania z przeglądarki — CORS)
-            const res = await fetch('/api/search/web', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: q, apiKey, count: 10 }),
-            });
-            if (!res.ok) {
-              const body = await res.text();
-              dbgRef.current(`googleSearch: HTTP ${res.status} — ${body.slice(0, 200)}`);
-              if (res.status === 404) {
-                appendAssistant('⚠️ Wygoogluj: backend nie zna trasy /api/search/web (404) — zrestartuj backend (pnpm dev:backend).');
-              } else if (res.status === 401 || res.status === 403) {
-                appendAssistant(`⚠️ Wygoogluj: błędny/nieaktywny klucz Serper.dev (HTTP ${res.status}).`);
-              } else {
-                appendAssistant(`⚠️ Wygoogluj: błąd wyszukiwania (HTTP ${res.status}).`);
-              }
-              return [];
-            }
-            const data = await res.json();
-            const urls = ((data.urls || []) as string[]).filter(Boolean);
-            dbgRef.current(`googleSearch: OK, ${urls.length} wyników`);
-            if (urls.length === 0) appendAssistant('ℹ️ Wygoogluj: 0 wyników dla tego zapytania.');
-            return urls;
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            dbgRef.current(`googleSearch: wyjątek — ${msg}`);
-            appendAssistant(`⚠️ Wygoogluj: błąd połączenia (${msg}).`);
-            return [];
-          }
-        },
-        // VFS: wczytaj plik (treść tekstowa)
-        vfsReadFile: async (path: unknown) => await readVfsFile(String(path ?? '')),
-        // VFS: wczytaj JSON z okrojeniem ścieżki i filtrami (cfg może być stringiem JSON)
-        vfsReadJson: async (cfg: unknown) => {
-          let parsed: VfsJsonQueryConfig;
-          try { parsed = (typeof cfg === 'string' ? JSON.parse(cfg || '{}') : cfg) as VfsJsonQueryConfig; }
-          catch { return null; }
-          if (!parsed || !parsed.path) return null;
-          return await runVfsJsonQuery(parsed);
-        },
+        readVfsFile: (path) => readVfsFile(path),
+        queryVfsJson: (query) => runVfsJsonQuery(query as unknown as VfsJsonQueryConfig),
+        getLastUtterance: () => lastUtteranceRef.current,
+        setLastUtterance: (text) => { lastUtteranceRef.current = text; },
+        getSerperKey: () => googleSearchRef.current.serperKey ?? '',
+        debug: (message) => dbgRef.current(message),
       };
+      Aura.setHost(host);
+      Aura.beginRun();
+
       setState('thinking');
       try {
-        const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as new (arg: string, body: string) => (aura: unknown) => Promise<void>;
-        const fn = new AsyncFunction('aura', fullCode);
-        await fn(aura);
-        for (const h of handlers) { await h(); }
+        if (usesScript) {
+          // Skrypt idzie przez ten sam sandbox co blok w notatce, więc ma `api`
+          // i `display`; `aura` dokładamy przez hostScope jako lokalny const.
+          if (!automateApiRef.current) {
+            automateApiRef.current = new AutomateSystemApi(
+              dataSource,
+              automateVarsRef.current,
+              () => undefined,
+              () => userName ?? null,
+              () => token ?? null,
+            );
+          }
+          // Granica środowiska: rozmowa nie ma dokumentu markdown, więc to, czego
+          // brakuje (np. api.doc), melduje brak zamiast wywracać skrypt.
+          const scriptApi = createAutomateApi(
+            automateApiRef.current as unknown as Partial<AutomateApi>,
+            {
+              unavailableReason: 'skrypt uruchomiony w rozmowie z Aurą',
+              onUnavailable: (message) => appendAssistant(`⚠️ ${message}`),
+            },
+          );
+          // display.* nie ma tu panelu wyjścia — pozycje lądują w czacie.
+          const display = createDisplay({
+            push: (item) => {
+              switch (item.type) {
+                case 'json':
+                case 'table':
+                  appendAssistant(JSON.stringify(item.data, null, 2));
+                  break;
+                case 'list':
+                  appendAssistant(Array.isArray(item.data)
+                    ? item.data.map(i => `• ${String(i)}`).join('\n')
+                    : String(item.data ?? ''));
+                  break;
+                case 'dom':
+                  appendAssistant('(display.dom nie jest dostępny w rozmowie z Aurą)');
+                  break;
+                default:
+                  appendAssistant(String(item.data ?? ''));
+              }
+            },
+          });
+          await AutomateSandbox.execute(
+            fullCode,
+            scriptApi as unknown as AutomateSystemApi,
+            {},
+            automateVarsRef.current,
+            undefined,
+            { Aura, aura, api: scriptApi, display },
+          );
+        } else {
+          const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as new (
+            ...args: string[]
+          ) => (auraAlias: unknown, auraClass: unknown) => Promise<void>;
+          const fn = new AsyncFunction('aura', 'Aura', fullCode);
+          await fn(aura, Aura);
+        }
+        for (const handler of Aura.pendingHandlers()) { await handler(); }
       } catch (err) {
         console.warn('[Aura] Błąd wykonania konwersacji:', err);
+        appendAssistant(`(Błąd skryptu: ${err instanceof Error ? err.message : String(err)})`);
       }
     } finally {
       actionDepthRef.current--;
     }
-  }, [captureOneUtterance, appendAssistant, appendUser, enqueueTts, streamAiResponse]);
+  }, [captureOneUtterance, appendAssistant, appendUser, enqueueTts, streamAiResponse,
+      userName, dataSource, token]);
   useEffect(() => { runVoiceActionRef.current = runVoiceAction; }, [runVoiceAction]);
 
   // ---- Przetwarzanie wypowiedzi: najpierw akcje głosowe, potem model AI ----

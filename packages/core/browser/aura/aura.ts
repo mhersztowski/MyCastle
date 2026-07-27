@@ -1,0 +1,376 @@
+/**
+ * browser/aura/aura.ts — logika asystenta Aura dla obu ścieżek edytora
+ * konwersacji: bloczków i skryptów automatyzacji.
+ *
+ * Wszystko, co bloczki oferują w kategoriach „Konwersacja", „VFS / Pliki",
+ * „Sieć / Google", „Komponenty" i „Funkcje globalne", jest tu statyczną metodą
+ * async klasy `Aura`. Generator Blockly emituje wywołania `Aura.*`, a skrypt
+ * użytkownika importuje tę samą klasę:
+ *
+ *   import { Aura } from 'mycastle/packages/core/browser/aura/aura';
+ *   await Aura.say('Cześć');
+ *   const imie = await Aura.ask('Jak masz na imię?');
+ *
+ * Klasa nie zna Reacta ani DOM-u. Prymitywy zależne od interfejsu (dopisanie
+ * wiadomości do czatu, TTS, mikrofon, model AI, VFS) dostarcza host przez
+ * `Aura.setHost(...)` — strona Aury robi to przed uruchomieniem logiki.
+ * Dzięki temu ta sama logika jest testowalna bez przeglądarki.
+ */
+
+// ── Typy pomocnicze ──────────────────────────────────────────────────────────
+
+/** Konfiguracja komponentu pokazywanego w czacie (`showComponent`). */
+export interface AuraComponentConfig {
+  id: string;
+  [key: string]: unknown;
+}
+
+/** Zapytanie o JSON z VFS — ścieżka + opcjonalne okrojenie i filtry. */
+export interface AuraJsonQuery {
+  path: string;
+  [key: string]: unknown;
+}
+
+export interface AuraChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * Prymitywy dostarczane przez stronę Aury. Wszystkie są „głupie" — logika
+ * (kolejność kroków, obsługa błędów, kontekst rozmowy) siedzi w klasie.
+ */
+export interface AuraHost {
+  /** Dopisuje wypowiedź asystenta do czatu. */
+  appendAssistant(text: string): void;
+  /** Dopisuje wypowiedź użytkownika do czatu. */
+  appendUser(text: string): void;
+  /** Wypowiada tekst i czeka, aż skończy mówić. */
+  speak(text: string): Promise<void>;
+  /** Czeka na jedną wypowiedź użytkownika (głos albo tekst). 0 = bez limitu. */
+  capture(timeoutSec?: number): Promise<string>;
+  /** Sygnalizuje, że trwa praca (kręciołek „myślę"). */
+  setThinking(): void;
+  /** Wstawia komponent do czatu. */
+  showComponent(config: AuraComponentConfig): void;
+  /** Uruchamia inną akcję głosową (po id, nazwie albo tagu). */
+  runAction(idOrNameOrTag: string, utterance: string): Promise<void>;
+  /** Wysyła rozmowę do modelu AI i zwraca odpowiedź. */
+  askAi(messages: AuraChatMessage[]): Promise<string>;
+  /** Czyta plik z VFS jako tekst. */
+  readVfsFile(path: string): Promise<string>;
+  /** Wykonuje zapytanie o JSON z VFS (ścieżka + filtry). */
+  queryVfsJson(query: AuraJsonQuery): Promise<unknown>;
+  /** Ostatnia wypowiedź użytkownika. */
+  getLastUtterance(): string;
+  /** Zapisuje ostatnią wypowiedź (po `ask`/`listen`). */
+  setLastUtterance(text: string): void;
+  /** Klucz Serper.dev z konfiguracji konwersacji ('' = brak). */
+  getSerperKey(): string;
+  /** Log diagnostyczny widoczny w panelu debug. */
+  debug(message: string): void;
+}
+
+type GlobalFn = (...args: unknown[]) => Promise<unknown> | unknown;
+
+const asText = (v: unknown): string => String(v ?? '');
+
+/** Host-zaślepka — logika działa (nic nie wybucha), ale nic nie widać. */
+const NOOP_HOST: AuraHost = {
+  appendAssistant: () => {},
+  appendUser: () => {},
+  speak: async () => {},
+  capture: async () => '',
+  setThinking: () => {},
+  showComponent: () => {},
+  runAction: async () => {},
+  askAi: async () => '',
+  readVfsFile: async () => '',
+  queryVfsJson: async () => null,
+  getLastUtterance: () => '',
+  setLastUtterance: () => {},
+  getSerperKey: () => '',
+  debug: () => {},
+};
+
+// ── Klasa ────────────────────────────────────────────────────────────────────
+
+export class Aura {
+  private static host: AuraHost = NOOP_HOST;
+
+  /** Handlery zarejestrowane przez `onActivator` — host odpala je po kodzie. */
+  private static handlers: Array<() => Promise<void>> = [];
+  /** Funkcje globalne z kategorii „Definicje globalne". */
+  private static globals: Record<string, GlobalFn> = {};
+  /** Konteksty rozmów z agentem AI (per identyfikator czatu). */
+  private static agentChats: Record<string, AuraChatMessage[]> = {};
+  private static currentAgentChat = 'default';
+  private static agentResponseText = '';
+
+  // ── Cykl życia ─────────────────────────────────────────────────────────────
+
+  /** Podpina prymitywy interfejsu. Wołane przez stronę Aury przed logiką. */
+  static setHost(host: AuraHost): void {
+    Aura.host = host;
+  }
+
+  /**
+   * Czyści stan jednego przebiegu (handlery aktywatorów i funkcje globalne).
+   * Konteksty agenta AI zostają — rozmowa ma przeżyć pojedynczą akcję.
+   */
+  static beginRun(): void {
+    Aura.handlers = [];
+    Aura.globals = {};
+  }
+
+  /** Handlery zebrane przez `onActivator` w bieżącym przebiegu. */
+  static pendingHandlers(): Array<() => Promise<void>> {
+    return Aura.handlers;
+  }
+
+  /** Pełny reset — używany w testach. */
+  static reset(): void {
+    Aura.host = NOOP_HOST;
+    Aura.handlers = [];
+    Aura.globals = {};
+    Aura.agentChats = {};
+    Aura.currentAgentChat = 'default';
+    Aura.agentResponseText = '';
+  }
+
+  // ── Konwersacja ────────────────────────────────────────────────────────────
+
+  /** Rejestruje blok wykonywany po dopasowaniu frazy aktywującej. */
+  static async onActivator(_phrase: unknown, fn: () => Promise<void>): Promise<void> {
+    if (typeof fn === 'function') Aura.handlers.push(fn);
+  }
+
+  /** Wypowiada tekst i czeka, aż zostanie odczytany do końca. */
+  static async say(text: unknown): Promise<void> {
+    const t = asText(text);
+    Aura.host.appendAssistant(t);
+    if (t.trim()) await Aura.host.speak(t);
+  }
+
+  /** Pyta i czeka na odpowiedź; zwraca rozpoznany tekst (pusty, gdy brak). */
+  static async ask(text: unknown): Promise<string> {
+    const t = asText(text);
+    Aura.host.appendAssistant(t);
+    if (t.trim()) await Aura.host.speak(t);
+    const answer = await Aura.host.capture();
+    if (answer) {
+      Aura.host.appendUser(answer);
+      Aura.host.setLastUtterance(answer);
+    }
+    return answer;
+  }
+
+  /** Nasłuchuje z opcjonalnym limitem sekund; 0 = bez limitu. */
+  static async listen(timeout: unknown): Promise<string> {
+    const secs = Number(timeout) || 0;
+    Aura.host.appendAssistant(`🎧 Słucham${secs ? ` (do ${secs}s)` : ''}... powiedz lub wpisz odpowiedź.`);
+    const heard = await Aura.host.capture(secs);
+    if (heard) {
+      Aura.host.appendUser(heard);
+      Aura.host.setLastUtterance(heard);
+    } else {
+      Aura.host.appendAssistant('(nie usłyszałem odpowiedzi)');
+    }
+    return heard;
+  }
+
+  /** Ostatnia wypowiedź użytkownika. */
+  static async lastUtterance(): Promise<string> {
+    return Aura.host.getLastUtterance();
+  }
+
+  /** Czy ostatnia wypowiedź zawiera podany fragment (bez względu na wielkość liter). */
+  static async utteranceContains(fragment: unknown): Promise<boolean> {
+    return Aura.host.getLastUtterance().toLowerCase().includes(asText(fragment).toLowerCase());
+  }
+
+  /** Uruchamia inną akcję głosową (id, nazwa albo tag). */
+  static async callAction(idOrNameOrTag: unknown): Promise<void> {
+    const key = asText(idOrNameOrTag);
+    if (!key) return;
+    await Aura.host.runAction(key, Aura.host.getLastUtterance());
+  }
+
+  /** Pauza w sekundach. */
+  static async wait(seconds: unknown): Promise<void> {
+    const ms = (Number(seconds) || 0) * 1000;
+    if (ms <= 0) return;
+    await new Promise<void>(resolve => setTimeout(resolve, ms));
+  }
+
+  /** Kończy konwersację komunikatem na ekranie (bez odczytu głosem). */
+  static async endConversation(message: unknown): Promise<void> {
+    const t = asText(message).trim();
+    if (t) Aura.host.appendAssistant(t);
+  }
+
+  // ── Komponenty ─────────────────────────────────────────────────────────────
+
+  /**
+   * Wstawia komponent (wbudowany albo z Programming → Components) do czatu.
+   * Bloczek przekazuje konfigurację jako JSON-string, skrypt może podać obiekt.
+   */
+  static async showComponent(config: unknown): Promise<void> {
+    let parsed: AuraComponentConfig | null = null;
+    if (config && typeof config === 'object') {
+      parsed = config as AuraComponentConfig;
+    } else {
+      try { parsed = JSON.parse(asText(config) || 'null') as AuraComponentConfig | null; }
+      catch { parsed = null; }
+    }
+    if (!parsed || !parsed.id) return;
+    Aura.host.showComponent(parsed);
+  }
+
+  // ── Agent AI ───────────────────────────────────────────────────────────────
+
+  /** Zaczyna nowy kontekst rozmowy z agentem (albo czyści istniejący). */
+  static async agentNewChat(id: unknown): Promise<void> {
+    const key = asText(id) || 'default';
+    Aura.agentChats[key] = [];
+    Aura.currentAgentChat = key;
+  }
+
+  /** Wysyła prompt do agenta w bieżącym kontekście i zapamiętuje odpowiedź. */
+  static async agentSendPrompt(prompt: unknown): Promise<string> {
+    const text = asText(prompt);
+    const key = Aura.currentAgentChat;
+    const history = Aura.agentChats[key] ?? (Aura.agentChats[key] = []);
+    history.push({ role: 'user', content: text });
+    Aura.host.setThinking();
+    const answer = await Aura.host.askAi(history);
+    history.push({ role: 'assistant', content: answer });
+    Aura.agentResponseText = answer;
+    return answer;
+  }
+
+  /** Ostatnia odpowiedź agenta AI. */
+  static async agentResponse(): Promise<string> {
+    return Aura.agentResponseText;
+  }
+
+  // ── Sieć ───────────────────────────────────────────────────────────────────
+
+  /**
+   * Wyszukiwanie w Google przez Serper.dev. Zwraca listę adresów URL; przy
+   * braku klucza albo błędzie mówi o tym w czacie i zwraca pustą listę —
+   * skrypt nie musi opakowywać wywołania w try/catch.
+   */
+  static async googleSearch(query: unknown): Promise<string[]> {
+    const q = asText(query).trim();
+    if (!q) return [];
+    const apiKey = Aura.host.getSerperKey();
+    Aura.host.debug(`googleSearch: q="${q}" serperKey=${apiKey ? 'jest' : 'BRAK'}`);
+    if (!apiKey) {
+      Aura.host.appendAssistant('⚠️ Wygoogluj: wpisz klucz Serper.dev API w Edytorze Konwersacji (sekcja „Wygoogluj (Serper.dev)").');
+      return [];
+    }
+    try {
+      // Przez proxy backendu — Serper nie pozwala wołać się z przeglądarki (CORS).
+      const res = await fetch('/api/search/web', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, apiKey, count: 10 }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        Aura.host.debug(`googleSearch: HTTP ${res.status} — ${body.slice(0, 200)}`);
+        if (res.status === 404) {
+          Aura.host.appendAssistant('⚠️ Wygoogluj: backend nie zna trasy /api/search/web (404) — zrestartuj backend (pnpm dev:backend).');
+        } else if (res.status === 401 || res.status === 403) {
+          Aura.host.appendAssistant(`⚠️ Wygoogluj: błędny/nieaktywny klucz Serper.dev (HTTP ${res.status}).`);
+        } else {
+          Aura.host.appendAssistant(`⚠️ Wygoogluj: błąd wyszukiwania (HTTP ${res.status}).`);
+        }
+        return [];
+      }
+      const data = await res.json() as { urls?: unknown };
+      const urls = (Array.isArray(data.urls) ? data.urls : []).map(asText).filter(Boolean);
+      Aura.host.debug(`googleSearch: OK, ${urls.length} wyników`);
+      if (urls.length === 0) Aura.host.appendAssistant('ℹ️ Wygoogluj: 0 wyników dla tego zapytania.');
+      return urls;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Aura.host.debug(`googleSearch: wyjątek — ${msg}`);
+      Aura.host.appendAssistant(`⚠️ Wygoogluj: błąd połączenia (${msg}).`);
+      return [];
+    }
+  }
+
+  // ── VFS / Pliki ────────────────────────────────────────────────────────────
+
+  /** Czyta plik z VFS jako tekst. */
+  static async vfsReadFile(path: unknown): Promise<string> {
+    const p = asText(path);
+    if (!p) return '';
+    return Aura.host.readVfsFile(p);
+  }
+
+  /**
+   * Czyta JSON z VFS z opcjonalnym okrojeniem ścieżki i filtrami. Bloczek
+   * przekazuje konfigurację jako JSON-string, skrypt może podać obiekt.
+   */
+  static async vfsReadJson(config: unknown): Promise<unknown> {
+    let query: AuraJsonQuery | null = null;
+    if (config && typeof config === 'object') {
+      query = config as AuraJsonQuery;
+    } else {
+      try { query = JSON.parse(asText(config) || '{}') as AuraJsonQuery; }
+      catch { query = null; }
+    }
+    if (!query || !query.path) return null;
+    return Aura.host.queryVfsJson(query);
+  }
+
+  // ── Funkcje globalne ───────────────────────────────────────────────────────
+
+  /** Rejestruje funkcję globalną (kategoria „Definicje globalne"). */
+  static async registerGlobal(name: unknown, fn: GlobalFn): Promise<void> {
+    const key = asText(name);
+    if (key && typeof fn === 'function') Aura.globals[key] = fn;
+  }
+
+  /** Woła funkcję globalną; brak funkcji nie przerywa skryptu. */
+  static async callGlobal(name: unknown, ...args: unknown[]): Promise<unknown> {
+    const key = asText(name);
+    const fn = Aura.globals[key];
+    if (typeof fn !== 'function') {
+      Aura.host.debug(`callGlobal: brak funkcji globalnej „${key}"`);
+      return undefined;
+    }
+    return await fn(...args);
+  }
+}
+
+/**
+ * Obiekt zgodny ze starym API skryptów (`aura.say(...)`). Nowy kod powinien
+ * używać `Aura.*` — ten alias istnieje, żeby skrypty napisane wcześniej
+ * działały bez przepisywania.
+ */
+export const aura = {
+  onActivator: (phrase: unknown, fn: () => Promise<void>) => Aura.onActivator(phrase, fn),
+  say: (text: unknown) => Aura.say(text),
+  ask: (text: unknown) => Aura.ask(text),
+  listen: (timeout: unknown) => Aura.listen(timeout),
+  lastUtterance: () => Aura.lastUtterance(),
+  utteranceContains: (fragment: unknown) => Aura.utteranceContains(fragment),
+  callAction: (id: unknown) => Aura.callAction(id),
+  wait: (seconds: unknown) => Aura.wait(seconds),
+  endConversation: (message: unknown) => Aura.endConversation(message),
+  showComponent: (config: unknown) => Aura.showComponent(config),
+  agentNewChat: (id: unknown) => Aura.agentNewChat(id),
+  agentSendPrompt: (prompt: unknown) => Aura.agentSendPrompt(prompt),
+  agentResponse: () => Aura.agentResponse(),
+  googleSearch: (query: unknown) => Aura.googleSearch(query),
+  vfsReadFile: (path: unknown) => Aura.vfsReadFile(path),
+  vfsReadJson: (config: unknown) => Aura.vfsReadJson(config),
+  callGlobal: (name: unknown, ...args: unknown[]) => Aura.callGlobal(name, ...args),
+  registerGlobal: (name: unknown, fn: GlobalFn) => Aura.registerGlobal(name, fn),
+};
+
+export default Aura;

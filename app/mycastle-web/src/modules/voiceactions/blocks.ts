@@ -344,93 +344,93 @@ export function registerAuraGenerators(): void {
   g.forBlock['aura_on_activator'] = function (block) {
     const phrase = block.getFieldValue('PHRASE') || '';
     const body = g.statementToCode(block, 'DO');
-    return `aura.onActivator(${JSON.stringify(phrase)}, async () => {\n${body}});\n`;
+    return `await Aura.onActivator(${JSON.stringify(phrase)}, async () => {\n${body}});\n`;
   };
 
   g.forBlock['aura_say'] = function (block) {
     const text = g.valueToCode(block, 'TEXT', Order.NONE) || "''";
-    return `await aura.say(${text});\n`;
+    return `await Aura.say(${text});\n`;
   };
 
   g.forBlock['aura_say_var'] = function (block) {
     const varName = g.getVariableName(block.getFieldValue('VAR'));
-    return `await aura.say(${varName});\n`;
+    return `await Aura.say(${varName});\n`;
   };
 
   g.forBlock['aura_ask'] = function (block) {
     const text = g.valueToCode(block, 'TEXT', Order.NONE) || "''";
     const varName = g.getVariableName(block.getFieldValue('VAR'));
-    return `${varName} = await aura.ask(${text});\n`;
+    return `${varName} = await Aura.ask(${text});\n`;
   };
 
   g.forBlock['aura_last_utterance'] = function () {
-    return ['aura.lastUtterance()', Order.FUNCTION_CALL];
+    return ['await Aura.lastUtterance()', Order.AWAIT];
   };
 
   g.forBlock['aura_utterance_contains'] = function (block) {
     const text = g.valueToCode(block, 'TEXT', Order.NONE) || "''";
-    return [`aura.utteranceContains(${text})`, Order.FUNCTION_CALL];
+    return [`await Aura.utteranceContains(${text})`, Order.AWAIT];
   };
 
   g.forBlock['aura_call_action'] = function (block) {
     const id = block.getFieldValue('ACTION_ID') || '';
-    return `await aura.callAction(${JSON.stringify(id)});\n`;
+    return `await Aura.callAction(${JSON.stringify(id)});\n`;
   };
 
   g.forBlock['aura_wait'] = function (block) {
     const s = block.getFieldValue('SECONDS') || 0;
-    return `await aura.wait(${s});\n`;
+    return `await Aura.wait(${s});\n`;
   };
 
   g.forBlock['aura_stop'] = function (block) {
     const msg = block.getFieldValue('MSG') || '';
-    return `aura.endConversation(${JSON.stringify(msg)});\nreturn;\n`;
+    return `await Aura.endConversation(${JSON.stringify(msg)});\nreturn;\n`;
   };
 
   g.forBlock['aura_listen'] = function (block) {
     const s = block.getFieldValue('SECONDS') || 0;
-    return [`await aura.listen(${s})`, Order.AWAIT];
+    return [`await Aura.listen(${s})`, Order.AWAIT];
   };
 
   g.forBlock['aura_agent_new_chat'] = function (block) {
     const id = block.getFieldValue('ID') || '';
-    return `await aura.agentNewChat(${JSON.stringify(id)});\n`;
+    return `await Aura.agentNewChat(${JSON.stringify(id)});\n`;
   };
 
   g.forBlock['aura_agent_send_prompt'] = function (block) {
     const prompt = g.valueToCode(block, 'PROMPT', Order.NONE) || "''";
-    return `await aura.agentSendPrompt(${prompt});\n`;
+    return `await Aura.agentSendPrompt(${prompt});\n`;
   };
 
   g.forBlock['aura_agent_send_prompt_var'] = function (block) {
     const varName = g.getVariableName(block.getFieldValue('VAR'));
-    return `await aura.agentSendPrompt(${varName});\n`;
+    return `await Aura.agentSendPrompt(${varName});\n`;
   };
 
   g.forBlock['aura_agent_response'] = function () {
-    return ['aura.agentResponse()', Order.FUNCTION_CALL];
+    return ['await Aura.agentResponse()', Order.AWAIT];
   };
 
   g.forBlock['aura_vfs_read_file'] = function (block) {
     const path = block.getFieldValue('PATH') || '';
-    return [`await aura.vfsReadFile(${JSON.stringify(path)})`, Order.AWAIT];
+    return [`await Aura.vfsReadFile(${JSON.stringify(path)})`, Order.AWAIT];
   };
 
   g.forBlock['aura_vfs_read_json'] = function (block) {
     const cfg = block.getFieldValue('QUERY') || '{}';
     // przekaż jako string (bezpieczniej niż wstawianie surowego JSON jako literału)
-    return [`await aura.vfsReadJson(${JSON.stringify(cfg)})`, Order.AWAIT];
+    return [`await Aura.vfsReadJson(${JSON.stringify(cfg)})`, Order.AWAIT];
   };
 
   g.forBlock['aura_google_search'] = function (block) {
     const query = g.valueToCode(block, 'QUERY', Order.NONE) || "''";
-    return [`await aura.googleSearch(${query})`, Order.AWAIT];
+    return [`await Aura.googleSearch(${query})`, Order.AWAIT];
   };
 
   g.forBlock['aura_show_component'] = function (block) {
     const cfg = block.getFieldValue('CONFIG') || '{}';
-    // przekaż jako string (parsowane w runtime aura.showComponent)
-    return `await aura.showComponent(${JSON.stringify(cfg)});\n`;
+    // przekaż jako string (parsowany w Aura.showComponent)
+    return `await Aura.showComponent(${JSON.stringify(cfg)});\n`;
   };
 
   g.forBlock['aura_global_def'] = function (block) {
@@ -438,14 +438,14 @@ export function registerAuraGenerators(): void {
     const params = String(block.getFieldValue('PARAMS') || '').split(',').map((s: string) => s.trim()).filter(Boolean).join(', ');
     const body = g.statementToCode(block, 'DO');
     const ret = g.valueToCode(block, 'RESULT', Order.NONE);
-    return `aura._globals[${JSON.stringify(name)}] = async (${params}) => {\n${body}${ret ? `  return ${ret};\n` : ''}};\n`;
+    return `await Aura.registerGlobal(${JSON.stringify(name)}, async (${params}) => {\n${body}${ret ? `  return ${ret};\n` : ''}});\n`;
   };
 
   g.forBlock['aura_call_global'] = function (block) {
     const name = block.getFieldValue('NAME') || '';
     const args = g.valueToCode(block, 'ARGS', Order.NONE);
     const doAwait = block.getFieldValue('AWAIT') !== 'FALSE';
-    const call = `aura.callGlobal(${JSON.stringify(name)}${args ? `, ...(${args} || [])` : ''})`;
+    const call = `Aura.callGlobal(${JSON.stringify(name)}${args ? `, ...(${args} || [])` : ''})`;
     return `${doAwait ? 'await ' : ''}${call};\n`;
   };
 
@@ -453,7 +453,7 @@ export function registerAuraGenerators(): void {
     const name = block.getFieldValue('NAME') || '';
     const args = g.valueToCode(block, 'ARGS', Order.NONE);
     const doAwait = block.getFieldValue('AWAIT') !== 'FALSE';
-    const call = `aura.callGlobal(${JSON.stringify(name)}${args ? `, ...(${args} || [])` : ''})`;
+    const call = `Aura.callGlobal(${JSON.stringify(name)}${args ? `, ...(${args} || [])` : ''})`;
     return doAwait ? [`await ${call}`, Order.AWAIT] : [call, Order.FUNCTION_CALL];
   };
 }
@@ -558,6 +558,26 @@ export const AURA_TOOLBOX = {
     { kind: 'category', name: 'Funkcje', categorystyle: 'procedure_category', custom: 'PROCEDURE' },
   ],
 };
+
+/**
+ * Kategorie specyficzne dla Aury (bez standardowych: Tekst, Logika, Pętle…),
+ * gotowe do wstrzyknięcia w cudzy toolbox — używa ich Edytor Automate otwierany
+ * z Edytora Konwersacji. Nazwy dostają przedrostek, żeby w palecie było widać,
+ * skąd bloczek pochodzi i czym różni się od zwykłej automatyzacji.
+ *
+ * Wywołanie rejestruje też definicje bloczków i generatory (obie operacje są
+ * idempotentne), więc host nie musi o tym pamiętać.
+ */
+const AURA_OWN_CATEGORIES = ['Konwersacja', 'VFS / Pliki', 'Sieć / Google', 'Komponenty', 'Funkcje globalne'];
+
+export function auraToolboxCategories(prefix = 'Aura'): Blockly.utils.toolbox.ToolboxItemInfo[] {
+  defineAuraConversationBlocks();
+  registerAuraGenerators();
+  registerVfsFields();
+  return (AURA_TOOLBOX.contents as Array<{ kind: string; name?: string }>)
+    .filter(c => c.kind === 'category' && !!c.name && AURA_OWN_CATEGORIES.includes(c.name))
+    .map(c => ({ ...c, name: `${prefix}: ${c.name}` })) as Blockly.utils.toolbox.ToolboxItemInfo[];
+}
 
 /**
  * Toolbox workspace „Global" — definicje funkcji globalnych + wszystkie kategorie

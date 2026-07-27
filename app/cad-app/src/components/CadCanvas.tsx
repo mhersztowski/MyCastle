@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Box } from '@mui/material';
-import type { Entity, Point2D, Project, ProjectData, SnapResult } from '@mhersztowski/core-cad';
+import type { DimensionEntity, Entity, Point2D, Project, ProjectData, SnapResult } from '@mhersztowski/core-cad';
 import type { ViewMode } from '@mhersztowski/core-cad';
 import { CadRenderer } from '../renderer/CadRenderer';
 import { buildEntityObject } from '../renderer/EntityMeshBuilder';
@@ -67,6 +67,8 @@ interface Props {
   onDimensionClick?: (id: string) => void;
   /** Constrainty szkicu — renderowane jako symbole na canvasie przy elementach. */
   constraints?: SketchConstraintLite[];
+  /** Zmiana aktywnego narzędzia (np. prawy klik w trybie rysowania → anuluj i wróć do 'select'). */
+  onToolChange?: (tool: ToolName) => void;
 }
 
 /** Odległość punktu do linii wymiarowej (na offsecie) — do wykrywania kliknięcia wymiaru. */
@@ -120,12 +122,14 @@ const tools: Record<ToolName, Tool> = {
   sphere3d: new Sphere3dTool(),
 };
 
-export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement, theme, subSelect, onSubSelect, subSelectClear, onDimensionClick, constraints }: Props) {
+export function CadCanvas({ project, activeTool, version, viewMode, injectedPoint, injectedAngle, onLastPoint, placementTemplate, onCancelPlacement, theme, subSelect, onSubSelect, subSelectClear, onDimensionClick, constraints, onToolChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CadRenderer | null>(null);
   const prevToolRef = useRef<ToolName>(activeTool);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [cursorActive, setCursorActive] = useState(false); // kursor nad kanwą (do krzyżyka)
+  // Wskaźnik snapu: symbol przy kursorze, gdy stoi dokładnie nad wierzchołkiem / krawędzią / osią.
+  const [snapHint, setSnapHint] = useState<{ kind: 'vertex' | 'edge' | 'axis'; at: Point2D } | null>(null);
   const [previewGeom, setPreviewGeom] = useState<PreviewGeometry | null>(null); // podgląd rysowanego kształtu (kropki wierzchołków)
   const placementDataRef = useRef<PlacementData | null>(null);
 
@@ -148,6 +152,8 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   const clickStartRef = useRef<Point2D | null>(null);
   // Zaznaczanie ramką (box select) w trybie sub-selekcji.
   const boxSelRef = useRef<{ start: Point2D } | null>(null);
+  // Przeciąganie wymiaru średnicy: obrót linii (kąt) + odległość opisu od środka.
+  const dimDragRef = useRef<{ id: string; center: Point2D; r: number; moved: boolean; orig: DimensionEntity } | null>(null);
   const [dimLabels, setDimLabels] = useState<DimensionLabel[]>([]);
   const [penInput, setPenInput] = useState<PenInput | null>(null);
   const [zoomTick, setZoomTick] = useState(0); // bumps on zoom so dimension labels re-project
@@ -383,6 +389,46 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
     setCursorWorld(snap.point);
     setPenInput(pen);
 
+    // Wskaźnik snapu (symbol przy kursorze): w trybie szkicu, przy hoverze (nie podczas
+    // przeciągania). Działa dla wszystkich narzędzi — także podczas rysowania obiektów.
+    if (subSelect && renderer.getViewMode() !== '3d' && !mouseRef.current.isDown) {
+      const hr = canvasRef.current!.getBoundingClientRect();
+      const rawPt = renderer.screenToWorld(e.clientX - hr.left, e.clientY - hr.top);
+      const hth = (renderer.getPixelToWorld?.() ?? 1) * 12;
+      const shit = pickSub(rawPt, project.entityRegistry.getAll(), hth);
+      setSnapHint(shit
+        ? {
+            kind: shit.vertex ? 'vertex' : (shit.ref === '#axisX' || shit.ref === '#axisY') ? 'axis' : 'edge',
+            at: shit.vertex ?? rawPt,
+          }
+        : null);
+    } else {
+      setSnapHint(null);
+    }
+
+    // Przeciąganie wymiaru średnicy: kąt linii = kierunek środek→mysz, labelDist = odległość myszy.
+    if (dimDragRef.current && mouseRef.current.isDown) {
+      const dd = dimDragRef.current;
+      const dr = canvasRef.current!.getBoundingClientRect();
+      const m = renderer.screenToWorld(e.clientX - dr.left, e.clientY - dr.top);
+      const ang = Math.atan2(m.y - dd.center.y, m.x - dd.center.x);
+      const labelDist = Math.max(dd.r * 0.4, Math.hypot(m.x - dd.center.x, m.y - dd.center.y));
+      const p1 = { x: dd.center.x + Math.cos(ang) * dd.r, y: dd.center.y + Math.sin(ang) * dd.r }; // strona myszy
+      const p2 = { x: dd.center.x - Math.cos(ang) * dd.r, y: dd.center.y - Math.sin(ang) * dd.r };
+      const cur = project.entityRegistry.get(dd.id) as DimensionEntity | undefined;
+      const a1 = cur?.anchor1 ? { ...cur.anchor1, angle: ang } : undefined;
+      const a2 = cur?.anchor2 ? { ...cur.anchor2, angle: ang + Math.PI } : undefined;
+      project.entityRegistry.update(dd.id, {
+        x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, offset: 0, labelDist,
+        ...(a1 ? { anchor1: a1 } : {}), ...(a2 ? { anchor2: a2 } : {}),
+      } as Record<string, unknown>);
+      const e2 = project.entityRegistry.get(dd.id);
+      if (e2) project.eventBus.emit('entity:updated', e2);
+      dd.moved = true;
+      renderer.syncAll();
+      return;
+    }
+
     // Przeciąganie zaznaczonych encji w trybie select — przesuwa całe zaznaczenie za kursorem.
     if (selectDragRef.current && mouseRef.current.isDown) {
       const d = selectDragRef.current;
@@ -442,7 +488,14 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     const is3d = renderer.getViewMode() === '3d';
 
-    // 2D pan with middle/right click
+    // Prawy klik w trybie WSTAWIANIA (narzędzie rysowania) → anuluj wstawianie i wróć do 'select'.
+    // Anulację (reset draftu + czyszczenie preview) załatwia efekt zmiany narzędzia.
+    if (!is3d && e.button === 2 && activeTool !== 'select' && onToolChange) {
+      onToolChange('select');
+      return;
+    }
+
+    // 2D pan with middle/right click (prawy panuje tylko w 'select'; w rysowaniu obsłużony wyżej)
     if (!is3d && (e.button === 1 || e.button === 2)) {
       mouseRef.current.isPanning = true;
       mouseRef.current.lastX = e.clientX;
@@ -519,6 +572,22 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         ? renderer.pickEntity3d(sx, sy)
         : renderer.pickEntity(sx, sy);
       if (picked) {
+        // Wymiar średnicy → przeciąganie zmienia KĄT linii i ODLEGŁOŚĆ opisu (nie przesuwa encji).
+        const pe = project.entityRegistry.get(picked);
+        if (!is3d && pe?.type === 'dimension' && (pe as DimensionEntity).dimType === 'diameter') {
+          const dpe = pe as DimensionEntity;
+          project.selectionManager.select(picked, e.shiftKey);
+          project.eventBus.emit('selection:changed', project.selectionManager.getSelected());
+          dimDragRef.current = {
+            id: picked,
+            center: { x: (dpe.x1 + dpe.x2) / 2, y: (dpe.y1 + dpe.y2) / 2 },
+            r: Math.hypot(dpe.x2 - dpe.x1, dpe.y2 - dpe.y1) / 2,
+            moved: false,
+            orig: { ...dpe },
+          };
+          renderer.syncAll();
+          return;
+        }
         // Klik na już zaznaczonej (bez Shift) zachowuje całe zaznaczenie do przeciągnięcia grupy.
         if (!(project.selectionManager.isSelected(picked) && !e.shiftKey)) {
           project.selectionManager.select(picked, e.shiftKey);
@@ -561,6 +630,34 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
 
     if (mouseRef.current.isPanning) {
       mouseRef.current.isPanning = false;
+      return;
+    }
+
+    // Zakończenie przeciągania wymiaru średnicy. Ruch → wpis historii; brak ruchu → klik = dialog wartości.
+    if (dimDragRef.current) {
+      const dd = dimDragRef.current;
+      dimDragRef.current = null;
+      mouseRef.current.isDown = false;
+      if (dd.moved && renderer) {
+        const final = project.entityRegistry.get(dd.id) as DimensionEntity | undefined;
+        const orig = dd.orig;
+        if (final) {
+          const snapshot = { ...final } as DimensionEntity;
+          const applyDim = (d: DimensionEntity) => {
+            project.entityRegistry.update(dd.id, { ...d } as unknown as Record<string, unknown>);
+            const en = project.entityRegistry.get(dd.id);
+            if (en) project.eventBus.emit('entity:updated', en);
+            renderer.syncAll();
+          };
+          project.historyManager.push({
+            type: 'update', description: 'Wymiar średnicy (kąt/opis)',
+            undo: () => applyDim(orig), redo: () => applyDim(snapshot),
+          });
+          project.eventBus.emit('history:changed', undefined as never);
+        }
+      } else if (!dd.moved) {
+        onDimensionClick?.(dd.id); // czysty klik → dialog wartości
+      }
       return;
     }
 
@@ -709,12 +806,25 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
   // overlay re-projects on pan (cursorWorld), zoom (zoomTick) and edits (version).
   void zoomTick; void version;
   const committedDimLabels: DimensionLabel[] = is3d ? [] : project.entityRegistry.getByType('dimension')
-    .map(e => e as unknown as { x1: number; y1: number; x2: number; y2: number; offset: number; visible: boolean })
+    .map(e => e as unknown as { x1: number; y1: number; x2: number; y2: number; offset: number; visible: boolean; dimType?: 'diameter'; labelDist?: number })
     .filter(d => d.visible)
     .map(d => {
       const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
       const len = Math.hypot(dx, dy);
       const l = len || 1;
+      // Średnica: opis wzdłuż linii wymiarowej (kierunek środek→p1), w odległości `labelDist`.
+      if (d.dimType === 'diameter') {
+        const cx = (d.x1 + d.x2) / 2, cy = (d.y1 + d.y2) / 2;
+        const ldx = (d.x1 - cx) / (l / 2 || 1), ldy = (d.y1 - cy) / (l / 2 || 1); // jednostkowy w stronę p1
+        const dist = d.labelDist ?? (l / 2) * 1.35;
+        return {
+          worldX: cx + ldx * dist,
+          worldY: cy + ldy * dist,
+          text: len.toFixed(2),
+          prefix: '⌀',
+          variant: 'primary' as const,
+        };
+      }
       const nx = (-dy / l) * d.offset, ny = (dx / l) * d.offset;
       return {
         worldX: (d.x1 + d.x2) / 2 + nx,
@@ -754,7 +864,7 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
-        onPointerLeave={() => { setPenInput(null); setCursorActive(false); }}
+        onPointerLeave={() => { setPenInput(null); setCursorActive(false); setSnapHint(null); }}
         onContextMenu={e => e.preventDefault()}
       />
       {!is3d && (
@@ -864,10 +974,53 @@ export function CadCanvas({ project, activeTool, version, viewMode, injectedPoin
         </>
       )}
 
+      {/* Symbol snapu przy kursorze — inny dla wierzchołka / krawędzi / osi układu. */}
+      {!is3d && snapHint && rendererNow && (() => {
+        const s = rendererNow.worldToScreen(snapHint.at.x, snapHint.at.y);
+        return (
+          <Box sx={{ position: 'absolute', left: s.x + 11, top: s.y - 26, pointerEvents: 'none', lineHeight: 0 }}>
+            <SnapGlyph kind={snapHint.kind} />
+          </Box>
+        );
+      })()}
+
       {/* Kropki wierzchołków rysowanej polyline / prostokąta */}
       {vertexDots.map((d, i) => (
         <Box key={i} sx={{ position: 'absolute', left: d.x - 3.5, top: d.y - 3.5, width: 7, height: 7, borderRadius: '50%', bgcolor: '#7fd1ff', border: '1.5px solid #fff', boxSizing: 'border-box', pointerEvents: 'none' }} />
       ))}
     </Box>
+  );
+}
+
+/**
+ * Symbol snapu rysowany przy kursorze, gdy stoi nad pod-elementem szkicu:
+ *  • vertex — czerwony kwadrat (spójny z podświetleniem wierzchołka),
+ *  • edge   — bursztynowy ukośny odcinek (punkt na krawędzi),
+ *  • axis   — niebieski krzyż osi (punkt na osi układu X/Y).
+ * `drop-shadow` daje kontrast na jasnym i ciemnym tle.
+ */
+function SnapGlyph({ kind }: { kind: 'vertex' | 'edge' | 'axis' }) {
+  const common = { width: 14, height: 14, viewBox: '0 0 14 14', xmlns: 'http://www.w3.org/2000/svg' } as const;
+  const style = { filter: 'drop-shadow(0 0 1.2px rgba(255,255,255,0.9)) drop-shadow(0 0 1px rgba(0,0,0,0.5))' } as const;
+  if (kind === 'vertex') {
+    return (
+      <svg {...common} style={style}>
+        <rect x="2" y="2" width="10" height="10" fill="none" stroke="#ff3b30" strokeWidth="2" />
+      </svg>
+    );
+  }
+  if (kind === 'axis') {
+    return (
+      <svg {...common} style={style}>
+        <line x1="1" y1="7" x2="13" y2="7" stroke="#2196f3" strokeWidth="2" />
+        <line x1="7" y1="1" x2="7" y2="13" stroke="#2196f3" strokeWidth="2" />
+      </svg>
+    );
+  }
+  // edge — punkt na krawędzi
+  return (
+    <svg {...common} style={style}>
+      <line x1="2" y1="12" x2="12" y2="2" stroke="#ffab00" strokeWidth="2.5" />
+    </svg>
   );
 }

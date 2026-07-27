@@ -155,6 +155,9 @@ export function DimensionOverlay({ labels, renderer, onCommit, onCommitDraft, to
               }}
               title={isEditable ? 'Kliknij, aby edytować' : undefined}
             >
+              {label.prefix && (
+                <span style={{ color: isPrimary ? '#e8eef2' : '#a0d8ef', fontWeight: 700 }}>{label.prefix}</span>
+              )}
               <span style={{
                 color: isPrimary ? '#e8eef2' : '#a0d8ef',
                 fontWeight: 700,

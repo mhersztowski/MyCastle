@@ -1,0 +1,57 @@
+/* Styl punktów montowania Rysika w publikacji HTML. */
+
+.rysik-figure {
+  margin: 1.5rem 0;
+}
+
+.rysik-mount {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 280px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0f1216;
+  position: relative;
+}
+
+.rysik-mount canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.rysik-mount[data-error]::after {
+  content: attr(data-error);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ff8a80;
+  font: 13px/1.4 system-ui, sans-serif;
+  padding: 1rem;
+  text-align: center;
+}
+
+.rysik-vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 6px;
+}
+
+.rysik-var {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font: 13px/1.2 system-ui, sans-serif;
+}
+
+.rysik-var output {
+  font-family: ui-monospace, monospace;
+  min-width: 3.5rem;
+  text-align: right;
+}

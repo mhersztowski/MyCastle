@@ -6,6 +6,10 @@
 import React, { createContext, useContext, useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import { AutomateSystemApi, LogEntry } from '../../../modules/automate/engine/AutomateSystemApi';
 import { AutomateSandbox } from '../../../modules/automate/engine/AutomateSandbox';
+import { Aura, aura } from '../../../../../../packages/core/browser/aura/aura';
+import { createAutomateApi, createDisplay, type AutomateApi } from '../../../../../../packages/core/browser/api/api';
+import { createAuraPreviewHost } from '../../../modules/voiceactions/auraPreviewHost';
+import { prepareAutomateScript } from '../../../modules/voiceactions/auraScriptRuntime';
 import { preloadLibrariesForCode } from './automateLibraries';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
@@ -32,11 +36,6 @@ export interface DisplayItem {
   data: unknown;
   timestamp: number;
 }
-
-/** Monotoniczny licznik id pozycji display — nigdy się nie powtarza w sesji,
- *  więc React `key` jest zawsze unikatowy między uruchomieniami. */
-let _displayItemSeq = 0;
-const nextDisplayItemId = (): number => ++_displayItemSeq;
 
 export interface DisplayApi {
   text: (str: string) => void;
@@ -344,14 +343,9 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
     // caused (the gap between output:[] and the new canvas appeared as a brief
     // blank during library preload / script startup).
     const bufferedOutput: DisplayItem[] = [];
-    const displayApi: DisplayApi = {
-      text:  (str)   => bufferedOutput.push({ id: nextDisplayItemId(), type: 'text',  data: String(str), timestamp: Date.now() }),
-      table: (data)  => bufferedOutput.push({ id: nextDisplayItemId(), type: 'table', data,              timestamp: Date.now() }),
-      list:  (items) => bufferedOutput.push({ id: nextDisplayItemId(), type: 'list',  data: items,       timestamp: Date.now() }),
-      json:  (obj)   => bufferedOutput.push({ id: nextDisplayItemId(), type: 'json',  data: obj,         timestamp: Date.now() }),
-      html:  (markup)=> bufferedOutput.push({ id: nextDisplayItemId(), type: 'html',  data: String(markup), timestamp: Date.now() }),
-      dom:   (el)    => bufferedOutput.push({ id: nextDisplayItemId(), type: 'dom',   data: el,          timestamp: Date.now() }),
-    };
+    // `display` należy do TEGO przebiegu — bufor jest domknięty w instancji,
+    // więc blok animujący coś w tle nie zacznie pisać do panelu innego bloku.
+    const displayApi: DisplayApi = createDisplay({ push: (item) => bufferedOutput.push(item) });
     // eslint-disable-next-line no-console
     console.groupCollapsed(`[AutomateScript] runBlock(${id}) — ${code.length} chars`);
     // eslint-disable-next-line no-console
@@ -381,14 +375,29 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
       const { handle, host } = makeRunHandle();
       runHandlesRef.current.set(id, handle);
 
-      const wrappedScript = `const display = input.__display;\n${code}`;
+      // Skrypty akcji głosowych wołają `Aura.*`; uruchomione z edytora nie mają
+      // rozmowy, więc dostają host podglądowy piszący do panelu wyników.
+      Aura.setHost(createAuraPreviewHost(displayApi, api.log));
+      Aura.beginRun();
+
+      // Granica środowiska: to, czego host nie ma, melduje brak zamiast
+      // wywracać skrypt na `undefined`.
+      const scriptApi = createAutomateApi(api as unknown as Partial<AutomateApi>, {
+        unavailableReason: 'blok skryptu w dokumencie',
+        onUnavailable: (message) => api.log.warn(message),
+      });
+
+      // Importy modułów środowiska usuwamy — symbole wchodzą przez hostScope.
+      const wrappedScript = `const display = input.__display;\n${prepareAutomateScript(code).code}`;
       const result = await AutomateSandbox.execute(
         wrappedScript,
-        api,
+        // Proxy dostarcza w runtime komplet namespace'ów (host + zaślepki dla
+        // brakujących), ale statycznie widać tylko `log` — stąd rzutowanie.
+        scriptApi as unknown as AutomateSystemApi,
         { __display: displayApi },
         variablesRef.current,
         undefined,
-        host,
+        { ...host, Aura, aura },
       );
       // eslint-disable-next-line no-console
       console.log(`Result (${(performance.now() - tStart).toFixed(1)}ms):`, result);

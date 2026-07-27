@@ -19,7 +19,6 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Highlight from '@tiptap/extension-highlight';
 import TypographyExtension from '@tiptap/extension-typography';
-import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import TextAlign from '@tiptap/extension-text-align';
 import { Table, TableRow } from '@tiptap/extension-table';
 import { CustomTableCell } from './extensions/CustomTableCell';
@@ -97,6 +96,8 @@ import { InlineMath, MathBlock } from './extensions/MathExtension';
 import { EditableImage } from './extensions/ImageExtension';
 import { AudioEmbed } from './extensions/AudioExtension';
 import { VideoEmbed } from './extensions/VideoExtension';
+import { YouTubeEmbed } from './extensions/YouTubeExtension';
+import { makeCodeBlockWithLang } from './extensions/CodeBlockWithLang';
 import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
 import { ColumnLayout, Column } from './extensions/ColumnExtension';
 import { UIFormEmbed } from './extensions/UIFormExtension';
@@ -426,12 +427,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
         multicolor: true,
       }),
       TypographyExtension,
-      CodeBlockLowlight.configure({
-        lowlight,
-        HTMLAttributes: {
-          class: 'md-editor-code-block',
-        },
-      }),
+      makeCodeBlockWithLang(lowlight),
       Table.configure({
         resizable: true,
         HTMLAttributes: {
@@ -451,6 +447,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       ComponentEmbed,
       AudioEmbed,
       VideoEmbed,
+      YouTubeEmbed,
       ColumnLayout,
       Column,
       UIFormEmbed,
@@ -952,6 +949,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
 
   const handleSave = useCallback(() => {
     if (editor && onSave) {
+      window.dispatchEvent(new CustomEvent('md:autosave')); // zapisz też bloki kodu z pliku
       const html = editor.getHTML();
       const markdown = htmlToMarkdown(html);
       setSaveStatus('saving');
@@ -1284,6 +1282,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
       setSaveStatus('unsaved');
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = setTimeout(() => {
+        // Bloki kodu z zewnętrznym plikiem zapisują wtedy swoją treść do pliku.
+        window.dispatchEvent(new CustomEvent('md:autosave'));
         if (!onSaveRef.current) return;
         const markdown = htmlToMarkdown(editor.getHTML());
         setSaveStatus('saving');

@@ -189,7 +189,7 @@ export const BlockActionMenu: React.FC<BlockActionMenuProps> = ({
           </MenuItem>,
           <MenuItem key="au-edit" dense onClick={() => dispatchBlock(AUTOMATE_ACTION_EVENT, { pos: blockPos, action: 'edit' })}>
             <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
-            <ListItemText primary="Edytor skryptu" />
+            <ListItemText primary="Edytor Automate" />
           </MenuItem>,
           <MenuItem key="au-set" dense onClick={() => dispatchBlock(AUTOMATE_ACTION_EVENT, { pos: blockPos, action: 'settings' })}>
             <ListItemIcon><SettingsIcon fontSize="small" /></ListItemIcon>

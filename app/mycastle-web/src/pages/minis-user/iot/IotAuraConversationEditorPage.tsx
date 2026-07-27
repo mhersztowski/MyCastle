@@ -7,7 +7,7 @@
  * Prawy panel: workspace Blockly wybranego wariantu (blocklyXml) + podgląd kodu.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -36,6 +36,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+import CodeIcon from '@mui/icons-material/Code';
+import EditIcon from '@mui/icons-material/Edit';
 import { App } from '../../../App';
 import {
   AuraBlocklyEditor,
@@ -45,6 +47,13 @@ import {
   ShowComponentDialog, setShowComponentPicker,
 } from '../../../modules/voiceactions';
 import type { VoiceAction, VoiceActionVariant, WakeWord, VfsJsonQueryConfig, ShowComponentConfig } from '../../../modules/voiceactions';
+import { auraScriptPath, variantLogicMode } from '@mhersztowski/core';
+import { ensureAuraScript, readAuraScript, writeAuraScript } from '../../../modules/voiceactions/auraScriptStore';
+import { EMPTY_AURA_SCRIPT, type AuraScriptFile } from '../../../modules/voiceactions/auraScriptFile';
+import { AutomateDocumentProvider } from '../../../components/mdeditor/extensions/AutomateDocumentContext';
+// Ten sam pełnoekranowy edytor, którego używa blok ```automate``` w notatkach —
+// logika akcji i skrypt w markdownie to dokładnie to samo narzędzie.
+const AutomateScriptEditorDialog = lazy(() => import('../../../components/mdeditor/extensions/AutomateScriptEditorDialog'));
 
 const LANGUAGES = [
   { code: 'pl', label: 'Polski (pl)' },
@@ -67,10 +76,13 @@ const IotAuraConversationEditorPage: React.FC = () => {
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Skrypt automatyzacji wybranego wariantu (tryb 'automate') + jego edytor.
+  const [scriptFile, setScriptFile] = useState<AuraScriptFile | null>(null);
+  const [scriptLoading, setScriptLoading] = useState(false);
+  const [scriptEditorOpen, setScriptEditorOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [codePreview, setCodePreview] = useState('');
   const [wakeWords, setWakeWords] = useState<WakeWord[]>([]);
   const [globalXml, setGlobalXml] = useState('');
   const [googleSearch, setGoogleSearch] = useState<{ apiKey?: string; cx?: string; serperKey?: string }>({ apiKey: '', cx: '' });
@@ -110,21 +122,45 @@ const IotAuraConversationEditorPage: React.FC = () => {
   const actionVariants = variants.filter(v => v.voiceActionId === selectedActionId);
   const selectedVariant = variants.find(v => v.id === selectedVariantId) || null;
 
-  // ---- Wybór akcji ----
+  const patchVariant = useCallback((id: string, patch: Partial<VoiceActionVariant>) => {
+    setVariants(prev => prev.map(v => (v.id === id ? { ...v, ...patch, id: v.id } : v)));
+    setDirty(true);
+  }, []);
+
+  // ---- Wybór akcji / wariantu ----
+  // Logika akcji to zawsze skrypt Automate, więc wybór od razu prowadzi do
+  // edytora: zapewniamy plik i otwieramy go bez dodatkowego kliknięcia.
+  const openVariantScript = useCallback(async (variant: VoiceActionVariant) => {
+    const action = actions.find(a => a.id === variant.voiceActionId);
+    const path = variant.scriptPath || auraScriptPath(action?.name ?? 'akcja', variant.language, variant.id);
+    if (!userName) return;
+    try {
+      setScriptLoading(true);
+      const file = await ensureAuraScript(userName, path, action?.name ?? 'Akcja', variant.language);
+      setScriptFile(file);
+      if (variantLogicMode(variant) !== 'automate' || variant.scriptPath !== path) {
+        patchVariant(variant.id, { mode: 'automate', scriptPath: path });
+      }
+      setScriptEditorOpen(true);
+    } catch (err) {
+      setMessage({ ok: false, text: `Nie udało się otworzyć skryptu: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setScriptLoading(false);
+    }
+  }, [actions, patchVariant, userName]);
+
   const selectAction = useCallback((id: string) => {
     setSelectedActionId(id);
     const firstVar = variants.find(v => v.voiceActionId === id);
     setSelectedVariantId(firstVar?.id ?? null);
-    currentXmlRef.current = firstVar?.blocklyXml ?? '';
-  }, [variants]);
+    if (firstVar) void openVariantScript(firstVar);
+  }, [variants, openVariantScript]);
 
   const selectVariant = useCallback((id: string) => {
-    // zapisz bieżący XML do poprzedniego wariantu przed przełączeniem
-    setVariants(prev => prev.map(v => v.id === selectedVariantId ? { ...v, blocklyXml: currentXmlRef.current } : v));
     setSelectedVariantId(id);
     const v = variants.find(x => x.id === id);
-    currentXmlRef.current = v?.blocklyXml ?? '';
-  }, [selectedVariantId, variants]);
+    if (v) void openVariantScript(v);
+  }, [variants, openVariantScript]);
 
   // ---- CRUD akcji ----
   const addAction = useCallback(() => {
@@ -157,17 +193,21 @@ const IotAuraConversationEditorPage: React.FC = () => {
   // ---- CRUD wariantów ----
   const addVariant = useCallback((language: string) => {
     if (!selectedActionId) return;
+    const action = actions.find(a => a.id === selectedActionId);
+    const id = `vav-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     const variant: VoiceActionVariant = {
-      id: `vav-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      id,
       voiceActionId: selectedActionId,
       language,
       blocklyXml: '',
+      mode: 'automate',
+      scriptPath: auraScriptPath(action?.name ?? 'akcja', language, id),
     };
     setVariants(prev => [...prev, variant]);
     setSelectedVariantId(variant.id);
-    currentXmlRef.current = '';
     setDirty(true);
-  }, [selectedActionId]);
+    void openVariantScript(variant);
+  }, [selectedActionId, actions, openVariantScript]);
 
   const removeVariant = useCallback((id: string) => {
     setVariants(prev => prev.filter(v => v.id !== id));
@@ -179,20 +219,44 @@ const IotAuraConversationEditorPage: React.FC = () => {
     setDirty(true);
   }, [selectedVariantId, actionVariants]);
 
-  // ---- Zmiana w Blockly ----
-  const handleBlocklyChange = useCallback((xml: string, code: string) => {
-    currentXmlRef.current = xml;
-    setCodePreview(code);
-    setDirty(true);
-  }, []);
+  // ---- Warianty: logika zawsze w skrypcie Automate ----
 
-  // ---- Zapis całości ----
+  // Skrypt wybranego wariantu — wczytywany z pliku przy każdej zmianie wyboru.
+  useEffect(() => {
+    const variant = variants.find(v => v.id === selectedVariantId) ?? null;
+    if (!userName || !variant || variantLogicMode(variant) !== 'automate' || !variant.scriptPath) {
+      setScriptFile(null);
+      return;
+    }
+    let alive = true;
+    setScriptLoading(true);
+    readAuraScript(userName, variant.scriptPath)
+      .then(file => { if (alive) setScriptFile(file ?? { ...EMPTY_AURA_SCRIPT }); })
+      .catch(() => { if (alive) setScriptFile({ ...EMPTY_AURA_SCRIPT }); })
+      .finally(() => { if (alive) setScriptLoading(false); });
+    return () => { alive = false; };
+  }, [selectedVariantId, variants, userName]);
+
+  /** Zapis skryptu idzie prosto do pliku — konfiguracja akcji trzyma tylko ścieżkę. */
+  const persistScript = useCallback(async (next: AuraScriptFile, scriptPath: string) => {
+    setScriptFile(next);
+    if (!userName) return;
+    try {
+      await writeAuraScript(userName, scriptPath, next);
+    } catch (err) {
+      setMessage({ ok: false, text: `Błąd zapisu skryptu: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [userName]);
+
+  // Workspace globalny nadal jest w Blockly — zmiany trafiają wprost do XML-a.
   const saveAll = useCallback(async () => {
     setSaving(true);
     setMessage(null);
     // zapisz bieżący XML do aktywnego wariantu
     const finalVariants = variants.map(v =>
-      v.id === selectedVariantId ? { ...v, blocklyXml: currentXmlRef.current } : v,
+      v.id === selectedVariantId && variantLogicMode(v) === 'blockly'
+        ? { ...v, blocklyXml: currentXmlRef.current }
+        : v,
     );
     try {
       const ok = await voiceActionService.saveConfig(userName, { type: 'voice_actions', actions, variants: finalVariants, wakeWords, globalXml, googleSearch });
@@ -393,7 +457,11 @@ const IotAuraConversationEditorPage: React.FC = () => {
                 <List dense>
                   {actionVariants.map(v => (
                     <ListItemButton key={v.id} selected={v.id === selectedVariantId} onClick={() => selectVariant(v.id)}>
-                      <ListItemText primary={`Wariant: ${v.language}`} secondary={v.blocklyXml ? 'ma logikę' : 'pusty'} />
+                      <ListItemText
+                        primary={`Wariant: ${v.language}`}
+                        secondary={v.scriptPath ?? 'skrypt zostanie utworzony po otwarciu'}
+                        secondaryTypographyProps={{ noWrap: true }}
+                      />
                       <IconButton size="small" edge="end" onClick={e => { e.stopPropagation(); removeVariant(v.id); }}>
                         <DeleteIcon fontSize="small" />
                       </IconButton>
@@ -403,6 +471,22 @@ const IotAuraConversationEditorPage: React.FC = () => {
                     <Typography variant="caption" color="text.secondary" sx={{ px: 1 }}>Brak wariantów — dodaj wariant językowy.</Typography>
                   )}
                 </List>
+
+                {selectedVariant && (
+                  <>
+                    <Divider sx={{ my: 1 }} />
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <CodeIcon fontSize="small" color="primary" />
+                      <Typography variant="subtitle2" fontWeight={600} sx={{ flex: 1 }}>Skrypt Automate</Typography>
+                      <Button size="small" startIcon={<EditIcon />} onClick={() => void openVariantScript(selectedVariant)}>
+                        Otwórz
+                      </Button>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>
+                      drive/{selectedVariant.scriptPath ?? '—'}
+                    </Typography>
+                  </>
+                )}
 
                 <Divider sx={{ my: 1 }} />
                 <Button color="error" size="small" startIcon={<DeleteIcon />} onClick={removeAction}>Usuń akcję</Button>
@@ -438,25 +522,48 @@ const IotAuraConversationEditorPage: React.FC = () => {
                 />
               </Paper>
             ) : selectedVariant ? (
-              <>
-                <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                  <AuraBlocklyEditor
-                    key={selectedVariant.id}
-                    initialXml={selectedVariant.blocklyXml}
-                    onChange={handleBlocklyChange}
-                  />
-                </Paper>
-                <Paper variant="outlined" sx={{ height: 140, overflow: 'auto', p: 1, bgcolor: 'grey.900' }}>
-                  <Typography variant="caption" sx={{ color: 'grey.400' }}>Podgląd logiki (kod):</Typography>
-                  <Box component="pre" sx={{ m: 0, color: 'grey.100', fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                    {codePreview || '// Przeciągnij bloczki, aby zbudować konwersację...'}
+              <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', p: 2, gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CodeIcon color="primary" />
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="subtitle1" fontWeight={600}>Skrypt automatyzacji</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                      drive/{selectedVariant.scriptPath}
+                    </Typography>
                   </Box>
-                </Paper>
-              </>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={<EditIcon />}
+                    disabled={scriptLoading || !selectedVariant.scriptPath}
+                    onClick={() => setScriptEditorOpen(true)}
+                  >
+                    Edytuj skrypt
+                  </Button>
+                </Box>
+                <Divider />
+                {scriptLoading ? (
+                  <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress size={24} /></Box>
+                ) : (
+                  <Box
+                    component="pre"
+                    sx={{
+                      flex: 1, m: 0, p: 1, overflow: 'auto', bgcolor: 'grey.900', color: 'grey.100',
+                      fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap', borderRadius: 1,
+                    }}
+                  >
+                    {scriptFile?.code?.trim()
+                      ? scriptFile.code
+                      : '// Pusty skrypt — kliknij „Edytuj skrypt".\n// Dostępne: aura.say / aura.ask / aura.listen / aura.callAction oraz api.* i display.*'}
+                  </Box>
+                )}
+              </Paper>
             ) : (
               <Paper variant="outlined" sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Typography variant="body1" color="text.secondary">
-                  {selectedAction ? 'Dodaj lub wybierz wariant językowy, aby edytować konwersację w Blockly.' : 'Wybierz akcję po lewej.'}
+                  {selectedAction
+                    ? 'Dodaj wariant językowy — jego logika powstanie jako skrypt Automate.'
+                    : 'Wybierz akcję po lewej — skrypt otworzy się automatycznie.'}
                 </Typography>
               </Paper>
             )}
@@ -475,6 +582,42 @@ const IotAuraConversationEditorPage: React.FC = () => {
         current={jsonDialog?.current || null}
         onClose={(c) => { jsonDialog?.resolve(c); setJsonDialog(null); }}
       />
+      {/* Pełnoekranowy edytor skryptu — ten sam komponent co w notatkach. */}
+      <Suspense fallback={null}>
+        {scriptEditorOpen && selectedVariant?.scriptPath && (
+          <AutomateScriptEditorDialog
+            open={scriptEditorOpen}
+            onClose={() => setScriptEditorOpen(false)}
+            blockId={`aura:${selectedVariant.id}`}
+            code={scriptFile?.code ?? ''}
+            onCodeChange={(next: string) => {
+              const base = scriptFile ?? { ...EMPTY_AURA_SCRIPT };
+              void persistScript({ ...base, code: next }, selectedVariant.scriptPath!);
+            }}
+            settings={{
+              autorun: scriptFile?.settings.autorun ?? false,
+              viewMode: scriptFile?.settings.viewMode ?? 'code',
+              tags: scriptFile?.settings.tags ?? [],
+              windowHeight: scriptFile?.settings.windowHeight ?? null,
+              umlProjects: scriptFile?.settings.umlProjects ?? [],
+              scenePath: scriptFile?.settings.scenePath ?? '',
+              // Plik wariantu obsługuje sama strona — edytor nie wiąże go po raz drugi.
+              scriptFile: '',
+            }}
+            onSettingsChange={(patch) => {
+              const base = scriptFile ?? { ...EMPTY_AURA_SCRIPT };
+              void persistScript(
+                { ...base, settings: { ...base.settings, ...patch } },
+                selectedVariant.scriptPath!,
+              );
+            }}
+            userName={userName || ''}
+            subtitle={`drive/${selectedVariant.scriptPath}`}
+            auraBlocks
+          />
+        )}
+      </Suspense>
+
       <ShowComponentDialog
         open={!!componentDialog}
         userName={userName || ''}
@@ -486,4 +629,14 @@ const IotAuraConversationEditorPage: React.FC = () => {
   );
 };
 
-export default IotAuraConversationEditorPage;
+/**
+ * Provider rejestru skryptów — pełnoekranowy edytor uruchamia kod dokładnie tak
+ * samo jak blok w notatce (api.*, display.*, biblioteki, sceny QObject).
+ */
+const IotAuraConversationEditorPageWithScripts: React.FC = () => (
+  <AutomateDocumentProvider>
+    <IotAuraConversationEditorPage />
+  </AutomateDocumentProvider>
+);
+
+export default IotAuraConversationEditorPageWithScripts;
