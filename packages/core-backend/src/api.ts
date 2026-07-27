@@ -18,6 +18,8 @@ import { randomUUID } from 'node:crypto';
 import mqtt, { type MqttClient as MqttJsClient } from 'mqtt';
 import type {
   HttpEndpointRequest,
+  HttpRequestOptions,
+  HttpResponse,
   IotLogLevel,
   IotLogPacket,
   GitResult,
@@ -34,6 +36,9 @@ import type {
 
 export type {
   HttpEndpointRequest,
+  HttpRequestOptions,
+  HttpResponse,
+  HttpResponseType,
   IotLogLevel,
   IotLogPacket,
   GitResult,
@@ -585,6 +590,35 @@ export const iot_log_warning = iot_log_warnning;
 /** Błąd. */
 export async function iot_log_error(conn: Conn, msg: string): Promise<void> {
   await iotLog(conn, 'error', msg);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Wychodzące żądania HTTP
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Wykonuje żądanie HTTP PO STRONIE SERWERA i zwraca ujednoliconą odpowiedź.
+ *
+ *     const res = await http_request(conn, 'https://api.github.com/repos/x/y', {
+ *       headers: { 'User-Agent': 'MyCastle' },
+ *     });
+ *     if (res.ok) console.log(res.body);
+ *
+ * Po co przez serwer, skoro w Node jest `fetch`: skrypt w przeglądarce nie
+ * podlega wtedy CORS, a żądanie wychodzi z sieci backendu (usługi lokalne,
+ * urządzenia w LAN). Status 4xx/5xx wraca w `status` — wyjątek jest zarezerwowany
+ * dla braku odpowiedzi (timeout, błąd sieci).
+ *
+ * Ciało: obiekt → JSON (z nagłówkiem `Content-Type`), string → bez zmian.
+ * Odpowiedź: JSON, tekst albo base64 dla binariów — patrz `encoding`; można
+ * wymusić przez `responseType`.
+ */
+export async function http_request(
+  conn: Conn,
+  url: string,
+  options: HttpRequestOptions = {},
+): Promise<HttpResponse> {
+  return (await sendCommand(conn, 'http_request', { url, options })) as HttpResponse;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

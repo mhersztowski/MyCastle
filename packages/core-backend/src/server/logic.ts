@@ -64,6 +64,33 @@ export interface ServerPush {
   request: HttpEndpointRequest;
 }
 
+/** Jak zinterpretować ciało odpowiedzi `http_request`. */
+export type HttpResponseType = 'text' | 'json' | 'base64';
+
+/** Opcje wychodzącego żądania HTTP (`http_request`). */
+export interface HttpRequestOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  /** Obiekt jest serializowany do JSON (z nagłówkiem), string idzie bez zmian. */
+  body?: unknown;
+  /** Parametry doklejane do adresu. */
+  query?: Record<string, string>;
+  /** Domyślnie 30 s. */
+  timeoutMs?: number;
+  /** Wymusza interpretację ciała; bez tego wynika z `content-type`. */
+  responseType?: HttpResponseType;
+}
+
+/** Odpowiedź zwrócona skryptowi. Status błędu NIE jest wyjątkiem. */
+export interface HttpResponse {
+  status: number;
+  ok: boolean;
+  headers: Record<string, string>;
+  /** Tekst, sparsowany JSON albo base64 — patrz `encoding`. */
+  body: unknown;
+  encoding: HttpResponseType;
+}
+
 /** Poziomy komunikatów `iot_log_*`. */
 export type IotLogLevel = 'info' | 'warning' | 'error';
 
@@ -846,6 +873,103 @@ export class ServerLogic {
     return await this.iotDeviceExtCommand(owner, device, 'vfs', op, params);
   }
 
+  // ── Wychodzące żądania HTTP (`http_request`) ───────────────────────────────
+
+  /** Typy MIME, które traktujemy jako tekst — reszta binariów idzie w base64. */
+  private static readonly TEXTUAL = /^(text\/|application\/(json|xml|javascript|x-www-form-urlencoded)|.*\+json)/i;
+
+  /**
+   * Wykonuje żądanie HTTP po stronie serwera i zwraca ujednoliconą odpowiedź.
+   *
+   * Sens tej operacji to wyjście poza ograniczenia wywołującego: skrypt
+   * w przeglądarce nie podlega wtedy CORS, a żądanie wychodzi z sieci serwera.
+   * Status 4xx/5xx wraca normalnie w `status` — wyjątek zostaje zarezerwowany
+   * dla sytuacji, w których odpowiedzi nie ma wcale (timeout, błąd sieci).
+   */
+  async httpRequest(url: string, opts: HttpRequestOptions = {}): Promise<HttpResponse> {
+    let target: URL;
+    try {
+      target = new URL(String(url ?? ''));
+    } catch {
+      throw new Error(`http_request: niepoprawny adres "${url}"`);
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      throw new Error(`http_request: dozwolone są tylko adresy http/https (${target.protocol})`);
+    }
+    for (const [key, value] of Object.entries(opts.query ?? {})) {
+      target.searchParams.set(key, String(value));
+    }
+
+    const headers: Record<string, string> = { ...(opts.headers ?? {}) };
+    let body: string | undefined;
+    if (opts.body !== undefined && opts.body !== null) {
+      if (typeof opts.body === 'string') {
+        body = opts.body;
+      } else {
+        body = JSON.stringify(opts.body);
+        // Nie nadpisujemy typu podanego jawnie przez wywołującego.
+        if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
+          headers['Content-Type'] = 'application/json';
+        }
+      }
+    }
+
+    // HTTP przenosi nagłówki jako Latin-1; bez tej kontroli fetch rzuca
+    // komunikatem o „ByteString", z którego nie widać, który nagłówek zawinił.
+    for (const [key, value] of Object.entries(headers)) {
+      if (/[^\x00-\xFF]/.test(String(value)) || /[^\x00-\xFF]/.test(key)) {
+        throw new Error(`http_request: nagłówek "${key}" zawiera znaki spoza Latin-1 — HTTP ich nie przenosi`);
+      }
+    }
+
+    const timeoutMs = Math.max(1, opts.timeoutMs ?? 30_000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(target.toString(), {
+        method: (opts.method ?? 'GET').toUpperCase(),
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        controller.signal.aborted
+          ? `http_request: przekroczono limit ${timeoutMs} ms (${target.host})`
+          : `http_request: ${message}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const outHeaders: Record<string, string> = {};
+    res.headers.forEach((value, key) => { outHeaders[key] = value; });
+
+    const contentType = res.headers.get('content-type') ?? '';
+    const encoding: HttpResponseType = opts.responseType
+      ?? (contentType.includes('json') ? 'json'
+        : ServerLogic.TEXTUAL.test(contentType) || !contentType ? 'text'
+          : 'base64');
+
+    let parsed: unknown;
+    if (encoding === 'base64') {
+      parsed = Buffer.from(await res.arrayBuffer()).toString('base64');
+    } else {
+      const text = await res.text();
+      if (encoding === 'json') {
+        // Serwer bywa niesłowny co do content-type — nie wywracamy się na tym,
+        // tylko oddajemy surowy tekst.
+        try { parsed = JSON.parse(text); } catch { parsed = text; }
+      } else {
+        parsed = text;
+      }
+    }
+
+    return { status: res.status, ok: res.ok, headers: outHeaders, body: parsed, encoding };
+  }
+
   // ── Log (`iot_log_*`) ──────────────────────────────────────────────────────
 
   /** Sprowadza poziom do jednego z trzech dozwolonych; `warn` bywa nawykiem z konsoli. */
@@ -1154,6 +1278,8 @@ export class ServerLogic {
         return await this.projectPicosdkBuild(owner, s('projectId'), s('sketch'), s('boardKey') || undefined);
       case 'project_picosdk_get_output':
         return this.projectPicosdkGetOutput(owner, s('projectId'), s('sketch'), s('boardKey') || undefined);
+      case 'http_request':
+        return await this.httpRequest(s('url'), (args.options as HttpRequestOptions) ?? {});
       case 'iot_log':
         return this.iotLog(s('level'), s('message'), {
           userName: owner,

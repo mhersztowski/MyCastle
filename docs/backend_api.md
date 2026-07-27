@@ -104,7 +104,26 @@ git_history(conn, server_filename)
 git_diff(conn, server_filename, commit_from, commit_to)
 
 
-http_request(conn, url, ...) : response // z mozliwoscia ustawinia naglowkow itd
+http_request(conn, url, options?) : HttpResponse // z mozliwoscia ustawinia naglowkow itd
+
+// http_request — szczegóły (implementacja: core-backend/src/server/logic.ts `httpRequest`)
+//   options: { method?, headers?, body?, query?, timeoutMs? (30 s), responseType?: 'text'|'json'|'base64' }
+//   HttpResponse: { status, ok, headers, body, encoding }
+//
+//       const res = await http_request(conn, 'https://api.github.com/repos/x/y', {
+//         headers: { 'User-Agent': 'MyCastle' },
+//       });
+//       if (res.ok) console.log(res.body);
+//
+// • Żądanie wychodzi Z SERWERA — skrypt w przeglądarce nie podlega wtedy CORS, a adresatem
+//   mogą być usługi w sieci backendu. W skrypcie Node to też wygodne: jednolity kształt
+//   odpowiedzi i wspólny timeout.
+// • Status 4xx/5xx wraca normalnie w `status`; wyjątek zostaje na brak odpowiedzi
+//   (timeout, błąd sieci, adres spoza http/https).
+// • Ciało żądania: obiekt → JSON (+ nagłówek Content-Type), string → bez zmian.
+//   Nagłówki muszą być Latin-1 (tak działa HTTP) — polskie znaki dają czytelny błąd.
+// • Ciało odpowiedzi: JSON gdy content-type jest JSON-owy, tekst dla typów tekstowych,
+//   base64 dla binariów; `encoding` mówi, co dostałeś, a `responseType` to wymusza.
 
 http_add_endpoint(conn, path, callback, opts?)   // rejestruje endpoint HTTP obsługiwany przez skrypt
                                                  // opts: { public?: boolean }

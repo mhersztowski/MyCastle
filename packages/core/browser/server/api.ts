@@ -781,6 +781,55 @@ export async function iot_log_error(conn: Conn, msg: string): Promise<void> {
   await iotLog(conn, 'error', msg);
 }
 
+// ── Wychodzące żądania HTTP ──────────────────────────────────────────────────
+
+/** Jak zinterpretować ciało odpowiedzi (kontrakt z `core-backend/src/server/logic.ts`). */
+export type HttpResponseType = 'text' | 'json' | 'base64';
+
+export interface HttpRequestOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  /** Obiekt jest serializowany do JSON (z nagłówkiem), string idzie bez zmian. */
+  body?: unknown;
+  query?: Record<string, string>;
+  /** Domyślnie 30 s. */
+  timeoutMs?: number;
+  responseType?: HttpResponseType;
+}
+
+export interface HttpResponse {
+  status: number;
+  ok: boolean;
+  headers: Record<string, string>;
+  body: unknown;
+  encoding: HttpResponseType;
+}
+
+/**
+ * Wykonuje żądanie HTTP PO STRONIE SERWERA i zwraca ujednoliconą odpowiedź.
+ *
+ *     const res = await http_request(conn, 'https://api.github.com/repos/x/y', {
+ *       headers: { 'User-Agent': 'MyCastle' },
+ *     });
+ *     if (res.ok) console.log(res.body);
+ *
+ * Po co przez serwer, skoro w Node jest `fetch`: skrypt w przeglądarce nie
+ * podlega wtedy CORS, a żądanie wychodzi z sieci backendu (usługi lokalne,
+ * urządzenia w LAN). Status 4xx/5xx wraca w `status` — wyjątek jest zarezerwowany
+ * dla braku odpowiedzi (timeout, błąd sieci).
+ *
+ * Ciało: obiekt → JSON (z nagłówkiem `Content-Type`), string → bez zmian.
+ * Odpowiedź: JSON, tekst albo base64 dla binariów — patrz `encoding`; można
+ * wymusić przez `responseType`.
+ */
+export async function http_request(
+  conn: Conn,
+  url: string,
+  options: HttpRequestOptions = {},
+): Promise<HttpResponse> {
+  return (await sendCommand(conn, 'http_request', { url, options })) as HttpResponse;
+}
+
 // ── Endpointy HTTP wystawiane przez skrypt ───────────────────────────────────
 
 /** Żądanie HTTP przekazane skryptowi (kontrakt z `core-backend/src/server/logic.ts`). */

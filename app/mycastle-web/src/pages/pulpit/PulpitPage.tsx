@@ -93,6 +93,10 @@ import {
   VolumeOffRounded as VolumeOffIcon,
   RecordVoiceOverRounded as AuraIcon,
   TerminalRounded as LogIcon,
+  RadioRounded as RadioIcon,
+  TabRounded as TabsIcon,
+  VolumeUpRounded as VolUpIcon,
+  VolumeOffRounded as VolOffIcon,
   PauseRounded as PauseIcon,
   PlayArrowRounded as PlayIcon,
 } from '@mui/icons-material';
@@ -112,10 +116,13 @@ import { runBrowserComponent, type RunHandle } from '../../modules/component-run
  *  w localStorage.
  * ------------------------------------------------------------------ */
 
-type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component' | 'aura' | 'iot-log';
+type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'rss' | 'clock' | 'weather' | 'contacts' | 'component' | 'aura' | 'iot-log' | 'radio' | 'tabs';
 
 interface RssFeed { name?: string; url: string; }
 interface Contact { name: string; detail?: string; hue?: number; }
+interface RadioStation { name: string; url: string; }
+/** Zakładka widgetu „Tabs": osadzony widget wraz z własną konfiguracją. */
+interface TabDef { id: string; label: string; kind: WidgetKind; config?: WidgetConfig; }
 
 interface WidgetConfig {
   title?: string;
@@ -134,6 +141,10 @@ interface WidgetConfig {
   logLevels?: IotLogLevel[];      // iot-log: pokazywane poziomy (brak ⇒ wszystkie)
   logOnlyMine?: boolean;          // iot-log: tylko wpisy zalogowanego użytkownika
   logLimit?: number;              // iot-log: ile ostatnich wpisów trzymać
+  stations?: RadioStation[];      // radio: lista stacji
+  stationIndex?: number;          // radio: ostatnio wybrana stacja
+  volume?: number;                // radio: głośność 0–1
+  tabs?: TabDef[];                // tabs: zakładki z osadzonymi widgetami
 }
 
 /* --- motyw (jasny/ciemny) współdzielony przez widgety --------------- */
@@ -210,6 +221,8 @@ const WIDGET_CATALOG: { kind: WidgetKind; label: string; icon: React.ReactNode; 
   { kind: 'component', label: 'Komponent (Programming/Components)', icon: <ComponentIcon fontSize="small" />, w: 420, h: 360 },
   { kind: 'aura', label: 'Aura — asystent głosowy', icon: <AuraIcon fontSize="small" />, w: 360, h: 240 },
   { kind: 'iot-log', label: 'IoT Log (iot_log_* z MQTT)', icon: <LogIcon fontSize="small" />, w: 460, h: 300 },
+  { kind: 'radio', label: 'Internet Radio', icon: <RadioIcon fontSize="small" />, w: 340, h: 220 },
+  { kind: 'tabs', label: 'Tabs — widgety w zakładkach', icon: <TabsIcon fontSize="small" />, w: 460, h: 380 },
 ];
 
 const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> = {
@@ -225,6 +238,8 @@ const WIDGET_META: Record<WidgetKind, { title: string; icon: React.ReactNode }> 
   'component': { title: 'Komponent', icon: <ComponentIcon sx={{ fontSize: 16 }} /> },
   'aura': { title: 'Aura', icon: <AuraIcon sx={{ fontSize: 16 }} /> },
   'iot-log': { title: 'IoT Log', icon: <LogIcon sx={{ fontSize: 16 }} /> },
+  'radio': { title: 'Internet Radio', icon: <RadioIcon sx={{ fontSize: 16 }} /> },
+  'tabs': { title: 'Zakładki', icon: <TabsIcon sx={{ fontSize: 16 }} /> },
 };
 
 /* --- typ wpisu z Programming/Components (do widgetu Komponent) ------------- */
@@ -1323,6 +1338,219 @@ function ComponentWidget({ userName, config }: { userName: string; config?: Widg
   );
 }
 
+/* --- radio: strumień audio z URL ------------------------------------------
+   Odtwarzanie stoi na jednym elemencie <audio> trzymanym w ref: strumień ma
+   żyć niezależnie od renderów Reacta, a przemontowanie elementu zrywałoby
+   połączenie z serwerem stacji. */
+const DEFAULT_STATIONS: RadioStation[] = [
+  { name: 'Radio 357', url: 'https://stream.rcs.revma.com/ypqt40u0x1zuv' },
+  { name: 'Nowy Świat', url: 'https://stream.rcs.revma.com/5w7d0eqd3tzuv' },
+  { name: 'SomaFM Groove Salad', url: 'https://ice1.somafm.com/groovesalad-128-mp3' },
+];
+
+type RadioState = 'stopped' | 'loading' | 'playing' | 'error';
+
+function RadioWidget({ config }: { config?: WidgetConfig }) {
+  const pal = usePal();
+  const stations = config?.stations?.length ? config.stations : DEFAULT_STATIONS;
+  const [index, setIndex] = useState(Math.min(config?.stationIndex ?? 0, stations.length - 1));
+  const [state, setState] = useState<RadioState>('stopped');
+  const [volume, setVolume] = useState(config?.volume ?? 0.8);
+  const [muted, setMuted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const station = stations[index] ?? stations[0];
+
+  // Element audio tworzymy raz; przy odmontowaniu widgetu trzeba go zatrzymać,
+  // inaczej strumień grałby dalej w tle po usunięciu widgetu z pulpitu.
+  useEffect(() => {
+    const audio = new Audio();
+    audio.preload = 'none';
+    // Bez `crossOrigin` — jego ustawienie wymusza CORS na strumieniu, a większość
+    // stacji nie wysyła nagłówków Access-Control-*; samo odtwarzanie ich nie wymaga.
+    audioRef.current = audio;
+    const onPlaying = () => { setState('playing'); setError(null); };
+    const onWaiting = () => setState('loading');
+    const onPause = () => setState((s) => (s === 'error' ? s : 'stopped'));
+    const onError = () => {
+      setState('error');
+      setError('Nie udało się otworzyć strumienia (adres, CORS albo stacja offline)');
+    };
+    audio.addEventListener('playing', onPlaying);
+    audio.addEventListener('waiting', onWaiting);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('error', onError);
+    return () => {
+      audio.pause();
+      audio.src = '';
+      audio.removeEventListener('playing', onPlaying);
+      audio.removeEventListener('waiting', onWaiting);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('error', onError);
+      audioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) { audio.volume = volume; audio.muted = muted; }
+  }, [volume, muted]);
+
+  const play = useCallback(async (url: string) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setState('loading');
+    setError(null);
+    // Strumień radiowy nie ma końca — przy zmianie stacji podmieniamy źródło
+    // i wymuszamy load(), żeby przeglądarka nie odtwarzała starego bufora.
+    audio.src = url;
+    audio.load();
+    try {
+      await audio.play();
+    } catch (e) {
+      setState('error');
+      setError((e as Error).message || 'Przeglądarka odmówiła odtwarzania');
+    }
+  }, []);
+
+  const toggle = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (state === 'playing' || state === 'loading') {
+      audio.pause();
+      audio.src = '';   // zwolnij połączenie ze stacją, nie tylko wstrzymaj
+      setState('stopped');
+    } else if (station) {
+      void play(station.url);
+    }
+  }, [state, station, play]);
+
+  const switchTo = useCallback((next: number) => {
+    setIndex(next);
+    const target = stations[next];
+    if (target && (state === 'playing' || state === 'loading')) void play(target.url);
+  }, [stations, state, play]);
+
+  if (!station) {
+    return <EmptyGalleryHint icon={<RadioIcon />} text="Dodaj stację w ustawieniach ⚙" />;
+  }
+
+  const stateLabel: Record<RadioState, string> = {
+    stopped: 'zatrzymane', loading: 'łączę…', playing: 'gra', error: 'błąd',
+  };
+  const stateColor: Record<RadioState, string> = {
+    stopped: pal.text, loading: '#ffb547', playing: '#4caf50', error: '#ff6b6b',
+  };
+
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1.25, gap: 1, minHeight: 0 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <RadioIcon sx={{ fontSize: 28, color: stateColor[state] }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle2" noWrap sx={{ fontWeight: 700 }}>{station.name}</Typography>
+          <Typography variant="caption" sx={{ color: stateColor[state] }}>{stateLabel[state]}</Typography>
+        </Box>
+        <Tooltip title={state === 'playing' || state === 'loading' ? 'Zatrzymaj' : 'Odtwórz'}>
+          <IconButton
+            onClick={toggle}
+            sx={{
+              width: 44, height: 44, color: '#fff',
+              bgcolor: state === 'playing' ? 'error.main' : 'primary.main',
+              '&:hover': { bgcolor: state === 'playing' ? 'error.dark' : 'primary.dark' },
+            }}
+          >
+            {state === 'loading' ? <CircularProgress size={20} sx={{ color: '#fff' }} />
+              : state === 'playing' ? <PauseIcon /> : <PlayIcon />}
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Tooltip title={muted ? 'Włącz dźwięk' : 'Wycisz'}>
+          <IconButton size="small" onClick={() => setMuted((m) => !m)}>
+            {muted || volume === 0 ? <VolOffIcon sx={{ fontSize: 18 }} /> : <VolUpIcon sx={{ fontSize: 18 }} />}
+          </IconButton>
+        </Tooltip>
+        <Box
+          component="input"
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setVolume(Number(e.target.value)); setMuted(false); }}
+          sx={{ flex: 1, accentColor: '#6f8cff' }}
+        />
+      </Box>
+
+      {stations.length > 1 && (
+        <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          {stations.map((s, i) => (
+            <Box
+              key={`${s.url}-${i}`}
+              onClick={() => switchTo(i)}
+              sx={{
+                px: 1, py: 0.5, borderRadius: 1, cursor: 'pointer', fontSize: 13,
+                background: i === index ? pal.hover : 'transparent',
+                fontWeight: i === index ? 700 : 400,
+                '&:hover': { background: pal.hover },
+              }}
+            >
+              {s.name}
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {error && (
+        <Typography variant="caption" color="error" sx={{ wordBreak: 'break-word' }}>{error}</Typography>
+      )}
+    </Box>
+  );
+}
+
+/* --- tabs: kilka widgetów w zakładkach ------------------------------------
+   Zakładka trzyma pełną definicję osadzonego widgetu (kind + config), a treść
+   renderuje ten sam `WidgetContent`, co zwykła ramka. Zawartość nieaktywnych
+   zakładek nie jest montowana — inaczej cztery galerie ładowałyby się naraz. */
+function TabsWidget({ userName, config, custom }: { userName: string; config?: WidgetConfig; custom: boolean }) {
+  const tabs = config?.tabs ?? [];
+  const [active, setActive] = useState(0);
+  const current = tabs[Math.min(active, tabs.length - 1)];
+
+  if (!tabs.length) {
+    return <EmptyGalleryHint icon={<TabsIcon />} text="Dodaj zakładki w ustawieniach ⚙" />;
+  }
+
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Tabs
+        value={Math.min(active, tabs.length - 1)}
+        onChange={(_, v) => setActive(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontSize: 13, py: 0 } }}
+      >
+        {tabs.map((t) => (
+          <Tab key={t.id} label={t.label || WIDGET_META[t.kind]?.title || t.kind} />
+        ))}
+      </Tabs>
+      <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+        {current && (
+          <WidgetContent
+            key={current.id}
+            kind={current.kind}
+            config={current.config}
+            userName={userName}
+            custom={custom}
+          />
+        )}
+      </Box>
+    </Box>
+  );
+}
+
 /* --- iot-log: podgląd komunikatów `iot_log_*` z kanału komend --------------
    Skrypty backendu (patrz drive/server/logic/log.ts) rozgłaszają na SERVER_TOPIC
    pakiety `{ type: 'log', level, message, userName, clientId?, source?, ts }`.
@@ -1475,7 +1703,8 @@ const IotAuraPage = lazy(() => import('../minis-user/iot/IotAuraPage'));
 function AuraWidget({ userName, fullscreen, onToggleFullscreen }: {
   userName: string;
   fullscreen: boolean;
-  onToggleFullscreen: () => void;
+  /** Brak = widget nie pokazuje przycisku pełnego ekranu (np. w zakładce). */
+  onToggleFullscreen?: () => void;
 }) {
   return (
     <Suspense fallback={<Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress size={22} /></Box>}>
@@ -1500,6 +1729,8 @@ function WidgetSettingsDialog({
 }) {
   const [cfg, setCfg] = useState<WidgetConfig>(widget.config ?? {});
   const patch = (p: Partial<WidgetConfig>) => setCfg((c) => ({ ...c, ...p }));
+  /** Indeks zakładki, której osadzony widget konfigurujemy (widget „Tabs"). */
+  const [editingTab, setEditingTab] = useState<number | null>(null);
 
   const pages = useMemo(() => buildPages(userName), [userName]);
   // pages: bez konfiguracji ⇒ wszystkie zaznaczone
@@ -1794,6 +2025,141 @@ function WidgetSettingsDialog({
           </>
         )}
 
+        {/* --- radio: lista stacji ------------------------------------------- */}
+        {widget.kind === 'radio' && (
+          <>
+            <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
+              Stacje (nazwa + adres strumienia). Bez wpisów widget pokazuje kilka domyślnych.
+            </Typography>
+            {(cfg.stations ?? []).map((st, i) => (
+              <Box key={i} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  label="Nazwa"
+                  value={st.name}
+                  sx={{ width: 160 }}
+                  onChange={(e) => {
+                    const next = [...(cfg.stations ?? [])];
+                    next[i] = { ...next[i], name: e.target.value };
+                    patch({ stations: next });
+                  }}
+                />
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="URL strumienia"
+                  placeholder="https://…/stream.mp3"
+                  value={st.url}
+                  onChange={(e) => {
+                    const next = [...(cfg.stations ?? [])];
+                    next[i] = { ...next[i], url: e.target.value };
+                    patch({ stations: next });
+                  }}
+                />
+                <Tooltip title="Usuń stację">
+                  <IconButton size="small" onClick={() => patch({ stations: (cfg.stations ?? []).filter((_, j) => j !== i) })}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ))}
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => patch({ stations: [...(cfg.stations ?? []), { name: '', url: '' }] })}
+            >
+              Dodaj stację
+            </Button>
+            <Typography variant="caption" sx={{ display: 'block', mt: 1.5, opacity: 0.6 }}>
+              Na stronie serwowanej po HTTPS przeglądarka zablokuje strumień pod adresem HTTP —
+              używaj adresów https://.
+            </Typography>
+          </>
+        )}
+
+        {/* --- tabs: zakładki z osadzonymi widgetami -------------------------- */}
+        {widget.kind === 'tabs' && (
+          <>
+            <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
+              Zakładki — każda pokazuje inny widget. Ustawienia osadzonego widgetu otwiera ⚙ przy zakładce.
+            </Typography>
+            {(cfg.tabs ?? []).map((tab, i) => (
+              <Box key={tab.id} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  label="Nazwa"
+                  value={tab.label}
+                  sx={{ width: 150 }}
+                  onChange={(e) => {
+                    const next = [...(cfg.tabs ?? [])];
+                    next[i] = { ...next[i], label: e.target.value };
+                    patch({ tabs: next });
+                  }}
+                />
+                <FormControl size="small" sx={{ flex: 1 }}>
+                  <InputLabel id={`tab-kind-${tab.id}`}>Widget</InputLabel>
+                  <Select
+                    labelId={`tab-kind-${tab.id}`}
+                    label="Widget"
+                    value={tab.kind}
+                    onChange={(e) => {
+                      const next = [...(cfg.tabs ?? [])];
+                      // Zmiana rodzaju czyści konfigurację — pola poprzedniego widgetu
+                      // nic nie znaczą dla nowego i tylko myliłyby przy zapisie.
+                      next[i] = { ...next[i], kind: e.target.value as WidgetKind, config: undefined };
+                      patch({ tabs: next });
+                    }}
+                  >
+                    {WIDGET_CATALOG
+                      // Zakładki w zakładkach dają nieskończone zagnieżdżenie — bez sensu.
+                      .filter((c) => c.kind !== 'tabs')
+                      .map((c) => <MenuItem key={c.kind} value={c.kind}>{c.label}</MenuItem>)}
+                  </Select>
+                </FormControl>
+                <Tooltip title="Ustawienia widgetu w zakładce">
+                  <IconButton size="small" onClick={() => setEditingTab(i)}><SettingsIcon fontSize="small" /></IconButton>
+                </Tooltip>
+                <Tooltip title="Usuń zakładkę">
+                  <IconButton size="small" onClick={() => patch({ tabs: (cfg.tabs ?? []).filter((_, j) => j !== i) })}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ))}
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => patch({
+                tabs: [
+                  ...(cfg.tabs ?? []),
+                  { id: `tab-${Date.now().toString(36)}`, label: 'Nowa', kind: 'clock' as WidgetKind },
+                ],
+              })}
+            >
+              Dodaj zakładkę
+            </Button>
+
+            {/* Zagnieżdżony dialog: ta sama konfiguracja co dla widgetu na pulpicie. */}
+            {editingTab !== null && cfg.tabs?.[editingTab] && (
+              <WidgetSettingsDialog
+                widget={{
+                  id: cfg.tabs[editingTab].id,
+                  kind: cfg.tabs[editingTab].kind,
+                  x: 0, y: 0, w: 0, h: 0,
+                  config: cfg.tabs[editingTab].config,
+                }}
+                userName={userName}
+                onClose={() => setEditingTab(null)}
+                onSave={(inner) => {
+                  const next = [...(cfg.tabs ?? [])];
+                  next[editingTab] = { ...next[editingTab], config: inner };
+                  patch({ tabs: next });
+                }}
+              />
+            )}
+          </>
+        )}
+
         {/* --- iot-log: filtry strumienia komunikatów ------------------------ */}
         {widget.kind === 'iot-log' && (
           <>
@@ -1850,6 +2216,39 @@ function WidgetSettingsDialog({
       </DialogActions>
     </Dialog>
   );
+}
+
+/**
+ * Treść widgetu bez ramki. Wydzielona, bo używa jej i `WidgetFrame`, i widget
+ * „Tabs", który osadza inne widgety w zakładkach — inaczej trzeba by utrzymywać
+ * dwie listy rodzajów, które prędzej czy później by się rozjechały.
+ */
+function WidgetContent({ kind, config, userName, custom, fullscreen, onToggleFullscreen }: {
+  kind: WidgetKind;
+  config?: WidgetConfig;
+  userName: string;
+  custom: boolean;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+}) {
+  switch (kind) {
+    case 'pages': return <PagesWidget userName={userName} config={config} />;
+    case 'drive-fav': return <DriveFavWidget userName={userName} />;
+    case 'immich': return <ImmichWidget config={config} />;
+    case 'gphotos': return <GPhotosWidget config={config} />;
+    case 'calendar': return <CalendarWidget userName={userName} config={config} custom={custom} />;
+    case 'rss': return <RssWidget config={config} />;
+    case 'clock': return <ClockWidget config={config} />;
+    case 'weather': return <WeatherWidget config={config} />;
+    case 'contacts': return <ContactsWidget config={config} />;
+    case 'component': return <ComponentWidget userName={userName} config={config} />;
+    case 'iot-log': return <IotLogWidget userName={userName} config={config} />;
+    case 'radio': return <RadioWidget config={config} />;
+    case 'tabs': return <TabsWidget userName={userName} config={config} custom={custom} />;
+    case 'aura':
+      return <AuraWidget userName={userName} fullscreen={!!fullscreen} onToggleFullscreen={onToggleFullscreen} />;
+    default: return null;
+  }
 }
 
 /* ================================================================== *
@@ -1965,20 +2364,14 @@ function WidgetFrame({
       )}
 
       <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', containerType: fullscreen ? 'normal' : 'size', borderRadius: fullscreen ? 0 : (custom ? '0 0 18px 18px' : '18px') }}>
-        {widget.kind === 'pages' && <PagesWidget userName={userName} config={widget.config} />}
-        {widget.kind === 'drive-fav' && <DriveFavWidget userName={userName} />}
-        {widget.kind === 'immich' && <ImmichWidget config={widget.config} />}
-        {widget.kind === 'gphotos' && <GPhotosWidget config={widget.config} />}
-        {widget.kind === 'calendar' && <CalendarWidget userName={userName} config={widget.config} custom={custom} />}
-        {widget.kind === 'rss' && <RssWidget config={widget.config} />}
-        {widget.kind === 'clock' && <ClockWidget config={widget.config} />}
-        {widget.kind === 'weather' && <WeatherWidget config={widget.config} />}
-        {widget.kind === 'contacts' && <ContactsWidget config={widget.config} />}
-        {widget.kind === 'component' && <ComponentWidget userName={userName} config={widget.config} />}
-        {widget.kind === 'iot-log' && <IotLogWidget userName={userName} config={widget.config} />}
-        {widget.kind === 'aura' && (
-          <AuraWidget userName={userName} fullscreen={fullscreen} onToggleFullscreen={() => setFullscreen((f) => !f)} />
-        )}
+        <WidgetContent
+          kind={widget.kind}
+          config={widget.config}
+          userName={userName}
+          custom={custom}
+          fullscreen={fullscreen}
+          onToggleFullscreen={() => setFullscreen((f) => !f)}
+        />
       </Box>
 
       {/* Resize handles — visible 12px marker w środku, niewidoczny 32x32 hitbox

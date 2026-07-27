@@ -94,13 +94,14 @@ export {
   iot_log_warnning,
   iot_log_warning,
   iot_log_error,
+  http_request,
   http_add_endpoint,
   http_remove_endpoint,
   http_list_endpoints,
 } from './api';
 export type {
   ConnResponse, ResCallback, ErrCallback, IotDevice, ServerConfig,
-  HttpEndpointHandler, HttpEndpointReply,
+  HttpEndpointHandler, HttpEndpointReply, HttpRequestOptions, HttpResponse, HttpResponseType,
   IotCommandStatus, IotVfsStat, IotVfsEntry, IotVfsFileData, IotVfsOk,
 } from './api';
 
