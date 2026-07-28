@@ -127,6 +127,99 @@ describe('konwersacja', () => {
   });
 });
 
+describe('dzwonek', () => {
+  /** Podstawiony Web Audio — sprawdzamy, że logika steruje nim poprawnie. */
+  function fakeAudio() {
+    const started: { freq: number; at: number; stop: number }[] = [];
+    let currentTime = 0;
+    const gainNode = () => ({
+      gain: {
+        setValueAtTime: () => {},
+        exponentialRampToValueAtTime: () => {},
+        linearRampToValueAtTime: () => {},
+      },
+      connect: () => {},
+      disconnect: () => {},
+    });
+    const ctx = {
+      state: 'running' as string,
+      currentTime,
+      destination: {},
+      resume: vi.fn(async () => { ctx.state = 'running'; }),
+      createGain: gainNode,
+      createOscillator: () => {
+        const osc = {
+          type: 'sine',
+          frequency: { value: 0, setValueAtTime: (v: number) => { osc.frequency.value = v; } },
+          connect: () => {},
+          disconnect: () => {},
+          start: (at: number) => { started.push({ freq: osc.frequency.value, at, stop: 0 }); },
+          stop: (at: number) => { if (started.length) started[started.length - 1].stop = at; },
+          onended: null as null | (() => void),
+        };
+        return osc;
+      },
+      close: vi.fn(async () => {}),
+    };
+    return { ctx, started, setTime: (t: number) => { currentTime = t; ctx.currentTime = t; } };
+  }
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).AudioContext;
+    Aura.resetAudio();
+  });
+
+  it('woła prymityw hosta, gdy ten go dostarcza', async () => {
+    const playBell = vi.fn(async () => {});
+    const host = makeHost({ playBell });
+    Aura.setHost(host);
+
+    await Aura.bell(3);
+
+    expect(playBell).toHaveBeenCalledTimes(1);
+    expect(playBell).toHaveBeenCalledWith(expect.objectContaining({ times: 3 }));
+  });
+
+  it('bez hosta i bez Web Audio nie wywraca skryptu', async () => {
+    Aura.setHost(makeHost());
+    await expect(Aura.bell()).resolves.toBeUndefined();
+  });
+
+  it('gra zadaną liczbę uderzeń przez Web Audio', async () => {
+    const { ctx, started } = fakeAudio();
+    (globalThis as Record<string, unknown>).AudioContext = function () { return ctx; };
+    Aura.setHost(makeHost());
+
+    await Aura.bell({ times: 2, frequency: 700, duration: 0.01 });
+
+    // Każde uderzenie to dwa oscylatory: ton podstawowy i składowa dzwonu.
+    expect(started.length).toBe(4);
+    expect(started[0].freq).toBe(700);
+    expect(started[1].freq).toBeGreaterThan(700);
+  });
+
+  it('wznawia zawieszony kontekst (polityka autoplay)', async () => {
+    const { ctx } = fakeAudio();
+    ctx.state = 'suspended';
+    (globalThis as Record<string, unknown>).AudioContext = function () { return ctx; };
+    Aura.setHost(makeHost());
+
+    await Aura.bell({ duration: 0.01 });
+
+    expect(ctx.resume).toHaveBeenCalled();
+  });
+
+  it('liczbę uderzeń trzyma w rozsądnych granicach', async () => {
+    const { ctx, started } = fakeAudio();
+    (globalThis as Record<string, unknown>).AudioContext = function () { return ctx; };
+    Aura.setHost(makeHost());
+
+    await Aura.bell({ times: 99, duration: 0.01 });
+
+    expect(started.length).toBeLessThanOrEqual(2 * 8);
+  });
+});
+
 describe('komponenty', () => {
   it('przyjmuje konfigurację jako JSON-string (z bloczka) i jako obiekt (ze skryptu)', async () => {
     const shown: unknown[] = [];

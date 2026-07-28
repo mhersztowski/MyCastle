@@ -73,6 +73,7 @@ import {
   CollectionsRounded as CollectionsIcon,
   RefreshRounded as RefreshIcon,
   OpenInNewRounded as OpenIcon,
+  LanguageRounded as LinkIcon,
   EventNoteRounded as CalWidgetIcon,
   RssFeedRounded as RssIcon,
   AccessTimeRounded as ClockIcon,
@@ -101,6 +102,7 @@ import {
   PlayArrowRounded as PlayIcon,
 } from '@mui/icons-material';
 import { App } from '../../App';
+import { Aura } from '../../../../../packages/core/browser/aura/aura';
 import { setOccurrenceCancelled } from '../calendar/eventOccurrence';
 import { readUserJson, readUserFileText } from '../../services/userJson';
 import { runBrowserComponent, type RunHandle } from '../../modules/component-runner/runBrowserComponent';
@@ -121,12 +123,15 @@ type WidgetKind = 'pages' | 'drive-fav' | 'immich' | 'gphotos' | 'calendar' | 'r
 interface RssFeed { name?: string; url: string; }
 interface Contact { name: string; detail?: string; hue?: number; }
 interface RadioStation { name: string; url: string; }
+/** Własny odnośnik w widgecie „Szybkie przejście" — otwierany w nowej karcie. */
+interface PageUrlLink { id: string; label: string; url: string; }
 /** Zakładka widgetu „Tabs": osadzony widget wraz z własną konfiguracją. */
 interface TabDef { id: string; label: string; kind: WidgetKind; config?: WidgetConfig; }
 
 interface WidgetConfig {
   title?: string;
   pages?: string[];               // pages: wybrane strony (klucz = text); brak ⇒ wszystkie
+  links?: PageUrlLink[];          // pages: własne adresy URL (otwierane w przeglądarce)
   shareUrl?: string;              // immich / gphotos
   mode?: 'random' | 'single';     // gphotos: pokaz losowy / jeden plik
   selected?: number[];            // gphotos: wybrane indeksy zdjęć
@@ -291,6 +296,23 @@ function PagesWidget({ userName, config }: { userName: string; config?: WidgetCo
   const pages = useMemo(() => buildPages(userName), [userName]);
   const sel = config?.pages;
   const list = sel ? pages.filter((p) => sel.includes(p.text)) : pages;
+  const links = config?.links ?? [];
+
+  /** Adres bez protokołu i tak trafi do przeglądarki — dopisujemy https, żeby nie
+   *  potraktowała go jako ścieżki względnej wewnątrz aplikacji. */
+  const openLink = (raw: string) => {
+    const url = /^[a-z][\w+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+    // noopener/noreferrer: otwierana strona nie dostaje uchwytu do naszego okna.
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  /** Kolor kafelka wyliczony z nazwy — stały między renderami, bez pola w konfiguracji. */
+  const hueFor = (text: string) => {
+    let h = 0;
+    for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 360;
+    return h;
+  };
+
   return (
     <Box
       sx={{
@@ -303,9 +325,9 @@ function PagesWidget({ userName, config }: { userName: string; config?: WidgetCo
         alignContent: 'start',
       }}
     >
-      {list.length === 0 && (
+      {list.length === 0 && links.length === 0 && (
         <Typography variant="body2" sx={{ opacity: 0.55, gridColumn: '1 / -1', textAlign: 'center', mt: 2 }}>
-          Wybierz strony w ustawieniach ⚙
+          Wybierz strony lub dodaj własne adresy w ustawieniach ⚙
         </Typography>
       )}
       {list.map((p) => (
@@ -354,6 +376,61 @@ function PagesWidget({ userName, config }: { userName: string; config?: WidgetCo
           </Typography>
         </Box>
       ))}
+
+      {/* Własne adresy — otwierane w nowej karcie przeglądarki, nie routerem. */}
+      {links.map((l) => {
+        const hue = hueFor(l.label || l.url);
+        return (
+          <Box
+            key={l.id}
+            onClick={() => openLink(l.url)}
+            title={l.url}
+            sx={{
+              cursor: 'pointer',
+              borderRadius: 2.5,
+              p: 1.25,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 0.75,
+              textAlign: 'center',
+              border: '1px dashed',
+              borderColor: pal.subtle,
+              background: pal.mode === 'dark'
+                ? 'linear-gradient(160deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01))'
+                : 'linear-gradient(160deg, rgba(255,255,255,0.9), rgba(240,243,250,0.7))',
+              transition: 'transform .15s ease, box-shadow .15s ease, border-color .15s ease',
+              '&:hover': {
+                transform: 'translateY(-3px)',
+                borderColor: `hsla(${hue},80%,60%,0.5)`,
+                boxShadow: `0 8px 22px -8px hsla(${hue},80%,50%,0.55)`,
+              },
+            }}
+          >
+            <Box
+              sx={{
+                width: 46,
+                height: 46,
+                borderRadius: '14px',
+                display: 'grid',
+                placeItems: 'center',
+                color: '#fff',
+                position: 'relative',
+                background: `linear-gradient(145deg, hsl(${hue},75%,58%), hsl(${(hue + 40) % 360},70%,45%))`,
+                boxShadow: `0 6px 16px -6px hsla(${hue},80%,50%,0.7)`,
+                '& svg': { fontSize: 24 },
+              }}
+            >
+              <LinkIcon />
+              {/* Strzałka „w nowym oknie" — od razu widać, że to wyjście poza aplikację. */}
+              <OpenIcon sx={{ position: 'absolute', right: -4, bottom: -4, fontSize: '14px !important', background: pal.card, borderRadius: '50%', p: '1px' }} />
+            </Box>
+            <Typography variant="caption" noWrap sx={{ fontWeight: 600, lineHeight: 1.1, opacity: 0.9, maxWidth: '100%' }}>
+              {l.label || l.url}
+            </Typography>
+          </Box>
+        );
+      })}
     </Box>
   );
 }
@@ -738,7 +815,10 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
     setTtsOn(nv);
     try { localStorage.setItem(TTS_KEY, nv ? '1' : '0'); } catch { /* ignore */ }
     // Kliknięcie = gest użytkownika → odblokowuje audio (autoplay) i potwierdza, że TTS działa.
-    if (nv) App.instance.speechService.speak({ text: 'Zapowiedzi kalendarza włączone' }).catch(() => {});
+    if (nv) {
+      void Aura.bell().catch(() => {});
+      App.instance.speechService.speak({ text: 'Zapowiedzi kalendarza włączone' }).catch(() => {});
+    }
   };
   const announcedRef = useRef<Set<string>>(new Set());
   const eventsRef = useRef(dataSource.events); eventsRef.current = dataSource.events;
@@ -747,6 +827,10 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
   const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
   const enqueueTts = useCallback((text: string) => {
     ttsChainRef.current = ttsChainRef.current
+      // Dzwonek przed zapowiedzią — zwraca uwagę, zanim padnie treść, więc
+      // pierwsze słowa nie giną. Awaria dźwięku nie może zablokować mowy,
+      // dlatego błąd jest tu połykany osobno.
+      .then(() => Aura.bell().catch(() => {}))
       .then(() => App.instance.speechService.speak({ text }))
       .catch(() => { /* provider niedostępny/niekonfigurowany */ });
   }, []);
@@ -1815,6 +1899,55 @@ function WidgetSettingsDialog({
               <Button size="small" onClick={() => patch({ pages: pages.map((p) => p.text) })}>Zaznacz wszystkie</Button>
               <Button size="small" onClick={() => patch({ pages: [] })}>Odznacz wszystkie</Button>
             </Box>
+
+            <Divider sx={{ my: 2 }} />
+
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Własne adresy</Typography>
+            <Typography variant="caption" sx={{ display: 'block', mb: 1.5, opacity: 0.65 }}>
+              Kafelki otwierające stronę w nowej karcie przeglądarki. Bez „https://" adres i tak
+              zostanie uzupełniony.
+            </Typography>
+            {(cfg.links ?? []).map((l, i) => (
+              <Box key={l.id} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  label="Nazwa"
+                  value={l.label}
+                  sx={{ width: 150 }}
+                  onChange={(e) => {
+                    const next = [...(cfg.links ?? [])];
+                    next[i] = { ...next[i], label: e.target.value };
+                    patch({ links: next });
+                  }}
+                />
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="Adres"
+                  placeholder="https://przyklad.pl"
+                  value={l.url}
+                  onChange={(e) => {
+                    const next = [...(cfg.links ?? [])];
+                    next[i] = { ...next[i], url: e.target.value };
+                    patch({ links: next });
+                  }}
+                />
+                <Tooltip title="Usuń adres">
+                  <IconButton size="small" onClick={() => patch({ links: (cfg.links ?? []).filter((_, j) => j !== i) })}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ))}
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => patch({
+                links: [...(cfg.links ?? []), { id: `link-${Date.now().toString(36)}`, label: '', url: '' }],
+              })}
+            >
+              Dodaj adres
+            </Button>
           </>
         )}
 

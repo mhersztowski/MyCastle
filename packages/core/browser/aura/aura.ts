@@ -36,6 +36,18 @@ export interface AuraChatMessage {
   content: string;
 }
 
+/** Parametry dzwonka (`bell`). Wszystkie opcjonalne. */
+export interface AuraBellOptions {
+  /** Ile uderzeń, 1–8 (domyślnie 1). */
+  times?: number;
+  /** Ton podstawowy w Hz (domyślnie 880 — a''). */
+  frequency?: number;
+  /** Czas wybrzmienia pojedynczego uderzenia w sekundach (domyślnie 0.7). */
+  duration?: number;
+  /** Głośność 0–1 (domyślnie 0.35 — sygnał ma nie przestraszyć). */
+  volume?: number;
+}
+
 /**
  * Prymitywy dostarczane przez stronę Aury. Wszystkie są „głupie" — logika
  * (kolejność kroków, obsługa błędów, kontekst rozmowy) siedzi w klasie.
@@ -69,6 +81,11 @@ export interface AuraHost {
   getSerperKey(): string;
   /** Log diagnostyczny widoczny w panelu debug. */
   debug(message: string): void;
+  /**
+   * Opcjonalny własny dzwonek. Gdy host go nie ma, `bell()` syntezuje dźwięk
+   * przez Web Audio — bez plików i bez pobierania czegokolwiek.
+   */
+  playBell?(options: Required<AuraBellOptions>): Promise<void>;
 }
 
 type GlobalFn = (...args: unknown[]) => Promise<unknown> | unknown;
@@ -106,6 +123,8 @@ export class Aura {
   private static agentChats: Record<string, AuraChatMessage[]> = {};
   private static currentAgentChat = 'default';
   private static agentResponseText = '';
+  /** Kontekst Web Audio dla `bell()` — jeden na stronę (przeglądarki limitują ich liczbę). */
+  private static audioCtx: AudioContext | null = null;
 
   // ── Cykl życia ─────────────────────────────────────────────────────────────
 
@@ -126,6 +145,12 @@ export class Aura {
   /** Handlery zebrane przez `onActivator` w bieżącym przebiegu. */
   static pendingHandlers(): Array<() => Promise<void>> {
     return Aura.handlers;
+  }
+
+  /** Zamyka kontekst audio (`bell`). Osobno od `reset`, bo dźwięk nie należy do przebiegu. */
+  static resetAudio(): void {
+    void Aura.audioCtx?.close?.();
+    Aura.audioCtx = null;
   }
 
   /** Pełny reset — używany w testach. */
@@ -163,6 +188,98 @@ export class Aura {
       Aura.host.setLastUtterance(answer);
     }
     return answer;
+  }
+
+  /**
+   * Gra dzwonek sygnalizacyjny — bez plików audio i bez pobierania czegokolwiek:
+   * dźwięk jest syntezowany na miejscu przez Web Audio. Uderzenie to ton
+   * podstawowy plus składowa 2.76× (typowa dla dzwonu) z wykładniczym zanikiem,
+   * co brzmi jak dzwonek, a nie jak „piknięcie".
+   *
+   *   await Aura.bell();                       // jedno uderzenie
+   *   await Aura.bell(3);                      // trzy uderzenia
+   *   await Aura.bell({ frequency: 660, times: 2 });
+   *
+   * Host może dostarczyć własną implementację (`playBell`) — np. gdy dźwięk ma
+   * pójść na głośnik urządzenia, a nie do przeglądarki. Gdy nie ma ani hosta,
+   * ani Web Audio (testy, Node), metoda po prostu nic nie robi.
+   */
+  static async bell(options?: unknown): Promise<void> {
+    // Z bloczka przychodzi zwykle liczba — najczęściej chodzi o liczbę uderzeń.
+    const raw: AuraBellOptions = typeof options === 'number'
+      ? { times: options }
+      : (options && typeof options === 'object' ? options as AuraBellOptions : {});
+
+    const opts: Required<AuraBellOptions> = {
+      // Górna granica jest po to, żeby literówka w skrypcie nie zamieniła
+      // sygnału w minutowy dzwon.
+      times: Math.min(8, Math.max(1, Math.round(Number(raw.times) || 1))),
+      frequency: Math.min(4000, Math.max(80, Number(raw.frequency) || 880)),
+      duration: Math.min(5, Math.max(0.05, Number(raw.duration) || 0.7)),
+      volume: Math.min(1, Math.max(0, raw.volume === undefined ? 0.35 : Number(raw.volume))),
+    };
+
+    if (Aura.host.playBell) {
+      await Aura.host.playBell(opts);
+      return;
+    }
+
+    const ctx = Aura.ensureAudio();
+    if (!ctx) {
+      Aura.host.debug('bell: brak Web Audio — dzwonek pominięty');
+      return;
+    }
+    // Autoplay policy usypia kontekst utworzony poza gestem użytkownika.
+    if (ctx.state === 'suspended') {
+      try { await ctx.resume(); } catch { /* zostanie cisza, ale skrypt idzie dalej */ }
+    }
+
+    // Odstęp krótszy niż wybrzmienie — uderzenia mają się nakładać jak w dzwonie.
+    const gap = Math.max(0.12, opts.duration * 0.45);
+    for (let i = 0; i < opts.times; i++) {
+      Aura.strike(ctx, ctx.currentTime + i * gap, opts);
+    }
+    // Czekamy do wybrzmienia, żeby `await Aura.bell()` znaczyło „po dzwonku".
+    const totalMs = ((opts.times - 1) * gap + opts.duration) * 1000;
+    await new Promise((resolve) => setTimeout(resolve, totalMs));
+  }
+
+  /** Pojedyncze uderzenie: dwa oscylatory z własnym wygaszaniem. */
+  private static strike(ctx: AudioContext, at: number, opts: Required<AuraBellOptions>): void {
+    // 2.76 to pierwsza istotna składowa nieharmoniczna dzwonu; sam ton podstawowy
+    // brzmiałby jak sygnał testowy.
+    const partials: [number, number][] = [[1, 1], [2.76, 0.45]];
+    for (const [ratio, level] of partials) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(opts.frequency * ratio, at);
+
+      const peak = Math.max(0.0001, opts.volume * level);
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(peak, at + 0.008);           // szybki atak
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + opts.duration); // długi zanik
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(at);
+      osc.stop(at + opts.duration + 0.05);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+    }
+  }
+
+  /** Leniwie tworzy kontekst audio; `null`, gdy środowisko go nie ma. */
+  private static ensureAudio(): AudioContext | null {
+    if (Aura.audioCtx) return Aura.audioCtx;
+    const g = globalThis as { AudioContext?: new () => AudioContext; webkitAudioContext?: new () => AudioContext };
+    const Ctor = g.AudioContext ?? g.webkitAudioContext;
+    if (!Ctor) return null;
+    try {
+      Aura.audioCtx = new Ctor();
+    } catch {
+      Aura.audioCtx = null;
+    }
+    return Aura.audioCtx;
   }
 
   /** Nasłuchuje z opcjonalnym limitem sekund; 0 = bez limitu. */
@@ -361,6 +478,7 @@ export const aura = {
   utteranceContains: (fragment: unknown) => Aura.utteranceContains(fragment),
   callAction: (id: unknown) => Aura.callAction(id),
   wait: (seconds: unknown) => Aura.wait(seconds),
+  bell: (options?: unknown) => Aura.bell(options),
   endConversation: (message: unknown) => Aura.endConversation(message),
   showComponent: (config: unknown) => Aura.showComponent(config),
   agentNewChat: (id: unknown) => Aura.agentNewChat(id),

@@ -9,6 +9,7 @@
  *  - aura_utterance_contains — czy wypowiedź zawiera [tekst] (Boolean)
  *  - aura_call_action   — uruchom inną akcję po id
  *  - aura_wait          — poczekaj [n] s
+ *  - aura_bell          — zagraj dzwonek [n] razy
  *  - aura_stop          — zakończ konwersację
  *
  * Generator produkuje JS wywołujący runtime `aura` (podgląd logiki).
@@ -163,6 +164,20 @@ export function defineAuraConversationBlocks(): void {
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
       this.setColour(HUE_ACTION);
+    },
+  };
+
+  // Dzwonek sygnalizacyjny — dźwięk syntezowany w przeglądarce (bez pliku audio)
+  Blockly.Blocks['aura_bell'] = {
+    init(this: Blockly.Block) {
+      this.appendDummyInput()
+        .appendField('🔔 dzwonek')
+        .appendField(new Blockly.FieldNumber(1, 1, 8, 1), 'TIMES')
+        .appendField('raz(y)');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_ACTION);
+      this.setTooltip('Gra dzwonek sygnalizacyjny i czeka, aż wybrzmi — dobre przed zapowiedzią.');
     },
   };
 
@@ -382,6 +397,11 @@ export function registerAuraGenerators(): void {
     return `await Aura.wait(${s});\n`;
   };
 
+  g.forBlock['aura_bell'] = function (block) {
+    const times = block.getFieldValue('TIMES') || 1;
+    return `await Aura.bell(${times});\n`;
+  };
+
   g.forBlock['aura_stop'] = function (block) {
     const msg = block.getFieldValue('MSG') || '';
     return `await Aura.endConversation(${JSON.stringify(msg)});\nreturn;\n`;
@@ -473,6 +493,7 @@ export const AURA_TOOLBOX = {
         { kind: 'block', type: 'aura_utterance_contains', inputs: { TEXT: { shadow: { type: 'text', fields: { TEXT: 'tak' } } } } },
         { kind: 'block', type: 'aura_call_action' },
         { kind: 'block', type: 'aura_wait' },
+        { kind: 'block', type: 'aura_bell' },
         { kind: 'block', type: 'aura_stop' },
         { kind: 'block', type: 'aura_listen' },
         { kind: 'block', type: 'aura_agent_new_chat' },
