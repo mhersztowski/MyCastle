@@ -15,8 +15,8 @@
  * błąd składni, niż żeby symbol po cichu był `undefined`.
  */
 
-/** Moduły środowiska: logika Aury oraz kontrakt `api`/`display`. */
-const ENV_MODULE_RE = /(^|\/)(aura\/aura|api\/api)(\.ts|\.js)?$/;
+/** Moduły środowiska: logika Aury, kontrakt `api`/`display` oraz API backendu (`Server`). */
+const ENV_MODULE_RE = /(^|\/)(aura\/aura|api\/api|server\/api)(\.ts|\.js)?$/;
 
 const IMPORT_RE = /^[ \t]*import\s+(?:type\s+)?([^;'"]*?)\s+from\s+['"]([^'"]+)['"][ \t]*;?[ \t]*$/gm;
 const SIDE_EFFECT_IMPORT_RE = /^[ \t]*import\s+['"]([^'"]+)['"][ \t]*;?[ \t]*$/gm;

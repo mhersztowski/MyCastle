@@ -68,7 +68,18 @@ export interface VoiceActionCollection {
     cx?: string;
     serperKey?: string;
   };
+  /** Przypominanie o akcjach w tle (`Aura.backgroundAction`) czekających na decyzję. */
+  backgroundReminder?: AuraBackgroundReminder;
 }
+
+/** Ustawienia przypomnień o zgłoszeniach z listy „W tle". */
+export interface AuraBackgroundReminder {
+  enabled: boolean;
+  /** Co ile minut Aura ma przypominać (1–600). */
+  minutes: number;
+}
+
+export const DEFAULT_BACKGROUND_REMINDER: AuraBackgroundReminder = { enabled: true, minutes: 5 };
 
 export const DEFAULT_VOICE_ACTION_COLLECTION: VoiceActionCollection = {
   type: 'voice_actions',
@@ -76,6 +87,7 @@ export const DEFAULT_VOICE_ACTION_COLLECTION: VoiceActionCollection = {
   variants: [],
   wakeWords: [],
   globalXml: '',
+  backgroundReminder: { ...DEFAULT_BACKGROUND_REMINDER },
 };
 
 /** Fabryka akcji głosowej (id dostarczany przez wywołującego — brak zależności od crypto). */

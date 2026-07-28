@@ -4,9 +4,10 @@ import type { Project } from '@mhersztowski/core-cad';
 import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSTEP, exportSTL, exportSVG, importDXF, importJSON, importSTL } from '../io/CadExporter';
 import { ProjectBrowser } from './ProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
-import { SCENE_EXT, CAD3D_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../vfs/cadProjectApi';
+import { SCENE_EXT, CAD3D_EXT, CAD_EXT, readFileAt, writeFileAt, buildViewerUrl } from '../vfs/cadProjectApi';
 import { useRegisterFileOps, type FileOps } from '../fileops/FileOpsContext';
 
+import { syncOpenUrl } from '../vfs/openTarget';
 interface Props {
   project: Project;
   /** 'cad' or 'cad3d' — chooses the viewer route and registry key. */
@@ -28,6 +29,10 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
   const [sceneOpenOpen, setSceneOpenOpen] = useState(false);
   const [currentFile, setCurrentFile] = useState<{ dir: string; name: string } | null>(null);
   const currentName = currentFile?.name ?? null;
+  // Ścieżka w kształcie, jakiego używają viewery i adresy `/open/…` (bez wiodącego `/`).
+  const currentPath = currentFile
+    ? `${currentFile.dir}/${currentFile.name}${mode === 'cad3d' ? CAD3D_EXT : CAD_EXT}`.replace(/^\/+/, '')
+    : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dxfInputRef = useRef<HTMLInputElement>(null);
   const stlImportRef = useRef<HTMLInputElement>(null);
@@ -52,6 +57,7 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
   }
   async function handleReadScene(dir: string, name: string) {
     onSceneData?.(await readFileAt(dir, name, sceneExtForMode));
+    syncOpenUrl(`${dir}/${name}${sceneExtForMode}`);
   }
 
   async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -106,6 +112,7 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
 
   const ops: FileOps = useMemo(() => ({
     currentName,
+    currentPath,
     newDoc: handleNew,
     server: serverActions,
     importItems: [
@@ -125,9 +132,9 @@ export function CadFileOps({ project, mode, getSceneData, onSceneData }: Props) 
     ],
     viewerUrl,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [mode, hasSceneData, busy, viewerUrl, currentName, project, serverActions]);
+  }), [mode, hasSceneData, busy, viewerUrl, currentName, currentPath, project, serverActions]);
 
-  useRegisterFileOps(mode, ops, [mode, hasSceneData, busy, viewerUrl, currentName]);
+  useRegisterFileOps(mode, ops, [mode, hasSceneData, busy, viewerUrl, currentName, currentPath]);
 
   return (
     <>

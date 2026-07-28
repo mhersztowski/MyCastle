@@ -20,6 +20,12 @@ export interface FileMenuItem {
 export interface FileOps {
   /** Friendly name of the currently-open file, shown in the menu header. */
   currentName?: string | null;
+  /**
+   * Pełna ścieżka VFS otwartego pliku (np. `users/marcin/projects/silnik.cad3d.json`).
+   * Dzięki niej okno „Embed in Notes" potrafi z góry zaznaczyć bieżący projekt —
+   * sama nazwa bywa niejednoznaczna, gdy ten sam plik leży w kilku katalogach.
+   */
+  currentPath?: string | null;
   /** Start a new/empty document. */
   newDoc?: () => void;
   /** Multiple "New …" actions (e.g. PCB: Project/Schematic/PCB/Symbol/Footprint). */

@@ -5,6 +5,7 @@ import type { Project } from '@mhersztowski/core-cad';
 import { loadProjectFromText } from '../io/CadExporter';
 import { CAD_EXT, SCENE_EXT, readFileAt, writeFileAt } from '../vfs/cadProjectApi';
 import { ServerFileBrowser } from './ServerFileBrowser';
+import { syncOpenUrl } from '../vfs/openTarget';
 
 interface Props {
   open: boolean;
@@ -27,6 +28,7 @@ interface Props {
 export function ProjectBrowser({ open, mode, project, onClose, onDone, onFile }: Props) {
   async function handleOpen(dir: string, name: string) {
     const jsonText = await readFileAt(dir, name, CAD_EXT);
+    syncOpenUrl(`${dir}/${name}${CAD_EXT}`);
     loadProjectFromText(jsonText, project);
     onFile?.(dir, name);
   }

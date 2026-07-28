@@ -76,6 +76,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ArrowRightIcon from '@mui/icons-material/ArrowRight';
 import CreateOutlinedIcon from '@mui/icons-material/CreateOutlined';
 import type { SvgIconComponent } from '@mui/icons-material';
+import { syncOpenUrl } from '../vfs/openTarget';
 
 type Editor = 'schematic' | 'pcb' | 'symbol' | 'footprint';
 interface Tool { id: string; title: string; icon: SvgIconComponent }
@@ -4359,6 +4360,7 @@ export function PcbView() {
   const loadProject = async (dir: string, name: string) => {
     try {
       const d = JSON.parse(await readFileAt(dir, name, PCB_EXT));
+      syncOpenUrl(`${dir}/${name}${PCB_EXT}`);
       if (d.error) throw new Error(d.error);
       setCurrentFile({ dir, name });
       type PDoc = { id: string; name: string; desc?: string; elements?: unknown[]; placed?: unknown[]; meta?: unknown };

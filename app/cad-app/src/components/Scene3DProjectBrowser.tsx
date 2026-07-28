@@ -19,6 +19,8 @@ import {
   deleteScene3dFile, deleteScene3dProject, renameScene3dProject,
 } from '../vfs/cadProjectApi';
 import type { Scene3DProjectMeta, Scene3DFileMeta } from '../vfs/cadProjectApi';
+import { syncOpenUrl } from '../vfs/openTarget';
+import { getCurrentUserId } from '../vfs/cadProjectApi';
 
 interface Props {
   open: boolean;
@@ -112,6 +114,8 @@ export function Scene3DProjectBrowser({ open, mode, onClose, onOpen, onSave }: P
     setBusy(true); setError(null);
     try {
       const json = await readScene3dFile(view.project, file);
+      // Ścieżka w kształcie, jakiego używa viewer/`/open/` dla Scene 3D.
+      syncOpenUrl(`users/${getCurrentUserId()}/scene3d/${view.project}/${file}`);
       onOpen?.(json, view.project, file);
       onClose();
     } catch (e) { setError(String(e)); }

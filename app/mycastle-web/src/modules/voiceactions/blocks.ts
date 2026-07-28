@@ -10,6 +10,8 @@
  *  - aura_call_action   — uruchom inną akcję po id
  *  - aura_wait          — poczekaj [n] s
  *  - aura_bell          — zagraj dzwonek [n] razy
+ *  - aura_background_action — zgłoś akcję w tle i poczekaj na decyzję użytkownika
+ *  - srv_*              — operacje backendu (packages/core/browser/server/api.ts) przez fasadę `Server`
  *  - aura_stop          — zakończ konwersację
  *
  * Generator produkuje JS wywołujący runtime `aura` (podgląd logiki).
@@ -28,6 +30,7 @@ const HUE_VFS = 45;      // złoto — pliki/VFS
 const HUE_GLOBAL = 330;  // magenta — funkcje globalne
 const HUE_WEB = 210;     // niebieski — sieć/Google
 const HUE_COMPONENT = 100; // limonka — komponenty UI
+const HUE_SERVER = 15;   // ceglasty — API backendu (Server.*)
 
 // Nazwy funkcji globalnych (do dropdownu bloku wywołania) — aktualizowane przez edytor.
 let globalNames: string[] = [];
@@ -178,6 +181,133 @@ export function defineAuraConversationBlocks(): void {
       this.setNextStatement(true, null);
       this.setColour(HUE_ACTION);
       this.setTooltip('Gra dzwonek sygnalizacyjny i czeka, aż wybrzmi — dobre przed zapowiedzią.');
+    },
+  };
+
+  // Akcja w tle — zgłoszenie czeka na „Uruchom"/„Odrzuć" w widoku „W tle"
+  Blockly.Blocks['aura_background_action'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('LABEL').setCheck('String').appendField('🕓 akcja w tle');
+      this.appendDummyInput()
+        .appendField('zapisz decyzję w')
+        .appendField(new Blockly.FieldVariable('decyzja'), 'VAR');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_ACTION);
+      this.setTooltip(
+        'Zgłasza akcję na listę „W tle" (dzwonek + zapowiedź) i CZEKA, aż użytkownik '
+        + 'kliknie Uruchom albo Odrzuć. Do zmiennej trafia "run" lub "cancel".',
+      );
+    },
+  };
+
+  // ── Serwer: operacje backendu (fasada `Server` → browser/server/api.ts) ────
+  // Bloczki celowo nie mają parametru „połączenie" — fasada zestawia je sama
+  // przy pierwszym użyciu, poświadczeniami zalogowanego użytkownika.
+
+  Blockly.Blocks['srv_file_read'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('PATH').setCheck('String').appendField('📄 wczytaj plik');
+      this.appendDummyInput().appendField('do').appendField(new Blockly.FieldVariable('tresc'), 'VAR');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+      this.setTooltip('Odczyt pliku z serwera. Ścieżka względem katalogu użytkownika, np. drive/notatka.md');
+    },
+  };
+
+  Blockly.Blocks['srv_file_write'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('PATH').setCheck('String').appendField('💾 zapisz plik');
+      this.appendValueInput('DATA').setCheck('String').appendField('treść');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+      this.setTooltip('Zapis pliku na serwerze (nadpisuje).');
+    },
+  };
+
+  Blockly.Blocks['srv_http_request'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('URL').setCheck('String').appendField('🌐 pobierz z adresu');
+      this.appendDummyInput()
+        .appendField('metodą')
+        .appendField(new Blockly.FieldDropdown([['GET', 'GET'], ['POST', 'POST'], ['PUT', 'PUT'], ['DELETE', 'DELETE']]), 'METHOD')
+        .appendField('do')
+        .appendField(new Blockly.FieldVariable('odpowiedz'), 'VAR');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+      this.setTooltip('Żądanie HTTP wykonuje SERWER, więc omija ograniczenia CORS przeglądarki. Do zmiennej trafia ciało odpowiedzi.');
+    },
+  };
+
+  Blockly.Blocks['srv_log'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('MSG').setCheck('String')
+        .appendField('📝 log')
+        .appendField(new Blockly.FieldDropdown([['info', 'info'], ['ostrzeżenie', 'warning'], ['błąd', 'error']]), 'LEVEL');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+      this.setTooltip('Wysyła komunikat na kanał logu (widget „IoT Log" na Pulpicie, plik log.txt).');
+    },
+  };
+
+  Blockly.Blocks['srv_iot_devices'] = {
+    init(this: Blockly.Block) {
+      this.appendDummyInput()
+        .appendField('📡 lista urządzeń IoT do')
+        .appendField(new Blockly.FieldVariable('urzadzenia'), 'VAR');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+    },
+  };
+
+  Blockly.Blocks['srv_iot_command'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('DEVICE').setCheck('String').appendField('📡 urządzenie');
+      this.appendValueInput('COMMAND').setCheck('String').appendField('komenda');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+      this.setTooltip('Wysyła komendę do urządzenia i czeka na potwierdzenie.');
+    },
+  };
+
+  Blockly.Blocks['srv_iot_telemetry'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('DEVICE').setCheck('String').appendField('📈 telemetria urządzenia');
+      this.appendValueInput('KEY').setCheck('String').appendField('metryka');
+      this.appendDummyInput().appendField('do').appendField(new Blockly.FieldVariable('wartosc'), 'VAR');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+    },
+  };
+
+  Blockly.Blocks['srv_mail_send'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('TO').setCheck('String').appendField('✉ wyślij wiadomość do');
+      this.appendValueInput('TOPIC').setCheck('String').appendField('temat');
+      this.appendValueInput('CONTENT').setCheck('String').appendField('treść');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
+    },
+  };
+
+  Blockly.Blocks['srv_git'] = {
+    init(this: Blockly.Block) {
+      this.appendValueInput('PATH').setCheck('String')
+        .appendField('git')
+        .appendField(new Blockly.FieldDropdown([['commit', 'commit'], ['pull', 'pull'], ['push', 'push']]), 'OP')
+        .appendField('w repo');
+      this.appendValueInput('MSG').setCheck('String').appendField('opis (dla commit)');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(HUE_SERVER);
     },
   };
 
@@ -402,6 +532,76 @@ export function registerAuraGenerators(): void {
     return `await Aura.bell(${times});\n`;
   };
 
+  g.forBlock['aura_background_action'] = function (block) {
+    const label = g.valueToCode(block, 'LABEL', Order.NONE) || "''";
+    const varName = g.getVariableName(block.getFieldValue('VAR'));
+    // Do zmiennej trafia samo 'run'/'cancel' — w bloczkach porównuje się je tekstem.
+    return `${varName} = (await Aura.backgroundAction(${label})).response;\n`;
+  };
+
+  // ── Serwer ────────────────────────────────────────────────────────────────
+
+  g.forBlock['srv_file_read'] = function (block) {
+    const path = g.valueToCode(block, 'PATH', Order.NONE) || "''";
+    const varName = g.getVariableName(block.getFieldValue('VAR'));
+    return `${varName} = await Server.fileRead(${path});\n`;
+  };
+
+  g.forBlock['srv_file_write'] = function (block) {
+    const path = g.valueToCode(block, 'PATH', Order.NONE) || "''";
+    const data = g.valueToCode(block, 'DATA', Order.NONE) || "''";
+    return `await Server.fileWrite(${path}, ${data});\n`;
+  };
+
+  g.forBlock['srv_http_request'] = function (block) {
+    const url = g.valueToCode(block, 'URL', Order.NONE) || "''";
+    const method = block.getFieldValue('METHOD') || 'GET';
+    const varName = g.getVariableName(block.getFieldValue('VAR'));
+    return `${varName} = await Server.httpJson(${url}, { method: ${JSON.stringify(method)} });\n`;
+  };
+
+  g.forBlock['srv_log'] = function (block) {
+    const msg = g.valueToCode(block, 'MSG', Order.NONE) || "''";
+    const level = block.getFieldValue('LEVEL') || 'info';
+    const fn = level === 'error' ? 'logError' : level === 'warning' ? 'logWarning' : 'logInfo';
+    return `await Server.${fn}(${msg});\n`;
+  };
+
+  g.forBlock['srv_iot_devices'] = function (block) {
+    const varName = g.getVariableName(block.getFieldValue('VAR'));
+    return `${varName} = await Server.iotDevices();\n`;
+  };
+
+  g.forBlock['srv_iot_command'] = function (block) {
+    const device = g.valueToCode(block, 'DEVICE', Order.NONE) || "''";
+    const command = g.valueToCode(block, 'COMMAND', Order.NONE) || "''";
+    return `await Server.iotCommand(${device}, ${command});\n`;
+  };
+
+  g.forBlock['srv_iot_telemetry'] = function (block) {
+    const device = g.valueToCode(block, 'DEVICE', Order.NONE) || "''";
+    const key = g.valueToCode(block, 'KEY', Order.NONE) || "''";
+    const varName = g.getVariableName(block.getFieldValue('VAR'));
+    return `${varName} = await Server.iotTelemetry(${device}, ${key});\n`;
+  };
+
+  g.forBlock['srv_mail_send'] = function (block) {
+    const to = g.valueToCode(block, 'TO', Order.NONE) || "''";
+    const topic = g.valueToCode(block, 'TOPIC', Order.NONE) || "''";
+    const content = g.valueToCode(block, 'CONTENT', Order.NONE) || "''";
+    return `await Server.mailSend(${to}, ${topic}, ${content});\n`;
+  };
+
+  g.forBlock['srv_git'] = function (block) {
+    const path = g.valueToCode(block, 'PATH', Order.NONE) || "''";
+    const msg = g.valueToCode(block, 'MSG', Order.NONE) || "''";
+    const op = block.getFieldValue('OP') || 'commit';
+    // `commit` bierze opis, pozostałe operacje go ignorują.
+    return op === 'commit'
+      ? `await Server.gitCommit(${path}, ${msg});\n`
+      : `await Server.git${op === 'pull' ? 'Pull' : 'Push'}(${path});\n`;
+  };
+
   g.forBlock['aura_stop'] = function (block) {
     const msg = block.getFieldValue('MSG') || '';
     return `await Aura.endConversation(${JSON.stringify(msg)});\nreturn;\n`;
@@ -494,12 +694,61 @@ export const AURA_TOOLBOX = {
         { kind: 'block', type: 'aura_call_action' },
         { kind: 'block', type: 'aura_wait' },
         { kind: 'block', type: 'aura_bell' },
+        {
+          kind: 'block', type: 'aura_background_action',
+          inputs: { LABEL: { shadow: { type: 'text', fields: { TEXT: 'Wyślij raport' } } } },
+        },
         { kind: 'block', type: 'aura_stop' },
         { kind: 'block', type: 'aura_listen' },
         { kind: 'block', type: 'aura_agent_new_chat' },
         { kind: 'block', type: 'aura_agent_send_prompt', inputs: { PROMPT: { shadow: { type: 'text', fields: { TEXT: 'Podsumuj rozmowę' } } } } },
         { kind: 'block', type: 'aura_agent_send_prompt_var' },
         { kind: 'block', type: 'aura_agent_response' },
+      ],
+    },
+    {
+      kind: 'category', name: 'Serwer', colour: String(HUE_SERVER),
+      contents: [
+        { kind: 'block', type: 'srv_file_read', inputs: { PATH: { shadow: { type: 'text', fields: { TEXT: 'drive/notatka.md' } } } } },
+        {
+          kind: 'block', type: 'srv_file_write',
+          inputs: {
+            PATH: { shadow: { type: 'text', fields: { TEXT: 'drive/notatka.md' } } },
+            DATA: { shadow: { type: 'text', fields: { TEXT: 'treść' } } },
+          },
+        },
+        { kind: 'block', type: 'srv_http_request', inputs: { URL: { shadow: { type: 'text', fields: { TEXT: 'https://api.example.com/dane' } } } } },
+        { kind: 'block', type: 'srv_log', inputs: { MSG: { shadow: { type: 'text', fields: { TEXT: 'Akcja wykonana' } } } } },
+        { kind: 'block', type: 'srv_iot_devices' },
+        {
+          kind: 'block', type: 'srv_iot_command',
+          inputs: {
+            DEVICE: { shadow: { type: 'text', fields: { TEXT: 'lampa' } } },
+            COMMAND: { shadow: { type: 'text', fields: { TEXT: 'on' } } },
+          },
+        },
+        {
+          kind: 'block', type: 'srv_iot_telemetry',
+          inputs: {
+            DEVICE: { shadow: { type: 'text', fields: { TEXT: 'czujnik' } } },
+            KEY: { shadow: { type: 'text', fields: { TEXT: 'temperature' } } },
+          },
+        },
+        {
+          kind: 'block', type: 'srv_mail_send',
+          inputs: {
+            TO: { shadow: { type: 'text', fields: { TEXT: 'ktos@example.com' } } },
+            TOPIC: { shadow: { type: 'text', fields: { TEXT: 'Aura' } } },
+            CONTENT: { shadow: { type: 'text', fields: { TEXT: 'Wiadomość z akcji' } } },
+          },
+        },
+        {
+          kind: 'block', type: 'srv_git',
+          inputs: {
+            PATH: { shadow: { type: 'text', fields: { TEXT: 'drive/git/repo' } } },
+            MSG: { shadow: { type: 'text', fields: { TEXT: 'zmiany z Aury' } } },
+          },
+        },
       ],
     },
     {
@@ -589,7 +838,7 @@ export const AURA_TOOLBOX = {
  * Wywołanie rejestruje też definicje bloczków i generatory (obie operacje są
  * idempotentne), więc host nie musi o tym pamiętać.
  */
-const AURA_OWN_CATEGORIES = ['Konwersacja', 'VFS / Pliki', 'Sieć / Google', 'Komponenty', 'Funkcje globalne'];
+const AURA_OWN_CATEGORIES = ['Konwersacja', 'Serwer', 'VFS / Pliki', 'Sieć / Google', 'Komponenty', 'Funkcje globalne'];
 
 export function auraToolboxCategories(prefix = 'Aura'): Blockly.utils.toolbox.ToolboxItemInfo[] {
   defineAuraConversationBlocks();

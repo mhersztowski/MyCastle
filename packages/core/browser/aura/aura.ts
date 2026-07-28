@@ -36,6 +36,25 @@ export interface AuraChatMessage {
   content: string;
 }
 
+/** Decyzja użytkownika o zgłoszonej akcji w tle. */
+export type AuraBackgroundResponse = 'run' | 'cancel';
+
+/** Zgłoszenie czekające na decyzję — to widzi lista „W tle". */
+export interface AuraBackgroundAction {
+  id: string;
+  /** Opis pokazywany użytkownikowi. */
+  label: string;
+  /** Czas zgłoszenia (ms) — do sortowania i pokazania „ile czeka". */
+  createdAt: number;
+}
+
+/** Wynik `backgroundAction` — rozstrzygnięty dopiero po kliknięciu użytkownika. */
+export interface AuraBackgroundResult {
+  id: string;
+  label: string;
+  response: AuraBackgroundResponse;
+}
+
 /** Parametry dzwonka (`bell`). Wszystkie opcjonalne. */
 export interface AuraBellOptions {
   /** Ile uderzeń, 1–8 (domyślnie 1). */
@@ -125,6 +144,13 @@ export class Aura {
   private static agentResponseText = '';
   /** Kontekst Web Audio dla `bell()` — jeden na stronę (przeglądarki limitują ich liczbę). */
   private static audioCtx: AudioContext | null = null;
+  /** Zgłoszenia czekające na decyzję użytkownika (widok „W tle"). */
+  private static background: Array<AuraBackgroundAction & {
+    settle: (response: AuraBackgroundResponse) => void;
+  }> = [];
+  /** Obserwatorzy listy zgłoszeń — UI odświeża się po każdej zmianie. */
+  private static backgroundWatchers: Array<() => void> = [];
+  private static backgroundSeq = 0;
 
   // ── Cykl życia ─────────────────────────────────────────────────────────────
 
@@ -153,8 +179,14 @@ export class Aura {
     Aura.audioCtx = null;
   }
 
-  /** Pełny reset — używany w testach. */
+  /**
+   * Pełny reset — używany w testach i przy zamykaniu strony. Oczekujące
+   * zgłoszenia rozstrzygamy jako `cancel`: skrypt czekający na `await` musi
+   * dostać odpowiedź, inaczej zawisłby na zawsze.
+   */
   static reset(): void {
+    for (const item of Aura.background.splice(0)) item.settle('cancel');
+    Aura.backgroundWatchers = [];
     Aura.host = NOOP_HOST;
     Aura.handlers = [];
     Aura.globals = {};
@@ -188,6 +220,73 @@ export class Aura {
       Aura.host.setLastUtterance(answer);
     }
     return answer;
+  }
+
+  // ── Akcje w tle ────────────────────────────────────────────────────────────
+
+  /**
+   * Zgłasza akcję do listy „W tle" i CZEKA, aż użytkownik ją uruchomi albo
+   * odrzuci. Zgłoszenie jest sygnalizowane dzwonkiem i zapowiedzią głosową,
+   * bo skrypt zwykle działa, gdy nikt nie patrzy na ekran.
+   *
+   *   const wynik = await Aura.backgroundAction('Wyślij raport dzienny');
+   *   if (wynik.response === 'run') { … }
+   *
+   * Obietnica rozstrzyga się dopiero po decyzji — dzięki temu skrypt czyta się
+   * liniowo, bez callbacków. `reset()` zwalnia oczekujących jako `cancel`.
+   */
+  static async backgroundAction(label: unknown): Promise<AuraBackgroundResult> {
+    const text = asText(label).trim() || 'Akcja w tle';
+    const id = `bg-${++Aura.backgroundSeq}-${Date.now().toString(36)}`;
+
+    let settle: (response: AuraBackgroundResponse) => void = () => {};
+    const decision = new Promise<AuraBackgroundResponse>((resolve) => {
+      settle = (response) => resolve(response);
+    });
+
+    Aura.background.push({ id, label: text, createdAt: Date.now(), settle });
+    // Powiadamiamy UI zanim zaczniemy dzwonić i mówić — lista ma pokazać wpis
+    // od razu, a nie po kilku sekundach zapowiedzi.
+    Aura.notifyBackground();
+
+    await Aura.bell().catch(() => { /* brak audio nie może wstrzymać zgłoszenia */ });
+    await Aura.say('Nowa Akcja w tle');
+
+    const response = await decision;
+    return { id, label: text, response };
+  }
+
+  /** Migawka listy zgłoszeń (najstarsze pierwsze) — dla widoku „W tle". */
+  static backgroundActions(): AuraBackgroundAction[] {
+    return Aura.background.map(({ id, label, createdAt }) => ({ id, label, createdAt }));
+  }
+
+  /** Decyzja użytkownika: „Uruchom" albo „Odrzuć". Nieznane id ignorujemy. */
+  static resolveBackgroundAction(id: unknown, response: AuraBackgroundResponse): void {
+    const key = asText(id);
+    const at = Aura.background.findIndex((a) => a.id === key);
+    if (at < 0) return;
+    const [item] = Aura.background.splice(at, 1);
+    Aura.notifyBackground();
+    item.settle(response === 'run' ? 'run' : 'cancel');
+  }
+
+  /** Subskrypcja zmian listy (React). Zwraca funkcję wypisującą. */
+  static onBackgroundChange(callback: () => void): () => void {
+    Aura.backgroundWatchers.push(callback);
+    return () => {
+      Aura.backgroundWatchers = Aura.backgroundWatchers.filter((c) => c !== callback);
+    };
+  }
+
+  private static notifyBackground(): void {
+    for (const watcher of [...Aura.backgroundWatchers]) {
+      try {
+        watcher();
+      } catch {
+        /* błąd w jednym obserwatorze nie może uciszyć pozostałych */
+      }
+    }
   }
 
   /**
@@ -479,6 +578,7 @@ export const aura = {
   callAction: (id: unknown) => Aura.callAction(id),
   wait: (seconds: unknown) => Aura.wait(seconds),
   bell: (options?: unknown) => Aura.bell(options),
+  backgroundAction: (label: unknown) => Aura.backgroundAction(label),
   endConversation: (message: unknown) => Aura.endConversation(message),
   showComponent: (config: unknown) => Aura.showComponent(config),
   agentNewChat: (id: unknown) => Aura.agentNewChat(id),

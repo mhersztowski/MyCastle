@@ -318,6 +318,12 @@ function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+/** Read any VFS file as text (pełna ścieżka, np. `users/x/projects/a.cad.json`). */
+export async function vfsReadFileText(path: string): Promise<string> {
+  const res = await vfsGet<{ data: string }>('/readFile', path);
+  return base64ToText(res.data);
+}
+
 /** Read any VFS file as raw bytes. */
 export async function vfsReadFileBin(path: string): Promise<Uint8Array<ArrayBuffer>> {
   const res = await vfsGet<{ data: string }>('/readFile', path);

@@ -25,6 +25,7 @@ import { useRegisterFileOps } from '../../fileops/FileOpsContext';
 import { serializeSvgElement, rasterizeSvg, exportCanvasPng, exportCanvasPdf, downloadText } from '../../io/exportGraphics';
 import type { ActiveTemplate } from '../RepositoryPanel';
 
+import { syncOpenUrl } from '../../vfs/openTarget';
 // ── Part renderer ─────────────────────────────────────────────────────────────
 
 /** Rysuje pojedynczy prymityw osadzonego symbolu (współrzędne w komórkach → px). */
@@ -1277,6 +1278,7 @@ export function BreadboardCanvas({
 
   const handleServerOpen = useCallback(async (dir: string, name: string) => {
     const text = await readFileAt(dir, name, ELEC_EXT);
+    syncOpenUrl(`${dir}/${name}${ELEC_EXT}`);
     const schema = JSON.parse(text) as ElectronicsSchema;
     registerEmbedded(schema.embeddedParts);
     setComponents(schema.components ?? []);

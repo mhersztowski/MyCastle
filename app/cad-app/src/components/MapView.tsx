@@ -33,6 +33,7 @@ import { fetchRoute, TRAVEL_MODES, formatDistance, formatDuration } from '../map
 import { useRegisterFileOps } from '../fileops/FileOpsContext'
 import { captureLeafletCanvas, exportCanvasPng, exportCanvasSvg, exportCanvasPdf } from '../io/exportGraphics'
 import type { MapNode, MapNodeType, RoutePoint, TravelMode } from '../map/types'
+import { syncOpenUrl } from '../vfs/openTarget'
 
 // ── serialization ─────────────────────────────────────────────────────────────
 
@@ -237,6 +238,7 @@ export function MapView() {
   const [toast, setToast]             = useState<string | null>(null)
 
   const handleOpen = useCallback(async (dir: string, name: string) => {
+    syncOpenUrl(`${dir}/${name}${MAP_EXT}`)
     const text = await readFileAt(dir, name, MAP_EXT)
     loadNodes(deserializeMap(text))
     setCurrentName(name)

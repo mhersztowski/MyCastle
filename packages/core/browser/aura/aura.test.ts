@@ -220,6 +220,75 @@ describe('dzwonek', () => {
   });
 });
 
+describe('akcje w tle', () => {
+  /** Wpis trafia na listę natychmiast, ale dzwonek i zapowiedź to kilka mikrozadań. */
+  const flush = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).AudioContext;
+    Aura.resetAudio();
+  });
+
+  it('zgłasza akcję, sygnalizuje ją i czeka na decyzję użytkownika', async () => {
+    const pending = Aura.backgroundAction('Wyślij raport');
+    // Zgłoszenie jest widoczne natychmiast — UI ma co pokazać, zanim ktoś kliknie.
+    const [action] = Aura.backgroundActions();
+    expect(action.label).toBe('Wyślij raport');
+
+    await flush();
+    expect(host.spoken).toContain('Nowa Akcja w tle');
+
+    Aura.resolveBackgroundAction(action.id, 'run');
+    await expect(pending).resolves.toMatchObject({ response: 'run', label: 'Wyślij raport' });
+    // Po decyzji wpis znika z listy.
+    expect(Aura.backgroundActions()).toHaveLength(0);
+  });
+
+  it('odrzucenie zwraca response "cancel"', async () => {
+    const pending = Aura.backgroundAction('Skasuj kopie');
+    Aura.resolveBackgroundAction(Aura.backgroundActions()[0].id, 'cancel');
+    await expect(pending).resolves.toMatchObject({ response: 'cancel' });
+  });
+
+  it('powiadamia obserwatorów o zmianach listy (dla UI)', async () => {
+    const seen: number[] = [];
+    const unsubscribe = Aura.onBackgroundChange(() => seen.push(Aura.backgroundActions().length));
+
+    const pending = Aura.backgroundAction('Zadanie');
+    Aura.resolveBackgroundAction(Aura.backgroundActions()[0].id, 'run');
+    await pending;
+
+    expect(seen).toEqual([1, 0]);
+    unsubscribe();
+    void Aura.backgroundAction('Kolejne');
+    expect(seen).toEqual([1, 0]);   // po wypisaniu już nie dostajemy powiadomień
+  });
+
+  it('kilka akcji czeka niezależnie', async () => {
+    const a = Aura.backgroundAction('Pierwsza');
+    const b = Aura.backgroundAction('Druga');
+    const list = Aura.backgroundActions();
+    expect(list).toHaveLength(2);
+
+    Aura.resolveBackgroundAction(list[1].id, 'cancel');
+    await expect(b).resolves.toMatchObject({ response: 'cancel', label: 'Druga' });
+    expect(Aura.backgroundActions().map((x) => x.label)).toEqual(['Pierwsza']);
+
+    Aura.resolveBackgroundAction(list[0].id, 'run');
+    await expect(a).resolves.toMatchObject({ response: 'run' });
+  });
+
+  it('decyzja o nieznanym id nic nie psuje', () => {
+    expect(() => Aura.resolveBackgroundAction('nie-ma', 'run')).not.toThrow();
+  });
+
+  it('reset odrzuca oczekujące zgłoszenia zamiast je porzucać', async () => {
+    const pending = Aura.backgroundAction('Wisząca');
+    Aura.reset();
+    await expect(pending).resolves.toMatchObject({ response: 'cancel' });
+  });
+});
+
 describe('komponenty', () => {
   it('przyjmuje konfigurację jako JSON-string (z bloczka) i jako obiekt (ze skryptu)', async () => {
     const shown: unknown[] = [];

@@ -1,6 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, InputAdornment, List, ListItemButton, ListItemText, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import { Box, CircularProgress, IconButton, Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip } from '@mui/material';
 import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined';
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
@@ -13,8 +12,6 @@ import DeveloperBoardIcon from '@mui/icons-material/DeveloperBoard';
 import MapOutlinedIcon from '@mui/icons-material/MapOutlined';
 import StorageIcon from '@mui/icons-material/Storage';
 import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import CheckIcon from '@mui/icons-material/Check';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import CodeIcon from '@mui/icons-material/Code';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
@@ -50,7 +47,7 @@ import { AudioPanel } from './components/AudioPanel';
 import { TemplatesPanel } from './components/TemplatesPanel';
 import { FileSystemPanel } from './components/FileSystemPanel';
 import { DriveView } from './pages/DriveView';
-import { getCurrentUserId, listFilesRecursive, listScene3dFiles, listScene3dProjects, userRootDir, CAD_EXT, ELEC_EXT } from './vfs/cadProjectApi';
+import { getCurrentUserId } from './vfs/cadProjectApi';
 import type { ElectronicsSchema } from './electronics/types';
 import { loadProjectFromText, mergeProjectFromText } from './io/CadExporter';
 import type { ActiveTemplate, CadProjectEntry, TemplateMode } from './components/RepositoryPanel';
@@ -58,6 +55,9 @@ const AiPanel = lazy(() => import('./components/AiPanel').then(m => ({ default: 
 const CodeEditorPanel = lazy(() => import('./components/CodeEditorPanel').then(m => ({ default: m.CodeEditorPanel })));
 import { useProject } from './hooks/useProject';
 import type { ToolName } from './tools/types';
+import { parseOpenTarget, type OpenMode } from './vfs/openTarget';
+import { EmbedInNotesDialog } from './components/EmbedInNotesDialog';
+import { vfsReadFileText } from './vfs/cadProjectApi';
 
 const project = new Project();
 
@@ -80,13 +80,8 @@ export default function App() {
   const [editorFullscreen, setEditorFullscreen] = useState(false);
 
   const [aiSceneData, setAiSceneData] = useState<string | undefined>(undefined);
-  type EmbedMode = 'cad' | 'cad3d' | 'scene3d' | 'electronics';
+  // Lista projektów i adresy żyją w `EmbedInNotesDialog` — tutaj zostaje samo otwarcie.
   const [embedOpen, setEmbedOpen] = useState(false);
-  const [embedMode, setEmbedMode] = useState<EmbedMode>('scene3d');
-  const [embedProject, setEmbedProject] = useState('');  // VFS path
-  const [embedProjects, setEmbedProjects] = useState<{ name: string; path: string }[]>([]);
-  const [embedLoading, setEmbedLoading] = useState(false);
-  const [embedCopied, setEmbedCopied] = useState(false);
 
   const [savedSceneJson, setSavedSceneJson] = useState<string | null>(null);
 
@@ -152,49 +147,6 @@ export default function App() {
     setInjectedAngle(null);
   }, []);
 
-  // Load project list when embed dialog opens or mode changes
-  useEffect(() => {
-    if (!embedOpen) return;
-    setEmbedLoading(true);
-    setEmbedProjects([]);
-    const userId = getCurrentUserId();
-
-    (async () => {
-      try {
-        if (embedMode === 'scene3d') {
-          const projects = await listScene3dProjects();
-          const entries: { name: string; path: string }[] = [];
-          await Promise.all(projects.map(async p => {
-            try {
-              const files = await listScene3dFiles(p.name);
-              for (const f of files) {
-                entries.push({
-                  name: `${p.name} / ${f.name}`,
-                  path: `users/${userId}/scene3d/${p.name}/${f.name}`,
-                });
-              }
-            } catch { /* skip */ }
-          }));
-          setEmbedProjects(entries);
-        } else {
-          // Recursive scan from the user's root so files saved into any sub-
-          // directory show up — not just the legacy flat `projects/` folder.
-          const ext = embedMode === 'electronics' ? ELEC_EXT : CAD_EXT;
-          const root = userRootDir(userId);
-          const files = await listFilesRecursive(root, ext);
-          setEmbedProjects(files.map(f => ({
-            name: f.name,                                 // 'subdir/foo' (no ext)
-            path: `users/${userId}/${f.name}`,            // matches viewer's vfsPath shape
-          })));
-        }
-      } catch {
-        setEmbedProjects([]);
-      } finally {
-        setEmbedLoading(false);
-      }
-    })();
-  }, [embedOpen, embedMode]);
-
   // Auto-select newly placed entity and switch to Properties tab
   useEffect(() => {
     return project.eventBus.on('entity:added', entity => {
@@ -227,6 +179,78 @@ export default function App() {
     setSavedSceneJson(jsonText);
     setSceneExternalKey(k => k + 1);
     setMode('scene3d');
+  }, []);
+
+  /**
+   * Otwarcie pliku wskazanego w adresie (`/open/<ścieżka>` lub `?open=`).
+   *
+   * Tryb bierze się z rozszerzenia, a treść wczytujemy raz przy starcie. CAD 3D
+   * i Electronics ładują się przez `ref`-y wystawiane przez komponenty widoku,
+   * a te pojawiają się dopiero po zamontowaniu — dlatego czekamy na nie krótką
+   * pętlą zamiast zakładać, że są gotowe od razu.
+   */
+  const [openError, setOpenError] = useState<string | null>(null);
+  const openHandledRef = useRef(false);
+
+  useEffect(() => {
+    if (openHandledRef.current) return;
+    const target = parseOpenTarget(window.location.pathname, window.location.search);
+    if (!target) return;
+    openHandledRef.current = true;
+
+    // Tryb przełączamy od razu — użytkownik widzi właściwy ekran, zanim
+    // skończy się pobieranie pliku.
+    setMode(target.mode as AppMode);
+
+    const waitForRef = async <T,>(getRef: () => T | null, timeoutMs = 4000): Promise<T | null> => {
+      const until = Date.now() + timeoutMs;
+      for (;;) {
+        const value = getRef();
+        if (value) return value;
+        if (Date.now() > until) return null;
+        await new Promise(r => setTimeout(r, 50));
+      }
+    };
+
+    void (async () => {
+      let text: string;
+      try {
+        text = await vfsReadFileText(target.vfsPath);
+      } catch (err) {
+        setOpenError(`Nie udało się wczytać ${target.vfsPath}: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      try {
+        switch (target.mode as OpenMode) {
+          case 'cad':
+            loadProjectFromText(text, project);
+            break;
+          case 'scene3d':
+            handleOpenSceneFromRepo(text);
+            break;
+          case 'cad3d': {
+            const replace = await waitForRef(() => replaceCad3dTreeRef.current);
+            if (!replace) { setOpenError('Widok CAD 3D nie zdążył się uruchomić — spróbuj odświeżyć stronę.'); return; }
+            replace(text);
+            break;
+          }
+          case 'electronics': {
+            const merge = await waitForRef(() => mergeElecSchemaRef.current);
+            if (!merge) { setOpenError('Widok Electronics nie zdążył się uruchomić — spróbuj odświeżyć stronę.'); return; }
+            merge(JSON.parse(text) as ElectronicsSchema);
+            break;
+          }
+          default:
+            // PCB / Map / Notes / Rysik trzymają stan wewnątrz swoich widoków
+            // i nie mają jeszcze wejścia „wczytaj ten tekst".
+            setOpenError(`Tryb „${target.mode}" otwiera się z adresu, ale plik trzeba wskazać z menu File.`);
+        }
+      } catch (err) {
+        setOpenError(`Plik ${target.vfsPath} nie daje się wczytać: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [activeTemplates, setActiveTemplates] = useState<ActiveTemplate[]>(() => {
@@ -317,6 +341,22 @@ export default function App() {
   return (
     <FileOpsProvider>
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh', overflow: 'hidden', bgcolor: 'background.default' }}>
+      {/* Problem z otwarciem pliku z adresu — pasek zamiast cichej porażki. */}
+      {openError && (
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+          bgcolor: 'rgba(211,47,47,0.18)', borderBottom: '1px solid rgba(211,47,47,0.5)', fontSize: 13,
+        }}>
+          <Box sx={{ flex: 1 }}>{openError}</Box>
+          <Box
+            component="button"
+            onClick={() => setOpenError(null)}
+            sx={{ background: 'none', border: 0, color: 'inherit', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
+          >
+            ×
+          </Box>
+        </Box>
+      )}
       {/* Top bar: unified File menu (always visible) + mode tabs + 2D/3D toggle */}
       <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center' }}>
         <FileMenu mode={mode} />
@@ -450,11 +490,7 @@ export default function App() {
         <Tooltip title="Embed in Notes">
           <IconButton
             size="small"
-            onClick={() => {
-              const m = (['cad','cad3d','scene3d','electronics'] as const).includes(mode as 'cad')
-                ? mode as EmbedMode : 'scene3d';
-              setEmbedMode(m); setEmbedProject(''); setEmbedCopied(false); setEmbedOpen(true);
-            }}
+            onClick={() => setEmbedOpen(true)}
             sx={{ mr: mode === 'cad' ? 0 : 1, color: 'text.secondary' }}
           >
             <BookmarkAddOutlinedIcon sx={{ fontSize: 18 }} />
@@ -765,82 +801,8 @@ export default function App() {
         )}
       </Box>
 
-      {/* ── Embed in Notes dialog ─────────────────────────────────────────── */}
-      {(() => {
-        const snippet = embedProject
-          ? `@[cad:${embedMode}:${window.location.origin}/viewer/${embedMode}/${embedProject}]`
-          : '';
-        return (
-          <Dialog open={embedOpen} onClose={() => setEmbedOpen(false)} maxWidth="xs" fullWidth>
-            <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 0 }}>
-              <Typography fontWeight={600}>Embed in Notes</Typography>
-              <IconButton size="small" onClick={() => setEmbedOpen(false)}><CloseIcon fontSize="small" /></IconButton>
-            </DialogTitle>
-            <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
-              {/* Mode tabs */}
-              <Tabs
-                value={embedMode}
-                onChange={(_, v: EmbedMode) => { setEmbedMode(v); setEmbedProject(''); setEmbedCopied(false); }}
-                variant="fullWidth"
-                sx={{ mb: 0.5, '& .MuiTab-root': { minHeight: 32, fontSize: 11, px: 0.5 } }}
-              >
-                <Tab value="cad" label="CAD 2D" />
-                <Tab value="cad3d" label="CAD 3D" />
-                <Tab value="scene3d" label="Scene 3D" />
-                <Tab value="electronics" label="Electronics" />
-              </Tabs>
+      <EmbedInNotesDialog open={embedOpen} onClose={() => setEmbedOpen(false)} editorMode={mode} />
 
-              {/* Project list */}
-              {embedLoading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
-                  <CircularProgress size={24} />
-                </Box>
-              ) : (
-                <List dense disablePadding sx={{ maxHeight: 200, overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-                  {embedProjects.length === 0 ? (
-                    <ListItemButton disabled>
-                      <ListItemText primary="No projects found" secondary="Save a project to the server first" />
-                    </ListItemButton>
-                  ) : embedProjects.map(p => (
-                    <ListItemButton
-                      key={p.path}
-                      selected={embedProject === p.path}
-                      onClick={() => { setEmbedProject(p.path); setEmbedCopied(false); }}
-                    >
-                      <ListItemText primary={p.name} secondary={p.path} secondaryTypographyProps={{ sx: { fontSize: 9, opacity: 0.55 } }} />
-                    </ListItemButton>
-                  ))}
-                </List>
-              )}
-
-              {/* Snippet */}
-              <TextField
-                label="Embed snippet"
-                value={snippet}
-                size="small"
-                fullWidth
-                placeholder="Select a project above"
-                InputProps={{
-                  readOnly: true,
-                  endAdornment: snippet ? (
-                    <InputAdornment position="end">
-                      <Tooltip title={embedCopied ? 'Copied!' : 'Copy'}>
-                        <IconButton size="small" onClick={() => {
-                          navigator.clipboard.writeText(snippet);
-                          setEmbedCopied(true);
-                          setTimeout(() => setEmbedCopied(false), 2000);
-                        }}>
-                          {embedCopied ? <CheckIcon sx={{ fontSize: 16, color: 'success.main' }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}
-                        </IconButton>
-                      </Tooltip>
-                    </InputAdornment>
-                  ) : undefined,
-                }}
-              />
-            </DialogContent>
-          </Dialog>
-        );
-      })()}
     </Box>
     </FileOpsProvider>
   );

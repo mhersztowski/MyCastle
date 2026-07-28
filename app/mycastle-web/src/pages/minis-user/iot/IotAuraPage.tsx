@@ -37,6 +37,13 @@ import {
   Button,
   Divider,
   Collapse,
+  Tabs,
+  Tab,
+  Badge,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
@@ -46,6 +53,10 @@ import BugReportIcon from '@mui/icons-material/BugReport';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import BlockIcon from '@mui/icons-material/Block';
+import PendingActionsIcon from '@mui/icons-material/PendingActions';
+import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SettingsVoiceIcon from '@mui/icons-material/SettingsVoice';
@@ -70,7 +81,9 @@ import { useAuth } from '../../../modules/auth/AuthContext';
 import { variantLogicMode } from '@mhersztowski/core';
 // Logika konwersacji (Konwersacja / VFS / Sieć / Komponenty / Funkcje globalne)
 // — jedno źródło dla bloczków i dla skryptów automatyzacji.
-import { Aura, aura, type AuraHost } from '../../../../../../packages/core/browser/aura/aura';
+import { Aura, aura, type AuraHost, type AuraBackgroundAction } from '../../../../../../packages/core/browser/aura/aura';
+import { DEFAULT_BACKGROUND_REMINDER, DEFAULT_VOICE_ACTION_COLLECTION, type AuraBackgroundReminder } from '@mhersztowski/core';
+import { createAuraServer, type AuraServer } from '../../../modules/voiceactions/auraServerApi';
 import { prepareAutomateScript } from '../../../modules/voiceactions/auraScriptRuntime';
 import { createAutomateApi, createDisplay, type AutomateApi } from '../../../../../../packages/core/browser/api/api';
 import { readAuraScript } from '../../../modules/voiceactions/auraScriptStore';
@@ -197,9 +210,62 @@ const IotAuraPage: React.FC<IotAuraPageProps> = ({
   const { token } = useAuth();
   const automateApiRef = useRef<AutomateSystemApi | null>(null);
   const automateVarsRef = useRef<Record<string, unknown>>({});
+  /** Fasada API backendu dla bloczków „Serwer" — łączy się dopiero przy pierwszym użyciu. */
+  const serverApiRef = useRef<AuraServer | null>(null);
+  useEffect(() => () => { serverApiRef.current?.dispose(); serverApiRef.current = null; }, []);
 
   // Konwersacja
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // ── Akcje w tle (`Aura.backgroundAction`) ────────────────────────────────
+  // Lista żyje w klasie Aura (skrypt zgłasza akcję i czeka na decyzję), więc tutaj
+  // tylko na nią patrzymy przez subskrypcję.
+  const [view, setView] = useState<'chat' | 'background'>('chat');
+  const [bgActions, setBgActions] = useState<AuraBackgroundAction[]>(() => Aura.backgroundActions());
+  useEffect(() => Aura.onBackgroundChange(() => setBgActions(Aura.backgroundActions())), []);
+  // Migający wskaźnik gaśnie dopiero po zajrzeniu do listy — zgłoszenie z tła
+  // ma zostać zauważone, nawet jeśli akurat trwała rozmowa.
+  const hasPendingBg = bgActions.length > 0;
+
+  // Przypomnienie o czekających zgłoszeniach. Ustawienie jedzie z kolekcją akcji
+  // głosowych na backend (`voice_actions.json`), więc obowiązuje na każdym
+  // urządzeniu — strona i widget na pulpicie czytają to samo źródło.
+  const [bgReminder, setBgReminder] = useState<AuraBackgroundReminder>({ ...DEFAULT_BACKGROUND_REMINDER });
+  const [bgSettingsOpen, setBgSettingsOpen] = useState(false);
+  const saveBgReminder = useCallback((next: AuraBackgroundReminder) => {
+    setBgReminder(next);
+    if (!userName) return;
+    const data = voiceActionService.getData();
+    voiceActionService
+      .saveConfig(userName, { ...data, backgroundReminder: next })
+      .catch((err) => console.warn('[Aura] Zapis ustawień przypomnień:', err));
+  }, [userName, voiceActionService]);
+
+  const bgCountRef = useRef(0);
+  bgCountRef.current = bgActions.length;
+  const lastBgReminderRef = useRef(Date.now());
+  useEffect(() => {
+    if (!bgReminder.enabled) return;
+    lastBgReminderRef.current = Date.now();
+    // Tykamy co 15 s i sami sprawdzamy, czy minął interwał — dzięki temu zmiana
+    // ustawienia działa od razu i nie gubimy odliczania przy przerysowaniu.
+    const id = setInterval(() => {
+      if (!bgCountRef.current) return;
+      const elapsedMin = (Date.now() - lastBgReminderRef.current) / 60000;
+      if (elapsedMin < Math.max(1, bgReminder.minutes)) return;
+      lastBgReminderRef.current = Date.now();
+      const n = bgCountRef.current;
+      // Odmiana: 1 akcja / 2–4 akcje / 5+ akcji (z wyjątkiem nastolatek 12–14).
+      const tens = n % 100;
+      const unit = n % 10;
+      const noun = n === 1 ? 'akcja' : (unit >= 2 && unit <= 4 && (tens < 12 || tens > 14)) ? 'akcje' : 'akcji';
+      void Aura.bell()
+        .catch(() => {})
+        .then(() => Aura.say(`Czeka ${n} ${noun} w tle`))
+        .catch(() => {});
+    }, 15000);
+    return () => clearInterval(id);
+  }, [bgReminder.enabled, bgReminder.minutes]);
   const [state, setState] = useState<AuraState>('idle');
   const [interimText, setInterimText] = useState('');
   const [textInput, setTextInput] = useState('');
@@ -313,7 +379,7 @@ const IotAuraPage: React.FC<IotAuraPageProps> = ({
   // ---- Ładowanie konfiguracji po połączeniu MQTT ----
   useEffect(() => {
     if (!isConnected) return;
-    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ type: 'voice_actions' as const, actions: [], variants: [], wakeWords: [], globalXml: '', googleSearch: { apiKey: '', cx: '' } })]).then(([ai, speech, va]) => {
+    Promise.all([aiService.loadConfig(), speechService.loadConfig(), userName ? voiceActionService.loadConfig(userName) : Promise.resolve({ ...DEFAULT_VOICE_ACTION_COLLECTION })]).then(([ai, speech, va]) => {
       setSttProvider(speech.stt.provider);
       setTtsProvider(speech.tts.provider);
       setAiConfig(ai);
@@ -322,6 +388,7 @@ const IotAuraPage: React.FC<IotAuraPageProps> = ({
       variantsRef.current = va.variants;
       globalXmlRef.current = va.globalXml ?? '';
       googleSearchRef.current = va.googleSearch ?? { apiKey: '', cx: '' };
+      setBgReminder(va.backgroundReminder ?? { ...DEFAULT_BACKGROUND_REMINDER });
       setGlobalFunctionNames(extractGlobalFunctionNames(va.globalXml ?? ''));
       const ww = va.wakeWords ?? [];
       setWakeWords(ww);
@@ -813,20 +880,34 @@ const IotAuraPage: React.FC<IotAuraPageProps> = ({
               }
             },
           });
+          // `Server` (browser/server/api.ts) — operacje backendu bez jawnego
+          // połączenia; tworzymy raz, żeby akcje dzieliły to samo MQTT.
+          if (!serverApiRef.current) {
+            serverApiRef.current = createAuraServer(() => ({
+              userName: userName ?? '',
+              token: token ?? '',
+            }));
+          }
           await AutomateSandbox.execute(
             fullCode,
             scriptApi as unknown as AutomateSystemApi,
             {},
             automateVarsRef.current,
             undefined,
-            { Aura, aura, api: scriptApi, display },
+            { Aura, aura, api: scriptApi, display, Server: serverApiRef.current },
           );
         } else {
           const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as new (
             ...args: string[]
-          ) => (auraAlias: unknown, auraClass: unknown) => Promise<void>;
-          const fn = new AsyncFunction('aura', 'Aura', fullCode);
-          await fn(aura, Aura);
+          ) => (auraAlias: unknown, auraClass: unknown, server: unknown) => Promise<void>;
+          if (!serverApiRef.current) {
+            serverApiRef.current = createAuraServer(() => ({
+              userName: userName ?? '',
+              token: token ?? '',
+            }));
+          }
+          const fn = new AsyncFunction('aura', 'Aura', 'Server', fullCode);
+          await fn(aura, Aura, serverApiRef.current);
         }
         for (const handler of Aura.pendingHandlers()) { await handler(); }
       } catch (err) {
@@ -1795,8 +1876,125 @@ const IotAuraPage: React.FC<IotAuraPageProps> = ({
         <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError(null)}>{error}</Alert>
       )}
 
+      {/* Przełącznik widoku: rozmowa albo zgłoszenia z tła. Zakładka „W tle"
+          pulsuje na czerwono, dopóki jakieś zgłoszenie czeka na decyzję. */}
+      <Tabs
+        value={view}
+        onChange={(_, v) => setView(v)}
+        sx={{
+          minHeight: 34, mb: 1,
+          // Ikona ustawień jest dzieckiem Tabs — flex pozwala dosunąć ją do prawej.
+          '& .MuiTabs-flexContainer': { alignItems: 'center' },
+          '& .MuiTab-root': { minHeight: 34, py: 0, textTransform: 'none', fontSize: compact ? 12 : 14 },
+          '@keyframes bgPulse': {
+            '0%, 100%': { color: '#d32f2f', opacity: 1 },
+            '50%': { color: '#d32f2f', opacity: 0.35 },
+          },
+        }}
+      >
+        <Tab value="chat" label="Konwersacja" />
+        <Tab
+          value="background"
+          label={
+            <Badge badgeContent={bgActions.length} color="error" sx={{ '& .MuiBadge-badge': { right: -14, top: 2 } }}>
+              W tle
+            </Badge>
+          }
+          sx={hasPendingBg && view !== 'background'
+            ? { animation: 'bgPulse 1.1s ease-in-out infinite', fontWeight: 700 }
+            : undefined}
+        />
+        {/* Ustawienia zgłoszeń — jedna ikona zamiast paska z polami; w kafelku
+            na pulpicie liczy się każdy milimetr. */}
+        <Box sx={{ flex: 1 }} />
+        <Tooltip title="Ustawienia akcji w tle">
+          <IconButton size="small" onClick={() => setBgSettingsOpen(true)} sx={{ alignSelf: 'center' }}>
+            <SettingsIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+      </Tabs>
+
+      {/* Dialog ustawień — przypominanie o zgłoszeniach czekających na decyzję. */}
+      <Dialog open={bgSettingsOpen} onClose={() => setBgSettingsOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 1 }}>Akcje w tle — przypomnienia</DialogTitle>
+        <DialogContent>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={bgReminder.enabled}
+                onChange={(_, c) => saveBgReminder({ ...bgReminder, enabled: c })}
+              />
+            }
+            label="Przypominaj głosem o czekających zgłoszeniach"
+          />
+          <TextField
+            fullWidth
+            size="small"
+            type="number"
+            label="Interwał (minuty)"
+            sx={{ mt: 2 }}
+            value={bgReminder.minutes}
+            disabled={!bgReminder.enabled}
+            onChange={(e) => saveBgReminder({
+              ...bgReminder,
+              minutes: Math.min(600, Math.max(1, Number(e.target.value) || 5)),
+            })}
+            inputProps={{ min: 1, max: 600, step: 1 }}
+            helperText="Aura zagra dzwonek i powie, ile zgłoszeń czeka. Ustawienie zapisuje się na serwerze."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBgSettingsOpen(false)}>Zamknij</Button>
+        </DialogActions>
+      </Dialog>
+
+      {view === 'background' && (
+        <Paper sx={{ flex: 1, overflow: 'auto', p: compact ? 1 : 2, mb: compact ? 1 : 2, minHeight: 0 }}>
+          {bgActions.length === 0 && (
+            <Box sx={{ textAlign: 'center', mt: compact ? 2 : 6 }}>
+              <PendingActionsIcon sx={{ fontSize: compact ? 32 : 56, color: 'grey.300', mb: 1 }} />
+              <Typography variant={compact ? 'caption' : 'body2'} color="text.secondary">
+                Brak akcji czekających na decyzję.
+              </Typography>
+            </Box>
+          )}
+          {bgActions.map((a) => (
+            <Paper
+              key={a.id}
+              variant="outlined"
+              sx={{ p: 1, mb: 1, display: 'flex', alignItems: 'center', gap: 1, borderColor: 'error.light' }}
+            >
+              <PendingActionsIcon sx={{ fontSize: 20, color: 'error.main' }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, wordBreak: 'break-word' }}>{a.label}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  zgłoszono {new Date(a.createdAt).toLocaleTimeString()}
+                </Typography>
+              </Box>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<PlayArrowIcon />}
+                onClick={() => Aura.resolveBackgroundAction(a.id, 'run')}
+              >
+                Uruchom
+              </Button>
+              <Button
+                size="small"
+                color="inherit"
+                startIcon={<BlockIcon />}
+                onClick={() => Aura.resolveBackgroundAction(a.id, 'cancel')}
+              >
+                Odrzuć
+              </Button>
+            </Paper>
+          ))}
+        </Paper>
+      )}
+
       {/* Konwersacja — w widgecie pokazujemy tylko ostatnią wypowiedź, żeby
           kafelek nie zamieniał się w nieczytelny pasek tekstu. */}
+      {view === 'chat' && (
       <Paper sx={{
         flex: 1, overflow: 'auto', p: compact ? 1 : 2, mb: compact ? 1 : 2,
         bgcolor: 'grey.50', display: 'flex', flexDirection: 'column', gap: 1.5,
@@ -1836,6 +2034,7 @@ const IotAuraPage: React.FC<IotAuraPageProps> = ({
 
         <div ref={messagesEndRef} />
       </Paper>
+      )}
 
       {/* Panel wejścia */}
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>

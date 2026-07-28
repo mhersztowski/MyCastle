@@ -80,6 +80,7 @@ import { useRegisterFileOps } from '../fileops/FileOpsContext';
 import { exportCanvasPng, exportCanvasSvg, exportCanvasPdf } from '../io/exportGraphics';
 import { renderMarkdown } from '../map/markdown';
 
+import { syncOpenUrl } from '../vfs/openTarget';
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface NotePoint { x: number; y: number; p: number; }
@@ -1264,6 +1265,7 @@ export function SpenNotesView() {
   };
   const handleNotesOpen = async (dir: string, name: string) => {
     const text = await readFileAt(dir, name, NOTES_EXT);
+    syncOpenUrl(`${dir}/${name}${NOTES_EXT}`);
     const data = JSON.parse(text) as { pages?: NotePage[]; currentId?: string };
     const loaded = Array.isArray(data.pages) && data.pages.length ? data.pages : [newPage()];
     setPages(loaded);

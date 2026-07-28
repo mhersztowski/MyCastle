@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
-import { EventNode } from '@mhersztowski/core';
+import { EventNode, type EventsModel, type TaskNode } from '@mhersztowski/core';
 import { useFilesystem } from '../../modules/filesystem';
 import { useMqtt } from '../../modules/mqttclient';
 import { useLayoutChrome } from '../../components/Layout';
@@ -100,6 +100,7 @@ import {
   VolumeOffRounded as VolOffIcon,
   PauseRounded as PauseIcon,
   PlayArrowRounded as PlayIcon,
+  PlayCircleOutlineRounded as PlayArrowIcon,
 } from '@mui/icons-material';
 import { App } from '../../App';
 import { Aura } from '../../../../../packages/core/browser/aura/aura';
@@ -793,6 +794,93 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataSource.events, nowTick]);
 
+  /**
+   * Zadania z komponentem `task_interval` (co N dni). Termin liczymy od ostatniego
+   * eventu powiązanego z zadaniem (`taskId`) — kalendarz jest tu historią wykonań.
+   * Zadanie bez żadnego eventu jest „zaległe od zawsze": nigdy go nie zrobiono.
+   */
+  const intervalTasks = useMemo(() => {
+    const now = dayjs();
+    const lastByTask = new Map<string, Dayjs>();
+    for (const e of dataSource.events) {
+      if (!e.taskId) continue;
+      const start = e.getStartDate();
+      if (!start?.isValid()) continue;
+      const prev = lastByTask.get(e.taskId);
+      if (!prev || start.isAfter(prev)) lastByTask.set(e.taskId, start);
+    }
+
+    const out: { task: TaskNode; due: Dayjs | null; last: Dayjs | null; days: number }[] = [];
+    for (const t of dataSource.tasks) {
+      const days = t.getDaysInterval();
+      if (!days || days <= 0) continue;
+      const last = lastByTask.get(t.id) ?? null;
+      out.push({ task: t, last, due: last ? last.add(days, 'day') : null, days });
+    }
+
+    const overdue = out
+      .filter((x) => !x.due || x.due.isBefore(now))
+      // Brak historii na górze, potem najdłużej zaległe.
+      .sort((a, b) => (a.due?.valueOf() ?? 0) - (b.due?.valueOf() ?? 0));
+    const soon = out
+      .filter((x) => x.due && !x.due.isBefore(now) && x.due.isBefore(now.add(7, 'day')))
+      .sort((a, b) => a.due!.diff(b.due!));
+    return { overdue, soon };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataSource.events, dataSource.tasks, nowTick]);
+
+  // Zakładka listy pod kalendarzem oraz zadanie wybrane do uruchomienia.
+  const [tab, setTab] = useState<'events' | 'overdue' | 'soon'>('events');
+  const [startTask, setStartTask] = useState<TaskNode | null>(null);
+  const [startAt, setStartAt] = useState<string>('');
+  const [startBusy, setStartBusy] = useState(false);
+
+  const openStartDialog = useCallback((task: TaskNode) => {
+    setStartTask(task);
+    // Pole `datetime-local` wymaga czasu LOKALNEGO bez strefy.
+    setStartAt(dayjs().format('YYYY-MM-DDTHH:mm'));
+  }, []);
+
+  /**
+   * Dopisuje event do pliku dnia (`data/calendar/{Y}/{M}/{D}.json`) — ten sam
+   * format i ta sama ścieżka, co strona Kalendarz, więc wpis jest od razu widoczny
+   * wszędzie indziej.
+   */
+  const startTaskEvent = useCallback(async (task: TaskNode, start: Dayjs) => {
+    setStartBusy(true);
+    try {
+      const dateStr = start.format('YYYY-MM-DD');
+      const [year, monthPart, dayPart] = dateStr.split('-');
+      const filePath = `data/calendar/${year}/${monthPart}/${dayPart}.json`;
+      const hours = Number(task.duration) > 0 ? Number(task.duration) : 1;
+
+      const sameDay = dataSource.events.filter((e) => {
+        const d = e.getStartDate();
+        return d && d.format('YYYY-MM-DD') === dateStr;
+      });
+      const model: EventsModel = {
+        type: 'events',
+        tasks: [
+          ...sameDay.map((e) => e.toModel()),
+          {
+            type: 'event',
+            taskId: task.id,
+            name: task.name,
+            description: task.description,
+            startTime: start.toISOString(),
+            endTime: start.add(hours, 'hour').toISOString(),
+          },
+        ],
+      };
+      await writeFile(filePath, JSON.stringify(model, null, 2));
+      setStartTask(null);
+    } catch (err) {
+      console.warn('[Pulpit] Nie udało się zapisać eventu:', err);
+    } finally {
+      setStartBusy(false);
+    }
+  }, [dataSource.events, writeFile]);
+
   // siatka dni miesiąca (pon–niedz)
   const days = useMemo(() => {
     const first = month.startOf('month');
@@ -921,11 +1009,33 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
 
       <Divider sx={{ borderColor: pal.subtle }} />
 
-      {/* zbliżające się eventy */}
+      {/* zbliżające się eventy + zadania cykliczne (komponent `task_interval`) */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-        <Typography variant="caption" sx={{ fontWeight: 700, opacity: 0.55, letterSpacing: 0.4, flex: 1 }}>
-          {config?.title?.toUpperCase() || 'ZBLIŻAJĄCE SIĘ'}
-        </Typography>
+        <Tabs
+          value={tab}
+          onChange={(_, v) => setTab(v)}
+          variant="scrollable"
+          scrollButtons={false}
+          sx={{
+            flex: 1, minHeight: 26,
+            '& .MuiTab-root': {
+              minHeight: 26, minWidth: 0, px: 0.75, py: 0,
+              fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+            },
+          }}
+        >
+          <Tab value="events" label={config?.title || 'Zbliżające się'} />
+          {/* Licznik w nazwie zakładki — w kafelku nie ma miejsca na osobne odznaki. */}
+          <Tab
+            value="overdue"
+            label={`Opóźnione${intervalTasks.overdue.length ? ` (${intervalTasks.overdue.length})` : ''}`}
+            sx={intervalTasks.overdue.length ? { color: '#ff6b6b' } : undefined}
+          />
+          <Tab
+            value="soon"
+            label={`Nadchodzące${intervalTasks.soon.length ? ` (${intervalTasks.soon.length})` : ''}`}
+          />
+        </Tabs>
         <Tooltip title={ttsOn ? 'Zapowiedzi głosowe: wł. (5 min przed i o starcie)' : 'Zapowiedzi głosowe: wył.'}>
           <IconButton size="small" onClick={toggleTts} sx={{ color: ttsOn ? '#7fd1ff' : 'text.disabled', p: 0.25 }}>
             {ttsOn ? <VolumeUpIcon sx={{ fontSize: 16 }} /> : <VolumeOffIcon sx={{ fontSize: 16 }} />}
@@ -933,10 +1043,54 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
         </Tooltip>
       </Box>
       <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-        {upcoming.length === 0 && (
+        {tab !== 'events' && (() => {
+          const rows = tab === 'overdue' ? intervalTasks.overdue : intervalTasks.soon;
+          if (!rows.length) {
+            return (
+              <Typography variant="body2" sx={{ opacity: 0.5, mt: 1 }}>
+                {tab === 'overdue' ? 'Brak zaległych zadań.' : 'Nic w ciągu 7 dni.'}
+              </Typography>
+            );
+          }
+          return rows.map(({ task, due, last, days }) => (
+            <Box
+              key={task.id}
+              onClick={() => openStartDialog(task)}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 1, p: 0.75, borderRadius: 2, cursor: 'pointer',
+                border: `1px solid ${tab === 'overdue' ? 'rgba(255,107,107,0.45)' : pal.subtle}`,
+                '&:hover': { background: pal.hover },
+              }}
+            >
+              <Box sx={{
+                width: 40, flexShrink: 0, textAlign: 'center', borderRadius: '10px', py: 0.25,
+                background: tab === 'overdue'
+                  ? 'linear-gradient(145deg, rgba(255,107,107,0.3), rgba(255,71,87,0.2))'
+                  : 'linear-gradient(145deg, rgba(74,123,255,0.25), rgba(122,92,255,0.2))',
+              }}>
+                <Typography variant="caption" sx={{ display: 'block', fontSize: 9, opacity: 0.7 }}>co</Typography>
+                <Typography variant="body2" sx={{ fontWeight: 800, lineHeight: 1 }}>{days}d</Typography>
+              </Box>
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>{task.name || '(bez nazwy)'}</Typography>
+                <Typography variant="caption" sx={{ opacity: 0.55 }}>
+                  {!due
+                    ? 'nigdy nie wykonane'
+                    : tab === 'overdue'
+                      ? `zaległe od ${due.format('D MMM')}`
+                      : `termin ${due.format('ddd, D MMM')}`}
+                  {last ? ` · ostatnio ${last.format('D MMM')}` : ''}
+                </Typography>
+              </Box>
+              <PlayArrowIcon sx={{ fontSize: 18, opacity: 0.6 }} />
+            </Box>
+          ));
+        })()}
+
+        {tab === 'events' && upcoming.length === 0 && (
           <Typography variant="body2" sx={{ opacity: 0.5, mt: 1 }}>Brak nadchodzących wydarzeń.</Typography>
         )}
-        {upcoming.map(({ event: e, date: d }, i) => {
+        {tab === 'events' && upcoming.map(({ event: e, date: d }, i) => {
           const cancelled = e.isCancelledOn(d);
           return (
             <Box
@@ -981,6 +1135,44 @@ function CalendarWidget({ userName, config, custom }: { userName: string; config
           );
         })}
       </Box>
+
+      {/* Uruchomienie zadania cyklicznego: wpis do kalendarza teraz albo o wskazanej porze. */}
+      <Dialog open={!!startTask} onClose={() => setStartTask(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 1 }}>Zacznij Event</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2, fontWeight: 600 }}>{startTask?.name}</Typography>
+          <TextField
+            fullWidth
+            size="small"
+            type="datetime-local"
+            label="Zacznij o godzinie"
+            value={startAt}
+            onChange={(e) => setStartAt(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+          <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.6 }}>
+            Event trafi do kalendarza na {startTask?.duration ? `${startTask.duration} h` : '1 h'}.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+          <Button onClick={() => setStartTask(null)} disabled={startBusy}>Anuluj</Button>
+          <Box sx={{ flex: 1 }} />
+          <Button
+            variant="outlined"
+            disabled={startBusy || !startAt}
+            onClick={() => startTask && startTaskEvent(startTask, dayjs(startAt))}
+          >
+            Zacznij o godzinie
+          </Button>
+          <Button
+            variant="contained"
+            disabled={startBusy}
+            onClick={() => startTask && startTaskEvent(startTask, dayjs())}
+          >
+            Zacznij teraz
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Menu kontekstowe wystąpienia (poza trybem Custom): anuluj/przywróć dany dzień. */}
       <Menu
@@ -1601,7 +1793,20 @@ function RadioWidget({ config }: { config?: WidgetConfig }) {
 function TabsWidget({ userName, config, custom }: { userName: string; config?: WidgetConfig; custom: boolean }) {
   const tabs = config?.tabs ?? [];
   const [active, setActive] = useState(0);
-  const current = tabs[Math.min(active, tabs.length - 1)];
+  const index = Math.min(active, Math.max(0, tabs.length - 1));
+  const current = tabs[index];
+
+  /**
+   * Zakładki raz odwiedzone zostają zamontowane — przełączenie tylko je ukrywa.
+   * Odmontowanie zabijało radio (cleanup pauzuje strumień), gubiło historię IoT
+   * Log i rwało rozmowę z Aurą. Montujemy leniwie (dopiero przy pierwszym
+   * wejściu), więc cztery galerie nie ruszają naraz przy otwarciu pulpitu.
+   */
+  const [mounted, setMounted] = useState<string[]>(() => (current ? [current.id] : []));
+  useEffect(() => {
+    if (!current) return;
+    setMounted((prev) => (prev.includes(current.id) ? prev : [...prev, current.id]));
+  }, [current]);
 
   if (!tabs.length) {
     return <EmptyGalleryHint icon={<TabsIcon />} text="Dodaj zakładki w ustawieniach ⚙" />;
@@ -1610,7 +1815,7 @@ function TabsWidget({ userName, config, custom }: { userName: string; config?: W
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <Tabs
-        value={Math.min(active, tabs.length - 1)}
+        value={index}
         onChange={(_, v) => setActive(v)}
         variant="scrollable"
         scrollButtons="auto"
@@ -1621,15 +1826,23 @@ function TabsWidget({ userName, config, custom }: { userName: string; config?: W
         ))}
       </Tabs>
       <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
-        {current && (
-          <WidgetContent
-            key={current.id}
-            kind={current.kind}
-            config={current.config}
-            userName={userName}
-            custom={custom}
-          />
-        )}
+        {tabs.map((t, i) => (
+          mounted.includes(t.id) && (
+            <Box
+              key={t.id}
+              // `position: absolute` daje każdej zakładce pełny rozmiar kontenera,
+              // a `display: none` wygasza tę nieaktywną bez odmontowania jej drzewa.
+              sx={{ position: 'absolute', inset: 0, display: i === index ? 'block' : 'none' }}
+            >
+              <WidgetContent
+                kind={t.kind}
+                config={t.config}
+                userName={userName}
+                custom={custom}
+              />
+            </Box>
+          )
+        ))}
       </Box>
     </Box>
   );

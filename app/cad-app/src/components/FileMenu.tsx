@@ -23,6 +23,7 @@ import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSTEP, exportSTL, ex
 import { ProjectBrowser } from './ProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
 import { SCENE_EXT, readFileAt, writeFileAt } from '../vfs/cadProjectApi';
+import { syncOpenUrl } from '../vfs/openTarget';
 
 interface Props {
   project: Project;
@@ -86,6 +87,7 @@ export function FileMenu({ project, getSceneData, onSceneData, onProjectFile }: 
 
   async function handleReadScene(dir: string, name: string) {
     const sceneJson = await readFileAt(dir, name, SCENE_EXT);
+    syncOpenUrl(`${dir}/${name}${SCENE_EXT}`);
     onSceneData?.(sceneJson);
   }
 

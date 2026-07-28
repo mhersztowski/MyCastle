@@ -13,6 +13,7 @@ import {
   VoiceAction,
   VoiceActionVariant,
   DEFAULT_VOICE_ACTION_COLLECTION,
+  DEFAULT_BACKGROUND_REMINDER,
 } from '@mhersztowski/core';
 
 function uid(prefix: string): string {
@@ -51,6 +52,8 @@ export class VoiceActionService {
         wakeWords: parsed?.wakeWords ?? [],
         globalXml: parsed?.globalXml ?? '',
         googleSearch: parsed?.googleSearch ?? { apiKey: '', cx: '' },
+        // Starsze zapisy nie mają tego pola — domyślne ustawienia przypomnień.
+        backgroundReminder: parsed?.backgroundReminder ?? { ...DEFAULT_BACKGROUND_REMINDER },
       };
       this._isLoaded = true;
       return this.data;

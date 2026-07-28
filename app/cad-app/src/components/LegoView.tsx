@@ -45,6 +45,7 @@ import { writeFileAt, readFileAt } from '../vfs/cadProjectApi';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
 import { buildBaseplateLines, disposeBaseplateLines, neededBaseplateStuds } from './legoBaseplate';
 
+import { syncOpenUrl } from '../vfs/openTarget';
 const LEGO_EXT = '.lego.json';
 
 // Lego units (scene = 1 unit per stud pitch). 1 plate = "flat" height.
@@ -395,6 +396,7 @@ export function LegoView() {
 
   const doLoad = useCallback(async (dir: string, name: string) => {
     const json = await readFileAt(dir, name, LEGO_EXT);
+    syncOpenUrl(`${dir}/${name}${LEGO_EXT}`);
     graphRef.current = SceneDeserializer.deserialize(json);
     setSelectedIds([]);
     setCurrentFile(name);
