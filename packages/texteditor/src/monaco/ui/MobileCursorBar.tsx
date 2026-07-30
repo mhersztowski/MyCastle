@@ -3,8 +3,8 @@
  *
  * Na telefonie precyzyjne postawienie kursora palcem jest walką: kliknięcie
  * trafia „mniej więcej", a klawiatury systemowe nie mają strzałek. Ten pasek
- * daje ← i →, które przesuwają karetkę o znak, oraz skoki na początek/koniec
- * linii.
+ * daje ruch o znak i o linię w obu osiach oraz skoki na początek/koniec linii
+ * i pliku (układ w `cursorBarButtons.ts`). Przytrzymanie powtarza akcję.
  *
  * Dwie rzeczy decydują o tym, czy to w ogóle działa:
  *   • pasek NIE MOŻE zabierać fokusu — każde wciśnięcie blokuje domyślną akcję
@@ -18,10 +18,26 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, IconButton, Tooltip } from '@mui/material';
 import KeyboardArrowLeftIcon from '@mui/icons-material/KeyboardArrowLeft';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import FirstPageIcon from '@mui/icons-material/FirstPage';
 import LastPageIcon from '@mui/icons-material/LastPage';
+import VerticalAlignTopIcon from '@mui/icons-material/VerticalAlignTop';
+import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 import type * as monaco from 'monaco-editor';
 import { keyboardState, type KeyboardState } from './keyboardInset';
+import { CURSOR_BAR_BUTTONS, type CursorBarAction } from './cursorBarButtons';
+
+const ICONS: Record<CursorBarAction, React.ReactNode> = {
+  cursorTop: <VerticalAlignTopIcon fontSize="small" />,
+  cursorHome: <FirstPageIcon fontSize="small" />,
+  cursorLeft: <KeyboardArrowLeftIcon fontSize="small" />,
+  cursorUp: <KeyboardArrowUpIcon fontSize="small" />,
+  cursorDown: <KeyboardArrowDownIcon fontSize="small" />,
+  cursorRight: <KeyboardArrowRightIcon fontSize="small" />,
+  cursorEnd: <LastPageIcon fontSize="small" />,
+  cursorBottom: <VerticalAlignBottomIcon fontSize="small" />,
+};
 
 export interface MobileCursorBarProps {
   /** Czy w ogóle pokazywać (tryb mobilny hosta). */
@@ -96,7 +112,7 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
   };
   useEffect(() => stopRepeat, []);
 
-  const run = (command: string) => {
+  const run = (command: CursorBarAction) => {
     const editor = getEditor();
     if (!editor) return;
     // `trigger` używa wbudowanych komend Monaco, więc zaznaczanie, składanie kodu
@@ -105,7 +121,7 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
     editor.focus();
   };
 
-  const press = (command: string) => (e: React.PointerEvent) => {
+  const press = (command: CursorBarAction) => (e: React.PointerEvent) => {
     // Bez tego wciśnięcie zabiera fokus edytorowi i klawiatura się chowa.
     e.preventDefault();
     e.stopPropagation();
@@ -117,13 +133,6 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
   };
 
   if (!enabled || !focused || !kb.visible) return null;
-
-  const buttons: Array<{ title: string; command: string; icon: React.ReactNode }> = [
-    { title: 'Początek linii', command: 'cursorHome', icon: <FirstPageIcon fontSize="small" /> },
-    { title: 'Kursor w lewo', command: 'cursorLeft', icon: <KeyboardArrowLeftIcon /> },
-    { title: 'Kursor w prawo', command: 'cursorRight', icon: <KeyboardArrowRightIcon /> },
-    { title: 'Koniec linii', command: 'cursorEnd', icon: <LastPageIcon fontSize="small" /> },
-  ];
 
   return (
     <Box
@@ -138,10 +147,13 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
         zIndex: 1400,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: 1,
-        px: 1,
+        justifyContent: 'space-between',
+        // Osiem przycisków musi wejść na wąski ekran — stąd mały odstęp i
+        // przewijanie w poziomie jako zabezpieczenie dla najmniejszych telefonów.
+        gap: 0.5,
+        px: 0.5,
         py: 0.5,
+        overflowX: 'auto',
         bgcolor: '#2d2d2d',
         borderTop: '1px solid #444',
         boxShadow: '0 -4px 12px rgba(0,0,0,0.35)',
@@ -151,7 +163,7 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
       onPointerCancel={stopRepeat}
       onPointerLeave={stopRepeat}
     >
-      {buttons.map((b) => (
+      {CURSOR_BAR_BUTTONS.map((b) => (
         <Tooltip key={b.command} title={b.title}>
           <IconButton
             onPointerDown={press(b.command)}
@@ -159,9 +171,14 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
             // żeby przeglądarka nie wywołała akcji drugi raz.
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => e.preventDefault()}
-            sx={{ color: '#ddd', bgcolor: '#3a3a3a', '&:active': { bgcolor: '#4a4a4a' }, borderRadius: 1.5, px: 2 }}
+            sx={{
+              color: '#ddd', bgcolor: '#3a3a3a', '&:active': { bgcolor: '#4a4a4a' },
+              borderRadius: 1.5,
+              // Kciuk potrzebuje ~40 px celu; szerokość rośnie, gdy jest miejsce.
+              flex: '1 1 auto', minWidth: 38, maxWidth: 64, py: 0.75,
+            }}
           >
-            {b.icon}
+            {ICONS[b.command]}
           </IconButton>
         </Tooltip>
       ))}
