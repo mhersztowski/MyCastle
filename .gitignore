@@ -68,3 +68,6 @@ app/mycastle-watch/node_modules/
 app/mycastle-watch/android/
 app/mycastle-watch/ios/
 app/mycastle-watch/assets/
+
+# Paczka deklaracji Three.js dla edytora kodu w cad-app (generowana: pnpm --filter cad-app gen:three-types)
+app/cad-app/public/types/

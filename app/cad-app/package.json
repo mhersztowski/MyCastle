@@ -10,7 +10,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:three-types": "node scripts/gen-three-types.mjs",
+    "predev": "node scripts/gen-three-types.mjs",
+    "prebuild": "node scripts/gen-three-types.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

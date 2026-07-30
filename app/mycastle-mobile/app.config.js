@@ -38,6 +38,12 @@ module.exports = {
       },
       package: appPackage,
       usesCleartextTraffic: true,
+      // `resize` (→ windowSoftInputMode=adjustResize) skraca okno WebView, gdy
+      // wychodzi klawiatura. Tego trybu trzyma się detekcja klawiatury w
+      // edytorze kodu (`keyboardInset.ts`) — przy `pan` okno jedzie poza ekran
+      // bez żadnej zmiany wymiarów, więc pasek kursora nie miałby się po czym
+      // zorientować. Expo używa `resize` domyślnie; zapisujemy to jawnie.
+      softwareKeyboardLayoutMode: 'resize',
     },
     web: {
       bundler: 'metro',

@@ -19,6 +19,8 @@ export interface SceneGraphData {
   root: SceneNodeData;
   animation?: AnimationClip | null;
   prefabs?: PrefabEntry[];
+  /** Ścieżka VFS do pliku `.ts` uruchamianego przyciskiem „Run" (patrz `SceneGraph.script`). */
+  script?: string;
 }
 
 export class SceneGraph {
@@ -26,6 +28,13 @@ export class SceneGraph {
   onChange: (() => void) | null = null;
   animation: AnimationClip | null = null;
   prefabs: PrefabEntry[] = [];
+  /**
+   * Ścieżka VFS do skryptu TypeScript sterującego sceną (przycisk „Run").
+   *
+   * Trzymana w scenie, a nie w localStorage, bo powiązanie ma jechać razem z
+   * plikiem projektu — inaczej po otwarciu sceny na innym urządzeniu skrypt ginie.
+   */
+  script: string | null = null;
 
   private _notifyScheduled = false;
 
@@ -76,6 +85,7 @@ export class SceneGraph {
       root: this.root.toData(),
       animation: this.animation ?? undefined,
       prefabs: this.prefabs.length > 0 ? this.prefabs : undefined,
+      script: this.script || undefined,
     };
   }
 
@@ -204,6 +214,7 @@ export class SceneGraph {
     graph.root.traverse((n) => { n._onChange = graph._handleChange; });
     if (data.animation) graph.animation = data.animation;
     if (data.prefabs) graph.prefabs = data.prefabs;
+    if (data.script) graph.script = data.script;
     return graph;
   }
 }

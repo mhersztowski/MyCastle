@@ -29,6 +29,8 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
 import Checkbox from '@mui/material/Checkbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import Radio from '@mui/material/Radio';
+import RadioGroup from '@mui/material/RadioGroup';
 import CircularProgress from '@mui/material/CircularProgress';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
@@ -86,6 +88,11 @@ import {
 } from './umlCallables';
 import { buildTypeOptions, insertImportLine, type TypeOption } from './sourceTypes';
 import { checkCallArgs, formatIssues, unwrapPromise } from './argTypeCheck';
+import {
+  DEFAULT_UML_SERVER, readUmlSource, writeUmlSource, umlEndpoint,
+  describeUmlSource, loginForToken, normalizeBaseUrl, filterUmlEntries, base64ToUtf8,
+  type UmlSourceConfig, type UmlSourceMode,
+} from './umlSource';
 // Side-effect import: registers Blockly's built-in block types
 // (controls_if, math_number, lists_*, text_*, variables_*, procedures_*, …).
 // Without this the toolbox tries to instantiate them and the flyout blanks
@@ -6029,6 +6036,11 @@ function OptionsButton({ uri }: { uri: string }) {
   const [loading, setLoading] = useState(false);
   const [callables, setCallables] = useState<UmlCallable[]>([]);
   const [typeCount, setTypeCount] = useState(0);
+  // Źródło projektów: ten serwer albo zdalny MyCastle (adres + użytkownik + token).
+  const [source, setSource] = useState<UmlSourceConfig>(() => readUmlSource());
+  const [password, setPassword] = useState('');
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [sourceBusy, setSourceBusy] = useState(false);
 
   // Wybór z poprzedniej sesji zasila bloczki od razu po otwarciu pliku — bez tego
   // dropdown byłby pusty do czasu, aż ktoś zajrzy w Options.
@@ -6044,23 +6056,58 @@ function OptionsButton({ uri }: { uri: string }) {
     });
   }, [uri]);
 
+  const refreshFiles = useCallback(async (cfg: UmlSourceConfig) => {
+    setLoading(true);
+    setSourceError(null);
+    try {
+      setFiles(await listUmlProjects(cfg));
+    } catch (e) {
+      setFiles([]);
+      setSourceError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const handleOpen = useCallback(async () => {
     setOpen(true);
-    setLoading(true);
-    setFiles(await listUmlProjects());
-    setLoading(false);
-  }, []);
+    const cfg = readUmlSource();
+    setSource(cfg);
+    await refreshFiles(cfg);
+  }, [refreshFiles]);
+
+  /** Zapisuje źródło i odświeża listę — jedna droga dla każdej zmiany pola. */
+  const applySource = useCallback(async (patch: Partial<UmlSourceConfig>, reload = true) => {
+    const next = { ...source, ...patch };
+    setSource(next);
+    writeUmlSource(next);
+    if (reload) await refreshFiles(next);
+  }, [source, refreshFiles]);
+
+  const handleConnect = useCallback(async () => {
+    setSourceBusy(true);
+    setSourceError(null);
+    try {
+      const token = await loginForToken(source.baseUrl, source.userName, password);
+      setPassword('');
+      await applySource({ token });
+    } catch (e) {
+      setSourceError((e as Error).message);
+    } finally {
+      setSourceBusy(false);
+    }
+  }, [source.baseUrl, source.userName, password, applySource]);
 
   const toggle = useCallback(async (file: string) => {
     const next = selected.includes(file) ? selected.filter((f) => f !== file) : [...selected, file];
     setSelected(next);
     writeUmlPref(uri, next);
-    const { callables: fns, types } = await loadUmlProjectData(next);
+    const { callables: fns, types } = await loadUmlProjectData(next, source);
     setUmlCallables(fns);
     setUmlTypes(types);
     setCallables(fns);
     setTypeCount(types.length);
-  }, [selected, uri]);
+  }, [selected, uri, source]);
 
   return (
     <>
@@ -6088,11 +6135,95 @@ function OptionsButton({ uri }: { uri: string }) {
             zapisie slotu. Klasy i interfejsy z projektów trafiają do okna wyboru typu zmiennej.
           </Typography>
 
+          {/* ── Serwer projektów UML ─────────────────────────────── */}
+          <Box sx={{ border: '1px solid #313244', borderRadius: 1, p: 1, mb: 1.5 }}>
+            <Typography sx={{ fontSize: 11, color: '#9399b2', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Serwer projektów UML
+            </Typography>
+            <RadioGroup
+              row
+              value={source.mode}
+              onChange={(e) => void applySource({ mode: e.target.value as UmlSourceMode })}
+              sx={{ mb: source.mode === 'remote' ? 1 : 0 }}
+            >
+              <FormControlLabel value="local" control={<Radio size="small" />}
+                label={<Typography sx={{ fontSize: 12 }}>Ten serwer</Typography>} />
+              <FormControlLabel value="remote" control={<Radio size="small" />}
+                label={<Typography sx={{ fontSize: 12 }}>Zdalny (web API VFS)</Typography>} />
+            </RadioGroup>
+
+            {source.mode === 'remote' && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <TextField
+                  size="small" label="Adres serwera" value={source.baseUrl}
+                  onChange={(e) => setSource((s) => ({ ...s, baseUrl: e.target.value }))}
+                  onBlur={() => void applySource({ baseUrl: source.baseUrl })}
+                  placeholder={DEFAULT_UML_SERVER}
+                  slotProps={{ inputLabel: { sx: { fontSize: 12 } }, input: { sx: { fontSize: 12 } } }}
+                />
+                {/* Gotowe adresy — najczęściej to produkcja albo backend na localhost. */}
+                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                  {[DEFAULT_UML_SERVER, 'http://localhost:1894', window.location.origin].map((preset) => (
+                    <Chip
+                      key={preset}
+                      size="small"
+                      label={preset.replace(/^https?:\/\//, '')}
+                      onClick={() => void applySource({ baseUrl: preset })}
+                      variant={normalizeBaseUrl(source.baseUrl) === normalizeBaseUrl(preset) ? 'filled' : 'outlined'}
+                      sx={{ fontSize: 10, height: 22 }}
+                    />
+                  ))}
+                </Box>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <TextField
+                    size="small" label="Użytkownik" value={source.userName}
+                    onChange={(e) => setSource((s) => ({ ...s, userName: e.target.value }))}
+                    onBlur={() => void applySource({ userName: source.userName })}
+                    sx={{ flex: 1 }}
+                    slotProps={{ inputLabel: { sx: { fontSize: 12 } }, input: { sx: { fontSize: 12 } } }}
+                  />
+                  <TextField
+                    size="small" label="Token (JWT / minis_…)" value={source.token}
+                    onChange={(e) => setSource((s) => ({ ...s, token: e.target.value }))}
+                    onBlur={() => void applySource({ token: source.token })}
+                    sx={{ flex: 1.4 }}
+                    slotProps={{ inputLabel: { sx: { fontSize: 12 } }, input: { sx: { fontSize: 12 } } }}
+                  />
+                </Box>
+                {/* Hasło służy tylko do wymiany na token — nie jest nigdzie zapisywane. */}
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    size="small" type="password" label="Hasło (opcjonalnie)" value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    sx={{ flex: 1 }}
+                    slotProps={{ inputLabel: { sx: { fontSize: 12 } }, input: { sx: { fontSize: 12 } } }}
+                  />
+                  <Button
+                    size="small" variant="outlined" onClick={() => void handleConnect()}
+                    disabled={sourceBusy || !password || !source.userName}
+                    sx={{ textTransform: 'none', whiteSpace: 'nowrap' }}
+                  >
+                    {sourceBusy ? 'Łączę…' : 'Połącz'}
+                  </Button>
+                </Box>
+                <Typography sx={{ fontSize: 11, color: '#6c7086' }}>
+                  Czytane przez web API: <code>{'{serwer}'}/api/users/{'{użytkownik}'}/vfs/readdir</code> →
+                  <code> {UML_DIR}</code>. Hasło wymieniamy na token (zapisywany lokalnie), samo hasło nie jest przechowywane.
+                </Typography>
+              </Box>
+            )}
+
+            <Typography sx={{ fontSize: 11, color: sourceError ? '#f38ba8' : '#a6adc8', mt: 1 }}>
+              {sourceError ?? `Źródło: ${describeUmlSource(source)}`}
+            </Typography>
+          </Box>
+
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={24} /></Box>
           ) : files.length === 0 ? (
             <Typography sx={{ fontSize: 12, color: '#6c7086', py: 2 }}>
-              Brak projektów w <code>drive/uml</code>. Utwórz projekt na stronie Programming → UML.
+              Brak projektów w <code>drive/uml</code>
+              {source.mode === 'remote' ? ' na wskazanym serwerze.' : '. Utwórz projekt na stronie Programming → UML.'}
             </Typography>
           ) : (
             <List dense disablePadding sx={{ maxHeight: 260, overflow: 'auto', border: '1px solid #313244', borderRadius: 1 }}>
@@ -6254,28 +6385,55 @@ const UML_DIR = 'drive/uml';
 const UML_EXT = '.umlproj.json';
 const UML_PREF_KEY = 'minislib.umlProjects';
 
-/** Lista plików projektów UML użytkownika. */
-async function listUmlProjects(): Promise<string[]> {
+/**
+ * Lista plików projektów UML — z tego serwera albo ze wskazanego zdalnego
+ * (Options → Blockly → Serwer projektów UML).
+ *
+ * Rzuca wyjątkiem tylko przy trybie zdalnym: tam błąd (zły token, brak katalogu)
+ * musi być widoczny w dialogu, bo inaczej pusta lista wygląda jak „brak projektów".
+ */
+async function listUmlProjects(source: UmlSourceConfig = readUmlSource()): Promise<string[]> {
+  const { url, headers } = umlEndpoint(source, 'readdir');
+  const where = source.mode === 'remote' ? ` z ${normalizeBaseUrl(source.baseUrl)}` : '';
+  let res: Response;
   try {
-    const res = await fetch(vfsApiUrl(`/user/${UML_DIR}`, 'readdir'), { headers: vfsAuthHeader() });
-    if (!res.ok) return [];
-    const { entries } = await res.json() as { entries?: Array<{ name: string; type: number }> };
-    return (entries ?? [])
-      .filter((e) => e.type !== 2 && e.name.toLowerCase().endsWith(UML_EXT))
-      .map((e) => e.name)
-      .sort();
-  } catch { return []; }
+    res = await fetch(url, { headers });
+  } catch (e) {
+    throw new Error(`Nie udało się połączyć${where || ' z serwerem'}: ${(e as Error).message}`);
+  }
+  if (!res.ok) {
+    const detail = res.status === 401 || res.status === 403
+      ? 'brak dostępu — sprawdź użytkownika i token'
+      : res.status === 404 ? 'katalog nie istnieje' : `HTTP ${res.status}`;
+    throw new Error(`Nie udało się odczytać ${UML_DIR}${where}: ${detail}`);
+  }
+  const { entries } = await res.json() as { entries?: Array<{ name: string; type: number }> };
+  return filterUmlEntries(entries);
+}
+
+/** Treść pliku projektu UML z aktywnego źródła. */
+async function readUmlProjectText(file: string, source: UmlSourceConfig): Promise<string | null> {
+  try {
+    const { url, headers } = umlEndpoint(source, 'readFile', file);
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    const { data } = await res.json() as { data: string };
+    return base64ToUtf8(data);
+  } catch { return null; }
 }
 
 /**
  * Wczytuje wybrane projekty: funkcje do bloczków i typy do okna wyboru typu.
  * Jedno przejście po plikach, bo obie listy pochodzą z tego samego JSON-a.
  */
-async function loadUmlProjectData(files: string[]): Promise<{ callables: UmlCallable[]; types: UmlType[] }> {
+async function loadUmlProjectData(
+  files: string[],
+  source: UmlSourceConfig = readUmlSource(),
+): Promise<{ callables: UmlCallable[]; types: UmlType[] }> {
   const callables: UmlCallable[] = [];
   const types: UmlType[] = [];
   for (const file of files) {
-    const text = await vfsReadFileText(`/user/${UML_DIR}/${file}`);
+    const text = await readUmlProjectText(file, source);
     if (!text) continue;
     try {
       const project = JSON.parse(text) as UmlProjectLike;

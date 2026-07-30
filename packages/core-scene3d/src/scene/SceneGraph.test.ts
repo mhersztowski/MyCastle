@@ -221,3 +221,33 @@ describe('SceneGraph', () => {
     expect(spy).toHaveBeenCalled();
   });
 });
+
+/**
+ * Skrypt sceny — ścieżka VFS do pliku `.ts` uruchamianego przyciskiem „Run".
+ *
+ * Powiązanie musi jechać razem z plikiem sceny: bez tego wybór skryptu ginął po
+ * ponownym otwarciu projektu z serwera.
+ */
+describe('SceneGraph.script', () => {
+  it('domyślnie nie ma skryptu i nie zaśmieca serializacji', () => {
+    const graph = new SceneGraph();
+    expect(graph.script).toBeNull();
+    expect(graph.toData().script).toBeUndefined();
+  });
+
+  it('przechodzi round-trip przez toData/fromData', () => {
+    const graph = new SceneGraph();
+    graph.script = '/users/marcin/projects/silnik.ts';
+
+    const restored = SceneGraph.fromData(graph.toData());
+
+    expect(restored.script).toBe('/users/marcin/projects/silnik.ts');
+  });
+
+  it('pusta ścieżka znaczy „brak skryptu"', () => {
+    const graph = new SceneGraph();
+    graph.script = '';
+    expect(graph.toData().script).toBeUndefined();
+    expect(SceneGraph.fromData(graph.toData()).script).toBeNull();
+  });
+});

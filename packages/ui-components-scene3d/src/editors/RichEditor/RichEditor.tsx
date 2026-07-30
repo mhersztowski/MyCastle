@@ -21,6 +21,8 @@ import SaveAsIcon from '@mui/icons-material/SaveAs';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import FileUploadIcon from '@mui/icons-material/FileUpload';
 import SettingsIcon from '@mui/icons-material/Settings';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import CodeIcon from '@mui/icons-material/Code';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
@@ -285,10 +287,15 @@ interface RichEditorExtendedProps extends RichEditorProps {
   currentProject?: string;
   currentFile?: string;
   otherProjectsPrefabs?: ProjectPrefabGroup[];
+  /** Wybór pliku `.ts` powiązanego ze sceną (Settings → Scene script). Zwraca
+   *  ścieżkę VFS, `''` gdy wyczyszczono albo `null` po anulowaniu. */
+  onPickScript?: () => Promise<string | null>;
+  /** Klik „Run" na pasku narzędzi — host wczytuje skrypt z VFS i uruchamia scenę. */
+  onRunScript?: (scriptPath: string | null) => void;
   // onEditMesh and getNodeGeometryRef are inherited from RichEditorProps (ui-core)
 }
 
-export function RichEditor({ className, style, initialSceneData, initialPrefabs, onSavePrefab, onDeletePrefab, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, propertyChangeRef, getNodeGeometryRef, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog, onBrowseAudioFile, resolveAudioSrc, onEditGeometryNodes, onEditMesh, currentProject, currentFile, otherProjectsPrefabs }: RichEditorExtendedProps) {
+export function RichEditor({ className, style, initialSceneData, initialPrefabs, onSavePrefab, onDeletePrefab, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, propertyChangeRef, getNodeGeometryRef, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog, onBrowseAudioFile, resolveAudioSrc, onEditGeometryNodes, onEditMesh, currentProject, currentFile, otherProjectsPrefabs, onPickScript, onRunScript }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [geoPointEdit, setGeoPointEdit] = useState<{ nodeId: string; fieldKey: string } | null>(null);
   const [version, setVersion] = useState(0);
@@ -431,6 +438,27 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     setCanUndo(historyPointerRef.current > 0);
     setCanRedo(false);
   }, [sceneGraph, onSceneChange]);
+
+  // ─── Skrypt sceny (SceneGraph.script) ─────────────────────────
+  // Ścieżka VFS pliku `.ts` uruchamianego przyciskiem „Run". Trzymana w grafie,
+  // więc jedzie z zapisem sceny i przeżywa undo/redo (snapshot to pełny JSON).
+  const [scriptPath, setScriptPath] = useState<string | null>(() => sceneGraph.script ?? null);
+  useEffect(() => { setScriptPath(sceneGraph.script ?? null); }, [sceneGraph, version]);
+
+  const handlePickScript = useCallback(async () => {
+    if (!onPickScript) return;
+    const picked = await onPickScript();
+    if (picked === null) return; // anulowano — nie ruszamy powiązania
+    sceneGraph.script = picked || null;
+    setScriptPath(sceneGraph.script);
+    bump();
+  }, [onPickScript, sceneGraph, bump]);
+
+  const handleClearScript = useCallback(() => {
+    sceneGraph.script = null;
+    setScriptPath(null);
+    bump();
+  }, [sceneGraph, bump]);
 
   const mergeScene = useCallback((json: string) => {
     try {
@@ -1353,6 +1381,17 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     { id: 'render-normal', label: 'Normal', onClick: () => setRenderMode('normal'), active: renderMode === 'normal', tooltip: 'Normal — visualize vertex normals as color' },
     { id: 'render-wire', label: 'Wire', onClick: () => setRenderMode('wireframe'), active: renderMode === 'wireframe', tooltip: 'Wireframe — show geometry edges only' },
     { id: 'sep-3', label: '', type: 'separator' },
+    // „Run" pokazujemy tylko tam, gdzie host umie uruchomić skrypt (cad-app) —
+    // w podglądach bez VFS przycisk byłby martwy.
+    ...(onRunScript ? [{
+      id: 'run',
+      label: 'Run',
+      icon: <PlayArrowIcon sx={{ fontSize: 16 }} />,
+      onClick: () => onRunScript(scriptPath),
+      tooltip: scriptPath
+        ? `Uruchom scenę ze skryptem ${scriptPath}`
+        : 'Uruchom scenę (brak skryptu — wskaż plik .ts w Settings)',
+    } as ToolbarItem, { id: 'sep-run', label: '', type: 'separator' } as ToolbarItem] : []),
     { id: 'settings', label: '', icon: <SettingsIcon sx={{ fontSize: 16 }} />, onClick: settingsDialog.open, tooltip: 'Settings' },
     { id: 'sep-4', label: '', type: 'separator' },
     { id: 'side',      label: 'Panels', onClick: () => setShowSidePanel(p => !p), active: showSidePanel, tooltip: 'Toggle Hierarchy + Inspector' },
@@ -1845,6 +1884,42 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
           </Button>
         }
       >
+        {/* Skrypt sceny — plik .ts z VFS uruchamiany przyciskiem „Run". */}
+        {onPickScript && (
+          <>
+            <Typography sx={{ fontSize: '0.8rem', fontWeight: 500, mb: 0.5 }}>Scene script</Typography>
+            <Typography sx={{ fontSize: '0.65rem', color: 'text.secondary', mb: 1 }}>
+              Plik TypeScript z serwera (VFS) uruchamiany przyciskiem „Run". W skrypcie dostępne są
+              <code style={{ margin: '0 3px' }}>scene</code> (graf sceny, <code>find</code>, <code>onFrame</code>, <code>log</code>)
+              oraz <code style={{ margin: '0 3px' }}>THREE</code>.
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+              <CodeIcon sx={{ fontSize: 16, color: scriptPath ? '#4fc3f7' : 'text.disabled', flexShrink: 0 }} />
+              <Typography
+                sx={{
+                  fontSize: '0.72rem', flex: 1, fontFamily: 'monospace',
+                  color: scriptPath ? 'text.primary' : 'text.disabled',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+              >
+                {scriptPath ?? '(brak powiązanego skryptu)'}
+              </Typography>
+              <Button size="small" onClick={handlePickScript} sx={{ fontSize: '0.7rem', textTransform: 'none' }}>
+                Wybierz…
+              </Button>
+              <Button
+                size="small"
+                color="inherit"
+                onClick={handleClearScript}
+                disabled={!scriptPath}
+                sx={{ fontSize: '0.7rem', textTransform: 'none' }}
+              >
+                Wyczyść
+              </Button>
+            </Box>
+            <Divider sx={{ mb: 2 }} />
+          </>
+        )}
         <Typography sx={{ fontSize: '0.8rem', fontWeight: 500, mb: 1 }}>Camera Controls</Typography>
         <RadioGroup
           value={cameraPreset}

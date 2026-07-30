@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RemoteFS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
 import { TextEditorWorkspace, SubpathFS } from '@mhersztowski/texteditor';
 import { getCurrentUserId } from '../vfs/cadProjectApi';
+import { createSceneScriptTypesPlugin } from '../editor/SceneScriptTypesPlugin';
 import '../editor/monacoWorkers';
 
 /**
@@ -27,9 +28,14 @@ export function CodeEditorPanel() {
     provider.mkdir?.('/').catch(() => {});
   }, [provider]);
 
+  // Podpowiedzi Three.js + globale skryptu sceny (`scene`, `THREE`) — patrz
+  // SceneScriptTypesPlugin: wbudowany plugin TS nie ma skąd wziąć typów three.
+  const extraPlugins = useMemo(() => [createSceneScriptTypesPlugin()], []);
+
   return (
     <TextEditorWorkspace
       provider={provider}
+      extraPlugins={extraPlugins}
       height="100%"
       projectDeps={{
         // Same-origin: Vite proxies /api/* → cad-backend (port 1897 internal).

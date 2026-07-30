@@ -17,7 +17,8 @@ import { cadProjectToSceneJson } from '../bridge/CadToScene';
 import { mapNodesToSceneJson, deserializeMapNodes } from '../bridge/MapToScene';
 import { Scene3DProjectBrowser } from './Scene3DProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
-import { writeScene3dFile, vfsListDir, vfsReadFileBin, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs, readFileAt, MAP_EXT, buildViewerUrl, getCurrentUserId } from '../vfs/cadProjectApi';
+import { SceneRunDialog } from './SceneRunDialog';
+import { writeScene3dFile, vfsListDir, vfsReadFileBin, vfsReadFileText, userProjectsDir, listScene3dPrefabs, writeScene3dPrefab, deleteScene3dPrefab, listAllScene3dPrefabs, readFileAt, MAP_EXT, buildViewerUrl, getCurrentUserId } from '../vfs/cadProjectApi';
 import { useRegisterFileOps } from '../fileops/FileOpsContext';
 import type { PrefabEntry } from '@mhersztowski/core-scene3d';
 import type { ProjectPrefabGroup } from '@mhersztowski/ui-components-scene3d';
@@ -28,6 +29,9 @@ import { evaluateDescriptor, geometryToEditable } from '../edit-mode/meshConvert
 import type { EditableMesh } from '../edit-mode/types';
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a'];
+
+/** Rozszerzenie skryptów sceny — plik wskazywany w Settings → Scene script. */
+const SCRIPT_EXT = '.ts';
 
 interface MapImportRecord {
   importId: string
@@ -105,6 +109,47 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   const [audioPickerPath, setAudioPickerPath] = useState(userProjectsDir());
   const [audioPickerEntries, setAudioPickerEntries] = useState<{ name: string; isDir: boolean }[]>([]);
   const audioPickerResolveRef = useRef<((path: string | null) => void) | null>(null);
+
+  // ─── Skrypt sceny (Settings → Scene script + „Run") ───────────
+  // Picker działa jak audio picker: obietnica rozwiązywana wyborem w dialogu,
+  // bo RichEditor oczekuje `Promise<string | null>` (null = anulowano).
+  const [scriptPickerOpen, setScriptPickerOpen] = useState(false);
+  const scriptPickResolveRef = useRef<((path: string | null) => void) | null>(null);
+  const [runState, setRunState] = useState<{ path: string | null; code: string | null } | null>(null);
+
+  const handlePickScript = useCallback((): Promise<string | null> => {
+    return new Promise((resolve) => {
+      scriptPickResolveRef.current = resolve;
+      setScriptPickerOpen(true);
+    });
+  }, []);
+
+  const handleScriptPicked = useCallback(async (dir: string, name: string) => {
+    scriptPickResolveRef.current?.(`${dir}/${name}${SCRIPT_EXT}`);
+    scriptPickResolveRef.current = null;
+    setScriptPickerOpen(false);
+  }, []);
+
+  const handleScriptPickerClose = useCallback(() => {
+    scriptPickResolveRef.current?.(null);
+    scriptPickResolveRef.current = null;
+    setScriptPickerOpen(false);
+  }, []);
+
+  const handleRunScene = useCallback(async (scriptPath: string | null) => {
+    if (!scriptPath) {
+      setRunState({ path: null, code: null });
+      return;
+    }
+    try {
+      const code = await vfsReadFileText(scriptPath);
+      setRunState({ path: scriptPath, code });
+    } catch (e) {
+      // Skrypt mógł zostać usunięty albo przeniesiony — scena i tak ma się otworzyć.
+      setToast({ msg: `Nie udało się wczytać skryptu ${scriptPath}: ${(e as Error).message}`, severity: 'error' });
+      setRunState({ path: scriptPath, code: null });
+    }
+  }, []);
 
   // Geometry nodes editor dialog
   const [geoNodesState, setGeoNodesState] = useState<{ nodeId: string; graph: GeoNodeGraph } | null>(null);
@@ -352,6 +397,8 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           onSceneChange={handleSceneChange}
           onOpenFromServer={() => setServerMode('open')}
           onSaveToServer={() => setServerMode('save')}
+          onPickScript={handlePickScript}
+          onRunScript={handleRunScene}
           onImportFromCad={handleImport}
           cadEntityCount={cadCount}
           onPlaneClick={placementTemplate?.mode === 'scene3d' ? handlePlaneClick : undefined}
@@ -565,6 +612,26 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
         initialMesh={editMeshState?.mesh ?? null}
         onApply={handleEditMeshApply}
         onClose={() => setEditMeshState(null)}
+      />
+
+      {/* Wybór skryptu sceny (.ts) — z podkatalogami i tworzeniem katalogu */}
+      <ServerFileBrowser
+        open={scriptPickerOpen}
+        mode="open"
+        title="Skrypt sceny (.ts)"
+        extension={SCRIPT_EXT}
+        storageKey="scene3d.script.dir"
+        onClose={handleScriptPickerClose}
+        onOpen={handleScriptPicked}
+      />
+
+      {/* Uruchomienie sceny ze skryptem */}
+      <SceneRunDialog
+        open={Boolean(runState)}
+        sceneJson={sceneJsonRef.current}
+        scriptPath={runState?.path ?? null}
+        scriptCode={runState?.code ?? null}
+        onClose={() => setRunState(null)}
       />
 
       {/* Map file picker */}

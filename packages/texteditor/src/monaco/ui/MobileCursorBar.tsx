@@ -9,8 +9,10 @@
  * Dwie rzeczy decydują o tym, czy to w ogóle działa:
  *   • pasek NIE MOŻE zabierać fokusu — każde wciśnięcie blokuje domyślną akcję
  *     wskaźnika, bo utrata fokusu chowa klawiaturę i przerywa pisanie;
- *   • pozycja liczona jest z `visualViewport`, a nie z `window.innerHeight` —
- *     tylko ten pierwszy wie, ile ekranu zasłania klawiatura.
+ *   • wykrycie klawiatury musi obsłużyć oba zachowania systemu — nakładkę
+ *     (przeglądarka) i zmniejszenie okna (WebView aplikacji mobilnej). Szczegóły
+ *     i powód w `keyboardInset.ts`; liczenie samą różnicą z `visualViewport`
+ *     sprawiało, że w `app/mycastle-mobile` pasek nie pokazywał się nigdy.
  */
 import { useEffect, useRef, useState } from 'react';
 import { Box, IconButton, Tooltip } from '@mui/material';
@@ -19,9 +21,7 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import FirstPageIcon from '@mui/icons-material/FirstPage';
 import LastPageIcon from '@mui/icons-material/LastPage';
 import type * as monaco from 'monaco-editor';
-
-/** Poniżej tylu pikseli „zjedzonych" z viewportu uznajemy, że klawiatura jest schowana. */
-const KEYBOARD_MIN_PX = 120;
+import { keyboardState, type KeyboardState } from './keyboardInset';
 
 export interface MobileCursorBarProps {
   /** Czy w ogóle pokazywać (tryb mobilny hosta). */
@@ -30,33 +30,45 @@ export interface MobileCursorBarProps {
   getEditor: () => monaco.editor.IStandaloneCodeEditor | null | undefined;
 }
 
-/** Ile pikseli u dołu okna zasłania klawiatura (0 = schowana). */
-function keyboardInset(): number {
-  const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-  if (!vv) return 0;
-  const inset = window.innerHeight - vv.height - vv.offsetTop;
-  return inset > KEYBOARD_MIN_PX ? inset : 0;
-}
-
 export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
-  const [inset, setInset] = useState(0);
+  const [kb, setKb] = useState<KeyboardState>({ visible: false, inset: 0 });
   const [focused, setFocused] = useState(false);
   /** Powtarzanie przy przytrzymaniu — jak auto-repeat klawiatury sprzętowej. */
   const repeatRef = useRef<{ timeout?: number; interval?: number }>({});
+  /** Największa wysokość widoku bez klawiatury — punkt odniesienia dla WebView. */
+  const baselineRef = useRef({ width: 0, height: 0 });
 
   // Klawiatura nie zgłasza się żadnym zdarzeniem — jedyny sygnał to zmiana
-  // wysokości widocznego obszaru.
+  // wymiarów widoku.
   useEffect(() => {
     if (!enabled) return;
     const vv = window.visualViewport;
-    if (!vv) return;
-    const update = () => setInset(keyboardInset());
+
+    const update = () => {
+      const height = vv?.height ?? window.innerHeight;
+      const width = vv?.width ?? window.innerWidth;
+      // Obrót ekranu zmienia wysokość „bez klawiatury", więc baseline liczymy
+      // od nowa — inaczej portretowa wysokość udawałaby klawiaturę w poziomie.
+      const base = baselineRef.current;
+      if (base.width !== width) baselineRef.current = { width, height };
+      else if (height > base.height) baselineRef.current = { width, height: height };
+
+      setKb(keyboardState(
+        { innerHeight: window.innerHeight, viewportHeight: vv?.height ?? null, offsetTop: vv?.offsetTop ?? 0 },
+        baselineRef.current.height,
+      ));
+    };
     update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
+
+    vv?.addEventListener('resize', update);
+    vv?.addEventListener('scroll', update);
+    // `window.resize` to jedyny sygnał w WebView z adjustResize (visualViewport
+    // tam też się zmienia, ale na starszych silnikach zdarzenie nie przychodzi).
+    window.addEventListener('resize', update);
     return () => {
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
+      vv?.removeEventListener('resize', update);
+      vv?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
     };
   }, [enabled]);
 
@@ -104,7 +116,7 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
     }, 400);
   };
 
-  if (!enabled || !focused || inset === 0) return null;
+  if (!enabled || !focused || !kb.visible) return null;
 
   const buttons: Array<{ title: string; command: string; icon: React.ReactNode }> = [
     { title: 'Początek linii', command: 'cursorHome', icon: <FirstPageIcon fontSize="small" /> },
@@ -115,13 +127,14 @@ export function MobileCursorBar({ enabled, getEditor }: MobileCursorBarProps) {
 
   return (
     <Box
-      // position: fixed + bottom = wysokość klawiatury — pasek „przykleja się"
-      // do jej górnej krawędzi i jedzie razem z nią przy zmianie wysokości.
+      // position: fixed + bottom = wysokość nakładki klawiatury; w WebView, gdzie
+      // okno jest już skrócone, inset wynosi 0 i pasek siedzi na jego dole.
+      // `env(safe-area-inset-bottom)` trzyma go nad gestem nawigacji.
       sx={{
         position: 'fixed',
         left: 0,
         right: 0,
-        bottom: inset,
+        bottom: kb.inset > 0 ? kb.inset : 'env(safe-area-inset-bottom, 0px)',
         zIndex: 1400,
         display: 'flex',
         alignItems: 'center',
