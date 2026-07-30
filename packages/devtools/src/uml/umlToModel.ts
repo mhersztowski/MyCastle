@@ -27,9 +27,9 @@ export function diagramToModel(diagram: UmlDiagram, language: Language = 'typesc
     const { kind, isAbstract } = umlKindToSymbol(n.data.kind);
     const members: CodeMember[] = n.data.members.map((m) => {
       const p = parseMemberText(m.text);
-      return { id: m.id, kind: p.kind, name: p.name, visibility: p.visibility, type: p.type, params: p.params, isStatic: p.isStatic, text: m.text };
+      return { id: m.id, kind: p.kind, name: p.name, visibility: p.visibility, type: p.type, params: p.params, isStatic: p.isStatic, isAsync: p.isAsync, doc: m.doc, text: m.text };
     });
-    return { id: n.data.name, name: n.data.name, kind, file: n.data.linkedFile ?? '', language, isAbstract, members, extends: [], implements: [] };
+    return { id: n.data.name, name: n.data.name, kind, file: n.data.linkedFile ?? '', language, isAbstract, doc: n.data.doc, members, extends: [], implements: [] };
   });
   const byName = new Map(symbols.map((s) => [s.name, s]));
 

@@ -511,8 +511,9 @@ class MinisApiService {
   // UML — generate/update a UML project from source code (backend uses @mhersztowski/devtools).
   // `dir` is a user-root-relative path (e.g. `Projects/cpp/HelloWorld` or `drive/...`).
   // Pass the current project to sync (diff + history commit); omit it to generate fresh.
-  async syncUmlFromCode<P = unknown>(userName: string, dir: string, project?: P, name?: string): Promise<{ project: P; changes: Array<{ kind: string; target: string; symbol?: string; member?: string; from?: string; to?: string }>; summary: string; committed: boolean }> {
-    return this.request('POST', `/users/${encodeURIComponent(userName)}/uml/sync`, { dir, name, project });
+  /** `files` (ścieżki względem `dir`) zawęża źródło do wybranych plików; brak = cały katalog. */
+  async syncUmlFromCode<P = unknown>(userName: string, dir: string, project?: P, name?: string, files?: string[]): Promise<{ project: P; changes: Array<{ kind: string; target: string; symbol?: string; member?: string; from?: string; to?: string }>; summary: string; committed: boolean }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/uml/sync`, { dir, name, project, files });
   }
 
   // API Keys

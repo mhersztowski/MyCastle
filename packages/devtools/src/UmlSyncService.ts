@@ -63,6 +63,53 @@ export class UmlSyncService {
     return out;
   }
 
+  /**
+   * Wczytuje wskazane pliki (zamiast całego katalogu). Przydatne, gdy diagram ma
+   * powstać z kilku wybranych klas, a nie z całego modułu — reszta katalogu
+   * dokładałaby do diagramu symbole, których nikt nie chciał.
+   *
+   * Ścieżki mogą być bezwzględne albo względem `baseDir`. Pliki nieczytelne
+   * i w nieobsługiwanym języku są po cichu pomijane — wybór z listy plików
+   * bywa zgrubny, a przerwanie całej operacji z powodu jednego `.md` byłoby
+   * dla użytkownika zaskoczeniem.
+   */
+  async readFiles(files: string[], baseDir: string, opts: ScanOptions = {}): Promise<SourceFile[]> {
+    const base = opts.relativeTo ?? baseDir;
+    const max = opts.maxFiles ?? 2000;
+    const out: SourceFile[] = [];
+    for (const entry of files) {
+      if (out.length >= max) break;
+      const abs = path.isAbsolute(entry) ? entry : path.resolve(baseDir, entry);
+      const lang = detectLanguage(path.basename(abs));
+      if (!lang) continue;
+      let content: string;
+      try { content = await fs.readFile(abs, 'utf8'); } catch { continue; }
+      out.push({ file: path.relative(base, abs).split(path.sep).join('/'), content, language: lang });
+    }
+    return out;
+  }
+
+  /** Parse a chosen set of files into a language-agnostic model. */
+  async parseFiles(files: string[], baseDir: string, opts: ScanOptions = {}): Promise<CodeModel> {
+    return buildModel(await this.readFiles(files, baseDir, opts));
+  }
+
+  /** Generate a brand-new UML project from a chosen set of files. */
+  async generateProjectFromFiles(
+    files: string[], baseDir: string, name: string, opts: ScanOptions = {},
+  ): Promise<UmlProject> {
+    const model = await this.parseFiles(files, baseDir, opts);
+    const linked = opts.relativeTo ? path.relative(opts.relativeTo, baseDir).split(path.sep).join('/') : baseDir;
+    return generateProject(model, name, linked);
+  }
+
+  /** Re-parse a chosen set of files and update an existing project in place. */
+  async updateProjectFromFiles(
+    project: UmlProject, files: string[], baseDir: string, opts: ScanOptions = {},
+  ): Promise<SyncResult> {
+    return this.applyModel(project, await this.parseFiles(files, baseDir, opts));
+  }
+
   /** Parse a directory into a language-agnostic model. */
   async parseDirectory(dir: string, opts: ScanOptions = {}): Promise<CodeModel> {
     return buildModel(await this.scanDirectory(dir, opts));

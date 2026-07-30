@@ -28,7 +28,14 @@ import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
 import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import CircularProgress from '@mui/material/CircularProgress';
+import Tabs from '@mui/material/Tabs';
+import Tab from '@mui/material/Tab';
+import List from '@mui/material/List';
+import ListItemButton from '@mui/material/ListItemButton';
+import ListItemText from '@mui/material/ListItemText';
+import SettingsIcon from '@mui/icons-material/Settings';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
@@ -72,6 +79,13 @@ import {
 import '@xyflow/react/dist/style.css';
 import { defineEditorPlugin, globalEventBus, globalPluginRegistry } from '../monaco';
 import * as Blockly from 'blockly';
+import {
+  extractCallables, callExpression, importSpecifierFor, blockTypeFor, returnsValue, groupByCategory,
+  extractTypes, hasDoc, docSections,
+  type UmlCallable, type UmlProjectLike, type UmlType, type DocSection,
+} from './umlCallables';
+import { buildTypeOptions, insertImportLine, type TypeOption } from './sourceTypes';
+import { checkCallArgs, formatIssues, unwrapPromise } from './argTypeCheck';
 // Side-effect import: registers Blockly's built-in block types
 // (controls_if, math_number, lists_*, text_*, variables_*, procedures_*, …).
 // Without this the toolbox tries to instantiate them and the flyout blanks
@@ -3258,6 +3272,401 @@ function StmtList({ stmts, ctx, onChange, depth = 0 }: { stmts: SlotStmt[]; ctx:
 // so re-running on every mount is cheap and safe.
 let _blkSlotCtx: SlotCtx = { props: [], signals: [], slots: [], vars: [], exprOpts: [], condOpts: [] };
 
+/**
+ * Funkcje z wybranych projektów UML — czytane przez dropdown i generator
+ * w momencie użycia (tak samo jak `_blkSlotCtx`), bo lista zmienia się po
+ * zapisaniu ustawień, a bloczki rejestrowane są raz.
+ */
+let _blkUmlCallables: UmlCallable[] = [];
+
+/**
+ * Typy do wyboru przy deklaracji zmiennej: wbudowane TS + zadeklarowane w tym
+ * pliku + sprowadzone importami. Liczone z aktualnej treści pliku przy każdym
+ * otwarciu listy, żeby nowa klasa albo świeży import były widoczne od razu.
+ */
+/**
+ * Nazwy zmiennych zadeklarowanych bloczkiem `let` w TYM workspace.
+ * Czytane przy każdym otwarciu listy, więc świeżo dodana deklaracja jest
+ * widoczna od razu; etykieta niesie też typ, żeby nie trzeba było wracać
+ * wzrokiem do deklaracji.
+ */
+/**
+ * Nazwa zmiennej wskazywanej przez pole odczytu. Wartość pola to zwykle id bloku
+ * deklaracji; starsze zapisy trzymały samą nazwę, więc przyjmujemy oba warianty.
+ */
+function varRefName(block: Blockly.Block): string {
+  const value = String(block.getFieldValue('NAME') || '').trim();
+  if (!value || value === '(zmienna)') return '';
+  // Zgodność: krótko istniał wariant, w którym w polu siedziało id deklaracji.
+  const referenced = block.workspace?.getBlockById(value);
+  if (referenced?.type === 'minis_var_declare') return String(referenced.getFieldValue('NAME') || '').trim();
+  return value;
+}
+
+/**
+ * Przepisuje nazwę zmiennej w bloczkach odczytu po jej zmianie w deklaracji.
+ *
+ * Pole nazwy to zwykła etykieta (`FieldLabelSerializable`), więc `setFieldValue`
+ * działa bez walidacji względem listy opcji — w przeciwieństwie do dropdownu,
+ * który odrzucał wartości i gubił je przy wczytywaniu zapisanego slotu.
+ */
+function renameVarReferences(ws: Blockly.Workspace | null, oldName: string, newName: string): void {
+  if (!ws || !oldName || !newName || oldName === newName) return;
+  for (const type of ['minis_var_ref', 'minis_var_ref_cast']) {
+    for (const block of ws.getBlocksByType(type, false)) {
+      const field = block.getField('NAME');
+      if (!field || String(field.getValue() || '') !== oldName) continue;
+      try {
+        field.setValue(newName);
+      } catch {
+        // Starsze bloczki miały tu dropdown, który odrzuca wartość spoza listy —
+        // wtedy regenerujemy opcje i ustawiamy ponownie (patrz test regresyjny
+        // blocklyDropdownRefresh).
+        const dyn = field as Blockly.Field & { getOptions?: (useCache: boolean) => unknown };
+        try { dyn.getOptions?.(false); field.setValue(newName); } catch { /* pomijamy ten bloczek */ }
+      }
+    }
+  }
+}
+
+/** Typ zadeklarowany dla danej zmiennej — podpowiedź przy rzutowaniu. */
+function declaredVarType(refValue: string): string {
+  const ws = _blkWorkspace;
+  if (!ws || !refValue) return '';
+  const byId = ws.getBlockById(refValue);
+  const block = byId?.type === 'minis_var_declare'
+    ? byId
+    : ws.getBlocksByType('minis_var_declare', false)
+      .find((b) => String(b.getFieldValue('NAME') || '').trim() === refValue);
+  const t = String(block?.getFieldValue('TYPE') || '');
+  return t === 'unknown' ? '' : t;
+}
+
+/** Ikona „wybierz typ" — ołówek w kolorze bloczka zmiennych. */
+const TYPE_PICK_ICON =
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">'
+    + '<path d="M2 11.5V14h2.5l7-7L9 4.5l-7 7z" fill="#13131e"/>'
+    + '<path d="M13.7 3.3a1 1 0 0 0 0-1.4l-1.6-1.6a1 1 0 0 0-1.4 0L9.5 1.5 14 6l-.3-2.7z" fill="#13131e"/>'
+    + '</svg>',
+  );
+
+/* ── Kontrola typów argumentów w wywołaniach funkcji z UML ────────────────── */
+
+/**
+ * Ostatnie zdarzenie wskaźnika w oknie. Blockly woła handler `FieldImage` bez
+ * zdarzenia, a popup ma pojawić się przy klikniętej ikonie — stąd ten podsłuch.
+ */
+let _blkLastPointer: MouseEvent | undefined;
+if (typeof window !== 'undefined') {
+  window.addEventListener('pointerdown', (e) => { _blkLastPointer = e as unknown as MouseEvent; }, true);
+}
+
+/** Czy sprawdzanie typów jest włączone (przełącznik nad edytorem slotu). */
+let _blkTypeCheckOn = false;
+export function setUmlTypeCheck(on: boolean): void { _blkTypeCheckOn = on; }
+
+/**
+ * Typ wartości, którą daje bloczek — na tyle, na ile da się to stwierdzić bez
+ * kompilatora. `undefined` znaczy „nie wiadomo" i wyłącza kontrolę dla tego
+ * argumentu, bo lepiej nic nie powiedzieć niż skłamać.
+ */
+function inferBlockValueType(block: Blockly.Block | null): string | undefined {
+  if (!block) return undefined;
+  switch (block.type) {
+    case 'math_number': return 'number';
+    case 'text': case 'text_join': case 'text_multiline': return 'string';
+    case 'logic_boolean': case 'logic_compare': case 'logic_operation': case 'logic_negate': return 'boolean';
+    case 'math_arithmetic': case 'math_single': case 'math_round': case 'math_modulo': return 'number';
+    case 'text_length': case 'text_indexOf': return 'number';
+    case 'lists_create_with': return 'unknown[]';
+    case 'minis_var_cast': case 'minis_var_ref_cast':
+      return String(block.getFieldValue('TYPE') || '') || undefined;
+    case 'minis_var_ref': {
+      const declared = declaredVarType(String(block.getFieldValue('NAME') || ''));
+      return declared || undefined;
+    }
+    default: {
+      // Bloczek wywołania funkcji z UML — bierzemy typ zwracany (po zdjęciu Promise,
+      // bo w kodzie jest `await`).
+      const fn = _blkUmlCallables.find((c) => blockTypeFor(c) === block.type);
+      if (fn?.returnType) return unwrapPromise(fn.returnType);
+      return undefined;
+    }
+  }
+}
+
+/**
+ * Ostatnio ustawiony tekst ostrzeżenia per bloczek.
+ *
+ * Blockly przy `setWarningText` odtwarza ikonę ostrzeżenia, co zamyka i od nowa
+ * otwiera bąbelek — a walidacja biegnie po KAŻDYM zdarzeniu workspace (także po
+ * zamknięciu bąbelka). Bez tej pamięci użytkownik nie mógłby zamknąć chmurki:
+ * wracałaby natychmiast.
+ */
+const _blkWarnCache = new WeakMap<Blockly.Block, string | null>();
+
+/** Ustawia ostrzeżenie tylko wtedy, gdy jego treść faktycznie się zmieniła. */
+function setWarningIfChanged(block: Blockly.Block, text: string | null): void {
+  const previous = _blkWarnCache.get(block) ?? null;
+  if (previous === text) return;
+  _blkWarnCache.set(block, text);
+  // Zmiana ikony ostrzeżenia sama generuje zdarzenie workspace — bez wyciszenia
+  // walidacja wywoływałaby się w kółko.
+  Blockly.Events.disable();
+  try {
+    block.setWarningText(text);
+  } finally {
+    Blockly.Events.enable();
+  }
+}
+
+/**
+ * Sprawdza wszystkie wywołania funkcji z UML w workspace i oznacza problemy.
+ *
+ * Ostrzeżenie ląduje na bloczku ARGUMENTU (tam jest źródło błędu) — a gdy
+ * argument jest niepodłączony lub to zwykła wartość bez własnego miejsca na
+ * chmurkę, na bloczku wywołania. Blockly rysuje przy takim bloczku znak
+ * ostrzeżenia z chmurką, więc opis jest dostępny bez dodatkowego UI.
+ */
+function validateUmlCallTypes(ws: Blockly.Workspace | null): void {
+  if (!ws) return;
+  const umlTypes = new Map(_blkUmlCallables.map((c) => [blockTypeFor(c), c]));
+
+  for (const block of ws.getAllBlocks(false)) {
+    const fn = umlTypes.get(block.type);
+    if (!fn) continue;
+
+    const argBlocks = fn.params.map((_, i) => block.getInputTargetBlock(`ARG${i}`));
+    const issues = _blkTypeCheckOn
+      ? checkCallArgs(fn.callee, fn.params, fn.paramTypes, argBlocks.map(inferBlockValueType))
+      : [];
+
+    // Opis przy samym argumencie — najkrótsza droga od ostrzeżenia do przyczyny.
+    argBlocks.forEach((argBlock, i) => {
+      if (!argBlock) return;
+      const issue = issues.find((x) => x.index === i);
+      setWarningIfChanged(argBlock, issue ? issue.message : null);
+    });
+    // Podsumowanie na wywołaniu — problem widać też, gdy argument jest zwinięty
+    // albo poza widokiem. Pusta lista czyści ostrzeżenie (np. po wyłączeniu kontroli).
+    setWarningIfChanged(block, issues.length ? formatIssues(issues) : null);
+  }
+}
+
+/** Ikona dokumentacji — „i" w kółku, w kolorze tekstu bloczka. */
+const DOC_ICON =
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">'
+    + '<circle cx="8" cy="8" r="7" fill="none" stroke="#13131e" stroke-width="1.6"/>'
+    + '<circle cx="8" cy="4.6" r="1" fill="#13131e"/>'
+    + '<rect x="7.1" y="6.6" width="1.8" height="5.2" rx="0.9" fill="#13131e"/>'
+    + '</svg>',
+  );
+
+/**
+ * Prosi Reacta o pokazanie opisu funkcji. Przekazujemy pozycję kursora, bo popup
+ * ma się pojawić przy klikniętej ikonie — bloczek nie jest elementem DOM, do
+ * którego dałoby się zakotwiczyć komponent MUI.
+ */
+function openDocPopup(callable: UmlCallable, event?: MouseEvent): void {
+  globalEventBus.emit(DOC_POPUP_OPEN, {
+    title: callable.label,
+    subtitle: [callable.project, callable.owner].filter(Boolean).join(' · '),
+    file: callable.file ?? '',
+    sections: docSections(callable),
+    x: event?.clientX ?? window.innerWidth / 2,
+    y: event?.clientY ?? window.innerHeight / 2,
+  });
+}
+
+/** Ikona „wybierz zmienną" — trzy poziome linie (lista) w kolorze bloczka. */
+const VAR_PICK_ICON =
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">'
+    + '<rect x="2" y="3" width="12" height="2" rx="1" fill="#13131e"/>'
+    + '<rect x="2" y="7" width="12" height="2" rx="1" fill="#13131e"/>'
+    + '<rect x="2" y="11" width="8" height="2" rx="1" fill="#13131e"/>'
+    + '</svg>',
+  );
+
+/** Lista zmiennych zadeklarowanych w tym workspace — dla okna wyboru. */
+function declaredVars(): Array<{ name: string; type: string }> {
+  const ws = _blkWorkspace;
+  if (!ws) return [];
+  const out: Array<{ name: string; type: string }> = [];
+  const seen = new Set<string>();
+  for (const block of ws.getBlocksByType('minis_var_declare', false)) {
+    const name = String(block.getFieldValue('NAME') || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const type = String(block.getFieldValue('TYPE') || '');
+    out.push({ name, type: type === 'unknown' ? '' : type });
+  }
+  return out;
+}
+
+/** Prosi Reacta o pokazanie okna wyboru zmiennej dla konkretnego bloczka. */
+function openVarPicker(block: Blockly.Block): void {
+  globalEventBus.emit(VAR_PICKER_OPEN, {
+    blockId: block.id,
+    current: String(block.getFieldValue('NAME') || ''),
+    vars: declaredVars(),
+  });
+}
+
+/** Podpina nasłuch wyboru zmiennej; odpina się przy usunięciu bloczka. */
+function wireVarApplyListener(block: Blockly.Block): void {
+  const off = globalEventBus.on<{ blockId: string; name: string }>(VAR_PICKER_APPLY, (p) => {
+    if (p.blockId !== block.id) return;
+    block.setFieldValue(p.name, 'NAME');
+    // Rzutowanie: przy pustym typie podpowiadamy ten z deklaracji.
+    if (block.type === 'minis_var_ref_cast' && String(block.getFieldValue('TYPE') || 'unknown') === 'unknown') {
+      const declared = declaredVarType(p.name);
+      if (declared) block.setFieldValue(declared, 'TYPE');
+    }
+  });
+  const orig = (block as Blockly.Block & { dispose: (...a: unknown[]) => unknown }).dispose;
+  (block as Blockly.Block & { dispose: (...a: unknown[]) => unknown }).dispose = function (...a: unknown[]) {
+    off();
+    return orig.apply(this, a);
+  };
+}
+
+/** Prosi Reacta o pokazanie okna wyboru typu dla konkretnego bloczka. */
+function openTypePicker(block: Blockly.Block): void {
+  globalEventBus.emit(TYPE_PICKER_OPEN, { blockId: block.id, current: String(block.getFieldValue('TYPE') || '') });
+}
+
+/** Podpina nasłuch wyboru; odpina się, gdy bloczek jest usuwany. */
+function wireTypeApplyListener(block: Blockly.Block): void {
+  const off = globalEventBus.on<{ blockId: string; type: string }>(TYPE_PICKER_APPLY, (p) => {
+    if (p.blockId !== block.id) return;
+    block.setFieldValue(p.type, 'TYPE');
+  });
+  const orig = (block as Blockly.Block & { dispose: (...a: unknown[]) => unknown }).dispose;
+  (block as Blockly.Block & { dispose: (...a: unknown[]) => unknown }).dispose = function (...a: unknown[]) {
+    off();
+    return orig.apply(this, a);
+  };
+}
+
+/**
+ * Pełna lista typów do okna wyboru: wbudowane TS, typy z tego pliku, z importów,
+ * z pakietów zewnętrznych oraz z wybranych projektów UML (te ostatnie grupowane
+ * po projekcie, bo bywa ich najwięcej).
+ */
+function allTypeOptions(): TypeOption[] {
+  const extra: TypeOption[] = [
+    ..._state.externalClassDefs.map((e) => ({ label: e.className, group: e.packageName })),
+    ..._blkUmlTypes.map((t) => ({ label: t.name, group: `UML: ${t.project}` })),
+  ];
+  return buildTypeOptions(_state.currentCode, extra);
+}
+/** Funkcje faktycznie wygenerowane do kodu — na tej podstawie dopisujemy importy. */
+let _blkUmlUsed = new Set<string>();
+
+/** Aktywny workspace slotu — do odświeżenia toolboxa po zmianie wyboru projektów. */
+let _blkWorkspace: Blockly.WorkspaceSvg | null = null;
+
+/** Typy z wybranych projektów UML — do listy typów zmiennej. */
+let _blkUmlTypes: UmlType[] = [];
+
+export function setUmlTypes(list: UmlType[]): void { _blkUmlTypes = list; }
+
+export function setUmlCallables(list: UmlCallable[]): void {
+  _blkUmlCallables = list;
+  registerUmlBlocks(list);
+  // Gdy ktoś zmieni projekty przy otwartym edytorze slotu, kategorie mają się
+  // pojawić od razu — bez zamykania i ponownego otwierania okna.
+  try { _blkWorkspace?.updateToolbox(slotToolbox()); } catch { /* workspace zamknięty */ }
+}
+
+/**
+ * Rejestruje OSOBNY bloczek dla każdej funkcji z UML.
+ *
+ * Nie ma tu jednego bloczka z listą rozwijaną, bo w toolboxie mają być widoczne
+ * konkretne funkcje pogrupowane w kategorie (klasa / plik) — użytkownik wybiera
+ * je jak zwykłe bloczki, a nie przez dropdown wewnątrz jednego klocka.
+ *
+ * Bloczek dostaje po jednym wejściu na parametr (etykietowanym jego nazwą),
+ * a to, czy jest instrukcją, czy wartością, wynika z typu zwracanego.
+ */
+function registerUmlBlocks(list: UmlCallable[]): void {
+  for (const fn of list) {
+    const type = blockTypeFor(fn);
+    const hasValue = returnsValue(fn);
+
+    Blockly.Blocks[type] = {
+      init() {
+        const block = this as Blockly.Block;
+        const head = `${fn.isAsync ? 'await ' : ''}${fn.callee}`;
+        const first = block.appendDummyInput();
+        first.appendField(fn.params.length === 0 ? `${head}()` : head);
+        // Ikona pojawia się TYLKO przy udokumentowanych funkcjach — przy pozostałych
+        // byłaby obietnicą treści, której nie ma.
+        if (hasDoc(fn.doc)) {
+          first.appendField(new Blockly.FieldImage(
+            DOC_ICON, 15, 15, 'opis funkcji',
+            // Blockly przekazuje do handlera samo pole; pozycję kursora bierzemy
+            // z ostatniego zdarzenia wskaźnika (patrz `_blkLastPointer`).
+            () => openDocPopup(fn, _blkLastPointer),
+          ));
+        }
+        if (fn.params.length > 0) {
+          fn.params.forEach((p, i) => {
+            block.appendValueInput(`ARG${i}`).setAlign(Blockly.inputs.Align.RIGHT).appendField(p);
+          });
+        }
+        if (hasValue) block.setOutput(true, null);
+        else { block.setPreviousStatement(true, null); block.setNextStatement(true, null); }
+        block.setColour('#a6e3a1');
+        block.setTooltip(
+          `${fn.project} · ${fn.ownerKind === 'class' ? 'metoda statyczna' : 'funkcja globalna'}`
+          + `${fn.returnType ? ` → ${fn.returnType}` : ''}`
+          + `${fn.file ? `\n${fn.file}` : ''}`,
+        );
+      },
+    };
+
+    javascriptGenerator.forBlock[type] = (block, gen) => {
+      // Zapamiętujemy użycie, żeby po zapisie slotu dopisać import.
+      _blkUmlUsed.add(fn.id);
+      const args = fn.params.map((_, i) => gen.valueToCode(block, `ARG${i}`, Order.NONE) || 'undefined');
+      const code = callExpression(fn, args);
+      return hasValue ? [code, Order.FUNCTION_CALL] : `${code};\n`;
+    };
+  }
+}
+
+/** Kategorie toolboxa dla funkcji z UML — nazwa klasy albo nazwa pliku modułu. */
+function umlToolboxCategories(list: UmlCallable[]): Blockly.utils.toolbox.ToolboxItemInfo[] {
+  return groupByCategory(list).map(({ category, items }) => ({
+    kind: 'category',
+    name: category,
+    colour: '#a6e3a1',
+    contents: items.map((fn) => ({ kind: 'block', type: blockTypeFor(fn) })),
+  })) as Blockly.utils.toolbox.ToolboxItemInfo[];
+}
+
+/** Toolbox slotu = stała część + kategorie z UML (o ile jakieś projekty wybrano). */
+function slotToolbox(): Blockly.utils.toolbox.ToolboxDefinition {
+  const uml = umlToolboxCategories(_blkUmlCallables);
+  if (!uml.length) return MINIS_BLK_TOOLBOX;
+  const base = MINIS_BLK_TOOLBOX as { kind: string; contents: Blockly.utils.toolbox.ToolboxItemInfo[] };
+  return {
+    ...base,
+    // Kategorie UML tuż po MinisLib — najczęściej sięga się po nie zaraz po
+    // blokach samego frameworka.
+    contents: [base.contents[0], ...uml, ...base.contents.slice(1)],
+  } as Blockly.utils.toolbox.ToolboxDefinition;
+}
+export function takeUsedUmlCallables(): UmlCallable[] {
+  const used = _blkUmlCallables.filter((c) => _blkUmlUsed.has(c.id));
+  _blkUmlUsed = new Set();
+  return used;
+}
+
 // Dynamic dropdown generators — read _blkSlotCtx at call time so they
 // reflect the current entity without re-registering blocks.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3350,6 +3759,133 @@ function ensureMinisBlocksRegistered(): void {
     const name = block.getFieldValue('NAME') || '';
     const arg  = gen.valueToCode(block, 'ARG', Order.NONE) || 'undefined';
     return name ? `this.${name}(${arg});\n` : '';
+  };
+
+  /* ── minis_var_declare ─ `let name: Type = value;` ──────────────────────── */
+  Blockly.Blocks['minis_var_declare'] = {
+    init() {
+      const block = this as Blockly.Block;
+      // Walidator pola (a nie zdarzenie workspace) jest tu jedynym pewnym
+      // haczykiem — zdarzenia zmiany pola nie docierają w tym edytorze.
+      const nameField = new Blockly.FieldTextInput('zmienna');
+      // Walidator to jedyny pewny haczyk — zdarzenia zmiany pola nie docierają
+      // w tym edytorze. Stara nazwa jest jeszcze w polu, nowa przychodzi jako
+      // argument, więc mamy obie strony przemianowania.
+      nameField.setValidator(function (this: Blockly.Field, value: string) {
+        const previous = String(this.getValue() || '');
+        if (previous && previous !== value) {
+          setTimeout(() => renameVarReferences(block.workspace, previous, value), 0);
+        }
+        return value;
+      });
+      block.appendDummyInput()
+        .appendField('let')
+        .appendField(nameField, 'NAME')
+        .appendField(':')
+        // Typ pokazujemy jako etykietę, a wybór odbywa się w oknie z drzewem —
+        // przy projektach UML lista bywa na setki pozycji, a płaski dropdown
+        // Blockly nie ma ani grupowania, ani filtra.
+        .appendField(new Blockly.FieldLabelSerializable('unknown'), 'TYPE')
+        .appendField(new Blockly.FieldImage(TYPE_PICK_ICON, 16, 16, 'wybierz typ', () => openTypePicker(block)));
+      block.appendValueInput('VALUE').appendField('=');
+      // Bez tego Blockly łamie wiersz przed `=` i deklaracja zajmuje dwie linie.
+      block.setInputsInline(true);
+      wireTypeApplyListener(block);
+      block.setPreviousStatement(true, null);
+      block.setNextStatement(true, null);
+      block.setColour('#ff8c00');
+      block.setTooltip(
+        'Deklaruje zmienną z typem. Lista zawiera typy wbudowane TypeScriptu, '
+        + 'typy z tego pliku oraz sprowadzone importami.',
+      );
+
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_declare'] = (block, gen) => {
+    const raw = String(block.getFieldValue('NAME') || 'zmienna');
+    // Nazwa trafia wprost do kodu — sanitacja chroni przed literówką łamiącą plik.
+    const name = raw.replace(/[^A-Za-z0-9_$]/g, '_').replace(/^(\d)/, '_$1');
+    const type = String(block.getFieldValue('TYPE') || '');
+    const value = gen.valueToCode(block, 'VALUE', Order.NONE);
+    // Bez wartości zostaje sama deklaracja — TypeScript wymaga wtedy typu,
+    // więc `let x: string;` jest poprawne, a `let x;` byłoby `any`.
+    return value
+      ? `let ${name}${type ? `: ${type}` : ''} = ${value};\n`
+      : `let ${name}${type ? `: ${type}` : ''};\n`;
+  };
+
+  /* ── minis_var_ref ─ odczyt zadeklarowanej zmiennej (sama nazwa) ────────── */
+  Blockly.Blocks['minis_var_ref'] = {
+    init() {
+      const block = this as Blockly.Block;
+      // Nazwa trzymana jako ETYKIETA, nie dropdown: pole z dynamiczną listą
+      // odrzucało wartość przy wczytywaniu zapisanego slotu (opcje jeszcze nie
+      // istniały) i bloczek pokazywał „(brak zmiennych)".
+      block.appendDummyInput()
+        .appendField(new Blockly.FieldLabelSerializable('(zmienna)'), 'NAME')
+        .appendField(new Blockly.FieldImage(VAR_PICK_ICON, 16, 16, 'wybierz zmienną', () => openVarPicker(block)));
+      block.setOutput(true, null);
+      block.setColour('#ff8c00');
+      block.setTooltip('Wartość zmiennej zadeklarowanej bloczkiem `let` w tym slocie.');
+      wireVarApplyListener(block);
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_ref'] = (block) => {
+    const name = varRefName(block);
+    return [name || 'undefined', Order.ATOMIC];
+  };
+
+  /* ── minis_var_ref_cast ─ odczyt zmiennej z rzutowaniem `as Typ` ────────── */
+  Blockly.Blocks['minis_var_ref_cast'] = {
+    init() {
+      const block = this as Blockly.Block;
+      block.appendDummyInput()
+        .appendField(new Blockly.FieldLabelSerializable('(zmienna)'), 'NAME')
+        .appendField(new Blockly.FieldImage(VAR_PICK_ICON, 16, 16, 'wybierz zmienną', () => openVarPicker(block)))
+        .appendField('jako')
+        .appendField(new Blockly.FieldLabelSerializable('unknown'), 'TYPE')
+        .appendField(new Blockly.FieldImage(TYPE_PICK_ICON, 16, 16, 'wybierz typ', () => openTypePicker(block)));
+      block.setInputsInline(true);
+      block.setOutput(true, null);
+      block.setColour('#ff8c00');
+      block.setTooltip(
+        'Wartość zmiennej rzutowana na wybrany typ — przydatne, gdy zmienna trzyma '
+        + '`unknown` albo typ ogólniejszy niż potrzebny w tym miejscu.',
+      );
+      wireTypeApplyListener(block);
+      wireVarApplyListener(block);
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_ref_cast'] = (block) => {
+    const name = varRefName(block);
+    if (!name) return ['undefined', Order.ATOMIC];
+    // Gdy typu nie wybrano, bierzemy ten z deklaracji — rzutowanie na własny typ
+    // zmiennej to najczęstszy przypadek i nie powinno wymagać klikania.
+    const chosen = String(block.getFieldValue('TYPE') || 'unknown');
+    const type = chosen !== 'unknown' ? chosen : (declaredVarType(name) || 'unknown');
+    return [`(${name} as ${type})`, Order.FUNCTION_CALL];
+  };
+
+  /* ── minis_var_cast ─ rzutowanie wartości na wybrany typ ────────────────── */
+  Blockly.Blocks['minis_var_cast'] = {
+    init() {
+      const block = this as Blockly.Block;
+      block.appendValueInput('VALUE').appendField('wartość');
+      block.appendDummyInput()
+        .appendField('jako')
+        .appendField(new Blockly.FieldLabelSerializable('unknown'), 'TYPE')
+        .appendField(new Blockly.FieldImage(TYPE_PICK_ICON, 16, 16, 'wybierz typ', () => openTypePicker(block)));
+      block.setInputsInline(true);
+      block.setOutput(true, null);
+      wireTypeApplyListener(block);
+      block.setColour('#ff8c00');
+      block.setTooltip('Rzutowanie `as Typ` — przydatne, gdy wartość przychodzi jako unknown.');
+    },
+  };
+  javascriptGenerator.forBlock['minis_var_cast'] = (block, gen) => {
+    const value = gen.valueToCode(block, 'VALUE', Order.NONE) || 'undefined';
+    const type = String(block.getFieldValue('TYPE') || 'unknown');
+    return [`(${value} as ${type})`, Order.FUNCTION_CALL];
   };
 
   /* ── minis_log ─ console.log(expr) ──────────────────────────────────────── */
@@ -3981,6 +4517,12 @@ const MINIS_BLK_TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
         {
           kind: 'category', name: 'Variables', colour: '#ff8c00',
           contents: [
+            // Deklaracja z typem — pierwsza, bo zwykle od niej zaczyna się praca
+            // ze zmienną; `variables_get/set` operują na już istniejącej.
+            { kind: 'block', type: 'minis_var_declare' },
+            { kind: 'block', type: 'minis_var_ref' },
+            { kind: 'block', type: 'minis_var_ref_cast' },
+            { kind: 'block', type: 'minis_var_cast' },
             { kind: 'block', type: 'variables_get' },
             { kind: 'block', type: 'variables_set' },
           ],
@@ -4007,8 +4549,343 @@ interface PathBuilderState {
   path: string;
 }
 
+const DOC_POPUP_OPEN = 'minislib:docPopupOpen';
+
+const VAR_PICKER_OPEN  = 'minislib:varPickerOpen';
+const VAR_PICKER_APPLY = 'minislib:varPickerApply';
+
+const TYPE_PICKER_OPEN  = 'minislib:typePickerOpen';
+const TYPE_PICKER_APPLY = 'minislib:typePickerApply';
+
 const PATH_BUILDER_OPEN  = 'minislib:pathBuilderOpen';
 const PATH_BUILDER_APPLY = 'minislib:pathBuilderApply';
+
+/**
+ * Popup z opisem funkcji z UML — treść pochodzi z metadanych TSDoc projektu.
+ *
+ * Nie jest to dialog: ma nie blokować pracy i znikać przy pierwszym kliknięciu
+ * gdziekolwiek (także w pole bloczka), więc zamykamy go na `pointerdown`
+ * przechwytywanym w fazie łapania — inaczej kliknięcie w Blockly zdążyłoby
+ * zostać obsłużone, a popup zostałby otwarty.
+ */
+function DocPopup() {
+  const [state, setState] = useState<{
+    title: string; subtitle: string; file: string; sections: DocSection[]; x: number; y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    return globalEventBus.on<{
+      title: string; subtitle: string; file: string; sections: DocSection[]; x: number; y: number;
+    }>(DOC_POPUP_OPEN, (payload) => setState(payload));
+  }, []);
+
+  useEffect(() => {
+    if (!state) return;
+    // Pomijamy zdarzenie, które właśnie otworzyło popup (ten sam gest kliknięcia).
+    let armed = false;
+    const arm = () => { armed = true; };
+    const close = () => { if (armed) setState(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setState(null); };
+
+    const id = window.setTimeout(arm, 0);
+    window.addEventListener('pointerdown', close, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener('pointerdown', close, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [state]);
+
+  if (!state) return null;
+
+  // Trzymamy popup w granicach okna — ikona bywa przy prawej krawędzi panelu.
+  const width = 380;
+  const left = Math.min(Math.max(8, state.x + 12), Math.max(8, window.innerWidth - width - 8));
+  const top = Math.min(Math.max(8, state.y + 12), Math.max(8, window.innerHeight - 240));
+
+  return createPortal(
+    <Box
+      // `pointerdown` na samym popupie nie zamyka go od razu — inaczej nie dałoby
+      // się zaznaczyć fragmentu przykładu kodu.
+      onPointerDown={(e) => e.stopPropagation()}
+      sx={{
+        position: 'fixed', left, top, width, zIndex: 2000,
+        maxHeight: '60vh', overflow: 'auto',
+        background: '#13131e', color: '#cdd6f4',
+        border: '1px solid #45475a', borderRadius: 1,
+        boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+        p: 1.25, fontSize: 12,
+      }}
+    >
+      <Typography sx={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: '#a6e3a1' }}>
+        {state.title}
+      </Typography>
+      {(state.subtitle || state.file) && (
+        <Typography sx={{ fontSize: 10, color: '#6c7086', mb: 0.75 }}>
+          {[state.subtitle, state.file].filter(Boolean).join(' · ')}
+        </Typography>
+      )}
+
+      {state.sections.length === 0 && (
+        <Typography sx={{ fontSize: 11, color: '#6c7086' }}>Brak opisu w projekcie UML.</Typography>
+      )}
+
+      {state.sections.map((section, i) => (
+        <Box key={`${section.title}-${i}`} sx={{ mt: section.title ? 1 : 0.25 }}>
+          {section.title && (
+            <Typography sx={{
+              fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+              color: section.title.startsWith('⚠') ? '#f38ba8' : '#89b4fa',
+            }}>
+              {section.title}
+            </Typography>
+          )}
+          {section.lines.map((line, j) => (
+            <Typography
+              key={j}
+              sx={{
+                fontSize: section.code ? 11 : 12,
+                fontFamily: section.code ? 'monospace' : 'inherit',
+                whiteSpace: 'pre-wrap',
+                color: section.code ? '#f9e2af' : '#cdd6f4',
+                // Argumenty czytają się lepiej jako lista z wcięciem.
+                pl: section.title === 'Argumenty' ? 1 : 0,
+              }}
+            >
+              {section.title === 'Argumenty' ? `• ${line}` : line}
+            </Typography>
+          ))}
+        </Box>
+      ))}
+
+      <Typography sx={{ fontSize: 9, color: '#45475a', mt: 1 }}>
+        Kliknij gdziekolwiek albo Esc, aby zamknąć
+      </Typography>
+    </Box>,
+    document.body,
+  );
+}
+
+/**
+ * Okno wyboru zmiennej — lista deklaracji `let` z tego slotu, z filtrem.
+ *
+ * Osobne okno, a nie lista rozwijana na bloczku: dropdown z dynamicznymi
+ * opcjami odrzucał zapisaną wartość przy wczytywaniu slotu, więc referencja
+ * do zmiennej ginęła po zapisaniu pliku.
+ */
+function VarPickerDialog() {
+  const [open, setOpen] = useState(false);
+  const [blockId, setBlockId] = useState<string | null>(null);
+  const [vars, setVars] = useState<Array<{ name: string; type: string }>>([]);
+  const [filter, setFilter] = useState('');
+
+  useEffect(() => {
+    return globalEventBus.on<{ blockId: string; current: string; vars: Array<{ name: string; type: string }> }>(
+      VAR_PICKER_OPEN,
+      (p) => {
+        setBlockId(p.blockId);
+        setVars(p.vars);
+        setFilter('');
+        setOpen(true);
+      },
+    );
+  }, []);
+
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? vars.filter((v) => v.name.toLowerCase().includes(q)) : vars;
+  }, [vars, filter]);
+
+  const pick = (name: string) => {
+    if (blockId) globalEventBus.emit(VAR_PICKER_APPLY, { blockId, name });
+    setOpen(false);
+  };
+
+  return (
+    <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth
+      slotProps={{ paper: { sx: { background: '#13131e', color: '#cdd6f4' } } }}>
+      <DialogTitle sx={{ py: 1.25, borderBottom: '1px solid #313244', fontSize: 14 }}>Wybierz zmienną</DialogTitle>
+      <DialogContent sx={{ pt: '12px !important' }}>
+        {vars.length === 0 ? (
+          <Typography sx={{ fontSize: 12, color: '#6c7086', py: 1 }}>
+            W tym slocie nie ma jeszcze deklaracji — dodaj bloczek <code>let</code>.
+          </Typography>
+        ) : (
+          <>
+            <TextField
+              autoFocus
+              fullWidth
+              size="small"
+              placeholder="filtruj po nazwie…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && shown.length) pick(shown[0].name); }}
+              inputProps={{ style: { fontSize: 12, fontFamily: 'monospace' } }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  background: '#1e1e2e', color: '#cdd6f4',
+                  '& fieldset': { borderColor: '#45475a' },
+                  '&:hover fieldset': { borderColor: '#585b70' },
+                  '&.Mui-focused fieldset': { borderColor: '#89b4fa' },
+                },
+                '& input::placeholder': { color: '#7f849c', opacity: 1 },
+              }}
+            />
+            <Box sx={{ mt: 1, maxHeight: 300, overflow: 'auto', border: '1px solid #313244', borderRadius: 1 }}>
+              {shown.length === 0 && (
+                <Typography sx={{ fontSize: 12, color: '#6c7086', p: 1.5 }}>Brak zmiennych pasujących do filtra.</Typography>
+              )}
+              {shown.map((v) => (
+                <Box
+                  key={v.name}
+                  onClick={() => pick(v.name)}
+                  sx={{
+                    px: 1.5, py: 0.5, fontSize: 12, fontFamily: 'monospace', cursor: 'pointer',
+                    display: 'flex', gap: 1, '&:hover': { background: '#1e1e2e', color: '#a6e3a1' },
+                  }}
+                >
+                  <span>{v.name}</span>
+                  {v.type && <span style={{ color: '#7f849c' }}>: {v.type}</span>}
+                </Box>
+              ))}
+            </Box>
+          </>
+        )}
+      </DialogContent>
+      <DialogActions><Button onClick={() => setOpen(false)}>Anuluj</Button></DialogActions>
+    </Dialog>
+  );
+}
+
+/**
+ * Okno wyboru typu — drzewo grup z rozwijaniem i filtrem po nazwie.
+ *
+ * Płaska lista nie wystarcza, bo po dodaniu projektów UML typów bywa kilkaset;
+ * grupy (TypeScript / Ten plik / import: … / UML: projekt) pozwalają szybko
+ * zawęzić obszar, a filtr działa na wszystkich naraz. Wpisany tekst może też
+ * zostać użyty wprost — typy generyczne (`Map<string, Sensor>`) i tak trzeba
+ * czasem napisać ręcznie.
+ */
+function TypePickerDialog() {
+  const [open, setOpen] = useState(false);
+  const [blockId, setBlockId] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [options, setOptions] = useState<TypeOption[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    return globalEventBus.on<{ blockId: string; current: string }>(TYPE_PICKER_OPEN, (p) => {
+      setBlockId(p.blockId);
+      setFilter(p.current && p.current !== 'unknown' ? p.current : '');
+      const opts = allTypeOptions();
+      setOptions(opts);
+      // Domyślnie rozwinięta tylko pierwsza grupa — przy kilkuset typach
+      // rozwinięcie wszystkiego dawałoby ścianę tekstu.
+      setExpanded(new Set(opts.length ? [opts[0].group] : []));
+      setOpen(true);
+    });
+  }, []);
+
+  const groups = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const map = new Map<string, string[]>();
+    for (const o of options) {
+      if (q && !o.label.toLowerCase().includes(q)) continue;
+      if (!map.has(o.group)) map.set(o.group, []);
+      map.get(o.group)!.push(o.label);
+    }
+    return [...map.entries()];
+  }, [options, filter]);
+
+  // Filtrowanie samo rozwija grupy z trafieniami — inaczej trzeba by klikać
+  // w każdą, żeby zobaczyć, gdzie wpadł szukany typ.
+  const isExpanded = (group: string) => (filter.trim() ? true : expanded.has(group));
+  const toggle = (group: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(group)) next.delete(group); else next.add(group);
+    return next;
+  });
+
+  const pick = (label: string) => {
+    if (blockId) globalEventBus.emit(TYPE_PICKER_APPLY, { blockId, type: label });
+    setOpen(false);
+  };
+
+  const total = groups.reduce((n, [, items]) => n + items.length, 0);
+
+  return (
+    <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth
+      slotProps={{ paper: { sx: { background: '#13131e', color: '#cdd6f4' } } }}>
+      <DialogTitle sx={{ py: 1.25, borderBottom: '1px solid #313244', fontSize: 14 }}>Wybierz typ</DialogTitle>
+      <DialogContent sx={{ pt: '12px !important' }}>
+        <TextField
+          autoFocus
+          fullWidth
+          size="small"
+          placeholder="filtruj po nazwie…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && filter.trim()) pick(filter.trim()); }}
+          inputProps={{ style: { fontSize: 12, fontFamily: 'monospace' } }}
+          // Okno ma własne ciemne tło, więc domyślne kolory MUI (ciemny tekst,
+          // ledwie widoczna ramka) zlewałyby pole z tłem.
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              background: '#1e1e2e',
+              color: '#cdd6f4',
+              '& fieldset': { borderColor: '#45475a' },
+              '&:hover fieldset': { borderColor: '#585b70' },
+              '&.Mui-focused fieldset': { borderColor: '#89b4fa' },
+            },
+            '& input::placeholder': { color: '#7f849c', opacity: 1 },
+          }}
+        />
+        <Typography sx={{ fontSize: 10, color: '#6c7086', mt: 0.5, mb: 1 }}>
+          {total} typów · Enter wpisuje własny (np. <code>Map&lt;string, Sensor&gt;</code>)
+        </Typography>
+
+        <Box sx={{ maxHeight: 340, overflow: 'auto', border: '1px solid #313244', borderRadius: 1 }}>
+          {groups.length === 0 && (
+            <Typography sx={{ fontSize: 12, color: '#6c7086', p: 1.5 }}>Brak typów pasujących do filtra.</Typography>
+          )}
+          {groups.map(([group, items]) => (
+            <Box key={group}>
+              <Box
+                onClick={() => toggle(group)}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, cursor: 'pointer',
+                  background: '#181825', borderBottom: '1px solid #313244', position: 'sticky', top: 0,
+                }}
+              >
+                <Typography sx={{ fontSize: 11, color: '#89b4fa', fontWeight: 700, flex: 1 }}>
+                  {isExpanded(group) ? '▾' : '▸'} {group}
+                </Typography>
+                <Typography sx={{ fontSize: 10, color: '#6c7086' }}>{items.length}</Typography>
+              </Box>
+              {isExpanded(group) && items.map((label) => (
+                <Box
+                  key={`${group}:${label}`}
+                  onClick={() => pick(label)}
+                  sx={{
+                    px: 2, py: 0.4, fontSize: 12, fontFamily: 'monospace', cursor: 'pointer',
+                    '&:hover': { background: '#1e1e2e', color: '#a6e3a1' },
+                  }}
+                >
+                  {label}
+                </Box>
+              ))}
+            </Box>
+          ))}
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        {filter.trim() && <Button onClick={() => pick(filter.trim())}>Użyj „{filter.trim()}"</Button>}
+        <Button onClick={() => setOpen(false)}>Anuluj</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 
 function PathBuilderDialog() {
   const state = usePluginState();
@@ -4300,7 +5177,7 @@ function SlotBlocklyEditor({ ctx, onCodeChange, onStateChange, initialState }: {
     ensureMinisBlocksRegistered();
     _blkSlotCtx = ctx; // set before inject so dropdown options are ready
     const workspace = Blockly.inject(container, {
-      toolbox: MINIS_BLK_TOOLBOX,
+      toolbox: slotToolbox(),
       scrollbars: true,
       trashcan: true,
       zoom: { controls: true, startScale: 0.85, maxScale: 2, minScale: 0.4 },
@@ -4316,10 +5193,24 @@ function SlotBlocklyEditor({ ctx, onCodeChange, onStateChange, initialState }: {
         console.warn('[MinisLib] failed to restore Blockly workspace state:', err);
       }
     }
+    _blkWorkspace = workspace;
     // Resize after first paint so Blockly measures the real container dimensions
     requestAnimationFrame(() => Blockly.svgResize(workspace));
     setTimeout(() => Blockly.svgResize(workspace), 200);
-    const listener = () => {
+    const listener = (e?: Blockly.Events.Abstract) => {
+      // Ten listener demonstracyjnie działa (odświeża podgląd kodu), więc to on
+      // — a nie walidator pola — jest pewnym miejscem na propagację nazwy:
+      // zmiana pola NAME w deklaracji przepisuje ją w bloczkach odczytu.
+      if (e && e.type === Blockly.Events.BLOCK_CHANGE) {
+        const ev = e as Blockly.Events.BlockChange;
+        if (ev.name === 'NAME' && ev.blockId) {
+          const changed = workspace.getBlockById(ev.blockId);
+          if (changed?.type === 'minis_var_declare') {
+            renameVarReferences(workspace, String(ev.oldValue ?? ''), String(ev.newValue ?? ''));
+          }
+        }
+      }
+      validateUmlCallTypes(workspace);
       cbRef.current(javascriptGenerator.workspaceToCode(workspace));
       if (stateCbRef.current) {
         try {
@@ -4336,6 +5227,9 @@ function SlotBlocklyEditor({ ctx, onCodeChange, onStateChange, initialState }: {
     ro.observe(container);
     return () => {
       ro.disconnect();
+      // Zwalniamy referencję tylko jeśli to nadal NASZ workspace — inaczej
+      // przemontowanie edytora skasowałoby uchwyt do świeżo utworzonego.
+      if (_blkWorkspace === workspace) _blkWorkspace = null;
       workspace.dispose();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4366,6 +5260,47 @@ const MinisContainerCtx = createContext<React.RefObject<HTMLDivElement | null> |
  * All slot metadata (name, parameter type, code) is edited inside this overlay
  * — there's no separate parent panel competing for the same data.
  */
+/**
+ * Przełącznik kontroli typów argumentów w wywołaniach funkcji z UML.
+ *
+ * Domyślnie wyłączony: bez kompilatora porównanie typów jest przybliżone, więc
+ * decyzję o tym, czy chcieć takich podpowiedzi, zostawiamy użytkownikowi.
+ * Ustawienie zostaje między sesjami — to nawyk pracy, nie treść dokumentu.
+ */
+function TypeCheckToggle() {
+  const KEY = 'minislib.umlTypeCheck';
+  const [on, setOn] = useState<boolean>(() => {
+    try { return localStorage.getItem(KEY) === '1'; } catch { return false; }
+  });
+
+  // Stan globalny czyta walidator w listenerze workspace, więc trzeba go ustawić
+  // także przy montowaniu — nie tylko przy kliknięciu.
+  useEffect(() => {
+    setUmlTypeCheck(on);
+    try { localStorage.setItem(KEY, on ? '1' : '0'); } catch { /* tryb prywatny */ }
+    // Natychmiastowe przeliczenie: włączenie ma od razu pokazać problemy,
+    // a wyłączenie — zdjąć wszystkie chmurki.
+    validateUmlCallTypes(_blkWorkspace);
+  }, [on]);
+
+  return (
+    <Tooltip title="Sprawdzaj typy argumentów w wywołaniach funkcji z UML (ostrzeżenie na bloczku)">
+      <FormControlLabel
+        sx={{ mr: 0.5, ml: 0 }}
+        control={
+          <Checkbox
+            size="small"
+            checked={on}
+            onChange={(e) => setOn(e.target.checked)}
+            sx={{ p: 0.25, color: '#585b70', '&.Mui-checked': { color: '#a6e3a1' } }}
+          />
+        }
+        label={<Typography sx={{ fontSize: 10, color: on ? '#a6e3a1' : '#6c7086' }}>Typy</Typography>}
+      />
+    </Tooltip>
+  );
+}
+
 function SlotBlkOverlay({
   slotName, onSlotNameChange,
   paramType, onParamTypeChange,
@@ -4412,6 +5347,7 @@ function SlotBlkOverlay({
           {isEdit ? `Edit Slot — ${slotName || '_'}` : 'New Slot'}
         </Typography>
         <Box sx={{ flex: 1 }} />
+        <TypeCheckToggle />
         <Button size="small" onClick={onCancel}
           sx={{
             fontSize: 11, color: '#cdd6f4', textTransform: 'none',
@@ -4479,6 +5415,9 @@ function SlotBlkOverlay({
       {/* Path builder dialog — single instance per slot overlay; listens to
           globalEventBus so any variable block can pop it open. */}
       <PathBuilderDialog />
+      <TypePickerDialog />
+      <VarPickerDialog />
+      <DocPopup />
     </Box>,
     el,
   );
@@ -4671,6 +5610,9 @@ function ClassBuilderPanel({ entity, onClose, pendingEditSlotName, onPendingCons
             } else {
               insertMemberIntoClass(memberCode, entity.varName, uri);
             }
+            // Slot mógł wywołać funkcje z projektów UML — dopisujemy dla nich
+            // importy, żeby zapisany kod od razu się kompilował.
+            ensureUmlImports(uri);
             reset();
           }}
         />
@@ -4984,6 +5926,201 @@ function AddNodeMenu({ uri: _uri, externalClassDefs, importedClasses, entities }
 
 /* ── Save source button ──────────────────────────────────────────────────────*/
 
+/**
+ * Dopisuje importy dla funkcji UML użytych w ostatnio wygenerowanym slocie.
+ *
+ * Ścieżkę liczymy względem edytowanego pliku, a symbolem jest klasa (dla metod
+ * statycznych) albo sama funkcja (dla globalnych). Importy już obecne w pliku
+ * `patchImportsInCode` pomija, więc powtórne zapisy slotu niczego nie duplikują.
+ */
+function ensureUmlImports(uri: string): void {
+  const used = takeUsedUmlCallables();
+  if (!used.length) return;
+  const model = findModel(uri);
+  if (!model) return;
+
+  // URI edytora bywa poprzedzone nazwą mountu (`/user/drive/...`) — do policzenia
+  // ścieżki względnej liczy się tylko część wspólna z `linkedFile` z UML.
+  const currentFile = uri.replace(/^\/+/, '').replace(/^user\//, '');
+  const add: { pkg: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const fn of used) {
+    const spec = importSpecifierFor(fn, currentFile);
+    if (!spec) continue;
+    const key = `${spec}::${fn.importName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    add.push({ pkg: spec, name: fn.importName });
+  }
+  if (!add.length) return;
+  replaceModelContent(model, patchImportsInCode(_state.currentCode, add, []));
+}
+
+/* ── Tryb samodzielny — sam edytor bloczków dla pliku bez minislib ────────── */
+
+/** Pusty kontekst slotu: w tym trybie nie ma klasy, więc nie ma jej pól ani sygnałów. */
+const EMPTY_SLOT_CTX: SlotCtx = { props: [], signals: [], slots: [], vars: [], exprOpts: [], condOpts: [] };
+
+/**
+ * Widok dla pliku, który nie importuje `@mhersztowski/minislib`.
+ *
+ * Nie ma tu grafu (brak encji do pokazania), ale sam edytor bloczków bywa
+ * potrzebny — choćby do złożenia kodu z funkcji opisanych w projektach UML.
+ * Dlatego pokazujemy wyłącznie edytor z toolboxem i jedną ikonę ustawień;
+ * cały pasek narzędzi grafu byłby tu bez sensu.
+ *
+ * Bloczki żyją w pamięci karty, więc jest jeszcze druga ikona: wstawienie
+ * wygenerowanego kodu do pliku. Bez niej z tego, co się ułoży, nic nie wynika.
+ */
+function StandaloneBlocklyView({ uri }: { uri: string }) {
+  const [code, setCode] = useState('');
+  const [inserted, setInserted] = useState(false);
+
+  const insertIntoFile = useCallback(() => {
+    const model = findModel(uri);
+    if (!model || !code.trim()) return;
+    const current = model.getValue();
+    // Dopisujemy na końcu pliku — pozycja kursora bywa gdziekolwiek, a wstawianie
+    // w środek istniejącej deklaracji rozjechałoby kod.
+    const next = `${current.replace(/\s*$/, '')}\n\n${code.replace(/\s*$/, '')}\n`;
+    replaceModelContent(model, next);
+    // Funkcje z UML użyte w bloczkach potrzebują importów.
+    ensureUmlImports(uri);
+    setInserted(true);
+    setTimeout(() => setInserted(false), 2000);
+  }, [uri, code]);
+
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#181825' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', borderBottom: '1px solid #313244' }}>
+        <Typography sx={{ flex: 1, minWidth: 0, px: 1, fontSize: 10, color: '#6c7086' }} noWrap>
+          Edytor bloczków — plik bez <code>@mhersztowski/minislib</code>
+        </Typography>
+        <Tooltip title={code.trim() ? 'Wstaw wygenerowany kod na końcu pliku' : 'Ułóż bloczki, aby był kod do wstawienia'}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={!code.trim()}
+              onClick={insertIntoFile}
+              sx={{ px: 1, borderLeft: '1px solid #313244', borderRadius: 0, color: inserted ? '#a6e3a1' : '#585b70', '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}
+            >
+              {inserted ? <CheckIcon sx={{ fontSize: 16 }} /> : <SaveIcon sx={{ fontSize: 16 }} />}
+            </IconButton>
+          </span>
+        </Tooltip>
+        <OptionsButton uri={uri} />
+      </Box>
+      {/* `SlotBlocklyEditor` rozciąga się przez `flex: 1`, więc kontener MUSI być
+          flex-column — inaczej edytor zostaje na swojej minimalnej wysokości. */}
+      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <SlotBlocklyEditor ctx={EMPTY_SLOT_CTX} onCodeChange={setCode} />
+      </Box>
+    </Box>
+  );
+}
+
+/* ── Options — ustawienia pluginu (zakładka Blockly: projekty UML) ────────── */
+
+function OptionsButton({ uri }: { uri: string }) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'blockly'>('blockly');
+  const [files, setFiles] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(() => readUmlPref(uri));
+  const [loading, setLoading] = useState(false);
+  const [callables, setCallables] = useState<UmlCallable[]>([]);
+  const [typeCount, setTypeCount] = useState(0);
+
+  // Wybór z poprzedniej sesji zasila bloczki od razu po otwarciu pliku — bez tego
+  // dropdown byłby pusty do czasu, aż ktoś zajrzy w Options.
+  useEffect(() => {
+    const pref = readUmlPref(uri);
+    setSelected(pref);
+    if (!pref.length) { setUmlCallables([]); setUmlTypes([]); return; }
+    void loadUmlProjectData(pref).then(({ callables: fns, types }) => {
+      setUmlCallables(fns);
+      setUmlTypes(types);
+      setCallables(fns);
+      setTypeCount(types.length);
+    });
+  }, [uri]);
+
+  const handleOpen = useCallback(async () => {
+    setOpen(true);
+    setLoading(true);
+    setFiles(await listUmlProjects());
+    setLoading(false);
+  }, []);
+
+  const toggle = useCallback(async (file: string) => {
+    const next = selected.includes(file) ? selected.filter((f) => f !== file) : [...selected, file];
+    setSelected(next);
+    writeUmlPref(uri, next);
+    const { callables: fns, types } = await loadUmlProjectData(next);
+    setUmlCallables(fns);
+    setUmlTypes(types);
+    setCallables(fns);
+    setTypeCount(types.length);
+  }, [selected, uri]);
+
+  return (
+    <>
+      <Tooltip title="Options">
+        <IconButton
+          size="small"
+          onClick={handleOpen}
+          sx={{ px: 1, borderLeft: '1px solid #313244', borderRadius: 0, color: '#585b70', '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}
+        >
+          <SettingsIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Tooltip>
+
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ pb: 0 }}>Options</DialogTitle>
+        <DialogContent>
+          <Tabs value={tab} onChange={(_, v: 'blockly') => setTab(v)} sx={{ mb: 1, minHeight: 34, '& .MuiTab-root': { minHeight: 34, textTransform: 'none' } }}>
+            <Tab value="blockly" label="Blockly" />
+          </Tabs>
+
+          <Typography sx={{ fontSize: 12, color: '#9399b2', mb: 1 }}>
+            Wybierz projekty UML (Programming/UML). Funkcje globalne i metody statyczne
+            pojawią się w edytorze slotu jako bloczki w kategoriach nazwanych klasą lub
+            plikiem; funkcje `async` dostają <code>await</code>, a import dopisuje się przy
+            zapisie slotu. Klasy i interfejsy z projektów trafiają do okna wyboru typu zmiennej.
+          </Typography>
+
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={24} /></Box>
+          ) : files.length === 0 ? (
+            <Typography sx={{ fontSize: 12, color: '#6c7086', py: 2 }}>
+              Brak projektów w <code>drive/uml</code>. Utwórz projekt na stronie Programming → UML.
+            </Typography>
+          ) : (
+            <List dense disablePadding sx={{ maxHeight: 260, overflow: 'auto', border: '1px solid #313244', borderRadius: 1 }}>
+              {files.map((f) => (
+                <ListItemButton key={f} onClick={() => void toggle(f)} dense>
+                  <Checkbox edge="start" size="small" checked={selected.includes(f)} tabIndex={-1} disableRipple />
+                  <ListItemText primary={f.replace(UML_EXT, '')} secondary={f} />
+                </ListItemButton>
+              ))}
+            </List>
+          )}
+
+          {selected.length > 0 && (
+            <Typography sx={{ fontSize: 11, color: '#a6e3a1', mt: 1 }}>
+              Dostępnych funkcji: {callables.length}
+              {callables.filter((c) => c.isAsync).length > 0
+                ? ` (w tym ${callables.filter((c) => c.isAsync).length} async)`
+                : ''}
+              {typeCount > 0 ? ` · typów do wyboru w zmiennych: ${typeCount}` : ''}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setOpen(false)}>Zamknij</Button></DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
 function SaveSourceButton({ uri }: { uri: string }) {
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -5106,6 +6243,61 @@ async function vfsReadFileText(path: string): Promise<string | null> {
     const { data } = await res.json() as { data: string };
     return atob(data);
   } catch { return null; }
+}
+
+/* ── Funkcje z projektów UML (Programming/UML) ───────────────────────────────
+   Slot może wołać funkcje globalne i metody statyczne opisane w projektach UML.
+   Wybór projektów jest per plik (Options → Blockly) i trzymany w localStorage —
+   to ustawienie warsztatowe, nie treść pliku, więc nie zaśmieca kodu. */
+
+const UML_DIR = 'drive/uml';
+const UML_EXT = '.umlproj.json';
+const UML_PREF_KEY = 'minislib.umlProjects';
+
+/** Lista plików projektów UML użytkownika. */
+async function listUmlProjects(): Promise<string[]> {
+  try {
+    const res = await fetch(vfsApiUrl(`/user/${UML_DIR}`, 'readdir'), { headers: vfsAuthHeader() });
+    if (!res.ok) return [];
+    const { entries } = await res.json() as { entries?: Array<{ name: string; type: number }> };
+    return (entries ?? [])
+      .filter((e) => e.type !== 2 && e.name.toLowerCase().endsWith(UML_EXT))
+      .map((e) => e.name)
+      .sort();
+  } catch { return []; }
+}
+
+/**
+ * Wczytuje wybrane projekty: funkcje do bloczków i typy do okna wyboru typu.
+ * Jedno przejście po plikach, bo obie listy pochodzą z tego samego JSON-a.
+ */
+async function loadUmlProjectData(files: string[]): Promise<{ callables: UmlCallable[]; types: UmlType[] }> {
+  const callables: UmlCallable[] = [];
+  const types: UmlType[] = [];
+  for (const file of files) {
+    const text = await vfsReadFileText(`/user/${UML_DIR}/${file}`);
+    if (!text) continue;
+    try {
+      const project = JSON.parse(text) as UmlProjectLike;
+      callables.push(...extractCallables(project, file));
+      types.push(...extractTypes(project, file));
+    } catch {
+      // Uszkodzony projekt pomijamy — jeden zły plik nie może odciąć pozostałych.
+    }
+  }
+  return { callables, types };
+}
+
+/** Wybrane projekty UML dla danego pliku (klucz = URI, bo różne pliki mają różny kontekst). */
+function readUmlPref(uri: string): string[] {
+  try {
+    const raw = localStorage.getItem(`${UML_PREF_KEY}:${uri}`);
+    return raw ? JSON.parse(raw) as string[] : [];
+  } catch { return []; }
+}
+
+function writeUmlPref(uri: string, files: string[]): void {
+  try { localStorage.setItem(`${UML_PREF_KEY}:${uri}`, JSON.stringify(files)); } catch { /* tryb prywatny */ }
 }
 
 /** Extract the class name from a MinisEntity (label = "varName:ClassName" for instances). */
@@ -5280,18 +6472,13 @@ function patchImportsInCode(
     addByPkg.delete(pkg); // mark as handled
   }
 
-  // Insert new import lines for packages that had no existing import
+  // Insert new import lines for packages that had no existing import.
+  // `insertImportLine` szuka końca OSTATNIEJ deklaracji importu — także
+  // wieloliniowej; wcześniejszy wzorzec „linia zaczynająca się od import"
+  // trafiał w `import {` i wstawiał nowy import w środek listy nazw.
   for (const [pkg, names] of addByPkg) {
     if (names.size === 0) continue;
-    const newLine = `import { ${[...names].join(', ')} } from '${pkg}';\n`;
-    // Insert after the last existing import line
-    const lastImportRe = /^import\s[^\n]+$/gm;
-    let lastIdx = 0;
-    let lm: RegExpExecArray | null;
-    while ((lm = lastImportRe.exec(result)) !== null) lastIdx = lm.index + lm[0].length;
-    result = lastIdx > 0
-      ? result.slice(0, lastIdx) + '\n' + newLine + result.slice(lastIdx)
-      : newLine + result;
+    result = insertImportLine(result, `import { ${[...names].join(', ')} } from '${pkg}';`);
   }
 
   return result;
@@ -6569,17 +7756,19 @@ function VisualMinisLibPanel() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const toggleFullscreen = useCallback(() => setIsFullscreen((v) => !v), []);
 
-  if (!uri || !isMinisFile) {
+  if (!uri) {
     return (
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, p: 2, textAlign: 'center' }}>
         <AutoFixHighIcon sx={{ fontSize: 36, color: '#45475a' }} />
-        <Typography sx={{ fontSize: 12, color: '#6c7086' }}>
-          Open a TypeScript file that imports <code style={{ color: '#cba6f7' }}>@mhersztowski/minislib</code>
-        </Typography>
-        <Typography sx={{ fontSize: 11, color: '#45475a' }}>Signal / MProperty / MTimer / MObject subclasses appear here as connectable nodes.</Typography>
+        <Typography sx={{ fontSize: 12, color: '#6c7086' }}>Otwórz plik, żeby zacząć.</Typography>
       </Box>
     );
   }
+
+  // Plik bez importu `@mhersztowski/minislib` nie ma encji do rysowania, ale sam
+  // edytor bloczków jest tu przydatny (np. do składania kodu z funkcji z UML) —
+  // pokazujemy go bez górnego paska, z jedną ikoną ustawień.
+  if (!isMinisFile) return <StandaloneBlocklyView uri={uri} />;
 
   return (
     <MinisContainerCtx.Provider value={containerRef}>
@@ -6594,6 +7783,7 @@ function VisualMinisLibPanel() {
         </Box>
         <NewClassButton uri={uri} onCreated={(varName) => { pendingSelectName.current = varName; }} />
         <ImportButton uri={uri} entities={entities} />
+        <OptionsButton uri={uri} />
         <SaveSourceButton uri={uri} />
         <Tooltip title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
           <IconButton size="small" onClick={toggleFullscreen} sx={{ px: 1, borderLeft: '1px solid #313244', borderRadius: 0, color: '#585b70', '&:hover': { color: '#cdd6f4', background: '#1e1e2e' } }}>

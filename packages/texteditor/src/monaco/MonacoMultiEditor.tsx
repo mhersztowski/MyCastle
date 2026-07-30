@@ -64,6 +64,7 @@ import { VfsExplorer } from '../vfs/VfsExplorer';
 import type { VfsProviderDef } from '../vfs/providerRegistry';
 import type { OutputLine } from '../vfs/project/types';
 import { EditorInstance } from './core/EditorInstance';
+import { MobileCursorBar } from './ui/MobileCursorBar';
 import { ModelManager } from './core/ModelManager';
 import { KeyMod, KeyCode } from './core/CommandRegistry';
 import type { DocumentUri } from './utils/types';
@@ -4138,6 +4139,13 @@ export function MonacoMultiEditor({
             </Box>
           ))}
         </Box>
+
+        {/* Pasek kursora nad klawiaturą — klawiatury ekranowe nie mają strzałek,
+            a palcem trudno trafić w konkretny znak. */}
+        <MobileCursorBar
+          enabled={isMobile}
+          getEditor={() => groupEditorsRef.current.get(activeGroupIdRef.current)}
+        />
 
         {/* Agent panel — overlay (all screen sizes) */}
         {enableAgent && agentPanelOpen && (

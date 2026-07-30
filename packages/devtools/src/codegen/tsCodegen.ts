@@ -13,7 +13,7 @@ function genClass(s: CodeSymbol): string {
   }
   for (const m of s.members.filter((x) => x.kind === 'method')) {
     if (m.isAbstract) { lines.push(`  abstract ${m.name}(${paramList(m.params)})${m.type ? `: ${m.type}` : ''};`); continue; }
-    lines.push(`  ${vis(m.visibility)}${m.isStatic ? 'static ' : ''}${m.name}(${paramList(m.params)})${m.type ? `: ${m.type}` : ''} {`);
+    lines.push(`  ${vis(m.visibility)}${m.isStatic ? 'static ' : ''}${m.isAsync ? 'async ' : ''}${m.name}(${paramList(m.params)})${m.type ? `: ${m.type}` : ''} {`);
     lines.push('    throw new Error(\'Not implemented\');');
     lines.push('  }');
   }

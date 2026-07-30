@@ -45,7 +45,7 @@ import {
   Box, Button, Stack, Typography, IconButton, Tooltip, Divider, TextField, MenuItem,
   Dialog, DialogTitle, DialogContent, DialogActions, List, ListItem, ListItemButton,
   ListItemText, ListItemIcon, Collapse, Paper, Snackbar, Alert, Chip, Breadcrumbs,
-  Link as MuiLink, CircularProgress, useMediaQuery, useTheme, Popover,
+  Link as MuiLink, CircularProgress, useMediaQuery, useTheme, Popover, Tabs, Tab, Checkbox,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -88,10 +88,53 @@ import { AccountMenu } from '../../components/AccountMenu';
 type UmlKind = 'class' | 'abstract' | 'interface' | 'enum' | 'struct' | 'module';
 type MemberKind = 'field' | 'method';
 
-interface UmlMember { id: string; kind: MemberKind; text: string; category?: string }
+/**
+ * Metadane dokumentacji w standardzie TSDoc — ten sam kształt, co `DocMeta`
+ * w devtools, żeby import „Z kodu" był kopiowaniem, a nie tłumaczeniem.
+ */
+interface UmlDoc {
+  summary?: string;
+  remarks?: string;
+  /** Opisy argumentów po nazwie (`@param`). */
+  params?: Record<string, string>;
+  returns?: string;
+  examples?: string[];
+  deprecated?: string;
+  see?: string[];
+  tags?: string[];
+}
+
+interface UmlMember { id: string; kind: MemberKind; text: string; category?: string; doc?: UmlDoc }
 
 /** Aktywny filtr kategorii składowych — null = pokaż wszystkie. */
 const CategoryFilterContext = createContext<string | null>(null);
+
+/**
+ * Składa metadane TSDoc w tekst do podpowiedzi. Kolejność jak w dokumentacji:
+ * opis, uwagi, argumenty, zwracana wartość, przykład — dzięki temu najważniejsze
+ * zdanie widać od razu, bez rozwijania.
+ */
+function docTooltip(doc?: UmlDoc): string {
+  if (!doc) return '';
+  const lines: string[] = [];
+  if (doc.deprecated !== undefined) lines.push(`⚠ Przestarzałe${doc.deprecated ? `: ${doc.deprecated}` : ''}`);
+  if (doc.summary) lines.push(doc.summary);
+  if (doc.remarks) lines.push(doc.remarks);
+  const params = Object.entries(doc.params ?? {});
+  if (params.length) {
+    lines.push('Argumenty:');
+    for (const [name, description] of params) lines.push(`  • ${name} — ${description}`);
+  }
+  if (doc.returns) lines.push(`Zwraca: ${doc.returns}`);
+  if (doc.examples?.length) lines.push(`Przykład:\n${doc.examples[0]}`);
+  if (doc.see?.length) lines.push(`Zobacz: ${doc.see.join(', ')}`);
+  return lines.join('\n');
+}
+
+/** Czy element ma jakąkolwiek dokumentację (do pokazania znacznika na węźle). */
+function hasDoc(doc?: UmlDoc): boolean {
+  return !!doc && Object.values(doc).some((v) => (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== ''));
+}
 
 /** Deterministyczny kolor kropki kategorii (ta sama nazwa → ten sam kolor). */
 function categoryColor(cat: string): string {
@@ -106,6 +149,8 @@ interface UmlNodeData extends Record<string, unknown> {
   members: UmlMember[];
   /** User-root-relative path of a source file this class maps to. */
   linkedFile?: string;
+  /** Dokumentacja TSDoc klasy/interfejsu/modułu (z kodu albo dopisana ręcznie). */
+  doc?: UmlDoc;
 }
 type UmlNode = Node<UmlNodeData>;
 
@@ -184,9 +229,28 @@ function userRootPath(userName: string, rel = ''): string {
   return `/data/Minis/Users/${userName}${cleaned ? `/${cleaned}` : ''}`;
 }
 
+/**
+ * Prefiks ścieżek wskazujących na drzewo źródeł MyCastle (montowane w VFS jako
+ * `/mycastle-code`). Trzymamy go w ścieżce, a nie w osobnym polu, bo `linkedPath`
+ * projektu to jeden string — dzięki temu powiązanie z `packages/…` zapisuje się
+ * i wczytuje bez zmiany formatu pliku projektu.
+ */
+const CODE_PREFIX = 'mycastle-code';
+
+function isCodePath(rel: string): boolean {
+  return rel === CODE_PREFIX || rel.startsWith(`${CODE_PREFIX}/`);
+}
+
+/** Ścieżka w VFS dla dowolnego źródła — katalog użytkownika albo kod aplikacji. */
+function vfsPathFor(userName: string, rel: string): string {
+  const cleaned = rel.replace(/^\/+|\/+$/g, '');
+  if (isCodePath(cleaned)) return `/${cleaned}`;
+  return userRootPath(userName, cleaned);
+}
+
 async function vfsReaddir(userName: string, rel: string): Promise<VfsEntry[]> {
   const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/readdir`, window.location.origin);
-  u.searchParams.set('path', userRootPath(userName, rel));
+  u.searchParams.set('path', vfsPathFor(userName, rel));
   const r = await fetch(u.pathname + u.search, { headers: authHeaders() });
   if (!r.ok) return [];
   const json = await r.json() as { entries?: VfsEntry[] };
@@ -195,7 +259,7 @@ async function vfsReaddir(userName: string, rel: string): Promise<VfsEntry[]> {
 
 async function vfsReadText(userName: string, rel: string): Promise<string | null> {
   const u = new URL(`/api/users/${encodeURIComponent(userName)}/vfs/readFile`, window.location.origin);
-  u.searchParams.set('path', userRootPath(userName, rel));
+  u.searchParams.set('path', vfsPathFor(userName, rel));
   const r = await fetch(u.pathname + u.search, { headers: authHeaders() });
   if (!r.ok) return null;
   const json = await r.json() as { data?: string };
@@ -477,7 +541,7 @@ function migrateProject(raw: unknown): UmlProject {
     const data = n.data ?? {};
     let members: UmlMember[];
     if (Array.isArray(data.members)) {
-      members = data.members.map((m: any) => ({ id: m.id ?? nextId('m'), kind: m.kind === 'method' ? 'method' : 'field', text: String(m.text ?? ''), category: m.category || undefined }));
+      members = data.members.map((m: any) => ({ id: m.id ?? nextId('m'), kind: m.kind === 'method' ? 'method' : 'field', text: String(m.text ?? ''), category: m.category || undefined, doc: m.doc || undefined }));
     } else {
       members = [
         ...(data.attributes ?? []).map((t: string) => member('field', t)),
@@ -575,11 +639,25 @@ function MemberLines({ members }: { members: UmlMember[] }) {
               </Box>
             )}
             {items.map(m => (
-              <Typography key={m.id} sx={{ fontSize: 11, lineHeight: 1.5, fontFamily: 'monospace' }}>
+              // `title` (a nie Tooltip MUI) — węzły diagramu przerysowują się
+              // przy każdym przesunięciu, a natywna podpowiedź nic nie kosztuje
+              // i zachowuje podział na linie.
+              <Typography
+                key={m.id}
+                title={docTooltip(m.doc)}
+                sx={{
+                  fontSize: 11, lineHeight: 1.5, fontFamily: 'monospace',
+                  textDecoration: m.doc?.deprecated !== undefined ? 'line-through' : 'none',
+                  cursor: hasDoc(m.doc) ? 'help' : 'default',
+                }}
+              >
                 {m.category && (
                   <Box component="span" title={m.category} sx={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', bgcolor: categoryColor(m.category), mr: 0.5, verticalAlign: 'middle' }} />
                 )}
                 {m.text}
+                {hasDoc(m.doc) && (
+                  <Box component="span" sx={{ ml: 0.5, opacity: 0.5, fontSize: 9 }}>ⓘ</Box>
+                )}
               </Typography>
             ))}
           </Box>
@@ -607,7 +685,16 @@ function UmlClassNode({ data, selected }: NodeProps<UmlNode>) {
           <Tooltip title={`Plik: ${data.linkedFile}`}><LinkIcon sx={{ position: 'absolute', top: 3, right: 3, fontSize: 13, color: meta.color }} /></Tooltip>
         )}
         {meta.stereotype && <Typography sx={{ fontSize: 10, fontStyle: 'italic', color: meta.color, lineHeight: 1.2 }}>{meta.stereotype}</Typography>}
-        <Typography sx={{ fontWeight: 700, fontStyle: italic ? 'italic' : 'normal', color: meta.color, lineHeight: 1.3 }}>{data.name || 'Unnamed'}</Typography>
+        <Typography
+          title={docTooltip(data.doc)}
+          sx={{
+            fontWeight: 700, fontStyle: italic ? 'italic' : 'normal', color: meta.color, lineHeight: 1.3,
+            cursor: hasDoc(data.doc) ? 'help' : 'default',
+          }}
+        >
+          {data.name || 'Unnamed'}
+          {hasDoc(data.doc) && <Box component="span" sx={{ ml: 0.5, opacity: 0.55, fontSize: 10 }}>ⓘ</Box>}
+        </Typography>
       </Box>
       <MemberLines members={fields} />
       <MemberLines members={methods} />
@@ -651,20 +738,54 @@ function UmlMarkerDefs() {
 // VFS picker + file preview dialogs
 // ──────────────────────────────────────────────────────────────────────────
 
-function VfsPickerDialog({ open, userName, mode, title, onPick, onClose }: { open: boolean; userName: string; mode: 'dir' | 'file'; title: string; onPick: (rel: string) => void; onClose: () => void }) {
+function VfsPickerDialog({ open, userName, mode, title, onPick, onClose }: { open: boolean; userName: string; mode: 'dir' | 'file'; title: string; onPick: (rel: string, files?: string[]) => void; onClose: () => void }) {
   const [cwd, setCwd] = useState('');
   const [entries, setEntries] = useState<VfsEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  /** Źródło plików: katalog użytkownika albo drzewo źródeł aplikacji (read-only). */
+  const [source, setSource] = useState<'user' | 'code'>('user');
+  /**
+   * Zaznaczone pliki (ścieżki względem korzenia źródła). Pusty zbiór = bierzemy
+   * cały katalog — dzięki temu dotychczasowy sposób pracy działa bez zmian,
+   * a zaznaczenie zawęża diagram do wybranych klas.
+   */
+  const [checked, setChecked] = useState<string[]>([]);
+  const toggleFile = (rel: string) =>
+    setChecked((prev) => (prev.includes(rel) ? prev.filter((f) => f !== rel) : [...prev, rel]));
   const load = useCallback(async (rel: string) => { setLoading(true); try { setEntries(await vfsReaddir(userName, rel)); setCwd(rel); } finally { setLoading(false); } }, [userName]);
-  useEffect(() => { if (open) void load(''); }, [open, load]);
-  const parts = cwd ? cwd.split('/') : [];
+  useEffect(() => { if (open) { setSource('user'); setChecked([]); void load(''); } }, [open, load]);
+
+  // Kod aplikacji zaczynamy od `packages` — po to jest ta zakładka; reszta repo
+  // (node_modules, build) tylko przeszkadzałaby w wyborze.
+  const switchSource = (next: 'user' | 'code') => {
+    setSource(next);
+    void load(next === 'code' ? `${CODE_PREFIX}/packages` : '');
+  };
+
+  // W ścieżkach kodu ukrywamy techniczny prefiks — użytkownik widzi `packages/…`.
+  const displayRel = source === 'code' ? cwd.replace(new RegExp(`^${CODE_PREFIX}/?`), '') : cwd;
+  const parts = displayRel ? displayRel.split('/') : [];
+  const rootRel = source === 'code' ? CODE_PREFIX : '';
+  const toRel = (i: number) => (source === 'code'
+    ? [CODE_PREFIX, ...parts.slice(0, i + 1)].join('/')
+    : parts.slice(0, i + 1).join('/'));
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{title}</DialogTitle>
       <DialogContent dividers sx={{ minHeight: 320 }}>
+        <Tabs
+          value={source}
+          onChange={(_, v: 'user' | 'code') => switchSource(v)}
+          sx={{ mb: 1, minHeight: 34, '& .MuiTab-root': { minHeight: 34, textTransform: 'none' } }}
+        >
+          <Tab value="user" label="Moje pliki" />
+          <Tab value="code" label="Kod aplikacji (packages)" />
+        </Tabs>
         <Breadcrumbs sx={{ mb: 1 }}>
-          <MuiLink component="button" underline="hover" onClick={() => void load('')}>~</MuiLink>
-          {parts.map((p, i) => <MuiLink key={i} component="button" underline="hover" onClick={() => void load(parts.slice(0, i + 1).join('/'))}>{p}</MuiLink>)}
+          <MuiLink component="button" underline="hover" onClick={() => void load(rootRel)}>
+            {source === 'code' ? 'MyCastle' : '~'}
+          </MuiLink>
+          {parts.map((p, i) => <MuiLink key={i} component="button" underline="hover" onClick={() => void load(toRel(i))}>{p}</MuiLink>)}
         </Breadcrumbs>
         {loading ? <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={28} /></Box> : (
           <List dense>
@@ -673,8 +794,27 @@ function VfsPickerDialog({ open, userName, mode, title, onPick, onClose }: { ope
               const childRel = cwd ? `${cwd}/${e.name}` : e.name;
               const isDir = e.type === DIR_TYPE;
               return (
-                <ListItem key={e.name} disablePadding>
-                  <ListItemButton onClick={() => { if (isDir) void load(childRel); else if (mode === 'file') { onPick(childRel); onClose(); } }} disabled={!isDir && mode === 'dir'}>
+                <ListItem
+                  key={e.name}
+                  disablePadding
+                  // W trybie katalogu pliki dostają checkbox — można wskazać sam
+                  // katalog albo zawęzić wybór do konkretnych plików.
+                  secondaryAction={!isDir && mode === 'dir' ? (
+                    <Checkbox
+                      edge="end"
+                      size="small"
+                      checked={checked.includes(childRel)}
+                      onChange={() => toggleFile(childRel)}
+                    />
+                  ) : undefined}
+                >
+                  <ListItemButton
+                    onClick={() => {
+                      if (isDir) void load(childRel);
+                      else if (mode === 'file') { onPick(childRel); onClose(); }
+                      else toggleFile(childRel);
+                    }}
+                  >
                     <ListItemIcon sx={{ minWidth: 32 }}>{isDir ? <FolderIcon fontSize="small" color="primary" /> : <InsertDriveFileIcon fontSize="small" />}</ListItemIcon>
                     <ListItemText primary={e.name} />
                   </ListItemButton>
@@ -685,7 +825,31 @@ function VfsPickerDialog({ open, userName, mode, title, onPick, onClose }: { ope
         )}
       </DialogContent>
       <DialogActions>
-        {mode === 'dir' && <Button variant="contained" onClick={() => { onPick(cwd); onClose(); }}>Wybierz: ~/{cwd || ''}</Button>}
+        {mode === 'dir' && checked.length > 0 && (
+          <>
+            <Typography variant="caption" sx={{ mr: 'auto', ml: 1, color: 'text.secondary' }}>
+              zaznaczono {checked.length}
+            </Typography>
+            <Button onClick={() => setChecked([])}>Wyczyść</Button>
+            <Button
+              variant="contained"
+              // Ścieżki plików przekazujemy WZGLĘDEM wybranego katalogu — backend
+              // sprawdza, że nie wychodzą poza niego.
+              onClick={() => {
+                const base = cwd ? `${cwd}/` : '';
+                onPick(cwd, checked.map((f) => (f.startsWith(base) ? f.slice(base.length) : f)));
+                onClose();
+              }}
+            >
+              Wybierz zaznaczone ({checked.length})
+            </Button>
+          </>
+        )}
+        {mode === 'dir' && checked.length === 0 && (
+          <Button variant="contained" onClick={() => { onPick(cwd); onClose(); }}>
+            Wybierz: {source === 'code' ? `MyCastle/${displayRel}` : `~/${cwd || ''}`}
+          </Button>
+        )}
         <Button onClick={onClose}>Anuluj</Button>
       </DialogActions>
     </Dialog>
@@ -1291,7 +1455,7 @@ function UmlEditor({ userName }: { userName: string }) {
   const [dirty, setDirty] = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'error' | 'info' } | null>(null);
-  const [picker, setPicker] = useState<{ mode: 'dir' | 'file'; title: string; onPick: (rel: string) => void } | null>(null);
+  const [picker, setPicker] = useState<{ mode: 'dir' | 'file'; title: string; onPick: (rel: string, files?: string[]) => void } | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [showFilesPanel, setShowFilesPanel] = useState(false);
   const [generating, setGenerating] = useState<string | null>(null);
@@ -1584,14 +1748,15 @@ function UmlEditor({ userName }: { userName: string }) {
   const pickNodeFile = useCallback((nodeId: string) => setPicker({ mode: 'file', title: 'Powiąż klasę z plikiem źródłowym', onPick: (rel) => patchNodeData(nodeId, { linkedFile: rel }) }), [patchNodeData]);
 
   // ── Generate / sync UML from source code (backend @mhersztowski/devtools) ──
-  const runCodeSync = useCallback(async (dir: string) => {
+  const runCodeSync = useCallback(async (dir: string, files?: string[]) => {
     if (!project) return;
+    const scope = files?.length ? `${files.length} wybranych plików w ${dir}` : `kodu w ${dir}`;
     const hasContent = project.diagrams.some((d) => d.nodes.length > 0);
-    if (hasContent && !window.confirm(`Diagram źródłowy zostanie zregenerowany z kodu w ${dir} (układ węzłów zostanie zachowany). Kontynuować?`)) return;
+    if (hasContent && !window.confirm(`Diagram źródłowy zostanie zregenerowany z ${scope} (układ węzłów zostanie zachowany). Kontynuować?`)) return;
     setSyncing(true);
     try {
       const current = commitActive(project);
-      const res = await minisApi.syncUmlFromCode<UmlProject>(userName, dir, current, current.name);
+      const res = await minisApi.syncUmlFromCode<UmlProject>(userName, dir, current, current.name, files);
       // Recognise `name?: type` fields coming from the parser as "optional".
       const np: UmlProject = normalizeOptionalProject({ ...res.project, linkedPath: res.project.linkedPath ?? dir });
       setProject(np);
@@ -1608,7 +1773,11 @@ function UmlEditor({ userName }: { userName: string }) {
   const generateFromCode = useCallback(() => {
     if (!project) return;
     if (project.linkedPath) void runCodeSync(project.linkedPath);
-    else setPicker({ mode: 'dir', title: 'Wybierz katalog z kodem (C/C++/Python/JS/TS)', onPick: (rel) => void runCodeSync(rel) });
+    else setPicker({
+      mode: 'dir',
+      title: 'Wybierz katalog lub zaznacz pliki — Twoje pliki albo kod aplikacji (packages)',
+      onPick: (rel, files) => void runCodeSync(rel, files),
+    });
   }, [project, runCodeSync]);
 
   useEffect(() => {

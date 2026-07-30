@@ -17,7 +17,7 @@ function genClass(s: CodeSymbol): string {
   for (const m of methods) {
     if (m.name === '__init__' && fields.length) continue;
     const params = ['self', ...(m.params ?? []).map((p) => (p.type ? `${p.name}: ${p.type}` : p.name))].join(', ');
-    lines.push(`    def ${nameFor(m.name, m.visibility)}(${params})${m.type ? ` -> ${m.type}` : ''}:`);
+    lines.push(`    ${m.isAsync ? 'async ' : ''}def ${nameFor(m.name, m.visibility)}(${params})${m.type ? ` -> ${m.type}` : ''}:`);
     lines.push('        pass');
     lines.push('');
   }

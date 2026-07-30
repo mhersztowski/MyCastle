@@ -95,6 +95,8 @@ export class MycastleHttpServer extends HttpUploadServer {
   private iotService: IotService | null;
   private terminalService: TerminalService | null = null;
   private httpPort: number;
+  /** Korzeń drzewa źródeł MyCastle (montowany jako `/mycastle-code`); '' = niedostępny. */
+  private codeRootDir = '';
   private jwtService: JwtService;
   private apiKeyService: ApiKeyService;
   private rpcRouter: RpcRouter;
@@ -169,9 +171,15 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     // Mount MyCastle source tree at /mycastle-code (read by ReadOnlyFS wrapper in the editor).
     // Backend exposes it RW; the wrapper enforces read-only on the client. Override via MYCASTLE_CODE_DIR.
-    const mycastleCodeDir = process.env.MYCASTLE_CODE_DIR ?? '/home/mhersztowski/myprojects/claude/MyCastle';
-    if (fs.existsSync(mycastleCodeDir)) {
-      this.vfs.mount('/mycastle-code', new NodeFS({ rootDir: path.resolve(mycastleCodeDir) }));
+    // Bez zmiennej środowiskowej szukamy repo tak samo jak runner skryptów Drive —
+    // na maszynie deweloperskiej montowanie ma działać bez dodatkowej konfiguracji.
+    const mycastleCodeDir = process.env.MYCASTLE_CODE_DIR
+      ?? (fs.existsSync('/home/mhersztowski/myprojects/claude/MyCastle')
+        ? '/home/mhersztowski/myprojects/claude/MyCastle'
+        : findMonorepoRoot() ?? '');
+    if (mycastleCodeDir && fs.existsSync(mycastleCodeDir)) {
+      this.codeRootDir = path.resolve(mycastleCodeDir);
+      this.vfs.mount('/mycastle-code', new NodeFS({ rootDir: this.codeRootDir }));
     }
 
     // Auto-mount device VFS extensions into the CompositeFS at /devices/{deviceId}
@@ -2344,13 +2352,34 @@ export class MycastleHttpServer extends HttpUploadServer {
 
   private async handleUmlSync(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
     if (!this.rootDir) { this.sendJsonResponse(res, 500, { error: 'Server data dir not configured' }); return; }
-    const body = await this.parseRequestBody(req) as { dir?: string; name?: string; project?: UmlProject };
+    const body = await this.parseRequestBody(req) as {
+      dir?: string; name?: string; project?: UmlProject;
+      /** Ścieżki plików względem `dir` — pusty/brak = cały katalog. */
+      files?: string[];
+    };
     const dir = (body.dir ?? '').replace(/^\/+/, '');
     if (!dir) { this.sendJsonResponse(res, 400, { error: 'dir is required (user-root-relative path to source code)' }); return; }
 
-    const userRoot = path.resolve(this.rootDir, 'Minis', 'Users', userName);
-    const absDir = path.resolve(userRoot, dir);
-    // Guard against path traversal outside the user's data dir.
+    // Dwa źródła kodu: katalog użytkownika oraz (read-only) drzewo źródeł MyCastle
+    // spod `/mycastle-code`. To drugie pozwala rysować UML z `packages/…` bez
+    // kopiowania kodu do Drive.
+    const CODE_PREFIX = 'mycastle-code/';
+    const fromCodeTree = dir === 'mycastle-code' || dir.startsWith(CODE_PREFIX);
+
+    let userRoot: string;
+    let absDir: string;
+    if (fromCodeTree) {
+      if (!this.codeRootDir) {
+        this.sendJsonResponse(res, 404, { error: 'Drzewo źródeł MyCastle nie jest zamontowane (ustaw MYCASTLE_CODE_DIR)' });
+        return;
+      }
+      userRoot = this.codeRootDir;
+      absDir = path.resolve(this.codeRootDir, dir.slice(dir === 'mycastle-code' ? dir.length : CODE_PREFIX.length));
+    } else {
+      userRoot = path.resolve(this.rootDir, 'Minis', 'Users', userName);
+      absDir = path.resolve(userRoot, dir);
+    }
+    // Guard against path traversal outside the chosen root.
     if (absDir !== userRoot && !absDir.startsWith(userRoot + path.sep)) {
       this.sendJsonResponse(res, 400, { error: 'Invalid dir' });
       return;
@@ -2358,13 +2387,30 @@ export class MycastleHttpServer extends HttpUploadServer {
     try { await fs.promises.access(absDir); }
     catch { this.sendJsonResponse(res, 404, { error: `Directory not found: ${dir}` }); return; }
 
+    // Wybrane pliki muszą leżeć w `absDir` — inaczej lista plików byłaby furtką
+    // omijającą kontrolę katalogu powyżej.
+    const picked: string[] = [];
+    for (const rel of Array.isArray(body.files) ? body.files : []) {
+      const abs = path.resolve(absDir, String(rel).replace(/^\/+/, ''));
+      if (abs === absDir || !abs.startsWith(absDir + path.sep)) {
+        this.sendJsonResponse(res, 400, { error: `Invalid file: ${rel}` });
+        return;
+      }
+      picked.push(abs);
+    }
+
     const svc = new UmlSyncService();
     try {
       if (body.project) {
-        const result = await svc.updateProjectFromDir(body.project, absDir, { relativeTo: userRoot });
+        const result = picked.length
+          ? await svc.updateProjectFromFiles(body.project, picked, absDir, { relativeTo: userRoot })
+          : await svc.updateProjectFromDir(body.project, absDir, { relativeTo: userRoot });
         this.sendJsonResponse(res, 200, result);
       } else {
-        const project = await svc.generateProjectFromDir(absDir, body.name ?? 'Generated', { relativeTo: userRoot });
+        const name = body.name ?? 'Generated';
+        const project = picked.length
+          ? await svc.generateProjectFromFiles(picked, absDir, name, { relativeTo: userRoot })
+          : await svc.generateProjectFromDir(absDir, name, { relativeTo: userRoot });
         this.sendJsonResponse(res, 200, { project, changes: [], summary: 'wygenerowano', committed: false });
       }
     } catch (err) {
@@ -3576,14 +3622,18 @@ export class MycastleHttpServer extends HttpUploadServer {
     const urlObj = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
     const userHomePrefix = `/data/Minis/Users/${userName}`;
 
-    const assertPath = (p: string) => {
+    // Drzewo źródeł MyCastle (`/mycastle-code`) jest widoczne TYLKO do odczytu:
+    // edytor UML pozwala wskazać `packages/…` jako źródło diagramu, ale nikt nie
+    // ma stąd prawa zapisu do repozytorium.
+    const CODE_MOUNT = '/mycastle-code';
+
+    const assertPath = (p: string, allowCodeTree = false) => {
       // Normalize first so that paths like /data/Minis/Users/x/../y/.. can't
       // bypass the prefix guard via path traversal.
       const normalized = path.posix.normalize(p === '/' ? userHomePrefix : p);
-      if (normalized !== userHomePrefix && !normalized.startsWith(userHomePrefix + '/')) {
-        throw new VfsError('NoPermissions' as any, `Access denied: path outside user home`, p);
-      }
-      return normalized;
+      if (normalized === userHomePrefix || normalized.startsWith(userHomePrefix + '/')) return normalized;
+      if (allowCodeTree && (normalized === CODE_MOUNT || normalized.startsWith(CODE_MOUNT + '/'))) return normalized;
+      throw new VfsError('NoPermissions' as any, `Access denied: path outside user home`, p);
     };
 
     try {
@@ -3591,15 +3641,15 @@ export class MycastleHttpServer extends HttpUploadServer {
         case 'capabilities':
           this.sendJsonResponse(res, 200, this.vfs.capabilities); return;
         case 'stat': {
-          const stat = await this.vfs.stat(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          const stat = await this.vfs.stat(assertPath(urlObj.searchParams.get('path') ?? '/', true));
           this.sendJsonResponse(res, 200, stat); return;
         }
         case 'readdir': {
-          const entries = await this.vfs.readDirectory(assertPath(urlObj.searchParams.get('path') ?? '/'));
+          const entries = await this.vfs.readDirectory(assertPath(urlObj.searchParams.get('path') ?? '/', true));
           this.sendJsonResponse(res, 200, { entries }); return;
         }
         case 'readFile': {
-          const pathStr = assertPath(urlObj.searchParams.get('path') ?? '/');
+          const pathStr = assertPath(urlObj.searchParams.get('path') ?? '/', true);
           const data = await this.vfs.readFile(pathStr);
           // `download=1` → respond with raw bytes + Content-Disposition: attachment.
           // Used by Drive UI and by Android WebView (which can't honor JS-side blob

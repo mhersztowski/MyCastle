@@ -34,8 +34,17 @@ export function modelToDiagram(model: CodeModel, opts: GenerateOptions = {}): Um
     data: {
       kind: kindToUml(s),
       name: s.name,
-      members: s.members.map((m) => ({ id: umlMemberId(m.id), kind: m.kind, text: m.text })),
+      // `category` zasila kolorową kropkę i filtr kategorii w edytorze UML —
+      // dzięki temu metody asynchroniczne da się odsiać jednym kliknięciem.
+      members: s.members.map((m) => ({
+        id: umlMemberId(m.id), kind: m.kind, text: m.text,
+        ...(m.isAsync ? { category: 'async' } : {}),
+        // Dokumentacja jedzie razem ze strukturą — po „Z kodu" opisy z TSDoc są
+        // widoczne w edytorze bez zaglądania do źródeł.
+        ...(m.doc ? { doc: m.doc } : {}),
+      })),
       linkedFile: s.file,
+      ...(s.doc ? { doc: s.doc } : {}),
     },
   }));
 

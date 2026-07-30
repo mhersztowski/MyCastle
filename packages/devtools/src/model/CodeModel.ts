@@ -16,6 +16,32 @@ export const VISIBILITY_SIGIL: Record<Visibility, string> = {
 
 export interface CodeParam { name: string; type?: string }
 
+/**
+ * Dokumentacja w standardzie TSDoc/JSDoc, wyciągnięta z kodu i przenoszona do UML.
+ *
+ * Trzymamy ją w rozbitej formie (osobno opis, parametry, zwracana wartość), a nie
+ * jako surowy komentarz — dzięki temu edytor UML może pokazać opis argumentu przy
+ * argumencie, a generator kodu odtworzyć komentarz w tym samym kształcie.
+ */
+export interface DocMeta {
+  /** Pierwszy akapit — zdanie opisujące element. */
+  summary?: string;
+  /** Dalsza część opisu (`@remarks` albo kolejne akapity). */
+  remarks?: string;
+  /** Opisy parametrów po nazwie (`@param nazwa opis`). */
+  params?: Record<string, string>;
+  /** Opis zwracanej wartości (`@returns`). */
+  returns?: string;
+  /** Przykłady użycia (`@example`) — każdy jako osobny wpis. */
+  examples?: string[];
+  /** Treść `@deprecated` (pusty string = oznaczone bez uzasadnienia). */
+  deprecated?: string;
+  /** Odnośniki `@see`. */
+  see?: string[];
+  /** Znaczniki bez treści, np. `internal`, `experimental`. */
+  tags?: string[];
+}
+
 export interface CodeMember {
   /** Stable within a symbol — matched across re-parses for diffing. */
   id: string;
@@ -28,6 +54,10 @@ export interface CodeMember {
   params?: CodeParam[];
   isStatic?: boolean;
   isAbstract?: boolean;
+  /** Metoda `async` — na diagramie dostaje kategorię „async". */
+  isAsync?: boolean;
+  /** Dokumentacja TSDoc tego członka (opis, `@param`, `@returns`, …). */
+  doc?: DocMeta;
   /** Pre-rendered UML line, e.g. `+ getId(): string`. */
   text: string;
 }
@@ -41,6 +71,8 @@ export interface CodeSymbol {
   file: string;
   language: Language;
   isAbstract?: boolean;
+  /** Dokumentacja TSDoc klasy/interfejsu/modułu. */
+  doc?: DocMeta;
   members: CodeMember[];
   /** Raw base-type names (resolved to relations by resolveRelations). */
   extends: string[];

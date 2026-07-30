@@ -10,13 +10,40 @@ export type RelType =
   | 'association' | 'directed' | 'aggregation' | 'composition'
   | 'generalization' | 'realization' | 'dependency';
 
-export interface UmlMember { id: string; kind: MemberKind; text: string }
+export interface UmlMember {
+  id: string;
+  kind: MemberKind;
+  text: string;
+  /** Dokumentacja TSDoc (opis, `@param`, `@returns`, przykłady) — z kodu albo ręczna. */
+  doc?: UmlDoc;
+  /** Znacznik grupujący (np. `async`, `optional`) — kolor kropki i filtr w edytorze. */
+  category?: string;
+}
+
+/**
+ * Metadane dokumentacji w standardzie TSDoc, przypisane do elementu diagramu.
+ * Kształt zgodny z `DocMeta` z modelu kodu, żeby przenoszenie kod ⇄ UML było
+ * kopiowaniem, a nie tłumaczeniem.
+ */
+export interface UmlDoc {
+  summary?: string;
+  remarks?: string;
+  /** Opisy argumentów po nazwie. */
+  params?: Record<string, string>;
+  returns?: string;
+  examples?: string[];
+  deprecated?: string;
+  see?: string[];
+  tags?: string[];
+}
 
 export interface UmlNodeData {
   kind: UmlKind;
   name: string;
   members: UmlMember[];
   linkedFile?: string;
+  /** Dokumentacja TSDoc klasy/interfejsu/modułu. */
+  doc?: UmlDoc;
 }
 
 export interface UmlNode {

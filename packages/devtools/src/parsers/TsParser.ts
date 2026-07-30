@@ -4,7 +4,7 @@
  * (ts.createSourceFile) which is enough to extract structure cheaply.
  */
 import ts from 'typescript';
-import { CodeMember, CodeParam, CodeSymbol, Language, Visibility } from '../model/CodeModel.js';
+import { CodeMember, CodeParam, CodeSymbol, DocMeta, Language, Visibility } from '../model/CodeModel.js';
 import { memberId, symbolId } from '../model/ids.js';
 import { renderMember } from '../model/render.js';
 import { LanguageParser } from './types.js';
@@ -19,6 +19,86 @@ function visibilityOf(mods: readonly ts.ModifierLike[] | undefined): Visibility 
   return 'public';
 }
 const hasMod = (mods: readonly ts.ModifierLike[] | undefined, k: ts.SyntaxKind) => !!mods?.some((m) => m.kind === k);
+
+/**
+ * Wyciąga dokumentację TSDoc/JSDoc z deklaracji.
+ *
+ * Czytamy z drzewa (`node.jsDoc`), a nie z surowego tekstu komentarza — dzięki
+ * temu dostajemy rozbite znaczniki (`@param`, `@returns`) bez własnego parsera
+ * i bez wrażliwości na formatowanie gwiazdek. `undefined`, gdy element nie ma
+ * komentarza — pusty obiekt tylko zaśmiecałby zapisany projekt UML.
+ */
+function docOf(node: ts.Node): DocMeta | undefined {
+  const blocks = (node as ts.Node & { jsDoc?: ts.JSDoc[] }).jsDoc;
+  if (!blocks?.length) return undefined;
+
+  const doc: DocMeta = {};
+  const paragraphs: string[] = [];
+  const examples: string[] = [];
+  const see: string[] = [];
+  const tags: string[] = [];
+
+  const textOf = (comment: string | ts.NodeArray<ts.JSDocComment> | undefined): string => {
+    if (!comment) return '';
+    if (typeof comment === 'string') return comment.trim();
+    return comment.map((c) => c.text ?? '').join('').trim();
+  };
+
+  for (const block of blocks) {
+    const body = textOf(block.comment);
+    if (body) paragraphs.push(body);
+
+    for (const tag of block.tags ?? []) {
+      const name = tag.tagName.text;
+      const value = textOf(tag.comment);
+      switch (name) {
+        case 'param': {
+          const paramName = (tag as ts.JSDocParameterTag).name?.getText();
+          if (paramName) {
+            doc.params = { ...doc.params, [paramName]: value };
+          }
+          break;
+        }
+        case 'returns': case 'return':
+          if (value) doc.returns = value;
+          break;
+        case 'remarks':
+          doc.remarks = doc.remarks ? `${doc.remarks}\n\n${value}` : value;
+          break;
+        case 'example':
+          examples.push(value);
+          break;
+        case 'see': {
+          // `@see https://x` TypeScript rozbija na name=`https` i comment=`://x`
+          // (traktuje początek jako referencję do symbolu) — trzeba je skleić,
+          // inaczej z adresu zostaje `://x`.
+          const ref = (tag as ts.JSDocSeeTag).name?.getText() ?? '';
+          see.push(`${ref}${value}`.trim());
+          break;
+        }
+        case 'deprecated':
+          doc.deprecated = value;
+          break;
+        default:
+          tags.push(value ? `${name} ${value}` : name);
+      }
+    }
+  }
+
+  // Pierwszy akapit to streszczenie, resztę dokładamy do `remarks` — taki podział
+  // pozwala UI pokazać jedno zdanie w liście i całość w szczegółach.
+  if (paragraphs.length) {
+    const [first, ...rest] = paragraphs.join('\n\n').split(/\n\s*\n/);
+    doc.summary = first.trim();
+    const tail = rest.join('\n\n').trim();
+    if (tail) doc.remarks = doc.remarks ? `${tail}\n\n${doc.remarks}` : tail;
+  }
+  if (examples.length) doc.examples = examples;
+  if (see.length) doc.see = see.filter(Boolean);
+  if (tags.length) doc.tags = tags;
+
+  return Object.keys(doc).length ? doc : undefined;
+}
 
 function typeText(node: ts.TypeNode | undefined): string | undefined {
   return node ? node.getText().replace(/\s+/g, ' ').trim() : undefined;
@@ -59,6 +139,7 @@ export class TsParser implements LanguageParser {
         symbols.push({
           id: symbolId(name), name, kind: 'class', file, language,
           isAbstract: hasMod(node.modifiers, ts.SyntaxKind.AbstractKeyword),
+          doc: docOf(node),
           extends: ext, implements: impl,
           members: this.classMembers(name, node.members),
         });
@@ -68,6 +149,7 @@ export class TsParser implements LanguageParser {
         for (const h of node.heritageClauses ?? []) for (const t of h.types) ext.push(t.expression.getText());
         symbols.push({
           id: symbolId(name), name, kind: 'interface', file, language,
+          doc: docOf(node),
           extends: ext, implements: [],
           members: this.interfaceMembers(name, node.members),
         });
@@ -78,7 +160,7 @@ export class TsParser implements LanguageParser {
           const base = { kind: 'field' as const, name: mn, visibility: 'public' as Visibility };
           return { id: memberId(name, 'field', mn) + `#${i}`, ...base, text: mn };
         });
-        symbols.push({ id: symbolId(name), name, kind: 'enum', file, language, extends: [], implements: [], members });
+        symbols.push({ id: symbolId(name), name, kind: 'enum', file, language, doc: docOf(node), extends: [], implements: [], members });
       }
       ts.forEachChild(node, visit);
     };
@@ -100,16 +182,16 @@ export class TsParser implements LanguageParser {
       const isExported = hasMod((stmt as ts.HasModifiers).modifiers, ts.SyntaxKind.ExportKeyword);
       const vis: Visibility = isExported ? 'public' : 'package';
       if (ts.isFunctionDeclaration(stmt) && stmt.name) {
-        pushMod({ kind: 'method', name: stmt.name.text, visibility: vis, type: typeText(stmt.type), params: params(stmt) });
+        pushMod({ kind: 'method', name: stmt.name.text, visibility: vis, type: typeText(stmt.type), params: params(stmt), isAsync: hasMod(stmt.modifiers, ts.SyntaxKind.AsyncKeyword), doc: docOf(stmt) });
       } else if (ts.isVariableStatement(stmt)) {
         for (const decl of stmt.declarationList.declarations) {
           const name = decl.name.getText();
           if (name && !name.startsWith('{') && !name.startsWith('[')) {
-            pushMod({ kind: 'field', name, visibility: vis, type: typeText(decl.type) });
+            pushMod({ kind: 'field', name, visibility: vis, type: typeText(decl.type), doc: docOf(stmt) });
           }
         }
       } else if (ts.isTypeAliasDeclaration(stmt)) {
-        pushMod({ kind: 'field', name: stmt.name.text, visibility: vis, type: stmt.type.getText().replace(/\s+/g, ' ').slice(0, 60) });
+        pushMod({ kind: 'field', name: stmt.name.text, visibility: vis, type: stmt.type.getText().replace(/\s+/g, ' ').slice(0, 60), doc: docOf(stmt) });
       }
     }
 
@@ -131,13 +213,13 @@ export class TsParser implements LanguageParser {
     };
     for (const m of members) {
       if (ts.isPropertyDeclaration(m)) {
-        push({ kind: 'field', name: m.name.getText(), visibility: visibilityOf(m.modifiers), type: typeText(m.type), isStatic: hasMod(m.modifiers, ts.SyntaxKind.StaticKeyword) });
+        push({ kind: 'field', name: m.name.getText(), visibility: visibilityOf(m.modifiers), type: typeText(m.type), isStatic: hasMod(m.modifiers, ts.SyntaxKind.StaticKeyword), doc: docOf(m) });
       } else if (ts.isMethodDeclaration(m)) {
-        push({ kind: 'method', name: m.name.getText(), visibility: visibilityOf(m.modifiers), type: typeText(m.type), params: params(m), isStatic: hasMod(m.modifiers, ts.SyntaxKind.StaticKeyword), isAbstract: hasMod(m.modifiers, ts.SyntaxKind.AbstractKeyword) });
+        push({ kind: 'method', name: m.name.getText(), visibility: visibilityOf(m.modifiers), type: typeText(m.type), params: params(m), isStatic: hasMod(m.modifiers, ts.SyntaxKind.StaticKeyword), isAbstract: hasMod(m.modifiers, ts.SyntaxKind.AbstractKeyword), isAsync: hasMod(m.modifiers, ts.SyntaxKind.AsyncKeyword), doc: docOf(m) });
       } else if (ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
-        push({ kind: 'method', name: m.name.getText(), visibility: visibilityOf(m.modifiers), type: typeText(m.type), params: params(m) });
+        push({ kind: 'method', name: m.name.getText(), visibility: visibilityOf(m.modifiers), type: typeText(m.type), params: params(m), doc: docOf(m) });
       } else if (ts.isConstructorDeclaration(m)) {
-        push({ kind: 'method', name: 'constructor', visibility: 'public', params: params(m) });
+        push({ kind: 'method', name: 'constructor', visibility: 'public', params: params(m), doc: docOf(m) });
         // constructor parameter properties become fields
         for (const p of m.parameters) {
           if (p.modifiers?.length) push({ kind: 'field', name: p.name.getText(), visibility: visibilityOf(p.modifiers), type: typeText(p.type) });
@@ -157,8 +239,8 @@ export class TsParser implements LanguageParser {
       out.push({ ...base, id, text: renderMember(base) });
     };
     for (const m of members) {
-      if (ts.isPropertySignature(m)) push({ kind: 'field', name: m.name.getText(), visibility: 'public', type: typeText(m.type) });
-      else if (ts.isMethodSignature(m)) push({ kind: 'method', name: m.name.getText(), visibility: 'public', type: typeText(m.type), params: params(m) });
+      if (ts.isPropertySignature(m)) push({ kind: 'field', name: m.name.getText(), visibility: 'public', type: typeText(m.type), doc: docOf(m) });
+      else if (ts.isMethodSignature(m)) push({ kind: 'method', name: m.name.getText(), visibility: 'public', type: typeText(m.type), params: params(m), doc: docOf(m) });
     }
     return out;
   }
