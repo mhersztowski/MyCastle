@@ -1,5 +1,6 @@
 import TurndownService from 'turndown';
 import Showdown from 'showdown';
+import { extractCallouts, calloutToMarkdown, isCalloutVariant, type CalloutVariant } from './callout';
 
 const showdownConverter = new Showdown.Converter({
   tables: true,
@@ -798,6 +799,29 @@ function preprocessColumnContent(html: string): string {
   return result;
 }
 
+// Callout rule — blok wyróżnienia zapisujemy jako alert GitHuba (`> [!NOTE]`).
+// Musi być PRZED regułą blockquote turndown-a, bo inaczej straciłby typ i stał
+// się zwykłym cytatem.
+turndownService.addRule('callout', {
+  filter: (node) => {
+    const el = node as HTMLElement;
+    if (el.hasAttribute?.('data-callout')) return true;
+    // NodeView opakowuje blok dodatkowym <div data-node-view-wrapper>.
+    if (el.getAttribute?.('data-node-view-wrapper') !== null && el.querySelector?.('[data-callout]')) return true;
+    return false;
+  },
+  replacement: (_content, node) => {
+    const el = node as HTMLElement;
+    const box = el.hasAttribute('data-callout') ? el : (el.querySelector('[data-callout]') as HTMLElement);
+    if (!box) return '';
+    const raw = (box.getAttribute('data-callout') || 'note').toLowerCase();
+    const variant: CalloutVariant = isCalloutVariant(raw) ? raw : 'note';
+    // Treść przez turndown osobno — w środku bywają listy, kod i tabele.
+    const body = turndownService.turndown(box.innerHTML).trim();
+    return `\n\n${calloutToMarkdown(variant, body)}\n\n`;
+  },
+});
+
 // Column layout rule - handles the column layout container
 // Save content as markdown for better portability and viewer compatibility
 turndownService.addRule('columnLayout', {
@@ -1495,8 +1519,12 @@ export function markdownToHtml(markdown: string): string {
     },
   );
 
+  // Callouty (`> [!NOTE]`) wyjmujemy przed showdownem — inaczej zrobiłby z nich
+  // zwykły <blockquote> i typ wyróżnienia by przepadł.
+  const { result: markdownWithoutCallouts, callouts } = extractCallouts(markdownWithBlockIds);
+
   // First, protect plugin script blocks from showdown processing
-  const pluginScriptDataStr = escapePluginScriptsForHtml(markdownWithBlockIds);
+  const pluginScriptDataStr = escapePluginScriptsForHtml(markdownWithoutCallouts);
   const { result: markdownWithoutPluginScripts, scripts: pluginScripts } = JSON.parse(pluginScriptDataStr);
 
   // Protect event blocks (```event {…json…}``` code fences) from showdown
@@ -1661,6 +1689,15 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore plugin script blocks
   html = restorePluginScriptsFromHtml(html, pluginScripts);
+
+  // Callouty: treść przechodzi przez showdown osobno, żeby listy i kod w środku
+  // zamieniły się w HTML tak samo jak w reszcie dokumentu.
+  callouts.forEach((c, index) => {
+    const inner = c.body.trim() ? showdownConverter.makeHtml(c.body) : '<p></p>';
+    const tag = `<div data-callout="${c.variant}">${inner}</div>`;
+    const placeholder = `%%CALLOUT${index}%%`;
+    html = html.replace(`<p>${placeholder}</p>`, tag).split(placeholder).join(tag);
+  });
 
   html = html.replace(
     /<li>\s*\[([ xX])\]\s*/g,

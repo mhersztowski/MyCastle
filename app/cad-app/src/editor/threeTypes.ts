@@ -1,77 +1,63 @@
 /**
- * threeTypes.ts — podpowiedzi Three.js i środowiska skryptu sceny w edytorze kodu.
+ * threeTypes.ts — deklaracje dostarczane edytorowi kodu w cad-app.
  *
- * Dwa niezależne kawałki:
- *  1. **Deklaracje `three`** — pobierane z `/types/three.json` (paczka robiona przez
- *     `scripts/gen-three-types.mjs`) i rejestrowane jako modele Monaco pod
- *     `file:///node_modules/@types/three/…`. Wbudowany plugin TypeScript IntelliSense
- *     ściąga z CDN tylko `index.d.ts`, a ten w @types/three zawiera samo
- *     `export * from "./src/Three.js"` — bez reszty drzewa nie ma ani jednej podpowiedzi.
- *  2. **Globalne API skryptu sceny** (`scene`, `THREE`) — bo „Run" w Scene 3D wstrzykuje
- *     je jako parametry funkcji, więc w pliku nie ma żadnego importu, z którego
+ * Dwa zestawy:
+ *  1. **`three`** — z paczki `/types/three.json` (`scripts/gen-three-types.mjs`).
+ *     Wbudowany plugin IntelliSense ściąga z CDN tylko `index.d.ts`, a ten w
+ *     @types/three zawiera samo `export * from "./src/Three.js"` — bez reszty
+ *     drzewa nie ma ani jednej podpowiedzi.
+ *  2. **globale skryptu sceny** (`scene`, `THREE`) — „Run" w Scene 3D wstrzykuje
+ *     je jako parametry funkcji, więc w pliku nie ma importu, z którego
  *     TypeScript mógłby je wywnioskować.
+ *
+ * Wszystko wraca JEDNĄ mapą do `TextEditorWorkspace.tsPreloadDts`, czyli trafia
+ * do magazynu deklaracji pluginu TS. Wcześniejsza wersja rejestrowała 573
+ * osobne modele Monaco i to zabijało cały IntelliSense: każdy `createModel`
+ * wywołuje synchronizację z workerem TypeScriptu, więc worker w nieskończoność
+ * nadrabiał zaległości zamiast odpowiadać na zapytania o podpowiedzi.
  */
-import * as monaco from 'monaco-editor';
 import {
-  THREE_TYPES_URL, TYPES_ROOT, SCENE_SCRIPT_ENV_DTS, normalizeDtsImports, isUsableThreeBundle,
+  THREE_TYPES_URL, SCENE_SCRIPT_ENV_DTS, buildThreeModels, isUsableThreeBundle,
   type ThreeTypesBundle,
 } from './threeTypesData';
 
 export {
-  THREE_TYPES_URL, SCENE_SCRIPT_ENV_DTS, normalizeDtsImports, isUsableThreeBundle,
-  type ThreeTypesBundle,
+  THREE_TYPES_URL, SCENE_SCRIPT_ENV_DTS, normalizeDtsImports, isUsableThreeBundle, buildThreeModels,
+  TYPES_ROOT, type ThreeTypesBundle,
 } from './threeTypesData';
 
-let threeTypesPromise: Promise<boolean> | null = null;
-
 /**
- * Rejestruje deklaracje `three` w Monaco. Wykonuje się raz na sesję — kolejne
- * wywołania dostają tę samą obietnicę (edytor woła to przy każdym otwarciu pliku TS).
+ * Deklaracje do wstrzyknięcia w edytor: `three` + środowisko skryptu sceny.
+ *
+ * Brak paczki nie jest błędem krytycznym — edytor działa dalej, tracimy tylko
+ * podpowiedzi dla Three.js.
  */
-export function ensureThreeTypes(): Promise<boolean> {
-  threeTypesPromise ??= loadThreeTypes();
-  return threeTypesPromise;
-}
+export async function loadEditorDts(): Promise<Record<string, string>> {
+  const files: Record<string, string> = {
+    'file:///scene-script-env.d.ts': SCENE_SCRIPT_ENV_DTS,
+  };
 
-async function loadThreeTypes(): Promise<boolean> {
   let bundle: ThreeTypesBundle;
   try {
     const res = await fetch(THREE_TYPES_URL);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     bundle = await res.json() as ThreeTypesBundle;
   } catch (e) {
-    // Brak paczki nie może psuć edytora — tracimy tylko podpowiedzi.
-    console.warn(`[threeTypes] Nie udało się pobrać ${THREE_TYPES_URL} (${(e as Error).message}). ` +
-      'Uruchom `node scripts/gen-three-types.mjs` w app/cad-app.');
-    return false;
+    console.warn(`[threeTypes] Nie udało się pobrać ${THREE_TYPES_URL} (${(e as Error).message}). `
+      + 'Uruchom `pnpm --filter cad-app gen:three-types`.');
+    return files;
   }
+
   if (!isUsableThreeBundle(bundle)) {
     console.warn('[threeTypes] Paczka deklaracji three jest niekompletna — pomijam.');
-    return false;
+    return files;
   }
 
-  for (const [rel, content] of Object.entries(bundle)) {
-    const uri = monaco.Uri.parse(`${TYPES_ROOT}/${rel}`);
-    if (monaco.editor.getModel(uri)) continue;
-    const language = rel.endsWith('.json') ? 'json' : 'typescript';
-    monaco.editor.createModel(
-      language === 'json' ? content : normalizeDtsImports(content),
-      language,
-      uri,
-    );
+  for (const model of buildThreeModels(bundle)) {
+    // Plugin TS wysyła do workera wszystko, co dostanie; `package.json` też jest
+    // czytany przez resolver, więc wchodzi do tej samej mapy.
+    files[model.uri] = model.content;
   }
-  console.log(`[threeTypes] Zarejestrowano ${Object.keys(bundle).length} plików deklaracji three.`);
-  return true;
-}
-
-let envRegistered = false;
-
-/** Rejestruje deklaracje globali skryptu sceny (raz na sesję). */
-export function ensureSceneScriptEnv(): void {
-  if (envRegistered) return;
-  envRegistered = true;
-  monaco.languages.typescript.typescriptDefaults.addExtraLib(
-    SCENE_SCRIPT_ENV_DTS,
-    'file:///scene-script-env.d.ts',
-  );
+  console.log(`[threeTypes] Przygotowano ${Object.keys(files).length} plików deklaracji (three + scene).`);
+  return files;
 }

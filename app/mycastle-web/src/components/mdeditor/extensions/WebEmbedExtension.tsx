@@ -24,6 +24,8 @@ import LanguageIcon from '@mui/icons-material/Language';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import BlockIcon from '@mui/icons-material/Block';
+import { embedDecision, type EmbedCheckResult } from '../utils/embedFraming';
 import { useAuth } from '../../../modules/auth/AuthContext';
 
 type WebEmbedMode = 'url' | 'lit';
@@ -210,6 +212,24 @@ function WebEmbedNodeView({ node, updateAttributes, editor }: NodeViewProps) {
     updateAttributes({ mode: m, value: v });
   }, [updateAttributes]);
 
+  // Czy adres w ogóle wolno pokazać w ramce. Serwisy z `X-Frame-Options` /
+  // CSP `frame-ancestors` (claude.ai, portale społecznościowe, banki) wyświetlą
+  // w ramce systemową stronę błędu przeglądarki — lepiej od razu dać kartę z
+  // linkiem. Nagłówki widać tylko z serwera, stąd zapytanie do backendu.
+  const [embedCheck, setEmbedCheck] = useState<EmbedCheckResult | null>(null);
+  useEffect(() => {
+    setEmbedCheck(null);
+    if (mode !== 'url' || !absUrl || !/^https?:/i.test(absUrl)) return;
+    let cancelled = false;
+    fetch(`/api/embed-check?url=${encodeURIComponent(absUrl)}`)
+      .then((r) => (r.ok ? r.json() as Promise<EmbedCheckResult> : { error: `HTTP ${r.status}` }))
+      .then((result) => { if (!cancelled) setEmbedCheck(result); })
+      .catch((e: unknown) => { if (!cancelled) setEmbedCheck({ error: (e as Error).message }); });
+    return () => { cancelled = true; };
+  }, [mode, absUrl]);
+
+  const decision = useMemo(() => embedDecision(absUrl, embedCheck), [absUrl, embedCheck]);
+
   return (
     <NodeViewWrapper>
       <Box contentEditable={false} sx={{
@@ -248,6 +268,35 @@ function WebEmbedNodeView({ node, updateAttributes, editor }: NodeViewProps) {
               sx={{ display: 'block', width: '100%', height, border: 'none', bgcolor: '#fff' }}
               title={label}
             />
+          ) : decision.mode === 'card' ? (
+            // Serwis zakazuje osadzania — ramka pokazałaby tylko systemowy błąd
+            // („net::ERR_BLOCKED_BY_RESPONSE"), więc dajemy kartę z linkiem.
+            <Box sx={{ px: 2, py: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <BlockIcon fontSize="small" color="warning" />
+                <Typography variant="body2" fontWeight={600}>
+                  {decision.title || 'Ta strona nie pozwala na osadzanie'}
+                </Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
+                {absUrl}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {decision.reason ?? 'Serwis blokuje wyświetlanie w ramce.'}
+                {' '}Otwórz ją w nowej karcie — treść pozostaje dostępna, tylko nie w tym dokumencie.
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                href={absUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{ alignSelf: 'flex-start', textTransform: 'none' }}
+              >
+                Otwórz w nowej karcie
+              </Button>
+            </Box>
           ) : (
             <Box component="iframe"
               src={value}

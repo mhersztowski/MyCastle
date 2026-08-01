@@ -5,6 +5,9 @@ import hljs from 'highlight.js';
 import Editor from 'react-simple-code-editor';
 import { useMqtt } from '../../../modules/mqttclient';
 import CodeFilePickerDialog, { langFromPath } from './CodeFilePickerDialog';
+import { blockBeforeCursor } from './selectBlockBefore';
+import type { Editor as TiptapEditor } from '@tiptap/core';
+import { DiagramBlockView } from './DiagramBlockView';
 
 /** Zdarzenie wysyłane przez MdEditor przy autosave — bloki z pliku zapisują wtedy swój plik. */
 export const MD_AUTOSAVE_EVENT = 'md:autosave';
@@ -28,7 +31,11 @@ const LANGS: { label: string; value: string }[] = [
   { label: 'Java', value: 'java' },
   { label: 'SQL', value: 'sql' },
   { label: 'Makefile', value: 'makefile' },
+  { label: 'Mermaid (diagram)', value: 'mermaid' },
 ];
+
+/** Języki, dla których blok dostaje przełącznik Code / View / Edit. */
+const DIAGRAM_LANGS = new Set(['mermaid']);
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
@@ -57,7 +64,7 @@ const preStyle: React.CSSProperties = {
   whiteSpace: 'pre', tabSize: 2, MozTabSize: 2, fontFamily: MONO,
 } as React.CSSProperties;
 
-const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes }) => {
+const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor, getPos }) => {
   const language: string = node.attrs.language || '';
   const externalSrc: string = node.attrs.externalSrc || '';
   const { readFile, writeFile } = useMqtt();
@@ -111,6 +118,23 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes }) => {
     }
   }, [draft, extCode, externalSrc, writeFile]);
 
+  /**
+   * Podmiana całej treści bloku (zapis z edytora graficznego).
+   *
+   * Idzie transakcją ProseMirror, a nie `insertContent`: treść bloku kodu jest
+   * czystym tekstem i musi nim zostać — `insertContent` rozbiłby wielolinijkowy
+   * diagram na osobne akapity.
+   */
+  const replaceBlockText = useCallback((next: string) => {
+    const pos = typeof getPos === 'function' ? getPos() : null;
+    if (pos == null) return;
+    const from = pos + 1;
+    const to = pos + node.nodeSize - 1;
+    const tr = editor.state.tr;
+    tr.replaceWith(from, to, next ? editor.schema.text(next) : []);
+    editor.view.dispatch(tr);
+  }, [editor, getPos, node]);
+
   const isExternal = !!externalSrc;
   const displayCode = isExternal ? extCode : node.textContent;
 
@@ -152,7 +176,29 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes }) => {
         )}
       </div>
 
-      {isExternal ? (
+      {DIAGRAM_LANGS.has(language) ? (
+        // Blok diagramu: pasek Code / View / Edit. Treść w trybie „Code" zostaje
+        // dokładnie taka jak dla zwykłego bloku, więc edycja tekstu działa jak dotąd.
+        <DiagramBlockView
+          code={displayCode}
+          language={language}
+          onChange={isExternal
+            ? (next) => { setExtCode(next); dirtyRef.current = true; }
+            : (next) => replaceBlockText(next)}
+        >
+          {() => (
+            isExternal ? (
+              <pre className={`hljs language-${language}`} style={preStyle} contentEditable={false} onDoubleClick={beginEdit}>
+                <code className={`hljs language-${language}`} dangerouslySetInnerHTML={{ __html: highlightCode(displayCode, language) }} />
+              </pre>
+            ) : (
+              <pre className="md-editor-code-block" style={preStyle}>
+                <NodeViewContent as={'code' as unknown as 'div'} className={`hljs language-${language}`} />
+              </pre>
+            )
+          )}
+        </DiagramBlockView>
+      ) : isExternal ? (
         editing ? (
           <div contentEditable={false} style={{ maxHeight: 460, overflow: 'auto' }}>
             <Editor
@@ -227,6 +273,23 @@ export function makeCodeBlockWithLang(lowlight: unknown) {
     },
     addNodeView() {
       return ReactNodeViewRenderer(CodeBlockView);
+    },
+    addKeyboardShortcuts() {
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...((this.parent?.() ?? {}) as any),
+        /**
+         * Backspace tuż pod blokiem: pierwszy raz zaznacza blok, drugi go
+         * usuwa. Domyślnie ProseMirror wciągał kursor do środka bloku i
+         * wyglądało to, jakby klawisz nie działał — bloku z własnym widokiem
+         * nie dało się wtedy skasować klawiaturą.
+         */
+        Backspace: ({ editor }: { editor: TiptapEditor }) => {
+          const target = blockBeforeCursor(editor.state, [this.name]);
+          if (!target) return false;
+          return editor.commands.setNodeSelection(target.pos);
+        },
+      };
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }).configure({ lowlight, HTMLAttributes: { class: 'md-editor-code-block' } } as any);

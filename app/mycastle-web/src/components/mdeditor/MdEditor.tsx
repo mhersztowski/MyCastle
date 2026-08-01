@@ -100,6 +100,7 @@ import { YouTubeEmbed } from './extensions/YouTubeExtension';
 import { makeCodeBlockWithLang } from './extensions/CodeBlockWithLang';
 import { ComponentEmbed } from './extensions/ComponentEmbedExtension';
 import { ColumnLayout, Column } from './extensions/ColumnExtension';
+import { Callout } from './extensions/CalloutExtension';
 import { UIFormEmbed } from './extensions/UIFormExtension';
 import { FormEngineEmbed } from './extensions/FormEngineExtension';
 import { LineNavigation } from './extensions/LineNavigationExtension';
@@ -450,6 +451,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
       YouTubeEmbed,
       ColumnLayout,
       Column,
+      Callout,
       UIFormEmbed,
       FormEngineEmbed,
       AutomateFlowEmbed,

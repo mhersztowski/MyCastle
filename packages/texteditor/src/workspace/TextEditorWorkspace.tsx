@@ -28,6 +28,13 @@ export interface TextEditorWorkspaceProps {
   defaultMountPresets?: VfsMountPreset[];
   /** Extra plugins activated on top of the built-in set (e.g. app-specific editors). */
   extraPlugins?: IPlugin[];
+  /**
+   * Dodatkowe deklaracje `.d.ts` dla IntelliSense TypeScriptu — mapa
+   * `ścieżka → treść`, wstrzykiwana raz przy starcie (np. pełne `@types/three`
+   * w cad-app). Musi iść przez plugin TS, bo osobne `setExtraLibs` po stronie
+   * aplikacji nadpisałoby jego własne deklaracje.
+   */
+  tsPreloadDts?: () => Promise<Record<string, string>>;
   /** AI agent panel. */
   enableAgent?: boolean;
   defaultAgentConfig?: Partial<AgentConfig>;
@@ -73,6 +80,7 @@ export function TextEditorWorkspace({
   providerRegistry,
   defaultMountPresets,
   extraPlugins,
+  tsPreloadDts,
   enableAgent = false,
   defaultAgentConfig,
   agentClaudeMd,
@@ -86,7 +94,7 @@ export function TextEditorWorkspace({
   initialPath,
 }: TextEditorWorkspaceProps) {
   // Plugins built from the editor's filesystem provider.
-  const tsPlugin = useMemo(() => createTypeScriptPlugin(provider), [provider]);
+  const tsPlugin = useMemo(() => createTypeScriptPlugin(provider, { preloadDts: tsPreloadDts }), [provider, tsPreloadDts]);
   const pyPlugin = useMemo(() => createPythonPlugin(provider), [provider]);
   const cppPlugin = useMemo(() => createCppPlugin(provider), [provider]);
   const mjdPlugin = useMemo(() => createMjdEditorPlugin(provider), [provider]);

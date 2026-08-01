@@ -46,6 +46,8 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import LinkIcon from '@mui/icons-material/Link';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import EventIcon from '@mui/icons-material/Event';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import { CALLOUT_VARIANTS, type CalloutVariant } from '../utils/callout';
 import { pluginRegistry } from '../../../modules/web-plugins';
 
 interface CommandItem {
@@ -127,6 +129,46 @@ const commands: CommandItem[] = [
     icon: <FormatQuoteIcon />,
     command: ({ editor, range }) => {
       editor.chain().focus().deleteRange(range).toggleBlockquote().run();
+    },
+  },
+  // Callout (wyróżnienie jak w Notion) — jeden wpis na wariant, żeby dało się
+  // wstawić właściwy typ bez dodatkowego klikania w menu bloku.
+  ...(Object.keys(CALLOUT_VARIANTS) as CalloutVariant[]).map((variant) => ({
+    title: `Callout: ${CALLOUT_VARIANTS[variant].label}`,
+    description: `Wyróżniony blok ${CALLOUT_VARIANTS[variant].emoji} (markdown: > [!${variant.toUpperCase()}])`,
+    icon: <span style={{ fontSize: 18 }}>{CALLOUT_VARIANTS[variant].emoji}</span>,
+    command: ({ editor, range }: { editor: any; range: any }) => {
+      editor.chain().focus().deleteRange(range).setCallout(variant).run();
+    },
+  })),
+  {
+    title: 'Diagram (Mermaid)',
+    description: 'Blok diagramu z przełącznikiem Code / View / Edit',
+    icon: <AccountTreeIcon />,
+    command: ({ editor, range }) => {
+      // Zaczynamy od minimalnego, poprawnego diagramu — pusty blok mermaid
+      // renderuje się błędem, co wygląda jak usterka edytora.
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: 'mermaid' },
+          content: [{ type: 'text', text: 'flowchart TD\n  A[Start] --> B[Koniec]' }],
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Diagram stanów (Mermaid)',
+    description: 'stateDiagram-v2 z przełącznikiem Code / View / Edit',
+    icon: <AccountTreeIcon sx={{ transform: 'rotate(90deg)' }} />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: 'mermaid' },
+          content: [{ type: 'text', text: 'stateDiagram-v2\n  [*] --> Idle\n  Idle --> Praca: start\n  Praca --> [*]' }],
+        })
+        .run();
     },
   },
   {

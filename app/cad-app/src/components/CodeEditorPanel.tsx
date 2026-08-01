@@ -3,7 +3,7 @@ import { RemoteFS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
 import { TextEditorWorkspace, SubpathFS } from '@mhersztowski/texteditor';
 import { getCurrentUserId } from '../vfs/cadProjectApi';
-import { createSceneScriptTypesPlugin } from '../editor/SceneScriptTypesPlugin';
+import { loadEditorDts } from '../editor/threeTypes';
 import '../editor/monacoWorkers';
 
 /**
@@ -28,14 +28,15 @@ export function CodeEditorPanel() {
     provider.mkdir?.('/').catch(() => {});
   }, [provider]);
 
-  // Podpowiedzi Three.js + globale skryptu sceny (`scene`, `THREE`) — patrz
-  // SceneScriptTypesPlugin: wbudowany plugin TS nie ma skąd wziąć typów three.
-  const extraPlugins = useMemo(() => [createSceneScriptTypesPlugin()], []);
+  // Podpowiedzi Three.js + globale skryptu sceny (`scene`, `THREE`). Idą przez
+  // plugin TS, bo tylko on składa wszystkie deklaracje w jeden wsad — własne
+  // `setExtraLibs`/`createModel` po stronie aplikacji rozstraja worker.
+  const preloadDts = useMemo(() => loadEditorDts, []);
 
   return (
     <TextEditorWorkspace
       provider={provider}
-      extraPlugins={extraPlugins}
+      tsPreloadDts={preloadDts}
       height="100%"
       projectDeps={{
         // Same-origin: Vite proxies /api/* → cad-backend (port 1897 internal).

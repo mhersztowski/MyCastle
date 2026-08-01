@@ -46,6 +46,8 @@ import PostAddIcon from '@mui/icons-material/PostAdd';
 import CollectionsIcon from '@mui/icons-material/Collections';
 import MapIcon from '@mui/icons-material/Map';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
+import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
+import { CALLOUT_VARIANTS, type CalloutVariant } from './utils/callout';
 import DataObjectIcon from '@mui/icons-material/DataObject';
 import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
@@ -149,6 +151,8 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
   const [spellHelpOpen, setSpellHelpOpen] = useState(false);
   const browser = useMemo(() => detectBrowser(), []);
   const [insertMenuAnchor, setInsertMenuAnchor] = useState<null | HTMLElement>(null);
+  // Callout ma pięć wariantów, więc przycisk otwiera listę zamiast wstawiać na ślepo.
+  const [calloutMenuAnchor, setCalloutMenuAnchor] = useState<null | HTMLElement>(null);
   const insertMenuOpen = Boolean(insertMenuAnchor);
 
   // "Paste Markdown" dialog — fallback when navigator.clipboard.readText() is
@@ -500,6 +504,37 @@ const MdEditorToolbar: React.FC<MdEditorToolbarProps> = ({
           </IconButton>
         </Tooltip>
       )}
+      <Tooltip title="Callout — wyróżniony blok (jak w Notion)">
+        <IconButton
+          size="small"
+          onClick={(e) => setCalloutMenuAnchor(e.currentTarget)}
+          color={editor?.isActive('callout') ? 'primary' : 'default'}
+        >
+          <LightbulbOutlinedIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Menu
+        anchorEl={calloutMenuAnchor}
+        open={calloutMenuAnchor !== null}
+        onClose={() => setCalloutMenuAnchor(null)}
+      >
+        {(Object.keys(CALLOUT_VARIANTS) as CalloutVariant[]).map((variant) => (
+          <MenuItem
+            key={variant}
+            selected={editor?.isActive('callout', { variant })}
+            onClick={() => {
+              // `toggle` — powtórne kliknięcie tego samego typu zdejmuje wyróżnienie.
+              editor?.chain().focus().toggleCallout(variant).run();
+              setCalloutMenuAnchor(null);
+            }}
+          >
+            <ListItemIcon sx={{ minWidth: 32, fontSize: 18 }}>{CALLOUT_VARIANTS[variant].emoji}</ListItemIcon>
+            <ListItemText primaryTypographyProps={{ fontSize: 14 }}>
+              {CALLOUT_VARIANTS[variant].label}
+            </ListItemText>
+          </MenuItem>
+        ))}
+      </Menu>
       {onToggleGroupMode && (
         <Tooltip title="Operacje grupowe na blokach (zaznacz i wykonaj Cut/Copy/Delete)">
           <IconButton

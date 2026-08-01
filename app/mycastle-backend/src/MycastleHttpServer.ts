@@ -1,4 +1,5 @@
 import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi, ArduinoWasmBuilder } from '@mhersztowski/core-backend';
+import { checkEmbeddable } from './modules/embed/embedCheck.js';
 import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, PicoSdkService, IotProvider, IotDeviceInfo } from '@mhersztowski/core-backend';
 import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
@@ -619,6 +620,21 @@ export class MycastleHttpServer extends HttpUploadServer {
       const wProjectDirName = await this.resolveProjectName(wUserName, wProjectName);
       if (!wProjectDirName) { this.sendJsonResponse(res, 404, { error: 'Project not found' }); return; }
       await this.handlePygameWebBuildFile(res, wUserName, wProjectDirName, wSketchName, wFilePath);
+      return;
+    }
+
+    // Embed check — czy adres pozwala pokazać się w <iframe> bloku „strona"
+    // w edytorze markdown. Publiczny (żaden zasób użytkownika nie jest ujawniany),
+    // ale wyłącznie dla adresów publicznych — patrz zabezpieczenie SSRF w module.
+    // GET /api/embed-check?url=https://… → { embeddable, reason?, title?, status? }
+    if (apiPath === '/embed-check' && method === 'GET') {
+      const target = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`).searchParams.get('url');
+      if (!target) {
+        this.sendJsonResponse(res, 400, { error: 'url required' });
+        return;
+      }
+      const result = await checkEmbeddable(target);
+      this.sendJsonResponse(res, 200, result);
       return;
     }
 

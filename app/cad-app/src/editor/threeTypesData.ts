@@ -8,7 +8,16 @@
 /** Adres paczki deklaracji (public/ cad-app → serwowane też z cad-backend). */
 export const THREE_TYPES_URL = '/types/three.json';
 
-export const TYPES_ROOT = 'file:///node_modules/@types/three';
+/**
+ * Katalog, pod którym rejestrujemy deklaracje — **pakiet `three`**, nie `@types/three`.
+ *
+ * TypeScript przy resolucji node bierze `node_modules/three/package.json` → pole
+ * `types` PRZED katalogiem `@types`. To ważne, bo wbudowany plugin IntelliSense
+ * mógł już wcześniej zarejestrować z CDN samotny `@types/three/index.d.ts`
+ * (`export * from "./src/Three.js"` i nic więcej). Taki wpis „wygrywał" resolucję
+ * i `import * as THREE from 'three'` kończył się modułem bez ani jednego symbolu.
+ */
+export const TYPES_ROOT = 'file:///node_modules/three';
 
 /**
  * Zdejmuje `.js` z relatywnych importów w plikach `.d.ts`.
@@ -28,6 +37,45 @@ export type ThreeTypesBundle = Record<string, string>;
 export function isUsableThreeBundle(bundle: ThreeTypesBundle): boolean {
   return typeof bundle['index.d.ts'] === 'string'
     && Object.keys(bundle).some((k) => k.startsWith('src/') && k.endsWith('.d.ts'));
+}
+
+export interface ThreeTypeModel {
+  uri: string;
+  language: 'typescript' | 'json';
+  content: string;
+}
+
+/**
+ * Zamienia paczkę deklaracji na listę modeli do zarejestrowania w Monaco.
+ *
+ * `package.json` piszemy własny: oryginalny (z `@types/three`) nazywa się
+ * `@types/three` i nie ma pola `types`, więc resolver szukałby wejścia po omacku.
+ * Minimalny plik z `"name": "three"` i `"types": "index.d.ts"` mówi wprost, czym
+ * jest ten katalog.
+ */
+export function buildThreeModels(bundle: ThreeTypesBundle): ThreeTypeModel[] {
+  const models: ThreeTypeModel[] = [];
+  let version = '0.0.0';
+  try {
+    const raw = bundle['package.json'];
+    if (raw) version = (JSON.parse(raw) as { version?: string }).version ?? version;
+  } catch { /* uszkodzony package.json — wersja jest tylko kosmetyczna */ }
+
+  models.push({
+    uri: `${TYPES_ROOT}/package.json`,
+    language: 'json',
+    content: JSON.stringify({ name: 'three', version, types: 'index.d.ts' }),
+  });
+
+  for (const [rel, content] of Object.entries(bundle)) {
+    if (!rel.endsWith('.d.ts')) continue;
+    models.push({
+      uri: `${TYPES_ROOT}/${rel}`,
+      language: 'typescript',
+      content: normalizeDtsImports(content),
+    });
+  }
+  return models;
 }
 
 /**

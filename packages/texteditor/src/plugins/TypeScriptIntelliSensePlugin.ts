@@ -171,7 +171,24 @@ function normalizeDtsImports(content: string): string {
 
 // ── Plugin factory ────────────────────────────────────────────────────────────
 
-export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
+export interface TypeScriptPluginOptions {
+  /**
+   * Dodatkowe deklaracje wstrzykiwane przy starcie: mapa `ścieżka → treść`
+   * (ścieżki w postaci `file:///node_modules/…` albo `/…`).
+   *
+   * Musi iść TĄ drogą, a nie osobnym `createModel`/`setExtraLibs` po stronie
+   * aplikacji: `setExtraLibs` NADPISUJE całą listę (skasowałoby stuby i typy z
+   * VFS), a tworzenie setek modeli trzyma worker TypeScriptu w wiecznym
+   * doganianiu i IntelliSense przestaje odpowiadać w ogóle. Tu wszystko ląduje
+   * w jednym magazynie i jednym wsadzie.
+   */
+  preloadDts?: () => Promise<Record<string, string>>;
+}
+
+export function createTypeScriptPlugin(
+  provider: FileSystemProvider,
+  options: TypeScriptPluginOptions = {},
+): IPlugin {
   return {
     manifest: {
       id: 'builtin.typescript-intellisense',
@@ -521,6 +538,20 @@ export function createTypeScriptPlugin(provider: FileSystemProvider): IPlugin {
       dtsLibStore.set('file:///ts-ambient/minislib-stub.d.ts', MINISLIB_STUB);
       scheduleDtsFlush();
       console.log('[TSPlugin] express + minislib stubs queued');
+
+      // Deklaracje dostarczone przez aplikację (np. pełne @types/three w cad-app)
+      // — jeden magazyn, jeden wsad, jeden restart workera.
+      if (options.preloadDts) {
+        void options.preloadDts()
+          .then((files) => {
+            const entries = Object.entries(files);
+            for (const [path, content] of entries) registerDtsLib(path, content);
+            console.log(`[TSPlugin] preloadDts: ${entries.length} plików deklaracji z aplikacji`);
+          })
+          .catch((e: unknown) => {
+            console.warn('[TSPlugin] preloadDts nie powiodło się:', e);
+          });
+      }
 
       // Track which lib URIs have already been registered to avoid duplicate models.
       // Used only for source files (.ts/.tsx/.js) — .d.ts files use dtsLibStore.
