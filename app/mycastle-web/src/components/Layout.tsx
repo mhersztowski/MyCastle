@@ -25,6 +25,7 @@ import {
   Devices as DevicesIcon,
   Code as CodeIcon,
   Dashboard as DashboardIcon,
+  Science as ScienceIcon,
   Sensors as SensorsIcon,
   NotificationsActive as NotificationsActiveIcon,
   BugReport as BugReportIcon,
@@ -131,6 +132,9 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
         { text: 'Main', icon: <HomeIcon />, path: `/user/${userName}/main` },
         { text: 'Drive', icon: <DriveFolderUploadIcon />, path: `/user/${userName}/pim/drive` },
         { text: 'Pulpit', icon: <DashboardIcon />, path: `/user/${userName}/pim/pulpit` },
+        // Baza wiedzy czyta katalog `knowledge/` z Drive — adres jest wspólny
+        // dla wszystkich użytkowników, bo strona bierze pliki z ich własnego VFS.
+        { text: 'Baza wiedzy', icon: <ScienceIcon />, path: '/knowledge' },
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },

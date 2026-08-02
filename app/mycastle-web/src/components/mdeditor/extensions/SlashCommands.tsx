@@ -24,6 +24,7 @@ import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
 import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import FormatQuoteIcon from '@mui/icons-material/FormatQuote';
+import ScienceIcon from '@mui/icons-material/Science';
 import CodeIcon from '@mui/icons-material/Code';
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import LanguageIcon from '@mui/icons-material/Language';
@@ -141,6 +142,230 @@ const commands: CommandItem[] = [
       editor.chain().focus().deleteRange(range).setCallout(variant).run();
     },
   })),
+  // Bloki bazy wiedzy. Każdy wstawia się z gotową, poprawną treścią — pusty
+  // blok `formula` pokazuje sam komunikat o braku przypisania, co wygląda jak
+  // usterka, a nie jak zaproszenie do pisania.
+  {
+    title: 'Wzór (baza wiedzy)',
+    description: 'Blok formula: równanie w LaTeX-u z jednostkami',
+    icon: <FunctionsIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: `formula:wzor-${Math.random().toString(36).slice(2, 6)}` },
+          content: [{ type: 'text', text: 'T = 2\\pi\\sqrt{\\frac{L}{g}}\n@vars T: s, L: m, g: m/s^2' }],
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Układ równań (baza wiedzy)',
+    description: 'Blok formula z @ode: zmienne stanu i pochodne',
+    icon: <FunctionsIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: `formula:ruch-${Math.random().toString(36).slice(2, 6)}` },
+          content: [{
+            type: 'text',
+            text: [
+              '@ode',
+              '@state x, v',
+              '@d x = v',
+              '@d v = -\\omega_0^2 \\cdot x',
+              '@init x = x_0, v = 0',
+              '@vars x: m, v: m/s, omega_0: s^-1, x_0: m',
+            ].join('\n'),
+          }],
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Symulacja (baza wiedzy)',
+    description: 'Blok sim: suwaki i wykresy ze wzorów tego dokumentu',
+    icon: <ScienceIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: 'sim' },
+          content: [{ type: 'text', text: '{\n  "duration": 10\n}' }],
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Model w skrypcie (baza wiedzy)',
+    description: 'Blok simscript: model w TypeScripcie dla zjawisk spoza grafu',
+    icon: <ScienceIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: 'simscript' },
+          content: [{
+            type: 'text',
+            text: [
+              'return defineModel({',
+              "  parameters: [{ name: 'a', unit: 'm/s^2', value: 2, min: 0, max: 10 }],",
+              "  observables: [{ name: 'x', kind: 'series', unit: 'm' }],",
+              '  run: (values: Record<string, number>, tSpan: [number, number]) => {',
+              '    const kroki = 500;',
+              '    const h = (tSpan[1] - tSpan[0]) / kroki;',
+              '    const x: Array<[number, number]> = [];',
+              '    for (let i = 0; i <= kroki; i += 1) {',
+              '      const t = tSpan[0] + i * h;',
+              '      x.push([t, 0.5 * values.a * t * t]);',
+              '    }',
+              '    return { series: { x }, scalars: {} };',
+              '  },',
+              '});',
+            ].join('\n'),
+          }],
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Zadanie (baza wiedzy)',
+    description: 'Blok exercise: dane losowane, klucz liczony z wzorów',
+    icon: <ScienceIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: `exercise:zadanie-${Math.random().toString(36).slice(2, 6)}` },
+          content: [{
+            type: 'text',
+            text: [
+              'Treść zadania. Dane poniżej są losowane, a odpowiedź liczy graf wzorów.',
+              '@given L: 0.5..2 m step 0.1',
+              '@answer T',
+              '@tolerance 2%',
+            ].join('\n'),
+          }],
+        })
+        .run();
+    },
+  },
+  {
+    title: 'Pole na siatce (baza wiedzy)',
+    description: 'Równanie cząstkowe: dyfuzja albo fala na siatce 2D',
+    icon: <ScienceIcon />,
+    command: ({ editor, range }) => {
+      // Dwa bloki naraz, bo pole potrzebuje ich obu: wzoru z równaniem i
+      // uruchomienia z nastawami. Wstawienie samego jednego dałoby blok, który
+      // od razu zgłasza brak drugiego.
+      const id = `pole-${Math.random().toString(36).slice(2, 6)}`;
+      editor.chain().focus().deleteRange(range)
+        .insertContent([
+          {
+            type: 'codeBlock',
+            attrs: { language: `formula:${id}` },
+            content: [{
+              type: 'text',
+              text: [
+                '@pde',
+                '@field u',
+                '@grid 96 x 96',
+                '@domain x: 0..1 m, y: 0..1 m',
+                '@d u = \\alpha \\cdot \\Delta u',
+                '@init u = \\exp(-60 \\cdot ((x - 0.5)^2 + (y - 0.5)^2))',
+                '@boundary neumann',
+                '@vars u: K, alpha: m^2/s, x: m, y: m',
+              ].join('\n'),
+            }],
+          },
+          {
+            type: 'codeBlock',
+            attrs: { language: `field:${id}` },
+            content: [{ type: 'text', text: '{\n  "alpha": 0.01,\n  "duration": 3\n}' }],
+          },
+        ])
+        .run();
+    },
+  },
+  {
+    title: 'Przekształcenie liniowe (baza wiedzy)',
+    description: 'Scena algebry: siatka, kwadrat jednostkowy, wektory własne',
+    icon: <ScienceIcon />,
+    command: ({ editor, range }) => {
+      // Dwa bloki naraz, jak przy polu: scena bez równania zgłaszałaby brak.
+      const id = `scena-${Math.random().toString(36).slice(2, 6)}`;
+      editor.chain().focus().deleteRange(range)
+        .insertContent([
+          {
+            type: 'codeBlock',
+            attrs: { language: `formula:${id}` },
+            content: [{
+              type: 'text',
+              text: [
+                '@linalg',
+                '@mat A = [[1, 1], [0, 1]]',
+                '@vec v = [1, 1]',
+                'w = A \\cdot v',
+              ].join('\n'),
+            }],
+          },
+          {
+            type: 'codeBlock',
+            attrs: { language: `linalg:${id}` },
+            content: [{ type: 'text', text: '{ "eigen": true }' }],
+          },
+        ])
+        .run();
+    },
+  },
+  {
+    title: 'Przekształcenie 3D (baza wiedzy)',
+    description: 'Scena przestrzenna: sześcian jednostkowy, oś obrotu, jądro',
+    icon: <ViewInArIcon />,
+    command: ({ editor, range }) => {
+      const id = `scena3d-${Math.random().toString(36).slice(2, 6)}`;
+      editor.chain().focus().deleteRange(range)
+        .insertContent([
+          {
+            type: 'codeBlock',
+            attrs: { language: `formula:${id}` },
+            content: [{
+              type: 'text',
+              text: [
+                '@linalg',
+                '@mat3 R = [[0.5, -0.866, 0], [0.866, 0.5, 0], [0, 0, 1]]',
+                '@vec3 v = [1.5, 0, 0]',
+                'w = R \\cdot v',
+              ].join('\n'),
+            }],
+          },
+          {
+            type: 'codeBlock',
+            attrs: { language: `linalg:${id}` },
+            content: [{ type: 'text', text: '{ "eigen": true }' }],
+          },
+        ])
+        .run();
+    },
+  },
+  {
+    title: 'Procedura krokowa (baza wiedzy)',
+    description: 'Eliminacja Gaussa albo Gram-Schmidt, krok po kroku',
+    icon: <ScienceIcon />,
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range)
+        .insertContent({
+          type: 'codeBlock',
+          attrs: { language: `procedure:gauss-${Math.random().toString(36).slice(2, 6)}` },
+          content: [{
+            type: 'text',
+            text: '{\n  "kind": "gauss",\n  "matrix": [[2, 1], [4, 3]],\n  "rhs": [5, 11]\n}',
+          }],
+        })
+        .run();
+    },
+  },
   {
     title: 'Diagram (Mermaid)',
     description: 'Blok diagramu z przełącznikiem Code / View / Edit',

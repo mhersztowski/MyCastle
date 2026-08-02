@@ -15,6 +15,11 @@ import { EditorState as PmEditorState } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import { WikiLink } from './extensions/WikiLinkExtension';
+// Import dla efektu ubocznego: moduł rejestruje widok bloku `mermaid` w
+// rejestrze widoków (`extensions/blockRenderers.ts`). Bloki spoza tego
+// katalogu — np. `formula`/`sim` z pakietu sci — rejestrują się tak samo,
+// tyle że z własnego pakietu.
+import './extensions/registerBuiltinBlocks';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Highlight from '@tiptap/extension-highlight';
@@ -125,7 +130,7 @@ import { EnvValue } from './extensions/EnvValueExtension';
 import { RawMarkdownBlock } from './extensions/RawMarkdownBlockExtension';
 import { TableView } from './extensions/TableViewExtension';
 import { MdEnvProvider } from './extensions/MdEnvContext';
-import { markdownToHtml, htmlToMarkdown } from './utils/markdownConverter';
+import { markdownToHtml, htmlToMarkdown, splitFrontMatter, withFrontMatter } from './utils/markdownConverter';
 import { copyBlocks, readBlocksForPaste } from './utils/blockClipboard';
 import 'katex/dist/katex.min.css';
 import './MdEditor.css';
@@ -179,6 +184,14 @@ const MdEditor: React.FC<MdEditorProps> = ({
   useEffect(() => { setMdViewSettings({ minimalView, fullWidth }); }, [minimalView, fullWidth]);
 
   const initialContentRef = useRef(initialContent);
+  /**
+   * Nagłówek YAML dokumentu, trzymany poza edytorem.
+   *
+   * TipTap nie ma węzła dla front mattera i rozbija go na poziomą linię plus
+   * akapity. Odcinamy go przy wczytaniu i doklejamy przy zapisie, żeby tytuł,
+   * tagi i prerekwizyty przetrwały edycję nietknięte.
+   */
+  const frontMatterRef = useRef<string | undefined>(undefined);
   const isInitializedRef = useRef(false);
   const autoFocusRef = useRef(autoFocus);
   const onCreatePageRef = useRef(onCreatePage);
@@ -660,7 +673,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // Load initial content only once when editor is ready
   useEffect(() => {
     if (editor && !isInitializedRef.current && initialContentRef.current) {
-      const html = markdownToHtml(initialContentRef.current);
+      const { frontMatter, body } = splitFrontMatter(initialContentRef.current);
+      frontMatterRef.current = frontMatter;
+      const html = markdownToHtml(body);
       editor.commands.setContent(html);
       // Clear history so the loaded content is the baseline — prevents undo
       // from going back past the loaded state to the empty initial document.
@@ -793,7 +808,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
     if (initialContent !== initialContentRef.current) {
       initialContentRef.current = initialContent;
       if (editor && initialContent) {
-        const html = markdownToHtml(initialContent);
+        const { frontMatter, body } = splitFrontMatter(initialContent);
+        frontMatterRef.current = frontMatter;
+        const html = markdownToHtml(body);
         editor.commands.setContent(html);
         // Clear history after external reload too — the new file's content
         // becomes the new baseline; prior undo stack from a different file
@@ -953,7 +970,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
     if (editor && onSave) {
       window.dispatchEvent(new CustomEvent('md:autosave')); // zapisz też bloki kodu z pliku
       const html = editor.getHTML();
-      const markdown = htmlToMarkdown(html);
+      const markdown = withFrontMatter(frontMatterRef.current, htmlToMarkdown(html));
       setSaveStatus('saving');
       Promise.resolve(onSave(markdown)).finally(() => setSaveStatus('saved'));
     }
@@ -1212,7 +1229,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
     if (!editor) return;
     setExportCopied(false);
     setExportManualHint(false);
-    const raw = htmlToMarkdown(editor.getHTML());
+    const raw = withFrontMatter(frontMatterRef.current, htmlToMarkdown(editor.getHTML()));
     // "Clean" = strip MyCastle-internal noise so the result is portable markdown:
     // block-id anchors (`<!-- bid:… -->`) are editor bookkeeping, not content.
     const cleaned = raw
@@ -1287,7 +1304,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
         // Bloki kodu z zewnętrznym plikiem zapisują wtedy swoją treść do pliku.
         window.dispatchEvent(new CustomEvent('md:autosave'));
         if (!onSaveRef.current) return;
-        const markdown = htmlToMarkdown(editor.getHTML());
+        const markdown = withFrontMatter(frontMatterRef.current, htmlToMarkdown(editor.getHTML()));
         setSaveStatus('saving');
         Promise.resolve(onSaveRef.current(markdown)).finally(() => setSaveStatus('saved'));
       }, autoSaveDelay);

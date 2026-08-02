@@ -73,6 +73,8 @@ import UIViewerPage from './pages/viewer/UIViewerPage';
 import LoginPage from './pages/LoginPage';
 import WatchPage from './pages/WatchPage';
 const MinisMonacoEditorPage = lazy(() => import('./pages/editor/MinisMonacoEditorPage'));
+// Baza wiedzy — katalog i tryb czytania nad katalogiem `knowledge/` w Drive.
+const KnowledgePage = lazy(() => import('./pages/knowledge/KnowledgePage'));
 // Heavy pages: Blockly + Monaco are large bundles — lazy load to keep initial bundle small (iOS Safari)
 const MinisProjectPage = lazy(() => import('./pages/minis-user/ProjectPage'));
 const MinisUPythonProjectPage = lazy(() => import('./pages/minis-user/UPythonProjectPage'));
@@ -174,6 +176,9 @@ function AppRoot() {
     <PageHooksRunner>
       <Routes>
         {/* Full-page routes without layout (mycastle) */}
+        {/* Baza wiedzy: `/knowledge` to katalog, `/knowledge/{ścieżka}` — dokument.
+            Tryb czytania celowo bez chrome edytora, jak w raporcie (Etap 3). */}
+        <Route path="/knowledge/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><KnowledgePage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/workspace/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><WorkspaceMdPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/simple/*" element={<RequireAuth><MinimalTopBar><SimpleEditorPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdEditorPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />

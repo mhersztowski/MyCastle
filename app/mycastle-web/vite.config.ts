@@ -8,6 +8,11 @@ export default defineConfig({
   ],
   optimizeDeps: {
     exclude: ['@mhersztowski/web-cpp'],
+    // Ten sam nowoczesny target co w `build` (niżej). Bez niego prebundling
+    // wywraca się na zależnościach z top-level await (`@novnc/novnc`), więc
+    // serwer dev w ogóle nie wstaje — a produkcyjny build przechodzi, bo tam
+    // target jest ustawiony.
+    esbuildOptions: { target: 'esnext' },
   },
   resolve: {
     alias: {

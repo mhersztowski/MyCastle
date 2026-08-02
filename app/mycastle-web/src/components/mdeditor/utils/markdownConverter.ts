@@ -1498,6 +1498,32 @@ function restoreWikiLinksToHtml(html: string, wikiLinks: { href: string; label: 
   return result;
 }
 
+/**
+ * Odcina nagłówek YAML z początku dokumentu.
+ *
+ * Front matter to **metadane, nie treść** — TipTap nie ma dla niego węzła i
+ * zamienia `---` na poziomą linię, a listę tagów na akapit. Dokument bazy
+ * wiedzy otwarty w edytorze tracił w ten sposób tytuł, tagi i prerekwizyty, a
+ * autosave zapisywał uszkodzoną wersję na dysk.
+ *
+ * Rozdzielenie i sklejenie są osobnymi funkcjami, bo edytor musi trzymać
+ * nagłówek po swojej stronie przez cały czas edycji — konwerter jest
+ * bezstanowy i nie ma gdzie go przechować.
+ */
+export function splitFrontMatter(markdown: string): { frontMatter?: string; body: string } {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(markdown);
+  if (!match) return { body: markdown };
+  return { frontMatter: match[0], body: markdown.slice(match[0].length) };
+}
+
+/** Skleja nagłówek z treścią; brak nagłówka zwraca samą treść. */
+export function withFrontMatter(frontMatter: string | undefined, body: string): string {
+  if (!frontMatter) return body;
+  // Nagłówek zachowuje własne zakończenie linii, więc doklejamy wprost —
+  // dodatkowa pusta linia rosłaby przy każdym zapisie.
+  return frontMatter.endsWith('\n') ? `${frontMatter}${body}` : `${frontMatter}\n${body}`;
+}
+
 export function markdownToHtml(markdown: string): string {
   if (!markdown || markdown.trim() === '') {
     return '';

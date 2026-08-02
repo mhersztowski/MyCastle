@@ -13,6 +13,7 @@
  * nierozpoznane linie; o to dba warstwa formatów, nie ten komponent.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { registerBlockRenderer } from './blockRenderers';
 import {
   DiagramEditor, SequenceEditor, PacketEditor, KanbanEditor, GanttEditor, TimelineEditor,
   diagramFormats, mergeLayout, starterDiagram, DIAGRAM_STARTERS,
@@ -198,3 +199,12 @@ export function DiagramBlockView({ code, onChange, language, initialMode = 'code
     </div>
   );
 }
+
+// Diagram Mermaida jest pierwszym klientem rejestru widoków bloków. Rejestracja
+// przy imporcie modułu, tak jak formaty w `web-devtools` — edytor nie musi
+// wiedzieć, że mermaid istnieje.
+registerBlockRenderer({
+  name: 'mermaid',
+  matches: (language) => language === 'mermaid',
+  Component: DiagramBlockView,
+});

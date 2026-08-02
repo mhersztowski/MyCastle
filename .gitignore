@@ -71,3 +71,6 @@ app/mycastle-watch/assets/
 
 # Paczka deklaracji Three.js dla edytora kodu w cad-app (generowana: pnpm --filter cad-app gen:three-types)
 app/cad-app/public/types/
+
+# Bundel bazy wiedzy budowany przez build:knowledge
+app/mycastle-web/public/sci-runtime/

@@ -1,13 +1,15 @@
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent, NodeViewProps } from '@tiptap/react';
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react';
 import hljs from 'highlight.js';
 import Editor from 'react-simple-code-editor';
 import { useMqtt } from '../../../modules/mqttclient';
 import CodeFilePickerDialog, { langFromPath } from './CodeFilePickerDialog';
 import { blockBeforeCursor } from './selectBlockBefore';
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import { DiagramBlockView } from './DiagramBlockView';
+import { blockRenderersVersion, rendererFor, subscribeBlockRenderers } from './blockRenderers';
+import { createModelWorker } from '../../../workers';
 
 /** Zdarzenie wysyłane przez MdEditor przy autosave — bloki z pliku zapisują wtedy swój plik. */
 export const MD_AUTOSAVE_EVENT = 'md:autosave';
@@ -34,8 +36,58 @@ const LANGS: { label: string; value: string }[] = [
   { label: 'Mermaid (diagram)', value: 'mermaid' },
 ];
 
-/** Języki, dla których blok dostaje przełącznik Code / View / Edit. */
-const DIAGRAM_LANGS = new Set(['mermaid']);
+/**
+ * Bloki z własnym widokiem.
+ *
+ * Infostring takiego bloku ma dwie części: **typ** (`formula`) i **nazwę**
+ * (`orbita-okres`). Na liście typów stoi wyłącznie typ — nazwa jest cechą tego
+ * konkretnego wzoru, nie osobnym rodzajem bloku, i edytuje się ją obok, w
+ * własnym polu. Wrzucenie pełnego infostringu do listy znaczyłoby, że każdy
+ * nowy wzór w dokumencie dokłada pozycję do rozwijanego menu.
+ */
+const NAMED_BLOCKS: Array<{ label: string; prefix: string; needsId: boolean }> = [
+  { label: 'Wzór (formula)', prefix: 'formula', needsId: true },
+  { label: 'Symulacja (sim)', prefix: 'sim', needsId: false },
+  { label: 'Model w skrypcie (simscript)', prefix: 'simscript', needsId: false },
+  { label: 'Zadanie (exercise)', prefix: 'exercise', needsId: true },
+  { label: 'Pole na siatce (field)', prefix: 'field', needsId: true },
+  { label: 'Przekształcenie liniowe (linalg)', prefix: 'linalg', needsId: true },
+  { label: 'Procedura krokowa (procedure)', prefix: 'procedure', needsId: true },
+];
+
+/** Rozkłada infostring na typ i nazwę: `formula:okres` → `['formula', 'okres']`. */
+function splitInfostring(language: string): { prefix: string; id: string } {
+  const colon = language.indexOf(':');
+  return colon < 0
+    ? { prefix: language, id: '' }
+    : { prefix: language.slice(0, colon), id: language.slice(colon + 1) };
+}
+
+/**
+ * Nazwa dopuszczalna w infostringu.
+ *
+ * Spacje i znaki spoza zakresu rozbiłyby parsowanie bloku, więc zamieniamy je
+ * po cichu zamiast odrzucać wpisany tekst — autor pisze „okres wahadła", a
+ * dostaje `okres-wahadla`, co jest tym, o co mu chodziło.
+ */
+function sanitizeId(raw: string): string {
+  return raw
+    .trim()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/ł/gi, 'l')
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    .toLowerCase();
+}
+
+/** Nazwa robocza dla nowego bloku — krótka i łatwa do podmiany. */
+function draftId(): string {
+  return `nowy-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// Widok bloku dla `mermaid` (i kolejnych języków) przychodzi z rejestru —
+// patrz `blockRenderers.ts`. Edytor nie zna już listy takich języków.
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
@@ -66,6 +118,65 @@ const preStyle: React.CSSProperties = {
 
 const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor, getPos }) => {
   const language: string = node.attrs.language || '';
+  const { prefix: selectedType, id: blockId } = splitInfostring(language);
+  const namedBlock = NAMED_BLOCKS.find((b) => b.prefix === selectedType);
+  // Subskrypcja rejestru: widok bloku może zostać zarejestrowany po pierwszym
+  // renderze (moduł ładowany asynchronicznie, ponowna próba po błędzie). Bez
+  // niej blok zostałby zwykłym kodem mimo dostępnego widoku.
+  useSyncExternalStore(subscribeBlockRenderers, blockRenderersVersion, blockRenderersVersion);
+  const blockRenderer = rendererFor(language);
+
+  /**
+   * Wszystkie bloki kodu dokumentu — czytane wprost z ProseMirror.
+   *
+   * Świadomie bez konwersji całego dokumentu do markdownu: interesują nas same
+   * bloki, a konwersja przy każdym renderze bloku symulacji byłaby najdroższą
+   * rzeczą na stronie.
+   */
+  /**
+   * Podmienia treść **innego** bloku dokumentu, wskazanego infostringiem.
+   *
+   * Potrzebne blokom sterującym czymś zapisanym gdzie indziej: rysunek warunku
+   * początkowego powstaje przy bloku `field`, ale jego miejscem jest `formula`.
+   * Bez tego rysunek musiałby żyć obok równania i mogłyby się rozejść.
+   */
+  const replaceOtherBlock = useCallback((language: string, next: string) => {
+    if (!editor) return;
+
+    let pozycja: number | undefined;
+    let wezel: ProseMirrorNode | undefined;
+    editor.state.doc.descendants((child, pos) => {
+      if (child.type.name === 'codeBlock' && (child.attrs.language || '') === language) {
+        pozycja = pos;
+        wezel = child;
+        return false;
+      }
+      return true;
+    });
+    if (pozycja === undefined || !wezel) return;
+
+    editor.chain().focus().command(({ tr }) => {
+      // Zamiana samej treści węzła; atrybuty (język, identyfikator) zostają,
+      // bo zmieniamy warunek początkowy, a nie rodzaj bloku.
+      tr.replaceWith(
+        pozycja! + 1,
+        pozycja! + wezel!.nodeSize - 1,
+        next ? editor.schema.text(next) : [],
+      );
+      return true;
+    }).run();
+  }, [editor]);
+
+  const collectCodeBlocks = useCallback(() => {
+    const blocks: Array<{ language: string; code: string }> = [];
+    editor?.state.doc.descendants((child) => {
+      if (child.type.name === 'codeBlock') {
+        blocks.push({ language: child.attrs.language || '', code: child.textContent });
+      }
+      return true;
+    });
+    return blocks;
+  }, [editor]);
   const externalSrc: string = node.attrs.externalSrc || '';
   const { readFile, writeFile } = useMqtt();
 
@@ -146,13 +257,49 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor
       <div style={bar} contentEditable={false}>
         <span style={{ fontFamily: 'monospace', opacity: 0.6 }}>{'</>'}</span>
         <select
-          value={language}
-          onChange={(e) => updateAttributes({ language: e.target.value || null })}
+          value={selectedType}
+          onChange={(e) => {
+            const wybrane = e.target.value;
+            const named = NAMED_BLOCKS.find((b) => b.prefix === wybrane);
+            // Blok z nazwą dostaje roboczą od razu: sam typ (`formula`) nie
+            // jest poprawnym infostringiem i widok by się nie pojawił.
+            updateAttributes({
+              language: named
+                ? (named.needsId ? `${named.prefix}:${blockId || draftId()}` : named.prefix)
+                : wybrane || null,
+            });
+          }}
           style={sel}
-          title="Język bloku kodu (podświetlanie składni)"
+          title="Typ bloku: język do podświetlania albo blok z własnym widokiem"
         >
           {LANGS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+          {NAMED_BLOCKS.map((b) => (
+            <option key={b.prefix} value={b.prefix}>{b.label}</option>
+          ))}
+          {/* Typ spoza listy (np. `haskell` z cudzego pliku) pokazujemy wprost,
+              żeby select nie twierdził, że blok jest zwykłym tekstem. */}
+          {selectedType && !LANGS.some((l) => l.value === selectedType)
+            && !NAMED_BLOCKS.some((b) => b.prefix === selectedType) && (
+            <option value={selectedType}>{selectedType}</option>
+          )}
         </select>
+
+        {/* Nazwa bloku — osobne pole, bo to parametr tego wzoru, a nie rodzaj
+            bloku. Po niej odwołują się do niego inne wzory i zadania. */}
+        {namedBlock?.needsId && (
+          <input
+            value={blockId}
+            onChange={(e) => {
+              const czysta = sanitizeId(e.target.value);
+              // Pusta nazwa nie jest poprawnym infostringiem — zostawiamy
+              // poprzednią, żeby kasowanie tekstu nie psuło bloku.
+              if (czysta) updateAttributes({ language: `${namedBlock.prefix}:${czysta}` });
+            }}
+            placeholder="nazwa wzoru"
+            title="Nazwa, po której odwołują się do tego bloku inne wzory i zadania"
+            style={{ ...sel, minWidth: 140, fontFamily: 'monospace' }}
+          />
+        )}
 
         <span style={{ flex: 1 }} />
 
@@ -176,12 +323,16 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor
         )}
       </div>
 
-      {DIAGRAM_LANGS.has(language) ? (
-        // Blok diagramu: pasek Code / View / Edit. Treść w trybie „Code" zostaje
-        // dokładnie taka jak dla zwykłego bloku, więc edycja tekstu działa jak dotąd.
-        <DiagramBlockView
+      {blockRenderer ? (
+        // Blok z własnym widokiem (diagram, wzór, symulacja). Treść w trybie
+        // „Code" zostaje dokładnie taka jak dla zwykłego bloku, więc edycja
+        // tekstu działa jak dotąd.
+        <blockRenderer.Component
           code={displayCode}
           language={language}
+          documentBlocks={collectCodeBlocks}
+          onBlockChange={replaceOtherBlock}
+          workerFactory={createModelWorker}
           onChange={isExternal
             ? (next) => { setExtCode(next); dirtyRef.current = true; }
             : (next) => replaceBlockText(next)}
@@ -197,7 +348,7 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor
               </pre>
             )
           )}
-        </DiagramBlockView>
+        </blockRenderer.Component>
       ) : isExternal ? (
         editing ? (
           <div contentEditable={false} style={{ maxHeight: 460, overflow: 'auto' }}>
