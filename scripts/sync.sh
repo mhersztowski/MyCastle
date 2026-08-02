@@ -3,12 +3,21 @@ set -euo pipefail
 
 # Synchronizacja katalogu data/ między lokalnym dev a serwerem Coolify
 # Użycie:
-#   ./scripts/sync.sh push [--force]      # local → server (bez user-data, bez SQLite)
-#   ./scripts/sync.sh pull [--force]      # server → local (bez user-data, bez SQLite)
+#   ./scripts/sync.sh push [subdir] [--force]   # local → server (bez user-data, bez SQLite)
+#   ./scripts/sync.sh pull [subdir] [--force]   # server → local (bez user-data, bez SQLite)
 #   ./scripts/sync.sh db-push             # local iot.db → server
 #   ./scripts/sync.sh db-pull             # server iot.db → local
 #   ./scripts/sync.sh backup              # snapshot serwerowego data/Minis/Users na serwerze (tarball)
 #   ./scripts/sync.sh backup-list         # lista snapshotów na serwerze
+#
+# [subdir] — opcjonalna podścieżka względem data/ (lokalnie) i SYNC_REMOTE_PATH
+#            (zdalnie). Gdy podana, synchronizowane jest TYLKO to poddrzewo, np.:
+#              ./scripts/sync.sh push Minis/public --force
+#              ./scripts/sync.sh pull Minis/Users/marcin/drive --force
+#            UWAGA: anchored exclude'y user-data (Minis/Users/*/drive/ itd.) są
+#            względem korzenia transferu, więc dla subdir-a NIE obowiązują —
+#            podając subdir świadomie decydujesz się zsynchronizować jego zawartość.
+#            Serwer NIE jest tu podawany — bierze się z SYNC_HOST w .env.sync.
 #
 # ── KRYTYCZNE OSTRZEŻENIE ────────────────────────────────────────────────
 # Dane wprowadzane przez użytkowników w aplikacji webowej (drive, Calendar,
@@ -93,7 +102,15 @@ RSYNC_OPTS=(
 
 usage() {
   cat <<EOF
-Użycie: $0 {push|pull|db-push|db-pull|backup|backup-list} [--force]
+Użycie: $0 {push|pull} [subdir] [--force]
+        $0 {db-push|db-pull|backup|backup-list}
+
+  [subdir]      Opcjonalna podścieżka względem data/ (lokalnie) i
+                SYNC_REMOTE_PATH (zdalnie). Gdy podana, synchronizowane jest
+                TYLKO to poddrzewo, np.:
+                  $0 push Minis/public --force
+                  $0 pull Minis/Users/marcin/drive --force
+                Serwer bierze się z SYNC_HOST (.env.sync) — nie podajesz go.
 
   push          Wyślij lokalne data/ na serwer (DODAJE/UPDATE, NIE kasuje).
                 User-data (drive/Calendar/Projects/…) i hashed passwords
@@ -136,7 +153,53 @@ if [ $# -lt 1 ]; then
 fi
 
 COMMAND="$1"
-FORCE="${2:-}"
+shift
+
+# Parsowanie pozostałych argumentów: --force to flaga (w dowolnym miejscu),
+# każdy inny argument traktujemy jako [subdir] (podścieżka względem data/).
+FORCE=""
+SUBDIR=""
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE="--force" ;;
+    *)
+      if [ -n "$SUBDIR" ]; then
+        echo "Błąd: podano więcej niż jeden [subdir]: '$SUBDIR' oraz '$arg'"
+        exit 1
+      fi
+      SUBDIR="$arg"
+      ;;
+  esac
+done
+
+# subdir MUSI być ścieżką WZGLĘDNĄ — jest doklejany do data/ (lokalnie) ORAZ
+# do SYNC_REMOTE_PATH (zdalnie). Ścieżka absolutna (np. rozwinięte ~/… albo
+# /home/…) zbudowałaby bezsensowny remote (/opt/mycastle-data/home/…) i rsync
+# padnie na "No such file or directory". Jeśli chcesz ściągnąć zdalne dane do
+# DOWOLNEGO lokalnego katalogu (np. backup), użyj scripts/fetch.sh.
+case "$SUBDIR" in
+  /* | "~"*)
+    echo "Błąd: [subdir] musi być ścieżką WZGLĘDNĄ do data/, a podałeś absolutną:"
+    echo "        $SUBDIR"
+    echo ""
+    echo "  sync.sh zawsze synchronizuje z lokalnym katalogiem data/."
+    echo "  Aby ściągnąć zdalne dane do dowolnego katalogu (np. backupu), użyj:"
+    echo "        ./scripts/fetch.sh $SUBDIR [remote-subpath]"
+    exit 1
+    ;;
+esac
+
+# Normalizacja subdir (usuń wiodące/końcowe '/') i zbudowanie ścieżek
+# źródłowej/docelowej po obu stronach. Gdy subdir pusty → cały data/.
+SUBDIR="${SUBDIR#/}"
+SUBDIR="${SUBDIR%/}"
+if [ -n "$SUBDIR" ]; then
+  LOCAL_SYNC_PATH="${LOCAL_DATA}${SUBDIR}/"
+  REMOTE_SYNC_PATH="${SYNC_REMOTE_PATH}${SUBDIR}/"
+else
+  LOCAL_SYNC_PATH="$LOCAL_DATA"
+  REMOTE_SYNC_PATH="$SYNC_REMOTE_PATH"
+fi
 
 case "$COMMAND" in
   push)
@@ -148,9 +211,10 @@ case "$COMMAND" in
       # Bezpieczna sieć: pre-push tarball nim cokolwiek tknie remote.
       remote_backup
     fi
-    echo ">>> Sync: local → $SYNC_HOST:$SYNC_REMOTE_PATH"
+    echo ">>> Sync: local → $SYNC_HOST:$REMOTE_SYNC_PATH"
+    [ -n "$SUBDIR" ] && echo "    subdir: $SUBDIR (tylko to poddrzewo)"
     echo "    (user-data wykluczone — patrz EXCLUDES w scripts/sync.sh)"
-    rsync "${RSYNC_OPTS[@]}" "$LOCAL_DATA" "$SYNC_HOST:$SYNC_REMOTE_PATH"
+    rsync "${RSYNC_OPTS[@]}" "$LOCAL_SYNC_PATH" "$SYNC_HOST:$REMOTE_SYNC_PATH"
     if [ "$FORCE" != "--force" ]; then
       echo ""
       echo "=== To był dry-run. Aby wykonać naprawdę: pnpm sync:push:force ==="
@@ -162,10 +226,15 @@ case "$COMMAND" in
       RSYNC_OPTS+=(--dry-run)
       echo "=== DRY RUN — podgląd zmian (nic nie zostanie zmienione) ==="
       echo ""
+    else
+      # rsync nie tworzy pośrednich katalogów po stronie lokalnej — dla subdir-a
+      # zapewniamy istnienie celu, żeby pull nie padł na brakującej ścieżce.
+      mkdir -p "$LOCAL_SYNC_PATH"
     fi
-    echo ">>> Sync: $SYNC_HOST:$SYNC_REMOTE_PATH → local"
+    echo ">>> Sync: $SYNC_HOST:$REMOTE_SYNC_PATH → local"
+    [ -n "$SUBDIR" ] && echo "    subdir: $SUBDIR (tylko to poddrzewo)"
     echo "    (user-data wykluczone — patrz EXCLUDES w scripts/sync.sh)"
-    rsync "${RSYNC_OPTS[@]}" "$SYNC_HOST:$SYNC_REMOTE_PATH" "$LOCAL_DATA"
+    rsync "${RSYNC_OPTS[@]}" "$SYNC_HOST:$REMOTE_SYNC_PATH" "$LOCAL_SYNC_PATH"
     if [ "$FORCE" != "--force" ]; then
       echo ""
       echo "=== To był dry-run. Aby wykonać naprawdę: pnpm sync:pull:force ==="

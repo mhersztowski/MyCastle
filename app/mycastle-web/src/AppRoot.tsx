@@ -178,7 +178,7 @@ function AppRoot() {
         {/* Full-page routes without layout (mycastle) */}
         {/* Baza wiedzy: `/knowledge` to katalog, `/knowledge/{ścieżka}` — dokument.
             Tryb czytania celowo bez chrome edytora, jak w raporcie (Etap 3). */}
-        <Route path="/knowledge/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><KnowledgePage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        <Route path="/knowledge/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><KnowledgePage /></Suspense></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/workspace/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><WorkspaceMdPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/simple/*" element={<RequireAuth><MinimalTopBar><SimpleEditorPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdEditorPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />

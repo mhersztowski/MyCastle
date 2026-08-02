@@ -51,7 +51,17 @@ export const KnowledgePage: React.FC = () => {
         // szuka pliku w drzewie po ścieżce **względnej**, a czyta go po
         // **pełnej**, więc działa tylko wtedy, gdy wczytano cały Drive.
         // Tutaj wczytujemy jeden katalog, a węzły drzewa niosą pełne ścieżki.
-        const tree = await mqttClient.listDirectory(ROOT);
+        //
+        // Gdy katalog bazy jeszcze nie istnieje (nowy użytkownik), listowanie
+        // rzuca błąd. Zamiast pokazać awarię — zakładamy katalog dla użytkownika.
+        // VFS nie ma osobnego `mkdir`, więc tworzymy go zapisem placeholdera
+        // (backend zakłada katalogi nadrzędne przy zapisie). `.keep` nie jest
+        // plikiem `.md`, więc nie pojawi się jako dokument — baza startuje pusta
+        // i strona pokazuje stan „Baza wiedzy jest pusta".
+        const tree = await mqttClient.listDirectory(ROOT).catch(async () => {
+          await mqttClient.writeFile(`${ROOT}/.keep`, '');
+          return mqttClient.listDirectory(ROOT);
+        });
         const markdowny = collectMarkdown(tree);
 
         const wczytane: LoadedFile[] = [];

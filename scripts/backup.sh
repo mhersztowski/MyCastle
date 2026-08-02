@@ -1,0 +1,1 @@
+./fetch.sh ~/myprojects/claude/MyCastelBackup-31-07-2026
