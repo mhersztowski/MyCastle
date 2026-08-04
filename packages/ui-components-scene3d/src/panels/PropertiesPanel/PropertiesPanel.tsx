@@ -16,7 +16,9 @@ import Button from '@mui/material/Button';
 import Menu from '@mui/material/Menu';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
+import { UiSection } from './UiSection';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import LinkIcon from '@mui/icons-material/Link';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -313,6 +315,7 @@ export function PropertiesPanel({
   sceneSettings,
   onSceneSettingsChange,
   onBrowseAudioFile,
+  onBrowseTexture,
   onEditGeometryNodes,
   onEditMesh,
   sceneGeometries,
@@ -538,6 +541,8 @@ export function PropertiesPanel({
               />
             </AccordionDetails>
           </Accordion>
+
+          {node.ui && <UiSection ui={node.ui} onChange={handleChange} />}
 
           {node.geoPrimitive && (
             <Accordion defaultExpanded disableGutters sx={accordionSx}>
@@ -1041,6 +1046,66 @@ export function PropertiesPanel({
                   <Typography sx={sectionTitleSx}>Material</Typography>
                 </AccordionSummary>
                 <AccordionDetails sx={{ px: 1.5, py: 0.5 }}>
+                  {/*
+                    Tekstura: ścieżka w plikach projektu albo gotowy adres.
+                    Ścieżka jest tym, co przeżywa zapis sceny — `blob:` z okna
+                    wyboru pliku żyje tyle, co karta przeglądarki, a data URL
+                    potrafi rozdąć plik sceny do megabajtów.
+                  */}
+                  {hasColor && (
+                    <Box sx={{ mb: 0.75 }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', mb: 0.25, display: 'block' }}>
+                        Texture
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <TextField
+                          size="small"
+                          value={mat.texturePath ?? mat.textureDataUrl ?? ''}
+                          placeholder="/users/…/tekstury/cegla.png"
+                          onChange={(e) => {
+                            const wartosc = e.target.value.trim();
+                            // Adres wpisany ręcznie (`http`, `data:`) zostaje adresem;
+                            // wszystko inne jest ścieżką w plikach projektu.
+                            const jestAdresem = /^(https?:|data:|blob:)/.test(wartosc);
+                            handleChange('material.texturePath', jestAdresem ? undefined : (wartosc || undefined));
+                            handleChange('material.textureDataUrl', jestAdresem ? wartosc : undefined);
+                          }}
+                          sx={tfSx}
+                        />
+                        {onBrowseTexture && (
+                          <Tooltip title="Wybierz teksturę z plików projektu">
+                            <IconButton
+                              size="small"
+                              sx={{ p: 0.25, flexShrink: 0 }}
+                              onClick={async () => {
+                                const path = await onBrowseTexture();
+                                if (path == null) return;
+                                handleChange('material.texturePath', path);
+                                handleChange('material.textureDataUrl', undefined);
+                              }}
+                            >
+                              <FolderOpenIcon sx={{ fontSize: 14 }} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        {(mat.texturePath || mat.textureDataUrl) && (
+                          <Tooltip title="Zdejmij teksturę">
+                            <IconButton
+                              size="small"
+                              sx={{ p: 0.25, flexShrink: 0 }}
+                              onClick={() => {
+                                handleChange('material.texturePath', undefined);
+                                handleChange('material.textureDataUrl', undefined);
+                              }}
+                            >
+                              <CloseIcon sx={{ fontSize: 14 }} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+
                   {/* UUID bar */}
                   {mat.matId && (
                     <Box sx={{ mb: 0.75, display: 'flex', alignItems: 'center', gap: 0.25, bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 0.5, px: 0.75, py: 0.4 }}>

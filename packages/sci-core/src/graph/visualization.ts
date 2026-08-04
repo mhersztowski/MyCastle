@@ -31,7 +31,15 @@ export type ViewSpec =
   /** Przestrzeń fazowa: wielkość względem własnej pochodnej. */
   | { kind: 'phase'; x: string; y: string }
   /** Wielkości stałe w czasie. */
-  | { kind: 'scalars'; names: string[] };
+  | { kind: 'scalars'; names: string[] }
+  /**
+   * Widmo amplitudowe przebiegów.
+   *
+   * Wyłącznie **na żądanie**: dla drgań jest najważniejszym widokiem, ale
+   * spadek swobodny czy rozpad wykładniczy mają widmo bez treści, a pokazane
+   * domyślnie sugerowałoby, że jest co z niego odczytać.
+   */
+  | { kind: 'spectrum'; names: string[] };
 
 export type ViewKind = ViewSpec['kind'];
 
@@ -92,7 +100,12 @@ export function suggestViews(model: PhenomenonModel, requested?: string[]): View
   if (scalars.length) views.push({ kind: 'scalars', names: scalars });
 
   if (!requested?.length) return views;
+
+  // Widoki dostępne tylko na żądanie — sensowne dla części zjawisk, więc
+  // proponowanie ich wszystkim byłoby myleniem czytelnika.
+  const naŻyczenie: ViewSpec[] = changing.length ? [{ kind: 'spectrum', names: changing }] : [];
+
   return requested
-    .map((kind) => views.find((view) => view.kind === kind))
+    .map((kind) => [...views, ...naŻyczenie].find((view) => view.kind === kind))
     .filter((view): view is ViewSpec => !!view);
 }

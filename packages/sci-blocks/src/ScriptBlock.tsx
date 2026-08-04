@@ -11,7 +11,7 @@
  */
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { runScript, suggestViews } from '@mhersztowski/sci-core';
+import { runScript, suggestViews, SCRIPT_API_TYPES } from '@mhersztowski/sci-core';
 import { ModelViews } from './ModelViews';
 import type { WorkerFactory } from './useModelRunner';
 
@@ -88,6 +88,31 @@ export function ScriptBlock({ code, onChange, bare, workerFactory }: ScriptBlock
         <div style={{ fontSize: 11, color: '#b91c1c', background: '#fef2f2', borderRadius: 4, padding: '6px 8px', whiteSpace: 'pre-wrap' }}>
           {result.issues.map((issue, index) => <div key={index}>{issue}</div>)}
         </div>
+      )}
+
+      {editing && (
+        /**
+         * Ściąga z API — ten sam tekst, który host wstrzykuje do Monaco.
+         *
+         * Pole tekstowe nie podpowiada niczego, więc bez tej listy autor nie ma
+         * skąd wiedzieć, że ma pod ręką metodę dla układów sztywnych albo
+         * bibliotekę gotowych zjawisk. Pokazujemy **dosłownie** deklaracje,
+         * a nie ich streszczenie: drugie źródło rozjechałoby się z pierwszym
+         * przy najbliższej zmianie API.
+         */
+        <details style={{ fontSize: 11, color: '#475569' }}>
+          <summary style={{ cursor: 'pointer' }}>co jest dostępne w skrypcie</summary>
+          <pre
+            data-testid="script-api"
+            style={{
+              fontFamily: 'ui-monospace, monospace', fontSize: 10, lineHeight: 1.4,
+              maxHeight: 220, overflow: 'auto', margin: '6px 0 0',
+              padding: 8, borderRadius: 4, background: '#f1f5f9', color: '#0f172a',
+            }}
+          >
+            {SCRIPT_API_TYPES.trim()}
+          </pre>
+        </details>
       )}
 
       {editing && (

@@ -10,6 +10,7 @@ import { parseFormulaBlock } from '../formula/parseFormula';
 import { buildGraph } from '../graph/formulaGraph';
 import { compileGraph } from '../graph/compileGraph';
 import { parseExerciseBlock, serializeExerciseBlock } from './parseExercise';
+import { statedVariant } from './solveExercise';
 import { exerciseVariant, checkNumeric, checkSymbolic } from './solveExercise';
 import { buildHints } from './hints';
 
@@ -43,8 +44,12 @@ describe('blok zadania', () => {
     expect(ZADANIE.issues).toEqual([]);
   });
 
-  it('zadanie bez wskazanej odpowiedzi jest błędem', () => {
-    expect(parseExerciseBlock('x', 'Policz coś.').issues.join(' ')).toMatch(/wielkość będącą odpowiedzią/);
+  it('zadanie bez treści jest błędem — reszta jest opcjonalna', () => {
+    // Kontrakt zmienił się świadomie: wskazanie wielkości z grafu jest jednym
+    // z trzech sposobów na zadanie, a nie warunkiem jego istnienia. Zadania
+    // podręcznikowe i jakościowe też mają wchodzić do powtórek.
+    expect(parseExerciseBlock('x', '@answer T').issues.join(' ')).toMatch(/treści/);
+    expect(parseExerciseBlock('x', 'Policz coś.').issues).toEqual([]);
   });
 
   it('odwrócony zakres jest błędem', () => {
@@ -233,5 +238,85 @@ describe('podpowiedzi z grafu', () => {
 
   it('wielkość spoza grafu nie ma podpowiedzi', () => {
     expect(buildHints(graph, 'nieistnieje')).toEqual([]);
+  });
+});
+
+describe('zadanie z podręcznika — bez obliczeń', () => {
+  it('odpowiedź wpisana wprost zwalnia z modelu', () => {
+    const block = parseExerciseBlock('rh1-zad-2-5', `
+Grający w golfa uderzył trzykrotnie: 12 m na północ, 6 m na południowy wschód,
+3 m na południowy zachód. Jakie przemieszczenie wbiłoby piłkę za pierwszym razem?
+
+@expected 6 m, o kąt 20,5° od kierunku północnego ku wschodowi
+@level 2
+@uses rh1-2-eq10a
+`);
+    expect(block.issues).toEqual([]);
+    expect(block.expected).toBe('6 m, o kąt 20,5° od kierunku północnego ku wschodowi');
+    expect(block.answer).toBeUndefined();
+    // Nic nie jest losowane: treść zadania jest taka, jak w książce.
+    expect(block.given).toEqual([]);
+  });
+
+  it('wyłuskuje wiodącą wielkość, żeby dało się sprawdzić wpisaną odpowiedź', () => {
+    const block = parseExerciseBlock('z', 'Treść.\n@expected 6 m, o kąt 20,5°');
+    expect(block.check).toBe('6 m');
+  });
+
+  it('gdy odpowiedź nie zaczyna się liczbą, nie ma czego sprawdzać', () => {
+    const block = parseExerciseBlock('z', 'Treść.\n@expected wektory muszą być prostopadłe');
+    expect(block.check).toBeUndefined();
+    expect(block.expected).toBe('wektory muszą być prostopadłe');
+  });
+
+  it('wielkość do sprawdzenia można podać wprost', () => {
+    const block = parseExerciseBlock('z', 'Treść.\n@expected 6 m pod kątem 20,5°\n@check 6 m');
+    expect(block.check).toBe('6 m');
+  });
+
+  it('zadanie jakościowe nie ma żadnej odpowiedzi i to jest w porządku', () => {
+    // Podręcznik jest ich pełen („co można powiedzieć o wektorach a i b…").
+    // Odrzucanie ich zamykałoby im drogę do powtórek, a to główny powód,
+    // dla którego trafiają do bazy.
+    const block = parseExerciseBlock('z', 'Co można powiedzieć o wektorach $a$ i $b$?');
+    expect(block.issues).toEqual([]);
+    expect(block.answer).toBeUndefined();
+    expect(block.expected).toBeUndefined();
+  });
+
+  it('dane do losowania bez wskazanej wielkości to pomyłka i mówimy o tym', () => {
+    const block = parseExerciseBlock('z', 'Treść.\n@given L: 1..2 m');
+    expect(block.issues.join(' ')).toMatch(/@answer/);
+  });
+
+  it('zapis i odczyt wracają tym samym', () => {
+    const kod = 'Treść zadania.\n@expected 6 m pod kątem 20,5°\n@check 6 m\n@level 2\n@uses rh1-2-eq10a\n@hint Rozłóż na składowe.';
+    const raz = parseExerciseBlock('z', kod);
+    const dwa = parseExerciseBlock('z', serializeExerciseBlock(raz));
+    expect(dwa).toEqual(raz);
+  });
+});
+
+describe('sprawdzanie odpowiedzi przepisanej z podręcznika', () => {
+  it('porównuje z tolerancją i wymiarem, bez żadnego modelu', () => {
+    const wariant = statedVariant('6 m');
+    expect(checkNumeric('6.05 m', wariant, 0.02).verdict).toBe('correct');
+    expect(checkNumeric('7 m', wariant, 0.02).verdict).toBe('wrong');
+    expect(checkNumeric('6', wariant, 0.02).verdict).toBe('wrong-unit');
+    expect(checkNumeric('6 s', wariant, 0.02).verdict).toBe('wrong-unit');
+  });
+
+  it('czyta przecinek dziesiętny — podręcznik pisze „20,5°"', () => {
+    expect(statedVariant('20,5').expected).toBeCloseTo(20.5, 9);
+  });
+
+  it('odpowiedź czytelnika też może mieć przecinek — tak się pisze po polsku', () => {
+    const wariant = statedVariant('6 m');
+    expect(checkNumeric('6,1 m', wariant, 0.02).verdict).toBe('correct');
+  });
+
+  it('odpowiedź, której nie da się odczytać jako wielkości, nie ma wartości wzorcowej', () => {
+    expect(statedVariant('prostopadłe').expected).toBeUndefined();
+    expect(statedVariant('prostopadłe').issues.length).toBeGreaterThan(0);
   });
 });

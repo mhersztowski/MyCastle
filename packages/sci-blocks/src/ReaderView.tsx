@@ -15,9 +15,9 @@
  * renderera markdownu obok istniejącego byłoby budowaniem frameworka zamiast
  * treści — a przed tym raport ostrzega wprost.
  */
-import { useMemo } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
-import { parseFormulaBlock, type FormulaBlock } from '@mhersztowski/sci-core';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { parseFormulaBlock, type FormulaBlock, type ReferenceKind } from '@mhersztowski/sci-core';
 import { FormulaBlockView } from './FormulaBlockView';
 import { SimBlock } from './SimBlock';
 import { ScriptBlock } from './ScriptBlock';
@@ -25,6 +25,15 @@ import { ExerciseBlock } from './ExerciseBlock';
 import { FieldBlock } from './FieldBlock';
 import { LinAlgBlock } from './LinAlgBlock';
 import { ProcedureBlock } from './ProcedureBlock';
+import { FigureBlock } from './FigureBlock';
+import { TableBlock } from './TableBlock';
+import { CalloutBlock } from './CalloutBlock';
+import type { SolutionDraft } from './SolutionDialog';
+import type { Solution } from '@mhersztowski/sci-core';
+import { LawBlock } from './LawBlock';
+import { Markdown } from './Markdown';
+import { punktyLamania, stronaDlaOffsetu } from './lamanieStron';
+import { kontenerPrzewijania, pozycjaPrzewijania, przewinDo } from './przewijanie';
 import type { WorkerFactory } from './useModelRunner';
 import type { Quality } from '@mhersztowski/sci-core';
 
@@ -44,6 +53,54 @@ export interface ReaderViewProps {
   onAttempt?: (attempt: { id: string; quality: Quality; hintsUsed: number }) => void;
   /** Ścieżka dokumentu — przedrostek identyfikatora zadania. */
   path?: string;
+  /**
+   * Rozwiązywanie odsyłaczy `[[id]]` na wzory bazy.
+   *
+   * Host podaje je, bo tylko on ma indeks całej bazy; bez tego odsyłacze do
+   * innych dokumentów pokazują się jako nieznane. Odsyłacze w obrębie
+   * dokumentu działają zawsze — na jego własnych wzorach.
+   */
+  resolveRef?: (id: string) => {
+    code?: string;
+    kind?: ReferenceKind;
+    documentTitle?: string;
+    sameDocument: boolean;
+  } | undefined;
+  /** Przejście do celu odsyłacza; brak = odsyłacz tylko pokazuje podgląd. */
+  onNavigate?: (id: string) => void;
+  /**
+   * Czytanie stronami zamiast przewijania.
+   *
+   * Przewijanie jest złe dla podręcznika z dwóch powodów: gubi miejsce (po
+   * odłożeniu telefonu nie wiadomo, gdzie się było) i nie pokazuje postępu.
+   * Strona ma wysokość widoku, więc czytelnik wraca zawsze do tego samego
+   * kadru, a licznik „3 / 12" mówi coś prawdziwego.
+   *
+   * Podział **wynika z pomiaru**, nie z liczby znaków: ten sam rozdział na
+   * telefonie i na monitorze ma inną liczbę stron i tak być powinno.
+   */
+  paged?: boolean;
+  /**
+   * Zgłoszenie „przeczytałem" — host zapisuje je w statystykach.
+   *
+   * Brak = przycisku nie ma. Statystyka potrzebuje sygnału, którego nie da się
+   * wywnioskować z przewijania: przewinięcie do końca znaczy tyle, że ktoś
+   * przeciągnął palcem. Deklaracja czytelnika jest jedyną wiarygodną miarą.
+   */
+  onRead?: (read: boolean) => void;
+  /** Czy dokument jest już oznaczony jako przeczytany. */
+  read?: boolean;
+  /**
+   * Historia i zapis rozwiązań zadań.
+   *
+   * Kontrakt hosta, bo tylko on ma plik postępów. Klucz jest taki sam jak
+   * w harmonogramie (`dokument:zadanie`), więc jedno zadanie ma jedną tożsamość
+   * w całej warstwie postępów. Brak = przycisków „rozwiąż" i „historia" nie ma.
+   */
+  solutionStore?: {
+    get: (exerciseId: string) => Solution[];
+    save: (exerciseId: string, draft: SolutionDraft) => void;
+  };
 }
 
 type Segment =
@@ -55,6 +112,10 @@ type Segment =
   | { kind: 'field'; id: string; body: string }
   | { kind: 'linalg'; id: string; body: string }
   | { kind: 'procedure'; id: string; body: string }
+  | { kind: 'figure'; id: string; body: string }
+  | { kind: 'table'; id: string; body: string }
+  | { kind: 'callout'; id: string; body: string }
+  | { kind: 'law'; id: string; body: string }
   | { kind: 'code'; language: string; body: string };
 
 const FENCE = /```([^\n]*)\n([\s\S]*?)```/g;
@@ -84,8 +145,16 @@ export function splitDocument(markdown: string): Segment[] {
     const field = /^field:([A-Za-z0-9_-]+)$/.exec(info);
     const linalg = /^linalg:([A-Za-z0-9_-]+)$/.exec(info);
     const procedura = /^procedure:([A-Za-z0-9_-]+)$/.exec(info);
+    const rysunek = /^figure:([A-Za-z0-9_-]+)$/.exec(info);
+    const tablica = /^table:([A-Za-z0-9_-]+)$/.exec(info);
+    const notka = /^callout:([A-Za-z0-9_-]+)$/.exec(info);
+    const prawo = /^law:([A-Za-z0-9_-]+)$/.exec(info);
 
-    if (procedura) segments.push({ kind: 'procedure', id: procedura[1], body: content });
+    if (rysunek) segments.push({ kind: 'figure', id: rysunek[1], body: content });
+    else if (notka) segments.push({ kind: 'callout', id: notka[1], body: content });
+    else if (prawo) segments.push({ kind: 'law', id: prawo[1], body: content });
+    else if (tablica) segments.push({ kind: 'table', id: tablica[1], body: content });
+    else if (procedura) segments.push({ kind: 'procedure', id: procedura[1], body: content });
     else if (linalg) segments.push({ kind: 'linalg', id: linalg[1], body: content });
     else if (field) segments.push({ kind: 'field', id: field[1], body: content });
     else if (formula) segments.push({ kind: 'formula', id: formula[1], body: content });
@@ -127,7 +196,10 @@ function parseStageSetup(body: string) {
 
 const text: CSSProperties = { fontSize: 15, lineHeight: 1.65, color: '#1e293b' };
 
-export function ReaderView({ markdown, maxWidth = 720, workerFactory, onAttempt, path }: ReaderViewProps) {
+export function ReaderView({
+  markdown, maxWidth = 720, workerFactory, onAttempt, path, resolveRef, onNavigate, paged,
+  onRead, read, solutionStore,
+}: ReaderViewProps) {
   const segments = useMemo(() => splitDocument(markdown), [markdown]);
   // Bloki `formula` z dyrektywą `@pde` opisują pola; blok `field` tylko je
   // uruchamia, tak jak `sim` uruchamia graf wzorów.
@@ -155,14 +227,192 @@ export function ReaderView({ markdown, maxWidth = 720, workerFactory, onAttempt,
     [segments],
   );
 
-  return (
-    <article style={{ maxWidth, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14, ...text }}>
+  /**
+   * Rozwiązanie odsyłacza: najpierw wzory tego dokumentu, potem indeks hosta.
+   *
+   * Dzięki temu odsyłacze wewnątrzdokumentowe — a w podręczniku to 97% —
+   * działają nawet wtedy, gdy host nie podał indeksu (podgląd, eksport).
+   */
+  const rozwiazOdsylacz = (id: string) => {
+    const wlasny = segments.find(
+      (s): s is Extract<Segment, { kind: 'formula' | 'figure' | 'table' }> =>
+        (s.kind === 'formula' || s.kind === 'figure' || s.kind === 'table'
+          || s.kind === 'callout' || s.kind === 'law')
+        && s.id === id,
+    );
+    if (wlasny) return { code: wlasny.body, kind: wlasny.kind, sameDocument: true };
+    return resolveRef?.(id);
+  };
+
+  /**
+   * Kliknięcie odsyłacza.
+   *
+   * Cel w tym samym dokumencie **przewijamy**, zamiast wołać nawigację hosta —
+   * ta przeładowałaby tę samą stronę i nic by się nie stało. W podręczniku
+   * ogromna większość odesłań jest wewnątrzdokumentowa, więc to jest przypadek
+   * typowy, nie brzegowy.
+   */
+  const przejdzDoCelu = (id: string) => {
+    const cel = typeof document !== 'undefined' ? document.getElementById(`ref-${id}`) : null;
+    if (cel) {
+      cel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    onNavigate?.(id);
+  };
+
+  const okno = useRef<HTMLDivElement>(null);
+  const tresc = useRef<HTMLDivElement>(null);
+  /** Artykuł istnieje w obu trybach — po nim mierzymy miejsce lektury. */
+  const artykul = useRef<HTMLElement>(null);
+  const [strona, setStrona] = useState(0);
+  /**
+   * Przesunięcia początków stron.
+   *
+   * Lista, a nie jedna wysokość: strony mają różne rozmiary, bo łamiemy je
+   * między elementami, a nie co stałą liczbę pikseli. Wersja z jedną wysokością
+   * tnie wzór albo symulację w połowie.
+   */
+  const [punkty, setPunkty] = useState<number[]>([0]);
+
+  /**
+   * Przełączenie trybu czytania zachowuje miejsce w dokumencie.
+   *
+   * Tryb odpowiada za **sposób pokazywania**, nie za miejsce lektury. Skok na
+   * początek rozdziału przy każdym przełączeniu kazał czytelnikowi szukać
+   * akapitu, przy którym przed chwilą był.
+   *
+   * Obie strony przeliczenia idą przez jedną wielkość: przesunięcie od góry
+   * treści. W trybie stron niesie je numer strony, w trybie przewijania —
+   * pozycja okna. Wspólna miara jest tu jedynym sposobem, żeby przejście było
+   * odwracalne.
+   *
+   * Efekt stoi **przed** pomiarem, bo przy wejściu w tryb stron podział na
+   * strony dopiero powstanie: zapisujemy miejsce, a stronę wybiera pomiar,
+   * gdy zna już punkty łamania.
+   */
+  const poprzedniTryb = useRef(paged);
+  const docelowyOffset = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (poprzedniTryb.current === paged) return;
+    const bylyStrony = poprzedniTryb.current;
+    poprzedniTryb.current = paged;
+
+    const element = artykul.current;
+    if (!element || typeof window === 'undefined') return;
+
+    // Treść przewija najbliższy przodek z własnym przewijaniem, a nie zawsze
+    // okno: strona bywa osadzona w obszarze roboczym o stałej wysokości.
+    // Pytanie okna dawało wtedy zero i przejście nie robiło nic.
+    const kontener = kontenerPrzewijania(element);
+    const przewiniete = pozycjaPrzewijania(kontener);
+
+    // Górna krawędź treści w układzie przewijanej zawartości, nie okna.
+    const odniesienie = kontener?.getBoundingClientRect().top ?? 0;
+    const goraTresci = element.getBoundingClientRect().top - odniesienie + przewiniete;
+
+    if (bylyStrony && !paged) {
+      przewinDo(kontener, goraTresci + (punkty[strona] ?? 0));
+    } else if (!bylyStrony && paged) {
+      docelowyOffset.current = przewiniete - goraTresci;
+    }
+  }, [paged, punkty, strona]);
+
+  /**
+   * Pomiar: ile treści i ile widoku.
+   *
+   * Liczony po każdym renderze i przy każdej zmianie rozmiaru — treść rośnie
+   * także **po** pierwszym renderze, gdy doładują się obrazy rysunków albo
+   * policzy symulacja. Podział zrobiony raz, na starcie, kończyłby się ostatnią
+   * stroną w połowie wykresu.
+   */
+  useLayoutEffect(() => {
+    if (!paged || typeof window === 'undefined') return undefined;
+
+    const zmierz = () => {
+      const widok = okno.current?.clientHeight || window.innerHeight;
+      const kontener = tresc.current;
+      const wysokosc = kontener?.scrollHeight ?? 0;
+
+      // Mierzymy **dzieci artykułu**, nie sam artykuł: to one są akapitami,
+      // wzorami i symulacjami, między którymi wolno łamać.
+      const tekst = artykul.current;
+      const gora = tekst?.getBoundingClientRect().top ?? 0;
+      const elementy = [...(tekst?.children ?? [])].map((dziecko) => {
+        const prostokat = dziecko.getBoundingClientRect();
+        return { top: prostokat.top - gora, height: prostokat.height };
+      });
+
+      const nowe = punktyLamania(elementy, widok, wysokosc);
+      setPunkty((p) => (p.length === nowe.length && p.every((v, i) => v === nowe[i]) ? p : nowe));
+
+      // Miejsce zapamiętane przy wejściu w tryb stron — odtwarzamy je dopiero
+      // teraz, bo dopiero teraz wiadomo, gdzie przebiegają granice stron.
+      if (docelowyOffset.current !== null) {
+        setStrona(stronaDlaOffsetu(nowe, docelowyOffset.current));
+        docelowyOffset.current = null;
+      }
+    };
+
+    zmierz();
+    window.addEventListener('resize', zmierz);
+    const obserwator = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(zmierz);
+    if (tresc.current) obserwator?.observe(tresc.current);
+    return () => {
+      window.removeEventListener('resize', zmierz);
+      obserwator?.disconnect();
+    };
+  }, [paged, markdown]);
+
+  // Zmiana podziału (obrót telefonu) nie może zostawić numeru strony za końcem.
+  useEffect(() => {
+    setStrona((p) => Math.min(p, punkty.length - 1));
+  }, [punkty.length]);
+
+  const przewroc = useCallback((o: number) => {
+    setStrona((p) => Math.min(Math.max(0, p + o), punkty.length - 1));
+  }, [punkty.length]);
+
+  useEffect(() => {
+    if (!paged || typeof window === 'undefined') return undefined;
+    const klawisz = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') przewroc(1);
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') przewroc(-1);
+    };
+    window.addEventListener('keydown', klawisz);
+    return () => window.removeEventListener('keydown', klawisz);
+  }, [paged, przewroc]);
+
+  const tekstDokumentu = (
+    <article ref={artykul} style={{ maxWidth, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14, ...text }}>
       {segments.map((segment, index) => {
         switch (segment.kind) {
           case 'text':
-            return <Markdown key={index} source={segment.content} />;
+            return (
+              <Markdown
+                key={index}
+                source={segment.content}
+                resolve={rozwiazOdsylacz}
+                onNavigate={przejdzDoCelu}
+              />
+            );
+          case 'figure':
+            return <FigureBlock key={index} id={segment.id} code={segment.body} />;
+          case 'table':
+            return <TableBlock key={index} id={segment.id} code={segment.body} />;
+          case 'callout':
+            return <CalloutBlock key={index} id={segment.id} code={segment.body} />;
+          case 'law':
+            return <LawBlock key={index} id={segment.id} code={segment.body} />;
           case 'formula':
-            return <FormulaBlockView key={index} id={segment.id} code={segment.body} />;
+            return (
+              // Kotwica dla odsyłacza w obrębie dokumentu — bez niej „równanie
+              // (15-2)" nie miałoby dokąd przewinąć.
+              <div key={index} id={`ref-${segment.id}`}>
+                <FormulaBlockView id={segment.id} code={segment.body} />
+              </div>
+            );
           case 'sim':
             return <SimBlock key={index} code={segment.body} formulas={formulas} workerFactory={workerFactory} />;
           case 'procedure':
@@ -206,10 +456,23 @@ export function ReaderView({ markdown, maxWidth = 720, workerFactory, onAttempt,
                 id={segment.id}
                 code={segment.body}
                 formulas={formulas}
+                resolve={rozwiazOdsylacz}
+                onNavigate={przejdzDoCelu}
                 onAttempt={onAttempt && ((attempt) => onAttempt({
                   ...attempt,
                   id: path ? `${path}:${attempt.id}` : attempt.id,
                 }))}
+                /*
+                  Klucz historii składamy **tak samo jak klucz harmonogramu** —
+                  identyfikator zadania jest unikalny tylko w obrębie dokumentu,
+                  więc bez ścieżki „zadanie-1" z dwóch rozdziałów dzieliłoby
+                  jedną historię.
+                */
+                solutions={solutionStore?.get(path ? `${path}:${segment.id}` : segment.id)}
+                onSolution={solutionStore && ((draft) => solutionStore.save(
+                  path ? `${path}:${segment.id}` : segment.id,
+                  draft,
+                ))}
               />
             );
           default:
@@ -220,80 +483,111 @@ export function ReaderView({ markdown, maxWidth = 720, workerFactory, onAttempt,
             );
         }
       })}
+      {onRead && (
+        /*
+          Na końcu treści, nie w nagłówku: w nagłówku byłby propozycją
+          oznaczenia czegoś, czego czytelnik jeszcze nie przeczytał — czyli
+          zaproszeniem do psucia własnej statystyki.
+        */
+        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8 }}>
+          <button
+            type="button"
+            aria-pressed={!!read}
+            onClick={() => onRead(!read)}
+            style={read ? przyciskPrzeczytane : przyciskPrzeczytam}
+          >
+            {read ? '✓ przeczytane' : 'przeczytałem'}
+          </button>
+        </div>
+      )}
     </article>
   );
-}
 
-/**
- * Minimalny render markdownu: nagłówki, akapity, listy, kod w linii, wyróżnienia.
- *
- * Świadomie bez biblioteki i bez `dangerouslySetInnerHTML` — dokument bazy
- * wiedzy bywa cudzy, a wstrzykiwanie HTML-a z treści to jedyne miejsce, gdzie
- * ten komponent mógłby zrobić krzywdę.
- */
-function Markdown({ source }: { source: string }) {
-  const blocks = source.split(/\n{2,}/).filter((block) => block.trim());
+  if (!paged) return tekstDokumentu;
 
   return (
-    <>
-      {blocks.map((block, index) => {
-        const heading = /^(#{1,4})\s+(.*)$/.exec(block.trim());
-        if (heading) {
-          const level = heading[1].length;
-          const sizes = [26, 20, 16, 14];
-          return (
-            <div
-              key={index}
-              style={{
-                fontSize: sizes[level - 1], fontWeight: 600, color: '#0f172a',
-                marginTop: level <= 2 ? 10 : 4, lineHeight: 1.25,
-              }}
-            >
-              {inline(heading[2])}
-            </div>
-          );
-        }
+    <div ref={okno} style={ramkaStron}>
+      {/*
+        Strona jest **przesunięciem** treści, nie jej przycięciem. Gdyby każda
+        renderowała tylko swoje akapity, wzór albo symulacja przecięte granicą
+        musiałyby się przemontować przy każdym przewróceniu — a symulacja liczy
+        się wtedy od nowa.
+      */}
+      <div
+        ref={tresc}
+        data-testid="reader-pages"
+        style={{
+          transform: `translateY(-${punkty[strona] ?? 0}px)`,
+          transition: 'transform 180ms ease-out',
+        }}
+      >
+        {tekstDokumentu}
+      </div>
 
-        if (/^\s*[-*]\s+/m.test(block)) {
-          const items = block.split('\n').filter((line) => /^\s*[-*]\s+/.test(line));
-          return (
-            <ul key={index} style={{ margin: 0, paddingLeft: 22 }}>
-              {items.map((item, i) => <li key={i}>{inline(item.replace(/^\s*[-*]\s+/, ''))}</li>)}
-            </ul>
-          );
-        }
+      <button type="button" aria-label="poprzednia strona" onClick={() => przewroc(-1)} style={{ ...polowa, left: 0 }} />
+      <button type="button" aria-label="następna strona" onClick={() => przewroc(1)} style={{ ...polowa, right: 0 }} />
 
-        return <p key={index} style={{ margin: 0 }}>{inline(block)}</p>;
-      })}
-    </>
+      <div style={licznikStron}>{strona + 1} / {punkty.length}</div>
+    </div>
   );
 }
 
+const przyciskPrzeczytam: CSSProperties = {
+  fontSize: 13,
+  padding: '6px 16px',
+  borderRadius: 16,
+  border: '1px solid #cbd5e1',
+  background: '#fff',
+  color: '#334155',
+  cursor: 'pointer',
+};
+
+/** Oznaczony stan wygląda inaczej, żeby dało się go rozpoznać bez czytania. */
+const przyciskPrzeczytane: CSSProperties = {
+  ...przyciskPrzeczytam,
+  borderColor: '#059669',
+  background: '#ecfdf5',
+  color: '#047857',
+};
+
+/** Okno strony: przycina treść i jest układem odniesienia dla stref dotyku. */
+const ramkaStron: CSSProperties = {
+  position: 'relative',
+  height: '100%',
+  minHeight: 200,
+  overflow: 'hidden',
+};
+
+/**
+ * Strefa przewracania — połowa szerokości, przezroczysta.
+ *
+ * Przezroczysta, a nie widoczna: w książce nie ma przycisków, a czytelnik
+ * uczy się tego jednym przypadkowym dotknięciem. `zIndex` niżej niż dymki
+ * odsyłaczy, żeby przycisk „otwórz" w dymku dało się nacisnąć.
+ */
+const polowa: CSSProperties = {
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  width: '35%',
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  zIndex: 5,
+};
+
+const licznikStron: CSSProperties = {
+  position: 'absolute',
+  bottom: 6,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  fontSize: 11,
+  color: '#64748b',
+  background: 'rgba(255,255,255,0.85)',
+  borderRadius: 10,
+  padding: '2px 10px',
+  pointerEvents: 'none',
+  zIndex: 6,
+};
+
 /** Kod w linii, pogrubienie i kursywa — reszta zostaje tekstem. */
-function inline(source: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
-  let last = 0;
-  let key = 0;
-
-  for (const match of source.matchAll(pattern)) {
-    if (match.index! > last) out.push(source.slice(last, match.index));
-    const token = match[0];
-    last = match.index! + token.length;
-
-    if (token.startsWith('`')) {
-      out.push(
-        <code key={key += 1} style={{ background: '#f1f5f9', borderRadius: 3, padding: '1px 4px', fontSize: '0.9em' }}>
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith('**')) {
-      out.push(<strong key={key += 1}>{token.slice(2, -2)}</strong>);
-    } else {
-      out.push(<em key={key += 1}>{token.slice(1, -1)}</em>);
-    }
-  }
-
-  if (last < source.length) out.push(source.slice(last));
-  return out;
-}

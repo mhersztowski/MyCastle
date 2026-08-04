@@ -92,7 +92,11 @@ describe('prawdziwe dokumenty', () => {
         (s) => s.kind === 'code' && /^(formula|sim|simscript|exercise)/.test((s as { language: string }).language),
       );
       expect(nierozpoznane).toEqual([]);
-      expect(segments.length).toBeGreaterThan(2);
+      // Dokument z blokami musi się na nie rozpaść. Dokument bez bloków —
+      // Pytania rozdziału to sam tekst — zostaje jednym segmentem i to jest
+      // stan poprawny, więc warunku nie stawiamy wszystkim po równo.
+      const maBloki = /^ {0,3}```(formula|sim|simscript|exercise|figure|table|term):/m.test(read(name));
+      expect(segments.length).toBeGreaterThan(maBloki ? 2 : 0);
     });
 
     it(`${name}: treść nie ginie`, () => {

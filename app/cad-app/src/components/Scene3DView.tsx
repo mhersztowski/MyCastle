@@ -26,9 +26,18 @@ import type { ActiveTemplate } from './RepositoryPanel';
 import { GeometryNodesEditor } from './GeometryNodesEditor';
 import { MeshEditModeDialog } from './MeshEditModeDialog';
 import { evaluateDescriptor, geometryToEditable } from '../edit-mode/meshConverter';
+import { importGLTF } from '../io/CadExporter';
 import type { EditableMesh } from '../edit-mode/types';
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a'];
+
+/** Obrazy, które przeglądarka wczyta jako teksturę. */
+const TEXTURE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.ktx2', '.avif'];
+
+const TEXTURE_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+  gif: 'image/gif', bmp: 'image/bmp', avif: 'image/avif',
+};
 
 /** Rozszerzenie skryptów sceny — plik wskazywany w Settings → Scene script. */
 const SCRIPT_EXT = '.ts';
@@ -79,15 +88,6 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     ? buildViewerUrl('scene3d', `/users/${getCurrentUserId()}/scene3d/${currentProject}`, currentFile)
     : null;
 
-  // Register file operations with the unified top-bar File menu.
-  useRegisterFileOps('scene3d', {
-    currentName: currentFile,
-    server: [
-      { label: 'Open Scene 3D from Server…', run: () => setServerMode('open') },
-      { label: 'Save Scene 3D to Server…', run: () => setServerMode('save') },
-    ],
-    viewerUrl: sceneViewerUrl,
-  }, [currentFile, sceneViewerUrl]);
   const [initialPrefabs, setInitialPrefabs] = useState<string | undefined>(undefined);
   const [allProjectsPrefabs, setAllProjectsPrefabs] = useState<ProjectPrefabGroup[]>([]);
   const currentProjectRef = useRef<string | null>(null);
@@ -100,8 +100,58 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
   }, []);
 
   useEffect(() => { refreshAllPrefabs(); }, [refreshAllPrefabs]);
-  const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
+  // `warning` obok sukcesu i błędu: import glTF potrafi się udać **niekompletnie**
+  // (np. „.gltf" bez pliku „.bin" obok) i to jest trzeci stan, nie żaden z dwóch.
+  const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' | 'warning' } | null>(null);
   const [debugLog, setDebugLog] = useState(false);
+
+  /**
+   * Import modelu glTF/GLB z dysku.
+   *
+   * Wchodzi przez **górne menu File**, a nie tylko przez menu wewnątrz edytora:
+   * to pierwsze miejsce, w którym szuka się importu, i jedyne wspólne dla
+   * wszystkich trybów aplikacji.
+   *
+   * Model **dokładamy** do sceny (`mergeScene`), zamiast ją zastępować:
+   * import zwykle domyka to, co już stoi w scenie, a podmiana kasowałaby pracę
+   * bez pytania.
+   */
+  const gltfInputRef = useRef<HTMLInputElement>(null);
+
+  const wczytajGltf = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const plik = e.target.files?.[0];
+    e.target.value = '';
+    if (!plik) return;
+
+    try {
+      const { json, warnings, meshCount } = await importGLTF(plik);
+      if (mergeSceneRef.current) mergeSceneRef.current(json);
+      else setSceneData(json);
+
+      setToast(warnings.length
+        ? { msg: warnings[0], severity: 'warning' }
+        : { msg: `Wczytano ${plik.name}: ${meshCount} siatek`, severity: 'success' });
+    } catch (blad) {
+      setToast({ msg: (blad as Error).message, severity: 'error' });
+    }
+  }, []);
+
+  // Register file operations with the unified top-bar File menu.
+  useRegisterFileOps('scene3d', {
+    currentName: currentFile,
+    server: [
+      { label: 'Open Scene 3D from Server…', run: () => setServerMode('open') },
+      { label: 'Save Scene 3D to Server…', run: () => setServerMode('save') },
+    ],
+    importItems: [
+      {
+        label: 'Import glTF / GLB…',
+        secondary: 'Cała scena — hierarchia i materiały',
+        run: () => gltfInputRef.current?.click(),
+      },
+    ],
+    viewerUrl: sceneViewerUrl,
+  }, [currentFile, sceneViewerUrl]);
   const [mapImports, setMapImports] = useState<MapImportRecord[]>([]);
   const [mapPanelAnchor, setMapPanelAnchor] = useState<HTMLElement | null>(null);
   const [mapPickerOpen, setMapPickerOpen] = useState(false);
@@ -271,10 +321,25 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     refreshAllPrefabs();
   }, [refreshAllPrefabs]);
 
+  /**
+   * Rozszerzenia, które okno wyboru pokazuje w bieżącym przebiegu.
+   *
+   * Jeden picker zamiast dwóch prawie identycznych: dźwięk i tekstura różnią
+   * się wyłącznie listą rozszerzeń i tym, co robimy z wybraną ścieżką.
+   */
+  const pickerFilterRef = useRef<string[]>(AUDIO_EXTENSIONS);
+  /** Czy bieżący przebieg pickera ma oddać ścieżkę VFS zamiast adresu strumienia. */
+  const pickerZwracaSciezkeRef = useRef(false);
+  // Tytuł w stanie, nie w ref: okno musi się przerysować po jego zmianie.
+  const [pickerTytul, setPickerTytul] = useState('Wybierz plik');
+  /** Siatka miniatur zamiast listy nazw — dla obrazów. */
+  const [pickerMiniatury, setPickerMiniatury] = useState(false);
+
   const loadAudioPickerDir = useCallback((path: string) => {
     vfsListDir(path).then(entries => {
+      const rozszerzenia = pickerFilterRef.current;
       const filtered = entries.filter(e =>
-        e.isDir || AUDIO_EXTENSIONS.some(ext => e.name.toLowerCase().endsWith(ext))
+        e.isDir || rozszerzenia.some(ext => e.name.toLowerCase().endsWith(ext))
       );
       filtered.sort((a, b) => {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -287,8 +352,16 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     });
   }, []);
 
-  const handleBrowseAudioFile = useCallback((): Promise<string | null> => {
+  const otworzPicker = useCallback((
+    rozszerzenia: string[],
+    tytul: string,
+    zwracaSciezke = false,
+  ): Promise<string | null> => {
     return new Promise((resolve) => {
+      pickerFilterRef.current = rozszerzenia;
+      pickerZwracaSciezkeRef.current = zwracaSciezke;
+      setPickerTytul(tytul);
+      setPickerMiniatury(rozszerzenia === TEXTURE_EXTENSIONS);
       audioPickerResolveRef.current = resolve;
       const root = userProjectsDir();
       setAudioPickerPath(root);
@@ -296,6 +369,30 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
       setAudioPickerOpen(true);
     });
   }, [loadAudioPickerDir]);
+
+  const handleBrowseAudioFile = useCallback(
+    () => otworzPicker(AUDIO_EXTENSIONS, 'Wybierz dźwięk'),
+    [otworzPicker],
+  );
+
+  const handleBrowseTexture = useCallback(
+    () => otworzPicker(TEXTURE_EXTENSIONS, 'Wybierz teksturę', true),
+    [otworzPicker],
+  );
+
+  /**
+   * Ścieżka tekstury z VFS → adres, który wczyta przeglądarka.
+   *
+   * Pliku z VFS nie da się podać wprost do `<img>`, bo nie stoi pod żadnym
+   * adresem HTTP — czytamy bajty i robimy z nich `blob:`. Adres gotowy
+   * (`http`, `data:`) zostaje bez zmian.
+   */
+  const resolveTextureSrc = useCallback(async (src: string): Promise<string> => {
+    if (!src || /^(https?:|blob:|data:)/.test(src)) return src;
+    const bytes = await vfsReadFileBin(src);
+    const ext = src.split('.').pop()?.toLowerCase() ?? '';
+    return URL.createObjectURL(new Blob([bytes], { type: TEXTURE_MIME[ext] ?? 'image/png' }));
+  }, []);
 
   const handleAudioPickerNavigate = useCallback((dirName: string) => {
     loadAudioPickerDir(`${audioPickerPath}/${dirName}`);
@@ -307,10 +404,20 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
     loadAudioPickerDir(parent.startsWith(root) ? parent : root);
   }, [audioPickerPath, loadAudioPickerDir]);
 
+  /**
+   * Wybór pliku kończy przebieg pickera.
+   *
+   * Dźwięk dostaje **adres** (`/api/vfs/stream?path=…`), bo `<audio>` odtwarza
+   * strumień wprost. Tekstura dostaje **ścieżkę VFS**: to ona zapisuje się
+   * w scenie i otwiera na innym komputerze, a adres z bieżącego okna
+   * przeglądarki nie znaczy tam nic.
+   */
   const handleAudioPickerSelect = useCallback((name: string) => {
     const vfsPath = `${audioPickerPath}/${name}`;
-    const url = `${window.location.origin}/api/vfs/stream?path=${encodeURIComponent(vfsPath)}`;
-    audioPickerResolveRef.current?.(url);
+    const wynik = pickerZwracaSciezkeRef.current
+      ? vfsPath
+      : `${window.location.origin}/api/vfs/stream?path=${encodeURIComponent(vfsPath)}`;
+    audioPickerResolveRef.current?.(wynik);
     audioPickerResolveRef.current = null;
     setAudioPickerOpen(false);
   }, [audioPickerPath]);
@@ -380,6 +487,7 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
 
   const cadCount = project.entityRegistry.getAll().length;
 
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* RichEditor fills the rest — includes SceneTree, viewport, Properties panels */}
@@ -406,6 +514,8 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           debugLog={debugLog}
           onBrowseAudioFile={handleBrowseAudioFile}
           resolveAudioSrc={resolveAudioSrc}
+          onBrowseTexture={handleBrowseTexture}
+          resolveTextureSrc={resolveTextureSrc}
           onEditGeometryNodes={handleEditGeometryNodes}
           onEditMesh={handleEditMesh}
           propertyChangeRef={propertyChangeRef}
@@ -535,7 +645,17 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
         onSave={handleSaveProject}
       />
 
-      <Dialog open={audioPickerOpen} onClose={handleAudioPickerClose} maxWidth="xs" fullWidth>
+      {/*
+        Okno wyboru: dla tekstur **siatka miniatur**, dla dźwięku lista nazw.
+        Tekstury wybiera się okiem — po nazwie pliku nie da się poznać, czy to
+        cegła, czy tynk, a ścianę trzeba obejrzeć, zanim się ją nałoży.
+      */}
+      <Dialog
+        open={audioPickerOpen}
+        onClose={handleAudioPickerClose}
+        maxWidth={pickerMiniatury ? 'md' : 'xs'}
+        fullWidth
+      >
         <DialogTitle sx={{ fontSize: '0.9rem', py: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
           {audioPickerPath !== userProjectsDir() && (
             <IconButton size="small" onClick={handleAudioPickerUp} sx={{ p: 0.25, mr: 0.5 }}>
@@ -543,7 +663,7 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
             </IconButton>
           )}
           <Box sx={{ flex: 1, overflow: 'hidden' }}>
-            <Typography sx={{ fontSize: '0.9rem', fontWeight: 500 }}>Select File</Typography>
+            <Typography sx={{ fontSize: '0.9rem', fontWeight: 500 }}>{pickerTytul}</Typography>
             <Typography variant="caption" sx={{ fontSize: '0.7rem', color: 'text.secondary', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {audioPickerPath}
             </Typography>
@@ -553,8 +673,60 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
           {audioPickerEntries.length === 0 ? (
             <Box sx={{ px: 2, py: 2 }}>
               <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8rem' }}>
-                No audio files (.mp3, .wav, .ogg, .flac, .aac, .m4a) found here.
+                {pickerMiniatury
+                  ? 'Nie ma tu obrazów (.png, .jpg, .webp, .gif, .bmp, .avif).'
+                  : 'No audio files (.mp3, .wav, .ogg, .flac, .aac, .m4a) found here.'}
               </Typography>
+            </Box>
+          ) : pickerMiniatury ? (
+            <Box sx={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+              gap: 1,
+              p: 1.5,
+              maxHeight: '60vh',
+              overflow: 'auto',
+            }}>
+              {audioPickerEntries.map(entry => (
+                <Box
+                  key={entry.name}
+                  onClick={() => entry.isDir
+                    ? handleAudioPickerNavigate(entry.name)
+                    : handleAudioPickerSelect(entry.name)}
+                  sx={{
+                    cursor: 'pointer', borderRadius: 1, overflow: 'hidden',
+                    border: '1px solid', borderColor: 'divider',
+                    display: 'flex', flexDirection: 'column',
+                    '&:hover': { borderColor: 'primary.main' },
+                  }}
+                >
+                  <Box sx={{
+                    height: 96, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    bgcolor: 'action.hover', overflow: 'hidden',
+                  }}>
+                    {entry.isDir ? (
+                      <FolderIcon sx={{ fontSize: 40, color: '#ffb74d' }} />
+                    ) : (
+                      <Box
+                        component="img"
+                        // Miniatura idzie prosto ze strumienia VFS — ten sam
+                        // plik, który za chwilę zobaczysz na modelu.
+                        src={`${window.location.origin}/api/vfs/stream?path=${encodeURIComponent(`${audioPickerPath}/${entry.name}`)}`}
+                        alt={entry.name}
+                        loading="lazy"
+                        sx={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      />
+                    )}
+                  </Box>
+                  <Typography sx={{
+                    fontSize: '0.68rem', px: 0.75, py: 0.5,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    color: entry.isDir ? 'text.primary' : 'text.secondary',
+                  }}>
+                    {entry.name}
+                  </Typography>
+                </Box>
+              ))}
             </Box>
           ) : (
             <List dense disablePadding>
@@ -644,6 +816,15 @@ export function Scene3DView({ project, externalSceneData, externalSceneKey, merg
         onClose={() => setMapPickerOpen(false)}
         onOpen={handleImportMap}
         onDone={() => setMapPickerOpen(false)}
+      />
+
+      {/* Wybór pliku dla „File → Import glTF / GLB…" z górnego paska. */}
+      <input
+        ref={gltfInputRef}
+        type="file"
+        accept=".gltf,.glb"
+        style={{ display: 'none' }}
+        onChange={wczytajGltf}
       />
 
       <Snackbar

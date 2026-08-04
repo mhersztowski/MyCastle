@@ -6,7 +6,7 @@ import type { Entity, EntityInput, Layer, Project, ProjectData } from '@mherszto
 import { build3dEntityObject } from '../renderer/EntityMeshBuilder';
 import { getOcc } from '../cad3d/occ/occLoader';
 import { OccScope, entitiesToWires, wiresToFace } from '../cad3d/occ/occConvert';
-import { parseSTLBuffer, SceneGraph, MeshNode, LightNode, SceneSerializer } from '@mhersztowski/core-scene3d';
+import { parseSTLBuffer, GLTFImporter, SceneGraph, MeshNode, LightNode, SceneSerializer } from '@mhersztowski/core-scene3d';
 
 // ── Download helper ────────────────────────────────────────────────────────────
 
@@ -730,6 +730,33 @@ export function importDXF(file: File, project: Project): Promise<void> {
 // ── STL import ─────────────────────────────────────────────────────────────────
 
 /** Parses an STL file and returns a Scene 3D JSON string ready for Scene3DView. */
+/**
+ * Wczytuje glTF/GLB jako scenę gotową do podmiany w zakładce Scene 3D.
+ *
+ * Inaczej niż STL, który jest jedną bryłą bez podziału: glTF opisuje **scenę**,
+ * więc przenosimy całą hierarchię, materiały i przekształcenia. Oświetlenie
+ * dokładamy tylko wtedy, gdy plik go nie niesie — model z własnymi światłami
+ * zostałby inaczej prześwietlony.
+ */
+export async function importGLTF(file: File): Promise<{ json: string; warnings: string[]; meshCount: number }> {
+  const buffer = await file.arrayBuffer();
+  const wynik = await GLTFImporter.importFromBuffer(buffer, file.name);
+  const graph = wynik.graph;
+
+  const maSwiatlo = graph.root.children.some(function szukaj(n): boolean {
+    return n.type === 'light' || n.children.some(szukaj);
+  });
+
+  if (!maSwiatlo) {
+    graph.addNode(new LightNode({ name: 'Ambient', lightType: 'ambient', color: '#ffffff', intensity: 0.5 }));
+    graph.addNode(new LightNode({
+      name: 'Directional', lightType: 'directional', color: '#ffffff', intensity: 1.0, position: [5, 10, 5],
+    }));
+  }
+
+  return { json: SceneSerializer.serialize(graph), warnings: wynik.warnings, meshCount: wynik.meshCount };
+}
+
 export function importSTL(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

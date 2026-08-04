@@ -10,6 +10,9 @@ import {
 } from './types';
 import { pluginRegistry } from '../web-plugins';
 import { makeCredentialsApi } from '../../services/credentialsApi';
+import { Scene } from '../scene-script/Scene';
+import { isLayer, isNode3D } from '@mhersztowski/core-cad-viewer';
+import { stripEnvImports } from './envImports';
 
 /** Read-only access to the document env vars (loaded by File components). */
 export interface ScriptEnv {
@@ -85,7 +88,10 @@ export function buildScriptContext(auth: ScriptAuth, env?: ScriptEnv): ScriptCon
   };
 
   // Spread registered plugin namespaces (iot, map, timeline, flow …) into context
-  return { auth, http, secrets, md, table, reactive, env: envApi, ...pluginRegistry.buildContext() };
+  // `Scene` wchodzi przez kontekst, ale skrypt sięga po nią importem — patrz
+  // `stripEnvImports`. Dzięki temu nazwa nie zajmuje globalnej przestrzeni
+  // skryptów, które scen nie używają, a Monaco podpowiada z modułu.
+  return { auth, http, secrets, md, table, reactive, env: envApi, Scene, isNode3D, isLayer, ...pluginRegistry.buildContext() };
 }
 
 // AsyncFunction constructor — lets scripts use await at top level
@@ -103,7 +109,7 @@ export async function executeScript(
   const fn = new AsyncFunction(
     'ctx',
     'display',
-    `const { ${ctxKeys} } = ctx;\n${code}`,
+    `const { ${ctxKeys} } = ctx;\n${stripEnvImports(code)}`,
   );
   return fn(ctx, display) as Promise<ScriptOutput>;
 }

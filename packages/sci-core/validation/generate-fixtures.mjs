@@ -15,6 +15,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parseFormulaBlock, exportScenario } from '../dist/index.js';
 
 const uruchom = promisify(execFile);
@@ -23,7 +24,10 @@ const python = process.argv[2] ?? 'python3';
 
 const DOKUMENTY = join(here, '..', '..', 'sci-blocks', 'dokumenty');
 const FIXTURES = join(here, 'fixtures');
-const TYMCZASOWE = join(here, '.scenario.json');
+// Katalog tymczasowy systemu, nie repozytorium: scenariusz jest przekazywany
+// Pythonowi i po nim nie ma śladu, a zapisywany obok źródeł zaśmiecał diff przy
+// każdej regeneracji odniesień.
+const TYMCZASOWE = join(tmpdir(), 'sci-core-scenario.json');
 
 /**
  * Które układy porównujemy i z jakimi parametrami.
@@ -53,6 +57,34 @@ const UKLADY = [
     parameters: { sigma: 10, rho: 28, beta: 2.667, x_0: 1 },
     tSpan: [0, 3],
   },
+  {
+    // Orbita ekscentryczna — sprawdzian metody adaptacyjnej (etap 1). Zmienna
+    // skala czasu jest tu istotą zjawiska: w peryhelium wszystko dzieje się
+    // kilkadziesiąt razy szybciej niż w aphelium.
+    dokument: 'orbita.md',
+    formula: 'orbita-ode',
+    parameters: { mu: 3.986004418e14, r_0: 7e6, v_0: 7546 },
+    tSpan: [0, 6000],
+  },
+  {
+    // Obwód sztywny — sprawdzian metody niejawnej (etap 3). Referencja liczona
+    // metodą Radau, bo jawna nie ma tu czego szukać.
+    dokument: 'uklad-sztywny.md',
+    formula: 'sztywny-ode',
+    parameters: { R: 1e5, L: 0.01, C: 1e-6, U_0: 5, Omega: 1e4 },
+    tSpan: [0, 0.005],
+    method: 'Radau',
+  },
+  {
+    // Rzut z oporem, ze zdarzeniem kończącym — sprawdzian etapu 2. Porównujemy
+    // nie tylko tor, ale **chwilę lądowania**, którą SciPy wyznacza tą samą
+    // drogą: jako miejsce zerowe wewnątrz kroku.
+    dokument: 'rzut-ukosny.md',
+    formula: 'rzut-ode',
+    parameters: { g: 9.80665, b: 0.01, m: 1, v_0: 20, alpha: Math.PI / 4 },
+    tSpan: [0, 3],
+    events: true,
+  },
 ];
 
 /** Wyciąga treść bloku `formula:id` z dokumentu. */
@@ -72,6 +104,8 @@ for (const uklad of UKLADY) {
     parameters: uklad.parameters,
     tSpan: uklad.tSpan,
     samples: 60,
+    method: uklad.method,
+    events: uklad.events,
   });
 
   if (scenariusz.issues.length) {

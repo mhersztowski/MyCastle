@@ -30,38 +30,76 @@ function toThreeBlending(blending: MaterialDescriptor['blending']): THREE.Blendi
   return THREE.NormalBlending;
 }
 
+/**
+ * Tekstura materiału — jedna droga dla wszystkich rodzajów materiału.
+ *
+ * Wcześniej mapę koloru umiał tylko `MeshStandardMaterial`, bo obsługa siedziała
+ * w osobnym komponencie użytym w jednej gałęzi `switch`. Ustawienie tekstury na
+ * materiale fizycznym albo Phonga nie robiło **nic** — bez błędu, bez śladu.
+ * Hook daje ją każdemu, kto ją potrafi pokazać.
+ */
+function useMaterialTexture(
+  mat: MaterialDescriptor,
+  resolveTextureSrc?: (src: string) => Promise<string>,
+): THREE.Texture | null {
+  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+  useEffect(() => {
+    // Ścieżka w VFS ma pierwszeństwo przed gotowym adresem: to ona przeżywa
+    // zapis sceny, a `textureDataUrl` bywa `blob:` ważnym tylko w tej karcie.
+    const zrodlo = mat.texturePath || mat.textureDataUrl;
+    if (!zrodlo) { setTexture(null); return; }
+
+    let t: THREE.Texture | null = null;
+    let active = true;
+
+    const zaladuj = (url: string) => {
+      const img = new Image();
+      img.onload = () => {
+        if (!active) return;
+        t = new THREE.Texture(img);
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.needsUpdate = true;  // explicit GPU upload trigger
+        setTexture(t);
+      };
+      img.onerror = () => {
+        // eslint-disable-next-line no-console
+        console.warn('[SimpleViewer] Nie udało się wczytać tekstury:', url.slice(0, 80));
+      };
+      img.src = url;
+    };
+
+    // Ścieżkę VFS rozwiązuje host — rdzeń nie wie, skąd biorą się pliki.
+    if (mat.texturePath && resolveTextureSrc) {
+      void resolveTextureSrc(mat.texturePath)
+        .then((url) => { if (active) zaladuj(url); })
+        .catch((e: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn('[SimpleViewer] Nie udało się odczytać tekstury z dysku:', mat.texturePath, e);
+        });
+    } else {
+      zaladuj(zrodlo);
+    }
+
+    return () => {
+      active = false;
+      t?.dispose();
+    };
+  }, [mat.texturePath, mat.textureDataUrl, resolveTextureSrc]);
+
+  return texture;
+}
+
 function TexturedStandardMat({
-  mat, selEmissive, selEmissiveIntensity, side, blending,
+  mat, selEmissive, selEmissiveIntensity, side, blending, resolveTextureSrc,
 }: {
   mat: MaterialDescriptor;
   selEmissive: string;
   selEmissiveIntensity: number;
   side: THREE.Side;
   blending: THREE.Blending;
+  resolveTextureSrc?: (src: string) => Promise<string>;
 }) {
-  const [texture, setTexture] = useState<THREE.Texture | null>(null);
-  useEffect(() => {
-    if (!mat.textureDataUrl) return;
-    let t: THREE.Texture | null = null;
-    let active = true;
-    const img = new Image();
-    img.onload = () => {
-      if (!active) return;
-      t = new THREE.Texture(img);
-      t.colorSpace = THREE.SRGBColorSpace;
-      t.needsUpdate = true;  // explicit GPU upload trigger
-      setTexture(t);
-    };
-    img.onerror = () => {
-      // eslint-disable-next-line no-console
-      console.warn('[SimpleViewer] TexturedStandardMat: failed to load texture data URL');
-    };
-    img.src = mat.textureDataUrl;
-    return () => {
-      active = false;
-      t?.dispose();
-    };
-  }, [mat.textureDataUrl]);
+  const texture = useMaterialTexture(mat, resolveTextureSrc);
   return (
     <meshStandardMaterial
       map={texture ?? undefined}
@@ -82,18 +120,30 @@ function TexturedStandardMat({
   );
 }
 
-function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSelected: boolean }) {
+function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
+  mat: MaterialDescriptor;
+  isSelected: boolean;
+  resolveTextureSrc?: (src: string) => Promise<string>;
+}) {
   const side = toThreeSide(mat.side);
   const blending = toThreeBlending(mat.blending);
   // For materials that support emissive, use selection highlight via emissive channel
   const selEmissive = isSelected ? '#4fc3f7' : (mat.emissive ?? '#000000');
   const selEmissiveIntensity = isSelected ? 0.15 : (mat.emissiveIntensity ?? 1);
 
+  // Mapa koloru dla każdego materiału, który ją obsługuje. Hook musi stać przed
+  // `switch`, bo React nie pozwala wołać go warunkowo.
+  const texture = useMaterialTexture(mat, resolveTextureSrc);
+  // Z teksturą barwa materiału jest **mnożnikiem** — kolor inny niż biały
+  // przyciemniłby obraz i wyglądałoby to jak zła tekstura.
+  const kolor = texture ? '#ffffff' : mat.color;
+
   switch (mat.type) {
     case 'MeshBasicMaterial':
       return (
         <meshBasicMaterial
-          color={mat.color}
+          map={texture ?? undefined}
+          color={kolor}
           opacity={mat.opacity}
           transparent={mat.transparent || mat.opacity < 1}
           wireframe={mat.wireframe}
@@ -129,7 +179,8 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
     case 'MeshLambertMaterial':
       return (
         <meshLambertMaterial
-          color={mat.color}
+          map={texture ?? undefined}
+          color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
           opacity={mat.opacity}
@@ -161,7 +212,8 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
     case 'MeshPhongMaterial':
       return (
         <meshPhongMaterial
-          color={mat.color}
+          map={texture ?? undefined}
+          color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
           specular={mat.specular ?? '#111111'}
@@ -183,7 +235,8 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
     case 'MeshToonMaterial':
       return (
         <meshToonMaterial
-          color={mat.color}
+          map={texture ?? undefined}
+          color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
           opacity={mat.opacity}
@@ -201,7 +254,8 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
     case 'MeshPhysicalMaterial':
       return (
         <meshPhysicalMaterial
-          color={mat.color}
+          map={texture ?? undefined}
+          color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
           roughness={mat.roughness ?? 1}
@@ -247,7 +301,7 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
 
     case 'MeshStandardMaterial':
     default:
-      if (mat.textureDataUrl) {
+      if (mat.textureDataUrl || mat.texturePath) {
         return (
           <TexturedStandardMat
             mat={mat}
@@ -255,6 +309,7 @@ function RealisticMaterial({ mat, isSelected }: { mat: MaterialDescriptor; isSel
             selEmissiveIntensity={selEmissiveIntensity}
             side={side}
             blending={blending}
+            resolveTextureSrc={resolveTextureSrc}
           />
         );
       }
@@ -326,6 +381,15 @@ export interface SimpleViewerProps {
   /** Extra THREE objects rendered as-is inside the scene (e.g. a line-grid floor).
    *  Not selectable / not part of the scene graph. */
   extraObjects?: THREE.Object3D | THREE.Object3D[];
+  /** React content rendered inside the R3F canvas, after the scene.
+   *
+   *  Different from `extraObjects`, which takes ready-made THREE objects: this is
+   *  for content that has to live in the React tree to work at all — a uikit UI
+   *  layer needs hooks (canvas size, pointer events) that a detached Object3D
+   *  cannot have. It is deliberately not part of the scene graph: an on-screen
+   *  interface is not scene content and must not appear in the tree, in exports
+   *  or in picking. */
+  overlay3d?: ReactNode;
   /** Draw a wireframe bounding box around the selected node(s). Default false. */
   showBoundingBox?: boolean;
   /** Scene-level settings: background, environment, fog. */
@@ -336,6 +400,8 @@ export interface SimpleViewerProps {
   debugLog?: boolean;
   /** Resolves a VFS path (e.g. /users/default/projects/audio.mp3) to a playable URL (e.g. blob:). */
   resolveAudioSrc?: (src: string) => Promise<string>;
+  /** Rozwiązuje ścieżkę tekstury z VFS (np. `/users/…/cegla.png`) na adres do wczytania. */
+  resolveTextureSrc?: (src: string) => Promise<string>;
   /** Size of the transform gizmo handles. Default 0.7. */
   gizmoSize?: number;
   /** Called when a gizmo drag ends — useful for animation recording. */
@@ -352,6 +418,7 @@ function SelectableMesh({
   meshNode,
   isSelected,  renderMode = 'realistic',
   edges = false,
+  resolveTextureSrc,
 }: {
   node: SceneNode;
   meshNode: MeshNode;
@@ -359,6 +426,7 @@ function SelectableMesh({
   onSelect?: (nodeId: string) => void;
   renderMode?: SceneRenderMode;
   edges?: boolean;
+  resolveTextureSrc?: (src: string) => Promise<string>;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
 
@@ -387,7 +455,7 @@ function SelectableMesh({
         <meshBasicMaterial wireframe color={isSelected ? '#4fc3f7' : '#aaaaaa'} />
       )}
       {(renderMode === 'realistic' || renderMode == null) && (
-        <RealisticMaterial mat={meshNode.material} isSelected={isSelected} />
+        <RealisticMaterial mat={meshNode.material} isSelected={isSelected} resolveTextureSrc={resolveTextureSrc} />
       )}
       {edges && <Edges threshold={20} color={isSelected ? '#4fc3f7' : '#0b0b0b'} />}
     </mesh>
@@ -1523,6 +1591,7 @@ type RenderCtx = {
   onNodeSelect?: (id: string) => void;
   renderMode?: SceneRenderMode;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  resolveTextureSrc?: (src: string) => Promise<string>;
   edges?: boolean;
 };
 
@@ -1557,6 +1626,7 @@ function renderSceneNode(node: SceneNode, ctx: RenderCtx): ReactElement | null {
         onSelect={ctx.onNodeSelect}
         renderMode={ctx.renderMode}
         edges={ctx.edges}
+        resolveTextureSrc={ctx.resolveTextureSrc}
       />
     );
   }
@@ -1628,6 +1698,7 @@ function SceneRenderer({
   onNodeSelect,
   renderMode = 'realistic',
   resolveAudioSrc,
+  resolveTextureSrc,
   edges = false,
 }: {
   sceneGraph?: SceneGraph;
@@ -1637,18 +1708,19 @@ function SceneRenderer({
   onNodeSelect?: (nodeId: string) => void;
   renderMode?: SceneRenderMode;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  resolveTextureSrc?: (src: string) => Promise<string>;
   edges?: boolean;
 }) {
   const idsKey = (selectedNodeIds ?? []).join(',');
   const objects = useMemo(() => {
     if (!sceneGraph) return [];
     const selectedIds = selectedNodeIds && selectedNodeIds.length ? new Set(selectedNodeIds) : undefined;
-    const ctx: RenderCtx = { selectedNodeId, selectedIds, onNodeSelect, renderMode, resolveAudioSrc, edges };
+    const ctx: RenderCtx = { selectedNodeId, selectedIds, onNodeSelect, renderMode, resolveAudioSrc, resolveTextureSrc, edges };
     return sceneGraph.root.children
       .map(child => renderSceneNode(child, ctx))
       .filter((el): el is ReactElement => el !== null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneGraph, version, selectedNodeId, idsKey, onNodeSelect, renderMode, resolveAudioSrc, edges]);
+  }, [sceneGraph, version, selectedNodeId, idsKey, onNodeSelect, renderMode, resolveAudioSrc, resolveTextureSrc, edges]);
 
   return <group>{objects}</group>;
 }
@@ -2074,6 +2146,7 @@ function SceneContent({
   isDraggingGizmoRef,
   addLog,
   resolveAudioSrc,
+  resolveTextureSrc,
   gizmoSize = 0.7,
   geoPointEdit,
   onGeoPointChange,
@@ -2106,6 +2179,7 @@ function SceneContent({
   isDraggingGizmoRef?: MutableRefObject<boolean>;
   addLog?: (msg: string) => void;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  resolveTextureSrc?: (src: string) => Promise<string>;
   gizmoSize?: number;
   geoPointEdit?: { nodeId: string; fieldKey: string } | null;
   onGeoPointChange?: (nodeId: string, fieldKey: string, value: [number, number, number]) => void;
@@ -2174,6 +2248,7 @@ function SceneContent({
         onNodeSelect={onNodeSelect}
         renderMode={renderMode}
         resolveAudioSrc={resolveAudioSrc}
+        resolveTextureSrc={resolveTextureSrc}
         edges={edges}
       />
       <GpuPicker onPick={onNodeSelect} />
@@ -2250,11 +2325,13 @@ export function SimpleViewer({
   translationSnap = null,
   rotationSnap = null,
   extraObjects,
+  overlay3d,
   showBoundingBox = false,
   sceneSettings,
   onPlaneClick,
   debugLog = false,
   resolveAudioSrc,
+  resolveTextureSrc,
   gizmoSize = 0.7,
   onGizmoTransformEnd,
   geoPointEdit,
@@ -2534,10 +2611,12 @@ export function SimpleViewer({
           isDraggingGizmoRef={isDraggingGizmoRef}
           addLog={addLog}
           resolveAudioSrc={resolveAudioSrc}
+          resolveTextureSrc={resolveTextureSrc}
           gizmoSize={gizmoSize}
           geoPointEdit={geoPointEdit}
           onGeoPointChange={onGeoPointChange}
         />
+        {overlay3d}
       </Canvas>
       {selectedNode && (
         <div

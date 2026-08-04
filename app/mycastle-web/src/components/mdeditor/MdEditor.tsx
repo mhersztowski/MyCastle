@@ -15,6 +15,7 @@ import { EditorState as PmEditorState } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import { WikiLink } from './extensions/WikiLinkExtension';
+import { KnowledgeRef } from './extensions/KnowledgeRefExtension';
 // Import dla efektu ubocznego: moduł rejestruje widok bloku `mermaid` w
 // rejestrze widoków (`extensions/blockRenderers.ts`). Bloki spoza tego
 // katalogu — np. `formula`/`sim` z pakietu sci — rejestrują się tak samo,
@@ -413,6 +414,7 @@ const MdEditor: React.FC<MdEditorProps> = ({
         placeholder,
         showOnlyWhenEditable: true,
       }),
+      KnowledgeRef,
       WikiLink.configure({
         openOnClick: false,
         autolink: true,

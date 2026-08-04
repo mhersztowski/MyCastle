@@ -15,6 +15,25 @@ import { ProcedureBlock } from './ProcedureBlock';
 import { ScriptBlock } from './ScriptBlock';
 import { FormulaBlockView } from './FormulaBlockView';
 import { SimBlock } from './SimBlock';
+import { FigureBlock } from './FigureBlock';
+import { TableBlock } from './TableBlock';
+import { CalloutBlock } from './CalloutBlock';
+import { LawBlock } from './LawBlock';
+import type { InkRecognizer } from './InkCanvas';
+
+/**
+ * Rozpoznawanie pisma rysikiem, wstrzykiwane przez hosta.
+ *
+ * Moduł, nie prop: renderery bloków dostają od edytora tylko `code` i
+ * `language`, a przeciąganie portu przez cały ten kontrakt zmusiłoby każdego
+ * hosta do wiedzy o piórze. Ustawia go aplikacja przy starcie; brak = bloki
+ * działają jak dotąd, bez zakładki pióra.
+ */
+let rozpoznawaniePisma: InkRecognizer | undefined;
+
+export function setInkRecognizer(recognizer: InkRecognizer | undefined): void {
+  rozpoznawaniePisma = recognizer;
+}
 
 /** Kontrakt widoku bloku po stronie hosta — celowo opisany tu, nie importowany. */
 export interface HostBlockRendererProps {
@@ -49,6 +68,10 @@ export const EXERCISE_LANG = /^exercise:([A-Za-z0-9_-]+)$/;
 const FIELD_LANG = /^field(:|$)/;
 const LINALG_LANG = /^linalg(:|$)/;
 const PROCEDURE_LANG = /^procedure(:|$)/;
+export const FIGURE_LANG = /^figure(:|$)/;
+export const TABLE_LANG = /^table(:|$)/;
+export const CALLOUT_LANG = /^callout(:|$)/;
+export const LAW_LANG = /^law(:|$)/;
 /** Infostring `simscript` albo `simscript:etykieta` — model pisany w dokumencie. */
 export const SIMSCRIPT_LANG = /^simscript(?::([A-Za-z0-9_-]+))?$/;
 
@@ -67,7 +90,9 @@ function FormulaRenderer({ code, language, children, onChange }: HostBlockRender
     children,
     // Zapis włącza wizualną edycję matematyki. W trybie czytania (`ReaderView`,
     // eksport statyczny) nie ma go wcale i wzory pozostają nieklikalne.
-    view: createElement(FormulaBlockView, { id, code, bare: true, onChange }),
+    view: createElement(FormulaBlockView, {
+      id, code, bare: true, onChange, recognizeInk: rozpoznawaniePisma,
+    }),
   });
 }
 
@@ -88,7 +113,10 @@ function ExerciseRenderer({ code, language, documentBlocks, children }: HostBloc
     accent: '#7c3aed',
     id,
     children,
-    view: createElement(ExerciseBlock, { id, code, formulas: formulasOf(documentBlocks), bare: true }),
+    view: createElement(ExerciseBlock, {
+      id, code, formulas: formulasOf(documentBlocks), bare: true,
+      recognizeInk: rozpoznawaniePisma,
+    }),
   });
 }
 
@@ -163,6 +191,67 @@ function parseStageSetup(code: string) {
   }
 }
 
+/**
+ * Blok `figure` — rysunek z podręcznika.
+ *
+ * Bez tego edytor traktował `figure` jak nieznany język i wyrzucał na ekran
+ * kilkadziesiąt kilobajtów base64 zamiast obrazu.
+ */
+function FigureRenderer({ code, language, children, onChange }: HostBlockRendererProps) {
+  const id = language.split(':')[1] ?? 'rysunek';
+  return createElement(BlockShell, {
+    kind: 'rysunek',
+    accent: '#7c3aed',
+    id,
+    children,
+    // Zapis włącza kontrolkę szerokości. W trybie czytania i w eksporcie
+    // statycznym hosta nie ma, więc rysunek zostaje sam.
+    view: createElement(FigureBlock, { id, code, onChange }),
+  });
+}
+
+/** Blok `table` — tablica z podręcznika. */
+function TableRenderer({ code, language, children }: HostBlockRendererProps) {
+  const id = language.split(':')[1] ?? 'tablica';
+  return createElement(BlockShell, {
+    kind: 'tablica',
+    accent: '#c2410c',
+    id,
+    children,
+    view: createElement(TableBlock, { id, code }),
+  });
+}
+
+/**
+ * Blok `callout` — notka kontekstowa, jedyna nasza treść w dokumencie.
+ *
+ * Bez rejestracji edytor pokazałby ją jako nieznany język, czyli dokładnie tak
+ * samo jak treść książki w bloku kodu — a wtedy zniknęłaby jedyna rzecz, która
+ * odróżnia nasz dopisek od Resnicka.
+ */
+function CalloutRenderer({ code, language, children }: HostBlockRendererProps) {
+  const id = language.split(':')[1] ?? 'notka';
+  return createElement(BlockShell, {
+    kind: 'notka',
+    accent: '#0369a1',
+    id,
+    children,
+    view: createElement(CalloutBlock, { id, code }),
+  });
+}
+
+/** Blok `law` — pozycja katalogu praw i zasad książki. */
+function LawRenderer({ code, language, children }: HostBlockRendererProps) {
+  const id = language.split(':')[1] ?? 'prawo';
+  return createElement(BlockShell, {
+    kind: 'prawo',
+    accent: '#0f766e',
+    id,
+    children,
+    view: createElement(LawBlock, { id, code }),
+  });
+}
+
 /** Blok `procedure` — eliminacja Gaussa albo Gram-Schmidt krok po kroku. */
 function ProcedureRenderer({ code, language, children }: HostBlockRendererProps) {
   const id = language.split(':')[1] ?? 'procedura';
@@ -212,6 +301,10 @@ export function registerSciBlocks(
     register({ name: 'sci-field', matches: (l) => FIELD_LANG.test(l), Component: FieldRenderer }),
     register({ name: 'sci-linalg', matches: (l) => LINALG_LANG.test(l), Component: LinAlgRenderer }),
     register({ name: 'sci-procedure', matches: (l) => PROCEDURE_LANG.test(l), Component: ProcedureRenderer }),
+    register({ name: 'sci-figure', matches: (l) => FIGURE_LANG.test(l), Component: FigureRenderer }),
+    register({ name: 'sci-table', matches: (l) => TABLE_LANG.test(l), Component: TableRenderer }),
+    register({ name: 'sci-callout', matches: (l) => CALLOUT_LANG.test(l), Component: CalloutRenderer }),
+    register({ name: 'sci-law', matches: (l) => LAW_LANG.test(l), Component: LawRenderer }),
   ];
   return () => off.forEach((fn) => fn());
 }

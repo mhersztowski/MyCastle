@@ -297,6 +297,23 @@ describe('zadania w dokumentach', () => {
     const model = () => compileGraph(buildGraph(scanFormulas(markdown)));
 
     for (const { id, body } of scanExercises(markdown)) {
+      const liczony = Boolean(parseExerciseBlock(id, body).answer);
+
+      // Zadanie przepisane z podręcznika nie liczy klucza i nie ma czego
+      // sprawdzać wariantami — od niego wymagamy tylko tego, co ma naprawdę:
+      // czytelnej treści i zapisu bez zastrzeżeń.
+      if (!liczony) {
+        it(`${name} / ${id}: treść bez zastrzeżeń`, () => {
+          const block = parseExerciseBlock(id, body);
+          expect(block.issues, `${id}: ${block.issues.join(' | ')}`).toEqual([]);
+          expect(block.prompt.trim().length, id).toBeGreaterThan(10);
+          // Odpowiedź z druku, o ile jest, musi zostać zapisana jako całość —
+          // urwana w połowie zdania jest gorsza niż żadna.
+          if (block.expected) expect(block.expected.trim().length).toBeGreaterThan(0);
+        });
+        continue;
+      }
+
       it(`${name} / ${id}: buduje się i liczy klucz`, () => {
         const block = parseExerciseBlock(id, body);
         expect(block.issues, `${id}: ${block.issues.join(' | ')}`).toEqual([]);
@@ -368,11 +385,28 @@ describe('baza wiedzy jako całość', () => {
   it('katalog zadań powstaje sam', () => {
     const zadania = allExercises(index());
     expect(zadania.length).toBeGreaterThanOrEqual(3);
-    for (const { exercise } of zadania) expect(exercise.uses.length).toBeGreaterThan(0);
+
+    // `@uses` wpina zadanie w graf wiedzy, więc jest wymagane od tych, które
+    // z tego grafu liczą klucz — bez powiązania nie miałyby z czego.
+    for (const { exercise } of zadania.filter((z) => z.exercise.answer)) {
+      expect(exercise.uses.length, exercise.id).toBeGreaterThan(0);
+    }
+
+    // Zadania przepisane z podręcznika wchodzą do bazy bez powiązania z wzorem:
+    // wskazanie, którego wzoru dotyczy zadanie 7 z rozdziału 1, jest pracą
+    // redakcyjną do wykonania zadanie po zadaniu. Udawanie jej automatem
+    // wpisałoby do grafu krawędzie, których nikt nie sprawdził.
+    const bezPowiazania = zadania.filter((z) => !z.exercise.answer && !z.exercise.uses.length);
+    for (const { exercise } of bezPowiazania) {
+      expect(exercise.prompt.trim().length, exercise.id).toBeGreaterThan(10);
+    }
   });
 
   it('wyszukiwanie po tagu działa', () => {
     expect(documentsByTag(index(), 'drgania').length).toBeGreaterThanOrEqual(3);
-    expect(documentsByTag(index(), 'elektronika').map((d) => d.meta.title)).toEqual(['Obwód RLC']);
+    // Dwa dokumenty o elektronice: obwód i jego przetłumiony wariant, na którym
+    // pokazana jest sztywność.
+    expect(documentsByTag(index(), 'elektronika').map((d) => d.meta.title).sort())
+      .toEqual(['Obwód RLC', 'Układ sztywny']);
   });
 });

@@ -47,7 +47,13 @@ def sprawdz_punkty_kontrolne(scenario):
 
         for nazwa, oczekiwana in punkt["derivatives"].items():
             policzona = eval(scenario["derivatives"][nazwa], globals(), zakres)  # noqa: S307
-            if abs(policzona - oczekiwana) > TOLERANCJA_KONTROLNA:
+            # Porównanie **względne**, z bezwzględnym progiem przy zerze.
+            # Przy wielkościach astronomicznych (przyspieszenie rzędu 10^14)
+            # ostatni bit podwójnej precyzji to 0,04 — a sama zmiana kolejności
+            # mnożeń między JS-em a Pythonem wystarczy, żeby ten bit się różnił.
+            # Kryterium bezwzględne odrzucałoby tłumaczenie idealnie poprawne.
+            skala = max(abs(policzona), abs(oczekiwana), 1.0)
+            if abs(policzona - oczekiwana) > TOLERANCJA_KONTROLNA * skala:
                 raise SystemExit(
                     f"Punkt kontrolny {numer}: pochodna „{nazwa}” nie zgadza się.\n"
                     f"  dokument: {oczekiwana!r}\n"
@@ -56,6 +62,25 @@ def sprawdz_punkty_kontrolne(scenario):
                     "To błąd tłumaczenia wzoru, nie solvera — porównanie trajektorii "
                     "nie miałoby sensu."
                 )
+
+
+def zbuduj_zdarzenia(scenario):
+    """Funkcje zdarzeń dla `solve_ivp` — te same wyrażenia co po stronie TS."""
+    nazwy = scenario["state"]
+    opisy = scenario.get("events") or []
+    funkcje = []
+
+    for opis in opisy:
+        def zdarzenie(t, y, kod=opis["expression"]):
+            stan = dict(zip(nazwy, y))
+            zakres = srodowisko(scenario, stan, t)
+            return eval(kod, globals(), zakres)  # noqa: S307
+
+        zdarzenie.direction = opis.get("direction", 0)
+        zdarzenie.terminal = bool(opis.get("terminal"))
+        funkcje.append(zdarzenie)
+
+    return funkcje
 
 
 def prawa_strona(scenario):
@@ -89,23 +114,41 @@ def main():
     # Ciasne tolerancje: fixture ma być odniesieniem, więc jego własny błąd
     # numeryczny musi być o rzędy wielkości mniejszy niż różnica, której
     # szukamy między solverami.
+    #
+    # Metoda przychodzi ze scenariusza: dla układu sztywnego jawny DOP853 jest
+    # odniesieniem bezużytecznym, bo krok narzuca mu stabilność, a nie dokładność.
+    metoda = scenario.get("method", "DOP853")
+    # Metody niejawne nie schodzą tak nisko z tolerancją jak DOP853 —
+    # ich jakobian liczony różnicami stawia własną granicę.
+    rtol, atol = (1e-11, 1e-12) if metoda == "DOP853" else (1e-10, 1e-12)
+
+    zdarzenia = zbuduj_zdarzenia(scenario)
     wynik = solve_ivp(
         prawa_strona(scenario), (t0, t1), y0,
-        t_eval=czasy, method="DOP853", rtol=1e-11, atol=1e-12,
+        t_eval=czasy, method=metoda, rtol=rtol, atol=atol,
+        events=zdarzenia if zdarzenia else None,
     )
 
     if not wynik.success:
         raise SystemExit(f"SciPy nie rozwiązał układu: {wynik.message}")
 
+    # Zdarzenie kończące skraca przedział, więc `t_eval` poza nim nie ma
+    # odpowiednika w wyniku — bierzemy tyle punktów, ile solver policzył.
     fixture = {
         "id": scenario["id"],
         "state": scenario["state"],
         "parameters": scenario["parameters"],
         "initial": scenario["initial"],
         "tSpan": scenario["tSpan"],
-        "solver": "scipy DOP853 rtol=1e-11 atol=1e-12",
+        "solver": f"scipy {metoda} rtol={rtol:g} atol={atol:g}",
         "t": [float(x) for x in wynik.t],
         "y": {n: [float(v) for v in wynik.y[i]] for i, n in enumerate(scenario["state"])},
+        # Chwile zdarzeń: to jest odniesienie dla etapu 2, w którym zdarzenie
+        # przestało być sprawdzeniem po kroku i stało się równaniem.
+        "eventTimes": [
+            [float(t) for t in czasy_zdarzen]
+            for czasy_zdarzen in (wynik.t_events if wynik.t_events is not None else [])
+        ],
     }
 
     with open(sys.argv[2], "w", encoding="utf-8") as plik:

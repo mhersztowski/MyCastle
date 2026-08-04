@@ -101,6 +101,19 @@ export interface MaterialDescriptor {
 
   // ── Texture map (data URL or HTTP URL) ────────────────────
   textureDataUrl?: string;
+  /**
+   * Ścieżka tekstury w VFS, np. `/users/marcin/tekstury/cegla.png`.
+   *
+   * Odrębna od `textureDataUrl`, bo to co innego: tam stoi **gotowy adres**
+   * (data URL z importu mapy, link http), tu — miejsce pliku na dysku
+   * użytkownika. Ścieżka przeżywa zapis i otwarcie na innym komputerze; adres
+   * `blob:` żyje tyle, co karta przeglądarki, a data URL potrafi rozdąć plik
+   * sceny do megabajtów.
+   *
+   * Rozwiązaniem ścieżki na coś, co przeglądarka wczyta, zajmuje się host
+   * (`resolveTextureSrc`) — rdzeń nie wie, skąd biorą się pliki.
+   */
+  texturePath?: string;
 }
 
 export const DEFAULT_MATERIAL: MaterialDescriptor = {

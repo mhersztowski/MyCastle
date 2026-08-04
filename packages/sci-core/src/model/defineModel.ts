@@ -16,6 +16,8 @@
  * obserwable, pary pochodnych, listę uwag — uzupełniamy stąd.
  */
 import type { ObservableDef, ParamSchema, PhenomenonModel, PhenomenonResult } from '../graph/compileGraph';
+import { measureInvariant } from '../numeric/invariants';
+import type { State } from '../numeric/trajectory';
 
 export interface ManualModelSpec {
   /** Parametry z jednostkami i zakresami — z nich powstaje panel suwaków. */
@@ -27,8 +29,32 @@ export interface ManualModelSpec {
    * je wymienić, bo z kodu nie da się tego odczytać — inaczej niż z równań.
    */
   observables: Array<Partial<ObservableDef> & { name: string }>;
-  /** Właściwe obliczenia. */
-  run: (values: Record<string, number>, tSpan: [number, number], dt: number) => PhenomenonResult;
+  /**
+   * Właściwe obliczenia.
+   *
+   * Wynik jest **częściowy**: autor zwraca to, co policzył, a brakujące pola
+   * uzupełniamy niżej. Wymaganie pełnej struktury zmuszałoby każdy skrypt do
+   * dopisywania pustych obiektów dla rzeczy, których jego model nie ma.
+   */
+  run: (values: Record<string, number>, tSpan: [number, number], dt: number) => Partial<PhenomenonResult>;
+  /**
+   * Wielkości, które mają pozostać stałe — odpowiednik `@invariant` z dokumentu.
+   *
+   * Podane jako funkcje stanu, bo model ręczny nie ma wzorów do skompilowania.
+   * Mierzone są na trajektorii, więc model bez trajektorii nie ma ich gdzie
+   * sprawdzić — i to jest zgłaszane, a nie przemilczane.
+   */
+  invariants?: Array<{
+    name: string;
+    /**
+     * Wartość niezmiennika ze stanu — z **wartościami parametrów** jako trzecim
+     * argumentem.
+     *
+     * Bez nich energia oscylatora musiałaby domykać masę i stałą sprężystości
+     * w chwili budowy modelu, czyli zanim ktokolwiek ruszył suwakiem.
+     */
+    of: (state: State, t: number, values: Record<string, number>) => number;
+  }>;
   /** Pary „zmienna, jej pochodna" — jeśli są, model dostaje przestrzeń fazową. */
   derivativePairs?: Array<[string, string]>;
   /** Czy model ma dynamikę w czasie. */
@@ -78,6 +104,10 @@ export function defineModel(spec: ManualModelSpec): PhenomenonModel {
     .filter((name, index, all) => all.indexOf(name) !== index);
   if (duplicates.length) issues.push(`Powtórzone wielkości: ${[...new Set(duplicates)].join(', ')}.`);
 
+  if (spec.invariants?.length && spec.dynamic === false) {
+    issues.push('Model deklaruje niezmiennik, ale nie liczy trajektorii — nie ma na czym go zmierzyć.');
+  }
+
   for (const [position, velocity] of spec.derivativePairs ?? []) {
     if (!observables.some((o) => o.name === position) || !observables.some((o) => o.name === velocity)) {
       issues.push(`Para pochodnych (${position}, ${velocity}) wskazuje wielkość spoza modelu.`);
@@ -93,9 +123,39 @@ export function defineModel(spec: ManualModelSpec): PhenomenonModel {
     run(values, tSpan = [0, 10], dt = 0.005) {
       const complete = { ...Object.fromEntries(parameters.map((p) => [p.name, p.value])), ...values };
       const result = spec.run(complete, tSpan, dt);
+
+      // Pomiar robimy tutaj, a nie zostawiamy autorowi: dzięki temu raport
+      // z modelu ręcznego i z grafu wzorów powstaje tą samą drogą i da się je
+      // zestawić obok siebie.
+      const measured = result.trajectory
+        ? (spec.invariants ?? []).map(({ name, of }) => measureInvariant(
+          result.trajectory!,
+          (state, t) => of(state, t, complete),
+          { name },
+        ))
+        : [];
+
+      /**
+       * Przebiegi zmiennych stanu dopisujemy z trajektorii.
+       *
+       * Model kompilowany z grafu robi to sam, więc bez tego kroku ta sama
+       * wielkość byłaby dostępna w jednej ścieżce, a w drugiej nie — i wykres
+       * czasowy dla zjawiska z biblioteki wychodziłby pusty. Autor modelu ma
+       * zwrócić to, co policzył, a nie pamiętać, w ilu miejscach to zapisać.
+       */
+      const series = { ...result.series };
+      for (const name of result.trajectory?.stateNames ?? []) {
+        if (!(name in series)) series[name] = result.trajectory!.series(name);
+      }
+
       // Uzupełniamy brakujące pola: autor ręcznego modelu ma zwrócić wyniki, a
       // nie pamiętać o kształcie struktury.
-      return { scalars: result.scalars ?? {}, series: result.series ?? {}, trajectory: result.trajectory };
+      return {
+        scalars: result.scalars ?? {},
+        series,
+        trajectory: result.trajectory,
+        invariants: [...measured, ...(result.invariants ?? [])],
+      };
     },
   };
 }

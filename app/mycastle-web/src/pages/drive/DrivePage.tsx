@@ -16,7 +16,9 @@ import { DjvuViewContent } from './DjvuView';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
 import { QtUiSceneEditor, type QtUiFs } from '../../modules/qtui/QtUiSceneEditor';
-import { useMqtt } from '../../modules/mqttclient';
+import { mqttClient, useMqtt } from '../../modules/mqttclient';
+import { ScenePanel, setSceneHost, SCENE_SCRIPT_DTS } from '../../modules/scene-script';
+import type { IScene } from '@mhersztowski/core-cad-viewer';
 import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
   Alert, Backdrop, Box, Breadcrumbs, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
@@ -104,7 +106,7 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // VFS adapter MjdVfsLoader expects.
 import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
-import { RemoteFS, CompositeFS } from '@mhersztowski/core';
+import { RemoteFS, CompositeFS, isPublicDrivePath, publicDriveUrl, PUBLIC_DRIVE_DIRS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
 // Value import (not just types): used to reach the live Monaco model of the
 // file currently open in the embedded workspace (`file://<wsPath>`), so the
@@ -767,18 +769,23 @@ function downloadFile(userName: string, relPath: string, _name: string): void {
   link.remove();
 }
 
-// Path under /drive/ that lives in the public subtree
-function isPublic(relPath: string): boolean {
-  return relPath === 'public' || relPath.startsWith('public/');
-}
+/**
+ * Czy ścieżka leży w obszarze publicznym Drive.
+ *
+ * Reguła przychodzi z `@mhersztowski/core` — tego samego modułu, którego używa
+ * backend przy serwowaniu plików. Dopóki katalog publiczny był jeden, obie
+ * strony miały własną kopię warunku i nikt tego nie zauważał; przy trzech
+ * rozjazd oznaczałby link prowadzący do 403 albo plik publiczny bez oznaczenia.
+ */
+const isPublic = isPublicDrivePath;
+
+/** Ludzki opis katalogów publicznych — do komunikatów, żeby brzmiały jednakowo. */
+const OPIS_PUBLICZNYCH = PUBLIC_DRIVE_DIRS.map((d) => `${d}/`).join(', ');
 
 function publicUrl(userName: string, relPath: string): string {
-  // Backend exposes a dedicated public endpoint that ONLY serves
-  // data/Minis/Users/{u}/drive/public/* (with path-traversal guard).
-  // `relPath` already starts with "public/..." for files in the public
-  // subtree — strip that prefix and let the URL itself say `/public/...`.
-  const rest = relPath.startsWith('public/') ? relPath.slice('public/'.length) : relPath;
-  return `${window.location.origin}/public/drive/users/${encodeURIComponent(userName)}/${rest.split('/').map(encodeURIComponent).join('/')}`;
+  // Adres buduje ta sama funkcja, która decyduje o publiczności — dzięki temu
+  // nie da się zbudować linku do ścieżki, której backend nie wyda.
+  return publicDriveUrl(window.location.origin, userName, relPath) ?? '';
 }
 
 function formatBytes(n?: number): string {
@@ -995,6 +1002,23 @@ export default function DrivePage(): React.JSX.Element {
     [commentToolsPlugin],
   );
 
+  /**
+   * Deklaracje modułów środowiska dla IntelliSense.
+   *
+   * `mycastle/scene` nie ma pliku na dysku — inaczej niż `api` i `Aura`, które
+   * mieszkają w `packages/core/browser/…` i TypeScript rozwiązuje je po ścieżce.
+   * Skoro moduł jest wirtualny, deklarację trzeba **podać wprost**; bez tego
+   * edytor nie zna nazwy `Scene` i nie podpowiada niczego.
+   *
+   * Idzie przez `tsPreloadDts`, a nie przez własne `setExtraLibs`: plugin
+   * TypeScriptu trzyma jeden magazyn deklaracji i zewnętrzny zapis skasowałby
+   * jego własne.
+   */
+  const driveTsPreloadDts = useCallback(
+    async () => ({ '/ts-ambient/mycastle-scene.d.ts': SCENE_SCRIPT_DTS }),
+    [],
+  );
+
   // ── In-browser runner for the open .js/.ts file ──────────────────────────
   // Runs the LIVE editor buffer (the Monaco model, so unsaved edits count) in
   // the page with a redirected console. A session tracks the script's timers
@@ -1002,6 +1026,8 @@ export default function DrivePage(): React.JSX.Element {
   const [browserConsole, setBrowserConsole] = useState<BrowserConsoleLine[]>([]);
   const [browserConsoleOpen, setBrowserConsoleOpen] = useState(false);
   const [browserRunning, setBrowserRunning] = useState(false);
+  /** Scena wczytana przez `Scene.load` w uruchomionym skrypcie. */
+  const [scenaSkryptu, setScenaSkryptu] = useState<{ scene: IScene; path: string } | null>(null);
   const browserSessionRef = useRef<{ stopped: boolean; timers: number[]; subs: Array<() => void> } | null>(null);
   // DOM mount surface for visual output — scripts push elements via `display.dom(el)`.
   const browserDomRef = useRef<HTMLDivElement | null>(null);
@@ -1024,6 +1050,9 @@ export default function DrivePage(): React.JSX.Element {
     }
     browserSessionRef.current = null;
     setBrowserRunning(false);
+    // Host zdejmujemy razem z sesją: `Scene.load` wywołane po zatrzymaniu
+    // (np. z zaległego timera) nie ma już gdzie pokazać sceny.
+    setSceneHost(null);
   }, []);
 
   // Run the .js/.ts file currently open in the embedded workspace. Reads the
@@ -1046,6 +1075,19 @@ export default function DrivePage(): React.JSX.Element {
     setBrowserConsole([]);
     setBrowserConsoleOpen(true);
     setBrowserRunning(true);
+    setScenaSkryptu(null);
+
+    // Scena wczytana przez `Scene.load` pokazuje się w panelu nad konsolą.
+    // Host żyje tak długo jak przebieg: skrypt zatrzymany nie ma prawa dosypywać
+    // scen do widoku po tym, jak użytkownik go przerwał.
+    setSceneHost({
+      readFile: async (path) => (await mqttClient.readFile(path))?.content ?? null,
+      writeFile: async (path, content) => { await mqttClient.writeFile(path, content); },
+      present: (scene, opis) => {
+        if (session.stopped) return;
+        setScenaSkryptu({ scene, path: opis.path });
+      },
+    });
     const session = { stopped: false, timers: [] as number[], subs: [] as Array<() => void> };
     browserSessionRef.current = session;
 
@@ -1194,11 +1236,16 @@ export default function DrivePage(): React.JSX.Element {
       // Import z monorepo (Vite bundluje źródło + mqtt). Specyfikator w skrypcie:
       //   import { conn_http_connect, ... } from 'mycastle/packages/core/browser/server/api';
       const serverApi = await import('../../../../../packages/core/browser/server/api');
+      // Sceny CAD/3D: `import { Scene } from 'mycastle/scene'`. Ta sama nazwa
+      // modułu, co w skryptach w notatkach — skrypt przeniesiony stamtąd tutaj
+      // ma działać bez przepisywania.
+      const sceneNs = await import('../../modules/scene-script');
       const resolveNs = (spec: string): unknown | null =>
         spec === 'lit' ? lit
           : (spec === '@mhersztowski/minislib' || /minislib/.test(spec)) ? minislib
             : /core\/browser\/server\/api$/.test(spec) ? serverApi
-              : null;
+              : spec === 'mycastle/scene' ? sceneNs
+                : null;
       const nsMap: Record<string, unknown> = {};
       const bindings: string[] = [];
       let nsIdx = 0;
@@ -1895,7 +1942,7 @@ export default function DrivePage(): React.JSX.Element {
 
   const moveToPublic = useCallback(async (entry: VfsEntry) => {
     if (isPublic(cwd ? `${cwd}/${entry.name}` : entry.name)) {
-      toast('Plik jest już w katalogu public/', 'info');
+      toast('Plik jest już w katalogu publicznym', 'info');
       return;
     }
     try {
@@ -1947,7 +1994,7 @@ export default function DrivePage(): React.JSX.Element {
   const copyPublicUrl = useCallback(async (entry: VfsEntry) => {
     const rel = cwd ? `${cwd}/${entry.name}` : entry.name;
     if (!isPublic(rel)) {
-      toast('Plik nie jest w public/ — użyj "Make public" najpierw', 'error');
+      toast(`Plik nie jest publiczny — publiczne są: ${OPIS_PUBLICZNYCH}`, 'error');
       return;
     }
     const url = publicUrl(userName, rel);
@@ -2960,6 +3007,7 @@ export default function DrivePage(): React.JSX.Element {
         initialPath={isAdmin ? `/user/drive/${viewingRel}` : `/drive/${viewingRel}`}
         projectDeps={driveWorkspaceProjectDeps}
         extraPlugins={driveExtraPlugins}
+        tsPreloadDts={driveTsPreloadDts}
       />
     ) : isImageMime(viewing.mime) ? (
       <Box sx={{ textAlign: 'center', p: 2, height: '100%', overflow: 'auto' }}>
@@ -3630,6 +3678,17 @@ export default function DrivePage(): React.JSX.Element {
             {viewing && (
               <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Box sx={{ flex: 1, minHeight: 0 }}>{viewerBody}</Box>
+                {/*
+                  Panel sceny nad konsolą i **wyżej** niż ona: scena wymaga
+                  miejsca, żeby dało się cokolwiek na niej zobaczyć, a konsola
+                  jest przy niej dopiskiem.
+                */}
+                {scenaSkryptu && (
+                  <Box sx={{ height: '52%', minHeight: 260, flexShrink: 0, borderTop: 2, borderColor: 'divider', p: 0.5 }}>
+                    <ScenePanel scene={scenaSkryptu.scene} path={scenaSkryptu.path} height="100%" />
+                  </Box>
+                )}
+
                 {browserConsoleOpen && viewing.textContent !== undefined && isBrowserRunnable(viewing.entry.name) && (
                   <Box sx={{
                     height: '38%', minHeight: 120, flexShrink: 0,
@@ -4004,7 +4063,13 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText>Make public (przenieś do public/)</ListItemText>
           </MenuItem>
         )}
-        {menuFor && isPublic(cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name) && menuFor.entry.type === FILE_TYPE && (
+        {menuFor && isPublic(cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name) && (
+          /*
+            Dla plików i katalogów jednakowo: adres katalogu też bywa potrzebny
+            (baza wiedzy to katalog, nie plik), a rozróżnianie tych przypadków
+            w menu było pozostałością po czasach, gdy publiczny był tylko
+            `public/` z pojedynczymi obrazkami.
+          */
           <MenuItem onClick={() => { void copyPublicUrl(menuFor.entry); setMenuFor(null); }}>
             <ListItemIcon><LinkIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Kopiuj link publiczny</ListItemText>

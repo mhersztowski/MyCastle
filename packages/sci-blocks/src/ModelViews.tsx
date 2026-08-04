@@ -10,10 +10,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  formatIn, type ModelSource, type ParamSchema,
+  formatIn, spectrum, type ModelSource, type ParamSchema,
   type PhenomenonModel, type PhenomenonResult, type ViewSpec,
 } from '@mhersztowski/sci-core';
 import { useModelRunner, type WorkerFactory } from './useModelRunner';
+import { QualityPanel } from './QualityPanel';
 import { PlotCanvas, type PlotSeries } from './PlotCanvas';
 import { AngularStage } from './AngularStage';
 import { XYCanvas } from './XYCanvas';
@@ -111,7 +112,7 @@ export function ModelViews({
     () => (source && workerFactory ? undefined : model.run(values, tSpan, dt)),
     [model, values, tSpan, dt, source, workerFactory],
   );
-  const result: PhenomenonResult = local ?? runner.result ?? { scalars: {}, series: {} };
+  const result: PhenomenonResult = local ?? runner.result ?? { scalars: {}, series: {}, invariants: [] };
 
   const trajectory = result.trajectory;
   const animated = views.some((v) => v.kind === 'angular2d' || v.kind === 'path2d' || v.kind === 'path3d');
@@ -189,9 +190,22 @@ export function ModelViews({
         ))}
       </div>
 
+      {/* Ocena jakości stoi tuż pod widokami, a nad suwakami: czyta się ją
+          razem z wykresem, którego dotyczy, a nie jako przypis na dole. */}
+      <QualityPanel invariants={result.invariants ?? []} />
+
       {runner.pending && !local && (
         <div style={{ ...label, fontStyle: 'italic' }}>liczę…</div>
       )}
+      {/* Nieudane całkowanie: model policzył wszystko, co się dało, ale
+          trajektorii nie ma. Komunikat idzie na wierzch, bo bez niego blok
+          wyglądałby jak pusty wykres bez powodu. */}
+      {result.error && (
+        <div style={{ fontSize: 11, color: '#b91c1c', background: '#fef2f2', borderRadius: 4, padding: '6px 8px' }}>
+          {result.error}
+        </div>
+      )}
+
       {runner.error && !local && (
         <div style={{ fontSize: 11, color: '#b91c1c', background: '#fef2f2', borderRadius: 4, padding: '6px 8px' }}>
           {runner.error}
@@ -304,6 +318,38 @@ function View({ view, result, values, time, at, trailOf, unitOf }: ViewProps) {
       return series.length ? (
         <Framed title="przebieg w czasie">
           <PlotCanvas series={series} marker={time} />
+        </Framed>
+      ) : null;
+    }
+
+    /**
+     * Widmo amplitudowe.
+     *
+     * Liczone **z tych samych przebiegów**, które widać na wykresie czasowym —
+     * i to jest cała treść tego widoku: czytelnik ogląda jedno zjawisko z dwóch
+     * stron, a nie dwa różne obliczenia. Prążek przy częstości drgania mówi to,
+     * czego z przebiegu w czasie nie da się odczytać, gdy składowych jest kilka.
+     */
+    case 'spectrum': {
+      const series: PlotSeries[] = view.names
+        .map((name, index) => {
+          const widmo = spectrum(result.series[name] ?? []);
+          return {
+            label: name,
+            points: widmo.freq.map((f, i) => [f, widmo.amplitude[i]] as [number, number]),
+            color: SERIES_COLORS[index % SERIES_COLORS.length],
+          };
+        })
+        .filter((s) => s.points.length > 1);
+
+      // Pokazujemy dolną część zakresu: przy drganiach cała treść siedzi przy
+      // niskich częstościach, a reszta osi tylko ją ściska.
+      const maks = Math.max(...series.flatMap((s) => s.points.filter(([, a]) => a > 0.01).map(([f]) => f)), 1);
+      const przycięte = series.map((s) => ({ ...s, points: s.points.filter(([f]) => f <= maks * 3) }));
+
+      return przycięte.length ? (
+        <Framed title="widmo">
+          <PlotCanvas series={przycięte} xLabel="częstość" />
         </Framed>
       ) : null;
     }

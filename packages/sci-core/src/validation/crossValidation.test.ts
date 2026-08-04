@@ -32,6 +32,8 @@ interface Fixture {
   solver: string;
   t: number[];
   y: Record<string, number[]>;
+  /** Chwile zdarzeń wyznaczone przez SciPy — po jednej liście na zdarzenie. */
+  eventTimes?: number[][];
 }
 
 const KATALOG_FIXTURES = join(__dirname, '..', '..', 'validation', 'fixtures');
@@ -75,24 +77,44 @@ function najwiekszaRoznica(nasze: number[], referencyjne: number[]): number {
  * rzędu tysiąca przepuściłby realny błąd i test nie sprawdzałby niczego.
  */
 const UKLADY = [
-  { dokument: 'wahadlo.md', id: 'pendulum-ode', tolerancja: 5e-6 },
-  { dokument: 'rezonans.md', id: 'oscylator-ode', tolerancja: 5e-6 },
+  { dokument: 'wahadlo.md', id: 'pendulum-ode', tolerancja: 5e-6, dt: 1e-4 },
+  { dokument: 'rezonans.md', id: 'oscylator-ode', tolerancja: 5e-6, dt: 1e-4 },
   // Chaos rozjeżdża się z definicji — na krótkim odcinku trajektorie muszą się
   // jeszcze pokrywać, ale luźniej, bo błąd rośnie tam wykładniczo.
-  { dokument: 'lorenz.md', id: 'lorenz-ode', tolerancja: 1e-4 },
+  { dokument: 'lorenz.md', id: 'lorenz-ode', tolerancja: 1e-4, dt: 1e-4 },
+  /**
+   * Trzy układy dołożone w etapie 7 — **po jednym na każdą metodę**, która nie
+   * miała dotąd potwierdzenia spoza tego pakietu. Metodę wybiera dokument
+   * dyrektywą `@solver`, więc walidacja dotyczy tego, co czytelnik naprawdę
+   * dostaje, a nie konfiguracji wymyślonej na potrzeby testu:
+   *
+   *  • orbita — `verlet` (symplektyczny, stały krok),
+   *  • układ sztywny — `rosenbrock` (niejawny, etap 3),
+   *  • rzut ukośny — `dopri5` (adaptacyjny, etap 1) i do tego ze zdarzeniem.
+   *
+   * Progi znów z pomiaru: 3,3·10⁻⁶ · 3,3·10⁻⁶ · 1,4·10⁻⁹, z marginesem rzędu
+   * trzydziestu. Rzut wychodzi o trzy rzędy dokładniej od pozostałych, bo tam
+   * krok dobiera sterowanie błędem, a nie dokument.
+   */
+  { dokument: 'orbita.md', id: 'orbita-ode', tolerancja: 1e-4, dt: 1 },
+  { dokument: 'uklad-sztywny.md', id: 'sztywny-ode', tolerancja: 1e-4, dt: 1e-5 },
+  { dokument: 'rzut-ukosny.md', id: 'rzut-ode', tolerancja: 5e-8, dt: 1e-3 },
 ];
 
 describe('cross-walidacja ze SciPy', () => {
-  for (const { dokument, id, tolerancja } of UKLADY) {
+  for (const { dokument, id, tolerancja, dt } of UKLADY) {
     const fixture = wczytajFixture(id);
 
     it.skipIf(!fixture)(`${id}: trajektoria zgadza się z niezależnym solverem`, () => {
       const model = compileGraph(buildGraph([blokZDokumentu(dokument, id)]));
-      const wynik = model.run(fixture!.parameters, fixture!.tSpan, 1e-4);
+      const wynik = model.run(fixture!.parameters, fixture!.tSpan, dt);
 
-      expect(wynik.trajectory).toBeDefined();
+      expect(wynik.trajectory, wynik.error).toBeDefined();
 
       for (const nazwa of fixture!.state) {
+        // Do ostatniej policzonej chwili: gdy zdarzenie kończy symulację,
+        // obie strony zatrzymują się w tym samym miejscu, ale punkty `t_eval`
+        // za nim nie mają odpowiednika po żadnej ze stron.
         const nasze = fixture!.t.map((t) => wynik.trajectory!.value(nazwa, t));
         const roznica = najwiekszaRoznica(nasze, fixture!.y[nazwa]);
 
@@ -103,6 +125,32 @@ describe('cross-walidacja ze SciPy', () => {
       }
     });
   }
+
+  /**
+   * Chwila zdarzenia z niezależnego źródła.
+   *
+   * To jest domknięcie etapu 2. Obie strony rozwiązują to samo równanie
+   * `g(t, y) = 0` wewnątrz kroku, ale zupełnie inaczej: SciPy metodą Brenta na
+   * własnym interpolancie, my metodą Illinois na dense outpucie Dormanda–Prince'a.
+   * Zgodność co do ósmej cyfry znaczy, że obie implementacje mówią o tej samej
+   * chwili, a nie o dwóch bliskich.
+   */
+  it('rzut-ode: chwila lądowania zgadza się z niezależnym solverem', () => {
+    const fixture = wczytajFixture('rzut-ode');
+    if (!fixture?.eventTimes?.[0]?.length) {
+      throw new Error('Fixture rzutu nie zawiera chwil zdarzeń — zregeneruj odniesienia.');
+    }
+
+    const model = compileGraph(buildGraph([blokZDokumentu('rzut-ukosny.md', 'rzut-ode')]));
+    const wynik = model.run(fixture.parameters, fixture.tSpan, 1e-3);
+    const nasze = wynik.trajectory!.events?.[0]?.t;
+
+    expect(nasze).toBeDefined();
+    expect(
+      Math.abs(nasze! - fixture.eventTimes[0][0]),
+      `nasze ${nasze}, SciPy ${fixture.eventTimes[0][0]}`,
+    ).toBeLessThan(1e-8);
+  });
 
   it('fixtures są obecne — inaczej cross-walidacja tylko udaje, że działa', () => {
     // Brakujący fixture ucisza testy powyżej przez `skipIf`. Bez tego

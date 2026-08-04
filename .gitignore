@@ -74,3 +74,9 @@ app/cad-app/public/types/
 
 # Bundel bazy wiedzy budowany przez build:knowledge
 app/mycastle-web/public/sci-runtime/
+
+# Środowisko Pythona dla cross-walidacji ze SciPy (patrz packages/sci-core/validation/README.md).
+# Tworzone lokalnie i przy regeneracji odniesień; kilkadziesiąt megabajtów bibliotek
+# binarnych, które i tak są specyficzne dla systemu.
+.venv-scipy/
+packages/sci-core/validation/.scenario.json

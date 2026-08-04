@@ -30,3 +30,12 @@ export type {
   GeoEditableField,
   GeoMetric,
 } from './GeometryNodes';
+
+export { UiRootNode, UiWidgetNode, UI_NODE_TYPES, isUiNode } from './UiNodes';
+export type {
+  UiLayoutMode, UiWidgetKind, UiAnchor, UiFlowItem, UiFlowContainer, UiConstraint,
+  UiRootNodeData, UiWidgetNodeData,
+} from './UiNodes';
+
+export { buildUiDoc, solveUiLayout, applyUiDrag, findUiRoot, findAllUiRoots } from './uiLayout';
+export type { UiDocResult, UiLayoutResult, UiDragResult } from './uiLayout';

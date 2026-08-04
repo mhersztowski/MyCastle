@@ -38,11 +38,21 @@ dostaje czynnik `v`, czyli długość wektora prędkości.
 @init x = 0, y = 0, v_x = v_0 \cdot \cos(\alpha), v_y = v_0 \cdot \sin(\alpha)
 @when y < 0
 @stop
+@solver dopri5
+@tol 1e-9
 @vars x: m, y: m, v_x: m/s, v_y: m/s, g: m/s^2, b: kg/m, m: kg, v_0: m/s, alpha: rad
 ```
 
 Zdarzenie `@when y < 0 @stop` kończy symulację w chwili upadku — bez niego
 pocisk leciałby dalej pod ziemię, a wykres pokazywałby bzdurę.
+
+Chwila upadku nie jest tu jednak drobiazgiem technicznym: **zasięg to położenie
+w tej właśnie chwili**, więc błąd w jej wyznaczeniu przenosi się wprost na
+wynik. Dlatego blok liczy się metodą adaptacyjną (`@solver dopri5`), która
+zdarzenie **rozwiązuje** — szuka miejsca zerowego wysokości wewnątrz kroku
+zamiast sprawdzać po kroku, czy pocisk jest już pod ziemią. Bez oporu
+(`b = 0`) da się to sprawdzić rachunkiem: zasięg wychodzi dokładnie
+v₀²·sin(2α)/g.
 
 ## Energia i prędkość
 

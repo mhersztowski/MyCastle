@@ -65,7 +65,16 @@ function symbolsOf(latex: string, declared: string[]): string[] {
   return compileExpression(latex, declared).freeSymbols.filter((s) => !BUILTIN.has(s));
 }
 
-export function buildGraph(blocks: FormulaBlock[]): FormulaGraph {
+/**
+ * Buduje graf z bloków wzorów.
+ *
+ * `knownIds` to identyfikatory istniejące w dokumencie, ale **poza** tym grafem.
+ * Potrzebne, gdy blok `sim` wybiera podzbiór wzorów: `@derivedFrom` jest wtedy
+ * metadaną pochodzenia, nie zależnością obliczeniową, i wskazywanie na wzór
+ * spoza podzbioru jest normalne — bez tej listy każdy taki odsyłacz byłby
+ * zgłaszany jako brak.
+ */
+export function buildGraph(blocks: FormulaBlock[], knownIds: string[] = []): FormulaGraph {
   const issues: GraphIssue[] = [];
   const nodes: GraphNode[] = [];
 
@@ -124,9 +133,10 @@ export function buildGraph(blocks: FormulaBlock[]): FormulaGraph {
     }
   }
 
+  const znane = new Set([...seenIds, ...knownIds]);
   for (const node of nodes) {
     for (const reference of node.block.derivedFrom) {
-      if (!seenIds.has(reference)) {
+      if (!znane.has(reference)) {
         issues.push({
           message: `Wzór „${node.block.id}" wywodzi się z „${reference}", którego nie ma w dokumencie.`,
           formulaId: node.block.id,

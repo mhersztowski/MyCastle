@@ -23,6 +23,7 @@ import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
 import ViewStreamIcon from '@mui/icons-material/ViewStream';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import MediaPickerDialog from '../components/MediaPickerDialog';
+import { ImageResizeHandle } from './ImageResizeHandle';
 
 type ImageAlign = 'left' | 'center' | 'right' | 'inline';
 
@@ -39,6 +40,8 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const srcInputRef = useRef<HTMLInputElement>(null);
   const initializedRef = useRef(false);
+  /** Element, którego szerokość mierzy uchwyt w chwili chwycenia. */
+  const boxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (isEditing && srcInputRef.current) {
@@ -418,6 +421,7 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
       style={nodeWrapperStyle}
     >
       <Box
+        ref={boxRef}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         sx={{
@@ -584,6 +588,19 @@ const ImageNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes, delete
               </Box>
             )}
           </Box>
+        )}
+
+        {/*
+          Uchwyt zmiany rozmiaru — w narożniku, widoczny razem z resztą
+          nakładki. Zapisuje do tego samego atrybutu `width`, co suwak w oknie
+          edycji, więc konwersja do markdownu pozostaje jedna.
+        */}
+        {(isHovered || selected) && !imageError && (
+          <ImageResizeHandle
+            width={node.attrs.width}
+            updateAttributes={updateAttributes}
+            elementRef={boxRef}
+          />
         )}
 
         {/* Alt text indicator */}

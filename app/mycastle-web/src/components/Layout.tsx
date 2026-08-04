@@ -153,6 +153,7 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
             { text: 'UML', icon: <SchemaIcon />, path: `/user/${userName}/programming/uml` },
             { text: 'MinisC', icon: <MemoryIcon />, path: `/user/${userName}/programming/minisc` },
             { text: 'Components', icon: <WidgetsIcon />, path: `/user/${userName}/programming/components` },
+            { text: 'Layout Lab', icon: <SchemaIcon />, path: `/user/${userName}/programming/layout-lab` },
             { text: 'Server Logic', icon: <DnsIcon />, path: `/user/${userName}/programming/server-logic` },
           ],
         },

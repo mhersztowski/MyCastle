@@ -119,7 +119,13 @@ export function SimBlock({ code, formulas, onChange, bare, workerFactory }: SimB
         initialValues={setup.values}
         duration={setup.spec.duration ?? 10}
         onValues={setCurrent}
-        source={{ kind: 'graph', formulas: formulas.map((f) => ({ id: f.id, body: serializeFormulaBlock(f) })) }}
+        // Ten sam podzbiór, z którego zbudowano model na ekranie — inaczej
+        // worker liczyłby z pełnego dokumentu i wynik nie zgadzałby się z tym,
+        // co widzi czytelnik.
+        source={{
+          kind: 'graph',
+          formulas: setup.usedFormulas.map((f) => ({ id: f.id, body: serializeFormulaBlock(f) })),
+        }}
         workerFactory={workerFactory}
       />
 

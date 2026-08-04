@@ -18,7 +18,13 @@
  * MathLive i z rozpoznawania pisma rysikiem.
  */
 
-export type FormulaKind = 'definition' | 'ode' | 'pde' | 'linalg';
+/**
+ * `relation` to równanie, które **nie jest przypisaniem** — jak (15-5)
+ * u Resnicka: `d²x/dt² + (k/m)x = 0`. Podręcznik jest ich pełen, a tekst
+ * odsyła do nich po numerze, więc muszą mieć identyfikator i dać się pokazać.
+ * Do grafu obliczeń nie wchodzą: nie ma czego z nich policzyć bez rozwiązania.
+ */
+export type FormulaKind = 'definition' | 'ode' | 'pde' | 'linalg' | 'relation';
 
 /**
  * Opis bloku algebry liniowej.
@@ -91,6 +97,8 @@ export interface FormulaIssue {
 export interface FormulaBlock {
   id: string;
   kind: FormulaKind;
+  /** Surowy LaTeX — używany, gdy równanie nie jest przypisaniem (`relation`). */
+  latex?: string;
   /** Nazwa wyniku dla definicji — po niej inne wzory się do niej odwołują. */
   target?: string;
   /**
@@ -101,8 +109,17 @@ export interface FormulaBlock {
    * mu wzory.
    */
   targetLatex?: string;
-  /** Prawa strona definicji w LaTeX-u. */
+  /** Prawa strona definicji w LaTeX-u — **ostatni** człon łańcucha równości. */
   expression?: string;
+  /**
+   * Człony łańcucha `a = b = c`, gdy autor pokazał drogę, a nie sam wynik.
+   *
+   * Do liczenia służy ostatni (wyrażony przez wielkości znane); pośrednie
+   * zostają do pokazania, bo w nich mieści się wartość dydaktyczna zapisu.
+   * Zwykły wzór nie ma tego pola wcale — pusta tablica zmuszałaby widok do
+   * odróżniania jej od łańcucha jednoelementowego.
+   */
+  chain?: string[];
   /** Zmienne stanu układu ODE, w kolejności wektora stanu. */
   state?: string[];
   /** Pochodne zmiennych stanu: nazwa → wyrażenie LaTeX. */
@@ -116,12 +133,29 @@ export interface FormulaBlock {
    * — rzeczy, których nie da się zapisać jako ciągła pochodna.
    */
   events?: FormulaEvent[];
+  /**
+   * Wielkości, które mają pozostać stałe: nazwa → wyrażenie LaTeX.
+   *
+   * Deklaracja **nie wchodzi do obliczeń** — układ liczy się tak samo z nią
+   * i bez niej. Wchodzi do tego, co silnik potrafi o obliczeniach powiedzieć:
+   * energia, która narasta, jest jedynym sygnałem, że krok całkowania jest za
+   * duży, a wykres wygląda przy tym zupełnie zdrowo.
+   */
+  invariants?: Record<string, string>;
   /** Opis pola na siatce, gdy blok jest równaniem cząstkowym. */
   pde?: PdeSpec;
   /** Deklaracje algebry liniowej, gdy blok jest sceną przekształcenia. */
   linalg?: LinAlgSpec;
   /** Metoda całkowania wskazana przez autora; brak = wybór domyślny. */
   solver?: string;
+  /**
+   * Tolerancja względna dla metod adaptacyjnych.
+   *
+   * Osobno od `solver`, bo odpowiada na inne pytanie: metoda to „czym liczyć",
+   * tolerancja to „jak dokładnie". Metody o stałym kroku ją ignorują — i to
+   * jest powód, dla którego w ogóle warto wybrać metodę adaptacyjną.
+   */
+  tolerance?: number;
   /** Jednostki zmiennych — podstawa analizy wymiarowej i UI parametrów. */
   vars: Record<string, string>;
   derivedFrom: string[];
@@ -133,7 +167,46 @@ export interface FormulaBlock {
   issues: FormulaIssue[];
 }
 
-const ASSIGNMENT = /^\s*(\\?[A-Za-z][A-Za-z0-9]*(?:_\{?[A-Za-z0-9]+\}?)?)\s*=\s*([\s\S]+?)\s*$/;
+/**
+ * Przypisanie „nazwa = wyrażenie".
+ *
+ * Nazwa może nieść **argument w nawiasie** — `U(x)`, `F(x)` — bo tak pisze
+ * podręcznik. To wyłącznie zapis: wielkością pozostaje `U`, więc graf obliczeń
+ * nic o tym nie wie. Nawias musi przylegać do nazwy, inaczej `E (m + 1) = 2`
+ * (mnożenie) udawałoby funkcję.
+ *
+ * Nawias jest w **tej samej grupie** co nazwa, a nie w osobnej — dzięki temu
+ * numery grup zostają, a używa ich sześć innych miejsc w tym pliku.
+ */
+const ASSIGNMENT = /^\s*((?:\\?[A-Za-z][A-Za-z0-9]*(?:_\{?[A-Za-z0-9]+\}?)?)(?:\([^)\s][^)]*\))?)\s*=\s*([\s\S]+?)\s*$/;
+
+/**
+ * Warianty greckich liter, którym Compute Engine nadaje **inną nazwę, niż
+ * wygląda ich zapis**: `\varkappa` staje się `kappaSymbol`, a nie `varkappa`.
+ *
+ * Bez tej tabeli `@vars \varkappa: N*m` deklarowało wielkość o nazwie, której
+ * w skompilowanym wyrażeniu nie było — wzór zgłaszał brakujący symbol i nie dawał
+ * się policzyć. A warianty nie są ozdobą: Resnick pisze moment kierujący
+ * wahadła torsyjnego właśnie jako `ϰ`.
+ */
+const WARIANTY_GRECKIE: Record<string, string> = {
+  varkappa: 'kappaSymbol',
+  varepsilon: 'epsilonSymbol',
+  vartheta: 'thetaSymbol',
+  varrho: 'rhoSymbol',
+  varpi: 'piSymbol',
+  varsigma: 'finalSigma',
+};
+
+/**
+ * `\varphi` nie da się zmapować, bo Compute Engine czyta je jako **złoty
+ * podział** — stałą 1,618, a nie symbol. Wzór z nim nie tyle się psuje, co po
+ * cichu liczy z podstawioną liczbą, więc zgłaszamy to jako błąd bloku.
+ */
+const VARPHI = /\\varphi\b/;
+
+/** Lewa strona typu `\omega' = …` — nazwa wielkości zakończona primem. */
+const PRIM_PO_LEWEJ = /^\s*\\?[A-Za-z][A-Za-z0-9]*(?:_\{?[A-Za-z0-9]+\}?)?'\s*=/;
 
 /**
  * Nazwa symbolu w postaci, jakiej używa silnik matematyczny.
@@ -147,7 +220,14 @@ const ASSIGNMENT = /^\s*(\\?[A-Za-z][A-Za-z0-9]*(?:_\{?[A-Za-z0-9]+\}?)?)\s*=\s*
  * pułapka, co `pi` czytane jako `p·i`.
  */
 export function symbolName(latexName: string): string {
-  return latexName.replace(/\\/g, '').replace(/[{}]/g, '');
+  const goła = latexName.replace(/\\/g, '').replace(/[{}]/g, '');
+  // Indeks zostaje nietknięty: `\vartheta_0` to `thetaSymbol_0`, tak samo jak
+  // czyta to silnik. Mapujemy więc samą bazę nazwy, a nie cały napis.
+  const podzial = goła.indexOf('_');
+  const baza = podzial < 0 ? goła : goła.slice(0, podzial);
+  const wariant = WARIANTY_GRECKIE[baza];
+  if (!wariant) return goła;
+  return podzial < 0 ? wariant : wariant + goła.slice(podzial);
 }
 const DIRECTIVE = /^\s*@([A-Za-z][A-Za-z0-9]*)\s*(.*)$/;
 
@@ -199,6 +279,39 @@ function parseBoundary(rest: string): PdeSpec['boundary'] {
   return undefined;
 }
 
+/**
+ * Rozdziela łańcuch równości na człony.
+ *
+ * Znak `=` wewnątrz nawiasów albo w poleceniu LaTeX-a (`\leq`, `\neq`) nie
+ * rozdziela — inaczej wyrażenie z warunkiem rozpadłoby się w połowie.
+ */
+function rozdzielLancuch(prawaStrona: string): string[] {
+  const czlony: string[] = [];
+  let glebokosc = 0;
+  let biezacy = '';
+
+  for (let i = 0; i < prawaStrona.length; i += 1) {
+    const znak = prawaStrona[i];
+    if ('({['.includes(znak)) glebokosc += 1;
+    if (')}]'.includes(znak)) glebokosc -= 1;
+
+    const poprzedni = prawaStrona[i - 1];
+    const nastepny = prawaStrona[i + 1];
+    const czescOperatora = poprzedni === '<' || poprzedni === '>' || poprzedni === '!'
+      || nastepny === '=' || poprzedni === '=';
+
+    if (znak === '=' && glebokosc === 0 && !czescOperatora) {
+      czlony.push(biezacy.trim());
+      biezacy = '';
+      continue;
+    }
+    biezacy += znak;
+  }
+
+  czlony.push(biezacy.trim());
+  return czlony.filter(Boolean);
+}
+
 export function parseFormulaBlock(id: string, body: string): FormulaBlock {
   const block: FormulaBlock = {
     id,
@@ -214,6 +327,13 @@ export function parseFormulaBlock(id: string, body: string): FormulaBlock {
 
   const lines = body.split('\n');
   let sawAssignment = false;
+
+  if (VARPHI.test(body)) {
+    block.issues.push({
+      message: 'Zapis „\\varphi" jest w silniku matematycznym złotym podziałem (1,618), '
+        + 'a nie symbolem — wzór policzyłby się z podstawioną liczbą. Użyj „\\phi".',
+    });
+  }
 
   lines.forEach((line, index) => {
     const trimmed = line.trim();
@@ -347,9 +467,33 @@ export function parseFormulaBlock(id: string, body: string): FormulaBlock {
           last.stop = true;
           return;
         }
-        case 'solver':
+        case 'invariant': {
+          const assignment = ASSIGNMENT.exec(rest);
+          if (!assignment) {
+            block.issues.push({
+              message: 'Niezmiennik zapisuje się „@invariant nazwa = wyrażenie", np. „@invariant E = \\frac{1}{2} m v^2".',
+              line: index,
+            });
+            return;
+          }
+          block.invariants = { ...block.invariants, [symbolName(assignment[1])]: assignment[2] };
+          return;
+        }
+        case 'relation':
+        block.kind = 'relation';
+        return;
+      case 'solver':
           block.solver = rest.trim();
           return;
+        case 'tol': {
+          const value = Number(rest.trim());
+          if (!Number.isFinite(value) || value <= 0) {
+            block.issues.push({ message: 'Tolerancja to dodatnia liczba, np. „@tol 1e-8".', line: index });
+            return;
+          }
+          block.tolerance = value;
+          return;
+        }
         case 'vars':
           block.vars = { ...block.vars, ...parseVars(rest) };
           return;
@@ -367,6 +511,11 @@ export function parseFormulaBlock(id: string, body: string): FormulaBlock {
       }
     }
 
+    if (block.kind === 'relation') {
+      block.latex = block.latex ? `${block.latex} ${trimmed}` : trimmed;
+      return;
+    }
+
     const assignment = ASSIGNMENT.exec(trimmed);
     if (assignment && block.kind === 'linalg') {
       const spec = block.linalg ?? { matrices: [], vectors: [], definitions: [] };
@@ -382,9 +531,16 @@ export function parseFormulaBlock(id: string, body: string): FormulaBlock {
 
     if (assignment && !sawAssignment) {
       sawAssignment = true;
-      block.target = symbolName(assignment[1]);
+      // Argument w nawiasie należy do zapisu, nie do nazwy wielkości.
+      block.target = symbolName(assignment[1].replace(/\([^)]*\)$/, ''));
       block.targetLatex = assignment[1];
-      block.expression = assignment[2];
+
+      // Łańcuch `T = 2π/ω = 2π√(m/k)`: liczymy z **ostatniego** członu, bo to
+      // on jest wyrażony przez wielkości znane. Pierwszy bywa zapisany przez
+      // wielkość liczoną gdzie indziej i sam z siebie nie wystarcza.
+      const czlony = rozdzielLancuch(assignment[2]);
+      block.expression = czlony[czlony.length - 1];
+      if (czlony.length > 1) block.chain = czlony;
       return;
     }
 
@@ -411,9 +567,30 @@ function validate(block: FormulaBlock): void {
     return;
   }
 
+  // Równanie bez przypisania niesie tylko zapis — sprawdzamy, że w ogóle coś
+  // ma, bo pusty blok byłby cichym brakiem.
+  if (block.kind === 'relation') {
+    if (!block.latex) {
+      block.issues.push({ message: `Równanie „${block.id}" nie ma treści.` });
+    }
+    return;
+  }
+
   if (block.kind === 'definition') {
     if (!block.target) {
-      block.issues.push({ message: 'Wzór musi być przypisaniem postaci „nazwa = wyrażenie".' });
+      // Prim jest w podręczniku zwykłym oznaczeniem innej wielkości (`ω′` to
+      // częstość ruchu tłumionego), ale dla silnika matematycznego znaczy
+      // pochodną. Bez tej podpowiedzi autor dostawał „musi być przypisaniem"
+      // przy zapisie, w którym przypisanie widać gołym okiem.
+      const zPrimem = block.unknown.some((linia) => PRIM_PO_LEWEJ.test(linia));
+      block.issues.push({
+        message: zPrimem
+          ? 'Nazwa z primem („\\omega\'") znaczy dla silnika matematycznego pochodną, '
+            + 'a nie osobną wielkość, więc wzór nie może być przypisaniem. '
+            + 'Zapisz go jako „@relation" — zostanie pokazany dokładnie jak w druku, '
+            + 'ale nie wejdzie do grafu obliczeń.'
+          : 'Wzór musi być przypisaniem postaci „nazwa = wyrażenie".',
+      });
     }
     return;
   }
@@ -464,6 +641,7 @@ export function serializeFormulaBlock(block: FormulaBlock): string {
     const initEntries = Object.entries(init);
     if (initEntries.length) out.push(`@init ${initEntries.map(([k, v]) => `${k} = ${v}`).join(', ')}`);
     if (block.solver) out.push(`@solver ${block.solver}`);
+    if (block.tolerance !== undefined) out.push(`@tol ${block.tolerance}`);
     for (const event of block.events ?? []) {
       out.push(`@when ${event.when}`);
       const assign = Object.entries(event.assign ?? {});
@@ -471,7 +649,15 @@ export function serializeFormulaBlock(block: FormulaBlock): string {
       if (event.stop) out.push('@stop');
     }
   } else if (block.target) {
-    out.push(`${block.targetLatex ?? block.target} = ${block.expression ?? ''}`);
+    // Łańcuch równości zapisujemy w całości: to on niesie wyprowadzenie,
+    // a samo `block.expression` to tylko jego ostatni człon.
+    out.push(`${block.targetLatex ?? block.target} = ${block.chain?.join(' = ') ?? block.expression ?? ''}`);
+  }
+
+  // Niezmienniki tuż po równaniach, bo mówią o tym samym układzie — a przed
+  // jednostkami, bo jednostki bywają deklarowane także dla nich.
+  for (const [name, expression] of Object.entries(block.invariants ?? {})) {
+    out.push(`@invariant ${name} = ${expression}`);
   }
 
   const vars = Object.entries(block.vars);

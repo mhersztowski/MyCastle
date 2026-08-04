@@ -1,4 +1,5 @@
 export { GLTFImporter } from './GLTFImporter';
+export type { GLTFImportResult } from './GLTFImporter';
 export { GLTFExporter } from './GLTFExporter';
 export { OBJExporter } from './OBJExporter';
 export { STLExporter } from './STLExporter';

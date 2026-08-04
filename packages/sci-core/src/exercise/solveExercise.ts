@@ -148,7 +148,10 @@ export function checkNumeric(answer: string, variant: ExerciseVariant, tolerance
     return { verdict: 'unreadable', message: 'Zadanie nie ma policzonej odpowiedzi wzorcowej.' };
   }
 
-  const text = answer.trim();
+  // Przecinek dziesiętny jest tym, co pisze uczący się po polsku — i tym, czego
+  // nie rozumie parser wielkości. Zamiana tutaj, a nie w interfejsie, bo przez
+  // to miejsce przechodzi każda sprawdzana odpowiedź.
+  const text = answer.trim().replace(/(\d),(\d)/g, '$1.$2');
   if (!text) return { verdict: 'unreadable', message: 'Wpisz odpowiedź.' };
 
   let value: number;
@@ -221,4 +224,40 @@ export function checkSymbolic(answer: string, expected: string, symbols: string[
   }
 
   return { verdict: 'correct', message: 'Dobrze — wyrażenie jest równoważne.' };
+}
+
+/**
+ * Wariant zbudowany z odpowiedzi **przepisanej z podręcznika**.
+ *
+ * Nic tu nie jest liczone: wartość wzorcowa jest tą, którą podał autor książki.
+ * Odrębna funkcja zamiast gałęzi w `exerciseVariant`, bo to inna sytuacja —
+ * tam wariant powstaje z ziarna i modelu, tu jest jeden i pochodzi z zewnątrz.
+ *
+ * Dzięki temu sprawdzanie odpowiedzi jest **dokładnie to samo** w obu trybach:
+ * ta sama tolerancja, ta sama kontrola wymiaru, te same komunikaty. Osobna
+ * ścieżka porównywania rozjechałaby się przy pierwszej poprawce.
+ */
+export function statedVariant(check: string): ExerciseVariant {
+  // Podręcznik pisze „20,5°", a nie „20.5°". Bez tej zamiany sprawdzanie
+  // odpadałoby dokładnie tam, gdzie miało pomóc.
+  const tekst = check.trim().replace(/(\d),(\d)/g, '$1.$2');
+
+  try {
+    const parsed = parseQuantity(tekst);
+    return {
+      seed: 0,
+      values: {},
+      shown: {},
+      expected: parsed.si,
+      ...(parsed.unit ? { expectedUnit: parsed.unit } : {}),
+      issues: [],
+    };
+  } catch (error) {
+    return {
+      seed: 0,
+      values: {},
+      shown: {},
+      issues: [`Nie umiem odczytać odpowiedzi „${check}" jako wielkości: ${(error as Error).message}`],
+    };
+  }
 }

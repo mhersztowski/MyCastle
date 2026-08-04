@@ -36,6 +36,11 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import ChangeHistoryIcon from '@mui/icons-material/ChangeHistory';
+import WidgetsIcon from '@mui/icons-material/Widgets';
+import CropSquareIcon from '@mui/icons-material/CropSquare';
+import SmartButtonIcon from '@mui/icons-material/SmartButton';
+import TextFieldsIcon from '@mui/icons-material/TextFields';
+import LinearScaleIcon from '@mui/icons-material/LinearScale';
 import {
   CubeIcon,
   SphereIcon,
@@ -69,6 +74,8 @@ function getNodeIcon(type: string, name?: string) {
   if (type === 'geometry-segment') return <HorizontalRuleIcon sx={{ fontSize: 14 }} />;
   if (type === 'geometry-line') return <TimelineIcon sx={{ fontSize: 14 }} />;
   if (type === 'geometry-angle') return <ChangeHistoryIcon sx={{ fontSize: 14 }} />;
+  if (type === 'ui-root') return <WidgetsIcon sx={{ fontSize: 14 }} />;
+  if (type === 'ui-widget') return <CropSquareIcon sx={{ fontSize: 14 }} />;
   return <FolderIcon size={14} />;
 }
 
@@ -99,6 +106,12 @@ const addMenuItems: Array<{ type: string; label?: string; icon?: React.ReactNode
   { type: 'geometry-line', label: 'Geometry Line', icon: <TimelineIcon sx={{ fontSize: 14 }} /> },
   { type: 'geometry-angle', label: 'Geometry Angle', icon: <ChangeHistoryIcon sx={{ fontSize: 14 }} /> },
   { type: 'divider5' },
+  { type: 'ui-root', label: 'UI Layer', icon: <WidgetsIcon sx={{ fontSize: 14 }} /> },
+  { type: 'ui-panel', label: 'UI Panel', icon: <CropSquareIcon sx={{ fontSize: 14 }} /> },
+  { type: 'ui-button', label: 'UI Button', icon: <SmartButtonIcon sx={{ fontSize: 14 }} /> },
+  { type: 'ui-label', label: 'UI Label', icon: <TextFieldsIcon sx={{ fontSize: 14 }} /> },
+  { type: 'ui-bar', label: 'UI Bar', icon: <LinearScaleIcon sx={{ fontSize: 14 }} /> },
+  { type: 'divider6' },
   { type: 'import-mesh', label: 'Import Mesh...', icon: <FileUploadIcon sx={{ fontSize: 14 }} /> },
 ];
 

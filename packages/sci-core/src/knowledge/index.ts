@@ -16,10 +16,16 @@
  */
 import { parseFormulaBlock, type FormulaBlock } from '../formula/parseFormula';
 import { parseExerciseBlock, type ExerciseBlock } from '../exercise/parseExercise';
+import { parseTermBlock, type TermBlock } from './glossary';
+import { parseFigureBlock, parseTableBlock, type FigureBlock, type TableBlock } from './blocks';
+import { parseCalloutBlock, type CalloutBlock } from './callout';
+import { parseLawBlock, type LawBlock } from './law';
 
 /** Nagłówek YAML dokumentu — tagi, prerekwizyty, tytuł. */
 export interface DocumentMeta {
   title?: string;
+  /** Identyfikator dokumentu jako celu odsyłacza („paragraf 15-1"). */
+  id?: string;
   tags: string[];
   /** Tematy, które warto poznać wcześniej — z nich powstaje DAG nauki. */
   requires: string[];
@@ -31,6 +37,16 @@ export interface KnowledgeDocument {
   meta: DocumentMeta;
   formulas: FormulaBlock[];
   exercises: ExerciseBlock[];
+  /** Hasła słownika zagadnień — pełne tylko w pliku słownika książki. */
+  terms: TermBlock[];
+  figures: FigureBlock[];
+  tables: TableBlock[];
+  /** Notki kontekstowe — jedyna nasza treść w dokumencie. */
+  callouts: CalloutBlock[];
+  /** Pozycje katalogu praw — pełne tylko w pliku `Prawa.md` książki. */
+  laws: LawBlock[];
+  /** Identyfikator samego dokumentu (`id:` w nagłówku) — cel odsyłacza do paragrafu. */
+  anchorId?: string;
   /** Bloki `sim` — po nich widać, które dokumenty mają symulację z grafu. */
   simCount: number;
   /** Bloki `simscript` — model pisany wprost w dokumencie. */
@@ -43,17 +59,50 @@ export interface KnowledgeIssue {
   formulaId?: string;
 }
 
+/** Co może być celem odsyłacza `((id))`. */
+export type AnchorKind =
+  | 'formula' | 'term' | 'figure' | 'table' | 'section' | 'callout' | 'law';
+
+export interface Anchor {
+  path: string;
+  kind: AnchorKind;
+}
+
 export interface KnowledgeIndex {
   documents: KnowledgeDocument[];
-  /** Wzór → dokument, w którym mieszka. */
+  /**
+   * Wszystkie cele odsyłaczy w jednej mapie.
+   *
+   * Jedna mapa, nie pięć, bo odsyłacz rozwiązuje się po **samym
+   * identyfikatorze** — a wtedy kolizja między wzorem a rysunkiem jest tak samo
+   * groźna jak kolizja dwóch wzorów i musi być wykrywana w jednym miejscu.
+   */
+  anchors: Map<string, Anchor>;
+  /** Wzór → dokument. Zachowane dla katalogu, wywodzone z `anchors`. */
   formulaHome: Map<string, string>;
+  /** Hasło słownika → dokument. */
+  termHome: Map<string, string>;
   issues: KnowledgeIssue[];
 }
 
-const FORMULA_FENCE = /```formula:([A-Za-z0-9_-]+)\n([\s\S]*?)```/g;
-const EXERCISE_FENCE = /```exercise:([A-Za-z0-9_-]+)\n([\s\S]*?)```/g;
-const SIM_FENCE = /```sim(?::[A-Za-z0-9_-]+)?\n[\s\S]*?```/g;
-const SCRIPT_FENCE = /```simscript(?::[A-Za-z0-9_-]+)?\n[\s\S]*?```/g;
+/**
+ * Ogrodzenia bloków — **zakotwiczone na początku wiersza**.
+ *
+ * Bez `^` przykład wcięty w dokumentacji byłby czytany jak prawdziwy blok:
+ * `PLAN.md` leży w tej samej bazie i pokazuje format hasła, więc zakładałby
+ * hasło i rezerwował identyfikator, który potem kolidowałby z prawdziwym.
+ * Markdown i tak traktuje wcięcie o cztery spacje jako blok kodu — robimy to
+ * samo. Dopuszczamy do trzech spacji, bo tyle markdown wybacza w ogrodzeniu.
+ */
+const FORMULA_FENCE = /^ {0,3}```formula:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const EXERCISE_FENCE = /^ {0,3}```exercise:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const TERM_FENCE_G = /^ {0,3}```term:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const FIGURE_FENCE = /^ {0,3}```figure:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const TABLE_FENCE = /^ {0,3}```table:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const CALLOUT_FENCE_G = /^ {0,3}```callout:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const LAW_FENCE_G = /^ {0,3}```law:([A-Za-z0-9_-]+)\n([\s\S]*?)```/gm;
+const SIM_FENCE = /^ {0,3}```sim(?::[A-Za-z0-9_-]+)?\n[\s\S]*?```/gm;
+const SCRIPT_FENCE = /^ {0,3}```simscript(?::[A-Za-z0-9_-]+)?\n[\s\S]*?```/gm;
 
 /**
  * Czyta nagłówek YAML z początku pliku.
@@ -74,6 +123,7 @@ export function parseFrontMatter(markdown: string): { meta: DocumentMeta; body: 
     if (!value) continue;
 
     if (key === 'title') meta.title = value.replace(/^["']|["']$/g, '');
+    else if (key === 'id') meta.id = value.replace(/^["']|["']$/g, '');
     else if (key === 'tags' || key === 'requires') {
       const list = value.replace(/^\[|\]$/g, '').split(',').map((s) => s.trim().replace(/^["']|["']$/g, ''));
       meta[key] = list.filter(Boolean);
@@ -97,6 +147,31 @@ export function readDocument(path: string, markdown: string): KnowledgeDocument 
     exercises.push(parseExerciseBlock(match[1], match[2]));
   }
 
+  const terms: TermBlock[] = [];
+  for (const match of body.matchAll(TERM_FENCE_G)) {
+    terms.push(parseTermBlock(match[1], match[2]));
+  }
+
+  const figures: FigureBlock[] = [];
+  for (const match of body.matchAll(FIGURE_FENCE)) {
+    figures.push(parseFigureBlock(match[1], match[2]));
+  }
+
+  const callouts: CalloutBlock[] = [];
+  for (const match of body.matchAll(CALLOUT_FENCE_G)) {
+    callouts.push(parseCalloutBlock(match[1], match[2]));
+  }
+
+  const laws: LawBlock[] = [];
+  for (const match of body.matchAll(LAW_FENCE_G)) {
+    laws.push(parseLawBlock(match[1], match[2]));
+  }
+
+  const tables: TableBlock[] = [];
+  for (const match of body.matchAll(TABLE_FENCE)) {
+    tables.push(parseTableBlock(match[1], match[2]));
+  }
+
   // Tytuł z nagłówka YAML, a w jego braku z pierwszego nagłówka markdown —
   // autor nie powinien pisać tytułu dwa razy.
   if (!meta.title) {
@@ -109,6 +184,12 @@ export function readDocument(path: string, markdown: string): KnowledgeDocument 
     meta,
     formulas,
     exercises,
+    terms,
+    figures,
+    tables,
+    callouts,
+    laws,
+    anchorId: meta.id,
     simCount: [...body.matchAll(SIM_FENCE)].length,
     scriptCount: [...body.matchAll(SCRIPT_FENCE)].length,
   };
@@ -123,22 +204,70 @@ export function readDocument(path: string, markdown: string): KnowledgeDocument 
 export function buildIndex(files: Array<{ path: string; markdown: string }>): KnowledgeIndex {
   const documents = files.map(({ path, markdown }) => readDocument(path, markdown));
   const issues: KnowledgeIssue[] = [];
-  const formulaHome = new Map<string, string>();
+  const anchors = new Map<string, Anchor>();
+
+  /**
+   * Rejestruje cel, pilnując unikalności **w całej bazie**.
+   *
+   * Kolizja między rodzajami (wzór i rysunek o tym samym identyfikatorze) jest
+   * tak samo groźna jak kolizja w obrębie jednego rodzaju, bo odsyłacz zna
+   * tylko identyfikator.
+   */
+  const dodaj = (id: string, kind: AnchorKind, path: string) => {
+    const zajete = anchors.get(id);
+    if (zajete) {
+      const rodzaje = zajete.kind === kind ? `(oba jako ${kind})` : `(jako ${zajete.kind} i ${kind})`;
+      issues.push({
+        message: `Identyfikator „${id}" jest użyty w dwóch dokumentach: ${zajete.path} i ${path} ${rodzaje}.`,
+        path,
+        formulaId: id,
+      });
+      return;
+    }
+    anchors.set(id, { path, kind });
+  };
 
   for (const document of documents) {
-    for (const formula of document.formulas) {
-      const previous = formulaHome.get(formula.id);
-      if (previous) {
-        issues.push({
-          message: `Wzór „${formula.id}" jest zdefiniowany w dwóch dokumentach: ${previous} i ${document.path}.`,
-          path: document.path,
-          formulaId: formula.id,
-        });
-        continue;
+    for (const formula of document.formulas) dodaj(formula.id, 'formula', document.path);
+    for (const term of document.terms) {
+      for (const issue of term.issues) {
+        issues.push({ message: issue.message, path: document.path, formulaId: term.id });
       }
-      formulaHome.set(formula.id, document.path);
+      dodaj(term.id, 'term', document.path);
     }
+    for (const figure of document.figures) {
+      for (const issue of figure.issues) {
+        issues.push({ message: issue.message, path: document.path, formulaId: figure.id });
+      }
+      dodaj(figure.id, 'figure', document.path);
+    }
+    for (const table of document.tables) {
+      for (const issue of table.issues) {
+        issues.push({ message: issue.message, path: document.path, formulaId: table.id });
+      }
+      dodaj(table.id, 'table', document.path);
+    }
+    for (const callout of document.callouts) {
+      for (const issue of callout.issues) {
+        issues.push({ message: issue.message, path: document.path, formulaId: callout.id });
+      }
+      dodaj(callout.id, 'callout', document.path);
+    }
+    for (const law of document.laws) {
+      for (const issue of law.issues) {
+        issues.push({ message: issue.message, path: document.path, formulaId: law.id });
+      }
+      dodaj(law.id, 'law', document.path);
+    }
+    if (document.anchorId) dodaj(document.anchorId, 'section', document.path);
   }
+
+  const formulaHome = new Map(
+    [...anchors].filter(([, a]) => a.kind === 'formula').map(([id, a]) => [id, a.path]),
+  );
+  const termHome = new Map(
+    [...anchors].filter(([, a]) => a.kind === 'term').map(([id, a]) => [id, a.path]),
+  );
 
   const documentPaths = new Set(documents.map((d) => d.path));
   const titles = new Map(documents.map((d) => [d.meta.title, d.path] as const));
@@ -179,7 +308,7 @@ export function buildIndex(files: Array<{ path: string; markdown: string }>): Kn
     }
   }
 
-  return { documents, formulaHome, issues };
+  return { documents, anchors, formulaHome, termHome, issues };
 }
 
 /** Wszystkie zadania w bazie — katalog powstaje ze skanu, nie z ręcznej listy. */

@@ -11,6 +11,20 @@
  * zawsze daje ten sam wariant — bez tego nie dałoby się ani wrócić do zadania,
  * ani go sprawdzić.
  *
+ * **Nie każde zadanie da się tak opisać** i próba dopisania osobnego bloku dla
+ * każdego rodzaju kończy się setką bloków. Dlatego rodzaj zadania wynika tutaj
+ * z tego, co autor napisał, a nie z nazwy bloku:
+ *
+ *  • `@answer` — wielkość z grafu; klucz liczy model, dane losuje ziarno;
+ *  • `@expected` — odpowiedź przepisana z podręcznika; **blok nie liczy nic**,
+ *    a sprawdzanie jest możliwe tylko wtedy, gdy odpowiedź zaczyna się liczbą;
+ *  • brak obu — zadanie jakościowe („co można powiedzieć o wektorach a i b?").
+ *    Takich w podręczniku jest pełno i one też mają wracać w powtórkach.
+ *
+ * Wspólne dla wszystkich trzech jest to, co naprawdę się liczy: identyfikator,
+ * treść, podpowiedzi, poziom i miejsce w grafie wiedzy — a przez to wpięcie
+ * w harmonogram powtórek.
+ *
  * Zapis jest celowo bliski blokowi `formula`: pierwsza część to treść dla
  * czytelnika, dyrektywy `@` niosą resztę.
  */
@@ -35,6 +49,22 @@ export interface ExerciseBlock {
   given: GivenRange[];
   /** Wielkość z grafu, która jest odpowiedzią. */
   answer?: string;
+  /**
+   * Odpowiedź przepisana z podręcznika — tekst, nie wielkość.
+   *
+   * Obecność tego pola znaczy, że blok **niczego nie liczy**: pokazuje treść,
+   * czytelnik rozwiązuje na kartce, a odpowiedź służy do porównania.
+   */
+  expected?: string;
+  /**
+   * Wielkość wyłuskana z `expected` do automatycznego sprawdzenia.
+   *
+   * Odpowiedzi w podręczniku bywają zdaniami („6 m, o kąt 20,5° od kierunku
+   * północnego"). Sprawdzamy z nich **pierwszą wartość** i mówimy o tym wprost
+   * w interfejsie — udawanie, że rozumiemy całe zdanie, byłoby gorsze niż
+   * przyznanie, że sprawdzamy jedną liczbę.
+   */
+  check?: string;
   kind: AnswerKind;
   /** Dopuszczalny błąd względny; domyślnie 2%. */
   tolerance: number;
@@ -53,6 +83,15 @@ const DIRECTIVE = /^\s*@([A-Za-z][A-Za-z0-9]*)\s*(.*)$/;
 const GIVEN = /^(?<name>\\?[A-Za-z][A-Za-z0-9]*(?:_\{?[A-Za-z0-9]+\}?)?)\s*:\s*(?<min>-?[\d.eE+-]+)\s*\.\.\s*(?<max>-?[\d.eE+-]+)\s*(?<unit>[^\s]+)?\s*(?:step\s+(?<step>[\d.eE+-]+))?\s*$/;
 
 export const EXERCISE_FENCE = /^exercise:([A-Za-z0-9_-]+)$/;
+
+/**
+ * Liczba z jednostką na początku odpowiedzi.
+ *
+ * Przecinek dziesiętny jest tu obowiązkowo obsłużony, bo polski podręcznik
+ * pisze „20,5°", a nie „20.5°" — bez tego sprawdzanie odpadałoby dokładnie tam,
+ * gdzie miało pomóc.
+ */
+const LEADING_QUANTITY = /^-?\d+(?:[.,]\d+)?(?:\s*(?:[a-zA-Zµ°Ω]+(?:\/[a-zA-Z]+)?(?:\^?-?\d+)?))?/;
 
 /** Nazwa symbolu bez ozdobników LaTeX-a — jak w `parseFormula`. */
 function symbolName(name: string): string {
@@ -106,6 +145,12 @@ export function parseExerciseBlock(id: string, body: string): ExerciseBlock {
       case 'answer':
         block.answer = symbolName(rest.trim());
         break;
+      case 'expected':
+        block.expected = rest.trim();
+        break;
+      case 'check':
+        block.check = rest.trim();
+        break;
       case 'kind': {
         const kind = rest.trim();
         if (kind === 'numeric' || kind === 'symbolic' || kind === 'interactive') block.kind = kind;
@@ -139,8 +184,17 @@ export function parseExerciseBlock(id: string, body: string): ExerciseBlock {
   block.prompt = promptLines.join('\n').trim();
 
   if (!block.prompt) block.issues.push('Zadanie nie ma treści.');
-  if (block.kind !== 'interactive' && !block.answer) {
-    block.issues.push('Zadanie musi wskazywać wielkość będącą odpowiedzią („@answer T").');
+
+  // Dane do losowania bez wskazanej wielkości to zawsze pomyłka: nie ma czego
+  // policzyć, więc wylosowane liczby nie miałyby dokąd trafić.
+  if (block.given.length && !block.answer) {
+    block.issues.push('Są dane do wylosowania („@given"), ale nie wiadomo, co policzyć — dopisz „@answer".');
+  }
+
+  // Wiodąca wielkość z odpowiedzi — tylko gdy autor nie wskazał jej sam.
+  if (block.expected && !block.check) {
+    const wiodaca = LEADING_QUANTITY.exec(block.expected);
+    if (wiodaca) block.check = wiodaca[0].trim();
   }
   for (const given of block.given) {
     if (!(given.max > given.min)) {
@@ -160,6 +214,8 @@ export function serializeExerciseBlock(block: ExerciseBlock): string {
     out.push(`@given ${given.name}: ${given.min}..${given.max}${unit}${step}`);
   }
   if (block.answer) out.push(`@answer ${block.answer}`);
+  if (block.expected) out.push(`@expected ${block.expected}`);
+  if (block.check) out.push(`@check ${block.check}`);
   if (block.kind !== 'numeric') out.push(`@kind ${block.kind}`);
   if (block.tolerance !== 0.02) out.push(`@tolerance ${block.tolerance * 100}%`);
   if (block.level !== undefined) out.push(`@level ${block.level}`);

@@ -86,6 +86,7 @@ const UmlEditorPage = lazy(() => import('./pages/programming/UmlEditorPage'));
 const MiniscPage = lazy(() => import('./pages/programming/MiniscPage'));
 const LitComponentsPage = lazy(() => import('./pages/programming/ComponentsPage'));
 const ServerLogicPage = lazy(() => import('./pages/programming/ServerLogicPage'));
+const LayoutLabPage = lazy(() => import('./pages/programming/layoutlab/LayoutLabPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -178,7 +179,21 @@ function AppRoot() {
         {/* Full-page routes without layout (mycastle) */}
         {/* Baza wiedzy: `/knowledge` to katalog, `/knowledge/{ścieżka}` — dokument.
             Tryb czytania celowo bez chrome edytora, jak w raporcie (Etap 3). */}
-        <Route path="/knowledge/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><KnowledgePage /></Suspense></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
+        {/*
+          Baza wiedzy jest **publiczna**: katalog `drive/knowledge` serwuje się
+          bez konta (patrz `publicPaths.ts` w core), więc żądanie logowania
+          przed pokazaniem podrozdziału byłoby bramką bez zamka. Zalogowany
+          czyta własną bazę i ma zapis postępów; gość czyta bazę wskazanego
+          właściciela, tylko do odczytu.
+        */}
+        {/*
+          Adres z właścicielem: `/knowledge/u/{kto}/{ścieżka}`. Bez niego strona
+          musiałaby zgadywać, czyją bazę otworzyć — a zgadywanie skończyło się
+          komunikatem „nie ma dokumentu" na instalacji, gdzie biblioteka leżała
+          na innym koncie niż domyślne.
+        */}
+        <Route path="/knowledge/u/:owner/*" element={<MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><KnowledgePage /></Suspense></EditorErrorBoundary></MinimalTopBar>} />
+        <Route path="/knowledge/*" element={<MinimalTopBar><EditorErrorBoundary><Suspense fallback={null}><KnowledgePage /></Suspense></EditorErrorBoundary></MinimalTopBar>} />
         <Route path="/workspace/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><WorkspaceMdPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/simple/*" element={<RequireAuth><MinimalTopBar><SimpleEditorPage /></MinimalTopBar></RequireAuth>} />
         <Route path="/editor/md/*" element={<RequireAuth><MinimalTopBar><EditorErrorBoundary><MdEditorPage /></EditorErrorBoundary></MinimalTopBar></RequireAuth>} />
@@ -331,6 +346,7 @@ function AppRoot() {
                   <Route path="/user/:userName/iot/aura" element={<IotAuraPage />} />
                   <Route path="/user/:userName/iot/aura/conversation-editor" element={<IotAuraConversationEditorPage />} />
                   <Route path="/user/:userName/programming/components" element={<Suspense fallback={null}><LitComponentsPage /></Suspense>} />
+                  <Route path="/user/:userName/programming/layout-lab" element={<Suspense fallback={null}><LayoutLabPage /></Suspense>} />
                   <Route path="/user/:userName/programming/server-logic" element={<AdminOnly><Suspense fallback={null}><ServerLogicPage /></Suspense></AdminOnly>} />
                   <Route path="/user/:userName/tools/rpc" element={<AdminOnly><RpcExplorerPage /></AdminOnly>} />
                   <Route path="/user/:userName/tools/mqtt-explorer" element={<AdminOnly><MqttExplorerPage /></AdminOnly>} />

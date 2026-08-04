@@ -10,13 +10,14 @@
  * (`dθ/dt`), bo tak zapisuje się je w podręcznikach — model trzyma same nazwy
  * zmiennych i wyrażenia, więc zapis trzeba złożyć tutaj.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   editableExpressions, parseFormulaBlock, replaceExpression,
   type FormulaBlock,
 } from '@mhersztowski/sci-core';
 import { MathField } from './MathField';
+import type { InkRecognizer } from './InkCanvas';
 import { Math, symbolToLatex } from './Math';
 
 export interface FormulaBlockViewProps {
@@ -38,6 +39,13 @@ export interface FormulaBlockViewProps {
    * LaTeX-em działa dalej niezależnie od tego.
    */
   onChange?: (code: string) => void;
+  /**
+   * Rozpoznawanie pisma rysikiem — przekazywane wprost do edytora wzoru.
+   *
+   * Port hosta; brak = zakładki „pióro" nie ma. Ma sens tylko razem
+   * z `onChange`, bo bez zapisu nie ma czego rozpoznawać do czego.
+   */
+  recognizeInk?: InkRecognizer;
 }
 
 /** Nazwa rodzaju bloku pokazywana czytelnikowi. */
@@ -127,10 +135,42 @@ function AlgebraView({ block }: { block: FormulaBlock }) {
   );
 }
 
-export function FormulaBlockView({ id, code, bare, onChange }: FormulaBlockViewProps) {
+/**
+ * Odgradza wnętrze od edytora tekstu, w którym blok jest osadzony.
+ *
+ * `stopPropagation` w obsłudze Reacta **nie wystarcza**: React nasłuchuje
+ * zdarzeń na swoim korzeniu, a edytor tekstu zakłada własne, natywne nasłuchy
+ * niżej w drzewie. Te odpalają się pierwsze, przechwytują wciśnięcie i wygaszają
+ * je, żeby zaznaczyć węzeł — kliknięcie nigdy nie powstaje.
+ *
+ * Dlatego zdarzenia zatrzymujemy natywnie, w fazie przechwytywania, zanim
+ * dojdą do edytora.
+ */
+function useOdgrodzenie<T extends HTMLElement>(aktywne: boolean) {
+  const ref = useRef<T>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !aktywne) return undefined;
+
+    const zatrzymaj = (event: Event) => event.stopPropagation();
+    const zdarzenia = ['mousedown', 'pointerdown', 'touchstart'] as const;
+    for (const nazwa of zdarzenia) element.addEventListener(nazwa, zatrzymaj);
+
+    return () => {
+      for (const nazwa of zdarzenia) element.removeEventListener(nazwa, zatrzymaj);
+    };
+  }, [aktywne]);
+
+  return ref;
+}
+
+export function FormulaBlockView({ id, code, bare, onChange, recognizeInk,
+}: FormulaBlockViewProps) {
   const block = parseFormulaBlock(id, code);
   /** Numer edytowanego wiersza; `undefined` znaczy tryb czytania. */
   const [edytowany, setEdytowany] = useState<number | undefined>();
+  const odgrodzenie = useOdgrodzenie<HTMLDivElement>(!!onChange);
 
   // Odwzorowanie „wzór na ekranie → wiersz w pliku". Bez niego zapis musiałby
   // zgadywać, który z kilku wzorów bloku właśnie zmieniono.
@@ -154,6 +194,7 @@ export function FormulaBlockView({ id, code, bare, onChange }: FormulaBlockViewP
             }
           }}
           onCancel={() => setEdytowany(undefined)}
+          recognizeInk={recognizeInk}
         />
       );
     }
@@ -163,7 +204,7 @@ export function FormulaBlockView({ id, code, bare, onChange }: FormulaBlockViewP
         key={`wzor-${line}`}
         role="button"
         tabIndex={0}
-        onClick={() => setEdytowany(line)}
+        onClick={(e) => { e.stopPropagation(); setEdytowany(line); }}
         onKeyDown={(e) => { if (e.key === 'Enter') setEdytowany(line); }}
         title="Kliknij, aby edytować wzór"
         style={{ cursor: 'text', borderRadius: 4, padding: '2px 4px' }}
@@ -176,9 +217,12 @@ export function FormulaBlockView({ id, code, bare, onChange }: FormulaBlockViewP
   };
 
   return (
-    <div style={bare
-      ? { display: 'flex', flexDirection: 'column', gap: 6 }
-      : { border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff', padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div
+      ref={odgrodzenie}
+      style={bare
+        ? { display: 'flex', flexDirection: 'column', gap: 6 }
+        : { border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff', padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}
+    >
       {/* Poza ramką hosta blok sam się przedstawia; w ramce robi to `BlockShell`,
           poza rodzajem — „układ ODE" vs „wzór" widać dopiero po treści. */}
       {(!bare || block.kind !== 'definition') && (
@@ -196,7 +240,11 @@ export function FormulaBlockView({ id, code, bare, onChange }: FormulaBlockViewP
         </div>
       )}
 
-      {block.kind === 'linalg' ? (
+      {block.kind === 'relation' ? (
+        // Równanie bez przypisania — pokazujemy je dokładnie tak, jak stoi
+        // w książce; nie ma tu czego rozbijać na wielkość i wyrażenie.
+        <Math latex={block.latex ?? ''} block />
+      ) : block.kind === 'linalg' ? (
         <AlgebraView block={block} />
       ) : block.kind === 'pde' ? (
         <PoleView block={block} />
@@ -220,7 +268,11 @@ export function FormulaBlockView({ id, code, bare, onChange }: FormulaBlockViewP
         </div>
       ) : klikalny(
         0,
-        <Math latex={`${block.targetLatex ?? symbolToLatex(block.target ?? '')} = ${block.expression ?? ''}`} />,
+        // Łańcuch równości pokazujemy w całości: `T = 2π/ω = 2π√(m/k)` niesie
+        // drogę, a nie tylko wynik, i to jest treść, nie ozdoba.
+        <Math latex={`${block.targetLatex ?? symbolToLatex(block.target ?? '')} = ${
+          block.chain?.join(' = ') ?? block.expression ?? ''}`}
+        />,
       )}
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

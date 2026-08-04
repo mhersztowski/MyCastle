@@ -17,6 +17,7 @@
  *    z ręcznym LaTeX-em działa dalej dla tych, którzy go wolą.
  */
 import { useEffect, useRef, useState } from 'react';
+import { InkCanvas, type InkRecognizer } from './InkCanvas';
 
 export interface MathFieldProps {
   /** Wzór w LaTeX-u — wartość początkowa edycji. */
@@ -26,15 +27,62 @@ export interface MathFieldProps {
   onCancel?: () => void;
   /** Klawiatura matematyczna — na dotyku włączona, na myszy zbędna. */
   virtualKeyboard?: 'auto' | 'manual' | 'off';
+  /**
+   * Rozpoznawanie pisma rysikiem — włącza zakładkę „pióro".
+   *
+   * Port hosta, nie zależność pakietu: `sci-blocks` nie ma prawa wiedzieć, czy
+   * po drugiej stronie jest model wizyjny, usługa czy atrapa w teście.
+   * Brak = zakładki nie ma i edycja działa jak dotąd.
+   */
+  recognizeInk?: InkRecognizer;
 }
 
-export function MathField({ latex, onCommit, onCancel, virtualKeyboard = 'auto' }: MathFieldProps) {
+export function MathField({
+  latex, onCommit, onCancel, virtualKeyboard = 'auto', recognizeInk,
+}: MathFieldProps) {
+  /**
+   * Pióro jest **drugim wejściem do tego samego pola**, nie osobnym trybem
+   * zapisu: rozpoznany LaTeX wraca do edytora matematyki, gdzie autor może go
+   * poprawić przed zatwierdzeniem. Rozpoznawanie bywa bliskie, ale nie zawsze
+   * trafione — wynik bez możliwości poprawki byłby gorszy niż jego brak.
+   */
+  const [pioro, setPioro] = useState(false);
+  /**
+   * Wpisanie wartości do pola MathLive.
+   *
+   * Przez `ref`, a nie przez stan: pole jest web componentem tworzonym
+   * imperatywnie po leniwym załadowaniu modułu, więc w chwili renderu jeszcze
+   * nie istnieje — a rozpoznanie kończy się już po jego powstaniu.
+   */
+  const wpiszRef = useRef<((latex: string) => void) | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  /**
+   * Granica pola: klawisze nie mogą wyjść do dokumentu.
+   *
+   * Nasłuch jest **natywny**, nie przez Reacta — React nasłuchuje na swoim
+   * korzeniu, a edytor tekstu ma własne nasłuchy niżej w drzewie i odpalają się
+   * pierwsze. Bez tego strzałki i Backspace przesuwałyby kursor w dokumencie
+   * zamiast w edytowanym wzorze.
+   */
+  const granicaRef = useRef<HTMLDivElement>(null);
   const [stan, setStan] = useState<'ładowanie' | 'gotowe' | 'błąd'>('ładowanie');
   /** Najnowsza treść pola — czytana przy zatwierdzeniu, bez renderów po drodze. */
   const wartoscRef = useRef(latex);
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
+
+  useEffect(() => {
+    const granica = granicaRef.current;
+    if (!granica) return undefined;
+
+    const zatrzymaj = (event: Event) => event.stopPropagation();
+    const zdarzenia = ['keydown', 'keyup', 'keypress', 'beforeinput'] as const;
+    for (const nazwa of zdarzenia) granica.addEventListener(nazwa, zatrzymaj);
+
+    return () => {
+      for (const nazwa of zdarzenia) granica.removeEventListener(nazwa, zatrzymaj);
+    };
+  }, []);
 
   useEffect(() => {
     let anulowane = false;
@@ -71,6 +119,11 @@ export function MathField({ latex, onCommit, onCancel, virtualKeyboard = 'auto' 
         });
 
         hostRef.current.appendChild(pole);
+        wpiszRef.current = (nowy: string) => {
+          (pole as any).value = nowy;
+          wartoscRef.current = nowy;
+          (pole as any).focus?.();
+        };
         (pole as any).focus?.();
         setStan('gotowe');
       })
@@ -97,7 +150,7 @@ export function MathField({ latex, onCommit, onCancel, virtualKeyboard = 'auto' 
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div ref={granicaRef} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div ref={hostRef} />
       {stan === 'ładowanie' && (
         <span style={{ fontSize: 11, color: '#94a3b8' }}>wczytuję edytor wzorów…</span>
@@ -107,6 +160,37 @@ export function MathField({ latex, onCommit, onCancel, virtualKeyboard = 'auto' 
           Enter zatwierdza, Esc anuluje. Ułamek: <code>/</code>, pierwiastek: <code>\sqrt</code>,
           potęga: <code>^</code>.
         </span>
+      )}
+
+      {recognizeInk && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => setPioro((p) => !p)}
+            style={{
+              alignSelf: 'flex-start', fontSize: 12, padding: '4px 10px',
+              border: '1px solid #cbd5e1', borderRadius: 6,
+              background: pioro ? '#eff6ff' : '#fff', cursor: 'pointer',
+            }}
+          >
+            {pioro ? '× zamknij pióro' : '✎ napisz rysikiem'}
+          </button>
+
+          {pioro && (
+            <InkCanvas
+              mode="latex"
+              recognize={recognizeInk}
+              /*
+               * Rozpoznany wzór **wraca do edytora**, a nie prosto do dokumentu:
+               * autor widzi go złożonego i poprawia, zanim zatwierdzi.
+               */
+              onRecognized={(rozpoznany) => {
+                wpiszRef.current?.(rozpoznany);
+                setPioro(false);
+              }}
+            />
+          )}
+        </div>
       )}
     </div>
   );

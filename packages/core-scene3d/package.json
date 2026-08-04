@@ -29,6 +29,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@mhersztowski/layout": "workspace:*",
     "@mhersztowski/ui-core": "workspace:*",
     "three": "^0.182.0"
   },

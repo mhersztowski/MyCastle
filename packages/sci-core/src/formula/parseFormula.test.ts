@@ -98,3 +98,47 @@ describe('blok formula: zapis źródłowy', () => {
     expect(serializeFormulaBlock(parseFormulaBlock('p', source))).toBe(source);
   });
 });
+
+describe('łańcuch równości', () => {
+  /**
+   * `T = 2π/ω = 2π√(m/k)` — podręczniki zapisują tak **drogę**, nie tylko wynik.
+   * W tomie pierwszym Resnicka takich zapisów jest ponad sześćset, więc ich
+   * odrzucanie oznaczałoby przepisywanie każdego wyprowadzenia.
+   *
+   * Do liczenia bierzemy **ostatni** człon, bo to on jest wyrażony przez
+   * wielkości znane. Pośrednie zostają do pokazania czytelnikowi — w nich
+   * mieści się cała wartość dydaktyczna zapisu.
+   */
+  it('liczy z ostatniego członu', () => {
+    const blok = parseFormulaBlock('okres', [
+      'T = \\frac{2\\pi}{\\omega} = 2\\pi\\sqrt{\\frac{m}{k}}',
+      '@vars T: s, omega: s^-1, m: kg, k: N/m',
+    ].join('\n'));
+
+    expect(blok.issues).toEqual([]);
+    expect(blok.target).toBe('T');
+    expect(blok.expression).toBe('2\\pi\\sqrt{\\frac{m}{k}}');
+  });
+
+  it('zachowuje człony pośrednie do pokazania', () => {
+    const blok = parseFormulaBlock('okres', 'T = \\frac{2\\pi}{\\omega} = 2\\pi\\sqrt{\\frac{m}{k}}');
+    expect(blok.chain).toEqual(['\\frac{2\\pi}{\\omega}', '2\\pi\\sqrt{\\frac{m}{k}}']);
+  });
+
+  it('zwykły wzór nie ma łańcucha', () => {
+    // Bez tego każdy wzór niósłby pustą tablicę, a widok musiałby ją odróżniać
+    // od prawdziwego łańcucha jednoelementowego.
+    expect(parseFormulaBlock('proste', 'E = m \\cdot c^2').chain).toBeUndefined();
+  });
+
+  it('człon pośredni może używać wielkości liczonej gdzie indziej', () => {
+    // `2π/ω` wymaga `ω`, którego ten blok nie definiuje. Gdybyśmy liczyli
+    // z pierwszego członu, wzór zależałby od czegoś, czego może nie być.
+    const blok = parseFormulaBlock('okres', [
+      'T = \\frac{2\\pi}{\\omega} = 2\\pi\\sqrt{\\frac{m}{k}}',
+      '@vars T: s, omega: s^-1, m: kg, k: N/m',
+    ].join('\n'));
+
+    expect(blok.expression).not.toContain('omega');
+  });
+});

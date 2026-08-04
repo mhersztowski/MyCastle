@@ -19,6 +19,9 @@ import { compileGraph, type PhenomenonModel, type PhenomenonResult } from '../gr
 import { parseFormulaBlock, type FormulaBlock } from '../formula/parseFormula';
 import { runScript } from '../model/runScript';
 import { Trajectory } from '../numeric/trajectory';
+import type { InvariantReport } from '../numeric/invariants';
+import type { Interpolant } from '../numeric/trajectory';
+import type { EventHit } from '../numeric/events';
 
 /** Skąd bierze się model — te dwie drogi ma dokument. */
 export type ModelSource =
@@ -48,7 +51,27 @@ export interface ComputeResponse {
   id: number;
   scalars: Record<string, number>;
   series: Record<string, Array<[number, number]>>;
-  trajectory?: { samples: Array<{ t: number; y: number[] }>; stateNames: string[] };
+  trajectory?: {
+    samples: Array<{ t: number; y: number[] }>;
+    stateNames: string[];
+    /**
+     * Dense output i zdarzenia jadą razem z próbkami.
+     *
+     * Bez nich odbiorca dostawałby rzadkie próbki metody adaptacyjnej i czytał
+     * między nimi po cięciwie — czyli gorzej, niż policzył solver. To był
+     * powód, dla którego interpolant jest strukturą danych, a nie funkcją.
+     */
+    interpolants?: Interpolant[];
+    events?: EventHit[];
+  };
+  /**
+   * Pomiar niezmienników — zwykłe dane, więc przechodzą bez odtwarzania.
+   *
+   * Muszą jechać razem z wynikiem, a nie być liczone po stronie strony:
+   * pomiar dotyczy **tej** trajektorii, policzonej tym krokiem, i oderwany od
+   * niej byłby oceną czegoś innego niż to, co czytelnik ogląda.
+   */
+  invariants?: InvariantReport[];
   /** Opis modelu — strona potrzebuje go do panelu parametrów i widoków. */
   meta: {
     parameters: PhenomenonModel['parameters'];
@@ -107,10 +130,19 @@ export function computeRequest(request: ComputeRequest, now: () => number = () =
       scalars: result.scalars,
       series: result.series,
       trajectory: result.trajectory
-        ? { samples: result.trajectory.samples, stateNames: result.trajectory.stateNames }
+        ? {
+          samples: result.trajectory.samples,
+          stateNames: result.trajectory.stateNames,
+          interpolants: result.trajectory.interpolants,
+          events: result.trajectory.events,
+        }
         : undefined,
+      invariants: result.invariants,
       meta,
       elapsedMs: now() - started,
+      // Nieudane całkowanie nie jest błędem żądania — model policzył wszystko,
+      // czego dało się policzyć — ale odbiorca ma je zobaczyć tak samo.
+      error: result.error,
     };
   } catch (e) {
     return {
@@ -130,8 +162,15 @@ export function restoreResult(response: ComputeResponse): PhenomenonResult {
     scalars: response.scalars,
     series: response.series,
     trajectory: response.trajectory
-      ? new Trajectory(response.trajectory.samples, response.trajectory.stateNames)
+      ? new Trajectory(
+        response.trajectory.samples,
+        response.trajectory.stateNames,
+        response.trajectory.interpolants,
+        response.trajectory.events,
+      )
       : undefined,
+    invariants: response.invariants ?? [],
+    error: response.error,
   };
 }
 

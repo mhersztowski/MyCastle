@@ -111,3 +111,25 @@ describe('odporność rejestru', () => {
     expect(blockRenderersVersion()).toBeGreaterThan(b);
   });
 });
+
+describe('rysunek i tablica w edytorze', () => {
+  beforeEach(() => {
+    for (const renderer of [...registeredBlockRenderers()]) registerBlockRenderer(renderer)();
+    registerSciBlocks(registerBlockRenderer);
+  });
+
+  it('blok figure ma własny widok, a nie surowy kod', () => {
+    // Bez tego edytor wyrzucał na ekran kilkadziesiąt kilobajtów base64
+    // zamiast obrazu — blok wyglądał jak zwykły blok kodu.
+    expect(rendererFor('figure:rh1-15-rys1')?.name).toBe('sci-figure');
+  });
+
+  it('blok table ma własny widok', () => {
+    expect(rendererFor('table:rh1-15-tab1')?.name).toBe('sci-table');
+  });
+
+  it('nie łapie zwykłego bloku kodu o podobnej nazwie', () => {
+    expect(rendererFor('figures')).toBeUndefined();
+    expect(rendererFor('tablespace')).toBeUndefined();
+  });
+});

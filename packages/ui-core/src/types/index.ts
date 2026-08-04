@@ -253,6 +253,16 @@ export interface SelectedNodeMaterial {
   thickness?: number;
 
   depthPacking?: 'basic' | 'rgba';
+
+  /** Gotowy adres tekstury — data URL albo link http. */
+  textureDataUrl?: string;
+  /**
+   * Ścieżka tekstury w plikach projektu, np. `/users/marcin/tekstury/cegla.png`.
+   *
+   * Odrębna od adresu, bo to ona przeżywa zapis sceny i otwarcie jej na innym
+   * komputerze; `blob:` żyje tyle, co karta przeglądarki.
+   */
+  texturePath?: string;
 }
 
 export interface SelectedNodeLight {
@@ -332,6 +342,59 @@ export interface SelectedNodeGeoPrimitive {
   metrics?: Array<{ label: string; value: string }>;
 }
 
+// ─── Warstwa interfejsu ───────────────────────────────────────
+
+export interface SelectedNodeUiAnchor {
+  minX: number; maxX: number; minY: number; maxY: number;
+  offsetLeft: number; offsetTop: number; offsetRight: number; offsetBottom: number;
+}
+
+export interface SelectedNodeUiConstraint {
+  id: string;
+  type: string;
+  refs: string[];
+  value?: string;
+}
+
+/**
+ * Dane warstwy interfejsu pokazywane w inspektorze.
+ *
+ * Jedna struktura dla korzenia i dla widżetu, bo inspektor i tak rozstrzyga
+ * o zawartości po `role` — dwie osobne dałyby dwa prawie identyczne komplety
+ * pól i dwa miejsca do zapomnienia przy zmianie.
+ */
+export interface SelectedNodeUi {
+  role: 'root' | 'widget';
+  /** Tryb warstwy: własny dla korzenia, odziedziczony dla widżetu — decyduje, które pola mają sens. */
+  mode: 'static' | 'anchor' | 'flow' | 'constraint';
+  vars?: Record<string, number>;
+  constraints?: SelectedNodeUiConstraint[];
+  /** Widżety w warstwie — do wskazania drugiej strony więzu. */
+  widgets?: Array<{ id: string; name: string }>;
+  kind?: 'panel' | 'button' | 'label' | 'bar';
+  /** Wartości jako tekst: w tych polach wolno wpisać wyrażenie. */
+  x?: string;
+  y?: string;
+  w?: string;
+  h?: string;
+  anchor?: SelectedNodeUiAnchor;
+  flow?: { grow?: number; basis?: number };
+  container?: { direction: 'row' | 'column'; gap?: number; padding?: number; align?: 'start' | 'center' | 'end' | 'stretch' };
+  text?: string;
+  color?: string;
+  value?: number;
+  /**
+   * Wyliczony prostokąt w pikselach.
+   *
+   * Pokazywany, bo pola wyżej bywają wyrażeniami i sama ich treść nie mówi,
+   * gdzie widżet naprawdę wylądował.
+   */
+  rect?: { x: number; y: number; w: number; h: number };
+  /** Ile swobody zostało — tylko w trybie więzów. */
+  dof?: number;
+  issues?: string[];
+}
+
 export interface SelectedNodeData {
   id: string;
   name: string;
@@ -345,6 +408,7 @@ export interface SelectedNodeData {
   camera?: SelectedNodeCamera;
   audio?: SelectedNodeAudio;
   geoPrimitive?: SelectedNodeGeoPrimitive;
+  ui?: SelectedNodeUi;
 }
 
 // ─── Scene Settings ───────────────────────────────────────────
@@ -385,6 +449,8 @@ export interface PropertiesPanelProps {
   onSceneSettingsChange?: (settings: SceneSettings) => void;
   /** Opens a file picker for audio files; resolves to a VFS path or null if cancelled. */
   onBrowseAudioFile?: () => Promise<string | null>;
+  /** Wybór pliku tekstury z plików projektu; ścieżka VFS albo `null` po anulowaniu. */
+  onBrowseTexture?: () => Promise<string | null>;
   /** Opens the geometry node graph editor for a mesh node. Receives nodeId + current nodesGraph (opaque — cast to GeoNodeGraph in consumers). */
   onEditGeometryNodes?: (nodeId: string, currentGraph: unknown) => void;
   /** Opens the Blender-style mesh edit mode for a mesh node. */

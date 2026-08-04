@@ -13,7 +13,7 @@
  * rozbieżność solwerów, a to są zupełnie różne diagnozy.
  */
 import type { FormulaBlock } from '../formula/parseFormula';
-import { compileExpression } from '../formula/expression';
+import { compileComparison, compileExpression } from '../formula/expression';
 import { latexToPython } from './toPython';
 
 export interface ScenarioCheckpoint {
@@ -34,6 +34,24 @@ export interface Scenario {
   tSpan: [number, number];
   /** Ile punktów porównać — rzadziej niż kroków całkowania, bo chodzi o zgodność, nie o zapis. */
   samples: number;
+  /**
+   * Metoda, którą ma liczyć strona referencyjna.
+   *
+   * Dla większości układów `DOP853` z ciasnymi tolerancjami jest najlepszym
+   * możliwym odniesieniem. Dla układu **sztywnego** byłby jednak odniesieniem
+   * bezużytecznym — jawna metoda albo nie skończy, albo skończy po godzinie —
+   * więc scenariusz musi umieć poprosić o metodę niejawną. Bez tego pola
+   * całego etapu 3 nie da się skonfrontować z niezależnym silnikiem.
+   */
+  method?: 'DOP853' | 'Radau' | 'LSODA' | 'BDF';
+  /**
+   * Zdarzenia jako wyrażenia zmieniające znak — w składni Pythona.
+   *
+   * SciPy nazywa to tak samo i rozwiązuje tak samo (miejsce zerowe wewnątrz
+   * kroku), więc porównanie **chwil zdarzeń** jest sprawdzeniem etapu 2 przez
+   * niezależną implementację tej samej idei.
+   */
+  events?: Array<{ expression: string; direction: number; terminal: boolean }>;
   checkpoints: ScenarioCheckpoint[];
   issues: string[];
 }
@@ -43,6 +61,10 @@ export interface ScenarioOptions {
   initial?: Record<string, number>;
   tSpan?: [number, number];
   samples?: number;
+  /** Metoda strony referencyjnej; domyślnie DOP853. */
+  method?: Scenario['method'];
+  /** Czy przenieść zdarzenia z bloku (`@when`) do scenariusza. */
+  events?: boolean;
 }
 
 /**
@@ -119,6 +141,33 @@ export function exportScenario(
     return { state: stan, derivatives: pochodne };
   });
 
+  /**
+   * Zdarzenia przetłumaczone na wyrażenia zmieniające znak.
+   *
+   * Warunek `y < 0` staje się funkcją `y` — dokładnie tak, jak po naszej
+   * stronie robi to `compileComparison`. Kierunek zapisujemy w konwencji SciPy
+   * (−1 znaczy „przejście malejące"), bo to ona jest tu stroną obcą.
+   */
+  const events = options.events
+    ? (block.events ?? []).map((event) => {
+      const rozkład = compileComparison(event.when, [...state, ...Object.keys(options.parameters)]);
+      if (!rozkład) {
+        issues.push(`Warunku „${event.when}" nie da się rozłożyć na wielkość przechodzącą przez zero.`);
+        return undefined;
+      }
+      const strony = event.when.split(/<=|>=|<|>|=/);
+      const lewa = latexToPython(strony[0]);
+      const prawa = latexToPython(strony[1] ?? '0');
+      issues.push(...lewa.issues, ...prawa.issues);
+
+      return {
+        expression: `(${lewa.code}) - (${prawa.code})`,
+        direction: rozkład.direction === 'down' ? -1 : (rozkład.direction === 'up' ? 1 : 0),
+        terminal: !!event.stop,
+      };
+    }).filter((e): e is NonNullable<typeof e> => !!e)
+    : undefined;
+
   return {
     id: block.id,
     state,
@@ -127,6 +176,8 @@ export function exportScenario(
     initial,
     tSpan: options.tSpan ?? [0, 10],
     samples: options.samples ?? 50,
+    method: options.method ?? 'DOP853',
+    events,
     checkpoints,
     issues,
   };

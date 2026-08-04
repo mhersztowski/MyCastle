@@ -38,6 +38,8 @@ wyszła z zera, coś byłoby nie tak z równaniami.
 @d v_z = -\mu \cdot \frac{z}{(x^2 + y^2 + z^2)^{1.5}}
 @init x = r_0, y = 0, z = 0, v_x = 0, v_y = v_0, v_z = 0
 @solver verlet
+@invariant E = \frac{v_x^2 + v_y^2 + v_z^2}{2} - \frac{\mu}{\sqrt{x^2 + y^2 + z^2}}
+@invariant L_z = x \cdot v_y - y \cdot v_x
 @vars x: m, y: m, z: m, v_x: m/s, v_y: m/s, v_z: m/s, mu: m^3/s^2, r_0: m, v_0: m/s
 @derivedFrom orbita-mu
 ```
@@ -45,6 +47,13 @@ wyszła z zera, coś byłoby nie tak z równaniami.
 Metoda całkowania jest tu wskazana wprost: `@solver verlet`. Runge–Kutta liczy
 dokładniej krok po kroku, ale po tysiącu obiegów orbita zauważalnie się zwęża,
 bo energia powoli ucieka. Verlet tego nie robi.
+
+Dwie ostatnie linijki mówią, co ma pozostać stałe: energia na jednostkę masy
+i moment pędu. Nie wchodzą do obliczeń — orbita liczy się tak samo z nimi
+i bez nich. Wchodzą do tego, co symulacja **melduje pod wykresem**: gdyby
+zamienić `verlet` na `rk4`, panel jakości zacząłby pokazywać powolny ubytek
+energii, a orbita na ekranie wyglądałaby przy tym równie ładnie. Stałość
+momentu pędu to zresztą drugie prawo Keplera zapisane jedną linijką.
 
 ## Prędkość kołowa i okres
 

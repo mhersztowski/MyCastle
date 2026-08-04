@@ -83,7 +83,35 @@ export function BlockShell({ kind, accent, id, toolbar, issues = [], children, v
         </div>
       )}
 
-      {mode === 'view' || !children ? view : children()}
+      {/*
+        * Widok jest **nieedytowalny**.
+        *
+        * Blok mieszka w drzewie edytora tekstu, więc bez tego kliknięcie
+        * w wykres albo we wzór wstawia kursor i pozwala pisać po środku
+        * symulacji — a wpisany znak trafia do treści bloku i psuje jego
+        * składnię. Edycja należy do trybu „Kod", gdzie jest widoczna.
+        *
+        * `user-select: text` zostaje: zaznaczanie i kopiowanie działa dalej,
+        * bo to nie jest edycja.
+        */}
+      {(mode === 'view' || !children) && (
+        <div contentEditable={false} suppressContentEditableWarning style={{ userSelect: 'text' }}>
+          {view}
+        </div>
+      )}
+
+      {/*
+        * Treść edytowalna zostaje w drzewie **zawsze**, tylko schowana.
+        *
+        * Host renderuje w niej węzeł tekstowy edytora; usunięcie go przy
+        * przełączeniu na widok zabrałoby edytorowi miejsce, w którym trzyma
+        * treść bloku — kursor trafiałby wtedy w przypadkowe miejsca dokumentu.
+        */}
+      {children && (
+        <div style={mode === 'code' ? undefined : { display: 'none' }}>
+          {children()}
+        </div>
+      )}
     </div>
   );
 }

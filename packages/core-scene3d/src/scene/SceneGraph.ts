@@ -7,6 +7,8 @@ import type { LightNodeData } from '../nodes/LightNode';
 import { CameraNode } from '../nodes/CameraNode';
 import type { CameraNodeData } from '../nodes/CameraNode';
 import { GroupNode } from '../nodes/GroupNode';
+import { UiRootNode, UiWidgetNode } from '../nodes/UiNodes';
+import type { UiRootNodeData, UiWidgetNodeData } from '../nodes/UiNodes';
 import { AudioNode } from '../nodes/AudioNode';
 import type { AudioNodeData } from '../nodes/AudioNode';
 import { GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode } from '../nodes/GeometryNodes';
@@ -69,6 +71,33 @@ export class SceneGraph {
     if (node && node.parent) {
       node.parent.removeChild(id);
     }
+  }
+
+  /**
+   * Przenosi węzeł pod innego rodzica, zachowując jego poddrzewo.
+   *
+   * Usunięcie i dodanie na nowo dawałoby ten sam efekt tylko pozornie: węzeł
+   * traci wtedy miejsce w kolejności rodzeństwa, a każdy, kto trzyma na niego
+   * uchwyt, dostaje zdarzenie usunięcia. Przeniesienie to jedna operacja.
+   *
+   * `parentId` pominięty albo nieznany = przeniesienie pod korzeń.
+   */
+  moveNode(id: string, parentId?: string): boolean {
+    const node = this.root.findById(id);
+    if (!node || node === this.root) return false;
+
+    const parent = parentId ? this.root.findById(parentId) : this.root;
+    if (!parent) return false;
+
+    // Przeniesienie węzła pod własne dziecko rozerwałoby drzewo na dwa kawałki,
+    // z których jeden przestałby być osiągalny z korzenia.
+    for (let p: SceneNode | null = parent; p; p = p.parent) {
+      if (p === node) return false;
+    }
+
+    node.parent?.removeChild(id);
+    parent.addChild(node);
+    return true;
   }
 
   findNode(id: string): SceneNode | null {
@@ -174,6 +203,21 @@ export class SceneGraph {
             coneInnerAngle: d.coneInnerAngle,
             coneOuterAngle: d.coneOuterAngle,
             coneOuterGain: d.coneOuterGain,
+          });
+          break;
+        }
+        case 'ui-root': {
+          const d = nodeData as UiRootNodeData;
+          node = new UiRootNode({ ...baseFields(d), mode: d.mode, vars: d.vars, constraints: d.constraints });
+          break;
+        }
+        case 'ui-widget': {
+          const d = nodeData as UiWidgetNodeData;
+          node = new UiWidgetNode({
+            ...baseFields(d),
+            kind: d.kind, x: d.x, y: d.y, w: d.w, h: d.h,
+            anchor: d.anchor, flow: d.flow, container: d.container,
+            text: d.text, color: d.color, value: d.value,
           });
           break;
         }

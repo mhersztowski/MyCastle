@@ -24,12 +24,12 @@
     "build:core-scene3d": "pnpm --filter @mhersztowski/core-scene3d run build",
     "build:cad-viewer": "pnpm --filter @mhersztowski/core-cad-viewer run build",
     "build:ui-scene3d": "pnpm --filter @mhersztowski/ui-components-scene3d run build",
-    "build:cad": "pnpm build:core-cad && pnpm build:texteditor && pnpm build:cad-viewer && pnpm --filter cad-app run build",
+    "build:cad": "pnpm build:core-cad && pnpm build:layout && pnpm build:texteditor && pnpm build:cad-viewer && pnpm --filter cad-app run build",
     "build:cad-backend": "pnpm --filter cad-backend run build",
     "build:ui-core": "pnpm --filter @mhersztowski/ui-core run build",
-    "build:cad-all": "pnpm build:core && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:ui-scene3d && pnpm build:texteditor && pnpm build:cad-backend && pnpm build:cad",
+    "build:cad-all": "pnpm build:core && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:ui-scene3d && pnpm build:texteditor && pnpm build:layout && pnpm build:cad-backend && pnpm build:cad",
     "build:cadall": "pnpm build:cad-all",
-    "build:mycastle": "pnpm build:core && pnpm build:core-backend && pnpm build:minisc && pnpm build:minislib && pnpm build:server-logic && pnpm build:devtools && pnpm build:texteditor && pnpm build:web-client && pnpm build:web-cpp && pnpm build:web-devtools && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:sci-core && pnpm build:sci-blocks && pnpm build:backend && pnpm build:web",
+    "build:mycastle": "pnpm build:core && pnpm build:core-backend && pnpm build:minisc && pnpm build:minislib && pnpm build:server-logic && pnpm build:devtools && pnpm build:texteditor && pnpm build:web-client && pnpm build:web-cpp && pnpm build:web-devtools && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:layout && pnpm build:sci-core && pnpm build:sci-blocks && pnpm build:backend && pnpm build:web",
     "dev:mycastle": "concurrently -n backend,web -c blue,green --kill-others \"pnpm dev:backend\" \"pnpm dev:web\"",
     "dev:backend": "pnpm --filter mycastle-backend run dev",
     "dev:web": "pnpm --filter mycastle-web run dev",
@@ -54,7 +54,8 @@
     "sync:db-push": "./scripts/sync.sh db-push",
     "sync:db-pull": "./scripts/sync.sh db-pull",
     "sync:backup": "./scripts/sync.sh backup",
-    "sync:backup-list": "./scripts/sync.sh backup-list"
+    "sync:backup-list": "./scripts/sync.sh backup-list",
+    "build:layout": "pnpm --filter @mhersztowski/layout run build"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

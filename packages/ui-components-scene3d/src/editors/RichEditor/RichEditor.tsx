@@ -1,10 +1,12 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName, SceneSettings, SceneGeometryEntry, GeoPrimitiveField, GeoPrimitiveKind } from '@mhersztowski/ui-core';
 import { useDialog, DEFAULT_SCENE_SETTINGS } from '@mhersztowski/ui-core';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
-import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, AudioNode, GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode, isGeometryPrimitiveNode, parseOBJText, parseSTLBuffer, parseGLTFBuffer, FBXImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS, AnimationEngine, PrefabStore } from '@mhersztowski/core-scene3d';
-import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode, AnimationClip, PrefabEntry, GeometryPrimitiveNode } from '@mhersztowski/core-scene3d';
+import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, AudioNode, GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode, isGeometryPrimitiveNode, parseOBJText, parseSTLBuffer, FBXImporter, GLTFImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS, AnimationEngine, PrefabStore } from '@mhersztowski/core-scene3d';
+import { UiRootNode, UiWidgetNode, findAllUiRoots, solveUiLayout, applyUiDrag } from '@mhersztowski/core-scene3d';
+import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode, AnimationClip, PrefabEntry, GeometryPrimitiveNode, UiWidgetKind } from '@mhersztowski/core-scene3d';
+import { UiLayer, type UiLayerWidget } from '../../viewers/UiLayer';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Menu from '@mui/material/Menu';
@@ -193,6 +195,8 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
           attenuationColor: meshNode.material.attenuationColor,
           thickness: meshNode.material.thickness,
           depthPacking: meshNode.material.depthPacking,
+          textureDataUrl: meshNode.material.textureDataUrl,
+          texturePath: meshNode.material.texturePath,
         }
       : undefined,
     camera: cameraNode
@@ -284,6 +288,10 @@ interface RichEditorExtendedProps extends RichEditorProps {
   debugLog?: boolean;
   onBrowseAudioFile?: () => Promise<string | null>;
   resolveAudioSrc?: (src: string) => Promise<string>;
+  /** Wybór pliku tekstury z plików projektu — ścieżka VFS albo `null` po anulowaniu. */
+  onBrowseTexture?: () => Promise<string | null>;
+  /** Zamienia ścieżkę tekstury z VFS na adres, który wczyta przeglądarka. */
+  resolveTextureSrc?: (src: string) => Promise<string>;
   currentProject?: string;
   currentFile?: string;
   otherProjectsPrefabs?: ProjectPrefabGroup[];
@@ -292,13 +300,28 @@ interface RichEditorExtendedProps extends RichEditorProps {
   onPickScript?: () => Promise<string | null>;
   /** Klik „Run" na pasku narzędzi — host wczytuje skrypt z VFS i uruchamia scenę. */
   onRunScript?: (scriptPath: string | null) => void;
+  /** Treść renderowana wewnątrz kanwy, ponad sceną — warstwa interfejsu.
+   *
+   *  Nie trafia do grafu sceny ani do zapisu: interfejs jest nakładką na widok,
+   *  a nie obiektem sceny. Gdyby nim był, pojawiłby się w drzewie, w eksporcie
+   *  i pod kursorem przy zaznaczaniu obiektów. */
+  viewportOverlay?: ReactNode;
   // onEditMesh and getNodeGeometryRef are inherited from RichEditorProps (ui-core)
 }
 
-export function RichEditor({ className, style, initialSceneData, initialPrefabs, onSavePrefab, onDeletePrefab, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, propertyChangeRef, getNodeGeometryRef, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog, onBrowseAudioFile, resolveAudioSrc, onEditGeometryNodes, onEditMesh, currentProject, currentFile, otherProjectsPrefabs, onPickScript, onRunScript }: RichEditorExtendedProps) {
+export function RichEditor({ className, style, initialSceneData, initialPrefabs, onSavePrefab, onDeletePrefab, fitSceneRef: externalFitRef, mergeSceneRef: externalMergeRef, onSceneChange, onPlaneClick, propertyChangeRef, getNodeGeometryRef, onOpenFromServer, onSaveToServer, onImportFromCad, cadEntityCount, debugLog, onBrowseAudioFile, resolveAudioSrc, onBrowseTexture, resolveTextureSrc, onEditGeometryNodes, onEditMesh, currentProject, currentFile, otherProjectsPrefabs, onPickScript, onRunScript, viewportOverlay }: RichEditorExtendedProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [geoPointEdit, setGeoPointEdit] = useState<{ nodeId: string; fieldKey: string } | null>(null);
   const [version, setVersion] = useState(0);
+
+  // ── Warstwa interfejsu ────────────────────────────────────────────────────
+  // Obszarem jest kanwa, nie okno: dopiero wtedy kotwice i przepływ mają się do
+  // czego odnosić, a zwężenie panelu bocznego przelicza interfejs tak samo jak
+  // zmiana okna przeglądarki. Wartość początkowa jest zastępcza — pierwszy
+  // render warstwy podaje prawdziwą.
+  const [uiViewport, setUiViewport] = useState({ width: 960, height: 600 });
+  const [uiPreview, setUiPreview] = useState<Record<string, { x: number; y: number; w: number; h: number }> | null>(null);
+  const [uiNotice, setUiNotice] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [showGrid, setShowGrid] = useState(true);
   const internalFitRef = useRef<(() => void) | null>(null);
@@ -348,6 +371,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stlFileInputRef = useRef<HTMLInputElement>(null);
   const fbxFileInputRef = useRef<HTMLInputElement>(null);
+  const gltfFileInputRef = useRef<HTMLInputElement>(null);
   const sceneFileInputRef = useRef<HTMLInputElement>(null);
   const importParentIdRef = useRef<string | undefined>(undefined);
   const [canPaste, setCanPaste] = useState(false);
@@ -790,6 +814,36 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     setSelectedNodeId(node.id);
   }, [sceneGraph]);
 
+  const addUiRoot = useCallback((parentId?: string) => {
+    const node = new UiRootNode();
+    sceneGraph.addNode(node, parentId);
+    setSelectedNodeId(node.id);
+    return node;
+  }, [sceneGraph]);
+
+  const addUiWidget = useCallback((kind: UiWidgetKind, parentId?: string) => {
+    // Widżet musi wylądować w jakiejś warstwie — poza nią nie ma trybu układania
+    // ani obszaru, więc nie dałoby się go policzyć. Gdy wskazany rodzic nie jest
+    // warstwą ani widżetem, bierzemy pierwszą warstwę w scenie, a gdy nie ma
+    // żadnej — zakładamy ją. To jest jedyny moment, w którym „New" tworzy dwa
+    // węzły naraz, i jedyny, w którym nie tworzyć drugiego znaczyłoby zrobić nic.
+    const wskazany = parentId ? sceneGraph.findNode(parentId) : null;
+    const rodzic = wskazany instanceof UiRootNode || wskazany instanceof UiWidgetNode
+      ? wskazany
+      : (findAllUiRoots(sceneGraph.root)[0] ?? addUiRoot());
+
+    const rodzenstwo = rodzic.children.filter((c) => c instanceof UiWidgetNode).length;
+    const node = new UiWidgetNode({
+      kind,
+      x: String(24 + rodzenstwo * 12),
+      y: String(24 + rodzenstwo * 12),
+      ...(kind === 'bar' ? { value: 0.6 } : {}),
+      ...(kind === 'panel' ? {} : { text: kind.charAt(0).toUpperCase() + kind.slice(1) }),
+    });
+    sceneGraph.addNode(node, rodzic.id);
+    setSelectedNodeId(node.id);
+  }, [sceneGraph, addUiRoot]);
+
   const addGeometry = useCallback((kind: GeoPrimitiveKind, parentId?: string) => {
     let node: SceneNode;
     switch (kind) {
@@ -829,6 +883,10 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
       addGroup(parentId);
     } else if (type === 'audio') {
       addAudio(parentId);
+    } else if (type === 'ui-root') {
+      addUiRoot(parentId);
+    } else if (type === 'ui-panel' || type === 'ui-button' || type === 'ui-label' || type === 'ui-bar') {
+      addUiWidget(type.slice('ui-'.length) as UiWidgetKind, parentId);
     } else if (type === 'geometry-point' || type === 'geometry-segment' || type === 'geometry-line' || type === 'geometry-angle') {
       addGeometry(type, parentId);
     } else if (type === 'procedural') {
@@ -838,7 +896,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     } else {
       addMesh(type as 'box' | 'sphere' | 'cylinder' | 'cone' | 'plane' | 'torus', parentId);
     }
-  }, [addMesh, addLight, addCamera, addGroup, addAudio, addGeometry]);
+  }, [addMesh, addLight, addCamera, addGroup, addAudio, addGeometry, addUiRoot, addUiWidget]);
 
   // ─── Delete / Duplicate ─────────────────────────────────────
 
@@ -1237,6 +1295,35 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
       return;
     }
 
+    // glTF/GLB: import całej sceny — hierarchia, materiały PBR, przekształcenia.
+    // Wcześniej szło to przez `parseGLTFBuffer`, który brał z pliku **pierwszą
+    // napotkaną siatkę** i odrzucał resztę: model z kilku części wchodził jako
+    // jedna z nich, bez miejsca w przestrzeni i bez barwy.
+    if (ext === 'gltf' || ext === 'glb') {
+      try {
+        const buffer = await file.arrayBuffer();
+        const wynik = await GLTFImporter.importFromBuffer(buffer, file.name);
+        const korzenie = [...wynik.graph.root.children];
+
+        if (korzenie.length) {
+          const wrapper = new GroupNode({ name: file.name.replace(/\.[^.]+$/, '') });
+          sceneGraph.addNode(wrapper, importParentIdRef.current);
+          for (const node of korzenie) sceneGraph.addNode(node, wrapper.id);
+          setSelectedNodeId(wrapper.id);
+        }
+
+        // Ostrzeżenia trafiają do konsoli, a nie w próżnię: „.gltf bez pliku
+        // .bin obok" wygląda inaczej niż zepsuty plik i czytelnik ma prawo
+        // wiedzieć, że model wszedł niekompletny.
+        for (const uwaga of wynik.warnings) console.warn('[glTF]', uwaga);
+        if (!korzenie.length) console.warn('[glTF] Plik nie zawiera żadnych węzłów:', file.name);
+      } catch (error) {
+        console.error('[glTF] Nie udało się wczytać', file.name, error);
+      }
+      e.target.value = '';
+      return;
+    }
+
     let bufferData: BufferGeometryData;
 
     try {
@@ -1246,9 +1333,6 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
       } else if (ext === 'stl') {
         const buffer = await file.arrayBuffer();
         bufferData = parseSTLBuffer(buffer);
-      } else if (ext === 'gltf' || ext === 'glb') {
-        const buffer = await file.arrayBuffer();
-        bufferData = await parseGLTFBuffer(buffer);
       } else {
         return;
       }
@@ -1279,6 +1363,11 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
   const handleImportFBXFromMenu = useCallback(() => {
     setFileMenuAnchor(null);
     fbxFileInputRef.current?.click();
+  }, []);
+
+  const handleImportGLTFFromMenu = useCallback(() => {
+    setFileMenuAnchor(null);
+    gltfFileInputRef.current?.click();
   }, []);
 
   const handleSaveAs = useCallback(() => {
@@ -1359,13 +1448,128 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneGraph, version]);
 
+  // ── Warstwa interfejsu: liczenie, rysowanie, przeciąganie ─────────────────
+
+  const uiLayers = useMemo(
+    () => findAllUiRoots(sceneGraph.root).map((root) => ({ root, wynik: solveUiLayout(root, uiViewport) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sceneGraph, uiViewport, version],
+  );
+
+  const uiWidgets = useMemo<UiLayerWidget[]>(() => uiLayers.flatMap(({ root, wynik }) => {
+    const out: UiLayerWidget[] = [];
+    const zejdz = (n: SceneNode) => {
+      for (const dziecko of n.children) {
+        if (dziecko instanceof UiWidgetNode && dziecko.visible) {
+          const rect = uiPreview?.[wynik.shapeByNodeId[dziecko.id]] ?? wynik.rectsByNodeId[dziecko.id];
+          if (rect) {
+            out.push({
+              nodeId: dziecko.id,
+              kind: dziecko.kind,
+              rect,
+              text: dziecko.text,
+              color: dziecko.color,
+              value: dziecko.value,
+            });
+          }
+        }
+        zejdz(dziecko);
+      }
+    };
+    zejdz(root);
+    return out;
+  }), [uiLayers, uiPreview]);
+
+  /** Warstwę edytuje się tylko wtedy, gdy się nad nią pracuje — inaczej widżety
+   *  przechwytywałyby wskaźnik i przeszkadzały w obracaniu sceny. */
+  const uiEditing = useMemo(() => {
+    if (!selectedNodeId) return false;
+    const node = sceneGraph.findNode(selectedNodeId);
+    return node instanceof UiRootNode || node instanceof UiWidgetNode;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneGraph, selectedNodeId, version]);
+
+  const handleUiViewportSize = useCallback((width: number, height: number) => {
+    setUiViewport((p) => (p.width === width && p.height === height ? p : { width, height }));
+  }, []);
+
+  const handleUiDrag = useCallback((nodeId: string, cel: { x: number; y: number }, zakonczone: boolean) => {
+    // Warstwa, do której należy widżet — szukamy w górę drzewa, bo scena może
+    // mieć ich kilka, a każda ma własny tryb i własne więzy.
+    let przodek: SceneNode | null = sceneGraph.findNode(nodeId) ?? null;
+    while (przodek && !(przodek instanceof UiRootNode)) przodek = przodek.parent;
+    const warstwa = przodek as UiRootNode | null;
+    if (!warstwa) return;
+
+    if (!zakonczone) {
+      setUiPreview(applyUiDrag(warstwa, nodeId, cel, uiViewport, { preview: true }).rects);
+      return;
+    }
+
+    const skutek = applyUiDrag(warstwa, nodeId, cel, uiViewport);
+    setUiPreview(null);
+    setUiNotice(skutek.odmowa ?? skutek.uwaga ?? null);
+  }, [sceneGraph, uiViewport]);
+
+  const uiOverlay = (
+    <UiLayer
+      widgets={uiWidgets}
+      selectedNodeId={selectedNodeId}
+      editing={uiEditing}
+      onSelect={setSelectedNodeId}
+      onDrag={handleUiDrag}
+      onViewportSize={handleUiViewportSize}
+    />
+  );
+
   const selectedNodeData = useMemo(() => {
     if (!selectedNodeId) return null;
     const node = sceneGraph.findNode(selectedNodeId);
     if (!node) return null;
-    return buildSelectedNodeData(node);
+    const dane = buildSelectedNodeData(node);
+
+    if (node instanceof UiRootNode) {
+      const warstwa = uiLayers.find((l) => l.root.id === node.id);
+      const widgets: Array<{ id: string; name: string }> = [];
+      const zejdz = (n: SceneNode) => n.children.forEach((c) => {
+        if (c instanceof UiWidgetNode) { widgets.push({ id: c.id, name: c.name }); zejdz(c); }
+      });
+      zejdz(node);
+      dane.ui = {
+        role: 'root',
+        mode: node.mode,
+        vars: { ...node.vars },
+        constraints: node.constraints.map((c) => ({ ...c })),
+        widgets,
+        dof: warstwa?.wynik.dof,
+        issues: [...(warstwa?.wynik.issues ?? []), ...(uiNotice ? [uiNotice] : [])],
+      };
+    } else if (node instanceof UiWidgetNode) {
+      const warstwa = uiLayers.find((l) => l.wynik.shapeByNodeId[node.id]);
+      const rodzicWarstwy = (() => {
+        let p: SceneNode | null = node.parent;
+        while (p && !(p instanceof UiRootNode)) p = p.parent;
+        return p as UiRootNode | null;
+      })();
+      dane.ui = {
+        role: 'widget',
+        mode: rodzicWarstwy?.mode ?? 'static',
+        kind: node.kind,
+        x: node.x, y: node.y, w: node.w, h: node.h,
+        ...(node.anchor ? { anchor: { ...node.anchor } } : {}),
+        ...(node.flow ? { flow: { ...node.flow } } : {}),
+        ...(node.container ? { container: { ...node.container } } : {}),
+        text: node.text,
+        color: node.color,
+        value: node.value,
+        rect: warstwa?.wynik.rectsByNodeId[node.id],
+        issues: uiNotice ? [uiNotice] : [],
+      };
+    }
+
+    return dane;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneGraph, selectedNodeId, version]);
+  }, [sceneGraph, selectedNodeId, version, uiLayers, uiNotice]);
 
   const objectCount = sceneGraph.root.children.length;
 
@@ -1514,6 +1718,16 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
             <ListItemIcon><FileUploadIcon sx={{ fontSize: 16 }} /></ListItemIcon>
             <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Import STL…</ListItemText>
           </MenuItem>
+          <MenuItem onClick={handleImportGLTFFromMenu} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
+            <ListItemIcon><FileUploadIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            <ListItemText
+              primaryTypographyProps={{ fontSize: '0.75rem' }}
+              secondaryTypographyProps={{ fontSize: '0.65rem' }}
+              secondary="scena z hierarchią i materiałami"
+            >
+              Import glTF / GLB…
+            </ListItemText>
+          </MenuItem>
           <MenuItem onClick={handleImportFBXFromMenu} sx={{ fontSize: '0.75rem', minHeight: 32, py: 0.5, '& .MuiListItemIcon-root': { minWidth: 28 } }}>
             <ListItemIcon><FileUploadIcon sx={{ fontSize: 16 }} /></ListItemIcon>
             <ListItemText primaryTypographyProps={{ fontSize: '0.75rem' }}>Import FBX…</ListItemText>
@@ -1556,9 +1770,11 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   onPlaneClick={onPlaneClick}
                   debugLog={debugLog}
                   resolveAudioSrc={resolveAudioSrc}
+                  resolveTextureSrc={resolveTextureSrc}
                   onGizmoTransformEnd={handleGizmoTransformEnd}
                   geoPointEdit={geoPointEdit}
                   onGeoPointChange={handleGeoPointChange}
+                  overlay3d={<>{uiOverlay}{viewportOverlay}</>}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1602,6 +1818,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                     sceneSettings={sceneSettings}
                     onSceneSettingsChange={setSceneSettings}
                     onBrowseAudioFile={onBrowseAudioFile}
+                onBrowseTexture={onBrowseTexture}
                     onEditGeometryNodes={onEditGeometryNodes}
                     onEditMesh={onEditMesh}
                     sceneGeometries={sceneGeometries}
@@ -1701,9 +1918,11 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                   onPlaneClick={onPlaneClick}
                   debugLog={debugLog}
                   resolveAudioSrc={resolveAudioSrc}
+                  resolveTextureSrc={resolveTextureSrc}
                   onGizmoTransformEnd={handleGizmoTransformEnd}
                   geoPointEdit={geoPointEdit}
                   onGeoPointChange={handleGeoPointChange}
+                  overlay3d={<>{uiOverlay}{viewportOverlay}</>}
                 />
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, p: '4px 10px', pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1723,6 +1942,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 sceneSettings={sceneSettings}
                 onSceneSettingsChange={setSceneSettings}
                 onBrowseAudioFile={onBrowseAudioFile}
+                onBrowseTexture={onBrowseTexture}
                 onEditGeometryNodes={onEditGeometryNodes}
                 onEditMesh={onEditMesh}
                 sceneGeometries={sceneGeometries}
@@ -1814,6 +2034,13 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
         ref={stlFileInputRef}
         type="file"
         accept=".stl"
+        style={{ display: 'none' }}
+        onChange={handleFileSelected}
+      />
+      <input
+        ref={gltfFileInputRef}
+        type="file"
+        accept=".gltf,.glb"
         style={{ display: 'none' }}
         onChange={handleFileSelected}
       />

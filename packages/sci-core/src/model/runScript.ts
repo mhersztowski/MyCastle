@@ -24,6 +24,15 @@
 import { transform } from 'sucrase';
 import { defineModel, type ManualModelSpec } from './defineModel';
 import { rk4, euler, verlet } from '../numeric/solvers';
+import { dopri5 } from '../numeric/dopri5';
+import { rosenbrock } from '../numeric/rosenbrock';
+import { findEventTime } from '../numeric/events';
+import { buildModel, registerModel } from '../models/registry';
+// Import dla efektu ubocznego: bez niego `buildModel('wahadlo')` w skrypcie
+// odpowiadałby „nie znam", bo wpisy trafiają do rejestru przy ładowaniu pliku.
+import '../models/builtin';
+import { measureInvariant } from '../numeric/invariants';
+import { studyConvergence } from '../numeric/convergence';
 import { Trajectory } from '../numeric/trajectory';
 import { CONSTANTS } from '../units/constants';
 import { toSI } from '../units/quantity';
@@ -36,6 +45,26 @@ export interface ScriptApi {
   rk4: typeof rk4;
   euler: typeof euler;
   verlet: typeof verlet;
+  /** Krok dobierany do tolerancji — dla zjawisk o zmiennej skali czasu. */
+  dopri5: typeof dopri5;
+  /** Metoda niejawna — dla układów sztywnych (obwody RC, kinetyka reakcji). */
+  rosenbrock: typeof rosenbrock;
+  /** Pomiar wielkości, która miała pozostać stała. */
+  measureInvariant: typeof measureInvariant;
+  /** Rząd metody i oszacowanie błędu z zagęszczania kroku. */
+  studyConvergence: typeof studyConvergence;
+  /** Chwila zdarzenia jako miejsce zerowe — gdy skrypt szuka jej sam. */
+  findEventTime: typeof findEventTime;
+  /**
+   * Biblioteka zjawisk.
+   *
+   * Skrypt, który chce **złożyć** coś z gotowego modelu (dorzucić obserwablę,
+   * porównać dwa warianty), nie powinien przepisywać jego równań. A skrypt,
+   * który dojrzał do biblioteki, awansuje przez `registerModel` bez zmiany
+   * jednej linijki w środku — to jest cała ścieżka awansu z raportu.
+   */
+  buildModel: typeof buildModel;
+  registerModel: typeof registerModel;
   Trajectory: typeof Trajectory;
   CONSTANTS: typeof CONSTANTS;
   toSI: typeof toSI;
@@ -69,12 +98,111 @@ declare function defineModel(spec: {
   dynamic?: boolean;
 }): unknown;
 
+/**
+ * Wynik całkowania — to samo, co zwraca każdy solver.
+ *
+ * Klasa, a nie interfejs: skrypt bywa po drugiej stronie granicy i składa
+ * trajektorię z gotowych próbek, więc potrzebuje też konstruktora.
+ */
+declare class Trajectory {
+  constructor(samples: Array<{ t: number; y: number[] }>, stateNames: string[]);
+  samples: Array<{ t: number; y: number[] }>;
+  stateNames: string[];
+  t0: number;
+  t1: number;
+  length: number;
+  at(t: number): number[];
+  value(name: string, t: number): number;
+  series(name: string): Array<[number, number]>;
+}
+
+interface FixedStepOptions { dt: number; sampleEvery?: number; stateNames?: string[] }
+
 declare function rk4(
   f: (t: number, y: number[]) => number[],
   y0: number[],
   tSpan: [number, number],
-  options: { dt: number; sampleEvery?: number; stateNames?: string[] },
-): { samples: Array<{ t: number; y: number[] }>; series(name: string): Array<[number, number]> };
+  options: FixedStepOptions,
+): Trajectory;
+
+/** Pierwszego rzędu — materiał poglądowy: widać na nim narastanie energii. */
+declare function euler(
+  f: (t: number, y: number[]) => number[],
+  y0: number[],
+  tSpan: [number, number],
+  options: FixedStepOptions,
+): Trajectory;
+
+/** Symplektyczny; przyjmuje **przyspieszenie**, nie pełną pochodną. */
+declare function verlet(
+  a: (t: number, x: number[]) => number[],
+  x0: number[],
+  v0: number[],
+  tSpan: [number, number],
+  options: FixedStepOptions,
+): Trajectory;
+
+/** Zdarzenie jako miejsce zerowe funkcji „g” — chwila liczona, nie zgadywana. */
+interface EventSpec {
+  name?: string;
+  g: (t: number, y: number[]) => number;
+  direction?: 'up' | 'down' | 'any';
+  stop?: boolean;
+  apply?: (t: number, y: number[]) => number[];
+}
+
+declare function dopri5(
+  f: (t: number, y: number[]) => number[],
+  y0: number[],
+  tSpan: [number, number],
+  options?: {
+    rtol?: number; atol?: number; dt?: number; maxStep?: number;
+    stateNames?: string[]; events?: EventSpec[];
+  },
+): Trajectory;
+
+declare function rosenbrock(
+  f: (t: number, y: number[]) => number[],
+  y0: number[],
+  tSpan: [number, number],
+  options?: {
+    rtol?: number; atol?: number; dt?: number; stateNames?: string[];
+    jacobian?: (t: number, y: number[]) => number[][];
+  },
+): Trajectory;
+
+/** Chwila, w której „g” przechodzi przez zero — do własnych poszukiwań. */
+declare function findEventTime(
+  g: (t: number) => number,
+  ta: number,
+  tb: number,
+  tolerance?: number,
+): number | undefined;
+
+/** Model z biblioteki zjawisk — do złożenia z własnym albo do porównania. */
+declare function buildModel(
+  name: string,
+  options?: Record<string, unknown>,
+): { model?: unknown; issues: string[] };
+
+/** Wpisanie własnego zjawiska do biblioteki — pierwszy krok awansu skryptu. */
+declare function registerModel(spec: {
+  name: string;
+  summary: string;
+  options?: string[];
+  build: (options: Record<string, unknown>) => unknown;
+}): () => void;
+
+declare function measureInvariant(
+  trajectory: Trajectory,
+  of: (state: number[], t: number) => number,
+  options?: { name?: string },
+): { name: string; trend: 'stable' | 'oscillation' | 'drift'; relative: number };
+
+declare function studyConvergence(
+  run: (dt: number) => Trajectory,
+  options: { dt: number; at?: number; levels?: number },
+): { order?: number; error?: number };
 
 declare function toSI(value: string | number, expected?: string): number;
 declare function random(seed: number): () => number;
@@ -149,15 +277,26 @@ export function stripTypes(code: string): { js?: string; error?: string } {
  * przypisanie do `model`. Druga forma jest dla wygody: `return` na najwyższym
  * poziomie bloku w dokumencie wygląda dziwnie.
  */
-export function runScript(code: string, api: Partial<ScriptApi> = {}): ScriptResult {
-  const stripped = stripTypes(code);
-  if (stripped.error || stripped.js === undefined) return { issues: [stripped.error ?? 'Nie umiem odczytać skryptu.'] };
-
-  const full: ScriptApi = {
+/**
+ * Domyślny zestaw symboli widocznych w skrypcie.
+ *
+ * Wydzielone z `runScript`, żeby dało się je **wyliczyć** — bez tego lista
+ * symboli istniałaby tylko jako typ, a typ znika przy kompilacji i nie da się
+ * na nim oprzeć testu spójności z deklaracjami dla edytora.
+ */
+export function defaultScriptApi(): ScriptApi {
+  return {
     defineModel,
     rk4,
     euler,
     verlet,
+    dopri5,
+    rosenbrock,
+    measureInvariant,
+    studyConvergence,
+    findEventTime,
+    buildModel,
+    registerModel,
     Trajectory,
     CONSTANTS,
     toSI,
@@ -166,8 +305,14 @@ export function runScript(code: string, api: Partial<ScriptApi> = {}): ScriptRes
     distanceFromEarth,
     geocentricLongitude,
     BODIES,
-    ...api,
   };
+}
+
+export function runScript(code: string, api: Partial<ScriptApi> = {}): ScriptResult {
+  const stripped = stripTypes(code);
+  if (stripped.error || stripped.js === undefined) return { issues: [stripped.error ?? 'Nie umiem odczytać skryptu.'] };
+
+  const full: ScriptApi = { ...defaultScriptApi(), ...api };
 
   const names = [...Object.keys(full), ...SHADOWED];
   const values = [...Object.values(full), ...SHADOWED.map(() => undefined)];

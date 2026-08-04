@@ -63,6 +63,24 @@ ustalać w rozsądnym czasie — to nie błąd symulacji, tylko sedno rezonansu.
   "F_0": "1 N",
   "Omega": "3.1 s^-1",
   "duration": 60,
-  "view": ["timeseries", "phase", "scalars"]
+  "view": ["timeseries", "phase", "spectrum", "scalars"]
 }
 ```
+
+## Co widać w widmie
+
+Wykres widma odpowiada na pytanie, na które przebieg w czasie odpowiada
+najwyżej pośrednio: **z jakich drgań składa się ten ruch**. Na początku
+symulacji są dwa — własne, o częstości `omega_0`, i wymuszone, o częstości
+`Omega`. Przez pierwsze kilkanaście sekund widać ich nakładanie: amplituda
+faluje, choć żadna z częstości się nie zmienia.
+
+Własne drganie gaśnie, bo tłumienie zabiera mu energię, a wymuszenie jej nie
+dostarcza akurat w jego rytmie. Po wygaśnięciu transjentu w widmie zostaje
+**jeden prążek** i to jest ta chwila, od której ruch da się opisać jednym
+wzorem na amplitudę ustaloną.
+
+Ustaw `Omega` blisko `omega_0` i porównaj wysokość prążka z przewidywaniem
+`F_0 / (2 m \beta \omega_0)`. Zgodność tych dwóch liczb — jednej policzonej
+przez solver, drugiej wyprowadzonej rachunkiem — jest sprawdzianem, czy
+symulacja liczy tę fizykę, o której mówi tekst.

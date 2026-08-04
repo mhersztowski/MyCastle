@@ -184,3 +184,79 @@ export function evaluateOnce(latex: string, scope: Record<string, number>): numb
   const compiled = compileExpression(latex, Object.keys(scope));
   return compiled.evaluate(scope);
 }
+
+/** Warunek zdarzenia rozłożony na funkcję o znanym znaku. */
+export interface CompiledComparison {
+  /**
+   * Lewa strona minus prawa — zdarzenie zachodzi tam, gdzie przechodzi przez zero.
+   *
+   * Cała sztuczka etapu 2 mieści się w tym odjęciu: „czy y < 0" jest pytaniem
+   * zamkniętym i odpowiedź brzmi tak albo nie, a „ile wynosi y" jest funkcją
+   * ciągłą, więc jej miejsce zerowe da się **znaleźć** z dowolną dokładnością.
+   */
+  value: (scope: Record<string, number>) => number;
+  /** Kierunek przejścia wynikający z operatora. */
+  direction: 'up' | 'down' | 'any';
+  freeSymbols: string[];
+  issues: string[];
+}
+
+/** Operatory porównania w kolejności od najdłuższego — inaczej `\le` zjadłoby `\leq`. */
+const COMPARISONS: Array<[RegExp, 'up' | 'down' | 'any']> = [
+  [/\\leqslant|\\leq|\\le\b|<=|</, 'down'],
+  [/\\geqslant|\\geq|\\ge\b|>=|>/, 'up'],
+  [/=/, 'any'],
+];
+
+/**
+ * Dzieli warunek na strony porównania, pomijając wnętrza nawiasów klamrowych.
+ *
+ * Bez pilnowania nawiasów `\frac{a<b}{c}` rozpadłoby się w środku argumentu —
+ * a takie zapisy zdarzają się w warunkach z ułamkami.
+ */
+function splitAtComparison(latex: string): { left: string; right: string; direction: 'up' | 'down' | 'any' } | undefined {
+  for (const [pattern, direction] of COMPARISONS) {
+    let depth = 0;
+    for (let i = 0; i < latex.length; i += 1) {
+      const char = latex[i];
+      if (char === '{') depth += 1;
+      else if (char === '}') depth -= 1;
+      if (depth !== 0) continue;
+
+      const match = pattern.exec(latex.slice(i));
+      if (!match || match.index !== 0) continue;
+      return {
+        left: latex.slice(0, i),
+        right: latex.slice(i + match[0].length),
+        direction,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Rozkłada warunek zdarzenia na funkcję zmieniającą znak.
+ *
+ * Zwraca `undefined`, gdy warunek nie jest **pojedynczym** porównaniem —
+ * koniunkcja nie ma jednej takiej funkcji, a wybranie jednego z członów po
+ * cichu zgubiłoby drugi. Wołający ma wtedy wrócić do sprawdzania po kroku
+ * i o tym powiedzieć.
+ */
+export function compileComparison(latex: string, declared: string[] = []): CompiledComparison | undefined {
+  const parts = splitAtComparison(latex);
+  if (!parts) return undefined;
+  // Człon z operatorem logicznym znaczy, że to nie jest proste porównanie.
+  if (/\\land|\\lor|\\wedge|\\vee|&&|\|\|/.test(latex)) return undefined;
+  if (!parts.left.trim() || !parts.right.trim()) return undefined;
+
+  const left = compileExpression(parts.left, declared);
+  const right = compileExpression(parts.right, declared);
+
+  return {
+    value: (scope) => left.evaluate(scope) - right.evaluate(scope),
+    direction: parts.direction,
+    freeSymbols: [...new Set([...left.freeSymbols, ...right.freeSymbols])],
+    issues: [...left.issues, ...right.issues],
+  };
+}

@@ -71,3 +71,4 @@ osobna może być `Q` razy większe od zasilania.
   "view": ["timeseries", "phase", "scalars"]
 }
 ```
+

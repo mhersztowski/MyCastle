@@ -4,7 +4,7 @@ import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, Pi
 import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
-import { CompositeFS, NodeFS, VfsError } from '@mhersztowski/core';
+import { CompositeFS, NodeFS, VfsError, isPublicDrivePath, PUBLIC_DRIVE_DIRS } from '@mhersztowski/core';
 import { buildSwaggerSpec } from './swagger.js';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -240,15 +240,65 @@ export class MycastleHttpServer extends HttpUploadServer {
 
     // Public Drive file serving — no auth required.
     // GET /public/drive/users/{userName}/{path…}
-    //   → reads from data/Minis/Users/{userName}/drive/public/{path}
+    //   → reads from data/Minis/Users/{userName}/drive/{path}, but ONLY when
+    //     {path} starts with one of the public directories (public, knowledge,
+    //     git). The list lives in @mhersztowski/core so the UI cannot disagree.
     // Path traversal blocked: the request path MUST resolve INSIDE
     // `drive/public/`; anything else gets a 403.
-    if (req.method === 'GET' && req.url?.startsWith('/public/drive/users/')) {
+    // HEAD alongside GET: a client checking whether a document exists (e.g. to
+    // discover which user owns it) must not have to download it. Without this
+    // the probe got a 404 from the generic handler and the caller concluded the
+    // file was missing — while a plain GET returned it.
+    if ((req.method === 'GET' || req.method === 'HEAD') && req.url?.startsWith('/public/drive/users/')) {
       await this.handleDrivePublic(req, res);
       return;
     }
 
+    // Who has a public knowledge base — GET /public/knowledge/owners.
+    // A reader arriving at /knowledge/... has no way of knowing whose base to
+    // open: the URL carries no user name. Guessing a default ("admin") fails on
+    // any install where the library lives on a different account, and shows an
+    // empty page with no hint why. The server knows the answer, so it says it.
+    if (req.method === 'GET' && req.url?.startsWith('/public/knowledge/owners')) {
+      await this.handlePublicKnowledgeOwners(res);
+      return;
+    }
+
     await super.handleRequest(req, res);
+  }
+
+  /**
+   * Users whose `drive/knowledge` exists and is not empty.
+   *
+   * This does reveal user names — but only of accounts that already publish a
+   * public library, and only those. The directory itself is world-readable by
+   * explicit decision (see `publicPaths.ts`), so the name of its owner is not
+   * the secret here.
+   */
+  private async handlePublicKnowledgeOwners(res: ServerResponse): Promise<void> {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+      const users = await this.fileSystem.listDirectory('Minis/Users').catch(() => undefined);
+      const owners: string[] = [];
+
+      for (const entry of users?.children ?? []) {
+        if (entry.type !== 'directory') continue;
+        const tree = await this.fileSystem
+          .listDirectory(`Minis/Users/${entry.name}/drive/knowledge`)
+          .catch(() => undefined);
+        // `.keep` alone is not a library — an empty base would send readers to
+        // a blank page and look like a failure.
+        const hasDocuments = (tree?.children ?? []).some(
+          (c) => c.type === 'directory' || c.name.toLowerCase().endsWith('.md'),
+        );
+        if (hasDocuments) owners.push(entry.name);
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      this.sendJsonResponse(res, 200, { owners });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   private async handleDrivePublic(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -264,11 +314,49 @@ export class MycastleHttpServer extends HttpUploadServer {
 
       const userName = decodeURIComponent(m[1]);
       const rest = decodeURIComponent(m[2]);
-      // Normalise + reject path-traversal attempts (../ outside drive/public).
-      const userBase = `Minis/Users/${userName}/drive/public`;
+
+      /**
+       * Which Drive subtrees are public is decided in ONE place — see
+       * `publicPaths.ts` in @mhersztowski/core. The Drive UI uses the same
+       * function to decide whether to offer "copy public link", so a file the
+       * server refuses can never be advertised as shareable (and vice versa).
+       *
+       * Historically the check lived here as `startsWith('drive/public')` and
+       * again, separately, in DrivePage.tsx. With one directory the two copies
+       * could not visibly disagree; with three they would, at the first change.
+       */
+      if (!isPublicDrivePath(rest)) {
+        this.sendJsonResponse(res, 403, {
+          error: `Only these Drive directories are public: ${PUBLIC_DRIVE_DIRS.join(', ')}`,
+        });
+        return;
+      }
+
+      // Normalise + reject path-traversal attempts (../ outside drive/).
+      const userBase = `Minis/Users/${userName}/drive`;
       const requested = path.posix.normalize(`${userBase}/${rest}`);
       if (!requested.startsWith(`${userBase}/`)) {
         this.sendJsonResponse(res, 403, { error: 'Path traversal not allowed' });
+        return;
+      }
+
+      /**
+       * Directory listing — `?list=1`.
+       *
+       * A reader without an account needs the tree before it can fetch a single
+       * file: the knowledge base is a directory of hundreds of documents, and
+       * without listing there is no way to discover them. Serving files while
+       * hiding their names would not add security either — the directory is
+       * public by explicit decision, and its structure IS the table of contents.
+       */
+      if (urlObj.searchParams.get('list') === '1') {
+        try {
+          const tree = await this.fileSystem.listDirectory(requested);
+          res.setHeader('Cache-Control', 'public, max-age=60');
+          this.sendJsonResponse(res, 200, { tree });
+        } catch {
+          this.sendJsonResponse(res, 404, { error: 'Directory not found' });
+        }
         return;
       }
 
@@ -294,7 +382,9 @@ export class MycastleHttpServer extends HttpUploadServer {
       res.setHeader('Content-Disposition',
         `${force ? 'attachment' : 'inline'}; filename="${filename.replace(/"/g, '_')}"`);
       res.writeHead(200);
-      res.end(buffer);
+      // HEAD carries the headers but no body — that is the whole point of it.
+      if (req.method === 'HEAD') res.end();
+      else res.end(buffer);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.sendJsonResponse(res, 500, { error: msg });
@@ -6797,7 +6887,9 @@ Rules:
       res.setHeader('Content-Type', mimeType);
       res.setHeader('Content-Length', buffer.length);
       res.writeHead(200);
-      res.end(buffer);
+      // HEAD carries the headers but no body — that is the whole point of it.
+      if (req.method === 'HEAD') res.end();
+      else res.end(buffer);
     } catch {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'File not found' }));

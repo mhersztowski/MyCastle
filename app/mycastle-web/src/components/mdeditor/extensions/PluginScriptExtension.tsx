@@ -50,6 +50,9 @@ import { useAuth } from '../../../modules/auth/AuthContext';
 import { useMdEnv } from './MdEnvContext';
 import { usePlugins } from '../../../modules/web-plugins';
 import { editorOverlay } from '../editorOverlayState';
+import { ScenePanel, setSceneHost, SCENE_SCRIPT_DTS } from '../../../modules/scene-script';
+import type { IScene } from '@mhersztowski/core-cad-viewer';
+import { mqttClient } from '../../../modules/mqttclient';
 import {
   buildScriptContext,
   executeScript,
@@ -84,6 +87,9 @@ function ensureScriptGlobals(monaco: any): void {
   applyScriptDefaults(monaco);
   mergeExtraLibs(monaco, new Map([
     ['file:///plugin-script-globals.d.ts', PLUGIN_SCRIPT_GLOBALS_DTS],
+    // Sceny są modułem, nie nazwą globalną — podpowiedzi pojawiają się
+    // dopiero po `import { Scene } from 'mycastle/scene'`.
+    ['file:///mycastle-scene.d.ts', SCENE_SCRIPT_DTS],
   ]));
 }
 
@@ -176,6 +182,8 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
   const [status, setStatus] = useState<RunStatus>('idle');
   const [error, setError] = useState<string | undefined>();
   const [richOutput, setRichOutput] = useState<ScriptOutput>(undefined);
+  /** Scena wczytana przez `Scene.load` — panel pokazuje się pod wynikiem. */
+  const [scenaPanelu, setScenaPanelu] = useState<{ scene: IScene; path: string } | null>(null);
   const [displayItems, setDisplayItems] = useState<DisplayItem[]>([]);
   const [isLive, setIsLive] = useState(false);
 
@@ -225,6 +233,19 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
     }, { get: (name: string) => mdEnv.get(name), all: () => mdEnv.all() });
     const display = makeDisplayApi(pushDisplay);
 
+    /*
+      Scena wczytana przez `Scene.load` pojawia się w panelu pod wynikiem.
+      Host podstawiamy na czas przebiegu i zdejmujemy po nim: dwa bloki na
+      jednej stronie mają własne panele, a scena z jednego nie ma prawa wpaść
+      do wyniku drugiego.
+    */
+    setScenaPanelu(null);
+    setSceneHost({
+      readFile: async (path) => (await mqttClient.readFile(path))?.content ?? null,
+      writeFile: async (path, content) => { await mqttClient.writeFile(path, content); },
+      present: (scene, opis) => setScenaPanelu({ scene, path: opis.path }),
+    });
+
     try {
       const result = await executeScript(code, ctx, display);
       if (result instanceof ReactiveValue) setIsLive(true);
@@ -233,6 +254,8 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus('error');
+    } finally {
+      setSceneHost(null);
     }
   }, [status, code, currentUser, token, isAdmin, pushDisplay, mdEnv]);
 
@@ -455,6 +478,17 @@ const PluginScriptNodeView: React.FC<NodeViewProps> = ({ node, updateAttributes,
         )}
 
         {/* ── Output ── */}
+        {/*
+          Panel sceny stoi **poza** oknem wyniku i nie ma jego ograniczenia
+          wysokości: scena ściśnięta do 400 px jest nie do obejrzenia, a to
+          jedyny powód, dla którego skrypt ją wczytał.
+        */}
+        {scenaPanelu && outputVisible && (
+          <Box sx={{ borderTop: '1px solid rgba(124,77,255,0.25)', p: 1, bgcolor: 'background.paper' }}>
+            <ScenePanel scene={scenaPanelu.scene} path={scenaPanelu.path} height="70vh" />
+          </Box>
+        )}
+
         {hasOutput && outputVisible && (
           <Box sx={{ borderTop: '1px solid rgba(124,77,255,0.25)', maxHeight: 400, overflow: 'auto', bgcolor: 'background.paper' }}>
             {error && (

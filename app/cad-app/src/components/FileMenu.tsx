@@ -19,7 +19,7 @@ import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined
 import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type { Project } from '@mhersztowski/core-cad';
-import { exportDXF, exportGLTF, exportJSON, exportOBJ, exportSTEP, exportSTL, exportSVG, importDXF, importJSON, importSTL } from '../io/CadExporter';
+import { importGLTF, exportDXF, exportGLTF, exportJSON, exportOBJ, exportSTEP, exportSTL, exportSVG, importDXF, importJSON, importSTL } from '../io/CadExporter';
 import { ProjectBrowser } from './ProjectBrowser';
 import { ServerFileBrowser } from './ServerFileBrowser';
 import { SCENE_EXT, readFileAt, writeFileAt } from '../vfs/cadProjectApi';
@@ -40,13 +40,16 @@ type BrowserMode = 'open' | 'save';
 export function FileMenu({ project, getSceneData, onSceneData, onProjectFile }: Props) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' } | null>(null);
+  // `warning` obok sukcesu i błędu: import glTF potrafi się udać **niekompletnie**
+  // (np. „.gltf" bez pliku „.bin" obok) i to jest trzeci stan, nie żaden z dwóch.
+  const [toast, setToast] = useState<{ msg: string; severity: 'success' | 'error' | 'warning' } | null>(null);
   const [browserMode, setBrowserMode] = useState<BrowserMode | null>(null);
   const [sceneSaveOpen, setSceneSaveOpen] = useState(false);
   const [sceneOpenOpen, setSceneOpenOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dxfInputRef = useRef<HTMLInputElement>(null);
   const stlImportRef = useRef<HTMLInputElement>(null);
+  const gltfImportRef = useRef<HTMLInputElement>(null);
 
   const hasSceneData = Boolean(getSceneData?.());
 
@@ -133,6 +136,29 @@ export function FileMenu({ project, getSceneData, onSceneData, onProjectFile }: 
   function handleImportSTLClick() {
     close();
     stlImportRef.current?.click();
+  }
+
+  function handleImportGLTFClick() {
+    close();
+    gltfImportRef.current?.click();
+  }
+
+  async function handleGltfFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const { json, warnings, meshCount } = await importGLTF(file);
+      onSceneData?.(json);
+      // Ostrzeżenia mówią o modelu wczytanym **niekompletnie** — najczęściej
+      // o „.gltf" bez pliku „.bin" obok. Milczenie w tym miejscu wygląda jak
+      // udany import pustej sceny.
+      setToast(warnings.length
+        ? { msg: warnings[0], severity: 'warning' }
+        : { msg: `Wczytano do Scene 3D: ${file.name} (${meshCount} siatek)`, severity: 'success' });
+    } catch (err) {
+      setToast({ msg: (err as Error).message, severity: 'error' });
+    }
   }
 
   async function handleStlFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -257,6 +283,10 @@ export function FileMenu({ project, getSceneData, onSceneData, onProjectFile }: 
           <ListItemIcon><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Import STL (local)…" secondary="Loads mesh into Scene 3D tab" />
         </MenuItem>
+        <MenuItem onClick={handleImportGLTFClick} dense>
+          <ListItemIcon><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Import glTF / GLB (local)…" secondary="Whole scene — hierarchy and materials" />
+        </MenuItem>
         <MenuItem onClick={handleSaveJSON} dense>
           <ListItemIcon><SaveOutlinedIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Save JSON (local)</ListItemText>
@@ -317,6 +347,14 @@ export function FileMenu({ project, getSceneData, onSceneData, onProjectFile }: 
         accept=".stl"
         style={{ display: 'none' }}
         onChange={handleStlFileChange}
+      />
+      {/* Hidden file input for glTF/GLB import */}
+      <input
+        ref={gltfImportRef}
+        type="file"
+        accept=".gltf,.glb"
+        style={{ display: 'none' }}
+        onChange={handleGltfFileChange}
       />
 
       <Snackbar

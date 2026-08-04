@@ -11,7 +11,7 @@ import { AiProvider } from './AiProvider';
  * ("temperature is deprecated for this model"). Omit it only for those — other
  * models (incl. opus-4-6, sonnet) still accept it. Extend this list as needed.
  */
-const TEMPERATURE_UNSUPPORTED = [/opus-4-8/, /sonnet-5/, /opus-5/, /haiku-5/, /fable-5/];
+const TEMPERATURE_UNSUPPORTED = [/opus-4-7/, /opus-4-8/, /sonnet-5/, /opus-5/, /haiku-5/, /fable-5/];
 
 function modelAcceptsTemperature(model: string): boolean {
   return !TEMPERATURE_UNSUPPORTED.some(re => re.test(model));

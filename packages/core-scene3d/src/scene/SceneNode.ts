@@ -9,7 +9,9 @@ export type NodeType =
   | 'geometry-point'
   | 'geometry-segment'
   | 'geometry-line'
-  | 'geometry-angle';
+  | 'geometry-angle'
+  | 'ui-root'
+  | 'ui-widget';
 
 export interface SceneNodeData {
   id: string;

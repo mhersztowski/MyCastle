@@ -7,6 +7,8 @@
  * udostępnia **odczyt po czasie**, a nie po indeksie.
  */
 
+import type { EventHit } from './events';
+
 /** Stan układu — wektor liczb w kolejności zmiennych stanu. */
 export type State = number[];
 
@@ -15,11 +17,95 @@ export interface Sample {
   y: State;
 }
 
+/**
+ * Przebieg wewnątrz jednego kroku solvera, zapisany jako **dane**.
+ *
+ * Solver wyższego rzędu zna stan w środku kroku, nie tylko na jego końcach —
+ * ta wiedza powstaje przy okazji liczenia i przepada, jeśli się jej nie zapisze.
+ * Bez niej odczyt między próbkami sprowadza się do cięciwy, a przy adaptacji
+ * próbki bywają odległe o sekundy.
+ *
+ * Dane, a nie domknięcie, z jednego konkretnego powodu: model liczy się
+ * w workerze, a przez `postMessage` przechodzą wyłącznie struktury. Interpolant
+ * zapisany jako funkcja ginąłby dokładnie na tej granicy, więc animacja
+ * w aplikacji czytałaby po cięciwie mimo że solver policzył lepiej.
+ */
+export interface Interpolant {
+  /** Współczynniki postaci Hairera, po jednym wektorze na człon wielomianu. */
+  r1: number[];
+  r2: number[];
+  r3: number[];
+  r4: number[];
+  r5: number[];
+  /**
+   * Ułamek kroku, na którym interpolant obowiązuje.
+   *
+   * Krok przerwany zdarzeniem kończy się wcześniej, niż go policzono — wtedy
+   * `theta` z przedziału [0, 1] odnosi się do skróconego odcinka, a wielomian
+   * trzeba czytać w punkcie `theta · scale`.
+   */
+  scale: number;
+}
+
+/**
+ * Interpolant Hermite'a z wartości i pochodnych na końcach kroku.
+ *
+ * Dla metod niższego rzędu to wszystko, co realnie wiadomo o wnętrzu kroku:
+ * dwa stany i dwie pochodne dają wielomian trzeciego stopnia. Zapisujemy go
+ * w tej samej postaci co dense output Dormanda–Prince'a (człon czwartego rzędu
+ * zostaje zerowy), żeby odczyt z trajektorii nie musiał wiedzieć, która metoda
+ * ją policzyła.
+ */
+export function hermiteInterpolant(y0: State, y1: State, h: number, f0: State, f1: State): Interpolant {
+  const n = y0.length;
+  const r2 = new Array<number>(n);
+  const r3 = new Array<number>(n);
+  const r4 = new Array<number>(n);
+  const r5 = new Array<number>(n).fill(0);
+
+  for (let i = 0; i < n; i += 1) {
+    const diff = y1[i] - y0[i];
+    const bspl = h * f0[i] - diff;
+    r2[i] = diff;
+    r3[i] = bspl;
+    r4[i] = diff - h * f1[i] - bspl;
+  }
+
+  return { r1: [...y0], r2, r3, r4, r5, scale: 1 };
+}
+
+/** Stan w środku kroku; `theta` biegnie od 0 do 1 po zapisanym odcinku. */
+export function evalInterpolant(interpolant: Interpolant, theta: number): State {
+  const { r1, r2, r3, r4, r5, scale } = interpolant;
+  const s = theta * scale;
+  const s1 = 1 - s;
+  const out = new Array<number>(r1.length);
+  for (let i = 0; i < r1.length; i += 1) {
+    out[i] = r1[i] + s * (r2[i] + s1 * (r3[i] + s * (r4[i] + s1 * r5[i])));
+  }
+  return out;
+}
+
 export class Trajectory {
   constructor(
     readonly samples: Sample[],
     /** Nazwy zmiennych stanu w kolejności wektora — po nich czyta się wynik. */
     readonly stateNames: string[],
+    /**
+     * Interpolanty kroków: `interpolants[i]` obowiązuje między próbką `i` a `i+1`.
+     *
+     * Opcjonalne, bo solvery o stałym kroku ich nie mają i nie muszą — przy
+     * gęstych próbkach cięciwa wystarcza.
+     */
+    readonly interpolants?: Interpolant[],
+    /**
+     * Zdarzenia, które zaszły po drodze — z chwilą wyznaczoną, a nie zgadniętą.
+     *
+     * Trzymane przy trajektorii, bo dotyczą **tego** przebiegu: czas lotu jest
+     * wynikiem symulacji tak samo jak położenie, tylko odpowiada na pytanie
+     * „kiedy", a nie „gdzie".
+     */
+    readonly events?: EventHit[],
   ) {}
 
   get t0(): number { return this.samples[0]?.t ?? 0; }
@@ -52,6 +138,13 @@ export class Trajectory {
     const b = samples[hi];
     const span = b.t - a.t;
     const u = span === 0 ? 0 : (t - a.t) / span;
+
+    // Gdy solver zostawił interpolant tego kroku, czytamy z niego: cięciwa
+    // między dwiema odległymi próbkami myli się o rzędy wielkości bardziej niż
+    // sam solver, który je policzył.
+    const interpolant = this.interpolants?.[lo];
+    if (interpolant) return evalInterpolant(interpolant, u);
+
     return a.y.map((value, i) => value + (b.y[i] - value) * u);
   }
 

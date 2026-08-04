@@ -601,6 +601,20 @@ turndownService.addRule('links', {
   },
 });
 
+// Odsyłacz bazy wiedzy: <span data-type="knowledge-ref"> → ((id)) albo
+// ((id|podpis)). Musi stać PRZED regułą linków, bo to osobny element, ale
+// kolejność reguł turndown i tak jest po nazwie — trzymamy je razem dla jasności.
+turndownService.addRule('knowledgeRef', {
+  filter: (node) => node.nodeName === 'SPAN'
+    && (node as HTMLElement).getAttribute('data-type') === 'knowledge-ref',
+  replacement: (_content, node) => {
+    const el = node as HTMLElement;
+    const id = el.getAttribute('data-ref-id') ?? '';
+    const label = el.getAttribute('data-label') ?? '';
+    return label ? `((${id}|${label}))` : `((${id}))`;
+  },
+});
+
 // Internal (Obsidian-style) links: <a data-wikilink href="drive/notatka.md#…"> →
 // [[notatka#…]] (or [[notatka#…|label]] when the visible text was edited). The
 // href keeps the full workspace path for navigation; we strip it to the short
@@ -1472,6 +1486,37 @@ function restoreEmbedsToHtml(html: string, embeds: string[]): string {
   return result;
 }
 
+// ─── Odsyłacz bazy wiedzy ((id)) / ((id|podpis)) ────────────────────────────
+// Osobny nawias, bo `[[…]]` znaczy tu link do pliku w Drive — odsyłacz do
+// hasła zamieniał się przez to w link do nieistniejącego dokumentu.
+// Identyfikator zaczyna się od litery i nie ma spacji, więc zwykły nawias
+// w zdaniu („(patrz (a) wyżej)") nie jest brany za odsyłacz.
+function escapeKnowledgeRefsForHtml(content: string): { result: string; refs: { id: string; label: string }[] } {
+  const refs: { id: string; label: string }[] = [];
+  const result = content.replace(
+    // Podpis wolno złamać na wiersze — plik źródłowy jest zawijany, więc
+    // „paragrafu\n6-3" jest zapisem normalnym. Nie może zawierać nawiasu
+    // zamykającego, bo `))` kończy odsyłacz.
+    /\(\(([A-Za-z][A-Za-z0-9_-]*)(?:\|([^)]+))?\)\)/g,
+    (_m, id: string, label?: string) => {
+      // Złamanie wiersza jest zapisem, nie treścią — akapit składa się na nowo.
+      refs.push({ id, label: (label ?? '').replace(/\s+/g, ' ').trim() });
+      return `%%KNOWREF${refs.length - 1}%%`;
+    },
+  );
+  return { result, refs };
+}
+
+function restoreKnowledgeRefsToHtml(html: string, refs: { id: string; label: string }[]): string {
+  let result = html;
+  const enc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  refs.forEach((r, i) => {
+    const tag = `<span data-type="knowledge-ref" data-ref-id="${enc(r.id)}" data-label="${enc(r.label)}">${enc(r.label || r.id)}</span>`;
+    result = result.split(`%%KNOWREF${i}%%`).join(tag);
+  });
+  return result;
+}
+
 function escapeWikiLinksForHtml(content: string): { result: string; wikiLinks: { href: string; label: string }[] } {
   const wikiLinks: { href: string; label: string }[] = [];
   const result = content.replace(/\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]/g, (_m, target: string, label?: string) => {
@@ -1614,7 +1659,8 @@ export function markdownToHtml(markdown: string): string {
   const { result: markdownWithoutEmbeds, embeds } = escapeEmbedsForHtml(markdownWithoutComponents);
 
   // Protect Obsidian wikilinks [[…]] from showdown
-  const { result: markdownWithoutWikiLinks, wikiLinks } = escapeWikiLinksForHtml(markdownWithoutEmbeds);
+  const { result: markdownWithoutRefs, refs: knowledgeRefs } = escapeKnowledgeRefsForHtml(markdownWithoutEmbeds);
+  const { result: markdownWithoutWikiLinks, wikiLinks } = escapeWikiLinksForHtml(markdownWithoutRefs);
 
   // Then, protect math content from showdown processing
   const mathDataStr = escapeMathForHtml(markdownWithoutWikiLinks);
@@ -1676,6 +1722,7 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore Obsidian wikilinks
   html = restoreWikiLinksToHtml(html, wikiLinks);
+  html = restoreKnowledgeRefsToHtml(html, knowledgeRefs);
 
   // Restore Obsidian embeds ![[…]]
   html = restoreEmbedsToHtml(html, embeds);

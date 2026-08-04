@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SceneGraph } from './SceneGraph';
 import { SceneNode } from './SceneNode';
 import { MeshNode } from '../nodes/MeshNode';
+import { GroupNode } from '../nodes/GroupNode';
 import { LightNode } from '../nodes/LightNode';
 import { CameraNode } from '../nodes/CameraNode';
 
@@ -249,5 +250,47 @@ describe('SceneGraph.script', () => {
     graph.script = '';
     expect(graph.toData().script).toBeUndefined();
     expect(SceneGraph.fromData(graph.toData()).script).toBeNull();
+  });
+});
+
+describe('przenoszenie węzłów', () => {
+  it('węzeł zmienia rodzica razem z poddrzewem', () => {
+    const graph = new SceneGraph();
+    const a = new GroupNode({ id: 'a', name: 'A' });
+    const b = new GroupNode({ id: 'b', name: 'B' });
+    const dziecko = new GroupNode({ id: 'd', name: 'D' });
+    graph.addNode(a);
+    graph.addNode(b);
+    graph.addNode(dziecko, 'a');
+
+    expect(graph.moveNode('a', 'b')).toBe(true);
+    expect(graph.findNode('a')?.parent?.id).toBe('b');
+    expect(graph.findNode('d')?.parent?.id).toBe('a');
+  });
+
+  it('bez rodzica wraca pod korzeń', () => {
+    const graph = new SceneGraph();
+    graph.addNode(new GroupNode({ id: 'a', name: 'A' }));
+    graph.addNode(new GroupNode({ id: 'b', name: 'B' }), 'a');
+
+    expect(graph.moveNode('b')).toBe(true);
+    expect(graph.findNode('b')?.parent?.id).toBe(graph.root.id);
+  });
+
+  it('nie da się przenieść węzła pod własne dziecko — drzewo by się rozpadło', () => {
+    const graph = new SceneGraph();
+    graph.addNode(new GroupNode({ id: 'a', name: 'A' }));
+    graph.addNode(new GroupNode({ id: 'b', name: 'B' }), 'a');
+
+    expect(graph.moveNode('a', 'b')).toBe(false);
+    expect(graph.findNode('a')?.parent?.id).toBe(graph.root.id);
+  });
+
+  it('nieznany węzeł albo nieznany rodzic to „nie", a nie wyjątek', () => {
+    const graph = new SceneGraph();
+    graph.addNode(new GroupNode({ id: 'a', name: 'A' }));
+
+    expect(graph.moveNode('nie-ma')).toBe(false);
+    expect(graph.moveNode('a', 'nie-ma-rodzica')).toBe(false);
   });
 });

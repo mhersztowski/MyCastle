@@ -14,9 +14,13 @@
  * razy na krok RK4, czyli setki tysięcy razy na sekundę animacji — kompilacja
  * w pętli kosztowałaby więcej niż samo całkowanie.
  */
-import { compileCondition, compileExpression } from '../formula/expression';
+import { compileCondition, compileComparison, compileExpression } from '../formula/expression';
+import type { EventSpec } from '../numeric/events';
 import { symbolName } from '../formula/parseFormula';
 import { euler, rk4, verlet } from '../numeric/solvers';
+import { dopri5, IntegrationError } from '../numeric/dopri5';
+import { rosenbrock } from '../numeric/rosenbrock';
+import { measureInvariant, type InvariantReport } from '../numeric/invariants';
 import { Trajectory } from '../numeric/trajectory';
 import { sameDimension, toSI } from '../units/quantity';
 import { CONSTANTS } from '../units/constants';
@@ -69,8 +73,24 @@ export interface PhenomenonResult {
   scalars: Record<string, number>;
   /** Trajektoria z węzła ODE, jeśli był. */
   trajectory?: Trajectory;
+  /**
+   * Dlaczego trajektorii nie ma, choć model ją zapowiadał.
+   *
+   * Nieudane całkowanie nie może wywracać całego dokumentu — blok ma dalej
+   * stać na swoim miejscu i powiedzieć, co poszło nie tak. Wyjątek zatrzymałby
+   * render strony przez jeden zbyt sztywny układ w jednym akapicie.
+   */
+  error?: string;
   /** Przebiegi wielkości zależnych od stanu — liczone wzdłuż trajektorii. */
   series: Record<string, Array<[number, number]>>;
+  /**
+   * Pomiar wielkości zadeklarowanych jako `@invariant`.
+   *
+   * Pusta lista, gdy autor nic nie zadeklarował albo gdy nie ma trajektorii —
+   * brak pola zmuszałby każdy widok do rozróżniania „nie mierzono" od
+   * „zmierzono i nic nie znaleziono", a to jest ta sama informacja dla odbiorcy.
+   */
+  invariants: InvariantReport[];
 }
 
 /**
@@ -147,6 +167,41 @@ export function compileGraph(graph: FormulaGraph): PhenomenonModel {
   }
 
   const stateNames = ode?.state ?? [];
+
+  /**
+   * Wielkości zadeklarowane jako zachowywane.
+   *
+   * Zbieramy je ze **wszystkich** bloków, nie tylko z tego z równaniem ruchu:
+   * energia bywa zapisana osobnym wzorem wyżej w wykładzie, a dyrektywa stoi
+   * wtedy przy niej. Niezmiennik nie wchodzi do obliczeń, więc nie ma go
+   * w kolejności topologicznej — jest czytany dopiero na gotowej trajektorii.
+   */
+  const invariantDefs = graph.nodes.flatMap((node) => Object
+    .entries(node.block.invariants ?? {})
+    .map((entry) => {
+      const [name, expression] = entry;
+      const known = [
+        ...Object.keys(units), ...stateNames,
+        ...definitions.map((d) => d.target), ...parameters.map((p) => p.name),
+      ];
+      const compiled = compileExpression(expression, known);
+      for (const issue of compiled.issues) {
+        issues.push(`[${node.block.id}] niezmiennik „${name}": ${issue}`);
+      }
+
+      // Wolny symbol w zwykłym wzorze staje się parametrem z suwakiem, bo graf
+      // widzi, że nikt go nie liczy. Niezmiennik stoi poza grafem, więc ta
+      // ścieżka go nie obejmuje — nierozpoznana nazwa dałaby po cichu NaN
+      // i raport „energia nie jest liczbą" zamiast wskazania literówki.
+      const nieznane = compiled.freeSymbols.filter((symbol) => !known.includes(symbol));
+      if (nieznane.length) {
+        issues.push(
+          `[${node.block.id}] niezmiennik „${name}" używa wielkości spoza modelu: ${nieznane.join(', ')}.`,
+        );
+      }
+      return { name, compiled };
+    }));
+
   const observables: ObservableDef[] = [
     ...stateNames.map((name): ObservableDef => ({
       name, kind: 'series', unit: units[name], formulaId: odeNode?.block.id, fromState: true,
@@ -178,7 +233,18 @@ export function compileGraph(graph: FormulaGraph): PhenomenonModel {
         scope[definition.target] = value;
       }
 
-      const trajectory = ode?.solve(scope, tSpan, dt);
+      // Nieudane całkowanie zwracamy jako wynik z wyjaśnieniem, a nie jako
+      // wyjątek: blok w dokumencie ma dalej stać na swoim miejscu. Łapiemy
+      // wyłącznie `IntegrationError` — błąd w samym wyrażeniu jest usterką
+      // do naprawienia, a nie stanem, o którym warto meldować czytelnikowi.
+      let trajectory: Trajectory | undefined;
+      let error: string | undefined;
+      try {
+        trajectory = ode?.solve(scope, tSpan, dt);
+      } catch (e) {
+        if (!(e instanceof IntegrationError)) throw e;
+        error = e.message;
+      }
 
       for (const definition of afterOde) {
         const dependsOnState = definition.compiled.freeSymbols.some((s) => stateNames.includes(s));
@@ -203,7 +269,18 @@ export function compileGraph(graph: FormulaGraph): PhenomenonModel {
         for (const name of stateNames) series[name] = trajectory.series(name);
       }
 
-      return { scalars, trajectory, series };
+      // Pomiar na końcu, bo dopiero teraz `scope` zna wszystkie wielkości
+      // pomocnicze — energia bywa wyrażona przez \omega_0 policzone osobnym
+      // wzorem, a nie wprost przez parametry.
+      const invariants = trajectory
+        ? invariantDefs.map(({ name, compiled }) => measureInvariant(trajectory, (state) => {
+          const local = { ...scope };
+          for (let i = 0; i < stateNames.length; i += 1) local[stateNames[i]] = state[i];
+          return compiled.evaluate(local);
+        }, { name }))
+        : [];
+
+      return { scalars, trajectory, series, invariants, error };
     },
   };
 }
@@ -249,9 +326,41 @@ function compileOde(node: GraphNode, issues: string[]) {
     );
     method = 'rk4';
   }
-  if (!['rk4', 'euler', 'verlet'].includes(method)) {
+  // `rk45` to ta sama metoda pod nazwą, którą częściej spotyka się w podręczniku;
+  // `stiff` mówi o **układzie**, a nie o metodzie, i dla autora dokumentu jest
+  // często naturalniejszym określeniem tego, czego potrzebuje.
+  if (method === 'rk45') method = 'dopri5';
+  if (method === 'stiff' || method === 'implicit') method = 'rosenbrock';
+  if (!['rk4', 'euler', 'verlet', 'dopri5', 'rosenbrock'].includes(method)) {
     issues.push(`[${block.id}] Nieznana metoda „${block.solver}". Liczę metodą RK4.`);
     method = 'rk4';
+  }
+
+  /**
+   * Warunki zdarzeń rozłożone na funkcje zmieniające znak.
+   *
+   * Tylko dla nich da się **rozwiązać** równanie zdarzenia zamiast wypatrywać
+   * go po kroku. Warunek złożony (koniunkcja) takiej funkcji nie ma, więc
+   * zostaje przy starym trybie — i autor musi o tym wiedzieć, bo różnica
+   * dotyczy dokładności wyniku, a nie wygody.
+   */
+  const comparisons = (block.events ?? []).map((event) => compileComparison(event.when, known));
+  const zdarzeniaDokładne = comparisons.length > 0 && comparisons.every((c) => !!c && !c.issues.length);
+
+  if (method === 'rosenbrock' && (block.events ?? []).length) {
+    issues.push(
+      `[${block.id}] Metoda niejawna sprawdza zdarzenia po kroku, a jej kroki bywają długie — `
+      + 'chwila zdarzenia będzie przybliżona. Jeśli układ nie jest sztywny, dokładne zdarzenia '
+      + 'daje `@solver dopri5`.',
+    );
+  }
+
+  if (method === 'dopri5' && comparisons.length && !zdarzeniaDokładne) {
+    issues.push(
+      `[${block.id}] Warunku zdarzenia nie da się rozłożyć na jedną wielkość przechodzącą przez zero `
+      + '(np. jest koniunkcją), więc chwila zdarzenia będzie przybliżona — ograniczam krok z góry, '
+      + 'żeby próg nie został przestrzelony. Prosty warunek postaci „wielkość < próg" liczy się dokładnie.',
+    );
   }
 
   const events = (block.events ?? []).map((event) => {
@@ -321,6 +430,81 @@ function compileOde(node: GraphNode, issues: string[]) {
         : undefined;
 
       const options = { dt, sampleEvery: 4, stateNames: state, onStep };
+
+      if (method === 'rosenbrock') {
+        const rtol = block.tolerance ?? 1e-6;
+        return rosenbrock(f, y0, tSpan, {
+          rtol,
+          atol: rtol * 1e-3,
+          dt,
+          stateNames: state,
+          onStep,
+          // Ten sam limit co dla metody jawnej i z tego samego powodu: blok
+          // w dokumencie ma odpowiedzieć szybko, choćby odpowiedzią „nie umiem".
+          maxSteps: 200_000,
+        });
+      }
+
+      if (method === 'dopri5') {
+        const rtol = block.tolerance ?? 1e-6;
+
+        /**
+         * Zdarzenia dokumentu jako miejsca zerowe.
+         *
+         * Budowane tutaj, a nie przy kompilacji, bo funkcja zdarzenia musi
+         * widzieć wartości parametrów — a te przychodzą dopiero z `run()`.
+         */
+        const eventSpecs: EventSpec[] = zdarzeniaDokładne
+          ? events.map((event, i): EventSpec => {
+            const comparison = comparisons[i]!;
+            const scopeAt = (t: number, y: number[]) => {
+              const at: Record<string, number> = { ...scope, t };
+              for (let j = 0; j < state.length; j += 1) at[state[j]] = y[j];
+              return at;
+            };
+            return {
+              name: block.events![i].when,
+              g: (t, y) => comparison.value(scopeAt(t, y)),
+              direction: comparison.direction,
+              stop: event.stop,
+              apply: event.assign.length
+                ? (t, y) => {
+                  const at = scopeAt(t, y);
+                  const next = [...y];
+                  for (const { name, compiled } of event.assign) {
+                    const index = state.indexOf(name);
+                    if (index >= 0) next[index] = compiled.evaluate(at);
+                  }
+                  return next;
+                }
+                : undefined,
+            };
+          })
+          : [];
+        return dopri5(f, y0, tSpan, {
+          rtol,
+          // Tolerancja bezwzględna trzy rzędy niżej: to ona decyduje, co uznać
+          // za zero, a wielkości fizyczne rzadko mają sensowną wartość progową
+          // podaną osobno.
+          atol: rtol * 1e-3,
+          dt,
+          stateNames: state,
+          events: eventSpecs,
+          // Hak po kroku zostaje wyłącznie dla warunków, których nie dało się
+          // rozłożyć; przy zdarzeniach rozwiązywanych dokładnie byłby drugim,
+          // gorszym mechanizmem meldującym to samo.
+          onStep: zdarzeniaDokładne ? undefined : onStep,
+          // Ograniczenie kroku też jest już tylko dla tego przypadku: adaptacja
+          // rozciąga krok tam, gdzie rozwiązanie jest gładkie, a próg bywa
+          // właśnie na gładkim odcinku.
+          maxStep: (!zdarzeniaDokładne && events.length) ? (tSpan[1] - tSpan[0]) / 500 : undefined,
+          // Niżej niż domyślny limit solvera: to jest blok w dokumencie, a nie
+          // obliczenie w tle. Czytelnik ma dostać komunikat „układ jest sztywny"
+          // po chwili, a nie po kilku sekundach zamrożonej strony — a żaden
+          // model dydaktyczny nie potrzebuje dwustu tysięcy kroków.
+          maxSteps: 200_000,
+        });
+      }
 
       if (method === 'verlet') {
         // Stan przestawiamy na kolejność, której wymaga Verlet: najpierw

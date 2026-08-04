@@ -13,6 +13,7 @@ import { buildIndex } from '@mhersztowski/sci-core';
 import { KnowledgeCatalog } from '../src/KnowledgeCatalog';
 import { ReaderView } from '../src/ReaderView';
 import { FormulaBlockView } from '../src/FormulaBlockView';
+import { BlockShell } from '../src/BlockShell';
 
 /**
  * Fabryka workera dla podglądu — ten sam zapis, co w aplikacji.
@@ -39,7 +40,22 @@ function PodgladEdycji() {
     <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
       <h2 style={{ fontSize: 18 }}>Wizualna edycja wzoru</h2>
       <p style={{ fontSize: 14, color: '#475569' }}>Kliknij wzór, żeby otworzyć edytor matematyki.</p>
+      {/* Bez ramki hosta — tak wygląda w trybie czytania. */}
       <FormulaBlockView id="okres" code={kod} onChange={setKod} />
+
+      <h3 style={{ fontSize: 15, marginTop: 18 }}>W ramce edytora (contentEditable=false)</h3>
+      <p style={{ fontSize: 13, color: '#475569' }}>
+        Tak blok wygląda w edytorze markdown. Kliknięcie we wzór musi otwierać edytor
+        matematyki mimo nieedytowalnego opakowania.
+      </p>
+      <BlockShell
+        kind="wzór"
+        accent="#2563eb"
+        id="okres"
+        view={<FormulaBlockView id="okres" code={kod} onChange={setKod} bare />}
+      >
+        {() => <pre style={{ fontSize: 12 }}>{kod}</pre>}
+      </BlockShell>
       <pre style={{ fontSize: 12, background: '#f8fafc', padding: 10, borderRadius: 6, overflow: 'auto' }}>{kod}</pre>
     </div>
   );
