@@ -38,6 +38,10 @@ COPY packages/minislib/package.json packages/minislib/
 COPY packages/server-logic/package.json packages/server-logic/
 COPY packages/minisc/package.json packages/minisc/
 COPY packages/web-cpp/package.json packages/web-cpp/
+# layout — nowa zależność core-scene3d; sci-core/sci-blocks — importuje je mycastle-web
+COPY packages/layout/package.json packages/layout/
+COPY packages/sci-core/package.json packages/sci-core/
+COPY packages/sci-blocks/package.json packages/sci-blocks/
 COPY app/mycastle-backend/package.json app/mycastle-backend/
 COPY app/mycastle-web/package.json app/mycastle-web/
 COPY app/cad-backend/package.json app/cad-backend/
@@ -65,8 +69,13 @@ COPY packages/web-cpp/ packages/web-cpp/
 # core-scene3d needs ui-core.
 COPY packages/ui-core/ packages/ui-core/
 COPY packages/core-cad/ packages/core-cad/
+# layout musi być przed core-scene3d (peer dep dts)
+COPY packages/layout/ packages/layout/
 COPY packages/core-scene3d/ packages/core-scene3d/
 COPY packages/core-cad-viewer/ packages/core-cad-viewer/
+# sci-core → sci-blocks; mycastle-web importuje oba (KnowledgePage, mdeditor, worker)
+COPY packages/sci-core/ packages/sci-core/
+COPY packages/sci-blocks/ packages/sci-blocks/
 COPY app/mycastle-backend/ app/mycastle-backend/
 COPY app/mycastle-web/ app/mycastle-web/
 COPY docs/ docs/
@@ -82,8 +91,13 @@ RUN pnpm --filter @mhersztowski/web-cpp build --silent
 # CAD viewer chain (order: ui-core → core-scene3d, core-cad → core-cad-viewer)
 RUN pnpm --filter @mhersztowski/ui-core build --silent
 RUN pnpm --filter @mhersztowski/core-cad build --silent
+# layout przed core-scene3d (importuje @mhersztowski/layout w uiLayout.ts)
+RUN pnpm --filter @mhersztowski/layout build --silent
 RUN pnpm --filter @mhersztowski/core-scene3d build --silent
 RUN pnpm --filter @mhersztowski/core-cad-viewer build --silent
+# sci-core → sci-blocks przed web (mycastle-web importuje oba + build:knowledge)
+RUN pnpm --filter @mhersztowski/sci-core build --silent
+RUN pnpm --filter @mhersztowski/sci-blocks build --silent
 RUN pnpm --filter mycastle-backend build --silent
 RUN pnpm --filter mycastle-web build
 

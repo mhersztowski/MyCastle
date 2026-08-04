@@ -211,7 +211,10 @@ export function applyUiDrag(
   if (skutek.odmowa) return { rects: biezace, odmowa: skutek.odmowa };
 
   const wynik = solveLayout(skutek.doc);
-  const poId = new Map(skutek.doc.shapes.map((s) => [s.id, s]));
+  // Adnotacja krotki jest konieczna: bez niej TS wnioskuje `(string | Shape)[]`
+  // zamiast `[string, Shape]`, przez co wartość Mapy degeneruje się do `{}`
+  // i znikają pola `anchor`/`x`/`y`/`w`/`h` (błąd dts builda w tsup).
+  const poId = new Map(skutek.doc.shapes.map((s): [string, Shape] => [s.id, s]));
 
   for (const [shape, node] of Object.entries(nodeIdByShape)) {
     const nowy = poId.get(shape);
