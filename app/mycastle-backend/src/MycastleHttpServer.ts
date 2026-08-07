@@ -1380,6 +1380,22 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Bezwzględna ścieżka katalogu danych: GET /api/system/data-root (admin)
+    //
+    // Ścieżki, które widzi przeglądarka (`/data/Minis/Users/…`), są adresami
+    // wirtualnymi warstwy VFS — nie istnieją na dysku. Narzędzia uruchamiane
+    // w terminalu (budowanie Hydry) potrzebują prawdziwego katalogu, a klient
+    // nie ma jak go wyliczyć: zależy od ROOT_DIR i katalogu roboczego serwera.
+    // Zwracamy sam katalog, bez możliwości czytania czegokolwiek.
+    if (method === 'GET' && apiPath === '/system/data-root') {
+      if (!user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden: admin access required' });
+        return;
+      }
+      this.sendJsonResponse(res, 200, { dataRoot: path.resolve(process.env.ROOT_DIR || 'data') });
+      return;
+    }
+
     // AI search proxy: POST /ai/search
     if (apiPath === '/ai/search' && method === 'POST') {
       await this.handleAiSearch(req, res);

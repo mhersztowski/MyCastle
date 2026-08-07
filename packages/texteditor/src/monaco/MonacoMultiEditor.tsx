@@ -324,11 +324,39 @@ const extensionToLanguage: Record<string, string> = {
   cpp: 'cpp', hpp: 'cpp', cc: 'cpp', cxx: 'cpp', ino: 'cpp',
   sh: 'shell', bash: 'shell',
   yml: 'yaml', yaml: 'yaml',
+  // Pliki frameworka Hydra: projekt, schemat połączeń, definicja układu.
+  // Są YAML-em — własne rozszerzenia mają po to, żeby wtyczka Hydra Studio
+  // mogła je rozpoznać i otworzyć obok swój interfejs.
+  hydra: 'yaml', hsch: 'yaml', hcomp: 'yaml',
   xml: 'xml', svg: 'xml',
   sql: 'sql',
   dockerfile: 'dockerfile',
   txt: 'plaintext',
 };
+
+/**
+ * Ścieżka pliku dla zakładki — także wtedy, gdy zakładkę otworzyła wtyczka.
+ *
+ * Wtyczki otwierają własne widoki pod identyfikatorem ze schematem
+ * (`hydra-studio:///drive/projekt.hydra`), żeby nie kolidować z zakładką
+ * tekstową tego samego pliku. Eksplorator porównuje jednak identyfikator
+ * z nazwami węzłów drzewa, a te są zwykłymi ścieżkami — bez odcięcia schematu
+ * aktywny widok wtyczki nie zaznacza niczego i wygląda to, jakby eksplorator
+ * nie nadążał.
+ *
+ * Odcinamy tylko znany kształt `schemat://`; zwykła ścieżka przechodzi bez zmian.
+ */
+function vfsPathOfTab(tab: string | null | undefined): string | undefined {
+  if (!tab) return undefined;
+  const match = /^[a-z][a-z0-9+.-]*:\/\/(\/.*)$/i.exec(tab);
+  const path = match ? match[1] : tab;
+  try {
+    if (localStorage.getItem('HYDRA_DEBUG') === '1') {
+      console.log('[hydra] aktywna zakładka:', tab, '→ ścieżka dla eksploratora:', path);
+    }
+  } catch { /* brak localStorage */ }
+  return path;
+}
 
 function detectLanguage(filePath: string): string {
   const name = filePath.split('/').pop() ?? '';
@@ -2023,6 +2051,11 @@ export function MonacoMultiEditor({
       component: ComponentType;
       toSide: boolean;
     }>('system:editor:openVirtualTab', ({ uri, title, component, toSide }) => {
+      try {
+        if (localStorage.getItem('HYDRA_DEBUG') === '1') {
+          console.log('[hydra] host: żądanie zakładki wirtualnej', uri, 'obok:', toSide);
+        }
+      } catch { /* brak localStorage */ }
       const currentGroups = groupsRef.current;
       const currentActiveId = activeGroupIdRef.current;
 
@@ -3741,7 +3774,7 @@ export function MonacoMultiEditor({
                   defaultMountPresets={defaultMountPresets}
                   refreshRef={explorerRefreshRef}
                   revealPathsRef={explorerRevealRef}
-                  selectedPath={activeGroup.activeTab ?? undefined}
+                  selectedPath={vfsPathOfTab(activeGroup.activeTab)}
                   projectDeps={projectDeps}
                   onDialogAction={onDialogAction}
                   onOutputLine={handleOutputLine}

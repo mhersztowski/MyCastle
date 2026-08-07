@@ -60,7 +60,11 @@ export function inline(
   //
   // Odsyłacz to `((id))`, a **nie** `[[id]]` — ten drugi zapis należy do edytora
   // Markdown i znaczy tam link do pliku w Drive.
-  const pattern = /(\\[\\*_`[\]$~])|(!\[[^\]]*\]\([^)\s]+\)|\$\$[^$]+\$\$|\$[^$\s][^$\n]*\$|\(\([A-Za-z][A-Za-z0-9_-]*(?:\|[^)]+)?\)\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  // Wzór w linii **wolno złamać na wiersze**, tak jak podpis odsyłacza —
+  // dokumenty bazy są zawijane na 80 kolumn, więc dłuższe `$…$` i tak przez to
+  // łamanie przechodzi. Pusty wiersz zostaje granicą: bez tego samotny dolar
+  // („5 $ za sztukę") połykałby tekst aż do następnego dolara w dokumencie.
+  const pattern = /(\\[\\*_`[\]$~])|(!\[[^\]]*\]\([^)\s]+\)|\$\$[^$]+\$\$|\$[^$\s](?:[^$\n]|\n(?!\s*\n))*\$|\(\([A-Za-z][A-Za-z0-9_-]*(?:\|[^)]+)?\)\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
   let last = 0;
   let key = 0;
 
@@ -97,7 +101,8 @@ export function inline(
       // `$$…$$` musi stać we wzorcu **przed** `$…$`, inaczej ten drugi wgryza
       // się w środek („$F = …$" z „$$F = …$$") i zostawia samotny dolar.
       const blokowy = token.startsWith('$$');
-      const latex = blokowy ? token.slice(2, -2) : token.slice(1, -1);
+      // Złamanie wiersza w źródle jest zawijaniem pliku, nie treścią wzoru.
+      const latex = (blokowy ? token.slice(2, -2) : token.slice(1, -1)).replace(/\s*\n\s*/g, ' ');
       out.push(<MathView key={key += 1} latex={latex} block={blokowy} />);
       continue;
     }

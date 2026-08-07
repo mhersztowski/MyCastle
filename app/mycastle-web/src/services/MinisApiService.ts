@@ -740,6 +740,11 @@ class MinisApiService {
     return data.items;
   }
 
+  /** Bezwzględny katalog danych serwera — ścieżki Drive są wirtualne. */
+  async getDataRoot(): Promise<{ dataRoot: string }> {
+    return this.request<{ dataRoot: string }>('GET', '/system/data-root');
+  }
+
   async getTerminalTicket(): Promise<{ ticket: string }> {
     return this.request<{ ticket: string }>('POST', '/terminal/ticket');
   }

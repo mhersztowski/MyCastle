@@ -96,3 +96,34 @@ describe('numeracja listy przez przerwy', () => {
     expect([...container.querySelectorAll('li')].map((l) => l.textContent)).toEqual(['Jeden.', 'Dwa.']);
   });
 });
+
+/**
+ * Dokumenty bazy są zawijane na 80 kolumn, więc dłuższy wzór w linii **musi**
+ * czasem przejść przez łamanie wiersza — tak jak podpis odsyłacza, który skleja
+ * się od 15-2. Bez tego `$…$` rozjeżdżało się po cichu: w źródle wyglądało
+ * poprawnie, a czytelnik dostawał surowe dolary razem z LaTeX-em. Wyszło na 4-6,
+ * przy `d**r**′/d*t* = **v**′`.
+ */
+describe('matematyka w linii złamana na wiersze', () => {
+  it('składa się z powrotem w jeden wzór', () => {
+    const { container } = render(
+      <ReaderView markdown={'Ale $\\mathrm{d}\\mathbf{r}/\\mathrm{d}t =\n\\mathbf{v}$ jest prędkością.'} path="t.md" />,
+    );
+    const t = container.textContent ?? '';
+    // KaTeX dokłada do drzewa własną kopię źródła (MathML `annotation`), więc
+    // sam LaTeX w `textContent` jest normalny — dowodem złożenia jest brak
+    // dolarów i obecność złożonego wzoru.
+    expect(t).not.toContain('$');
+    expect(container.querySelector('.katex')).not.toBeNull();
+    expect(t).toContain('jest prędkością.');
+  });
+
+  it('pusty wiersz dalej kończy akapit, więc samotny dolar nie połyka tekstu', () => {
+    const { container } = render(
+      <ReaderView markdown={'Cena to 5 $ za sztukę.\n\nDrugi akapit z $x$ w środku.'} path="t.md" />,
+    );
+    const akapity = [...container.querySelectorAll('p')].map((p) => p.textContent);
+    expect(akapity[0]).toContain('5 $ za sztukę.');
+    expect(akapity[1]).not.toContain('$');
+  });
+});

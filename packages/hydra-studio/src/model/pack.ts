@@ -128,10 +128,18 @@ function checkPackConsistency(manifest: PackManifest, doc: HydraDocument, out: D
                          doc.positionOf(['pack'])));
     }
 
-    // Sterownik czujnika bez schematu konfiguracji da się użyć, ale inspektor
-    // nie będzie miał czego pokazać — użytkownik zobaczy pusty panel.
-    if (manifest.provides?.includes('sense.driver') && manifest.config_schema === undefined) {
-        out.push(warning('config_schema', 'sterownik czujnika bez schematu konfiguracji',
+    // Sterownik bez schematu konfiguracji da się użyć, ale inspektor nie będzie
+    // miał czego pokazać — użytkownik zobaczy pusty panel. Dotyczy wszystkiego,
+    // co ma ustawienia: czujnik ma adres i okres, sterownik silnika
+    // częstotliwość PWM, wyświetlacz rozdzielczość. Elementy bierne i złącza
+    // (`core.extension`) słusznie ich nie mają.
+    const CONFIGURABLE = ['sense.driver', 'ui.display', 'ui.widget',
+                          'motion.motor', 'motion.encoder', 'net.transport'];
+    const configurable = manifest.provides?.filter((kind) => CONFIGURABLE.includes(kind)) ?? [];
+
+    if (configurable.length > 0 && manifest.config_schema === undefined) {
+        out.push(warning('config_schema',
+                         `paczka dostarcza ${configurable.join(', ')}, ale nie ma schematu konfiguracji`,
                          'bez tego pliku inspektor w Studiu pokaże pusty panel dla tego komponentu',
                          doc.positionOf(['provides'])));
     }

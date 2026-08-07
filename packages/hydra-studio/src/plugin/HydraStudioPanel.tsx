@@ -28,7 +28,7 @@ import Typography from '@mui/material/Typography';
 import {
     entriesOf, formFor,
     HydraDocument, buildPlan, configFormFor, packForComponent, unsupportedFields, validate,
-    type ConfigSchema, type Diagnostic, type FormField, type FormSection,
+    type ConfigSchema, type FormField, type FormSection,
     type PackManifest, type PathSegment,
 } from '../model';
 
@@ -50,7 +50,7 @@ export interface HydraStudioPanelProps {
     fileName?: string | undefined;
 }
 
-export function HydraStudioPanel({ source, onEdit, fileName, packs = [], configSchemas = {} }: HydraStudioPanelProps) {
+export function HydraStudioPanel({ source, onEdit, packs = [], configSchemas = {} }: HydraStudioPanelProps) {
     const [selection, setSelection] = useState<PathSegment[]>(['project']);
 
     const { model, diagnostics, plan } = useMemo(() => {
@@ -100,7 +100,7 @@ export function HydraStudioPanel({ source, onEdit, fileName, packs = [], configS
 
     return (
         <Box sx={{ display: 'flex', height: '100%', minHeight: 0, fontSize: 13 }}>
-            <Box sx={{ width: 210, borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>
+            <Box sx={{ width: 150, flexShrink: 0, borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>
                 <Nav title="Projekt"
                      items={[{ key: 'project', path: ['project'] }]}
                      selection={selection} onSelect={setSelection} />
@@ -120,20 +120,28 @@ export function HydraStudioPanel({ source, onEdit, fileName, packs = [], configS
             </Box>
 
             <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                        <Typography variant="subtitle2">{fileName ?? 'projekt'}</Typography>
-                        <Chip size="small" label={`${plan.projectName} ${plan.projectVersion}`} />
-                        {plan.defaultTarget && (
-                            <Chip size="small" variant="outlined" label={`domyślnie: ${plan.defaultTarget}`} />
-                        )}
-                        <Box sx={{ flex: 1 }} />
-                        {errors.length > 0 && <Chip size="small" color="error" label={`błędy: ${errors.length}`} />}
-                        {warnings.length > 0 && (
-                            <Chip size="small" color="warning" label={`ostrzeżenia: ${warnings.length}`} />
-                        )}
-                    </Stack>
-                </Box>
+                {/* Nazwa pliku jest na zakładce edytora — drugi raz w panelu
+                    tylko zabierałaby miejsce. Zostaje to, czego zakładka nie
+                    pokazuje: wersja projektu, cel domyślny i liczba zgłoszeń. */}
+                <Stack direction="row" spacing={1}
+                       sx={{ alignItems: 'center', px: 1.5, py: 0.75,
+                             borderBottom: 1, borderColor: 'divider' }}>
+                    <Chip size="small" label={`${plan.projectName} ${plan.projectVersion}`}
+                          sx={{ height: 18 }} />
+                    {plan.defaultTarget && (
+                        <Chip size="small" variant="outlined" sx={{ height: 18 }}
+                              label={`domyślnie: ${plan.defaultTarget}`} />
+                    )}
+                    <Box sx={{ flex: 1 }} />
+                    {errors.length > 0 && (
+                        <Chip size="small" color="error" sx={{ height: 18 }}
+                              label={`błędy: ${errors.length}`} />
+                    )}
+                    {warnings.length > 0 && (
+                        <Chip size="small" color="warning" sx={{ height: 18 }}
+                              label={`ostrzeżenia: ${warnings.length}`} />
+                    )}
+                </Stack>
 
                 <Box sx={{ flex: 1, overflowY: 'auto', px: 2, py: 1.5 }}>
                     {componentForm ? (
@@ -157,13 +165,6 @@ export function HydraStudioPanel({ source, onEdit, fileName, packs = [], configS
                         : <Typography color="text.secondary">Wybierz sekcję po lewej.</Typography>}
                 </Box>
 
-                {diagnostics.length > 0 && (
-                    <Box sx={{ maxHeight: 160, overflowY: 'auto', borderTop: 1, borderColor: 'divider', p: 1 }}>
-                        {diagnostics.map((d, index) => (
-                            <DiagnosticRow key={index} diagnostic={d} onGo={setSelection} />
-                        ))}
-                    </Box>
-                )}
             </Box>
         </Box>
     );
@@ -292,30 +293,6 @@ function Field({ field, onEdit }: { field: FormField; onEdit: HydraStudioPanelPr
     );
 }
 
-function DiagnosticRow({ diagnostic, onGo }: {
-    diagnostic: Diagnostic;
-    onGo(path: PathSegment[]): void;
-}) {
-    const severity = diagnostic.severity === 'error' ? 'error'
-                   : diagnostic.severity === 'warning' ? 'warning' : 'info';
-    // Kliknięcie przenosi do sekcji, której dotyczy zgłoszenie — bez tego
-    // panel byłby listą pretensji bez drogi do naprawy.
-    const target = diagnostic.path.split('.').slice(0, 2);
-
-    return (
-        <Alert severity={severity} variant="outlined" sx={{ py: 0, mb: 0.5, cursor: 'pointer' }}
-               onClick={() => target.length > 0 && onGo(target)}>
-            <Typography variant="caption" component="div">
-                <strong>{diagnostic.path}</strong> — {diagnostic.message}
-            </Typography>
-            {diagnostic.hint && (
-                <Typography variant="caption" component="div" sx={{ opacity: 0.75 }}>
-                    → {diagnostic.hint}
-                </Typography>
-            )}
-        </Alert>
-    );
-}
 
 /** Wartość pod ścieżką w modelu — do wyciągnięcia konfiguracji układu. */
 function valueAtPath(model: unknown, path: readonly PathSegment[]): unknown {

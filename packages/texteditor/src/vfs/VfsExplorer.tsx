@@ -492,23 +492,71 @@ export function VfsExplorer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPath, provider]);
 
+  /**
+   * Kontener drzewa — potrzebny, żeby przewinąć do pozycji zaznaczonej
+   * z zewnątrz (aktywna zakładka edytora). Bez tego plik otwarty z innego
+   * miejsca jest wprawdzie zaznaczony, ale zostaje poza widocznym obszarem
+   * i wygląda, jakby eksplorator go nie zauważył.
+   */
+  const treeScrollRef = useRef<HTMLDivElement | null>(null);
+
   // Sync tree selection when externalSelectedPath changes (e.g. active editor tab)
   useEffect(() => {
     if (!externalSelectedPath) return;
-    setSelectedItems([externalSelectedPath]);
+    let cancelled = false;
 
-    // Expand all ancestor directories so the item is visible
-    const segments = externalSelectedPath.split('/').filter(Boolean);
-    const toExpand: string[] = [];
-    for (let i = 1; i <= segments.length - 1; i++) {
-      toExpand.push('/' + segments.slice(0, i).join('/'));
-    }
-    if (toExpand.length > 0) {
-      tree.setExpandedItems(prev => {
-        const set = new Set([...prev, ...toExpand]);
-        return [...set];
-      });
-    }
+    /**
+     * Odsłonięcie pozycji: doczytanie gałęzi, zaznaczenie, przewinięcie.
+     *
+     * Kolejność ma znaczenie i to na niej wcześniej się potykało. Samo
+     * `setExpandedItems` oznacza katalogi jako rozwinięte, ale **nie pobiera
+     * ich zawartości** — drzewo ładuje dzieci na żądanie. Bez doczytania węzeł
+     * pliku w ogóle nie powstaje, więc nie ma czego zaznaczyć ani przewinąć,
+     * a wygląda to jak brak reakcji eksploratora.
+     */
+    const reveal = async (): Promise<void> => {
+      const parts = normalize(externalSelectedPath).split('/').filter(Boolean);
+      const dirs: string[] = [];
+      for (let i = 1; i < parts.length; i++) dirs.push('/' + parts.slice(0, i).join('/'));
+
+      // Od najpłytszego: dziecko nie istnieje, dopóki rodzic nie jest wczytany.
+      for (const dir of dirs) {
+        if (cancelled) return;
+        await tree.handleItemExpansionToggle(null, dir, true);
+      }
+      if (cancelled) return;
+
+      tree.setExpandedItems(prev => [...new Set([...prev, ...dirs])]);
+      setSelectedItems([externalSelectedPath]);
+
+      // Przewinięcie dopiero po tym, jak pozycja pojawi się w drzewie DOM.
+      // `nearest` przewija tylko wtedy, gdy trzeba — pozycja już widoczna
+      // zostaje na miejscu, zamiast skakać przy każdym przełączeniu zakładki.
+      let attempts = 0;
+      const scroll = (): void => {
+        if (cancelled) return;
+        const item = treeScrollRef.current?.querySelector('.MuiTreeItem-content[data-selected]');
+        if (item) {
+          item.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          try {
+            if (localStorage.getItem('HYDRA_DEBUG') === '1') {
+              console.log('[hydra] eksplorator: zaznaczono i przewinięto', externalSelectedPath);
+            }
+          } catch { /* brak localStorage */ }
+          return;
+        }
+        if (++attempts < 8) { requestAnimationFrame(scroll); return; }
+        try {
+          if (localStorage.getItem('HYDRA_DEBUG') === '1') {
+            console.warn('[hydra] eksplorator: nie znalazłem pozycji dla', externalSelectedPath,
+                         '— węzły w drzewie:', tree.items.length);
+          }
+        } catch { /* brak localStorage */ }
+      };
+      requestAnimationFrame(scroll);
+    };
+
+    void reveal();
 
     // Update breadcrumb path
     const node = findNode(tree.items, externalSelectedPath);
@@ -520,6 +568,8 @@ export function VfsExplorer({
     findProjectContext(externalSelectedPath, provider, projectCacheRef.current)
       .then(ctx => { if (projectDetectSeqRef.current === seq) setActiveProject(ctx); })
       .catch(() => {});
+
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalSelectedPath, provider]);
 
@@ -1203,6 +1253,7 @@ export function VfsExplorer({
 
         {/* ── Tree: fills wrapper, paddingTop pushes content below overlay toolbar ── */}
         <div
+          ref={treeScrollRef}
           className="vfs-tree-container"
           style={{ position: 'absolute', inset: 0, paddingTop: projectToolbarHeight }}
           onContextMenu={handleContainerContextMenu}

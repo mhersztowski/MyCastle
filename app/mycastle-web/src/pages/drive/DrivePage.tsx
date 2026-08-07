@@ -107,6 +107,7 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // VFS adapter MjdVfsLoader expects.
 import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
 import { createHydraStudioPlugin } from '@mhersztowski/hydra-studio';
+import { runHydraBuild } from './hydraBuild';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
 import { RemoteFS, CompositeFS, isPublicDrivePath, publicDriveUrl, PUBLIC_DRIVE_DIRS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
@@ -648,7 +649,10 @@ function isEditableTextFile(name: string, mime: string): boolean {
   // Same set of recognised extensions we'd highlight, minus the markdown
   // variants. Kept inline rather than via a Set so the literal stays a
   // single grep target.
-  return /^(json|jsonc|json5|map|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyi|xml|svg|xsd|xsl|html|htm|css|scss|less|yaml|yml|sh|bash|zsh|sql|c|h|cpp|cc|cxx|hpp|hh|hxx|ino|pde|java|kt|rs|go|rb|php|cs|fs|swift|dart|lua|r|pl|ini|cfg|toml|env|conf|dockerfile|gitignore|gitattributes)$/.test(ext);
+  // hydra/hsch/hcomp: pliki projektu frameworka Hydra. Są YAML-em, ale mają
+  // własne rozszerzenia, żeby wtyczka Hydra Studio mogła je rozpoznać —
+  // otwarcie w tym edytorze uruchamia jej interfejs obok zakładki tekstowej.
+  return /^(json|jsonc|json5|map|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyi|xml|svg|xsd|xsl|html|htm|css|scss|less|yaml|yml|hydra|hsch|hcomp|sh|bash|zsh|sql|c|h|cpp|cc|cxx|hpp|hh|hxx|ino|pde|java|kt|rs|go|rb|php|cs|fs|swift|dart|lua|r|pl|ini|cfg|toml|env|conf|dockerfile|gitignore|gitattributes)$/.test(ext);
 }
 
 // Lekkie czyszczenie markdown wyeksportowanego z Notion: dekoduje %20 w lokalnych
@@ -1007,9 +1011,13 @@ export default function DrivePage(): React.JSX.Element {
    * tekstu: formularz i zakładka tekstowa patrzą wtedy na ten sam model,
    * a cofanie działa krok po kroku.
    *
-   * Paczki, schemat i budowanie zostają na razie niepodłączone — wymagają
-   * dostępu do plików projektu i do środowiska budowania, których przeglądarka
-   * nie ma. Panel projektu, walidacja i biblioteka komponentów działają bez nich.
+   * Budowanie idzie przez sesję terminala (`hydraBuild.ts`) — backend nie ma
+   * punktu uruchamiającego polecenia, a kanał terminala już istnieje i już jest
+   * uwierzytelniany biletem. Wynik leci przy okazji strumieniem, więc panel
+   * Kompilacja pokazuje postęp, a nie tylko wynik końcowy.
+   *
+   * Paczki i schemat zostają niepodłączone — wymagają czytania plików obok
+   * projektu. Panel projektu, walidacja i biblioteka komponentów działają bez nich.
    */
   const hydraStudioPlugin = useMemo(() => createHydraStudioPlugin({
     models: {
@@ -1019,7 +1027,18 @@ export default function DrivePage(): React.JSX.Element {
         return model ?? undefined;
       },
     },
-  }), []);
+    async runBuild(request, onLine) {
+      // Treść bierzemy z modelu edytora, a nie z dysku: budujemy to, co widać
+      // na ekranie, łącznie z niezapisanymi jeszcze zmianami.
+      const model = monaco.editor.getModels()
+        .find((m) => m.uri.path === request.file);
+      const source = model?.getValue() ?? '';
+
+      // Wiersze trafiają do panelu na bieżąco; pełny wynik i tak wraca na końcu,
+      // żeby wtyczka mogła go rozebrać na podsumowanie.
+      return runHydraBuild(request, userName, source, onLine);
+    },
+  }), [userName]);
 
   const driveExtraPlugins = useMemo(
     () => [

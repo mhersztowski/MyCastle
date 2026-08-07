@@ -17,7 +17,7 @@ uporządkowała książka.
 Definicja jest **cytatem z tekstu** ze strony, którą wskazuje skorowidz — nie
 streszczeniem. Numery stron przepisane ze skorowidza.
 
-Przeniesione: 1-1 (s. 13–14), 1-2 (s. 14–15), 1-3 (s. 15–18), 1-4 (s. 18–20), 1-5 (s. 20–22) oraz Pytania (s. 23–24) i Zadania (s. 24–25) — **cały rozdział 1**; 2-1 (s. 26–27), 2-2 (s. 27–28), 2-3 (s. 28–33), 2-4 (s. 33–37), 2-5 (s. 37–38) — **cały rozdział 2**; 3-1 (s. 43) … 3-11 (s. 59–60) wraz z Pytaniami i Zadaniami — **cały rozdział 3**; 4-1 (s. 68–69), 4-2 (s. 69–70), 4-3 (s. 70–74), 4-4 (s. 74–78), 4-5 (s. 79–81); 15-1 (s. 344–346), 15-2 (s. 347–350), 15-3 (s. 350–354),
+Przeniesione: 1-1 (s. 13–14), 1-2 (s. 14–15), 1-3 (s. 15–18), 1-4 (s. 18–20), 1-5 (s. 20–22) oraz Pytania (s. 23–24) i Zadania (s. 24–25) — **cały rozdział 1**; 2-1 (s. 26–27), 2-2 (s. 27–28), 2-3 (s. 28–33), 2-4 (s. 33–37), 2-5 (s. 37–38) — **cały rozdział 2**; 3-1 (s. 43) … 3-11 (s. 59–60) wraz z Pytaniami i Zadaniami — **cały rozdział 3**; 4-1 (s. 68–69), 4-2 (s. 69–70), 4-3 (s. 70–74), 4-4 (s. 74–78), 4-5 (s. 79–81), 4-6 (s. 81–83); 15-1 (s. 344–346), 15-2 (s. 347–350), 15-3 (s. 350–354),
 15-4 (s. 355–358), 15-5 (s. 358–364), 15-6 (s. 364–367), 15-7 (s. 367–369),
 15-8 (s. 369–371), 15-9 (s. 372–373), 15-10 (s. 373–375) — **cały rozdział 15**.
 Podrozdziały 15-6 i 15-7 nie wniosły
@@ -557,6 +557,16 @@ Przyspieszenie styczne
   styczna do krzywej w danym punkcie.
 @source 4-5, s. 79 (skorowidz: „przyspieszenie — styczne 79, 80")
 @aka przyspieszeniem stycznym, przyspieszenia stycznego
+```
+
+```term:rh1-poj-predkosc-wzgledna
+Prędkość względna
+@definition Prędkość v przedmiotu względem układu S jest sumą geometryczną
+  prędkości v′ tego przedmiotu względem układu S′ oraz prędkości u układu S′
+  względem układu S. Prędkości mierzone przez dwóch obserwatorów poruszających
+  się względem siebie zawsze różnią się o prędkość względną tych obserwatorów.
+@source 4-6, s. 82 (skorowidz: „prędkość — względna 81 i n.")
+@aka prędkością względną, prędkości względnej
 ```
 
 ## Rozdział 15. Drgania

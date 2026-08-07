@@ -23,7 +23,7 @@ import {
 } from '../model';
 import type {
     BuildSummary, BusEvent, ComponentDefinition, LogLine, PackManifest, PathSegment,
-    Schematic, TargetPlan, VcdChange,
+    Schematic, Speed, TargetPlan, VcdChange,
 } from '../model';
 
 /**
@@ -46,8 +46,8 @@ const BottomPanelLazy = lazy(async () => ({
 const SchematicCanvasLazy = lazy(async () => ({
     default: (await import('./SchematicCanvas')).SchematicCanvas,
 }));
-const HydraStudioPanelLazy = lazy(async () => ({
-    default: (await import('./HydraStudioPanel')).HydraStudioPanel,
+const HydraStudioIdeLazy = lazy(async () => ({
+    default: (await import('./HydraStudioIde')).HydraStudioIde,
 }));
 
 /** Zastępka na czas wczytywania panelu. */
@@ -94,7 +94,18 @@ export interface StudioPluginOptions {
      * Uruchomienie polecenia budowania. Wtyczka nie woła PlatformIO ani Dockera
      * sama — to zadanie środowiska budowania, które ma już własne wejście.
      */
-    runBuild?(request: { file: string; target?: string; upload: boolean }): Promise<string | void>;
+    runBuild?(
+        request: { file: string; target?: string; upload: boolean },
+        /**
+         * Kolejne wiersze wyniku, w trakcie budowania.
+         *
+         * Budowanie wsadu trwa minuty. Bez strumienia panel stoi pusty do
+         * samego końca i nie widać różnicy między „kompiluje" a „zawisło".
+         */
+        onLine: (line: string) => void,
+    ): Promise<string | void>;
+    /** Schematy konfiguracji paczek — z nich powstają formularze inspektora. */
+    loadConfigSchemas?(projectFile: string): Promise<Readonly<Record<string, unknown>>>;
     /** Schemat i definicje układów — wczytuje je host, tak jak paczki. */
     loadSchematic?(projectFile: string): Promise<{
         schematic: Schematic | undefined;
@@ -110,6 +121,29 @@ export interface StudioPluginOptions {
     onSaveVcd?(content: string): void;
     /** Zlecenie przebiegu na farmie — wykonuje go runner, nie przeglądarka. */
     runHilSuite?(suite: string): void;
+    /**
+     * Polecenia należące do gospodarza: cofanie, wyszukiwanie, formatowanie,
+     * paleta poleceń. Studio ich nie obsługuje, bo dotyczą edytora, a nie
+     * projektu — przekazuje je dalej pod nazwą z paska menu.
+     */
+    onHostAction?(action: string): void;
+}
+
+/**
+ * Tymczasowa diagnostyka, włączana z konsoli:
+ *
+ *     localStorage.HYDRA_DEBUG = '1'   // i przeładuj stronę
+ *
+ * Bez tego cisza. Wtyczka działa w przeglądarce, do której nie mam dostępu,
+ * więc bez śladu w konsoli każda hipoteza o tym, gdzie się urywa, jest
+ * zgadywaniem — a to kosztowało już kilka nietrafionych poprawek.
+ */
+function debug(...args: unknown[]): void {
+    try {
+        if (globalThis.localStorage?.getItem('HYDRA_DEBUG') === '1') {
+            console.log('[hydra]', ...args);
+        }
+    } catch { /* brak localStorage — trudno */ }
 }
 
 export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugin {
@@ -121,6 +155,19 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
     const listeners = new Set<(source: string) => void>();
 
     let packs: readonly PackManifest[] = [];
+    let configSchemas: Readonly<Record<string, unknown>> = {};
+
+    /**
+     * Cel wybrany przez użytkownika na pasku narzędzi gospodarza.
+     * Brak oznacza „domyślny z pliku projektu".
+     */
+    let selectedTarget: string | undefined;
+
+    /** Odroczone otwarcie zakładki — do anulowania przy wyłączeniu wtyczki. */
+    let pendingTabTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /** Gospodarz — zapamiętany przy aktywacji, bo `runAction` żyje poza nią. */
+    let host: HostApi | undefined;
     let definitions: Readonly<Record<string, ComponentDefinition>> = {};
     let schematic: Schematic | undefined;
 
@@ -131,8 +178,44 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
     const splitter = new LineSplitter();
     const monitorListeners = new Set<() => void>();
 
+    /**
+     * Wiersze dla panelu dolnego zakładki.
+     *
+     * Wynik budowania ma pierwszeństwo nad monitorem: po naciśnięciu „Buduj"
+     * człowiek patrzy na kompilację, a nie na to, co urządzenie mówiło minutę
+     * wcześniej. Gdy budowania nie było, pokazujemy telemetrię z monitora.
+     */
+    /** Odświeża zakładkę i monitor — wynik budowania zmienia oba. */
+    function republish(): void {
+        notifyMonitor();
+        publish(activeSource);
+    }
+
+    function bottomPanelLines(): readonly string[] {
+        if (buildOutput !== undefined) return buildOutput.split('\n');
+        return logs.toArray().map((l) =>
+            l.module ? `[${l.module}] ${l.text}` : l.text);
+    }
+
     let buildOutput: string | undefined;
     let buildSummary: BuildSummary | undefined;
+
+    /**
+     * Uchwyt gospodarza i połączenia z portem.
+     *
+     * Trzymane poza `activate`, bo sięgają po nie zarówno polecenia edytora,
+     * jak i pozycje z paska menu powłoki — a to dwie różne drogi do tej samej
+     * czynności.
+     */
+    let hostApi: HostApi | undefined;
+    let serial: { close(): void } | undefined;
+    let openSerialImpl: (() => { close(): void } | undefined) | undefined;
+
+    /** Przełącznik monitora: otwarcie portu blokuje go dla innych narzędzi. */
+    function toggleSerial(): void {
+        if (serial) { serial.close(); serial = undefined; return; }
+        serial = openSerialImpl?.();
+    }
 
     // Zegar symulacji powstaje przy otwarciu projektu, bo krok czasu jest
     // w pliku. Do tego czasu domyślna milisekunda wystarczy.
@@ -176,45 +259,198 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
         }
     }
 
+    /**
+     * Numer wydania stanu wtyczki.
+     *
+     * Sama treść pliku nie wystarcza jako sygnał odświeżenia: wynik budowania,
+     * wybrany cel czy wczytane paczki zmieniają to, co widać, nie ruszając ani
+     * jednego znaku w projekcie. `setState` z identycznym napisem React pomija,
+     * więc panel zostawał pusty mimo poprawnie wykonanej akcji.
+     */
+    let revision = 0;
+
     function publish(source: string): void {
         activeSource = source;
+        revision += 1;
         for (const listener of listeners) listener(source);
     }
 
     function StudioTab() {
-        const [source, setSource] = useState(activeSource);
+        // Obiekt, nie napis — nowa tożsamość przy każdym wydaniu wymusza
+        // przerysowanie także wtedy, gdy treść pliku się nie zmieniła.
+        const [state, setState] = useState(() => ({ source: activeSource, revision }));
+        const source = state.source;
 
         useEffect(() => {
-            listeners.add(setSource);
-            setSource(activeSource);
-            return () => { listeners.delete(setSource); };
+            const listener = (next: string): void => setState({ source: next, revision });
+            listeners.add(listener);
+            setState({ source: activeSource, revision });
+            return () => { listeners.delete(listener); };
         }, []);
 
         return (
             <Suspense fallback={<Loading />}>
-            <HydraStudioPanelLazy
-                source={source}
-                fileName={activeFile?.split('/').pop() ?? undefined}
-                onEdit={(path: PathSegment[], value) => {
-                    if (!activeFile) return false;
-                    const model = options.models.getModel(activeFile);
-                    if (!model) return false;
-
-                    const doc = HydraDocument.parse(source);
-                    // Pole, którego jeszcze nie ma w pliku, trzeba dopisać —
-                    // podmiana wartości działa tylko na tym, co już istnieje.
-                    const ok = doc.setScalar(path, value)
-                        || doc.insertKey(path.slice(0, -1), String(path[path.length - 1]), value);
-                    if (!ok) return false;
-
-                    return applyToModel(model, source, doc.pendingEdits());
-                }}
-            />
+                <HydraStudioIdeLazy
+                    source={source}
+                    fileName={activeFile?.split('/').pop()}
+                    packs={packs}
+                    definitions={definitions}
+                    schematic={schematic}
+                    configSchemas={configSchemas}
+                    target={selectedTarget}
+                    log={bottomPanelLines()}
+                    onEdit={(path, value) => editField(source, path, value)}
+                />
             </Suspense>
         );
     }
 
-    /** Wstawienie komponentu z biblioteki — wspólne dla panelu i poleceń. */
+    /**
+     * Zapis pola. Wydzielone z widoku, bo tę samą drogę wykorzystuje wstawianie
+     * komponentu: policz przedziały tekstu na modelu Hydry, nanieś na model
+     * Monaco. Formularz i zakładka tekstowa patrzą wtedy na to samo.
+     */
+    function editField(source: string, path: PathSegment[],
+                       value: string | number | boolean): boolean {
+        if (!activeFile) return false;
+        const model = options.models.getModel(activeFile);
+        if (!model) return false;
+
+        const doc = HydraDocument.parse(source);
+        // Pole, którego jeszcze nie ma w pliku, trzeba dopisać — podmiana
+        // wartości działa tylko na tym, co już istnieje.
+        const ok = doc.setScalar(path, value)
+            || doc.insertKey(path.slice(0, -1), String(path[path.length - 1]), value);
+        if (!ok) return false;
+
+        return applyToModel(model, source, doc.pendingEdits());
+    }
+
+    /**
+     * Wykonanie polecenia z paska menu albo narzędzi.
+     *
+     * Powłoka nie wie, jak zbudować wsad ani otworzyć port — to zadanie
+     * gospodarza, który ma dostęp do systemu plików i do środowiska budowania.
+     * Tutaj jest tylko rozdzielenie poleceń na te ścieżki.
+     */
+    async function runAction(action: string, argument?: unknown): Promise<void> {
+        if (!activeFile) {
+            // Cichy powrót zostawiał użytkownika z wrażeniem zepsutego przycisku.
+            host?.logger.warn(`polecenie ${action}: brak otwartego pliku .hydra`);
+            return;
+        }
+        debug('wykonuję:', action);
+
+        switch (action) {
+            case 'project.build':
+            case 'project.upload': {
+                const what = action === 'project.upload' ? 'Wgrywanie' : 'Budowanie';
+
+                /*
+                 * Brak zaplecza musi być widoczny.
+                 *
+                 * Wcześniej stało tu `options.runBuild?.(…)` — gdy gospodarz nie
+                 * podłączył budowania, wywołanie po cichu nic nie robiło i panel
+                 * zostawał pusty. Naciśnięcie „Buduj", po którym nie dzieje się
+                 * nic i nie wiadomo dlaczego, jest gorsze niż komunikat błędu.
+                 */
+                if (!options.runBuild) {
+                    buildOutput = [
+                        `${what} niedostępne: środowisko budowania nie jest podłączone.`,
+                        '',
+                        'Studio nie buduje samo — potrzebuje gospodarza, który uruchomi',
+                        'PlatformIO (libs/Hydra/docker/hydra.sh) i zwróci wynik.',
+                        'Podłącza się je przez opcję `runBuild` przy tworzeniu wtyczki.',
+                    ].join('\n');
+                    buildSummary = undefined;
+                    republish();
+                    return;
+                }
+
+                buildOutput = `${what}: ${activeFile.split('/').pop()}…`;
+                republish();
+
+                try {
+                    const streamed: string[] = [];
+                    const output = await options.runBuild({
+                        file: activeFile,
+                        ...(typeof argument === 'string' ? { target: argument } : {}),
+                        upload: action === 'project.upload',
+                    }, (line) => {
+                        streamed.push(line);
+                        buildOutput = streamed.join('\n');
+                        republish();
+                    });
+                    buildOutput = typeof output === 'string'
+                        ? output
+                        : (streamed.length > 0 ? streamed.join('\n') : `${what} zakończone bez wyniku.`);
+                    buildSummary = typeof output === 'string' ? parseBuildOutput(output) : undefined;
+                } catch (err) {
+                    buildOutput = `${what} nie powiodło się: ${String(err)}`;
+                    buildSummary = undefined;
+                }
+                republish();
+                return;
+            }
+
+            case 'project.buildAll': {
+                // Każdy cel osobno, po kolei: równoległe budowanie zajęłoby
+                // wszystkie rdzenie i tak, a wynik byłby nieczytelny.
+                const targets = buildPlan(HydraDocument.parse(activeSource).toJS()).targets;
+                for (const target of targets) {
+                    await options.runBuild?.(
+                        { file: activeFile, target: target.name, upload: false },
+                        (line) => { buildOutput = `${buildOutput ?? ''}${line}\n`; republish(); },
+                    );
+                }
+                return;
+            }
+
+            case 'sim.start':
+                if (typeof argument === 'number') clock.setSpeed(argument as Speed);
+                clock.start();
+                syncAnimation();
+                notifyMonitor();
+                return;
+
+            case 'sim.stop':
+                clock.stop();
+                syncAnimation();
+                notifyMonitor();
+                return;
+
+            case 'sim.record':
+                options.onSaveVcd?.(buildVcd());
+                return;
+
+            case 'sim.inject':
+                if (typeof argument === 'string') options.sendToDevice?.(argument);
+                return;
+
+            case 'tools.monitor':
+                toggleSerial();
+                return;
+
+            case 'tools.i2c':
+                options.sendToDevice?.('i2c scan');
+                return;
+
+            case 'tools.hil':
+                if (typeof argument === 'string') options.runHilSuite?.(argument);
+                return;
+
+            case 'file.save':
+                void hostApi?.commands.execute('workbench.action.files.save').catch(() => {});
+                return;
+
+            default:
+                // Polecenia bez własnej obsługi przekazujemy gospodarzowi —
+                // cofanie, wyszukiwanie i formatowanie należą do edytora.
+                options.onHostAction?.(action);
+        }
+    }
+
+        /** Wstawienie komponentu z biblioteki — wspólne dla panelu i poleceń. */
     function insertComponent(manifest: PackManifest): boolean {
         if (!activeFile) return false;
         const model = options.models.getModel(activeFile);
@@ -335,21 +571,44 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
         },
 
         activate(api: HostApi) {
+            host = api;
+          try {
             const openStudio = () => {
                 if (!activeFile) {
                     api.logger.warn('Hydra Studio: brak otwartego pliku .hydra');
                     return;
                 }
-                api.openEditorTab({
-                    uri: `hydra-studio://${activeFile}`,
-                    title: `Hydra: ${activeFile.split('/').pop()}`,
-                    component: StudioTab,
-                    toSide: true,
-                });
+                const target = activeFile;
+                debug('otwieram zakładkę Studia dla:', target);
+
+                /*
+                 * Odroczenie o jedno przejście pętli zdarzeń nie jest ozdobnikiem.
+                 *
+                 * Podwójne kliknięcie w drive obsługuje funkcja asynchroniczna:
+                 * wczytuje plik, budzi wtyczki (i wtedy trafiamy tutaj), a po
+                 * powrocie z `await` ustawia aktywną zakładkę na plik tekstowy.
+                 * Otwarcie Studia synchronicznie przegrywa ten wyścig — zakładka
+                 * powstaje, po czym natychmiast traci fokus i użytkownik widzi
+                 * goły YAML.
+                 *
+                 * W tej samej grupie co plik (`toSide: false`), bo Studio jest
+                 * innym widokiem tego samego dokumentu, a nie materiałem
+                 * do porównywania obok.
+                 */
+                pendingTabTimer = setTimeout(() => {
+                    pendingTabTimer = undefined;
+                    api.openEditorTab({
+                        uri: `hydra-studio://${target}`,
+                        title: `Hydra: ${target.split('/').pop()}`,
+                        component: StudioTab,
+                        toSide: false,
+                    });
+                }, 0);
             };
 
             disposables.push(
                 api.editor.onDidOpenDocument((uri, text) => {
+                    debug('otwarto dokument:', uri, '— czy .hydra:', uri.endsWith(HYDRA_EXTENSION));
                     if (!uri.endsWith(HYDRA_EXTENSION)) return;
                     activeFile = uri;
                     publish(text);
@@ -360,6 +619,11 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
 
                     // Paczki wczytujemy po otwarciu projektu, nie przy starcie
                     // edytora: zależą od pliku, a nie od sesji.
+                    void options.loadConfigSchemas?.(uri).then((loaded) => {
+                        configSchemas = loaded;
+                        publish(activeSource);
+                    }).catch(() => { /* brak schematów nie blokuje reszty */ });
+
                     void options.loadSchematic?.(uri).then((loaded) => {
                         schematic = loaded.schematic;
                         definitions = loaded.definitions;
@@ -399,58 +663,80 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                     else api.logger.info(text);
                 }),
 
-                api.commands.register('build', async (target?: unknown) => {
-                    if (!activeFile || !options.runBuild) return;
-                    const output = await options.runBuild({
-                        file: activeFile,
-                        ...(typeof target === 'string' ? { target } : {}),
-                        upload: false,
-                    });
-                    if (typeof output === 'string') {
-                        buildOutput = output;
-                        buildSummary = parseBuildOutput(output);
-                        notifyMonitor();
-                    }
-                }),
-
-                api.commands.register('upload', async (target?: unknown) => {
-                    if (!activeFile || !options.runBuild) return;
-                    await options.runBuild({
-                        file: activeFile,
-                        ...(typeof target === 'string' ? { target } : {}),
-                        upload: true,
-                    });
-                }),
             );
 
-            const command = (id: string) => `${api.pluginId}.${id}`;
+            /*
+             * Dwukropek, nie kropka.
+             *
+             * Host rejestruje polecenia wtyczek jako `pluginId:commandId`.
+             * Kropka dawała identyfikator, którego nikt nie zarejestrował,
+             * więc przycisk istniał, dawał się kliknąć i nic nie robił —
+             * bez błędu, bo wykonanie nieznanego polecenia niczego nie zgłasza.
+             */
+            const command = (id: string) => `${api.pluginId}:${id}`;
 
-            disposables.push(
-                api.ui.commandpalette.register({ command: command('open'), title: 'Otwórz edytor projektu', category: 'Hydra' }),
-                api.ui.commandpalette.register({ command: command('check'), title: 'Sprawdź plik projektu', category: 'Hydra' }),
-                api.ui.commandpalette.register({ command: command('build'), title: 'Buduj', category: 'Hydra' }),
-                api.ui.commandpalette.register({ command: command('upload'), title: 'Wgraj na urządzenie', category: 'Hydra' }),
-                api.ui.commandpalette.register({ command: command('schematic'), title: 'Otwórz schemat', category: 'Hydra' }),
-                api.ui.commandpalette.register({ command: command('monitor'), title: 'Monitor portu szeregowego', category: 'Hydra' }),
+            /**
+             * Pozycje menu z projektu interfejsu — bez „Plik" i „Edycja",
+             * bo te należą do edytora i dotyczą pliku, nie projektu.
+             *
+             * Edytor nie ma punktu rozszerzenia dla paska menu, więc trafiają
+             * do palety poleceń pod kategoriami odpowiadającymi nazwom menu.
+             * Nazwy zostają identyczne, żeby dało się je znaleźć po tym,
+             * czego się szuka.
+             */
+            const MENU: { id: string; title: string; category: string }[] = [
+                { id: 'open',            title: 'Otwórz edytor projektu',        category: 'Hydra · Widok' },
+                { id: 'schematic',       title: 'Schemat połączeń',              category: 'Hydra · Widok' },
+                { id: 'check',           title: 'Sprawdź plik projektu',         category: 'Hydra · Projekt' },
+                { id: 'project.build',   title: 'Buduj',                         category: 'Hydra · Projekt' },
+                { id: 'project.buildAll',title: 'Buduj wszystkie środowiska',    category: 'Hydra · Projekt' },
+                { id: 'project.upload',  title: 'Wgraj na urządzenie',           category: 'Hydra · Projekt' },
+                { id: 'sim.start',       title: 'Uruchom symulację',             category: 'Hydra · Symulacja' },
+                { id: 'sim.stop',        title: 'Zatrzymaj symulację',           category: 'Hydra · Symulacja' },
+                { id: 'sim.record',      title: 'Nagraj przebiegi (VCD)',        category: 'Hydra · Symulacja' },
+                { id: 'sim.inject',      title: 'Wstrzyknij zdarzenie na EventBus', category: 'Hydra · Symulacja' },
+                { id: 'tools.monitor',   title: 'Monitor portu szeregowego',     category: 'Hydra · Narzędzia' },
+                { id: 'tools.i2c',       title: 'Skaner I²C',                    category: 'Hydra · Narzędzia' },
+                { id: 'tools.hil',       title: 'Farma testowa (HIL)',           category: 'Hydra · Narzędzia' },
+            ];
 
-                api.ui.toolbar.register({
-                    id: 'hydra-build', label: 'Buduj wsad', icon: '⚙', command: command('build'),
-                    group: 'hydra', order: 10,
-                }),
-                api.ui.toolbar.register({
-                    id: 'hydra-upload', label: 'Wgraj na urządzenie', icon: '↑', command: command('upload'),
-                    group: 'hydra', order: 20,
-                }),
-            );
+            for (const entry of MENU) {
+                disposables.push(api.ui.commandpalette.register({
+                    command: command(entry.id), title: entry.title, category: entry.category,
+                }));
+            }
+
+            // Pasek narzędzi edytora: to, po co sięga się najczęściej.
+            const TOOLBAR: { id: string; label: string; icon: string; order: number }[] = [
+                { id: 'project.build',  label: 'Buduj wsad',           icon: '⚙', order: 10 },
+                { id: 'project.upload', label: 'Wgraj na urządzenie',  icon: '↑', order: 20 },
+                { id: 'sim.start',      label: 'Uruchom symulację',    icon: '▶', order: 30 },
+                { id: 'sim.stop',       label: 'Zatrzymaj symulację',  icon: '■', order: 40 },
+                { id: 'tools.monitor',  label: 'Monitor portu',        icon: '☰', order: 50 },
+            ];
+
+            for (const entry of TOOLBAR) {
+                disposables.push(api.ui.toolbar.register({
+                    id: `hydra-${entry.id}`, label: entry.label, icon: entry.icon,
+                    command: command(entry.id), group: 'hydra', order: entry.order,
+                }));
+            }
+
+            debug('zarejestrowano: poleceń', MENU.length, 'przycisków', TOOLBAR.length);
 
             // Pasek stanu pokazuje liczbę zgłoszeń — to samo, co panel na dole
             // interfejsu, ale widoczne także z zakładki tekstowej.
             // Monitor podłączamy dopiero na żądanie: otwarcie portu blokuje go
             // dla innych narzędzi, a nie każdy seans wymaga podglądu.
-            let serial: { close(): void } | undefined;
             disposables.push(api.commands.register('monitor', () => {
-                if (serial) { serial.close(); serial = undefined; return; }
-                serial = options.openSerial?.((chunk) => {
+                toggleSerial();
+                api.openEditorTab({
+                    uri: 'hydra-studio://panel', title: 'Panel', component: BottomTab,
+                });
+            }));
+
+            hostApi = api;
+            openSerialImpl = () => options.openSerial?.((chunk) => {
                     for (const line of splitter.push(chunk)) {
                         const at = Date.now();
                         // Zdarzenia idą do własnego strumienia, a nie do monitora:
@@ -462,9 +748,21 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                     }
                     notifyMonitor();
                 });
-                api.openEditorTab({
-                    uri: 'hydra-studio://panel', title: 'Panel', component: BottomTab,
-                });
+
+            // Pozycje z projektu interfejsu trafiają do slotów gospodarza:
+            // pasek narzędzi, pasek stanu i paleta poleceń. Studio nie rysuje
+            // drugiego kompletu obok tego, który edytor już ma.
+            for (const id of ['project.build', 'project.buildAll', 'project.upload',
+                              'sim.start', 'sim.stop', 'sim.record', 'sim.inject',
+                              'tools.monitor', 'tools.i2c', 'tools.hil'] as const) {
+                disposables.push(api.commands.register(id, (argument?: unknown) => {
+                    debug('polecenie:', id, '— plik:', activeFile ?? '(brak)');
+                    void runAction(id, argument);
+                }));
+            }
+
+            disposables.push(api.commands.register('target', (name?: unknown) => {
+                if (typeof name === 'string') { selectedTarget = name; publish(activeSource); }
             }));
 
             disposables.push(api.commands.register('schematic', () => {
@@ -494,9 +792,19 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                     tooltip: errors > 0 ? 'plik projektu zawiera błędy' : 'plik projektu jest poprawny',
                 });
             });
+          } catch (err) {
+            api.logger.error('rejestracja wtyczki przerwana', err);
+            throw err;
+          }
+
         },
 
         deactivate() {
+            if (pendingTabTimer !== undefined) {
+                clearTimeout(pendingTabTimer);
+                pendingTabTimer = undefined;
+            }
+
             if (animation) { clearInterval(animation); animation = undefined; }
             for (const disposable of disposables) disposable.dispose();
             disposables.length = 0;

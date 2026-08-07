@@ -7,6 +7,7 @@
  * wtyczka otwiera sama.
  */
 
+export { HydraStudioIde } from './HydraStudioIde';
 export { HydraStudioPanel } from './HydraStudioPanel';
 export { BottomPanel } from './BottomPanel';
 export { MonitorPanel } from './MonitorPanel';

@@ -27,6 +27,9 @@
     "build:ui-scene3d": "pnpm --filter @mhersztowski/ui-components-scene3d run build",
     "build:cad": "pnpm build:core-cad && pnpm build:layout && pnpm build:texteditor && pnpm build:cad-viewer && pnpm --filter cad-app run build",
     "build:cad-backend": "pnpm --filter cad-backend run build",
+    "build:monaco-backend": "pnpm --filter monaco-backend run build",
+    "build:monaco-web": "pnpm --filter monaco-web run build",
+    "build:monaco": "pnpm build:core && pnpm build:core-backend && pnpm build:texteditor && pnpm build:monaco-backend && pnpm build:monaco-web",
     "build:ui-core": "pnpm --filter @mhersztowski/ui-core run build",
     "build:cad-all": "pnpm build:core && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:ui-scene3d && pnpm build:texteditor && pnpm build:layout && pnpm build:cad-backend && pnpm build:cad",
     "build:cadall": "pnpm build:cad-all",
@@ -38,6 +41,9 @@
     "dev:cad": "concurrently -n cad-backend,cad-app -c cyan,green --kill-others \"pnpm dev:cad-backend\" \"pnpm dev:cad-app\"",
     "dev:cad-app": "pnpm --filter cad-app run dev",
     "dev:cad-backend": "pnpm --filter cad-backend run dev",
+    "dev:monaco": "concurrently -n monaco-backend,monaco-web -c magenta,green --kill-others \"pnpm dev:monaco-backend\" \"pnpm dev:monaco-web\"",
+    "dev:monaco-backend": "pnpm --filter monaco-backend run dev",
+    "dev:monaco-web": "pnpm --filter monaco-web run dev",
     "dev:trail-map": "pnpm --filter trail-map run dev",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -56,7 +62,9 @@
     "sync:db-pull": "./scripts/sync.sh db-pull",
     "sync:backup": "./scripts/sync.sh backup",
     "sync:backup-list": "./scripts/sync.sh backup-list",
-    "build:layout": "pnpm --filter @mhersztowski/layout run build"
+    "build:layout": "pnpm --filter @mhersztowski/layout run build",
+    "fix:node-pty": "bash scripts/fix-node-pty-permissions.sh",
+    "postinstall": "bash scripts/fix-node-pty-permissions.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

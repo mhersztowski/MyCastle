@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import type { Server as HttpServer, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Duplex } from 'stream';
@@ -77,8 +78,22 @@ export class TerminalService {
       ws.once('message', (raw: Buffer | string) => {
         clearTimeout(authTimeout);
 
+        // Rozbiór wiadomości osobno od uruchomienia sesji.
+        //
+        // Wcześniej jeden `try` obejmował oba kroki, więc awaria `pty.spawn`
+        // wracała do klienta jako „Invalid auth message" — komunikat wskazujący
+        // na zły format wiadomości, gdy w rzeczywistości format był poprawny,
+        // a nie dało się otworzyć powłoki. Diagnostyka szła wtedy w złą stronę.
+        let msg: { type?: string; ticket?: string };
         try {
-          const msg = JSON.parse(raw.toString());
+          msg = JSON.parse(raw.toString());
+        } catch {
+          ws.send(JSON.stringify({ type: 'error', data: 'Invalid auth message' }));
+          ws.close();
+          return;
+        }
+
+        try {
           if (msg.type !== 'auth' || !msg.ticket) {
             ws.send(JSON.stringify({ type: 'error', data: 'Expected auth message with ticket' }));
             ws.close();
@@ -96,8 +111,9 @@ export class TerminalService {
           // Consume ticket (one-time use)
           this.tickets.delete(msg.ticket);
           this.startTerminalSession(ws);
-        } catch {
-          ws.send(JSON.stringify({ type: 'error', data: 'Invalid auth message' }));
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ws.send(JSON.stringify({ type: 'error', data: `Terminal session failed: ${reason}` }));
           ws.close();
         }
       });
@@ -108,13 +124,38 @@ export class TerminalService {
     });
   }
 
+  /**
+   * Powłoka, którą da się uruchomić w tym środowisku.
+   *
+   * `process.env.SHELL` bierze się ze środowiska, w którym backend wystartował,
+   * i wcale nie musi istnieć tam, gdzie backend działa — pod systemd, w
+   * kontenerze albo pod innym użytkownikiem bywa pusty albo wskazuje powłokę,
+   * której w obrazie nie ma. `pty.spawn` kończy się wtedy `posix_spawnp failed`,
+   * bez podpowiedzi, czego brakuje. Sprawdzamy więc kandydatów po kolei.
+   */
+  private resolveShell(): string {
+    const candidates = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'];
+    for (const candidate of candidates) {
+      if (candidate && fs.existsSync(candidate)) return candidate;
+    }
+    throw new Error(
+      `nie znaleziono powłoki (sprawdzono: ${candidates.filter(Boolean).join(', ')})`,
+    );
+  }
+
+  /** Katalog startowy — musi istnieć, inaczej spawn pada tak samo jak bez powłoki. */
+  private resolveCwd(): string {
+    const home = process.env.HOME;
+    return home && fs.existsSync(home) ? home : '/';
+  }
+
   private startTerminalSession(ws: WebSocket): void {
-    const shell = process.env.SHELL || 'bash';
+    const shell = this.resolveShell();
     const term = pty.spawn(shell, [], {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
-      cwd: process.env.HOME || '/',
+      cwd: this.resolveCwd(),
       env: process.env as Record<string, string>,
     });
 
