@@ -65,8 +65,11 @@ describe('15-6 w czytniku', () => {
   });
 
   it('ten podrozdział nie dodaje haseł do słownika', () => {
-    // `ruch → po okręgu` czeka na rozdział 4, w którym książka je wprowadza.
-    expect(index.anchors.has('rh1-poj-ruch-po-okregu')).toBe(false);
+    // `ruch → po okręgu` ma w skorowidzu s. 364, ale książka definiuje je na
+    // s. 74 — hasło czekało więc na rozdział 4 i tam (4-4) zostało postawione.
+    // Tutaj sprawdzamy tylko, że 15-6 go nie stawia i się do niego nie odsyła.
+    expect(bodies['Slownik.md']).not.toContain('@source 15-6');
+    expect(bodies['15-6-okrag.md']).not.toContain('rh1-poj-ruch-po-okregu');
   });
 
   it('nic nie zostaje surowym zapisem', () => {

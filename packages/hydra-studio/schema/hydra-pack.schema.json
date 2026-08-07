@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform-minis.dev/schema/hydra-pack-1.json",
+  "title": "Manifest paczki Hydry (hydra-pack.yaml)",
+  "type": "object",
+  "description": "Manifest paczki Hydry",
+  "properties": {
+    "pack": {
+      "type": "string",
+      "description": "Nazwa paczki",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "version": {
+      "type": "string",
+      "description": "Wersja paczki",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+].+)?$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Krótki opis — pokazywany w bibliotece komponentów"
+    },
+    "provides": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "sense.driver",
+          "ui.widget",
+          "ui.display",
+          "motion.motor",
+          "motion.encoder",
+          "net.transport",
+          "core.extension",
+          "board"
+        ],
+        "description": "Rodzaj"
+      },
+      "description": "Czym paczka jest dla frameworka",
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "i2c",
+          "spi",
+          "uart",
+          "pwm",
+          "adc",
+          "dac",
+          "wifi",
+          "ble",
+          "ethernet",
+          "psram",
+          "sdcard",
+          "usb-host",
+          "usb-device",
+          "fpu",
+          "smp",
+          "can",
+          "rtc"
+        ],
+        "description": "Możliwość"
+      },
+      "description": "Wymagane możliwości płytki",
+      "uniqueItems": true
+    },
+    "upstream": {
+      "type": "object",
+      "description": "Prawdziwa zależność — przekazywana w dół do PlatformIO",
+      "properties": {
+        "lib_deps": {
+          "description": "Wpis albo lista wpisów lib_deps",
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "Pojedynczy wpis, np. \"adafruit/Adafruit BMP280 Library@^2.6\""
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "Wpis lib_deps"
+              },
+              "description": "Kilka wpisów"
+            }
+          ]
+        },
+        "build_flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Flaga"
+          },
+          "description": "Dodatkowe flagi kompilacji"
+        }
+      },
+      "additionalProperties": false
+    },
+    "adapter": {
+      "type": "string",
+      "description": "Plik adaptera nad interfejsem Hydry"
+    },
+    "component": {
+      "type": "string",
+      "description": "Symbol i wyprowadzenia dla edytora schematów",
+      "pattern": "\\.hcomp$"
+    },
+    "config_schema": {
+      "type": "string",
+      "description": "Schemat konfiguracji — z niego powstaje formularz w inspektorze",
+      "pattern": "\\.schema\\.json$"
+    },
+    "sim": {
+      "type": "string",
+      "description": "Model symulacji"
+    },
+    "defaults": {
+      "type": "object",
+      "description": "Wartości domyślne konfiguracji",
+      "additionalProperties": {
+        "description": "Wartość",
+        "anyOf": [
+          {
+            "type": "string",
+            "description": "Tekst"
+          },
+          {
+            "type": "boolean",
+            "description": "Wartość logiczna"
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "pack",
+    "version",
+    "provides"
+  ]
+}

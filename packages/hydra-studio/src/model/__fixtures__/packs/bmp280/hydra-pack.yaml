@@ -1,0 +1,28 @@
+# Paczka Hydry: czujnik ciśnienia i temperatury BMP280.
+#
+# Manifest jest cienki celowo — pobieraniem biblioteki producenta, wersjami
+# i pamięcią podręczną zajmuje się PlatformIO. Tutaj jest tylko to, czego
+# żaden istniejący format nie spina: adapter, komponent do schematu, schemat
+# konfiguracji dla inspektora i model do symulacji.
+
+pack: bmp280
+version: 1.2.0
+description: Ciśnienie i temperatura, I²C lub SPI
+
+provides: [sense.driver]
+
+# Czego paczka potrzebuje od płytki. Oś podziału to możliwości, nie rodzina
+# układu — czujnik I²C działa wszędzie, gdzie jest I²C.
+requires: [i2c]
+
+upstream:
+  lib_deps: "adafruit/Adafruit BMP280 Library@^2.6"
+
+adapter: src/Bmp280Adapter.cpp
+component: bmp280.hcomp
+config_schema: bmp280.schema.json
+sim: models/atmosphere.lua
+
+defaults:
+  address: "0x76"
+  mode: normal

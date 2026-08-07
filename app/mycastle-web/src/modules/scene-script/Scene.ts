@@ -77,7 +77,24 @@ async function pobierzPoHttp(h: SceneHost, url: string, jakoVfs = false): Promis
     throw new Error(`Serwer odpowiedział ${odpowiedz.status} ${odpowiedz.statusText} na „${read}".`);
   }
 
-  return trescZOdpowiedzi(await odpowiedz.text());
+  const tekst = await odpowiedz.text();
+
+  /*
+    Serwer aplikacji na nieznanej trasie oddaje `index.html` ze statusem 200 —
+    tak zachowuje się każda strona z routingiem po stronie klienta. Bez tego
+    sprawdzenia użytkownik dostawał „Unexpected token '<'" z wnętrza
+    `JSON.parse`, co nie mówi ani gdzie, ani dlaczego.
+  */
+  if (/^\s*<(!doctype|html)\b/i.test(tekst)) {
+    throw new Error(
+      `Adres „${read}" zwrócił stronę HTML, nie plik sceny. `
+      + 'Adres `/open/…` otwiera edytor z projektem — pliku szukaj pod ścieżką bez `/open/`, '
+      + 'a żeby sięgnąć do VFS tego serwera, dodaj opcję: '
+      + "Scene.load(adres, { vfs: true }).",
+    );
+  }
+
+  return trescZOdpowiedzi(tekst);
 }
 
 function wymagajHosta(): SceneHost {

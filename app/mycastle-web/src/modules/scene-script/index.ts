@@ -22,3 +22,5 @@ export { rodzajZeSciezki, scenaZTresci, trescZeSceny, pustaScena } from './scene
 export { jestUrl, adresyVfs, trescZOdpowiedzi } from './sceneUrl';
 export type { ObslugiwanyRodzaj } from './sceneFiles';
 export { SCENE_SCRIPT_DTS } from './sceneGlobals';
+export { utworzHostaSceny, sciezkaBackendu } from './vfsHost';
+export type { OpcjeHostaSceny } from './vfsHost';

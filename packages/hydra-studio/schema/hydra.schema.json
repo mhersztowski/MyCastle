@@ -1,0 +1,1063 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform-minis.dev/schema/hydra-0.4.json",
+  "title": "Plik projektu Hydra (.hydra)",
+  "type": "object",
+  "description": "Plik projektu Hydra",
+  "properties": {
+    "hydra": {
+      "type": "string",
+      "description": "Wersja schematu pliku",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "project": {
+      "type": "object",
+      "description": "Metadane projektu",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nazwa projektu",
+          "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$"
+        },
+        "version": {
+          "type": "string",
+          "description": "Wersja projektu",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+].+)?$"
+        },
+        "description": {
+          "type": "string",
+          "description": "Krótki opis"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Imię i adres"
+          },
+          "description": "Autorzy"
+        },
+        "license": {
+          "type": "string",
+          "description": "Licencja"
+        },
+        "framework": {
+          "type": "string",
+          "description": "Wymagany zakres wersji frameworka, np. \">=0.4.2 <0.5\""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "targets": {
+      "type": "object",
+      "description": "Cele sprzętowe",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Cel sprzętowy — jedno środowisko budowania",
+        "properties": {
+          "mcu": {
+            "type": "string",
+            "enum": [
+              "esp32",
+              "esp32s2",
+              "esp32s3",
+              "esp32c3",
+              "esp32c6",
+              "rp2040",
+              "rp2350",
+              "stm32g4",
+              "stm32f4",
+              "stm32h7"
+            ],
+            "description": "Rodzina układu"
+          },
+          "board": {
+            "type": "string",
+            "description": "Plik pinów płytki, np. boards/rover_s3.hpp",
+            "pattern": "\\.hpp$"
+          },
+          "platformio": {
+            "type": "object",
+            "description": "Odwzorowanie na środowisko PlatformIO",
+            "properties": {
+              "board": {
+                "type": "string",
+                "description": "Identyfikator płytki w PlatformIO, np. esp32-s3-devkitc-1"
+              },
+              "f_cpu": {
+                "type": "integer",
+                "description": "Taktowanie rdzenia [Hz]",
+                "minimum": 1000000
+              },
+              "platform": {
+                "type": "string",
+                "description": "Wersja platformy, np. espressif32@7.0.1"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "board"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "i2c",
+                "spi",
+                "uart",
+                "pwm",
+                "adc",
+                "dac",
+                "wifi",
+                "ble",
+                "ethernet",
+                "psram",
+                "sdcard",
+                "usb-host",
+                "usb-device",
+                "fpu",
+                "smp",
+                "can",
+                "rtc"
+              ],
+              "description": "Możliwość"
+            },
+            "description": "Co ta płytka potrafi — patrz CAPABILITIES",
+            "uniqueItems": true
+          },
+          "memory": {
+            "type": "object",
+            "description": "Pamięć",
+            "properties": {
+              "psram": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "quad",
+                  "opi"
+                ],
+                "description": "Rodzaj pamięci PSRAM"
+              },
+              "flash": {
+                "type": "string",
+                "description": "Rozmiar pamięci Flash, np. 16MB",
+                "pattern": "^\\d+(?:KB|MB|GB)$"
+              },
+              "partitions": {
+                "type": "string",
+                "enum": [
+                  "single_app",
+                  "huge_app",
+                  "ota_2app",
+                  "ota_2app_small",
+                  "ota_2app_fat"
+                ],
+                "description": "Schemat partycji — nazwa logiczna, nie plik"
+              }
+            },
+            "additionalProperties": false
+          },
+          "smp": {
+            "type": "object",
+            "description": "Przydział tasków do rdzeni",
+            "properties": {
+              "pin_tasks": {
+                "type": "object",
+                "description": "Task → numer rdzenia",
+                "additionalProperties": {
+                  "type": "integer",
+                  "description": "Numer rdzenia",
+                  "minimum": 0,
+                  "maximum": 3
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "modules": {
+            "type": "object",
+            "description": "Nadpisania modułów tylko dla tego celu",
+            "additionalProperties": {
+              "description": "Włączenie, wyłączenie albo nadpisanie ustawień modułu",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "description": "Włącz lub wyłącz moduł w całości"
+                },
+                {
+                  "type": "boolean",
+                  "description": "Włącz lub wyłącz moduł w całości"
+                },
+                {
+                  "type": "object",
+                  "description": "Nadpisania wybranych ustawień modułu",
+                  "additionalProperties": {
+                    "description": "Wartość ustawienia"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "mcu"
+        ]
+      },
+      "properties": {
+        "default": {}
+      }
+    },
+    "modules": {
+      "type": "object",
+      "description": "Konfiguracja modułów frameworka",
+      "properties": {
+        "core": {
+          "type": "object",
+          "description": "Rdzeń: logowanie, magistrala zdarzeń, watchdog, shell",
+          "properties": {
+            "log": {
+              "type": "object",
+              "description": "Logowanie",
+              "properties": {
+                "default": {
+                  "type": "string",
+                  "enum": [
+                    "trace",
+                    "debug",
+                    "info",
+                    "warn",
+                    "error",
+                    "off"
+                  ],
+                  "description": "Domyślny poziom"
+                },
+                "per_module": {
+                  "type": "object",
+                  "description": "Poziom dla wybranego modułu",
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "trace",
+                      "debug",
+                      "info",
+                      "warn",
+                      "error",
+                      "off"
+                    ],
+                    "description": "Poziom"
+                  }
+                },
+                "sinks": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "uart0",
+                      "uart1",
+                      "ringbuf",
+                      "rtt",
+                      "usb",
+                      "mqtt"
+                    ],
+                    "description": "Ujście"
+                  },
+                  "description": "Gdzie trafiają logi",
+                  "uniqueItems": true
+                },
+                "ringbuf_kb": {
+                  "type": "integer",
+                  "description": "Rozmiar bufora cyklicznego [KB]",
+                  "minimum": 1,
+                  "maximum": 256
+                }
+              },
+              "additionalProperties": false
+            },
+            "eventbus": {
+              "type": "object",
+              "description": "Magistrala zdarzeń",
+              "properties": {
+                "queue_depth": {
+                  "type": "integer",
+                  "description": "Głębokość skrzynki odbiorczej",
+                  "minimum": 1,
+                  "maximum": 1024
+                },
+                "pool": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Pula",
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "description": "Rozmiar bufora [B]",
+                        "minimum": 1
+                      },
+                      "count": {
+                        "type": "integer",
+                        "description": "Liczba buforów",
+                        "minimum": 1
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "size",
+                      "count"
+                    ]
+                  },
+                  "description": "Pule buforów dla większych ładunków"
+                }
+              },
+              "additionalProperties": false
+            },
+            "watchdog": {
+              "type": "object",
+              "description": "Nadzorca",
+              "properties": {
+                "task_timeout_ms": {
+                  "type": "integer",
+                  "description": "Po tylu milisekundach bez oznaki życia task uznajemy za zawieszony [ms]",
+                  "minimum": 1
+                },
+                "hw": {
+                  "type": "boolean",
+                  "description": "Użyj sprzętowego watchdoga układu"
+                }
+              },
+              "additionalProperties": false
+            },
+            "shell": {
+              "type": "object",
+              "description": "Shell diagnostyczny",
+              "properties": {
+                "transports": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "usb",
+                      "uart",
+                      "ws",
+                      "telnet"
+                    ],
+                    "description": "Kanał"
+                  },
+                  "description": "Kanały dostępu",
+                  "uniqueItems": true
+                },
+                "history": {
+                  "type": "integer",
+                  "description": "Ile poleceń pamiętać",
+                  "minimum": 0,
+                  "maximum": 200
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "sense": {
+          "type": "object",
+          "description": "Czujniki",
+          "properties": {
+            "hub": {
+              "type": "object",
+              "description": "Odpytywanie",
+              "properties": {
+                "max_sensors": {
+                  "type": "integer",
+                  "description": "Ilu czujników najwyżej",
+                  "minimum": 1,
+                  "maximum": 64
+                },
+                "timestamp": {
+                  "type": "string",
+                  "enum": [
+                    "ms",
+                    "us"
+                  ],
+                  "description": "Rozdzielczość znacznika czasu"
+                }
+              },
+              "additionalProperties": false
+            },
+            "calibration_store": {
+              "type": "string",
+              "enum": [
+                "nvs",
+                "file",
+                "none"
+              ],
+              "description": "Gdzie trzymać kalibrację"
+            }
+          },
+          "additionalProperties": false
+        },
+        "net": {
+          "type": "object",
+          "description": "Sieć",
+          "properties": {
+            "profile": {
+              "type": "string",
+              "description": "Gotowy zestaw ustawień, np. mqtt-wifi"
+            },
+            "hostname": {
+              "type": "string",
+              "description": "Nazwa urządzenia; służy też za nazwę mDNS",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            "wifi": {
+              "type": "object",
+              "description": "Wi-Fi",
+              "properties": {
+                "credentials": {
+                  "type": "string",
+                  "description": "Skąd wziąć dane logowania — zwykle „secrets\""
+                },
+                "fallback_ap": {
+                  "type": "object",
+                  "description": "Punkt dostępowy uruchamiany, gdy nie uda się połączyć",
+                  "properties": {
+                    "ssid": {
+                      "type": "string",
+                      "description": "Nazwa sieci"
+                    },
+                    "timeout_s": {
+                      "type": "integer",
+                      "description": "Po ilu sekundach wyłączyć [s]",
+                      "minimum": 10
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "ssid"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "mqtt": {
+              "type": "object",
+              "description": "MQTT",
+              "properties": {
+                "broker": {
+                  "type": "string",
+                  "description": "Adres brokera, np. mqtts://mqtt.local:8883",
+                  "pattern": "^mqtts?:\\/\\/[^\\s]+$"
+                },
+                "base_topic": {
+                  "type": "string",
+                  "description": "Przedrostek tematów"
+                },
+                "lwt": {
+                  "type": "object",
+                  "description": "Testament — broker rozgłosi go, gdy urządzenie zamilknie",
+                  "properties": {
+                    "topic": {
+                      "type": "string",
+                      "description": "Temat"
+                    },
+                    "payload": {
+                      "type": "string",
+                      "description": "Treść"
+                    },
+                    "qos": {
+                      "type": "integer",
+                      "description": "Poziom dostarczenia",
+                      "minimum": 0,
+                      "maximum": 2
+                    },
+                    "retain": {
+                      "type": "boolean",
+                      "description": "Czy broker ma zatrzymać ostatnią wiadomość"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "topic"
+                  ]
+                },
+                "tls": {
+                  "type": "object",
+                  "description": "Szyfrowanie",
+                  "properties": {
+                    "ca": {
+                      "type": "string",
+                      "description": "Certyfikat urzędu certyfikacji w formacie PEM"
+                    },
+                    "client_cert": {
+                      "type": "string",
+                      "description": "Certyfikat urządzenia — uwierzytelnianie dwustronne"
+                    },
+                    "client_key": {
+                      "type": "string",
+                      "description": "Klucz urządzenia"
+                    },
+                    "insecure": {
+                      "type": "boolean",
+                      "description": "Wyłącz weryfikację tożsamości serwera — chroni tylko przed biernym podsłuchem"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "broker"
+              ]
+            },
+            "ota": {
+              "type": "object",
+              "description": "Aktualizacja przez sieć",
+              "properties": {
+                "channel": {
+                  "type": "string",
+                  "description": "Adres kanału aktualizacji"
+                },
+                "verify": {
+                  "type": "string",
+                  "description": "Sposób weryfikacji wsadu, np. ed25519:keys/ota_pub.pem"
+                },
+                "auto": {
+                  "type": "boolean",
+                  "description": "Aktualizuj samoczynnie zamiast czekać na polecenie"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "channel"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "ui": {
+          "type": "object",
+          "description": "Interfejs użytkownika",
+          "properties": {
+            "backend": {
+              "type": "string",
+              "enum": [
+                "hydra",
+                "lvgl9"
+              ],
+              "description": "Warstwa rysująca"
+            },
+            "theme": {
+              "type": "object",
+              "description": "Motyw",
+              "properties": {
+                "base": {
+                  "type": "string",
+                  "enum": [
+                    "dark",
+                    "light"
+                  ],
+                  "description": "Wariant"
+                },
+                "accent": {
+                  "type": "string",
+                  "description": "Kolor wyróżnienia",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                },
+                "scale": {
+                  "type": "number",
+                  "description": "Skala interfejsu",
+                  "minimum": 0.5,
+                  "maximum": 4
+                }
+              },
+              "additionalProperties": false
+            },
+            "screens": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "Nazwa klasy ekranu"
+              },
+              "description": "Ekrany aplikacji",
+              "uniqueItems": true
+            },
+            "home": {
+              "type": "string",
+              "description": "Ekran pokazywany po starcie"
+            }
+          },
+          "additionalProperties": false
+        },
+        "motion": {
+          "type": "object",
+          "description": "Napęd",
+          "properties": {
+            "kinematics": {
+              "type": "object",
+              "description": "Model ruchu",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "enum": [
+                    "differential",
+                    "ackermann",
+                    "mecanum",
+                    "tank"
+                  ],
+                  "description": "Rodzaj napędu"
+                },
+                "wheel_mm": {
+                  "type": "number",
+                  "description": "Średnica koła [mm]",
+                  "minimum": 1
+                },
+                "track_mm": {
+                  "type": "number",
+                  "description": "Rozstaw kół [mm]",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "model"
+              ]
+            },
+            "control": {
+              "type": "object",
+              "description": "Pętla regulacji",
+              "properties": {
+                "period_us": {
+                  "type": "integer",
+                  "description": "Okres pętli [µs]",
+                  "minimum": 100,
+                  "maximum": 100000
+                },
+                "deadline_policy": {
+                  "type": "object",
+                  "description": "Reakcja na przekroczenie terminu",
+                  "properties": {
+                    "miss_limit": {
+                      "type": "integer",
+                      "description": "Ile spóźnień z rzędu wolno",
+                      "minimum": 1
+                    },
+                    "on_breach": {
+                      "type": "string",
+                      "enum": [
+                        "ignore",
+                        "degrade",
+                        "stop",
+                        "reboot"
+                      ],
+                      "description": "Co zrobić po przekroczeniu progu"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "safety": {
+              "type": "object",
+              "description": "Łańcuch bezpieczeństwa",
+              "properties": {
+                "estop": {
+                  "type": "object",
+                  "description": "Zatrzymanie awaryjne",
+                  "properties": {
+                    "gpio": {
+                      "type": "string",
+                      "description": "Pin, np. Pin.EStop"
+                    },
+                    "active": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "high"
+                      ],
+                      "description": "Stan aktywny"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "gpio"
+                  ]
+                },
+                "cmd_watchdog_ms": {
+                  "type": "integer",
+                  "description": "Brak nowego zadania przez ten czas zatrzymuje napęd [ms]",
+                  "minimum": 10
+                },
+                "current_limit_a": {
+                  "type": "number",
+                  "description": "Próg prądowy [A]",
+                  "minimum": 0.1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "ota": {
+          "type": "object",
+          "description": "Aktualizacja wsadu",
+          "properties": {
+            "channel": {
+              "type": "string",
+              "description": "Adres kanału aktualizacji"
+            },
+            "verify": {
+              "type": "string",
+              "description": "Sposób weryfikacji"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "Aktualizuj samoczynnie"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "Paczki Hydry używane przez projekt",
+      "additionalProperties": {
+        "description": "Wersja albo pełny opis źródła",
+        "anyOf": [
+          {
+            "type": "string",
+            "description": "Zakres wersji, np. \"^1.2.0\""
+          },
+          {
+            "type": "object",
+            "description": "Źródło paczki",
+            "properties": {
+              "version": {
+                "type": "string",
+                "description": "Zakres wersji"
+              },
+              "path": {
+                "type": "string",
+                "description": "Katalog w repozytorium"
+              },
+              "git": {
+                "type": "string",
+                "description": "Adres repozytorium"
+              },
+              "ref": {
+                "type": "string",
+                "description": "Gałąź, znacznik albo commit"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "description": "Sprzęt",
+      "properties": {
+        "schematic": {
+          "type": "string",
+          "description": "Plik schematu",
+          "pattern": "\\.hsch$"
+        },
+        "codegen": {
+          "type": "object",
+          "description": "Generowanie ze schematu",
+          "properties": {
+            "boards_header": {
+              "type": "boolean",
+              "description": "Twórz boards/*.hpp przy zapisie schematu"
+            },
+            "fail_on_erc": {
+              "type": "boolean",
+              "description": "Błąd reguł elektrycznych zatrzymuje budowę"
+            }
+          },
+          "additionalProperties": false
+        },
+        "buses": {
+          "type": "object",
+          "description": "Magistrale",
+          "additionalProperties": {
+            "type": "object",
+            "description": "Magistrala",
+            "properties": {
+              "hz": {
+                "type": "integer",
+                "description": "Częstotliwość zegara [Hz]",
+                "minimum": 1000
+              },
+              "baud": {
+                "type": "integer",
+                "description": "Prędkość transmisji [bit/s]",
+                "minimum": 300
+              },
+              "pullups": {
+                "type": "string",
+                "enum": [
+                  "internal",
+                  "external",
+                  "none"
+                ],
+                "description": "Rezystory podciągające"
+              },
+              "recovery": {
+                "type": "boolean",
+                "description": "Próbuj odblokować zawieszoną magistralę"
+              },
+              "role": {
+                "type": "string",
+                "description": "Rola magistrali, np. rs485"
+              },
+              "de_pin": {
+                "type": "string",
+                "description": "Pin kierunku transmisji dla RS-485"
+              }
+            },
+            "additionalProperties": false
+          },
+          "propertyNames": {
+            "pattern": "^(i2c|spi|uart|can)\\d$"
+          }
+        },
+        "components": {
+          "type": "object",
+          "description": "Układy na płytce",
+          "additionalProperties": {
+            "type": "object",
+            "description": "Układ",
+            "properties": {
+              "part": {
+                "type": "string",
+                "description": "Oznaczenie i miejsce, np. „BMP280 @ i2c0:0x76\""
+              },
+              "role": {
+                "type": "string",
+                "description": "Do czego służy, np. motion.encoder.left"
+              },
+              "pins": {
+                "type": "object",
+                "description": "Przypisanie wyprowadzeń",
+                "additionalProperties": {
+                  "type": "string",
+                  "description": "Nazwa pinu"
+                }
+              },
+              "hub": {
+                "description": "Ustawienia odpytywania — sprawdzane schematem z packa"
+              },
+              "pwm": {
+                "description": "Ustawienia PWM — sprawdzane schematem z packa"
+              },
+              "measure": {
+                "description": "Ustawienia pomiaru — sprawdzane schematem z packa"
+              },
+              "alerts": {
+                "description": "Progi alarmowe — sprawdzane schematem z packa"
+              }
+            },
+            "additionalProperties": true,
+            "required": [
+              "part"
+            ]
+          },
+          "propertyNames": {
+            "pattern": "^[a-z_][a-z0-9_]*$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "simulation": {
+      "type": "object",
+      "description": "Symulacja",
+      "properties": {
+        "engine": {
+          "type": "string",
+          "enum": [
+            "functional",
+            "qemu",
+            "renode"
+          ],
+          "description": "Silnik"
+        },
+        "timestep_us": {
+          "type": "integer",
+          "description": "Krok czasu [µs]",
+          "minimum": 1
+        },
+        "sources": {
+          "type": "object",
+          "description": "Skąd czujniki biorą dane",
+          "additionalProperties": {
+            "description": "Model źródła — zależny od packa"
+          }
+        },
+        "world": {
+          "type": "object",
+          "description": "Świat",
+          "properties": {
+            "physics": {
+              "type": "string",
+              "description": "Model fizyki"
+            },
+            "arena": {
+              "type": "string",
+              "description": "Plik areny"
+            }
+          },
+          "additionalProperties": false
+        },
+        "record": {
+          "type": "object",
+          "description": "Zapis przebiegów",
+          "properties": {
+            "vcd": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "Nazwa magistrali"
+              },
+              "description": "Magistrale do zapisania"
+            },
+            "eventbus": {
+              "type": "boolean",
+              "description": "Zapisuj zdarzenia"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "test": {
+      "type": "object",
+      "description": "Testy",
+      "properties": {
+        "host": {
+          "type": "object",
+          "description": "Poziom 1 — na maszynie, z atrapami sprzętu",
+          "properties": {
+            "env": {
+              "type": "string",
+              "description": "Środowisko"
+            },
+            "sanitizers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "address",
+                  "undefined",
+                  "thread",
+                  "leak"
+                ],
+                "description": "Kontrola"
+              },
+              "description": "Kontrole czasu wykonania",
+              "uniqueItems": true
+            },
+            "filter": {
+              "type": "string",
+              "description": "Które testy uruchamiać"
+            }
+          },
+          "additionalProperties": false
+        },
+        "target": {
+          "type": "object",
+          "description": "Poziom 2 — na układzie",
+          "properties": {
+            "envs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "Nazwa celu"
+              },
+              "description": "Cele",
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "hil": {
+          "type": "object",
+          "description": "Poziom 3 — na farmie sprzętowej",
+          "properties": {
+            "runner": {
+              "type": "string",
+              "description": "Nazwa runnera"
+            },
+            "fixtures": {
+              "type": "object",
+              "description": "Stanowisko dla celu",
+              "additionalProperties": {
+                "description": "Opis stanowiska"
+              }
+            },
+            "suites": {
+              "type": "object",
+              "description": "Zestawy testów",
+              "additionalProperties": {
+                "description": "Opis zestawu"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "secrets": {
+      "type": "object",
+      "description": "Sekrety",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Plik spoza repozytorium"
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Nazwa zmiennej",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "description": "Wymagane nazwy",
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "studio": {
+      "type": "object",
+      "description": "Ustawienia edytora — nie wpływają na wsad",
+      "properties": {},
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "hydra",
+    "project",
+    "targets"
+  ]
+}

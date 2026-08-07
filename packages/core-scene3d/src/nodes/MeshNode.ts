@@ -12,6 +12,14 @@ return geo;`;
 export interface BufferGeometryData {
   positions: number[];
   normals?: number[];
+  /**
+   * Współrzędne tekstury, po dwie na wierzchołek.
+   *
+   * Bez nich mapa koloru nie ma się na czym położyć — model wchodzi biały mimo
+   * poprawnie wczytanej tekstury, co wygląda na usterkę tekstury, a nie
+   * geometrii.
+   */
+  uvs?: number[];
   indices?: number[];
 }
 
@@ -114,6 +122,55 @@ export interface MaterialDescriptor {
    * (`resolveTextureSrc`) — rdzeń nie wie, skąd biorą się pliki.
    */
   texturePath?: string;
+
+  /**
+   * Pozostałe mapy PBR jako `data:`-URL.
+   *
+   * Osobno od `textureDataUrl`, bo mapa koloru jest tą jedną, którą ustawia się
+   * ręcznie w inspektorze; reszta przychodzi **z pliku** i tam ma zostać.
+   * Jedno pole na zbiór zamiast pięciu pól obok siebie: dołożenie kolejnej mapy
+   * nie każe wtedy ruszać modelu, serializacji i widoku naraz.
+   *
+   * Bez mapy normalnych model z sieci wygląda płasko — i to jest pierwsza
+   * rzecz, którą widać po imporcie, gdy jej brakuje.
+   */
+  maps?: MaterialMaps;
+
+  /**
+   * Jak nakładać teksturę — osobno od tego, **co** ona przedstawia.
+   *
+   * Plik potrafi żądać, żeby obraz powtórzył się na ścianie kilka razy; bez
+   * przeniesienia tego ustawienia współrzędne powyżej 1 pobierają piksel
+   * z brzegu i model wychodzi jednolity, choć tekstura wczytała się poprawnie.
+   *
+   * Jedno ustawienie na materiał, nie na każdą mapę z osobna: pliki praktycznie
+   * zawsze nakładają wszystkie mapy tego samego materiału tak samo, a pięć
+   * niezależnych zestawów byłoby pięcioma miejscami na tę samą informację.
+   */
+  textureSettings?: TextureSettings;
+}
+
+export type TextureWrap = 'clamp' | 'repeat' | 'mirror';
+
+/** Co dzieje się poza brzegiem tekstury i jak jest ona ułożona. */
+export interface TextureSettings {
+  wrapS?: TextureWrap;
+  wrapT?: TextureWrap;
+  /** Ile razy obraz mieści się w zakresie 0–1 współrzędnych. */
+  repeat?: [number, number];
+  offset?: [number, number];
+  /** glTF liczy współrzędne od górnego rogu i wymaga `false`. */
+  flipY?: boolean;
+}
+
+/** Mapy materiału inne niż kolor bazowy. */
+export interface MaterialMaps {
+  normal?: string;
+  roughness?: string;
+  metalness?: string;
+  emissive?: string;
+  /** Przesłonięcie otoczenia — wymaga drugiego zestawu UV. */
+  ao?: string;
 }
 
 export const DEFAULT_MATERIAL: MaterialDescriptor = {

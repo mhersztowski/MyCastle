@@ -1,0 +1,40 @@
+# Schemat łazika rover-01 — fragment z magistralą I²C i napędem.
+#
+# Format jest listą węzłów, nie rysunkiem: położenia symboli służą wyłącznie
+# do wyświetlania. Dzięki temu schemat czyta się w recenzji zmian i scala jak
+# każdy inny plik tekstowy.
+
+hsch: "0.1"
+
+sheet:
+  name: rover-01
+  grid_mm: 2.54
+
+components:
+  U1: { part: esp32-s3-devkitc-1, at: [40, 40] }
+  U2: { part: bmp280,             at: [120, 30] }
+  DS1: { part: ssd1306,           at: [120, 80] }
+  R1: { part: resistor, value: "4.7k", at: [100, 20] }
+  R2: { part: resistor, value: "4.7k", at: [108, 20] }
+
+nets:
+  3V3:
+    class: power
+    nodes: [U1.3V3, U2.VCC, DS1.VCC, R1.A, R2.A]
+  GND:
+    class: ground
+    nodes: [U1.GND, U2.GND, DS1.GND]
+  I2C0_SDA:
+    bus: i2c0
+    role: sda
+    nodes: [U1.IO8, U2.SDA, DS1.SDA, R1.B]
+  I2C0_SCL:
+    bus: i2c0
+    role: scl
+    nodes: [U1.IO9, U2.SCL, DS1.SCL, R2.B]
+  LED_STATUS:
+    nodes: [U1.IO48]
+    pin_name: StatusLed
+  MOT_L_PWM:
+    nodes: [U1.IO17]
+    pin_name: MotorLeftPwm

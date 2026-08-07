@@ -16,8 +16,9 @@ import { DjvuViewContent } from './DjvuView';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../modules/auth';
 import { QtUiSceneEditor, type QtUiFs } from '../../modules/qtui/QtUiSceneEditor';
-import { mqttClient, useMqtt } from '../../modules/mqttclient';
-import { ScenePanel, setSceneHost, SCENE_SCRIPT_DTS } from '../../modules/scene-script';
+import { useMqtt } from '../../modules/mqttclient';
+import { ScenePanel, setSceneHost, SCENE_SCRIPT_DTS, utworzHostaSceny } from '../../modules/scene-script';
+import { potrzebujeQt } from './potrzebneQt';
 import type { IScene } from '@mhersztowski/core-cad-viewer';
 import { readUserJson, writeUserJson } from '../../services/userJson';
 import {
@@ -105,6 +106,7 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // until the user actually opens a .mjd / .data.json file. RemoteFS is the
 // VFS adapter MjdVfsLoader expects.
 import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
+import { createHydraStudioPlugin } from '@mhersztowski/hydra-studio';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
 import { RemoteFS, CompositeFS, isPublicDrivePath, publicDriveUrl, PUBLIC_DRIVE_DIRS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
@@ -997,9 +999,34 @@ export default function DrivePage(): React.JSX.Element {
     () => (driveWorkspaceFs ? createCommentToolsPlugin(driveWorkspaceFs) : null),
     [driveWorkspaceFs],
   );
+  /**
+   * Hydra Studio — pliki `.hydra` otwierają się w interfejsie zamiast
+   * w zwykłym edytorze tekstu.
+   *
+   * Modele bierzemy wprost z Monaco, bo wtyczka nanosi zmiany przedziałami
+   * tekstu: formularz i zakładka tekstowa patrzą wtedy na ten sam model,
+   * a cofanie działa krok po kroku.
+   *
+   * Paczki, schemat i budowanie zostają na razie niepodłączone — wymagają
+   * dostępu do plików projektu i do środowiska budowania, których przeglądarka
+   * nie ma. Panel projektu, walidacja i biblioteka komponentów działają bez nich.
+   */
+  const hydraStudioPlugin = useMemo(() => createHydraStudioPlugin({
+    models: {
+      getModel: (uri: string) => {
+        const model = monaco.editor.getModels().find((m) => m.uri.toString() === uri
+          || m.uri.path === uri);
+        return model ?? undefined;
+      },
+    },
+  }), []);
+
   const driveExtraPlugins = useMemo(
-    () => (commentToolsPlugin ? [commentToolsPlugin] : undefined),
-    [commentToolsPlugin],
+    () => [
+      ...(commentToolsPlugin ? [commentToolsPlugin] : []),
+      hydraStudioPlugin,
+    ],
+    [commentToolsPlugin, hydraStudioPlugin],
   );
 
   /**
@@ -1080,14 +1107,14 @@ export default function DrivePage(): React.JSX.Element {
     // Scena wczytana przez `Scene.load` pokazuje się w panelu nad konsolą.
     // Host żyje tak długo jak przebieg: skrypt zatrzymany nie ma prawa dosypywać
     // scen do widoku po tym, jak użytkownik go przerwał.
-    setSceneHost({
-      readFile: async (path) => (await mqttClient.readFile(path))?.content ?? null,
-      writeFile: async (path, content) => { await mqttClient.writeFile(path, content); },
+    setSceneHost(utworzHostaSceny({
+      userName,
+      authHeaders,
       present: (scene, opis) => {
         if (session.stopped) return;
         setScenaSkryptu({ scene, path: opis.path });
       },
-    });
+    }));
     const session = { stopped: false, timers: [] as number[], subs: [] as Array<() => void> };
     browserSessionRef.current = session;
 
@@ -1207,6 +1234,14 @@ export default function DrivePage(): React.JSX.Element {
       const lit = await import('lit');
       g.Lit = lit;
       const qtBase = `/public/drive/users/${encodeURIComponent(currentUser?.name ?? userName)}/lit/qt`;
+      /*
+        Qt ładujemy tylko wtedy, gdy skrypt po nie sięga.
+
+        Te pliki leżą w katalogu użytkownika, więc twarde ładowanie ich przed
+        każdym uruchomieniem blokowało **wszystkie** skrypty każdemu, kto ich
+        u siebie nie ma — łącznie z takimi, które tylko czytają scenę.
+      */
+      const zQt = potrzebujeQt(code);
       const loadQtModule = async (file: string, sentinel: string): Promise<void> => {
         if (g[sentinel]) return;                       // already loaded this session
         try {
@@ -1216,12 +1251,14 @@ export default function DrivePage(): React.JSX.Element {
         }
         if (!g[sentinel]) throw new Error(`${file} załadowany, ale ${sentinel} nie pojawił się na globalThis`);
       };
-      await loadQtModule('qobject.module.js', 'QObject');  // must be first — qt.module.js reads globalThis.QObject/Signal
-      await loadQtModule('qt.module.js', 'QtCanvas');
-      // Final assertion so the script never starts with half-loaded Qt.
-      for (const need of ['QObject', 'Signal', 'QWidget', 'QLabel', 'QtCanvas', 'QVBoxLayout']) {
-        if (typeof g[need] !== 'function') {
-          throw new Error(`Klasa Qt "${need}" niedostępna po załadowaniu — sprawdź ${qtBase}/qt.module.js`);
+      if (zQt) {
+        await loadQtModule('qobject.module.js', 'QObject');  // must be first — qt.module.js reads globalThis.QObject/Signal
+        await loadQtModule('qt.module.js', 'QtCanvas');
+        // Final assertion so the script never starts with half-loaded Qt.
+        for (const need of ['QObject', 'Signal', 'QWidget', 'QLabel', 'QtCanvas', 'QVBoxLayout']) {
+          if (typeof g[need] !== 'function') {
+            throw new Error(`Klasa Qt "${need}" niedostępna po załadowaniu — sprawdź ${qtBase}/qt.module.js`);
+          }
         }
       }
       if (session.stopped) return;

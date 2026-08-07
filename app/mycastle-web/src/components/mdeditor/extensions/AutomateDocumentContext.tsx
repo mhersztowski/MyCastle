@@ -10,6 +10,7 @@ import { Aura, aura } from '../../../../../../packages/core/browser/aura/aura';
 import { createAutomateApi, createDisplay, type AutomateApi } from '../../../../../../packages/core/browser/api/api';
 import { createAuraPreviewHost } from '../../../modules/voiceactions/auraPreviewHost';
 import { prepareAutomateScript } from '../../../modules/voiceactions/auraScriptRuntime';
+import { Scene, isNode3D, isLayer, setSceneHost, utworzHostaSceny } from '../../../modules/scene-script';
 import { preloadLibrariesForCode } from './automateLibraries';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
@@ -387,6 +388,19 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         onUnavailable: (message) => api.log.warn(message),
       });
 
+      /*
+        Sceny CAD/3D: `import { Scene } from 'mycastle/scene'`.
+
+        Dostęp do plików idzie po REST, tym samym kanałem co reszta aplikacji —
+        blok bywa otwierany ze stron, które brokera MQTT nie zestawiają, a wtedy
+        `Scene.load` przewracało się na braku połączenia zamiast wczytać plik.
+      */
+      setSceneHost(utworzHostaSceny({
+        userName: userNameRef.current ?? '',
+        authHeaders: (): Record<string, string> => (tokenRef.current ? { Authorization: `Bearer ${tokenRef.current}` } : {}),
+        present: (_scena, opis) => api.log.info(`Wczytano scenę „${opis.path}" (${opis.kind}).`),
+      }));
+
       // Importy modułów środowiska usuwamy — symbole wchodzą przez hostScope.
       const wrappedScript = `const display = input.__display;\n${prepareAutomateScript(code).code}`;
       const result = await AutomateSandbox.execute(
@@ -397,7 +411,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         { __display: displayApi },
         variablesRef.current,
         undefined,
-        { ...host, Aura, aura },
+        { ...host, Aura, aura, Scene, isNode3D, isLayer },
       );
       // eslint-disable-next-line no-console
       console.log(`Result (${(performance.now() - tStart).toFixed(1)}ms):`, result);
@@ -489,6 +503,10 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         }
         return next;
       });
+    } finally {
+      // Host żyje tyle, co przebieg: blok zatrzymany nie ma prawa czytać plików
+      // po tym, jak użytkownik go przerwał.
+      setSceneHost(null);
     }
     // `blocks` removed from deps because we now read state via the functional
     // blocks read via blocksRef.current (latest), writes via functional

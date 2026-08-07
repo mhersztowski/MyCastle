@@ -1,5 +1,5 @@
 export { MeshNode } from './MeshNode';
-export type { GeometryType, GeometryDescriptor, MaterialDescriptor, MeshNodeData, BufferGeometryData } from './MeshNode';
+export type { GeometryType, GeometryDescriptor, MaterialDescriptor, MeshNodeData, BufferGeometryData, MaterialMaps, TextureSettings, TextureWrap } from './MeshNode';
 
 export { LightNode } from './LightNode';
 export type { LightType, LightNodeData } from './LightNode';

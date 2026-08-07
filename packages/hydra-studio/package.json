@@ -1,0 +1,75 @@
+{
+  "name": "@mhersztowski/hydra-studio",
+  "version": "0.1.0",
+  "description": "Hydra Studio — środowisko projektowe frameworka Hydra: model pliku .hydra, generatory plików budowania i wtyczka edytora otwierająca projekty w interfejsie",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./model": {
+      "import": {
+        "types": "./dist/model.d.ts",
+        "default": "./dist/model.js"
+      },
+      "require": {
+        "types": "./dist/model.d.cts",
+        "default": "./dist/model.cjs"
+      }
+    },
+    "./panels": {
+      "import": {
+        "types": "./dist/panels.d.ts",
+        "default": "./dist/panels.js"
+      },
+      "require": {
+        "types": "./dist/panels.d.cts",
+        "default": "./dist/panels.cjs"
+      }
+    }
+  },
+  "bin": {
+    "hydra": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "schema": "tsup && node scripts/emit-schema.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "peerDependencies": {
+    "@emotion/react": "^11.0.0",
+    "@emotion/styled": "^11.0.0",
+    "@mui/material": "^5.15.0 || ^6.0.0 || ^7.0.0",
+    "@xyflow/react": ">=12",
+    "monaco-editor": ">=0.44",
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.9.0",
+    "tsup": "^8.5.1",
+    "vitest": "^2.0.0"
+  },
+  "license": "MIT"
+}

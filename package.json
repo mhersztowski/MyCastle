@@ -12,6 +12,7 @@
     "build:core-backend": "pnpm --filter @mhersztowski/core-backend run build",
     "build:devtools": "pnpm --filter @mhersztowski/devtools run build",
     "build:texteditor": "pnpm --filter @mhersztowski/texteditor run build",
+    "build:hydra-studio": "pnpm --filter @mhersztowski/hydra-studio run build",
     "build:web-client": "pnpm --filter @mhersztowski/web-client run build",
     "build:sci-core": "pnpm --filter @mhersztowski/sci-core run build",
     "build:sci-blocks": "pnpm --filter @mhersztowski/sci-blocks run build",

@@ -58,4 +58,26 @@ describe('prepareAutomateScript', () => {
     expect(code).toBe(src);
     expect(strippedModules).toEqual([]);
   });
+
+  it('usuwa import scen — inaczej Automate wywraca się na składni', () => {
+    // Skrypt Automate idzie przez `new Function`, gdzie `import` jest błędem
+    // składni. Brak `mycastle/scene` na liście kończył się komunikatem
+    // „Cannot use import statement outside a module", niezwiązanym z treścią.
+    const { code, strippedModules } = prepareAutomateScript([
+      "import { Scene } from 'mycastle/scene';",
+      "const s = await Scene.load('drive/a.scene.json');",
+    ].join('\n'));
+
+    expect(strippedModules).toEqual(['mycastle/scene']);
+    expect(code).not.toContain('import');
+  });
+
+  it('nie rusza importów spoza środowiska', () => {
+    // Lepiej, żeby autor zobaczył błąd składni, niż żeby symbol po cichu
+    // został `undefined`.
+    const { strippedModules } = prepareAutomateScript("import { x } from 'jakas/biblioteka';\nx();");
+
+    expect(strippedModules).toEqual([]);
+  });
+
 });

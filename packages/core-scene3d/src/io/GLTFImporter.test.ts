@@ -7,7 +7,8 @@
  * atrapę.
  */
 import { describe, it, expect } from 'vitest';
-import { GLTFImporter } from './GLTFImporter';
+import * as THREE from 'three';
+import { GLTFImporter, opiszMaterial } from './GLTFImporter';
 import { MeshNode } from '../nodes/MeshNode';
 import { GroupNode } from '../nodes/GroupNode';
 
@@ -157,5 +158,90 @@ describe('import glTF', () => {
     const wynik = await GLTFImporter.importFromBuffer(puste, 'puste.gltf');
     expect(wynik.meshCount).toBe(0);
     expect(wynik.warnings.join(' ')).toMatch(/siatk/i);
+  });
+});
+
+/**
+ * Współrzędne tekstury.
+ *
+ * Bez nich mapa nie ma się na czym położyć — model wchodzi biały nawet wtedy,
+ * gdy tekstura przeszła poprawnie.
+ *
+ * **Czego tu nie ma:** modelu z obrazem osadzonym w pliku. Loader rozpakowuje
+ * taki obraz przez API przeglądarki (`self`, `createImageBitmap`), którego
+ * w Node nie ma, a jsdom nie dekoduje PNG — wczytywanie wisi do timeoutu.
+ * Samo przepisanie obrazu na zapis sprawdza `textureData.test.ts`, bez loadera.
+ */
+describe('współrzędne tekstury', () => {
+  function modelZUv(): ArrayBuffer {
+    const wierzcholki = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const uv = new Float32Array([0, 0, 1, 0, 0, 1]);
+
+    const bin = new Float32Array(wierzcholki.length + uv.length);
+    bin.set(wierzcholki, 0);
+    bin.set(uv, wierzcholki.length);
+
+    return glb({
+      asset: { version: '2.0' },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ name: 'Kostka', mesh: 0 }],
+      meshes: [{ name: 'Kostka', primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 } }] }],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+        { bufferView: 1, componentType: 5126, count: 3, type: 'VEC2', min: [0, 0], max: [1, 1] },
+      ],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: wierzcholki.byteLength },
+        { buffer: 0, byteOffset: wierzcholki.byteLength, byteLength: uv.byteLength },
+      ],
+      buffers: [{ byteLength: bin.byteLength }],
+    }, bin);
+  }
+
+  it('geometria niesie UV, gdy plik je ma', async () => {
+    const wynik = await GLTFImporter.importFromBuffer(modelZUv(), 'BoxTextured.glb');
+    const siatka = wynik.graph.root.children[0] as MeshNode;
+
+    expect(siatka.geometry.bufferData?.uvs).toBeDefined();
+    expect(siatka.geometry.bufferData?.uvs).toHaveLength(6);
+  });
+});
+
+describe('sposób nakładania tekstury', () => {
+  /**
+   * Rysownik-atrapa: przerysowanie obrazu wymaga płótna, którego w teście nie ma,
+   * a sprawdzamy tu co innego — czy z materiału schodzi żądanie powtarzania.
+   */
+  const rysownik = { narysuj: () => 'data:image/png;base64,AAAA' };
+
+  function materialZTekstura(wrap: THREE.Wrapping): THREE.MeshStandardMaterial {
+    const t = new THREE.Texture();
+    // Obraz musi mieć wymiary, inaczej przepisanie kończy się przed czasem.
+    t.image = { width: 4, height: 4 };
+    t.wrapS = wrap;
+    t.wrapT = wrap;
+    t.flipY = false;
+
+    const mat = new THREE.MeshStandardMaterial();
+    mat.map = t;
+    return mat;
+  }
+
+  it('przenosi powtarzanie z pliku na materiał sceny', () => {
+    // To ginęło: „BoxTextured.glb" ma współrzędne od 0 do 6 i żąda REPEAT.
+    // Bez tego ustawienia cała bryła próbkuje jeden piksel brzegu i wychodzi
+    // jednolicie szara — objaw nie do odróżnienia od braku tekstury.
+    const opis = opiszMaterial(materialZTekstura(THREE.RepeatWrapping), { rysownik }, () => {});
+
+    expect(opis.textureSettings?.wrapS).toBe('repeat');
+    expect(opis.textureSettings?.wrapT).toBe('repeat');
+    expect(opis.textureSettings?.flipY).toBe(false);
+  });
+
+  it('nie dopisuje ustawień, gdy plik ich nie wymaga', () => {
+    const opis = opiszMaterial(materialZTekstura(THREE.ClampToEdgeWrapping), { rysownik }, () => {});
+
+    expect(opis.textureSettings).toEqual({ flipY: false });
   });
 });

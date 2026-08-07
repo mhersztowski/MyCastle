@@ -26,7 +26,9 @@ import { SceneGraph } from '../scene/SceneGraph';
 import { MeshNode } from '../nodes/MeshNode';
 import { LightNode } from '../nodes/LightNode';
 import { GroupNode } from '../nodes/GroupNode';
-import type { BufferGeometryData, MaterialDescriptor } from '../nodes/MeshNode';
+import type { BufferGeometryData, MaterialDescriptor, MaterialMaps } from '../nodes/MeshNode';
+import { dataUrlZObrazu, type OpcjeTekstury } from './textureData';
+import { odczytajUstawienia } from './textureSettings';
 
 export interface GLTFImportResult {
   graph: SceneGraph;
@@ -38,10 +40,63 @@ export interface GLTFImportResult {
   warnings: string[];
 }
 
-function opiszMaterial(mat: THREE.Material | null | undefined): Partial<MaterialDescriptor> {
+export function opiszMaterial(
+  mat: THREE.Material | null | undefined,
+  opcje: OpcjeTekstury,
+  ostrzez: (tekst: string) => void,
+): Partial<MaterialDescriptor> {
   if (!mat) return { color: '#cccccc', opacity: 1, wireframe: false };
 
   const standard = mat as THREE.MeshStandardMaterial;
+
+  /*
+    Mapa koloru z pliku.
+
+    `.glb` niesie obraz w swoim buforze — po wczytaniu istnieje wyłącznie
+    w pamięci i nie ma ścieżki ani adresu, którym dałoby się go wskazać.
+    Przepisujemy go więc na `data:`, żeby scena była samowystarczalna tak samo
+    jak plik, z którego przyszła. Bez tego model wchodzi biały, bez śladu po
+    teksturze i bez wyjaśnienia.
+  */
+  const nazwaMat = mat.name || 'bez nazwy';
+  let lacznieKb = 0;
+
+  /** Przepisuje jedną mapę; `undefined`, gdy jej nie ma albo się nie udało. */
+  const przepisz = (tekstura: THREE.Texture | null | undefined, opis: string): string | undefined => {
+    if (!tekstura) return undefined;
+    const wynik = dataUrlZObrazu(tekstura.image as { width?: number; height?: number } | undefined, opcje);
+    if (!wynik.dataUrl) {
+      ostrzez(`Nie udało się przenieść mapy ${opis} materiału „${nazwaMat}": ${wynik.powod ?? 'nieznany powód'}`);
+      return undefined;
+    }
+    lacznieKb += wynik.kb;
+    return wynik.dataUrl;
+  };
+
+  const textureDataUrl = przepisz(standard.map, 'koloru');
+
+  // Pozostałe mapy PBR. Bez normalnej model wygląda płasko, bez chropowatości —
+  // jednolicie błyszcząco; obie zmieniają wygląd bardziej niż sam kolor.
+  const maps: MaterialMaps = {};
+  const normal = przepisz(standard.normalMap, 'normalnych');
+  const roughness = przepisz(standard.roughnessMap, 'chropowatości');
+  const metalness = przepisz(standard.metalnessMap, 'metaliczności');
+  const emissiveMap = przepisz(standard.emissiveMap, 'emisji');
+  const ao = przepisz(standard.aoMap, 'przesłonięcia otoczenia');
+  if (normal) maps.normal = normal;
+  if (roughness) maps.roughness = roughness;
+  if (metalness) maps.metalness = metalness;
+  if (emissiveMap) maps.emissive = emissiveMap;
+  if (ao) maps.ao = ao;
+
+  // Waga liczona **łącznie**: pojedyncza mapa bywa niewinna, a pięć naraz
+  // potrafi zamienić scenę w plik, którego nie da się otworzyć.
+  if (lacznieKb > 2048) {
+    ostrzez(
+      `Materiał „${nazwaMat}" wnosi ${Math.round(lacznieKb / 1024)} MB tekstur do zapisu sceny. `
+      + 'Rozważ mniejsze obrazy albo tekstury z plików na dysku.',
+    );
+  }
   // `getHexString()` zwraca „ff0000" bez krzyżyka — bez niego CSS i edytor
   // barwy w inspektorze dostają wartość, której nie rozumieją.
   const kolor = standard.color instanceof THREE.Color ? `#${standard.color.getHexString()}` : '#cccccc';
@@ -58,6 +113,20 @@ function opiszMaterial(mat: THREE.Material | null | undefined): Partial<Material
     ...(standard.emissive instanceof THREE.Color && standard.emissive.getHex() !== 0
       ? { emissive: `#${standard.emissive.getHexString()}` }
       : {}),
+    ...(textureDataUrl ? { textureDataUrl } : {}),
+    ...(Object.keys(maps).length ? { maps } : {}),
+    /*
+      Sposób nakładania bierzemy z **mapy koloru** — to ona rządzi wyglądem,
+      a pliki nakładają pozostałe mapy tak samo.
+
+      Bez tego ginie żądanie „powtórz obraz na ścianie": współrzędne powyżej 1
+      trafiają wtedy na piksel brzegu i model wychodzi jednolity, mimo poprawnie
+      wczytanej tekstury.
+    */
+    ...(() => {
+      const ustawienia = odczytajUstawienia(standard.map);
+      return ustawienia ? { textureSettings: ustawienia } : {};
+    })(),
   };
 }
 
@@ -81,6 +150,7 @@ function opiszGeometrie(mesh: THREE.Mesh): BufferGeometryData | null {
 function zbuduj(
   gltf: { scene: THREE.Object3D; animations?: THREE.AnimationClip[] },
   fileName: string,
+  opcjeTekstur: OpcjeTekstury = {},
 ): GLTFImportResult {
   const graph = new SceneGraph();
   const warnings: string[] = [];
@@ -121,7 +191,7 @@ function zbuduj(
         rotation,
         scale,
         geometry: { type: 'custom', bufferData, fileName },
-        material: opiszMaterial(material),
+        material: opiszMaterial(material, opcjeTekstur, (t) => warnings.push(t)),
       });
       graph.addNode(node, parentId);
       nodeCount += 1;
@@ -188,7 +258,11 @@ export class GLTFImporter {
    * @param buffer Zawartość pliku — `.glb` (binarny) albo `.gltf` (JSON).
    * @param fileName Nazwa pliku; stąd bierze się rozpoznanie wariantu w komunikatach.
    */
-  static importFromBuffer(buffer: ArrayBuffer, fileName = 'model.glb'): Promise<GLTFImportResult> {
+  static importFromBuffer(
+    buffer: ArrayBuffer,
+    fileName = 'model.glb',
+    opcjeTekstur: OpcjeTekstury = {},
+  ): Promise<GLTFImportResult> {
     const loader = new GLTFLoader();
 
     return new Promise((resolve, reject) => {
@@ -197,7 +271,7 @@ export class GLTFImporter {
         // Ścieżka zasobów pusta: importujemy pojedynczy plik z dysku, więc
         // odwołania do sąsiednich plików i tak nie mają dokąd trafić.
         '',
-        (gltf) => resolve(zbuduj(gltf, fileName)),
+        (gltf) => resolve(zbuduj(gltf, fileName, opcjeTekstur)),
         (error) => reject(new Error(
           `Nie udało się wczytać glTF „${fileName}": ${(error as { message?: string })?.message ?? String(error)}`,
         )),
@@ -206,9 +280,9 @@ export class GLTFImporter {
   }
 
   /** Wariant dla modelu spod adresu — zasoby zewnętrzne rozwiązują się względem niego. */
-  static async importFromUrl(url: string): Promise<GLTFImportResult> {
+  static async importFromUrl(url: string, opcjeTekstur: OpcjeTekstury = {}): Promise<GLTFImportResult> {
     const loader = new GLTFLoader();
     const gltf = await loader.loadAsync(url);
-    return zbuduj(gltf, url.split('/').pop() ?? url);
+    return zbuduj(gltf, url.split('/').pop() ?? url, opcjeTekstur);
   }
 }

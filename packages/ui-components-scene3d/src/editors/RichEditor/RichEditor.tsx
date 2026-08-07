@@ -1,10 +1,11 @@
 import { useState, useMemo, useCallback, useRef, useEffect, type ReactNode } from 'react';
-import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName, SceneSettings, SceneGeometryEntry, GeoPrimitiveField, GeoPrimitiveKind } from '@mhersztowski/ui-core';
+import type { RichEditorProps, SceneTreeNodeData, SelectedNodeData, TransformMode, ToolbarItem, CameraPresetName, SceneSettings, SceneGeometryEntry, GeoPrimitiveField, GeoPrimitiveKind, UvProjectionOptions } from '@mhersztowski/ui-core';
 import { useDialog, DEFAULT_SCENE_SETTINGS } from '@mhersztowski/ui-core';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import { SimpleViewer, SceneGraph, SceneSerializer, SceneDeserializer, MeshNode, LightNode, GroupNode, CameraNode, AudioNode, GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode, isGeometryPrimitiveNode, parseOBJText, parseSTLBuffer, FBXImporter, GLTFImporter, GLTFExporter, OBJExporter, STLExporter, CAMERA_PRESETS, AnimationEngine, PrefabStore } from '@mhersztowski/core-scene3d';
-import { UiRootNode, UiWidgetNode, findAllUiRoots, solveUiLayout, applyUiDrag } from '@mhersztowski/core-scene3d';
+import { UiRootNode, UiWidgetNode, findAllUiRoots, solveUiLayout, applyUiDrag, generujUv } from '@mhersztowski/core-scene3d';
+import type { OpcjeRzutu } from '@mhersztowski/core-scene3d';
 import type { SceneNode, LightType, BufferGeometryData, SceneRenderMode, AnimationClip, PrefabEntry, GeometryPrimitiveNode, UiWidgetKind } from '@mhersztowski/core-scene3d';
 import { UiLayer, type UiLayerWidget } from '../../viewers/UiLayer';
 import Box from '@mui/material/Box';
@@ -151,6 +152,7 @@ function buildSelectedNodeData(node: SceneNode): SelectedNodeData {
             vertexCount: meshNode.geometry.bufferData ? Math.floor(meshNode.geometry.bufferData.positions.length / 3) : undefined,
             indexCount: meshNode.geometry.bufferData?.indices?.length,
             fileName: meshNode.geometry.fileName,
+            hasUv: Boolean(meshNode.geometry.bufferData?.uvs?.length),
             attributes,
             bounds,
           };
@@ -1169,6 +1171,28 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
     bump();
   }, [sceneGraph, bump]);
 
+  /**
+   * Liczy współrzędne tekstury z kształtu siatki.
+   *
+   * Potrzebne dla modeli z generatorów: przychodzą z automatycznym rozwinięciem
+   * na setki wysepek, na które nie da się sensownie nałożyć zwykłego obrazka.
+   * Nowe `id` geometrii, bo to inna geometria niż ta z pliku — bez tego węzły
+   * współdzielące blok danych rozjechałyby się po cichu.
+   */
+  const handleGenerateUv = useCallback((nodeId: string, opcje: UvProjectionOptions) => {
+    const node = sceneGraph.findNode(nodeId);
+    if (!node || node.type !== 'mesh') return;
+    const mesh = node as unknown as MeshNode;
+    if (!mesh.geometry.bufferData) return;
+
+    mesh.setGeometry({
+      ...mesh.geometry,
+      id: crypto.randomUUID(),
+      bufferData: generujUv(mesh.geometry.bufferData, opcje as OpcjeRzutu),
+    });
+    bump();
+  }, [sceneGraph, bump]);
+
   // ─── Viewport selection ─────────────────────────────────────
 
   const handleViewportSelect = useCallback((nodeId: string | null) => {
@@ -1823,6 +1847,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                     onEditMesh={onEditMesh}
                     sceneGeometries={sceneGeometries}
                     onAssignGeometry={handleAssignGeometry}
+                    onGenerateUv={handleGenerateUv}
                     onEditGeoPoint={handleEditGeoPoint}
                     activeGeoPoint={geoPointEdit}
                     sceneNodes={allSceneNodes}
@@ -1947,6 +1972,7 @@ export function RichEditor({ className, style, initialSceneData, initialPrefabs,
                 onEditMesh={onEditMesh}
                 sceneGeometries={sceneGeometries}
                 onAssignGeometry={handleAssignGeometry}
+                    onGenerateUv={handleGenerateUv}
                 onEditGeoPoint={handleEditGeoPoint}
                 activeGeoPoint={geoPointEdit}
                 sceneNodes={allSceneNodes}

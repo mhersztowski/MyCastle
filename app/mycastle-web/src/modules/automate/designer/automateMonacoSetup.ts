@@ -4,6 +4,7 @@
  */
 
 import type { Monaco } from '@monaco-editor/react';
+import { SCENE_SCRIPT_DTS } from '../../scene-script';
 
 const AUTOMATE_API_TYPES = `
 /**
@@ -1261,6 +1262,9 @@ export function setupAutomateMonaco(monaco: Monaco): void {
   // them identically.
   mergeExtraLibs(monaco, new Map([
     ['file:///automate-api.d.ts', AUTOMATE_API_TYPES],
+    // Sceny CAD/3D — deklaracja modułu, więc podpowiedzi pojawiają się dopiero
+    // po `import { Scene } from 'mycastle/scene'`, tak jak w Drive.
+    ['file:///mycastle-scene.d.ts', SCENE_SCRIPT_DTS],
   ]));
 }
 

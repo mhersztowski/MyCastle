@@ -4,7 +4,8 @@ import { OrbitControls, TransformControls, GizmoHelper, GizmoViewport, GizmoView
 import * as THREE from 'three';
 import type { SceneGraph } from '../scene/SceneGraph';
 import type { SceneNode } from '../scene/SceneNode';
-import type { MeshNode, BufferGeometryData, MaterialDescriptor } from '../nodes/MeshNode';
+import type { MeshNode, BufferGeometryData, MaterialDescriptor, TextureSettings } from '../nodes/MeshNode';
+import { zastosujUstawienia } from '../io/textureSettings';
 import type { GeometryPointNode, GeometrySegmentNode, GeometryLineNode, GeometryAngleNode } from '../nodes/GeometryNodes';
 import type { GeoNodeGraph } from '../geometry-nodes/types';
 import { evaluateGeoNodeGraph } from '../geometry-nodes/evaluate';
@@ -38,72 +39,161 @@ function toThreeBlending(blending: MaterialDescriptor['blending']): THREE.Blendi
  * materiale fizycznym albo Phonga nie robiło **nic** — bez błędu, bez śladu.
  * Hook daje ją każdemu, kto ją potrafi pokazać.
  */
-function useMaterialTexture(
-  mat: MaterialDescriptor,
+function useTeksturaZeZrodla(
+  zrodlo: string | undefined,
   resolveTextureSrc?: (src: string) => Promise<string>,
+  sRGB = false,
+  ustawienia?: TextureSettings,
 ): THREE.Texture | null {
   const [texture, setTexture] = useState<THREE.Texture | null>(null);
+
+  /*
+    Ustawienia wchodzą do zależności jako **tekst**, a nie jako obiekt: opis
+    materiału powstaje na nowo przy każdym renderze, więc porównanie po
+    tożsamości kazałoby wczytywać ten sam obraz w kółko.
+  */
+  const kluczUstawien = ustawienia ? JSON.stringify(ustawienia) : '';
+  const ostatnieUstawienia = useRef(ustawienia);
+  ostatnieUstawienia.current = ustawienia;
+
   useEffect(() => {
-    // Ścieżka w VFS ma pierwszeństwo przed gotowym adresem: to ona przeżywa
-    // zapis sceny, a `textureDataUrl` bywa `blob:` ważnym tylko w tej karcie.
-    const zrodlo = mat.texturePath || mat.textureDataUrl;
     if (!zrodlo) { setTexture(null); return; }
 
-    let t: THREE.Texture | null = null;
     let active = true;
 
     const zaladuj = (url: string) => {
-      const img = new Image();
-      img.onload = () => {
-        if (!active) return;
-        t = new THREE.Texture(img);
-        t.colorSpace = THREE.SRGBColorSpace;
-        t.needsUpdate = true;  // explicit GPU upload trigger
-        setTexture(t);
-      };
-      img.onerror = () => {
-        // eslint-disable-next-line no-console
-        console.warn('[SimpleViewer] Nie udało się wczytać tekstury:', url.slice(0, 80));
-      };
-      img.src = url;
+      // `TextureLoader` zamiast ręcznego `new Image()`: sam ustawia `needsUpdate`
+      // i obsługuje przypadki, o których łatwo zapomnieć przy ręcznym ładowaniu.
+      new THREE.TextureLoader().load(
+        url,
+        (t) => {
+          if (!active) { t.dispose(); return; }
+          // Kolor i emisja są w przestrzeni sRGB; mapy techniczne (normalne,
+          // chropowatość) niosą **liczby**, nie barwy — przepuszczenie ich przez
+          // korekcję gamma rozjaśniłoby je i zepsuło oświetlenie.
+          t.colorSpace = sRGB ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+          // Sposób nakładania musi wejść **przed** oddaniem tekstury: to on
+          // decyduje, czy współrzędne powyżej 1 powtarzają obraz, czy pobierają
+          // w kółko piksel z brzegu.
+          zastosujUstawienia(t, ostatnieUstawienia.current);
+          t.needsUpdate = true;
+          setTexture(t);
+        },
+        undefined,
+        () => {
+          // eslint-disable-next-line no-console
+          console.warn('[SimpleViewer] Nie udało się wczytać tekstury:', url.slice(0, 80));
+        },
+      );
     };
 
     // Ścieżkę VFS rozwiązuje host — rdzeń nie wie, skąd biorą się pliki.
-    if (mat.texturePath && resolveTextureSrc) {
-      void resolveTextureSrc(mat.texturePath)
+    const zDysku = !/^(https?:|data:|blob:)/.test(zrodlo);
+    if (zDysku && resolveTextureSrc) {
+      void resolveTextureSrc(zrodlo)
         .then((url) => { if (active) zaladuj(url); })
         .catch((e: unknown) => {
           // eslint-disable-next-line no-console
-          console.warn('[SimpleViewer] Nie udało się odczytać tekstury z dysku:', mat.texturePath, e);
+          console.warn('[SimpleViewer] Nie udało się odczytać tekstury z dysku:', zrodlo, e);
         });
     } else {
       zaladuj(zrodlo);
     }
 
-    return () => {
-      active = false;
-      t?.dispose();
-    };
-  }, [mat.texturePath, mat.textureDataUrl, resolveTextureSrc]);
+    /*
+      Sprzątanie **nie niszczy** tekstury.
+
+      Wcześniej `dispose()` w tym miejscu kasował obraz, który materiał właśnie
+      dostał: wystarczyło, że efekt przeliczył się raz (zmiana źródła, remount
+      poddrzewa), a model wracał do bieli mimo poprawnie wczytanego pliku.
+      Teksturę zwalnia Three przy usuwaniu materiału.
+    */
+    return () => { active = false; };
+  }, [zrodlo, resolveTextureSrc, sRGB, kluczUstawien]);
 
   return texture;
 }
 
+export interface MapyMaterialu {
+  map: THREE.Texture | null;
+  normalMap: THREE.Texture | null;
+  roughnessMap: THREE.Texture | null;
+  metalnessMap: THREE.Texture | null;
+  emissiveMap: THREE.Texture | null;
+  aoMap: THREE.Texture | null;
+}
+
+/**
+ * Wymusza przebudowę shadera po dojściu map.
+ *
+ * Obraz wczytuje się **po** pierwszym renderze, więc materiał powstaje bez mapy.
+ * Three kompiluje shader pod zestaw map z chwili powstania i samo przypisanie
+ * `material.map` niczego nie zmienia — model zostaje biały, bez błędu i bez
+ * ostrzeżenia. Dopiero `needsUpdate` każe zbudować shader na nowo.
+ *
+ * Przez `ref`, a nie przez `key` na elemencie: odbudowa materiału przez React
+ * zależy od tego, jak biblioteka renderująca traktuje wymianę węzła — a to jest
+ * dokładnie ta warstwa, która tu zawodziła.
+ */
+function useShaderPoDojsciuMap(mapy: MapyMaterialu) {
+  // Typ ogólny, bo ten sam hook obsługuje wszystkie rodzaje materiału —
+  // `needsUpdate` jest wspólne dla każdego z nich.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ref = useRef<any>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.needsUpdate = true;
+  }, [mapy.map, mapy.normalMap, mapy.roughnessMap, mapy.metalnessMap, mapy.emissiveMap, mapy.aoMap]);
+  return ref;
+}
+
+/** Komplet map materiału — kolor i mapy techniczne. */
+function useMaterialMaps(
+  mat: MaterialDescriptor,
+  resolveTextureSrc?: (src: string) => Promise<string>,
+) {
+  // Ścieżka w VFS ma pierwszeństwo przed gotowym adresem: to ona przeżywa zapis
+  // sceny, a `textureDataUrl` bywa `blob:` ważnym tylko w tej karcie.
+  const u = mat.textureSettings;
+  const map = useTeksturaZeZrodla(mat.texturePath || mat.textureDataUrl, resolveTextureSrc, true, u);
+  const normalMap = useTeksturaZeZrodla(mat.maps?.normal, resolveTextureSrc, false, u);
+  const roughnessMap = useTeksturaZeZrodla(mat.maps?.roughness, resolveTextureSrc, false, u);
+  const metalnessMap = useTeksturaZeZrodla(mat.maps?.metalness, resolveTextureSrc, false, u);
+  const emissiveMap = useTeksturaZeZrodla(mat.maps?.emissive, resolveTextureSrc, true, u);
+  const aoMap = useTeksturaZeZrodla(mat.maps?.ao, resolveTextureSrc, false, u);
+
+  return { map, normalMap, roughnessMap, metalnessMap, emissiveMap, aoMap };
+}
+
+/**
+ * Materiał standardowy z mapami.
+ *
+ * Mapy **przychodzą z zewnątrz**, a nie są ładowane tutaj: wcześniej ładował je
+ * i ten komponent, i jego rodzic, więc ten sam obraz szedł przez pamięć dwa razy
+ * i dwa razy trafiał na kartę graficzną.
+ */
 function TexturedStandardMat({
-  mat, selEmissive, selEmissiveIntensity, side, blending, resolveTextureSrc,
+  mat, selEmissive, selEmissiveIntensity, side, blending, mapy,
 }: {
   mat: MaterialDescriptor;
   selEmissive: string;
   selEmissiveIntensity: number;
   side: THREE.Side;
   blending: THREE.Blending;
-  resolveTextureSrc?: (src: string) => Promise<string>;
+  mapy: MapyMaterialu;
 }) {
-  const texture = useMaterialTexture(mat, resolveTextureSrc);
+  const ref = useShaderPoDojsciuMap(mapy);
+
   return (
     <meshStandardMaterial
-      map={texture ?? undefined}
-      color={texture ? '#ffffff' : mat.color}
+      ref={ref}
+      map={mapy.map ?? undefined}
+      normalMap={mapy.normalMap ?? undefined}
+      roughnessMap={mapy.roughnessMap ?? undefined}
+      metalnessMap={mapy.metalnessMap ?? undefined}
+      emissiveMap={mapy.emissiveMap ?? undefined}
+      aoMap={mapy.aoMap ?? undefined}
+      color={mapy.map ? '#ffffff' : mat.color}
       emissive={selEmissive}
       emissiveIntensity={selEmissiveIntensity}
       roughness={mat.roughness ?? 1}
@@ -116,6 +206,8 @@ function TexturedStandardMat({
       depthTest={mat.depthTest}
       depthWrite={mat.depthWrite}
       alphaTest={mat.alphaTest}
+      vertexColors={mat.vertexColors}
+      flatShading={mat.flatShading ?? false}
     />
   );
 }
@@ -133,15 +225,18 @@ function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
 
   // Mapa koloru dla każdego materiału, który ją obsługuje. Hook musi stać przed
   // `switch`, bo React nie pozwala wołać go warunkowo.
-  const texture = useMaterialTexture(mat, resolveTextureSrc);
+  const mapy = useMaterialMaps(mat, resolveTextureSrc);
+  const texture = mapy.map;
   // Z teksturą barwa materiału jest **mnożnikiem** — kolor inny niż biały
   // przyciemniłby obraz i wyglądałoby to jak zła tekstura.
   const kolor = texture ? '#ffffff' : mat.color;
+  const refMat = useShaderPoDojsciuMap(mapy);
 
   switch (mat.type) {
     case 'MeshBasicMaterial':
       return (
         <meshBasicMaterial
+          ref={refMat}
           map={texture ?? undefined}
           color={kolor}
           opacity={mat.opacity}
@@ -179,7 +274,10 @@ function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
     case 'MeshLambertMaterial':
       return (
         <meshLambertMaterial
+          ref={refMat}
           map={texture ?? undefined}
+          normalMap={mapy.normalMap ?? undefined}
+          emissiveMap={mapy.emissiveMap ?? undefined}
           color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
@@ -212,7 +310,10 @@ function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
     case 'MeshPhongMaterial':
       return (
         <meshPhongMaterial
+          ref={refMat}
           map={texture ?? undefined}
+          normalMap={mapy.normalMap ?? undefined}
+          emissiveMap={mapy.emissiveMap ?? undefined}
           color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
@@ -235,6 +336,7 @@ function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
     case 'MeshToonMaterial':
       return (
         <meshToonMaterial
+          ref={refMat}
           map={texture ?? undefined}
           color={kolor}
           emissive={selEmissive}
@@ -254,7 +356,13 @@ function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
     case 'MeshPhysicalMaterial':
       return (
         <meshPhysicalMaterial
+          ref={refMat}
           map={texture ?? undefined}
+          normalMap={mapy.normalMap ?? undefined}
+          roughnessMap={mapy.roughnessMap ?? undefined}
+          metalnessMap={mapy.metalnessMap ?? undefined}
+          emissiveMap={mapy.emissiveMap ?? undefined}
+          aoMap={mapy.aoMap ?? undefined}
           color={kolor}
           emissive={selEmissive}
           emissiveIntensity={selEmissiveIntensity}
@@ -309,7 +417,7 @@ function RealisticMaterial({ mat, isSelected, resolveTextureSrc }: {
             selEmissiveIntensity={selEmissiveIntensity}
             side={side}
             blending={blending}
-            resolveTextureSrc={resolveTextureSrc}
+            mapy={mapy}
           />
         );
       }
@@ -433,7 +541,7 @@ function SelectableMesh({
   useEffect(() => {
     node._threeObject = meshRef.current;
     return () => { node._threeObject = null; };
-  }, [node]);
+  }, [node, meshNode]);
 
   return (
     <mesh
@@ -1752,6 +1860,11 @@ function CustomBufferGeometry({ data }: { data: BufferGeometryData }) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
     if (data.normals) {
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(data.normals, 3));
+    }
+    // Współrzędne tekstury: bez nich mapa nie ma się na czym położyć i model
+    // wchodzi biały, choć tekstura wczytała się poprawnie.
+    if (data.uvs) {
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(data.uvs, 2));
     }
     if (data.indices) {
       geo.setIndex(data.indices);

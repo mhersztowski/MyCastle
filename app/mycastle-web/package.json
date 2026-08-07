@@ -20,6 +20,7 @@
     "@mhersztowski/core-cad": "workspace:*",
     "@mhersztowski/core-cad-viewer": "workspace:*",
     "@mhersztowski/core-scene3d": "workspace:*",
+    "@mhersztowski/hydra-studio": "workspace:*",
     "@mhersztowski/layout": "workspace:*",
     "@mhersztowski/minislib": "workspace:*",
     "@mhersztowski/sci-blocks": "workspace:*",

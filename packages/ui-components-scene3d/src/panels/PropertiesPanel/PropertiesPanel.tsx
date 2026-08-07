@@ -17,6 +17,8 @@ import Menu from '@mui/material/Menu';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import { UiSection } from './UiSection';
+import { PropertyRow } from './PropertyRow';
+import { UvProjectionControls } from './UvProjectionControls';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -285,17 +287,6 @@ function ColorInput({
   );
 }
 
-function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-      <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', minWidth: 50, flexShrink: 0 }}>
-        {label}
-      </Typography>
-      {children}
-    </Box>
-  );
-}
-
 const selectSx = {
   flex: 1,
   fontSize: '0.7rem',
@@ -320,6 +311,7 @@ export function PropertiesPanel({
   onEditMesh,
   sceneGeometries,
   onAssignGeometry,
+  onGenerateUv,
   onEditGeoPoint,
   activeGeoPoint,
   sceneNodes,
@@ -854,9 +846,20 @@ export function PropertiesPanel({
                     onChange={(e) => handleChange('geometry.type', e.target.value)}
                     sx={selectSx}
                   >
-                    {Object.entries(GEO_TYPE_LABELS).filter(([k]) => k !== 'custom').map(([k, label]) => (
-                      <MenuItem key={k} value={k} sx={menuItemSx}>{label.toUpperCase()}</MenuItem>
-                    ))}
+                    {/*
+                      „Custom" jest na liście **tylko wtedy**, gdy siatka już go
+                      ma — z importu albo z edycji. Nie da się go wybrać ręcznie,
+                      bo nie ma z czego zbudować geometrii, ale bez tej pozycji
+                      pole pokazywało pustkę dla każdego zaimportowanego modelu
+                      i sypało ostrzeżeniem o wartości spoza zakresu.
+                    */}
+                    {Object.entries(GEO_TYPE_LABELS)
+                      .filter(([k]) => k !== 'custom' || node.geometry!.geoType === 'custom')
+                      .map(([k, label]) => (
+                        <MenuItem key={k} value={k} sx={menuItemSx} disabled={k === 'custom'}>
+                          {label.toUpperCase()}
+                        </MenuItem>
+                      ))}
                   </Select>
                 </PropertyRow>
 
@@ -931,6 +934,12 @@ export function PropertiesPanel({
                           {Math.floor(node.geometry.indexCount / 3)}
                         </Typography>
                       </PropertyRow>
+                    )}
+                    {onGenerateUv && (
+                      <UvProjectionControls
+                        hasUv={node.geometry.hasUv}
+                        onApply={(opcje) => onGenerateUv(node.id, opcje)}
+                      />
                     )}
                   </>
                 )}

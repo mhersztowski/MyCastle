@@ -192,6 +192,22 @@ export interface SelectedNodeGeometry {
   fileName?: string;
   attributes?: SelectedNodeGeometryAttributes;
   bounds?: [number, number, number];
+  /** Czy siatka niesie współrzędne tekstury — bez nich mapa nie ma się na czym położyć. */
+  hasUv?: boolean;
+}
+
+/**
+ * Jak policzyć współrzędne tekstury z kształtu modelu.
+ *
+ * Kształt powtórzony tutaj zamiast zaimportowany, bo `ui-core` świadomie nie
+ * zależy od `core-scene3d` — to ta zależność trzymałaby warstwę interfejsu
+ * przy jednym konkretnym silniku sceny.
+ */
+export interface UvProjectionOptions {
+  tryb: 'planar' | 'box';
+  os?: 'x' | 'y' | 'z';
+  skala?: number;
+  obrot?: number;
 }
 
 export type MaterialType =
@@ -459,6 +475,8 @@ export interface PropertiesPanelProps {
   sceneGeometries?: SceneGeometryEntry[];
   /** Assigns geometry from sourceNodeId to targetNodeId (copies descriptor incl. same id). */
   onAssignGeometry?: (targetNodeId: string, sourceNodeId: string) => void;
+  /** Liczy współrzędne tekstury z kształtu siatki, nadpisując te z pliku. */
+  onGenerateUv?: (nodeId: string, opcje: UvProjectionOptions) => void;
   /** Toggle viewport-gizmo editing for a geometry-primitive local point (e.g. segment start/end). */
   onEditGeoPoint?: (nodeId: string, fieldKey: string) => void;
   /** Currently gizmo-edited geometry point, for highlighting the active button. */

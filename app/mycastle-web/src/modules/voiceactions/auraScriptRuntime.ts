@@ -15,8 +15,14 @@
  * błąd składni, niż żeby symbol po cichu był `undefined`.
  */
 
-/** Moduły środowiska: logika Aury, kontrakt `api`/`display` oraz API backendu (`Server`). */
-const ENV_MODULE_RE = /(^|\/)(aura\/aura|api\/api|server\/api)(\.ts|\.js)?$/;
+/**
+ * Moduły środowiska: logika Aury, kontrakt `api`/`display`, API backendu (`Server`)
+ * oraz sceny CAD/3D (`mycastle/scene`).
+ *
+ * Ten ostatni jest **nazwą, nie ścieżką** — moduł nie leży w `packages/`, tylko
+ * jest składany przez hosta, więc dopisujemy go osobnym członem.
+ */
+const ENV_MODULE_RE = /(^|\/)(aura\/aura|api\/api|server\/api)(\.ts|\.js)?$|^mycastle\/scene$/;
 
 const IMPORT_RE = /^[ \t]*import\s+(?:type\s+)?([^;'"]*?)\s+from\s+['"]([^'"]+)['"][ \t]*;?[ \t]*$/gm;
 const SIDE_EFFECT_IMPORT_RE = /^[ \t]*import\s+['"]([^'"]+)['"][ \t]*;?[ \t]*$/gm;

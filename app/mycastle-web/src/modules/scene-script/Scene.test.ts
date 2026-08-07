@@ -184,3 +184,53 @@ describe('Scene przez HTTP', () => {
     await expect(Scene.save('https://serwer/pliki/dom.scene.json', scena)).rejects.toThrow(/nie da się zapisać/);
   });
 });
+
+describe('adres, który zwraca stronę zamiast pliku', () => {
+  /** Odpowiedź, jaką daje serwer aplikacji na trasę obsługiwaną po stronie klienta. */
+  const stronaHtml = (tresc: string) => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: async () => tresc,
+  }) as unknown as Response;
+
+  it('tłumaczy, że przyszła strona, a nie scena', async () => {
+    // Adres `/open/…` otwiera EDYTOR z projektem, a nie plik. Serwer oddaje
+    // wtedy `index.html`, a `JSON.parse` kończył to komunikatem
+    // „Unexpected token '<'", z którego nie wynika nic użytecznego.
+    setSceneHost({
+      readFile: async () => null,
+      fetch: async () => stronaHtml('<!DOCTYPE html><html><body>aplikacja</body></html>'),
+      present: () => {},
+    });
+
+    await expect(
+      Scene.load('http://localhost:1898/open/users/default/scene3d/a/main.scene.json'),
+    ).rejects.toThrow(/stron[ęy] HTML|nie plik/i);
+  });
+
+  it('podpowiada opcję vfs, bo to najczęstsza przyczyna', async () => {
+    setSceneHost({
+      readFile: async () => null,
+      fetch: async () => stronaHtml('<!doctype html><html></html>'),
+      present: () => {},
+    });
+
+    await expect(
+      Scene.load('http://localhost:1898/users/default/scene3d/a/main.scene.json'),
+    ).rejects.toThrow(/vfs/i);
+  });
+
+  it('nie myli sceny z HTML-em, gdy treść jest poprawna', async () => {
+    setSceneHost({
+      readFile: async () => null,
+      fetch: async () => ({
+        ok: true, status: 200, statusText: 'OK', text: async () => SCENA_3D,
+      }) as unknown as Response,
+      present: () => {},
+    });
+
+    const scena = await Scene.load('http://example.test/a.scene.json');
+    expect(scena.getNode('Grupa')).not.toBeNull();
+  });
+});

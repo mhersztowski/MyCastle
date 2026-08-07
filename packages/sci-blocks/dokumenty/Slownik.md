@@ -17,7 +17,7 @@ uporządkowała książka.
 Definicja jest **cytatem z tekstu** ze strony, którą wskazuje skorowidz — nie
 streszczeniem. Numery stron przepisane ze skorowidza.
 
-Przeniesione: 1-1 (s. 13–14), 1-2 (s. 14–15), 1-3 (s. 15–18), 1-4 (s. 18–20), 1-5 (s. 20–22) oraz Pytania (s. 23–24) i Zadania (s. 24–25) — **cały rozdział 1**; 2-1 (s. 26–27), 2-2 (s. 27–28), 2-3 (s. 28–33), 2-4 (s. 33–37), 2-5 (s. 37–38) — **cały rozdział 2**; 3-1 (s. 43), 3-2 (s. 43–44); 15-1 (s. 344–346), 15-2 (s. 347–350), 15-3 (s. 350–354),
+Przeniesione: 1-1 (s. 13–14), 1-2 (s. 14–15), 1-3 (s. 15–18), 1-4 (s. 18–20), 1-5 (s. 20–22) oraz Pytania (s. 23–24) i Zadania (s. 24–25) — **cały rozdział 1**; 2-1 (s. 26–27), 2-2 (s. 27–28), 2-3 (s. 28–33), 2-4 (s. 33–37), 2-5 (s. 37–38) — **cały rozdział 2**; 3-1 (s. 43) … 3-11 (s. 59–60) wraz z Pytaniami i Zadaniami — **cały rozdział 3**; 4-1 (s. 68–69), 4-2 (s. 69–70), 4-3 (s. 70–74), 4-4 (s. 74–78), 4-5 (s. 79–81); 15-1 (s. 344–346), 15-2 (s. 347–350), 15-3 (s. 350–354),
 15-4 (s. 355–358), 15-5 (s. 358–364), 15-6 (s. 364–367), 15-7 (s. 367–369),
 15-8 (s. 369–371), 15-9 (s. 372–373), 15-10 (s. 373–375) — **cały rozdział 15**.
 Podrozdziały 15-6 i 15-7 nie wniosły
@@ -469,6 +469,94 @@ Prędkość stała
   (stała wartość).
 @source 3-3, s. 45 (skorowidz: „prędkość — stała 45")
 @aka stałą prędkością
+```
+
+```term:rh1-poj-wymiar
+Wymiar wielkości fizycznej
+@definition Kombinacja wymiarów odpowiednich wielkości podstawowych — masy,
+  długości i czasu — w postaci której można zawsze przedstawić wymiary dowolnej
+  wielkości fizycznej. Wymiarem prędkości jest długość [L] dzielona przez czas
+  [T], wymiarem przyspieszenia długość dzielona przez kwadrat czasu. W każdym
+  poprawnym równaniu fizycznym wymiary wszystkich jego wyrazów muszą być
+  jednakowe.
+@source 3-9, s. 55-56 (skorowidz: „wymiar 55, 56")
+@aka wymiarów, wymiaru, wymiarem
+```
+
+```term:rh1-poj-spadek-swobodny
+Spadek swobodny
+@definition „Idealny" ruch, w którym zaniedbujemy opór powietrza oraz zmiany
+  przyspieszenia z wysokością. Gdy nie występuje opór powietrza, wszystkie ciała
+  — niezależnie od rozmiarów, ciężaru i składu chemicznego — spadają w tym samym
+  punkcie nad powierzchnią Ziemi z takim samym przyspieszeniem.
+@source 3-10, s. 57 (skorowidz: „spadek swobodny 57 i n.")
+@aka spadkiem swobodnym, spadku swobodnego, swobodny spadek
+```
+
+```term:rh1-poj-przyspieszenie-ziemskie
+Przyspieszenie ziemskie
+@definition Przyspieszenie swobodnie spadających ciał, oznaczane symbolem g.
+  W pobliżu powierzchni Ziemi jego wartość wynosi w przybliżeniu 9,8 m/s²,
+  a skierowane jest ono do środka Ziemi. Jego rzeczywista wartość zmienia się
+  z szerokością geograficzną i wysokością nad powierzchnią Ziemi.
+@source 3-10, s. 58 (skorowidz: „przyspieszenie — ziemskie 58, 389, 395 i n.")
+@aka przyspieszeniem ziemskim, przyspieszenia ziemskiego, przyspieszenie grawitacyjne
+```
+
+## Rozdział 4. Ruch na płaszczyźnie
+
+```term:rh1-poj-predkosc
+Prędkość
+@definition Prędkość punktu dana jest wektorem v, który musi być styczny do
+  toru, po którym punkt się porusza.
+@source 4-1, s. 68 (skorowidz: „prędkość 13, 68")
+@aka prędkości, prędkością
+```
+
+```term:rh1-poj-ruch-dwuwymiarowy
+Ruch dwuwymiarowy
+@definition Ruch odbywający się na płaszczyźnie xy, w którym — ogólnie biorąc —
+  oba zespoły składowych, wzdłuż osi x i wzdłuż osi y, mają niezerowe wartości.
+@source 4-1, s. 68-69 (skorowidz: „ruch — dwuwymiarowy 68 i n.")
+@aka ruchu dwuwymiarowego, ruchem dwuwymiarowym
+```
+
+```term:rh1-poj-rzut-ukosny
+Rzut ukośny
+@definition Przykład ruchu krzywoliniowego ze stałym przyspieszeniem —
+  dwuwymiarowy ruch ciała rzuconego pod kątem do poziomu. Jest to ruch o stałym
+  przyspieszeniu g skierowanym w dół, bez składowej poziomej przyspieszenia.
+@source 4-3, s. 70 (skorowidz: „rzut ukośny 70 i n.")
+@aka rzutu ukośnego, rzutem ukośnym
+```
+
+```term:rh1-poj-ruch-po-okregu
+Ruch po okręgu
+@definition Ruch, w którym zmienia się ciągle kierunek prędkości, natomiast
+  wartość jej pozostaje stała. W ruchu jednostajnym po okręgu przyspieszenie ma
+  stałą wartość v²/r i jest zawsze skierowane do środka okręgu.
+@source 4-4, s. 74 (skorowidz: „ruch — po okręgu 74 i n., 126, 364")
+@aka ruchem jednostajnym po okręgu, ruchu jednostajnego po okręgu, ruch jednostajny po okręgu
+```
+
+```term:rh1-poj-przyspieszenie-dosrodkowe
+Przyspieszenie dośrodkowe (radialne)
+@definition Przyspieszenie w ruchu jednostajnym po okręgu, zawsze skierowane
+  radialnie do wewnątrz. Powstaje na skutek zmian kierunku prędkości, a nie jej
+  wartości liczbowej, i jest równie realne jak przyspieszenie spowodowane
+  zmianami wartości prędkości.
+@source 4-4, s. 76 (skorowidz: „przyspieszenie — dośrodkowe (radialne) 76, 79, 80")
+@aka przyspieszeniem radialnym, dośrodkowym, przyspieszenia dośrodkowego, przyspieszenie radialne
+```
+
+```term:rh1-poj-przyspieszenie-styczne
+Przyspieszenie styczne
+@definition Wektorowa składowa przyspieszenia o kierunku stycznym do toru,
+  związana ze zmianami wartości prędkości w ruchu po okręgu; jej wartość wynosi
+  a_t = dv/dt. Przy ruchu po dowolnej krzywej jest to składowa przyspieszenia
+  styczna do krzywej w danym punkcie.
+@source 4-5, s. 79 (skorowidz: „przyspieszenie — styczne 79, 80")
+@aka przyspieszeniem stycznym, przyspieszenia stycznego
 ```
 
 ## Rozdział 15. Drgania
