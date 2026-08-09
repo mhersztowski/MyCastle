@@ -18,12 +18,14 @@ import { Suspense, lazy, useEffect, useState } from 'react';
 
 import {
     HydraDocument, LineSplitter, RingBuffer, SimulationClock, applyInsert, buildPlan,
-    formatDiagnostics, hasErrors, parseBuildOutput, parseEvent, parseLogLine, planInsert,
-    signalsForBuses, timestepOf, validate, writeVcd,
+    HOST_PLATFORMS,
+    decodeBase64, detectHostPlatform, detectHostPlatformSync, formatDiagnostics, hasErrors,
+    hostPlatform, parseBuildOutput, parseEvent, parseLogLine, planInsert,
+    signalsForBuses, timestepOf, validate, webglRendererProbe, writeVcd,
 } from '../model';
 import type {
-    BuildSummary, BusEvent, ComponentDefinition, LogLine, PackManifest, PathSegment,
-    Schematic, Speed, TargetPlan, VcdChange,
+    BuildArtifactInfo, BuildSummary, BusEvent, ComponentDefinition, DetectedHost, LogLine,
+    PackManifest, PathSegment, Schematic, Speed, TargetPlan, VcdChange,
 } from '../model';
 
 /**
@@ -82,6 +84,23 @@ export interface ModelAccess {
     getModel(uri: string): EditableModel | undefined;
 }
 
+/**
+ * Wynik budowy w postaci rozszerzonej.
+ *
+ * Gospodarz może dalej zwracać sam napis — tak działały wszystkie dotychczasowe
+ * podłączenia i nie ma powodu ich psuć. Postać obiektowa jest potrzebna
+ * dopiero dla celu natywnego, którego wynikiem jest plik do pobrania,
+ * a nie wsad do wgrania.
+ */
+export interface BuildOutcome {
+    /** Pełne wyjście budowy — to samo, co dotąd zwracał napis. */
+    output: string;
+    /** Gotowy program dla maszyny użytkownika. */
+    artifact?: BuildArtifactInfo;
+    /** Dlaczego artefaktu nie ma mimo udanej budowy. */
+    artifactProblem?: string;
+}
+
 export interface StudioPluginOptions {
     models: ModelAccess;
     /**
@@ -95,7 +114,15 @@ export interface StudioPluginOptions {
      * sama — to zadanie środowiska budowania, które ma już własne wejście.
      */
     runBuild?(
-        request: { file: string; target?: string; upload: boolean },
+        request: {
+            file: string; target?: string; upload: boolean;
+            /**
+             * Maszyna dla celu natywnego — identyfikator z HOST_PLATFORMS
+             * (`win-arm64`, `mac-arm64`, …). Dla celów sprzętowych nieobecny:
+             * wsad jest ten sam niezależnie od tego, na czym stoi przeglądarka.
+             */
+            hostPlatform?: string;
+        },
         /**
          * Kolejne wiersze wyniku, w trakcie budowania.
          *
@@ -103,7 +130,15 @@ export interface StudioPluginOptions {
          * samego końca i nie widać różnicy między „kompiluje" a „zawisło".
          */
         onLine: (line: string) => void,
-    ): Promise<string | void>;
+    ): Promise<string | BuildOutcome | void>;
+    /**
+     * Co zrobić z gotowym plikiem celu natywnego.
+     *
+     * Domyślnie wtyczka pobiera go przez przeglądarkę. Gospodarz z dostępem
+     * do dysku (wersja desktopowa) może chcieć zapisać go wprost albo od razu
+     * uruchomić — stąd punkt zaczepienia.
+     */
+    downloadArtifact?(artifact: BuildArtifactInfo): void;
     /** Schematy konfiguracji paczek — z nich powstają formularze inspektora. */
     loadConfigSchemas?(projectFile: string): Promise<Readonly<Record<string, unknown>>>;
     /** Schemat i definicje układów — wczytuje je host, tak jak paczki. */
@@ -146,6 +181,33 @@ function debug(...args: unknown[]): void {
     } catch { /* brak localStorage — trudno */ }
 }
 
+/**
+ * Pobranie pliku przez przeglądarkę. Zwraca opis problemu albo `undefined`.
+ *
+ * Odnośnik musi trafić do dokumentu, zanim zostanie kliknięty — Firefox
+ * ignoruje kliknięcie w element spoza drzewa. Adres obiektu zwalniamy
+ * z opóźnieniem, bo unieważnienie go w tej samej klatce przerywa rozpoczęte
+ * pobieranie w Safari.
+ */
+function downloadInBrowser(artifact: BuildArtifactInfo): string | undefined {
+    try {
+        const blob = new Blob([decodeBase64(artifact.base64) as unknown as BlobPart],
+                              { type: artifact.mimeType });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = artifact.name;
+        anchor.style.display = 'none';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        return undefined;
+    } catch (err) {
+        return String(err);
+    }
+}
+
 export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugin {
     const disposables: IDisposable[] = [];
     let activeFile: string | undefined;
@@ -165,6 +227,22 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
 
     /** Odroczone otwarcie zakładki — do anulowania przy wyłączeniu wtyczki. */
     let pendingTabTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Maszyna, dla której budujemy cel natywny.
+     *
+     * `detected` wypełnia wykrywanie przy aktywacji, `override` — wybór
+     * użytkownika. Wybór ma pierwszeństwo zawsze, bo wykrywanie architektury
+     * z poziomu strony bywa niemożliwe (Safari na Apple Silicon podaje
+     * „Intel", Windows on ARM podaje „x64") i użytkownik musi mieć jak
+     * to poprawić.
+     */
+    let detectedHost: DetectedHost | undefined;
+    let hostOverride: string | undefined;
+
+    function hostPlatformId(): string | undefined {
+        return hostOverride ?? detectedHost?.platform.id;
+    }
 
     /** Gospodarz — zapamiętany przy aktywacji, bo `runAction` żyje poza nią. */
     let host: HostApi | undefined;
@@ -298,11 +376,82 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                     schematic={schematic}
                     configSchemas={configSchemas}
                     target={selectedTarget}
+                    onSelectTarget={(name) => { selectedTarget = name; publish(activeSource); }}
                     log={bottomPanelLines()}
                     onEdit={(path, value) => editField(source, path, value)}
                 />
             </Suspense>
         );
+    }
+
+    /**
+     * Czy wskazany cel jest natywny.
+     *
+     * Pytamy plan, a nie nazwę celu: nazwa jest dowolna („podglad", „okno"),
+     * a decyzja ma zapadać w jednym miejscu — tym samym, z którego korzysta
+     * wiersz poleceń. Drugie miejsce oznaczałoby, że kiedyś odpowiedzą różnie.
+     */
+    function isNativeTarget(name: string | undefined): boolean {
+        if (!activeFile) return false;
+        try {
+            const plan = buildPlan(HydraDocument.parse(activeSource).toJS());
+            const wanted = name ?? plan.defaultTarget;
+            return plan.targets.some((target) => target.name === wanted && target.isNative);
+        } catch {
+            // Plik w trakcie edycji bywa niepoprawny — to nie powód, żeby
+            // przycisk „Buduj" przestał działać. Budowa i tak zgłosi błąd.
+            return false;
+        }
+    }
+
+    /** Sprowadza obie postacie wyniku budowy do jednej. */
+    function normalizeOutcome(result: string | BuildOutcome | void,
+                              streamed: readonly string[], what: string): BuildOutcome {
+        const fallback = streamed.length > 0
+            ? streamed.join('\n')
+            : `${what} zakończone bez wyniku.`;
+
+        if (typeof result === 'string') return { output: result };
+        if (result && typeof result === 'object') {
+            return {
+                output: result.output || fallback,
+                ...(result.artifact ? { artifact: result.artifact } : {}),
+                ...(result.artifactProblem ? { artifactProblem: result.artifactProblem } : {}),
+            };
+        }
+        return { output: fallback };
+    }
+
+    /**
+     * Oddaje gotowy plik użytkownikowi.
+     *
+     * Domyślnie przez pobranie w przeglądarce. Zapis do dysku jest poza
+     * zasięgiem strony, więc jedyną drogą jest obiekt Blob i odnośnik
+     * z atrybutem `download` — ta sama, którą Studio zapisuje pliki VCD.
+     */
+    function deliverArtifact(artifact: BuildArtifactInfo): void {
+        if (options.downloadArtifact) {
+            options.downloadArtifact(artifact);
+            return;
+        }
+        const problem = downloadInBrowser(artifact);
+        buildOutput = problem
+            ? `${buildOutput ?? ''}\n\nnie udało się pobrać ${artifact.name}: ${problem}`
+            : `${buildOutput ?? ''}\n\npobrano ${artifact.name} ` +
+              `(${Math.round(artifact.sizeBytes / 1024)} kB)${runHint(artifact)}`;
+    }
+
+    /**
+     * Co użytkownik ma zrobić z pobranym plikiem.
+     *
+     * Archiwum trzeba rozpakować, a plik z Uniksa dostaje po pobraniu prawa
+     * bez bitu wykonywalności — przeglądarka go zdejmuje i nie da się tego
+     * obejść. Bez tej podpowiedzi udana budowa kończy się plikiem, którego
+     * dwukrotne kliknięcie nic nie robi.
+     */
+    function runHint(artifact: BuildArtifactInfo): string {
+        if (artifact.packaged) return ' — rozpakuj i uruchom plik .exe';
+        return `\nnadaj prawo uruchamiania:  chmod +x ${artifact.name} && ./${artifact.name}`;
     }
 
     /**
@@ -367,24 +516,39 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                     return;
                 }
 
-                buildOutput = `${what}: ${activeFile.split('/').pop()}…`;
+                const chosenTarget = typeof argument === 'string' ? argument : selectedTarget;
+                const native = isNativeTarget(chosenTarget);
+                const machine = native ? hostPlatformId() : undefined;
+
+                buildOutput = native
+                    ? `${what}: ${activeFile.split('/').pop()} → ${machine ?? 'nieznana maszyna'}…`
+                    : `${what}: ${activeFile.split('/').pop()}…`;
                 republish();
 
                 try {
                     const streamed: string[] = [];
-                    const output = await options.runBuild({
+                    const result = await options.runBuild({
                         file: activeFile,
-                        ...(typeof argument === 'string' ? { target: argument } : {}),
+                        ...(chosenTarget !== undefined ? { target: chosenTarget } : {}),
                         upload: action === 'project.upload',
+                        ...(machine !== undefined ? { hostPlatform: machine } : {}),
                     }, (line) => {
                         streamed.push(line);
                         buildOutput = streamed.join('\n');
                         republish();
                     });
-                    buildOutput = typeof output === 'string'
-                        ? output
-                        : (streamed.length > 0 ? streamed.join('\n') : `${what} zakończone bez wyniku.`);
-                    buildSummary = typeof output === 'string' ? parseBuildOutput(output) : undefined;
+
+                    const outcome = normalizeOutcome(result, streamed, what);
+                    buildOutput = outcome.output;
+                    buildSummary = outcome.output ? parseBuildOutput(outcome.output) : undefined;
+
+                    // Wynik celu natywnego to plik dla tej maszyny — pobieramy
+                    // go od razu. Budowa, po której trzeba jeszcze samemu
+                    // znaleźć plik w katalogu build, nie jest skończona.
+                    if (outcome.artifact) deliverArtifact(outcome.artifact);
+                    else if (outcome.artifactProblem) {
+                        buildOutput = `${buildOutput}\n\n${outcome.artifactProblem}`;
+                    }
                 } catch (err) {
                     buildOutput = `${what} nie powiodło się: ${String(err)}`;
                     buildSummary = undefined;
@@ -706,6 +870,27 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                 }));
             }
 
+            /*
+             * Wybór maszyny dla celu natywnego — osobne polecenie na wariant.
+             *
+             * Paleta gospodarza rejestruje samą nazwę polecenia i nie przekazuje
+             * argumentów, więc `host` z parametrem nadaje się tylko do wywołania
+             * z kodu. Pozycja w palecie musi być poleceniem bezargumentowym,
+             * inaczej klika się w coś, co nic nie robi.
+             *
+             * Istnieją dlatego, że wykrywania architektury z poziomu strony nie
+             * da się zrobić pewnie — patrz emit/host.ts.
+             */
+            for (const machine of HOST_PLATFORMS) {
+                const id = `host.${machine.id}`;
+                disposables.push(api.commands.register(id, () => setHostPlatform(machine.id)));
+                disposables.push(api.ui.commandpalette.register({
+                    command: command(id),
+                    title: `Buduj cel native dla: ${machine.label}`,
+                    category: 'Hydra · Projekt',
+                }));
+            }
+
             // Pasek narzędzi edytora: to, po co sięga się najczęściej.
             const TOOLBAR: { id: string; label: string; icon: string; order: number }[] = [
                 { id: 'project.build',  label: 'Buduj wsad',           icon: '⚙', order: 10 },
@@ -765,6 +950,29 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                 if (typeof name === 'string') { selectedTarget = name; publish(activeSource); }
             }));
 
+            // Ręczne wskazanie maszyny dla celu natywnego. Musi istnieć, bo
+            // wykrywanie bywa niemożliwe — Safari na Apple Silicon i Windows
+            // on ARM podają architekturę x64 i nie da się tego rozstrzygnąć
+            // z poziomu strony.
+            disposables.push(api.commands.register('host', (id?: unknown) => {
+                if (typeof id === 'string') setHostPlatform(id);
+            }));
+
+            function setHostPlatform(id: string): void {
+                const machine = hostPlatform(id);
+                if (!machine) {
+                    api.logger.warn(`Hydra: nieznana maszyna „${id}"`);
+                    return;
+                }
+                hostOverride = id;
+                machineStatus.update({
+                    text: `⬒ ${machine.label}`,
+                    tooltip: 'maszyna wskazana ręcznie',
+                    color: '',
+                });
+                publish(activeSource);
+            }
+
             disposables.push(api.commands.register('schematic', () => {
                 api.openEditorTab({
                     uri: `hydra-studio://schematic/${activeFile ?? ''}`,
@@ -782,6 +990,50 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                 command: command('open'),
             });
             disposables.push(status);
+
+            /*
+             * Maszyna, dla której powstanie cel natywny.
+             *
+             * Widoczna na pasku stanu, bo to jedyna rzecz w całym budowaniu,
+             * o której program zgaduje. Wsad na ESP32 jest ten sam niezależnie
+             * od tego, na czym stoi przeglądarka; plik dla Windows on ARM
+             * uruchomi się tylko tam. Ukryte zgadywanie kończyłoby się plikiem,
+             * który nie startuje, i pytaniem „dlaczego" bez żadnego tropu.
+             */
+            const machineStatus = api.ui.statusbar.register({
+                id: 'hydra-host', text: '⬒ …', alignment: 'right', priority: 40,
+                tooltip: 'maszyna dla celu native',
+            });
+            disposables.push(machineStatus);
+
+            // Pierwsze przybliżenie od razu, żeby pasek nie stał pusty;
+            // Client Hints odpowiadają asynchronicznie i poprawiają wynik.
+            detectedHost = detectHostPlatformSync(globalThis.navigator ?? {});
+            showMachine();
+
+            void detectHostPlatform(
+                globalThis.navigator ?? {},
+                typeof document !== 'undefined'
+                    ? webglRendererProbe(() => document.createElement('canvas'))
+                    : undefined,
+            ).then((found) => {
+                detectedHost = found;
+                showMachine();
+                debug('maszyna:', found.platform.id, found.confidence, found.source);
+            }).catch(() => { /* zostaje przybliżenie */ });
+
+            function showMachine(): void {
+                if (!detectedHost) return;
+                const sure = detectedHost.confidence === 'high';
+                machineStatus.update({
+                    text: `⬒ ${detectedHost.platform.label}${sure ? '' : ' ?'}`,
+                    tooltip: sure
+                        ? `maszyna dla celu native — ${detectedHost.source}`
+                        : `maszyna zgadnięta (${detectedHost.source}). ` +
+                          'Popraw poleceniem „Hydra: maszyna", jeśli to nie ta.',
+                    ...(sure ? {} : { color: '#d97706' }),
+                });
+            }
 
             listeners.add((source) => {
                 const diagnostics = validate(HydraDocument.parse(source));

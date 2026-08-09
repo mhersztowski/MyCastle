@@ -17,13 +17,50 @@ export const MODULE_FLAGS: Readonly<Record<string, string>> = {
     ui: 'HYDRA_ENABLE_UI',
     motion: 'HYDRA_ENABLE_MOTION',
     ota: 'HYDRA_ENABLE_OTA',
+    // Moduł IoT MyCastle. Niezależny od `net`, choć zwykle chodzą razem:
+    // węzeł na końcu RS-485 nie ma stosu TCP/IP i nie ma powodu go kompilować.
+    minis: 'HYDRA_ENABLE_MINIS',
+    // Potok multimedialny. Kosztuje tyle, ile pule buforów zadeklarowane
+    // przez aplikację — framework nie ma tu pamięci własnej.
+    media: 'HYDRA_ENABLE_MEDIA',
+    // Warstwa zgodności z Arduboy2. Dokłada osobny korzeń włączeń
+    // `include/compat/arduboy`, skąd biorą się nazwy globalne wymagane przez
+    // niezmienione źródła gier — patrz emiter CMake.
+    arduboy: 'HYDRA_ENABLE_ARDUBOY',
 };
+
+/**
+ * Okno celu natywnego.
+ *
+ * Rozmiar opisuje **powierzchnię rysowania**, a nie okno: `scale` mnoży tylko
+ * to, co widać na monitorze. Dzięki temu ten sam projekt otwarty w oknie
+ * i wgrany na OLED 128×64 rysuje w identycznej rozdzielczości, a nie
+ * w „takiej, jaka wyszła".
+ */
+export interface NativeWindow {
+    /** `false` = program bez interfejsu; przydatne w CI i przez ssh. */
+    display: boolean;
+    width: number;
+    height: number;
+    scale: number;
+    format: string;
+    title: string | undefined;
+}
+
+export const NATIVE_PIXEL_FORMATS = ['mono1', 'rgb565', 'rgb888', 'rgba8888'] as const;
 
 export interface TargetPlan {
     /** Nazwa celu; służy zarazem za nazwę środowiska PlatformIO. */
     name: string;
     mcu: string;
     profile: McuProfile;
+    /**
+     * Cel natywny buduje się CMake'em, nie PlatformIO, i daje program zależny
+     * od systemu operacyjnego. Emitery rozgałęziają się na tym polu.
+     */
+    isNative: boolean;
+    /** Okno — tylko dla celu natywnego. */
+    native: NativeWindow | undefined;
     /** Płytka PlatformIO — z pliku albo z profilu układu. */
     board: string;
     /** Nagłówek z opisem wyprowadzeń. */
@@ -112,7 +149,11 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
 
     if (profile.core) settings['board_build.core'] = profile.core;
 
-    const boardHeader = asString(target['board']);
+    // Cel natywny ma swój plik płytki w bibliotece — na PC nie ma czego
+    // opisywać, a brak pliku oznaczałby build bez HYDRA_BOARD_NAME i aplikację,
+    // która nie umie powiedzieć, na czym chodzi.
+    const boardHeader = asString(target['board'])
+        ?? (profile.kind === 'native' ? 'hydra/boards/native.hpp' : undefined);
     if (boardHeader) {
         flags.push(`-D HYDRA_BOARD_HEADER='"${headerInclude(boardHeader)}"'`);
     }
@@ -126,8 +167,21 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
     applyClock(asRecord(target['platformio']), flags);
     applyLogLevel(asRecord(root['modules']), flags);
 
+    const isNative = profile.kind === 'native';
+    let native: NativeWindow | undefined;
+    if (isNative) {
+        // Backend hostowy wybiera się flagą, a nie gałęzią w pliku budowy.
+        // Ta sama flaga włącza atrapy HAL w Makefile testów, więc cel `native`
+        // i testy jednostkowe kompilują dokładnie ten sam kod.
+        flags.push('-D HYDRA_FORCE_HOST=1');
+        native = nativeWindow(asRecord(target['native']));
+        applyNative(native, flags);
+    }
+
     return {
         name, mcu, profile, board,
+        isNative,
+        native,
         boardHeader: boardHeader ? headerInclude(boardHeader) : undefined,
         modules,
         capabilities,
@@ -157,6 +211,47 @@ function enabledModules(globalModules: Record<string, unknown>, target: Record<s
         if (globalModules[module] !== undefined) enabled.push(module);
     }
     return enabled;
+}
+
+/**
+ * Okno celu natywnego z wartościami domyślnymi.
+ *
+ * Domyślne 320×240 RGB565 to nie liczba wzięta z powietrza, tylko najczęstszy
+ * panel IPS 2,8" na SPI — projekt otwarty w oknie bez żadnych ustawień ma
+ * od razu odpowiadać czemuś, co da się kupić.
+ */
+function nativeWindow(raw: Record<string, unknown> | undefined): NativeWindow {
+    const display = raw?.['display'];
+    const window = asRecord(raw?.['window']) ?? raw ?? {};
+
+    const format = asString(window['format']) ?? 'rgb565';
+
+    return {
+        display: display === undefined ? true : display !== false && display !== 'off',
+        width:  asPositiveInt(window['width'])  ?? 320,
+        height: asPositiveInt(window['height']) ?? 240,
+        // Skala 0 wyłączyłaby okno przez pomyłkę zamiast przez decyzję.
+        scale:  asPositiveInt(window['scale'])  ?? 2,
+        format: (NATIVE_PIXEL_FORMATS as readonly string[]).includes(format) ? format : 'rgb565',
+        title:  asString(window['title']),
+    };
+}
+
+function applyNative(window: NativeWindow, flags: string[]): void {
+    if (!window.display) {
+        flags.push('-D HYDRA_NATIVE_HEADLESS=1');
+        return;
+    }
+    flags.push(`-D HYDRA_NATIVE_WINDOW_W=${window.width}`);
+    flags.push(`-D HYDRA_NATIVE_WINDOW_H=${window.height}`);
+    flags.push(`-D HYDRA_NATIVE_WINDOW_SCALE=${window.scale}`);
+    if (window.title) {
+        flags.push(`-D HYDRA_NATIVE_WINDOW_TITLE='"${window.title}"'`);
+    }
+}
+
+function asPositiveInt(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function applyMemory(memory: Record<string, unknown> | undefined,

@@ -61,6 +61,7 @@
           "mcu": {
             "type": "string",
             "enum": [
+              "native",
               "esp32",
               "esp32s2",
               "esp32s3",
@@ -158,6 +159,56 @@
                   "ota_2app_fat"
                 ],
                 "description": "Schemat partycji — nazwa logiczna, nie plik"
+              }
+            },
+            "additionalProperties": false
+          },
+          "native": {
+            "type": "object",
+            "description": "Cel natywny: okno na maszynie deweloperskiej (tylko mcu: native)",
+            "properties": {
+              "display": {
+                "type": "boolean",
+                "description": "Czy otwierać okno; false = program bez interfejsu (CI, ssh)"
+              },
+              "window": {
+                "type": "object",
+                "description": "Powierzchnia rysowania — jej rozmiar, nie rozmiar okna",
+                "properties": {
+                  "width": {
+                    "type": "integer",
+                    "description": "Szerokość powierzchni [px]",
+                    "minimum": 16,
+                    "maximum": 4096
+                  },
+                  "height": {
+                    "type": "integer",
+                    "description": "Wysokość powierzchni [px]",
+                    "minimum": 16,
+                    "maximum": 4096
+                  },
+                  "scale": {
+                    "type": "integer",
+                    "description": "Powiększenie na ekranie; piksel bufora = kwadrat scale×scale",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "mono1",
+                      "rgb565",
+                      "rgb888",
+                      "rgba8888"
+                    ],
+                    "description": "Format piksela — ten sam co panelu, który ma to zastąpić"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Tytuł okna; domyślnie nazwa projektu"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false
@@ -723,6 +774,228 @@
             "auto": {
               "type": "boolean",
               "description": "Aktualizuj samoczynnie"
+            }
+          },
+          "additionalProperties": false
+        },
+        "minis": {
+          "type": "object",
+          "description": "Platforma IoT MyCastle",
+          "properties": {
+            "user": {
+              "type": "string",
+              "description": "Nazwa użytkownika w MyCastle"
+            },
+            "heartbeat_s": {
+              "type": "integer",
+              "description": "Co ile wysyłać puls; 0 = tylko telemetria [s]",
+              "minimum": 0,
+              "maximum": 3600
+            },
+            "auto_register": {
+              "type": "boolean",
+              "description": "Czy zgłaszać się do listy urządzeń po połączeniu"
+            },
+            "gateway": {
+              "type": "boolean",
+              "description": "Tryb bramki: subskrypcje z symbolem wieloznacznym i przekazywanie ruchu urządzeń za tym"
+            },
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "description": "Łącze",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "mqtt",
+                      "websocket",
+                      "rs485",
+                      "rs232"
+                    ],
+                    "description": "Rodzaj łącza"
+                  },
+                  "uart": {
+                    "type": "integer",
+                    "description": "Numer portu szeregowego",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "node": {
+                    "type": "integer",
+                    "description": "Numer węzła na magistrali; 0 = bramka",
+                    "minimum": 0,
+                    "maximum": 254
+                  },
+                  "de_pin": {
+                    "type": "string",
+                    "description": "Pin sterujący nadajnikiem RS-485, np. Pin.Rs485De"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "kind"
+                ]
+              },
+              "description": "Łącza w kolejności rejestracji; pierwsze do serwera jest trasą domyślną"
+            },
+            "routing": {
+              "type": "object",
+              "description": "Trasowanie",
+              "properties": {
+                "max_hops": {
+                  "type": "integer",
+                  "description": "Limit przeskoków między bramkami",
+                  "minimum": 1,
+                  "maximum": 8
+                },
+                "learn": {
+                  "type": "boolean",
+                  "description": "Czy budować tablicę tras z ruchu"
+                },
+                "route_ttl_s": {
+                  "type": "integer",
+                  "description": "Po jakim czasie ciszy zapomnieć trasę; 0 = nigdy [s]",
+                  "minimum": 0,
+                  "maximum": 86400
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "media": {
+          "type": "object",
+          "description": "Potok multimedialny: audio i obraz",
+          "properties": {
+            "pools": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "description": "Pula",
+                "properties": {
+                  "block_bytes": {
+                    "type": "integer",
+                    "description": "Rozmiar bloku [B]",
+                    "minimum": 16,
+                    "maximum": 4194304
+                  },
+                  "count": {
+                    "type": "integer",
+                    "description": "Liczba bloków",
+                    "minimum": 2,
+                    "maximum": 64
+                  },
+                  "memory": {
+                    "type": "string",
+                    "enum": [
+                      "internal",
+                      "psram",
+                      "dma"
+                    ],
+                    "description": "Skąd pamięć"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "block_bytes",
+                  "count"
+                ]
+              },
+              "description": "Pule buforów; rozmiar bloku przekłada się na opóźnienie"
+            },
+            "domains": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "description": "Domena",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Nazwa, np. capture"
+                  },
+                  "period_ms": {
+                    "type": "integer",
+                    "description": "Okres kroku [ms]",
+                    "minimum": 1,
+                    "maximum": 10000
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "realtime",
+                      "high",
+                      "normal",
+                      "low",
+                      "idle"
+                    ],
+                    "description": "Priorytet taska"
+                  },
+                  "core": {
+                    "type": "integer",
+                    "description": "Rdzeń; ignorowane na układach jednordzeniowych",
+                    "minimum": 0,
+                    "maximum": 3
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "period_ms"
+                ]
+              },
+              "description": "Domeny czasowe — jedna domena to jeden task"
+            },
+            "audio": {
+              "type": "object",
+              "description": "Domyślne parametry strumienia audio",
+              "properties": {
+                "sample_rate": {
+                  "type": "integer",
+                  "description": "Częstotliwość próbkowania [Hz]",
+                  "minimum": 8000,
+                  "maximum": 192000
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "u8",
+                    "s16",
+                    "s24",
+                    "s32",
+                    "f32"
+                  ],
+                  "description": "Format próbki"
+                },
+                "channels": {
+                  "type": "integer",
+                  "description": "Liczba kanałów",
+                  "minimum": 1,
+                  "maximum": 8
+                },
+                "frames_per_block": {
+                  "type": "integer",
+                  "description": "Ramki w bloku; wprost wyznacza opóźnienie",
+                  "minimum": 8,
+                  "maximum": 4096
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "arduboy": {
+          "type": "object",
+          "description": "Zgodność z Arduboy2 — gry na Arduboya bez zmian w źródle",
+          "properties": {
+            "scale": {
+              "type": "integer",
+              "description": "Powiększenie okna na celu natywnym",
+              "minimum": 1,
+              "maximum": 16
             }
           },
           "additionalProperties": false

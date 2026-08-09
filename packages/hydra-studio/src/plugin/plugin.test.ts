@@ -192,6 +192,44 @@ test('polecenie budowania przekazuje robotę środowisku, nie woła pio samo', a
     expectDeepEqual(requests, [{ file: '/proj/rover-01.hydra', target: 'esp32s3-main', upload: false }]);
 });
 
+test('cel wybrany w panelu wchodzi do budowania bez argumentu polecenia', async () => {
+    /*
+     * Sedno wyboru celu: „Buduj" na pasku narzędzi jest bezargumentowe, bo
+     * paleta i pasek gospodarza argumentów nie przekazują. Wybór musi więc
+     * zostać zapamiętany wcześniej — inaczej `pio run` idzie bez `-e`
+     * i buduje wszystkie środowiska naraz.
+     */
+    const { api, state } = fakeHost();
+    const requests: { target?: string }[] = [];
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async (request) => { requests.push(request); },
+    }).activate(api);
+
+    state.onOpen!('/proj/rover-01.hydra', roverSource);
+
+    await api.commands.execute('target', 'esp32s3-main');
+    await api.commands.execute('project.build');
+
+    expectEqual(requests[0]?.target, 'esp32s3-main');
+});
+
+test('brak wybranego celu zostawia budowanie bez -e, czyli wszystkie środowiska', async () => {
+    // Zachowanie domyślne opisane wprost, żeby zmiana była widoczna w teście,
+    // a nie dopiero w czasie kompilacji dwóch wsadów zamiast jednego.
+    const { api, state } = fakeHost();
+    const requests: { target?: string }[] = [];
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async (request) => { requests.push(request); },
+    }).activate(api);
+
+    state.onOpen!('/proj/rover-01.hydra', roverSource);
+    await api.commands.execute('project.build');
+
+    expectEqual(requests[0]?.target, undefined);
+});
+
 test('sprawdzanie wypisuje zgłoszenia przez dziennik edytora', async () => {
     const { api, state } = fakeHost();
     createHydraStudioPlugin({ models: { getModel: () => undefined } }).activate(api);
@@ -398,3 +436,112 @@ test('polecenia z paska menu trafiają do gospodarza, nie są wykonywane w przeg
     expectOk(forwarded.length === 0, 'bez wywołania nic nie jest przekazywane');
 });
 
+
+// --- cel natywny -----------------------------------------------------------
+
+/** Projekt z jednym celem natywnym i jednym sprzętowym. */
+const NATIVE_SOURCE = `
+hydra: "0.4"
+project: { name: okienko, version: 0.1.0 }
+targets:
+  default: podglad
+  podglad: { mcu: native }
+  esp32s3-main: { mcu: esp32s3 }
+`;
+
+test('budowa celu natywnego przekazuje wykrytą maszynę, sprzętowego — nie', async () => {
+    // Wsad na ESP32 jest ten sam niezależnie od tego, na czym stoi
+    // przeglądarka. Program natywny — nie, i to jest cała różnica.
+    const { api, state } = fakeHost();
+    const requests: { target?: string; hostPlatform?: string }[] = [];
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async (request) => { requests.push(request); return ''; },
+    }).activate(api);
+
+    state.onOpen!('/proj/okienko.hydra', NATIVE_SOURCE);
+
+    await api.commands.execute('project.build', 'podglad');
+    expectOk(requests[0]!.hostPlatform, 'cel natywny musi wskazywać maszynę');
+
+    await api.commands.execute('project.build', 'esp32s3-main');
+    expectEqual(requests[1]!.hostPlatform, undefined);
+});
+
+test('gotowy program trafia do gospodarza od razu po budowie', async () => {
+    // Budowa, po której trzeba jeszcze samemu znaleźć plik w katalogu build,
+    // nie jest skończona.
+    const { api, state } = fakeHost();
+    const delivered: { name: string }[] = [];
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async () => ({
+            output: 'gotowe',
+            artifact: {
+                name: 'podglad-win-arm64.zip', mimeType: 'application/zip',
+                sizeBytes: 2048, base64: 'AAAA', packaged: true,
+            },
+        }),
+        downloadArtifact: (artifact) => { delivered.push(artifact); },
+    }).activate(api);
+
+    state.onOpen!('/proj/okienko.hydra', NATIVE_SOURCE);
+    await api.commands.execute('project.build', 'podglad');
+
+    expectEqual(delivered.length, 1);
+    expectEqual(delivered[0]!.name, 'podglad-win-arm64.zip');
+});
+
+test('gospodarz zwracający sam napis działa jak dotąd', async () => {
+    // Wszystkie dotychczasowe podłączenia zwracają napis; postać obiektowa
+    // jest dodatkiem dla celu natywnego, a nie zmianą kontraktu.
+    const { api, state } = fakeHost();
+    let downloads = 0;
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async () => 'RAM:   [=         ]  12.3% (used 40000 bytes)',
+        downloadArtifact: () => { downloads += 1; },
+    }).activate(api);
+
+    state.onOpen!('/proj/okienko.hydra', NATIVE_SOURCE);
+    await api.commands.execute('project.build', 'podglad');
+
+    expectEqual(downloads, 0);
+});
+
+test('wybór maszyny ręcznie ma pierwszeństwo nad wykrywaniem', async () => {
+    // Konieczne, bo Safari na Apple Silicon i Windows on ARM podają x64
+    // i z poziomu strony nie zawsze da się to rozstrzygnąć.
+    const { api, state } = fakeHost();
+    const requests: { hostPlatform?: string }[] = [];
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async (request) => { requests.push(request); return ''; },
+    }).activate(api);
+
+    state.onOpen!('/proj/okienko.hydra', NATIVE_SOURCE);
+    await api.commands.execute('host', 'mac-arm64');
+    await api.commands.execute('project.build', 'podglad');
+
+    expectEqual(requests[0]!.hostPlatform, 'mac-arm64');
+});
+
+test('paleta ma bezargumentową pozycję na każdą maszynę', async () => {
+    // Paleta gospodarza rejestruje samą nazwę polecenia — wariant z argumentem
+    // dawałby pozycję, która po kliknięciu nic nie robi.
+    const { api, state } = fakeHost();
+    const requests: { hostPlatform?: string }[] = [];
+    createHydraStudioPlugin({
+        models: { getModel: () => undefined },
+        runBuild: async (request) => { requests.push(request); return ''; },
+    }).activate(api);
+
+    expectOk(state.palette.some((c) => c.endsWith('host.win-arm64')));
+    expectOk(state.palette.some((c) => c.endsWith('host.mac-arm64')));
+
+    state.onOpen!('/proj/okienko.hydra', NATIVE_SOURCE);
+    await api.commands.execute('host.win-arm64');
+    await api.commands.execute('project.build', 'podglad');
+
+    expectEqual(requests[0]!.hostPlatform, 'win-arm64');
+});

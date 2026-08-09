@@ -31,8 +31,16 @@ export {
 } from './jsonSchema';
 
 export {
-    buildPlan, MODULE_FLAGS, type BuildPlan, type TargetPlan, type PlanOptions,
+    buildPlan, MODULE_FLAGS, NATIVE_PIXEL_FORMATS,
+    type BuildPlan, type TargetPlan, type PlanOptions, type NativeWindow,
 } from './emit/plan';
+export {
+    HOST_PLATFORMS, hostPlatform, hostPlatformFor, artifactName, decodeBase64,
+    detectHostPlatform, detectHostPlatformSync, webglRendererProbe,
+    type HostPlatform, type HostOs, type HostArch, type DetectedHost,
+    type NavigatorLike, type RendererProbe, type BuildArtifactInfo,
+} from './emit/host';
+export { emitCMakePresets, type PresetsOptions } from './emit/presets';
 export { MCU_PROFILES, profileFor, type McuProfile } from './emit/mcu';
 export {
     emitPlatformio, isGenerated, GENERATED_MARKER, GENERATED_PHRASE,

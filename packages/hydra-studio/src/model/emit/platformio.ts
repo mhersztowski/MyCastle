@@ -43,12 +43,25 @@ export function emitPlatformio(plan: BuildPlan, options: PlatformioOptions = {})
 
     lines.push('[platformio]');
     lines.push(`; ${plan.description ?? plan.projectName}`);
-    if (plan.defaultTarget) lines.push(`default_envs = ${plan.defaultTarget}`);
+    // Domyślny cel projektu bywa natywny — wtedy nie ma go w tym pliku
+    // i wpisanie go dałoby „Unknown environment" przy każdym `pio run`.
+    // Bierzemy pierwszy cel sprzętowy; gdy takiego nie ma, sekcji nie ma wcale.
+    const hardware = plan.targets.filter((target) => !target.isNative);
+    const defaultEnv = hardware.some((target) => target.name === plan.defaultTarget)
+        ? plan.defaultTarget
+        : hardware[0]?.name;
+    if (defaultEnv) lines.push(`default_envs = ${defaultEnv}`);
     lines.push('');
 
     lines.push(...commonSection(plan, options));
 
     for (const target of plan.targets) {
+        // Cel natywny nie ma tu czego szukać: PlatformIO buduje wsady dla
+        // układów, a `native` daje program dla konkretnego systemu i wymaga
+        // znalezienia SDL. Próba wtłoczenia tego w `platform = native` kończy
+        // się plikiem, który wygląda poprawnie i nie linkuje się na żadnej
+        // maszynie. Ten cel obsługuje CMakeLists.txt razem z CMakePresets.json.
+        if (target.isNative) continue;
         lines.push('');
         lines.push(...targetSection(target, plan));
     }

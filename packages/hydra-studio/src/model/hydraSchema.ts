@@ -8,14 +8,22 @@
  * wymaga zmiany w rdzeniu Studia.
  */
 
-import { PARTITION_SCHEMES } from './emit/plan';
+import { NATIVE_PIXEL_FORMATS, PARTITION_SCHEMES } from './emit/plan';
 import {
     any, anyOf, bool, list, map, num, obj, oneOf, optional, required, str,
     type ObjectNode,
 } from './schema';
 
-/** Rodziny układów, dla których Hydra ma backend. */
-export const MCUS = ['esp32', 'esp32s2', 'esp32s3', 'esp32c3', 'esp32c6',
+/**
+ * Rodziny układów, dla których Hydra ma backend.
+ *
+ * `native` jest na tej liście świadomie, choć nie jest układem: to maszyna
+ * deweloperska jako cel budowy — ten sam rdzeń i te same taski, atrapy HAL
+ * zamiast Arduino i okno SDL zamiast panelu. Trzymanie go osobno oznaczałoby
+ * drugą oś w modelu i drugi zestaw reguł w każdym emiterze.
+ */
+export const MCUS = ['native',
+                     'esp32', 'esp32s2', 'esp32s3', 'esp32c3', 'esp32c6',
                      'rp2040', 'rp2350', 'stm32g4', 'stm32f4', 'stm32h7'] as const;
 
 /**
@@ -34,7 +42,7 @@ export const CAPABILITIES = [
     'fpu', 'smp', 'can', 'rtc',
 ] as const;
 
-const MODULE_NAMES = ['core', 'sense', 'net', 'ui', 'motion', 'ota'] as const;
+const MODULE_NAMES = ['core', 'sense', 'net', 'ui', 'motion', 'ota', 'minis', 'media', 'arduboy'] as const;
 
 /** Nadpisania modułów per cel: `off`, `on` albo zagnieżdżona konfiguracja. */
 const moduleOverride = anyOf('Włączenie, wyłączenie albo nadpisanie ustawień modułu', [
@@ -61,6 +69,18 @@ const target: ObjectNode = obj('Cel sprzętowy — jedno środowisko budowania',
             pattern: /^\d+(?:KB|MB|GB)$/i, patternHint: 'zapis w postaci 8MB, 16MB, 512KB',
         })),
         partitions: optional(oneOf('Schemat partycji — nazwa logiczna, nie plik', PARTITION_SCHEMES)),
+    })),
+    native: optional(obj('Cel natywny: okno na maszynie deweloperskiej (tylko mcu: native)', {
+        display: optional(bool('Czy otwierać okno; false = program bez interfejsu (CI, ssh)')),
+        window: optional(obj('Powierzchnia rysowania — jej rozmiar, nie rozmiar okna', {
+            width:  optional(num('Szerokość powierzchni', { integer: true, min: 16, max: 4096, unit: 'px' })),
+            height: optional(num('Wysokość powierzchni', { integer: true, min: 16, max: 4096, unit: 'px' })),
+            scale:  optional(num('Powiększenie na ekranie; piksel bufora = kwadrat scale×scale',
+                                 { integer: true, min: 1, max: 16 })),
+            format: optional(oneOf('Format piksela — ten sam co panelu, który ma to zastąpić',
+                                   NATIVE_PIXEL_FORMATS)),
+            title:  optional(str('Tytuł okna; domyślnie nazwa projektu')),
+        })),
     })),
     smp: optional(obj('Przydział tasków do rdzeni', {
         pin_tasks: optional(map('Task → numer rdzenia', num('Numer rdzenia', { integer: true, min: 0, max: 3 }))),
@@ -183,6 +203,85 @@ const motionModule = obj('Napęd', {
     })),
 });
 
+/**
+ * Moduł IoT MyCastle.
+ *
+ * Łącza są listą, a nie polem: bramka ma ich dwa, węzeł jedno, a kolejność
+ * decyduje o tym, które jest trasą domyślną. Sam adres urządzenia zostaje
+ * w kodzie, bo to tożsamość sztuki sprzętu, a nie ustawienie projektu.
+ */
+/**
+ * Potok multimedialny.
+ *
+ * Opisujemy tu **budżet i rytm**, a nie graf: kto z kim jest połączony, wynika
+ * z kodu, bo połączenie niesie typ i politykę przepełnienia, których w YAML-u
+ * nie da się sprawdzić przed kompilacją. Pule i okresy domen to co innego —
+ * te liczby dobiera się do urządzenia, nie do algorytmu.
+ */
+const mediaModule = obj('Potok multimedialny: audio i obraz', {
+    pools: optional(list('Pule buforów; rozmiar bloku przekłada się na opóźnienie',
+        obj('Pula', {
+            block_bytes: required(num('Rozmiar bloku', { integer: true, min: 16, max: 1 << 22, unit: 'B' })),
+            count: required(num('Liczba bloków', { integer: true, min: 2, max: 64 })),
+            memory: optional(oneOf('Skąd pamięć', ['internal', 'psram', 'dma'])),
+        }))),
+    domains: optional(list('Domeny czasowe — jedna domena to jeden task',
+        obj('Domena', {
+            name: required(str('Nazwa, np. capture')),
+            period_ms: required(num('Okres kroku', { integer: true, min: 1, max: 10000, unit: 'ms' })),
+            priority: optional(oneOf('Priorytet taska', ['realtime', 'high', 'normal', 'low', 'idle'])),
+            core: optional(num('Rdzeń; ignorowane na układach jednordzeniowych',
+                               { integer: true, min: 0, max: 3 })),
+        }))),
+    audio: optional(obj('Domyślne parametry strumienia audio', {
+        sample_rate: optional(num('Częstotliwość próbkowania',
+                                  { integer: true, min: 8000, max: 192000, unit: 'Hz' })),
+        format: optional(oneOf('Format próbki', ['u8', 's16', 's24', 's32', 'f32'])),
+        channels: optional(num('Liczba kanałów', { integer: true, min: 1, max: 8 })),
+        frames_per_block: optional(num('Ramki w bloku; wprost wyznacza opóźnienie',
+                                       { integer: true, min: 8, max: 4096 })),
+    })),
+});
+
+/**
+ * Zgodność z Arduboy2.
+ *
+ * Moduł nie ma czego konfigurować i to jest zamierzone: gra na Arduboya
+ * zakłada konkretny sprzęt — ekran 128×64, sześć przycisków, 1 KB EEPROM-u —
+ * a pole, które pozwalałoby to zmienić, pozwalałoby zarazem zbudować projekt,
+ * w którym cudza gra nie zadziała. Rozmiar okna na celu natywnym ustawia się
+ * w sekcji `native`, tak jak dla każdego innego projektu.
+ */
+const arduboyModule = obj('Zgodność z Arduboy2 — gry na Arduboya bez zmian w źródle', {
+    scale: optional(num('Powiększenie okna na celu natywnym',
+                        { integer: true, min: 1, max: 16 })),
+});
+
+const minisModule = obj('Platforma IoT MyCastle', {
+    user: optional(str('Nazwa użytkownika w MyCastle')),
+    heartbeat_s: optional(num('Co ile wysyłać puls; 0 = tylko telemetria',
+                              { integer: true, min: 0, max: 3600, unit: 's' })),
+    auto_register: optional(bool('Czy zgłaszać się do listy urządzeń po połączeniu')),
+    gateway: optional(bool('Tryb bramki: subskrypcje z symbolem wieloznacznym '
+                           + 'i przekazywanie ruchu urządzeń za tym')),
+    links: optional(list('Łącza w kolejności rejestracji; pierwsze do serwera '
+                         + 'jest trasą domyślną',
+        obj('Łącze', {
+            kind: required(oneOf('Rodzaj łącza', ['mqtt', 'websocket', 'rs485', 'rs232'])),
+            uart: optional(num('Numer portu szeregowego', { integer: true, min: 0, max: 2 })),
+            node: optional(num('Numer węzła na magistrali; 0 = bramka',
+                               { integer: true, min: 0, max: 254 })),
+            de_pin: optional(str('Pin sterujący nadajnikiem RS-485, np. Pin.Rs485De')),
+        }))),
+    routing: optional(obj('Trasowanie', {
+        max_hops: optional(num('Limit przeskoków między bramkami',
+                               { integer: true, min: 1, max: 8 })),
+        learn: optional(bool('Czy budować tablicę tras z ruchu')),
+        route_ttl_s: optional(num('Po jakim czasie ciszy zapomnieć trasę; 0 = nigdy',
+                                  { integer: true, min: 0, max: 86400, unit: 's' })),
+    })),
+});
+
 const otaModule = obj('Aktualizacja wsadu', {
     channel: optional(str('Adres kanału aktualizacji')),
     verify: optional(str('Sposób weryfikacji')),
@@ -221,6 +320,9 @@ export const HYDRA_SCHEMA: ObjectNode = obj('Plik projektu Hydra', {
         ui: optional(uiModule),
         motion: optional(motionModule),
         ota: optional(otaModule),
+    minis: optional(minisModule),
+    media: optional(mediaModule),
+    arduboy: optional(arduboyModule),
     })),
 
     dependencies: optional(map('Paczki Hydry używane przez projekt',

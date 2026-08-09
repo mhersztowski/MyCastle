@@ -13,6 +13,8 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import { runNativeBuild, type BuildArtifact } from './native';
+
 export interface BuildRequest {
     /** Katalog projektu. */
     projectRoot: string;
@@ -24,6 +26,18 @@ export interface BuildRequest {
     action: 'build' | 'upload';
     /** Port urządzenia przy wgrywaniu. */
     port?: string;
+    /**
+     * Cel natywny — obecność tego pola przełącza budowę na CMake i pomija
+     * kontener. Wypełnia je wołający, bo tylko on zna model projektu; build.ts
+     * nie parsuje `.hydra`, żeby nie mieć drugiego miejsca, w którym zapada
+     * decyzja „to jest cel natywny".
+     */
+    native?: {
+        /** Nazwa projektu — z niej bierze się nazwa pliku wykonywalnego. */
+        projectName: string;
+        /** Maszyna z HOST_PLATFORMS; brak = ta, na której stoimy. */
+        hostPlatformId?: string;
+    };
 }
 
 export interface BuildResult {
@@ -31,7 +45,13 @@ export interface BuildResult {
     exitCode: number;
     /** Uruchomione polecenie — wypisywane, żeby dało się je powtórzyć ręcznie. */
     command: string;
+    /** Wynik budowy celu natywnego, gotowy do pobrania. */
+    artifact?: BuildArtifact;
+    /** Dlaczego artefaktu nie ma mimo udanej budowy. */
+    artifactProblem?: string;
 }
+
+export type { BuildArtifact } from './native';
 
 /** Odnajduje skrypt środowiska budowania. */
 export function findBuildScript(hydraRoot: string): string {
@@ -46,6 +66,30 @@ export function findBuildScript(hydraRoot: string): string {
 
 export async function runBuild(request: BuildRequest,
                                onOutput?: (chunk: string) => void): Promise<BuildResult> {
+    if (request.native) {
+        if (request.action === 'upload') {
+            const message = 'cel natywny nie ma czego wgrywać — to program na tę maszynę\n';
+            onOutput?.(message);
+            return { ok: false, exitCode: 2, command: '' };
+        }
+        const result = await runNativeBuild({
+            projectRoot: request.projectRoot,
+            target: request.target ?? 'native',
+            projectName: request.native.projectName,
+            ...(request.native.hostPlatformId !== undefined
+                ? { hostPlatformId: request.native.hostPlatformId } : {}),
+            hydraRoot: request.hydraRoot,
+        }, onOutput);
+
+        return {
+            ok: result.ok,
+            exitCode: result.exitCode,
+            command: result.commands.join(' && '),
+            ...(result.artifact ? { artifact: result.artifact } : {}),
+            ...(result.artifactProblem ? { artifactProblem: result.artifactProblem } : {}),
+        };
+    }
+
     const script = findBuildScript(request.hydraRoot);
 
     // Polecenie `project` montuje katalog projektu jako roboczy, a Hydrę obok

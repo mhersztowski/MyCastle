@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import * as fs from 'node:fs';
 import { NodeFS, VfsError } from '@mhersztowski/core';
 import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
+import { planHydraBuild, HydraPlanError } from './hydra/plan';
+import { runHydra } from './hydra/run';
 
 /** Kod błędu VFS → status HTTP. Ten sam zestaw, którym posługuje się `RemoteFS`. */
 const VFS_STATUS: Record<string, number> = {
@@ -34,30 +37,162 @@ const STREAM_MIME: Record<string, string> = {
  * Nie ma tu uwierzytelniania: aplikacja jest lokalnym narzędziem na jeden
  * katalog danych. Gdyby kiedyś było potrzebne, wchodzi jednym `checkAuth()`
  * z `core-backend` przed rozgałęzieniem tras (tak robi cad-backend).
+ *
+ * Poza VFS wystawia jeszcze `/api/hydra/*` — budowanie projektów `.hydra`
+ * przez kontener Hydry. To jedyne miejsce, w którym serwer uruchamia proces,
+ * więc granice są wąskie i sprawdzane w `hydra/plan.ts`: buduje się wyłącznie
+ * katalog pliku `.hydra` leżącego wewnątrz katalogu danych.
  */
 export class MonacoHttpServer extends HttpUploadServer {
   private readonly vfs: NodeFS;
+  private readonly dataDir: string;
+  private readonly hydraDir?: string;
 
-  constructor(port: number, dataDir: string, staticDir?: string) {
+  constructor(port: number, dataDir: string, staticDir?: string, hydraDir?: string) {
     // FileSystem z core-backend obsługuje upload i `/files/` klasy bazowej;
     // NodeFS jest źródłem prawdy dla VFS edytora. Oba wskazują ten sam katalog.
     super(port, new FileSystem(dataDir), undefined, undefined, undefined, staticDir);
     this.vfs = new NodeFS({ rootDir: dataDir });
+    this.dataDir = dataDir;
+    this.hydraDir = hydraDir;
   }
 
   protected override async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-    if (pathname.startsWith('/api/vfs')) {
+    if (pathname.startsWith('/api/vfs') || pathname.startsWith('/api/hydra')) {
       this.setCorsHeaders(res);
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
         return;
       }
+      if (pathname.startsWith('/api/hydra')) {
+        await this.handleHydra(req, res, pathname);
+        return;
+      }
       await this.handleVfs(req, res);
       return;
     }
     await super.handleRequest(req, res);
+  }
+
+  /**
+   * `GET /api/hydra/status` — czy zaplecze w ogóle jest.
+   * `POST /api/hydra/build` — budowanie, wynik wierszami jako `text/event-stream`.
+   *
+   * Strumień, a nie zwykła odpowiedź JSON, bo budowanie wsadu trwa minuty:
+   * bez wierszy na bieżąco panel stoi pusty i nie widać różnicy między
+   * „kompiluje" a „zawisło".
+   */
+  private async handleHydra(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+    const route = pathname.replace(/^\/api\/hydra/, '');
+
+    if (req.method === 'GET' && route === '/status') {
+      const script = this.hydraDir ? `${this.hydraDir}/docker/hydra.sh` : undefined;
+      this.sendJsonResponse(res, 200, {
+        available: Boolean(script && fs.existsSync(script)),
+        hydraDir: this.hydraDir ?? null,
+        // Architektura kontenera budującego, a nie przeglądarki: preset CMake
+        // dla celu natywnego opisuje maszynę, na której stoi kompilator.
+        // Edytor bywa otwarty na Windows, gdy backend siedzi w WSL na ARM.
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      });
+      return;
+    }
+
+    if (req.method !== 'POST' || route !== '/build') {
+      this.sendJsonResponse(res, 404, { error: `Unknown route: ${route}` });
+      return;
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!this.hydraDir) {
+      this.sendJsonResponse(res, 503, {
+        error: 'Nie wskazano katalogu biblioteki Hydra — ustaw HYDRA_DIR w app/monaco-backend/.env',
+      });
+      return;
+    }
+
+    let plan;
+    try {
+      plan = planHydraBuild(
+        {
+          file: String(body.file ?? ''),
+          target: body.target as string | undefined,
+          upload: Boolean(body.upload),
+          kind: body.kind === 'native' ? 'native' : 'pio',
+          preset: body.preset as string | undefined,
+          os: body.os === 'windows' ? 'windows' : 'linux',
+          executable: body.executable as string | undefined,
+        },
+        { dataDir: this.dataDir, hydraDir: this.hydraDir },
+      );
+    } catch (err) {
+      const status = err instanceof HydraPlanError ? 400 : 500;
+      this.sendJsonResponse(res, status, { error: String(err instanceof Error ? err.message : err) });
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      // Bez tego nagłówka pośrednik (nginx w produkcji, proxy Vite w dev)
+      // potrafi buforować odpowiedź i zamienić strumień w jedną paczkę na końcu.
+      'X-Accel-Buffering': 'no',
+    });
+
+    const send = (event: Record<string, unknown>): void => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    /*
+     * Puls co 20 sekund.
+     *
+     * Kompilacja potrafi milczeć minutami (pobieranie obrazu, `pio` układający
+     * zależności), a bezczynne połączenie bywa zamykane po drodze — przez
+     * proxy w dev, przez nginx w produkcji. Komentarz SSE (wiersz zaczynający
+     * się od dwukropka) utrzymuje je przy życiu, nie zaśmiecając panelu.
+     */
+    const heartbeat = setInterval(() => res.write(': ping\n\n'), 20_000);
+    res.on('close', () => clearInterval(heartbeat));
+
+    const line = (text: string): void => send({ type: 'line', text });
+
+    line(`Buduję ${plan.projectDir}…`);
+
+    /*
+     * Kroki po kolei, z przerwaniem na pierwszym niepowodzeniu.
+     *
+     * Cel natywny to konfiguracja i budowa CMake — puszczenie budowy po
+     * nieudanej konfiguracji kompilowałoby przeciw nieaktualnej pamięci
+     * podręcznej i dawało błąd niezwiązany z prawdziwą przyczyną.
+     */
+    let running: ReturnType<typeof runHydra> | undefined;
+    let cancelled = false;
+    /*
+     * Zamknięcie karty nie ma zostawiać kontenera ani okna podglądu przy życiu.
+     *
+     * Nasłuch na `res`, a nie na `req`: ciało żądania jest odczytane w całości
+     * zanim ruszy budowanie, więc strumień żądania nic już nie powie o tym,
+     * że klient zniknął. Widzi to dopiero odpowiedź — na niej wisi też puls.
+     */
+    res.on('close', () => { cancelled = true; running?.cancel(); });
+
+    let code = 0;
+    for (const [index, step] of plan.steps.entries()) {
+      if (cancelled) break;
+      if (plan.steps.length > 1) line(`\n── krok ${index + 1} z ${plan.steps.length} ──`);
+
+      running = runHydra(step.script, step.args, line, step.cwd);
+      code = await running.done;
+      if (code !== 0) break;
+    }
+
+    clearInterval(heartbeat);
+    send({ type: 'done', code });
+    res.end();
   }
 
   /** `RemoteFS` woła trasy bez prefiksu — `/stat`, `/readdir`, `/writeFile`, … */

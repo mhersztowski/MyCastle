@@ -9,6 +9,15 @@
  */
 
 export interface McuProfile {
+    /**
+     * Rodzaj celu.
+     *
+     * `mcu` — wsad na układ, budowany przez PlatformIO.
+     * `native` — program na maszynę deweloperską, budowany CMake'em. Wyniku
+     * nie da się przenieść między systemami, więc ta gałąź ma własny emiter
+     * i własne presety (patrz emit/host.ts).
+     */
+    kind?: 'mcu' | 'native';
     /** Platforma PlatformIO. */
     platform: string;
     /** Domyślna płytka PlatformIO, gdy `.hydra` jej nie podaje. */
@@ -30,6 +39,27 @@ export interface McuProfile {
 const ARM_TOOLCHAIN_NOTE = 'stm32duino/STM32duino FreeRTOS@^10.3.2';
 
 export const MCU_PROFILES: Readonly<Record<string, McuProfile>> = {
+    /**
+     * Maszyna deweloperska — pełnoprawny cel, nie tryb podglądu.
+     *
+     * Chodzi ten sam rdzeń, te same taski i ta sama magistrala; wymienione są
+     * wyłącznie backendy: HAL na atrapy, scheduler na pthready, panel na okno
+     * SDL. Dzięki temu interfejs projektuje się bez sprzętu, a logikę
+     * uruchamia pod sanitizerami.
+     *
+     * Możliwości obejmują magistrale, choć na PC ich nie ma. To nie pomyłka:
+     * atrapa I2C jest zasilana z sekcji `simulation.sources`, więc pack
+     * czujnika naprawdę działa na tym celu — tylko z modelu, a nie z układu.
+     * Wykluczenie ich oznaczałoby, że projekt z jednym czujnikiem przestaje
+     * dać się otworzyć w oknie, czyli że cel `native` nie służy do niczego.
+     */
+    native: {
+        kind: 'native',
+        platform: 'native',
+        defaultBoard: 'native',
+        capabilities: ['i2c', 'spi', 'uart', 'pwm', 'adc', 'fpu', 'smp'],
+        hasFpu: true,
+    },
     esp32: {
         platform: 'espressif32',
         defaultBoard: 'esp32dev',

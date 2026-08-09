@@ -11,6 +11,9 @@ export * from './model';
 export {
     createHydraStudioPlugin, HYDRA_EXTENSION,
     type ModelAccess, type StudioPluginOptions,
+    // Gospodarz podłączający `runBuild` musi umieć nazwać to, co zwraca —
+    // inaczej oddanie artefaktu wymaga powtórzenia kształtu wyniku u siebie.
+    type BuildOutcome,
 } from './plugin/plugin';
 export type * from './plugin/host';
 export { applyToModel, toMonacoEdits } from './plugin/monacoBridge';

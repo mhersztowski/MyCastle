@@ -21,6 +21,7 @@ import {
 } from '../model';
 
 import { runBuild } from './build';
+import { currentHostPlatformId } from './native';
 import { generate, reportGenerated } from './generate';
 import { loadProject, reportDiagnostics } from './project';
 
@@ -32,6 +33,8 @@ interface Options {
     dryRun: boolean;
     port: string | undefined;
     output: string | undefined;
+    /** Maszyna dla celu natywnego; brak = ta, na której stoimy. */
+    host: string | undefined;
 }
 
 function parseOptions(argv: readonly string[]): Options {
@@ -40,6 +43,7 @@ function parseOptions(argv: readonly string[]): Options {
     let hydraRoot = process.env['HYDRA_ROOT'] ?? '.';
     let port: string | undefined;
     let output: string | undefined;
+    let host: string | undefined;
     let force = false;
     let dryRun = false;
 
@@ -49,6 +53,7 @@ function parseOptions(argv: readonly string[]): Options {
             case '-e': case '--env': case '--target': target = argv[++i]; break;
             case '--hydra': hydraRoot = argv[++i] ?? hydraRoot; break;
             case '--port': port = argv[++i]; break;
+            case '--host': host = argv[++i]; break;
             case '-o': case '--output': output = argv[++i]; break;
             case '--force': force = true; break;
             case '--dry-run': dryRun = true; break;
@@ -58,7 +63,7 @@ function parseOptions(argv: readonly string[]): Options {
         }
     }
 
-    return { path: positional[0] ?? '.', target, hydraRoot, force, dryRun, port, output };
+    return { path: positional[0] ?? '.', target, hydraRoot, force, dryRun, port, output, host };
 }
 
 function usage(): void {
@@ -66,7 +71,8 @@ function usage(): void {
 
   hydra check [ścieżka]     sprawdza plik projektu i manifesty paczek
   hydra plan  [ścieżka]     pokazuje cele i ustawienia wyprowadzone z pliku
-  hydra gen   [ścieżka]     generuje platformio.ini, CMakeLists.txt i nagłówki płytek
+  hydra gen   [ścieżka]     generuje platformio.ini, CMakeLists.txt, CMakePresets.json
+                            i nagłówki płytek
   hydra build [ścieżka]     generuje pliki i buduje wsad w kontenerze
   hydra upload [ścieżka]    to samo plus wgranie na urządzenie
   hydra import <plik>       zamienia netlistę KiCada albo EasyEDA na .hsch
@@ -75,6 +81,8 @@ Opcje:
   -e, --target <nazwa>   cel sprzętowy (domyślnie: wskazany w pliku)
       --hydra <ścieżka>  katalog biblioteki Hydry (albo zmienna HYDRA_ROOT)
       --port <urządzenie> port przy wgrywaniu
+      --host <maszyna>   dla celu native: win-x64, win-arm64, mac-arm64,
+                         mac-x64, linux-x64, linux-arm64 (domyślnie: ta maszyna)
       --force            nadpisz także pliki bez znacznika wygenerowania
       --dry-run          pokaż, co powstałoby, nic nie zapisując
   -o, --output <plik>    dokąd zapisać wynik importu
@@ -143,13 +151,37 @@ async function main(argv: readonly string[]): Promise<number> {
             });
             if (!reportGenerated(files, project.root)) return 1;
 
+            // Czy to cel natywny, rozstrzyga plan — nie nazwa i nie flaga.
+            // Nazwa celu jest dowolna („podglad", „okno"), a decyzja musi
+            // zapadać w jednym miejscu, tym samym, z którego korzysta Studio.
+            const plan = buildPlan(project.model, {
+                packLibDeps: project.packLibDeps,
+                packBuildFlags: project.packBuildFlags,
+            });
+            const chosen = options.target ?? plan.defaultTarget;
+            const nativeTarget = plan.targets.find((t) => t.name === chosen && t.isNative);
+
             const result = await runBuild({
                 projectRoot: project.root,
                 hydraRoot: options.hydraRoot,
                 action: command === 'upload' ? 'upload' : 'build',
-                ...(options.target !== undefined ? { target: options.target } : {}),
+                ...(chosen !== undefined ? { target: chosen } : {}),
                 ...(options.port !== undefined ? { port: options.port } : {}),
+                ...(nativeTarget ? {
+                    native: {
+                        projectName: plan.projectName,
+                        hostPlatformId: options.host ?? currentHostPlatformId() ?? 'linux-x64',
+                    },
+                } : {}),
             });
+            if (result.artifact) {
+                process.stdout.write(
+                    `\nwynik: ${result.artifact.path}\n` +
+                    `artefakt: ${result.artifact.name} ` +
+                    `(${Math.round(result.artifact.sizeBytes / 1024)} kB)\n`);
+            } else if (result.artifactProblem) {
+                process.stderr.write(`\n${result.artifactProblem}\n`);
+            }
             if (!result.ok) {
                 process.stderr.write(`\nbudowa nie powiodła się (kod ${result.exitCode})\n`);
                 process.stderr.write(`polecenie: ${result.command}\n`);

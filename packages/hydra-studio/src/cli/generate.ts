@@ -12,7 +12,7 @@ import { dirname, join, relative } from 'node:path';
 
 import {
     boardFromSchematic, boardSourceFrom, buildPlan,
-    emitBoardHeader, emitCMake, emitPlatformio, isGenerated,
+    emitBoardHeader, emitCMake, emitCMakePresets, emitPlatformio, isGenerated,
 } from '../model';
 
 import type { LoadedProject } from './project';
@@ -45,7 +45,7 @@ export interface GenerateOptions {
      */
     libSearchPath?: string;
     /** Które pliki wytworzyć. */
-    only?: readonly ('platformio' | 'cmake' | 'board')[];
+    only?: readonly ('platformio' | 'cmake' | 'presets' | 'board')[];
 }
 
 export function generate(project: LoadedProject, options: GenerateOptions = {}): GeneratedFile[] {
@@ -54,7 +54,7 @@ export function generate(project: LoadedProject, options: GenerateOptions = {}):
         packBuildFlags: project.packBuildFlags,
     });
 
-    const wanted = new Set(options.only ?? ['platformio', 'cmake', 'board']);
+    const wanted = new Set(options.only ?? ['platformio', 'cmake', 'presets', 'board']);
     const files: GeneratedFile[] = [];
 
     if (wanted.has('platformio')) {
@@ -72,11 +72,25 @@ export function generate(project: LoadedProject, options: GenerateOptions = {}):
                          }), options));
     }
 
+    if (wanted.has('presets')) {
+        // Plik powstaje tylko wtedy, gdy projekt ma cel natywny. Pusty
+        // CMakePresets.json wyglądałby jak konfiguracja, a niczego by nie
+        // konfigurował — a edytory pokazywałyby go na liście presetów.
+        const presets = emitCMakePresets(plan);
+        if (presets !== null) {
+            files.push(write(project, 'CMakePresets.json', presets, options));
+        }
+    }
+
     if (wanted.has('board')) {
         // Nagłówek powstaje tylko tam, gdzie cel go wskazuje — inaczej
         // generator tworzyłby pliki, do których nikt się nie odwołuje.
         for (const target of plan.targets) {
             if (!target.boardHeader) continue;
+            // Cel natywny wskazuje plik płytki dostarczony z biblioteką —
+            // nie ma pinów do opisania, a wygenerowanie własnego przesłoniłoby
+            // ten z Hydry i rozjechało nazwę płytki w logach.
+            if (target.isNative) continue;
 
             // Schemat jest źródłem prawdy dla wyprowadzeń: numer bierze się
             // z połączenia, a nie z ręcznego wpisu. Bez schematu zostaje to,

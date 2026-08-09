@@ -47,10 +47,75 @@ export function emitCMake(plan: BuildPlan, options: CMakeOptions = {}): string {
     lines.push(...sourceCollection(hydraPath));
     lines.push('');
     lines.push(...perTargetSettings(plan));
+    if (plan.targets.some((target) => target.isNative)) {
+        lines.push('');
+        lines.push(...nativeSupport());
+    }
     lines.push('');
     lines.push(...linkage(plan, hydraPath));
 
     return lines.join('\n') + '\n';
+}
+
+/**
+ * Zależności celu natywnego: wątki i SDL.
+ *
+ * Blok jest wspólny dla wszystkich celów natywnych i stoi **po** łańcuchu
+ * if/elseif, a nie w środku: `find_package` w gałęzi warunkowej wykonywałby
+ * się przy każdej rekonfiguracji z innym celem i zostawiał w pamięci podręcznej
+ * wyniki z poprzedniego.
+ *
+ * Brak SDL nie zatrzymuje konfiguracji. Ta sama budowa musi przejść w CI bez
+ * serwera X i na maszynie z monitorem — różnicą jest wtedy `HYDRA_WITH_SDL`
+ * i to, czy `SdlDisplay::begin()` otworzy okno, czy zwróci NotSupported.
+ */
+function nativeSupport(): string[] {
+    return [
+        '# --- cel natywny: wątki i SDL ----------------------------------------------',
+        'if(HYDRA_TARGET_IS_NATIVE)',
+        '    find_package(Threads REQUIRED)',
+        '    target_link_libraries(hydra PUBLIC Threads::Threads)',
+        '',
+        '    # Trzy drogi, bo trzy systemy pakują SDL inaczej: vcpkg i Homebrew dają',
+        '    # plik konfiguracyjny CMake, dystrybucje Linuksa — pkg-config.',
+        '    find_package(SDL2 CONFIG QUIET)',
+        '    if(NOT SDL2_FOUND)',
+        '        find_package(PkgConfig QUIET)',
+        '        if(PkgConfig_FOUND)',
+        '            pkg_check_modules(SDL2 IMPORTED_TARGET QUIET sdl2)',
+        '        endif()',
+        '    endif()',
+        '',
+        '    if(TARGET SDL2::SDL2)',
+        '        target_link_libraries(hydra PUBLIC SDL2::SDL2)',
+        '        set(HYDRA_SDL_FOUND ON)',
+        '    elseif(TARGET PkgConfig::SDL2)',
+        '        target_link_libraries(hydra PUBLIC PkgConfig::SDL2)',
+        '        set(HYDRA_SDL_FOUND ON)',
+        '    else()',
+        '        set(HYDRA_SDL_FOUND OFF)',
+        '    endif()',
+        '',
+        '    if(HYDRA_SDL_FOUND)',
+        '        target_compile_definitions(hydra PUBLIC HYDRA_WITH_SDL=1)',
+        '        # Wejściem programu zostaje main() aplikacji.',
+        '        #',
+        '        # Bez tego SDL2main podstawia na Windows własne WinMain i szuka',
+        '        # SDL_main — symbolu, który powstaje wyłącznie z `#define main',
+        '        # SDL_main` w <SDL.h>. Aplikacja Hydry dołącza Hydra.h, nie SDL,',
+        '        # bo SDL jest szczegółem backendu wyświetlania. SDL_MAIN_HANDLED',
+        '        # zostawia więc main() tam, gdzie jest; backend woła',
+        '        # SDL_SetMainReady() przed inicjalizacją.',
+        '        target_compile_definitions(hydra PUBLIC SDL_MAIN_HANDLED)',
+        '    else()',
+        '        message(WARNING',
+        '            "Hydra: nie znaleziono SDL2 — build powstanie bez okna.\\n"',
+        '            "  Debian/Ubuntu:  sudo apt install libsdl2-dev\\n"',
+        '            "  macOS:          brew install sdl2\\n"',
+        '            "  Windows:        vcpkg install sdl2  (+ CMAKE_TOOLCHAIN_FILE)")',
+        '    endif()',
+        'endif()',
+    ];
 }
 
 function targetChoice(plan: BuildPlan): string[] {
@@ -83,9 +148,14 @@ function sourceCollection(hydraPath: string): string[] {
         '',
         '# Rdzeń i warstwa sprzętowa są zawsze; moduły opcjonalne dokładane niżej,',
         '# zależnie od celu. Wyłączony moduł nie trafia do kompilacji w ogóle.',
+        '#',
+        '# gfx jest w rdzeniu, a nie wśród modułów, bo nie ma własnej flagi',
+        '# HYDRA_ENABLE_*: to podstawa modułu ui i celu native naraz. Wcześniej',
+        '# wypadało z budowy CMake i moduł ui nie linkował się na brak Framebuffer.',
         'file(GLOB HYDRA_CORE_SOURCES',
         '    "${HYDRA_ROOT}/src/core/*.cpp"',
         '    "${HYDRA_ROOT}/src/hal/*.cpp"',
+        '    "${HYDRA_ROOT}/src/gfx/*.cpp"',
         '    "${HYDRA_ROOT}/src/util/*.cpp")',
         '',
         '# Pusta lista oznacza złą ścieżkę. Bez tego sprawdzenia CMake kończy',
@@ -120,6 +190,7 @@ function targetBody(target: TargetPlan): string[] {
     const lines: string[] = [];
 
     lines.push(`set(HYDRA_MCU "${target.mcu}")`);
+    if (target.isNative) lines.push('set(HYDRA_TARGET_IS_NATIVE ON)');
     if (target.boardHeader) {
         lines.push(`target_compile_definitions(hydra PUBLIC HYDRA_BOARD_HEADER="${target.boardHeader}")`);
     }
@@ -137,15 +208,65 @@ function targetBody(target: TargetPlan): string[] {
     }
 
     if (target.modules.length > 0) {
+        /*
+         * Wszystkie podkatalogi modułu, minus backendy nie dla tego celu.
+         *
+         * Wcześniej brane były tylko `src/<moduł>/` i `src/<moduł>/<backend>/`,
+         * przez co katalogi będące zwykłym podziałem kodu — `media/elements/`,
+         * `minis/links/`, `ui/lvgl/` — wypadały z budowy. Objawem był brak
+         * symboli elementów potoku przy poprawnie skompilowanym module.
+         *
+         * Odwrotność, czyli wzorzec `*​/` bez filtra, brała naraz `net/arduino/`
+         * i `net/mock/` — konsolidator zgłaszał wtedy zduplikowany symbol
+         * w miejscu niezwiązanym z przyczyną. Stąd filtr po nazwie katalogu,
+         * a nie lista dozwolonych.
+         */
+        const excluded = target.isNative ? ['arduino'] : ['mock', 'sdl'];
+
         lines.push('');
-        lines.push('# Moduły włączone dla tego celu.');
+        lines.push(`# Moduły włączone dla tego celu; backend: ${target.isNative ? 'mock' : 'arduino'}.`);
         lines.push('file(GLOB HYDRA_MODULE_SOURCES');
         for (const module of target.modules) {
             lines.push(`    "\${HYDRA_ROOT}/src/${module}/*.cpp"`);
             lines.push(`    "\${HYDRA_ROOT}/src/${module}/*/*.cpp"`);
         }
+        // Sterowniki czujników są zwykłym kodem nad HAL i działają na obu
+        // backendach — na hoście rozmawiają z atrapą magistrali.
+        if (target.modules.includes('sense')) {
+            lines.push('    "${HYDRA_ROOT}/src/drivers/sense/*.cpp"');
+        }
         lines.push(')');
+        lines.push(`list(FILTER HYDRA_MODULE_SOURCES EXCLUDE REGEX "/(${excluded.join('|')})/")`);
         lines.push('target_sources(hydra PRIVATE ${HYDRA_MODULE_SOURCES})');
+    }
+
+    if (target.modules.includes('arduboy')) {
+        /*
+         * Drugi korzeń włączeń — wyłącznie dla projektów z modułem `arduboy`.
+         *
+         * Gra na Arduboya zaczyna się od `#include <Arduboy2.h>` i oczekuje
+         * nazw globalnych: `WIDTH`, `BLACK`, `A_BUTTON`. Nie da się tego podać
+         * spod `hydra/`, bo wtedy trzeba by zmienić źródło gry — czyli stracić
+         * to, o co w tym module chodzi.
+         *
+         * Katalog jest osobny, a nie dopisany do `include/`, żeby te nazwy
+         * widziały tylko projekty, które o nie poprosiły. Projekt bez modułu
+         * `arduboy` nie ma szans przypadkiem złapać makra `WIDTH`.
+         */
+        lines.push('');
+        lines.push('# Nazwy globalne dla niezmienionych źródeł gier: <Arduboy2.h>, WIDTH, A_BUTTON.');
+        lines.push('target_include_directories(hydra PUBLIC "${HYDRA_ROOT}/include/compat/arduboy")');
+    }
+
+    if (target.isNative) {
+        lines.push('');
+        lines.push('# Backend hostowy: atrapy HAL zamiast Arduino, okno SDL zamiast panelu.');
+        lines.push('# Katalogi */arduino/ nie trafiają tu w ogóle — na PC nie ma czego owijać.');
+        lines.push('file(GLOB HYDRA_NATIVE_SOURCES');
+        lines.push('    "${HYDRA_ROOT}/src/hal/mock/*.cpp"');
+        lines.push('    "${HYDRA_ROOT}/src/hal/host/*.cpp"');
+        lines.push('    "${HYDRA_ROOT}/src/gfx/sdl/*.cpp")');
+        lines.push('target_sources(hydra PRIVATE ${HYDRA_NATIVE_SOURCES})');
     }
 
     if (!target.hasFpu) {
@@ -174,6 +295,16 @@ function linkage(plan: BuildPlan, hydraPath: string): string[] {
         'if(APP_SOURCES)',
         `    add_executable(${plan.projectName} \${APP_SOURCES})`,
         `    target_link_libraries(${plan.projectName} PRIVATE hydra)`,
+        '',
+        '    # Windows: SDL2.dll leży w katalogu pakietu, nie przy pliku',
+        '    # wykonywalnym. Bez tej kopii pobrana binarka nie startuje i mówi',
+        '    # o brakującej bibliotece — a użytkownik nie ma jak zgadnąć której.',
+        '    if(WIN32 AND HYDRA_TARGET_IS_NATIVE AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)',
+        `        add_custom_command(TARGET ${plan.projectName} POST_BUILD`,
+        '            COMMAND ${CMAKE_COMMAND} -E copy_if_different',
+        `                    $<TARGET_RUNTIME_DLLS:${plan.projectName}> $<TARGET_FILE_DIR:${plan.projectName}>`,
+        '            COMMAND_EXPAND_LISTS)',
+        '    endif()',
         'endif()',
     ];
 }

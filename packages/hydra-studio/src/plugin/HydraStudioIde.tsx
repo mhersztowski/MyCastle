@@ -19,7 +19,9 @@ import Box from '@mui/material/Box';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
+import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import {
@@ -40,8 +42,18 @@ export interface HydraStudioIdeProps {
     schematic?: Schematic | undefined;
     configSchemas?: Readonly<Record<string, unknown>> | undefined;
 
-    /** Cel wybrany na pasku narzędzi gospodarza. */
+    /** Cel wybrany na pasku narzędzi gospodarza. `undefined` znaczy „wszystkie środowiska". */
     target?: string | undefined;
+
+    /**
+     * Zmiana celu budowania.
+     *
+     * Wybór musi być tutaj, bo „Buduj" na pasku narzędzi i w palecie jest
+     * bezargumentowe — gospodarz argumentów nie przekazuje. Bez zapamiętanego
+     * wcześniej celu `pio run` idzie bez `-e` i buduje wszystkie środowiska
+     * naraz, co przy dwóch płytkach jest podwójnym czekaniem zamiast wyboru.
+     */
+    onSelectTarget?(name: string | undefined): void;
 
     /** Wiersze wyniku budowania lub monitora portu — dostarcza je host. */
     log?: readonly string[] | undefined;
@@ -127,6 +139,43 @@ export function HydraStudioIde(props: HydraStudioIdeProps) {
                     {targetPlan ? (
                         <>
                             <Typography variant="subtitle2" sx={{ mb: 1 }}>Inspektor</Typography>
+
+                            {props.onSelectTarget && (
+                                <Section title="Cel budowania">
+                                    <TextField
+                                        select size="small" fullWidth
+                                        value={props.target ?? ''}
+                                        onChange={(e) => props.onSelectTarget?.(e.target.value || undefined)}
+                                        // Bez `slotProps`: pakiet deklaruje MUI 5–7, a ta droga
+                                        // przekazywania atrybutów istnieje dopiero od 6. Na 5
+                                        // nieznany prop schodzi do DOM i zostawia ostrzeżenie.
+                                        sx={{ '& .MuiInputBase-input': { fontSize: 12, py: 0.6 } }}
+                                    >
+                                        {/*
+                                          * Pusta wartość to nie „brak wyboru", tylko wybór
+                                          * świadomy: tak zachowuje się budowanie bez `-e`.
+                                          * Ukrycie tej pozycji sprawiłoby, że stan domyślny
+                                          * projektu nie ma odpowiednika na liście.
+                                          */}
+                                        <MenuItem value="" sx={{ fontSize: 12 }}>
+                                            wszystkie środowiska
+                                        </MenuItem>
+                                        {plan.targets.map((t) => (
+                                            <MenuItem key={t.name} value={t.name} sx={{ fontSize: 12 }}>
+                                                {t.name}
+                                                {t.name === plan.defaultTarget ? '  (domyślny)' : ''}
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                    {props.target === undefined && plan.targets.length > 1 && (
+                                        <Typography variant="caption"
+                                                    sx={{ display: 'block', mt: 0.5, opacity: 0.6 }}>
+                                            Zbudują się wszystkie {plan.targets.length} środowiska.
+                                            Poniżej opisany jest cel domyślny.
+                                        </Typography>
+                                    )}
+                                </Section>
+                            )}
 
                             <Section title="Cel">
                                 <Row k="nazwa" v={targetPlan.name} />
