@@ -1,0 +1,77 @@
+name: Build backend image
+
+# Budowanie obrazu przeniesione z serwera.
+#
+# Maszyna produkcyjna ma 3,4 GB RAM, a `vite build` w mycastle-web żąda 8 GB
+# heapu — build wchodził w swap, mielił 19 minut, kończył się zabiciem procesu
+# przez OOM i przy okazji kładł panel Coolify (502). Runner GitHuba ma 16 GB
+# i jest x86_64, czyli tej samej architektury co serwer.
+#
+# Po wypchnięciu obrazu Coolify tylko go pobiera — deploy przestaje być
+# budowaniem i trwa tyle, ile `docker pull`.
+
+on:
+  push:
+    branches: [main]
+    # Obraz zależy od kodu i sposobu budowania — nie od dokumentacji.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  # Ręczne uruchomienie: przydaje się, gdy trzeba odtworzyć obraz bez zmiany
+  # w kodzie (np. po zmianie sekretu albo obrazu bazowego).
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/mycastle-backend
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: app/mycastle-backend/Dockerfile
+          # Serwer jest x86_64. Bez tego runner zbudowałby dla swojej
+          # architektury, co akurat się zgadza — ale zapis wprost chroni przed
+          # cichą zmianą, gdyby runner kiedyś przeszedł na ARM.
+          platforms: linux/amd64
+          push: true
+          # Dwa znaczniki: `latest` dla compose i `sha-…` po to, żeby dało się
+          # wrócić do konkretnej wersji bez zgadywania, co wtedy było w `latest`.
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          # Cache warstw między przebiegami — bez niego każdy build instaluje
+          # 2051 paczek od zera.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Podsumowanie
+        run: |
+          {
+            echo "### Obraz gotowy"
+            echo ""
+            echo '```'
+            echo "${{ env.IMAGE }}:latest"
+            echo "${{ env.IMAGE }}:sha-${{ github.sha }}"
+            echo '```'
+            echo ""
+            echo 'Redeploy w Coolify pobierze latest bez budowania.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,8 +1,18 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: app/mycastle-backend/Dockerfile
+    # Gotowy obraz zamiast budowania na miejscu.
+    #
+    # Ta maszyna ma 3,4 GB RAM, a `vite build` w mycastle-web żąda 8 GB heapu:
+    # budowanie tutaj wchodziło w swap, mieliło 19 minut i kończyło się
+    # zabiciem procesu przez OOM — kładąc przy okazji panel Coolify (502).
+    # Obraz powstaje więc poza serwerem (scripts/deploy-image.sh albo workflow
+    # `Build backend image`), a deploy sprowadza się do pobrania warstw.
+    #
+    # Zmiana w kodzie wymaga teraz dwóch kroków: najpierw zbuduj i wypchnij
+    # obraz, dopiero potem Redeploy. Sam Redeploy podniesie to, co już jest
+    # w rejestrze pod `latest`.
+    image: ghcr.io/mhersztowski/mycastle-backend:latest
+    pull_policy: always
     environment:
       - PORT=1894
       - ROOT_DIR=/data

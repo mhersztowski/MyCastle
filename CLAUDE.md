@@ -130,6 +130,17 @@ Samodzielny edytor kodu — ten sam `TextEditorWorkspace` z `packages/texteditor
 **IMPORTANT:** Wszystko z WSL (nie Windows cmd). pnpm bin shims są OS-specific.
 
 ## Deployment (Coolify)
+
+**Obraz powstaje POZA serwerem — Coolify go tylko pobiera.** Maszyna produkcyjna ma **3,4 GB RAM**, a `vite build` w mycastle-web żąda `--max-old-space-size=8192`, czyli 8 GB heapu. Budowanie na miejscu wchodziło w swap, mieliło **19 minut** i kończyło się zabiciem `node` przez OOM (`load average 74`), kładąc przy okazji panel Coolify — objawem było `exit code 255` bez żadnego komunikatu błędu oraz `502` na UI. `docker-compose.yml` ma więc `image:` zamiast `build:`.
+
+Dwie drogi zbudowania obrazu, obie wypychają `ghcr.io/mhersztowski/mycastle-backend` (`latest` + `sha-<commit>`):
+- **`.github/workflows/build-image.yml`** — runner GitHuba, x86_64 natywnie, 16 GB RAM, cache warstw między przebiegami. Odpala się na push do `main` (poza zmianami w `**.md`/`docs/`) albo ręcznie.
+- **`scripts/deploy-image.sh`** — z maszyny deweloperskiej. **Uwaga na architekturę:** serwer jest `x86_64`; budowanie na ARM (Apple Silicon, Windows on ARM + WSL) wymaga emulacji QEMU — jednorazowo `docker run --privileged --rm tonistiigi/binfmt --install amd64` — i trwa wielokrotnie dłużej niż natywnie. Skrypt sprawdza obecność emulacji **przed** budową, bo bez niej pierwsze `RUN` kończy się kodem 255 bez wyjaśnienia. Token: `GHCR_TOKEN`/`GITHUB_TOKEN` z `write:packages`.
+
+Zmiana w kodzie wymaga teraz **dwóch kroków**: zbuduj i wypchnij obraz, dopiero potem Redeploy w Coolify. Sam Redeploy podniesie to, co już leży w rejestrze pod `latest`.
+
+**Gotchas Dockerfile'a backendu** (oba objawiły się dopiero na produkcji): `COPY scripts/` musi wejść **przed** `pnpm install`, bo root `package.json` ma hook `postinstall` — bez tego instalacja przerywa się po pobraniu 2051 paczek. Każdy nowy pakiet workspace używany przez `mycastle-web` wymaga **trzech** wpisów: manifestu przed instalacją, źródeł i `RUN pnpm --filter … build` przed budowaniem weba — inaczej `tsc` zgłasza `TS2307: Cannot find module` (tak wyszło z `hydra-studio`). Ta sama lista żyje w skrypcie `build:mycastle` i rozjeżdża się niezależnie.
+
 - `docker-compose.yml` — 2 serwisy: `backend` (1894, volume `/data`) + `web` (nginx :80, proxy do backend).
 - Frontend Dockerfile **usuwa `.env` przed buildem** — `urlHelper.ts` auto-detect z `window.location`.
 - nginx proxy: `/mqtt` (WebSocket upgrade), `/upload`, `/files/`, `/ocr`, `/webhook/` → backend:1894.
