@@ -162,6 +162,22 @@ export interface StudioPluginOptions {
      * projektu — przekazuje je dalej pod nazwą z paska menu.
      */
     onHostAction?(action: string): void;
+    /**
+     * Źródła modułu WebAssembly dla projektu: ścieżka → treść.
+     *
+     * Wtyczka nie czyta ich sama z tego samego powodu, co paczek: w przeglądarce
+     * nie ma dysku, a dostęp do plików jest własnością edytora. Zwrócenie
+     * `undefined` znaczy „ten projekt nie ma modułu" i zakładka się nie pojawia
+     * — a nie „nie udało się wczytać".
+     */
+    loadWasmSources?(projectFile: string): Promise<Record<string, string> | undefined>;
+    /**
+     * Wgranie skompilowanego modułu na urządzenie. Brak — panel kompiluje
+     * i pozwala pobrać wynik, ale nie udaje, że umie więcej.
+     */
+    uploadWasm?(wasm: Uint8Array, sha256: string): Promise<void>;
+    /** Nazwa urządzenia w przycisku wgrywania; zna ją gospodarz, nie projekt. */
+    wasmDeviceLabel?: string;
 }
 
 /**
@@ -217,6 +233,7 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
     const listeners = new Set<(source: string) => void>();
 
     let packs: readonly PackManifest[] = [];
+    let wasmSources: Record<string, string> | undefined;
     let configSchemas: Readonly<Record<string, unknown>> = {};
 
     /**
@@ -700,6 +717,9 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                 diagnostics={validate(doc)}
                 buildOutput={buildOutput}
                 buildSummary={buildSummary}
+                {...(wasmSources ? { wasmSources } : {})}
+                {...(options.uploadWasm ? { onUploadWasm: options.uploadWasm } : {})}
+                {...(options.wasmDeviceLabel ? { deviceLabel: options.wasmDeviceLabel } : {})}
                 simulation={{ ...state, skipped: clock.skippedSteps }}
                 onSimulation={(action, speed) => {
                     if (speed !== undefined) clock.setSpeed(speed);
@@ -793,6 +813,13 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                         definitions = loaded.definitions;
                         publish(activeSource);
                     }).catch(() => { /* brak schematu nie blokuje reszty */ });
+
+                    void options.loadWasmSources?.(uri).then((loaded) => {
+                        wasmSources = loaded;
+                        publish(activeSource);
+                    }).catch((error: unknown) => {
+                        api.logger.warn(`Hydra Studio: nie udało się wczytać źródeł modułu: ${String(error)}`);
+                    });
 
                     void options.loadPacks?.(uri).then((loaded) => {
                         packs = loaded;

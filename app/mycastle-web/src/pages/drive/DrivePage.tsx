@@ -108,6 +108,7 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
 import { createHydraStudioPlugin } from '@mhersztowski/hydra-studio';
 import { runHydraBuild } from './hydraBuild';
+import { loadWasmSources, useWasmUpload } from './wasmUpload';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
 import { RemoteFS, CompositeFS, isPublicDrivePath, publicDriveUrl, PUBLIC_DRIVE_DIRS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
@@ -1003,6 +1004,10 @@ export default function DrivePage(): React.JSX.Element {
     () => (driveWorkspaceFs ? createCommentToolsPlugin(driveWorkspaceFs) : null),
     [driveWorkspaceFs],
   );
+  // Wgrywanie modułu WASM: wybór urządzenia i sam transfer. Hook oddaje też
+  // okno wyboru, które strona wstawia niżej razem z resztą okien.
+  const wasmUpload = useWasmUpload(userName);
+
   /**
    * Hydra Studio — pliki `.hydra` otwierają się w interfejsie zamiast
    * w zwykłym edytorze tekstu.
@@ -1038,7 +1043,14 @@ export default function DrivePage(): React.JSX.Element {
       // żeby wtyczka mogła go rozebrać na podsumowanie.
       return runHydraBuild(request, userName, source, onLine);
     },
-  }), [userName]);
+
+    // Moduł WebAssembly: źródła z katalogu `assembly/` obok projektu, wgrywanie
+    // przez kanał `ext/script`. Bez `loadWasmSources` zakładka „Moduł WASM"
+    // w ogóle się nie pojawia — i tak ma być dla projektów bez modułu.
+    loadWasmSources: (projectFile: string) => loadWasmSources(userName, projectFile),
+    uploadWasm: (wasm: Uint8Array) => wasmUpload.uploadWasm(wasm),
+    ...(wasmUpload.deviceLabel ? { wasmDeviceLabel: wasmUpload.deviceLabel } : {}),
+  }), [userName, wasmUpload]);
 
   const driveExtraPlugins = useMemo(
     () => [
@@ -4765,6 +4777,11 @@ export default function DrivePage(): React.JSX.Element {
           </Dialog>
         );
       })()}
+
+      {/* Wybór urządzenia dla modułu WASM — otwiera się dopiero, gdy panel
+          Studia prosi o wgranie, a urządzeń z rozszerzeniem „script" jest
+          więcej niż jedno. */}
+      {wasmUpload.dialog}
 
       <Snackbar open={snack.open} autoHideDuration={3500} onClose={() => setSnack({ ...snack, open: false })}>
         <Alert severity={snack.severity}>{snack.msg}</Alert>
