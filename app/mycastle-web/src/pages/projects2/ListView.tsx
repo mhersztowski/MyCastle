@@ -22,7 +22,7 @@ import type { TaskModel, TaskStatusDef } from '@mhersztowski/core';
 import { TaskNode } from '@mhersztowski/core';
 import { cu, hoursToMinutes } from './clickup';
 import {
-    Assignees, DateField, InlineName, PersonOption, PriorityFlag, StatusPill, TagList, TimeCell, useTicker,
+    DateField, InlineName, PriorityFlag, StatusPill, TagList, TimeCell, useTicker,
 } from './fields';
 
 export interface TaskViewActions {
@@ -36,16 +36,22 @@ export interface TaskViewActions {
 interface ListViewProps extends TaskViewActions {
     tasks: TaskModel[];
     statuses: TaskStatusDef[];
-    people: PersonOption[];
     knownTags: string[];
     projectId?: string;
 }
 
-/** Szerokości kolumn — jedna definicja dla nagłówka i wierszy. */
-const COLUMNS = '1fr 132px 108px 96px 40px 150px 132px 32px';
+/**
+ * Szerokości kolumn — jedna definicja dla nagłówka i wierszy.
+ *
+ * Nazwa dostaje `minmax`, a nie samo `1fr`: dzieli kolumnę ze strzałką
+ * rozwijania, znacznikiem statusu i ikonami, więc przy wąskim oknie kurczyła
+ * się do zera i ellipsis zjadał ją w całości. Dolna granica sprawia, że
+ * wcześniej pojawi się poziomy pasek przewijania, niż zniknie treść wiersza.
+ */
+const COLUMNS = 'minmax(220px, 1fr) 108px 96px 40px 150px 132px 32px';
 
 export const ListView: React.FC<ListViewProps> = ({
-    tasks, statuses, people, knownTags, projectId, ...actions
+    tasks, statuses, knownTags, projectId, ...actions
 }) => {
     const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
     const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({});
@@ -76,7 +82,7 @@ export const ListView: React.FC<ListViewProps> = ({
                 px: 2, py: 1, position: 'sticky', top: 0, zIndex: 2,
                 bgcolor: cu.bg, borderBottom: `1px solid ${cu.border}`,
             }}>
-                {['Nazwa', 'Wykonawcy', 'Termin', 'Priorytet', '', 'Tagi', 'Czas', ''].map((label, index) => (
+                {['Nazwa', 'Termin', 'Priorytet', '', 'Tagi', 'Czas', ''].map((label, index) => (
                     <Typography key={index} sx={{
                         fontSize: 11, fontWeight: 600, color: cu.textMuted,
                         textTransform: 'uppercase', letterSpacing: 0.4,
@@ -127,7 +133,6 @@ export const ListView: React.FC<ListViewProps> = ({
                                     expanded={expandedTasks}
                                     onToggleExpand={id => setExpandedTasks(e => ({ ...e, [id]: !e[id] }))}
                                     statuses={statuses}
-                                    people={people}
                                     knownTags={knownTags}
                                     allTasks={tasks}
                                     {...actions}
@@ -151,13 +156,12 @@ interface TaskRowsProps extends TaskViewActions {
     expanded: Record<string, boolean>;
     onToggleExpand: (id: string) => void;
     statuses: TaskStatusDef[];
-    people: PersonOption[];
     knownTags: string[];
     allTasks: TaskModel[];
 }
 
 const TaskRows: React.FC<TaskRowsProps> = props => {
-    const { task, depth, byParent, expanded, onToggleExpand, statuses, people, knownTags, allTasks } = props;
+    const { task, depth, byParent, expanded, onToggleExpand, statuses, knownTags, allTasks } = props;
     const { onUpdate, onMutate, onAdd, onRemove, onOpen } = props;
 
     const children = byParent.get(task.id) ?? [];
@@ -234,12 +238,6 @@ const TaskRows: React.FC<TaskRowsProps> = props => {
                         </Typography>
                     )}
                 </Stack>
-
-                <Assignees
-                    people={people}
-                    value={task.assignees}
-                    onChange={assignees => onUpdate(task.id, { assignees })}
-                />
 
                 <DateField
                     value={task.dueDate}

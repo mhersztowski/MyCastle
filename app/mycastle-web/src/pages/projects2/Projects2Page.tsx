@@ -258,7 +258,6 @@ const Projects2Page: React.FC = () => {
                     <ListView
                         tasks={visibleTasks}
                         statuses={statuses}
-                        people={store.persons}
                         knownTags={store.knownTags}
                         projectId={activeId === UNASSIGNED ? undefined : activeId}
                         {...actions}
