@@ -15,7 +15,6 @@ export class DownsamplingService {
   private stmtRawForPeriod: Database.Statement;
   private stmtUpsert1m: Database.Statement;
   private stmtUpsert1h: Database.Statement;
-  private stmtDistinctDevices1m: Database.Statement;
   private stmtRaw1mForPeriod: Database.Statement;
   private minuteTimer: NodeJS.Timeout | null = null;
   private hourTimer: NodeJS.Timeout | null = null;
@@ -38,11 +37,6 @@ export class DownsamplingService {
       `INSERT INTO telemetry_1h (device_id, user_id, period_start, metrics_summary)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(device_id, period_start) DO UPDATE SET metrics_summary = excluded.metrics_summary`,
-    );
-
-    this.stmtDistinctDevices1m = db.prepare(
-      `SELECT DISTINCT device_id, user_id FROM telemetry_1m
-       WHERE period_start >= ?`,
     );
 
     this.stmtRaw1mForPeriod = db.prepare(

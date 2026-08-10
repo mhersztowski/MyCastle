@@ -3,7 +3,6 @@ import type { IotDatabase } from './IotDatabase.js';
 import type Database from 'better-sqlite3';
 
 export class DeviceTwinStore {
-  private stmtUpsert: Database.Statement;
   private stmtGet: Database.Statement;
   private stmtUpdateDesired: Database.Statement;
   private stmtUpdateReported: Database.Statement;
@@ -11,12 +10,6 @@ export class DeviceTwinStore {
 
   constructor(iotDb: IotDatabase) {
     const db = iotDb.raw;
-
-    this.stmtUpsert = db.prepare(
-      `INSERT INTO device_twin (device_id, user_id, desired, reported, desired_updated_at, reported_updated_at)
-       VALUES (?, ?, ?, '{}', ?, 0)
-       ON CONFLICT(device_id) DO NOTHING`,
-    );
 
     this.stmtGet = db.prepare(
       `SELECT * FROM device_twin WHERE device_id = ?`,
