@@ -18,3 +18,14 @@ export {
 export type * from './plugin/host';
 export { applyToModel, toMonacoEdits } from './plugin/monacoBridge';
 export type { EditableModel, MonacoEdit, MonacoRange } from './plugin/monacoBridge';
+
+/*
+ * Kompilacja AssemblyScriptu do WebAssembly — bez `asc` w paczce, dopóki
+ * nikt nie kliknie „Kompiluj": sam kompilator wchodzi importem dynamicznym.
+ * Panel wystawia osobne wejście `/panels`, jak pozostałe.
+ */
+export {
+    ENTRY_FILE, compileAssemblyScript, sha256Hex,
+    type CompileDiagnostic, type CompileRequest, type CompileResult,
+} from './wasm/compileAssemblyScript';
+export { useAssemblyScript, type AssemblyScriptCompiler } from './wasm/useAssemblyScript';

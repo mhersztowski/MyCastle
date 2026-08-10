@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig({
+  // Workery jako moduły ES, nie IIFE. Worker kompilatora AssemblyScriptu
+  // wciąga `asc` importem dynamicznym, a Rollup nie potrafi podzielić kodu
+  // w formacie IIFE — budowa padała na „UMD and IIFE output formats are not
+  // supported for code-splitting builds".
+  worker: { format: 'es' },
   plugins: [
     react(),
   ],

@@ -13,3 +13,5 @@ export { BottomPanel } from './BottomPanel';
 export { MonitorPanel } from './MonitorPanel';
 export { ComponentLibrary } from './ComponentLibrary';
 export { SchematicCanvas } from './SchematicCanvas';
+export { WasmModulePanel } from './WasmModulePanel';
+export type { WasmModulePanelProps } from './WasmModulePanel';

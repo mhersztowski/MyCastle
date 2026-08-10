@@ -16,6 +16,12 @@ export default defineConfig({
     model: 'src/model/index.ts',
     panels: 'src/plugin/panels.tsx',
     cli: 'src/cli/main.ts',
+    // Worker kompilatora musi zostać osobnym plikiem w `dist/`: hook wskazuje
+    // na niego przez `new URL(..., import.meta.url)`, a bundler odbiorcy
+    // rozwiązuje ten adres statycznie. Wciągnięty do wspólnej paczki
+    // wskazywałby na plik, którego tam nie ma — i budowa aplikacji padała
+    // właśnie na tym.
+    ascWorker: 'src/wasm/ascWorker.ts',
   },
   format: ['esm', 'cjs'],
   dts: { tsconfig: 'tsconfig.build.json' },

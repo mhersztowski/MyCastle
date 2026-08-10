@@ -67,8 +67,9 @@
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@types/react": "^18.3.0",
-    "typescript": "^5.9.0",
+    "assemblyscript": "^0.28.20",
     "tsup": "^8.5.1",
+    "typescript": "^5.9.0",
     "vitest": "^2.0.0"
   },
   "license": "MIT"
