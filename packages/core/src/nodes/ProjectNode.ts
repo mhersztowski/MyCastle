@@ -1,5 +1,6 @@
 import { NodeBase } from './NodeBase';
 import { ProjectModel, ProjectComponentModel } from '../models/ProjectModel';
+import { TaskStatusDef } from '../models/TaskModel';
 import { TaskNode } from './TaskNode';
 
 /**
@@ -13,6 +14,11 @@ export class ProjectNode extends NodeBase<ProjectModel> {
   description?: string;
   cost?: number;
   components?: ProjectComponentModel[];
+
+  // Pola widoku planistycznego (PIM/Projects2)
+  color?: string;
+  statuses?: TaskStatusDef[];
+  archived?: boolean;
 
   // Child nodes
   private _children: ProjectNode[] = [];
@@ -31,6 +37,9 @@ export class ProjectNode extends NodeBase<ProjectModel> {
     this.description = model.description;
     this.cost = model.cost;
     this.components = model.components;
+    this.color = model.color;
+    this.statuses = model.statuses;
+    this.archived = model.archived;
 
     // Build child nodes
     if (model.projects) {
@@ -308,6 +317,9 @@ export class ProjectNode extends NodeBase<ProjectModel> {
       projects: this._children.length > 0 ? this._children.map(c => c.toModel()) : undefined,
       tasks: this._tasks.length > 0 ? this._tasks.map(t => t.toModel()) : undefined,
       components: this.components,
+      color: this.color,
+      statuses: this.statuses,
+      archived: this.archived,
     };
   }
 

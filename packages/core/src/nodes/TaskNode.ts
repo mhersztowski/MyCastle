@@ -1,5 +1,20 @@
 import { NodeBase } from './NodeBase';
-import { TaskModel, TaskComponentModel, TaskIntervalComponentModel } from '../models/TaskModel';
+import {
+  TaskModel,
+  TaskComponentModel,
+  TaskIntervalComponentModel,
+  TaskPriority,
+  TaskTimeEntry,
+} from '../models/TaskModel';
+
+/**
+ * Pusta tablica jest w pliku nieodróżnialna od świadomej decyzji „bez tagów",
+ * a dokłada klucz do każdego zadania, które o tagach nic nie wie. Zapisujemy
+ * więc tylko listy niepuste.
+ */
+function keepList<T>(list: T[] | undefined): T[] | undefined {
+  return list && list.length > 0 ? list : undefined;
+}
 
 // Forward reference types to avoid circular imports
 type ProjectNodeRef = { id: string; name: string } | null;
@@ -17,6 +32,18 @@ export class TaskNode extends NodeBase<TaskModel> {
   cost?: number;
   components?: TaskComponentModel[];
 
+  // Pola planistyczne (widok PIM/Projects2)
+  status?: string;
+  priority?: TaskPriority;
+  startDate?: string;
+  dueDate?: string;
+  assignees?: string[];
+  tags?: string[];
+  timeEntries?: TaskTimeEntry[];
+  parentTaskId?: string;
+  order?: number;
+  dependsOn?: string[];
+
   // Additional UI states
   private _isCompleted: boolean = false;
   private _progress: number = 0;
@@ -33,6 +60,21 @@ export class TaskNode extends NodeBase<TaskModel> {
     this.duration = model.duration;
     this.cost = model.cost;
     this.components = model.components;
+    this.assignPlanningFields(model);
+  }
+
+  /** Wspólne dla konstruktora i `updateFrom` — inaczej łatwo o pole w jednym miejscu. */
+  private assignPlanningFields(model: TaskModel): void {
+    this.status = model.status;
+    this.priority = model.priority;
+    this.startDate = model.startDate;
+    this.dueDate = model.dueDate;
+    this.assignees = model.assignees;
+    this.tags = model.tags;
+    this.timeEntries = model.timeEntries;
+    this.parentTaskId = model.parentTaskId;
+    this.order = model.order;
+    this.dependsOn = model.dependsOn;
   }
 
   static fromModel(model: TaskModel): TaskNode { return new TaskNode(model); }
@@ -187,6 +229,7 @@ export class TaskNode extends NodeBase<TaskModel> {
     this.duration = model.duration;
     this.cost = model.cost;
     this.components = model.components;
+    this.assignPlanningFields(model);
     this.markDirty();
     return this;
   }
@@ -202,7 +245,104 @@ export class TaskNode extends NodeBase<TaskModel> {
       duration: this.duration,
       cost: this.cost,
       components: this.components,
+      status: this.status,
+      priority: this.priority,
+      startDate: this.startDate,
+      dueDate: this.dueDate,
+      assignees: keepList(this.assignees),
+      tags: keepList(this.tags),
+      timeEntries: keepList(this.timeEntries),
+      parentTaskId: this.parentTaskId,
+      order: this.order,
+      dependsOn: keepList(this.dependsOn),
     };
+  }
+
+  // --- śledzenie czasu ----------------------------------------------------
+
+  /** Wpis bez `end` — czyli licznik, który biegnie teraz. */
+  private openEntry(): TaskTimeEntry | undefined {
+    return this.timeEntries?.find(e => !e.end);
+  }
+
+  isTracking(): boolean {
+    return this.openEntry() !== undefined;
+  }
+
+  /**
+   * Suma zapisanego czasu w minutach. `now` wchodzi parametrem, bo wpis otwarty
+   * trzeba do czegoś domknąć — a sięgnięcie po zegar w środku uzależniłoby
+   * wynik od chwili wywołania i uniemożliwiło testowanie.
+   */
+  trackedMinutes(now: Date = new Date()): number {
+    if (!this.timeEntries) return 0;
+    const total = this.timeEntries.reduce((sum, entry) => {
+      const start = Date.parse(entry.start);
+      if (Number.isNaN(start)) return sum;
+      const end = entry.end ? Date.parse(entry.end) : now.getTime();
+      if (Number.isNaN(end) || end <= start) return sum;
+      return sum + (end - start);
+    }, 0);
+    return Math.round(total / 60000);
+  }
+
+  /**
+   * Otwiera nowy pomiar. Gdy jeden już biegnie, nie robi nic: dwa otwarte wpisy
+   * naraz liczyłyby ten sam czas podwójnie, a użytkownik nie ma jak tego
+   * zobaczyć na liście.
+   */
+  startTracking(options: { id: string; at?: Date; who?: string; note?: string }): this {
+    if (this.isTracking()) return this;
+    const entry: TaskTimeEntry = {
+      id: options.id,
+      start: (options.at ?? new Date()).toISOString(),
+      ...(options.who ? { who: options.who } : {}),
+      ...(options.note ? { note: options.note } : {}),
+    };
+    this.timeEntries = [...(this.timeEntries ?? []), entry];
+    this.markDirty();
+    return this;
+  }
+
+  /**
+   * Zamyka biegnący pomiar. Bez pomiaru — nic się nie dzieje.
+   *
+   * Podmiana elementu zamiast przypisania do `end`, bo `clone()` przechodzi
+   * przez `toModel()` i klon współdzieli obiekty wpisów z oryginałem —
+   * mutacja zatrzymywałaby licznik w obu naraz.
+   */
+  stopTracking(at: Date = new Date()): this {
+    const open = this.openEntry();
+    if (!open) return this;
+    this.timeEntries = this.timeEntries!.map(
+      entry => (entry === open ? { ...entry, end: at.toISOString() } : entry)
+    );
+    this.markDirty();
+    return this;
+  }
+
+  // --- zależności ---------------------------------------------------------
+
+  /**
+   * Dopisuje poprzednik. Zadanie zależne od samego siebie jest cyklem
+   * długości jeden — jedynym, który da się wykryć bez oglądania reszty grafu,
+   * więc odrzucamy go tutaj; dłuższe cykle są sprawą warstwy widoku, która zna
+   * wszystkie zadania.
+   */
+  addDependency(taskId: string): this {
+    if (taskId === this.id) return this;
+    const current = this.dependsOn ?? [];
+    if (current.includes(taskId)) return this;
+    this.dependsOn = [...current, taskId];
+    this.markDirty();
+    return this;
+  }
+
+  removeDependency(taskId: string): this {
+    if (!this.dependsOn) return this;
+    this.dependsOn = keepList(this.dependsOn.filter(id => id !== taskId));
+    this.markDirty();
+    return this;
   }
 
   clone(): TaskNode {

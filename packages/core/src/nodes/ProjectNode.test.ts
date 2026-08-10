@@ -158,4 +158,21 @@ describe('ProjectNode', () => {
     const p = new ProjectNode(model).setSelected(true);
     expect(p.clone().isSelected).toBe(true);
   });
+
+  it('round-trips pola widoku planistycznego', () => {
+    // Ten sam powód, co przy TaskNode: starsza strona PIM/Projects zapisuje
+    // cały plik przez toModel(), więc pole zgubione w konwersji znika z dysku.
+    const planned = {
+      type: 'project' as const,
+      id: 'p9',
+      name: 'Remont',
+      color: '#ff7a59',
+      archived: true,
+      statuses: [
+        { id: 'todo', name: 'Do zrobienia', color: '#87909e', kind: 'open' as const },
+        { id: 'done', name: 'Gotowe', color: '#6bc950', kind: 'done' as const },
+      ],
+    };
+    expect(new ProjectNode(planned).toModel()).toEqual(planned);
+  });
 });

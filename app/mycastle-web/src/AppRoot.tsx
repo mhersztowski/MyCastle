@@ -95,6 +95,7 @@ import { ObjectViewerPage } from './pages/objectviewer';
 import ComponentsPage from './pages/components/ComponentsPage';
 import CastlePersonPage from './pages/person/PersonPage';
 import CastleProjectPage from './pages/project/ProjectPage';
+import Projects2Page from './pages/projects2/Projects2Page';
 import AutomateListPage from './pages/automate/AutomateListPage';
 import AiSettingsPage from './pages/settings/AiSettingsPage';
 import SpeechSettingsPage from './pages/settings/SpeechSettingsPage';
@@ -289,6 +290,24 @@ function AppRoot() {
                 <DrivePage />
               </Layout>
             </Box>
+          }
+        />
+
+        {/* Projects 2 — widok w układzie ClickUpa: własny panel boczny
+            projektów, tablica kanban i lista na pełną szerokość. `fullBleed`
+            zdejmuje `Container maxWidth="lg"` i padding, ale zostawia górny
+            pasek i nawigację MyCastle — inaczej niż Drive, ta strona nie
+            renderuje własnego paska. */}
+        <Route
+          path="/user/:userName/pim/projects2"
+          element={
+            <RequireAuth>
+              <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+                <Layout fullBleed>
+                  <Projects2Page />
+                </Layout>
+              </Box>
+            </RequireAuth>
           }
         />
 
