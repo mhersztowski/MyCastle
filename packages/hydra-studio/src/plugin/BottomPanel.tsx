@@ -18,6 +18,8 @@ import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
+
+import { WasmModulePanel } from './WasmModulePanel';
 import TextField from '@mui/material/TextField';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
@@ -47,6 +49,15 @@ export interface BottomPanelProps {
     /** Wysłanie polecenia do urządzenia — tą samą drogą co polecenia shella. */
     onCommand?: ((command: string) => void) | undefined;
     onRunSuite?: ((suite: string) => void) | undefined;
+    /**
+     * Źródła modułu WebAssembly, ścieżka → treść. Podanie ich odsłania
+     * zakładkę „Moduł WASM"; brak oznacza projekt, który modułu nie ma.
+     */
+    wasmSources?: Record<string, string> | undefined;
+    /** Wgranie modułu na urządzenie. Brak — panel kompiluje i pozwala pobrać. */
+    onUploadWasm?: ((wasm: Uint8Array, sha256: string) => Promise<void> | void) | undefined;
+    /** Nazwa urządzenia w przycisku wgrywania. */
+    deviceLabel?: string | undefined;
 }
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -66,6 +77,10 @@ export function BottomPanel(props: BottomPanelProps) {
         { label: 'Problemy', badge: problems.filter((d) => d.severity === 'error').length },
         { label: 'Symulacja', badge: 0 },
         { label: 'Farma', badge: 0 },
+        // Zakładka pojawia się dopiero, gdy gospodarz poda źródła modułu —
+        // większość projektów Hydry nie ma modułu WebAssembly i pusta zakładka
+        // byłaby wyłącznie szumem.
+        ...(props.wasmSources ? [{ label: 'Moduł WASM', badge: 0 }] : []),
     ];
 
     return (
@@ -106,6 +121,13 @@ export function BottomPanel(props: BottomPanelProps) {
                 {tab === 4 && <SimulationTab model={props.model} simulation={props.simulation}
                                              onSimulation={props.onSimulation} />}
                 {tab === 5 && <HilTab model={props.model} onRunSuite={props.onRunSuite} />}
+                {tab === 6 && props.wasmSources && (
+                    <WasmModulePanel
+                        sources={props.wasmSources}
+                        {...(props.onUploadWasm ? { onUpload: props.onUploadWasm } : {})}
+                        {...(props.deviceLabel ? { deviceLabel: props.deviceLabel } : {})}
+                    />
+                )}
             </Box>
         </Box>
     );

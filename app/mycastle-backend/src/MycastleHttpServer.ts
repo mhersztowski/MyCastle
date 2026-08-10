@@ -789,7 +789,7 @@ export class MycastleHttpServer extends HttpUploadServer {
     if (userPublicMatch && method === 'GET') {
       const pubUserName = decodeURIComponent(userPublicMatch[1]);
       const pubFilePath = decodeURIComponent(userPublicMatch[2]);
-      await this.handleUserPublicFile(res, pubUserName, pubFilePath);
+      await this.handleUserPublicFile(req, res, pubUserName, pubFilePath);
       return;
     }
 
@@ -1579,6 +1579,22 @@ export class MycastleHttpServer extends HttpUploadServer {
       const deviceName = decodeURIComponent(extReqMatch[2]);
       const extType = extReqMatch[3] as 'vkbd' | 'vmouse';
       await this.handleVirtualInputExt(req, res, userName, deviceName, extType);
+      return;
+    }
+
+    // Wgranie skryptu/modułu WASM: POST /users/{u}/devices/{d}/ext/script/upload
+    // Osobno od `ext/{vkbd|vmouse}`, bo to nie jest jedno żądanie do urządzenia,
+    // tylko cała sekwencja begin → fragmenty → commit, którą składa serwer.
+    const scriptUploadMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/ext\/script\/upload$/);
+    if (scriptUploadMatch && method === 'POST') {
+      await this.handleScriptUpload(req, res, decodeURIComponent(scriptUploadMatch[2]));
+      return;
+    }
+
+    // Stan wgrywania skryptu: GET /users/{u}/devices/{d}/ext/script/status
+    const scriptStatusMatch = apiPath.match(/^\/users\/([^/]+)\/devices\/([^/]+)\/ext\/script\/status$/);
+    if (scriptStatusMatch && method === 'GET') {
+      await this.handleScriptStatus(res, decodeURIComponent(scriptStatusMatch[2]));
       return;
     }
 
@@ -3617,6 +3633,88 @@ export class MycastleHttpServer extends HttpUploadServer {
     }
   }
 
+  /**
+   * Wgranie modułu na urządzenie.
+   *
+   * Przyjmuje obraz w base64, bo tą samą drogą idzie potem do urządzenia —
+   * przekodowanie na bajty i z powrotem tylko po to, żeby przejść przez HTTP,
+   * byłoby pracą bez powodu.
+   *
+   * Fragmentowanie robi serwer: rozmiar bufora jest własnością urządzenia,
+   * nie przeglądarki.
+   */
+  private async handleScriptUpload(
+    req: IncomingMessage,
+    res: ServerResponse,
+    deviceName: string,
+  ): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+
+    const ext = this.iotService.extensions.getScript(deviceName);
+    if (!ext) {
+      this.sendJsonResponse(res, 404, {
+        error: `Rozszerzenie 'script' nie jest aktywne na urządzeniu '${deviceName}'`,
+      });
+      return;
+    }
+
+    const body = await this.parseRequestBody(req) as Record<string, unknown>;
+    const dataB64 = typeof body.data === 'string' ? body.data : null;
+    if (!dataB64) {
+      this.sendJsonResponse(res, 400, { error: "Brak pola 'data' (obraz w base64)" });
+      return;
+    }
+
+    const image = new Uint8Array(Buffer.from(dataB64, 'base64'));
+    if (image.byteLength === 0) {
+      this.sendJsonResponse(res, 400, { error: 'Pusty obraz' });
+      return;
+    }
+
+    try {
+      await ext.upload(image, {
+        variant: typeof body.variant === 'string' ? body.variant : 'wasm',
+        name: typeof body.name === 'string' ? body.name : undefined,
+        hmacKey: typeof body.hmacKey === 'string' ? body.hmacKey : undefined,
+      });
+      this.sendJsonResponse(res, 200, { ok: true, bytes: image.byteLength });
+    } catch (e) {
+      // Kod odmowy z urządzenia idzie dalej: `busy`, `variant`, `unsigned`,
+      // `checksum`, `signature` znaczą różne rzeczy i interfejs ma je rozróżnić.
+      const code = (e as Error & { code?: string }).code;
+      this.sendJsonResponse(res, 409, {
+        ok: false,
+        code: code ?? 'failed',
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /** Stan urządzenia: silnik, pojemność slotu, okres próbny. */
+  private async handleScriptStatus(res: ServerResponse, deviceName: string): Promise<void> {
+    if (!this.iotService) {
+      this.sendJsonResponse(res, 503, { error: 'IoT service not available' });
+      return;
+    }
+
+    const ext = this.iotService.extensions.getScript(deviceName);
+    if (!ext) {
+      this.sendJsonResponse(res, 404, {
+        error: `Rozszerzenie 'script' nie jest aktywne na urządzeniu '${deviceName}'`,
+      });
+      return;
+    }
+
+    try {
+      this.sendJsonResponse(res, 200, await ext.status());
+    } catch (e) {
+      this.sendJsonResponse(res, 504, { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   private async handleVirtualInputExt(
     req: IncomingMessage,
     res: ServerResponse,
@@ -3683,7 +3781,7 @@ export class MycastleHttpServer extends HttpUploadServer {
         this.sendJsonResponse(res, 405, { error: 'Method not allowed' });
         return;
       }
-      const body = await this.parseRequestBody(req) as { path?: string; ref?: string; type?: 'branch' | 'tag'; url?: string; remote?: string; branch?: string; token?: string; tokenSecretKey?: string | null; from?: string; to?: string; file?: string };
+      const body = await this.parseRequestBody(req) as { path?: string; ref?: string; type?: 'branch' | 'tag'; url?: string; remote?: string; branch?: string; token?: string; tokenSecretKey?: string | null; from?: string; to?: string; file?: string; message?: string };
       const repoPath = body.path ?? '';
       if (!repoPath) { this.sendJsonResponse(res, 400, { error: 'path is required' }); return; }
       switch (operation) {
@@ -4695,7 +4793,7 @@ const { password, ...safeBody } = body;
       sketchName = url.searchParams.get('sketchName') ?? undefined;
       boardKey = url.searchParams.get('boardKey') ?? 'pico2';
     } else {
-      const body = await this.readJsonBody(req) as { sketchName?: string; boardKey?: string };
+      const body = await this.parseRequestBody(req) as { sketchName?: string; boardKey?: string };
       sketchName = body.sketchName;
       boardKey = body.boardKey ?? 'pico2';
     }
@@ -4816,7 +4914,7 @@ const { password, ...safeBody } = body;
     // Write a temporary .npmrc so npm resolves @mhersztowski/* from GitHub Packages.
     // Environment variable names cannot contain '@' or ':', so npm_config_* injection
     // does not work for scoped registry keys — a config file is the only reliable way.
-    const { readFile, writeFile, unlink } = await import('fs/promises');
+    const { writeFile, unlink } = await import('fs/promises');
     const { tmpdir } = await import('os');
     const githubToken = process.env.GITHUB_TOKEN;
     let tmpNpmrc: string | null = null;
@@ -6358,13 +6456,13 @@ Rules:
   }
 
   private async fetchJson(url: string): Promise<unknown> {
-    const r = await fetch(url, { cache: 'no-store' });
+    const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
     return r.json();
   }
 
   private async fetchText(url: string): Promise<string> {
-    const r = await fetch(url, { cache: 'no-store' });
+    const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
     return r.text();
   }
@@ -6866,7 +6964,7 @@ Rules:
     }
   }
 
-  private async handleUserPublicFile(res: ServerResponse, userName: string, filePath: string): Promise<void> {
+  private async handleUserPublicFile(req: IncomingMessage, res: ServerResponse, userName: string, filePath: string): Promise<void> {
     const MIME_TYPES: Record<string, string> = {
       '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
       '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.bmp': 'image/bmp',
@@ -7004,7 +7102,14 @@ Rules:
           this.sendJsonResponse(res, 400, { error: 'name and webhookUrl required' });
           return;
         }
-        const channel = this.iotService.notificationChannels.create(userName, body);
+        // Pola przepisane jawnie: strażnik wyżej zawęża `body.name` i
+        // `body.webhookUrl` do stringów, ale nie zmienia typu całego obiektu,
+        // a `create()` wymaga ich jako obowiązkowych.
+        const channel = this.iotService.notificationChannels.create(userName, {
+          name: body.name,
+          webhookUrl: body.webhookUrl,
+          secret: body.secret,
+        });
         this.sendJsonResponse(res, 201, channel);
         return;
       }

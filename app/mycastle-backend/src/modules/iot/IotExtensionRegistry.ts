@@ -6,6 +6,7 @@ import { VirtualKeyboardExtension } from './extensions/VirtualKeyboardExtension.
 import { VirtualMouseExtension } from './extensions/VirtualMouseExtension.js';
 import { SmartDisplayExtension } from './extensions/SmartDisplayExtension.js';
 import { DisplayExtension } from './extensions/DisplayExtension.js';
+import { ScriptExtension } from './extensions/ScriptExtension.js';
 
 /**
  * Manages IoT device extensions — one set per device.
@@ -101,6 +102,11 @@ export class IotExtensionRegistry {
     return this.get(deviceId, 'vmouse') as VirtualMouseExtension | undefined;
   }
 
+  /** Wgrywanie skryptu i modułów WebAssembly. */
+  getScript(deviceId: string): ScriptExtension | undefined {
+    return this.get(deviceId, 'script') as ScriptExtension | undefined;
+  }
+
   getSmartDisplay(deviceId: string): SmartDisplayExtension | undefined {
     return this.get(deviceId, 'smart-display') as SmartDisplayExtension | undefined;
   }
@@ -160,6 +166,9 @@ export class IotExtensionRegistry {
         break;
       case 'display':
         ext = new DisplayExtension(deviceId, topicPrefix, this.publishFn);
+        break;
+      case 'script':
+        ext = new ScriptExtension(deviceId, topicPrefix, this.publishFn);
         break;
       default:
         console.warn(`[IotExtensionRegistry] Unknown extension type: ${type} (device=${deviceId})`);
