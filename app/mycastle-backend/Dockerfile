@@ -24,6 +24,10 @@ WORKDIR /app
 # Copy only manifests first — pnpm install layer is cached until lockfile/package.json changes
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY patches/ patches/
+# scripts/ musi tu być, mimo że nie zawiera manifestów: root package.json ma
+# hook `postinstall`, który uruchamia stąd skrypt. Bez tego katalogu instalacja
+# przerywa się na „No such file or directory" dopiero po pobraniu 2000 paczek.
+COPY scripts/ scripts/
 COPY packages/core/package.json packages/core/
 COPY packages/core-backend/package.json packages/core-backend/
 COPY packages/texteditor/package.json packages/texteditor/

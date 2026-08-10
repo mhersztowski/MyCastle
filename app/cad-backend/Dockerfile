@@ -9,6 +9,8 @@ WORKDIR /app
 
 # ── install deps (cached until lockfile changes) ──────────────────────────────
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Hook `postinstall` z root package.json uruchamia skrypt stąd.
+COPY scripts/ scripts/
 COPY packages/core/package.json             packages/core/
 COPY packages/core-backend/package.json     packages/core-backend/
 COPY packages/core-cad/package.json         packages/core-cad/
@@ -59,6 +61,8 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 WORKDIR /app
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Hook `postinstall` z root package.json uruchamia skrypt stąd.
+COPY scripts/ scripts/
 COPY packages/core/package.json             packages/core/
 COPY packages/core-backend/package.json     packages/core-backend/
 COPY packages/core-cad/package.json         packages/core-cad/

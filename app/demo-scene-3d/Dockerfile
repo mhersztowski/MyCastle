@@ -6,6 +6,8 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 FROM base AS build
 WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Hook `postinstall` z root package.json uruchamia skrypt stąd.
+COPY scripts/ scripts/
 COPY packages/core-scene3d/ packages/core-scene3d/
 COPY packages/ui-core/ packages/ui-core/
 COPY packages/ui-components-scene3d/ packages/ui-components-scene3d/

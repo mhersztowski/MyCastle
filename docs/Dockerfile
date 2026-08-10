@@ -6,6 +6,8 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 FROM base AS build
 WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json typedoc.json ./
+# Hook `postinstall` z root package.json uruchamia skrypt stąd.
+COPY scripts/ scripts/
 COPY packages/ packages/
 COPY app/ app/
 RUN pnpm install --frozen-lockfile
