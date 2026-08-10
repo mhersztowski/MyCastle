@@ -31,6 +31,7 @@ COPY scripts/ scripts/
 COPY packages/core/package.json packages/core/
 COPY packages/core-backend/package.json packages/core-backend/
 COPY packages/texteditor/package.json packages/texteditor/
+COPY packages/hydra-studio/package.json packages/hydra-studio/
 COPY packages/web-client/package.json packages/web-client/
 COPY packages/ui-core/package.json packages/ui-core/
 COPY packages/core-scene3d/package.json packages/core-scene3d/
@@ -67,6 +68,8 @@ COPY packages/server-logic/ packages/server-logic/
 COPY packages/devtools/ packages/devtools/
 COPY packages/minisc/ packages/minisc/
 COPY packages/texteditor/ packages/texteditor/
+# hydra-studio — DrivePage otwiera nim pliki .hydra (wtyczka + model projektu)
+COPY packages/hydra-studio/ packages/hydra-studio/
 COPY packages/web-client/ packages/web-client/
 COPY packages/web-cpp/ packages/web-cpp/
 # CAD viewer chain — mycastle-web imports @mhersztowski/core-cad-viewer
@@ -93,6 +96,9 @@ RUN pnpm --filter @mhersztowski/server-logic build --silent
 RUN pnpm --filter @mhersztowski/devtools build --silent
 RUN pnpm --filter @mhersztowski/minisc build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
+# hydra-studio przed web: mycastle-web importuje @mhersztowski/hydra-studio
+# (DrivePage) oraz /model (hydraBuild.ts), a tsc rozwiązuje typy z dist/.
+RUN pnpm --filter @mhersztowski/hydra-studio build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 RUN pnpm --filter @mhersztowski/web-cpp build --silent
 # CAD viewer chain (order: ui-core → core-scene3d, core-cad → core-cad-viewer)

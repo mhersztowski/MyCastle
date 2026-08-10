@@ -34,7 +34,7 @@
     "build:ui-core": "pnpm --filter @mhersztowski/ui-core run build",
     "build:cad-all": "pnpm build:core && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:ui-scene3d && pnpm build:texteditor && pnpm build:layout && pnpm build:cad-backend && pnpm build:cad",
     "build:cadall": "pnpm build:cad-all",
-    "build:mycastle": "pnpm build:core && pnpm build:core-backend && pnpm build:minisc && pnpm build:minislib && pnpm build:server-logic && pnpm build:devtools && pnpm build:texteditor && pnpm build:web-client && pnpm build:web-cpp && pnpm build:web-devtools && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:layout && pnpm build:sci-core && pnpm build:sci-blocks && pnpm build:backend && pnpm build:web",
+    "build:mycastle": "pnpm build:core && pnpm build:core-backend && pnpm build:minisc && pnpm build:minislib && pnpm build:server-logic && pnpm build:devtools && pnpm build:texteditor && pnpm build:hydra-studio && pnpm build:web-client && pnpm build:web-cpp && pnpm build:web-devtools && pnpm build:core-cad && pnpm build:ui-core && pnpm build:core-scene3d && pnpm build:cad-viewer && pnpm build:layout && pnpm build:sci-core && pnpm build:sci-blocks && pnpm build:backend && pnpm build:web",
     "dev:mycastle": "concurrently -n backend,web -c blue,green --kill-others \"pnpm dev:backend\" \"pnpm dev:web\"",
     "dev:backend": "pnpm --filter mycastle-backend run dev",
     "dev:web": "pnpm --filter mycastle-web run dev",
