@@ -94,6 +94,27 @@ async function writeNativeManifests(
 }
 
 /**
+ * Cel przeglądarkowy potrzebuje samego CMakeLists.
+ *
+ * Presetów nie ma czego opisywać: preset mówi, dla której maszyny budujemy,
+ * a `.wasm` jest jeden i chodzi wszędzie. Wygenerowanie pustego pliku presetów
+ * sugerowałoby wybór, którego nie ma.
+ */
+async function writeWasmManifest(
+    file: string,
+    plan: ReturnType<typeof buildPlan>,
+    provider: FileSystemProvider,
+    onLine: (line: string) => void,
+): Promise<void> {
+    await provider.writeFile?.(
+        file.replace(/[^/]+$/, 'CMakeLists.txt'),
+        new TextEncoder().encode(emitCMake(plan, { hydraPath: HYDRA_PATH_IN_CONTAINER })),
+        { create: true, overwrite: true },
+    );
+    onLine('Wygenerowano CMakeLists.txt.');
+}
+
+/**
  * Preset dla maszyny, na której stoi kontener — nie dla tej, na której otwarto
  * edytor.
  *
@@ -217,9 +238,20 @@ export async function runHydraBuild(
     // z `some()` zostawiała ją typem `string | undefined` mimo że w tej gałęzi
     // jest już pewna.
     const nativeTarget = plan.targets.find((t) => t.name === chosen && t.isNative);
+    const wasmTarget   = plan.targets.find((t) => t.name === chosen && t.isWasm);
 
     let payload: Record<string, unknown>;
-    if (nativeTarget) {
+    if (wasmTarget) {
+        await writeWasmManifest(request.file, plan, provider, onLine);
+        payload = {
+            ...request,
+            // Tak samo jak przy celu natywnym: CMakeLists wybiera cel zmienną
+            // HYDRA_TARGET i niczego nie zgaduje.
+            target: wasmTarget.name,
+            kind: 'wasm',
+        };
+        onLine(`Cel przeglądarkowy „${wasmTarget.name}" — buduję przez emscripten (bez wgrywania).`);
+    } else if (nativeTarget) {
         await writeNativeManifests(request.file, plan, provider, onLine);
         const os = targetOs();
         const platform = await containerPlatform(os);
@@ -263,6 +295,32 @@ export async function runHydraBuild(
     }
 
     const { output, code } = await readBuildStream(response.body, onLine);
+
+    if (wasmTarget && code === 0) {
+        // Ścieżka projektu bez pliku `.hydra` plus katalog budowy z `wasmSteps`.
+        const projectDir = request.file.replace(/^\/+/, '').replace(/[^/]+$/, '');
+        const url = `/api/hydra/preview/${projectDir}build/wasm/${plan.projectName}.html`;
+        onLine('');
+
+        /*
+         * „Wgraj" na celu przeglądarkowym znaczy „otwórz" — tak jak na celu
+         * natywnym znaczy „uruchom tutaj". Urządzeniem jest tu przeglądarka.
+         *
+         * Okno może nie wstać i to nie jest usterka: budowa trwa minutę, więc
+         * otwarcie następuje długo po kliknięciu i przeglądarka słusznie
+         * traktuje je jako wyskakujące. Dlatego adres i tak trafia do panelu —
+         * wtedy jedno kliknięcie w link załatwia to, czego blokada nie
+         * przepuściła.
+         */
+        if (request.upload) {
+            const opened = window.open(url, '_blank', 'noopener');
+            onLine(opened
+                ? `Otwarto w nowej karcie: ${url}`
+                : `Przeglądarka zablokowała nowe okno. Otwórz ręcznie: ${url}`);
+        } else {
+            onLine(`Gotowe. Otwórz w przeglądarce: ${url}`);
+        }
+    }
 
     // Wsad zostaje na urządzeniu, więc nie ma czego oddawać. Program natywny
     // jest plikiem dla maszyny użytkownika — budowa, po której trzeba go

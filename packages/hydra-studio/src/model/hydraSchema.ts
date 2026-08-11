@@ -22,7 +22,7 @@ import {
  * zamiast Arduino i okno SDL zamiast panelu. Trzymanie go osobno oznaczałoby
  * drugą oś w modelu i drugi zestaw reguł w każdym emiterze.
  */
-export const MCUS = ['native',
+export const MCUS = ['native', 'wasm',
                      'esp32', 'esp32s2', 'esp32s3', 'esp32c3', 'esp32c6',
                      'rp2040', 'rp2350', 'stm32g4', 'stm32f4', 'stm32h7'] as const;
 
@@ -70,7 +70,7 @@ const target: ObjectNode = obj('Cel sprzętowy — jedno środowisko budowania',
         })),
         partitions: optional(oneOf('Schemat partycji — nazwa logiczna, nie plik', PARTITION_SCHEMES)),
     })),
-    native: optional(obj('Cel natywny: okno na maszynie deweloperskiej (tylko mcu: native)', {
+    native: optional(obj('Okno programu — cel `native` (pulpit) albo `wasm` (kanwa w przeglądarce)', {
         display: optional(bool('Czy otwierać okno; false = program bez interfejsu (CI, ssh)')),
         window: optional(obj('Powierzchnia rysowania — jej rozmiar, nie rozmiar okna', {
             width:  optional(num('Szerokość powierzchni', { integer: true, min: 16, max: 4096, unit: 'px' })),

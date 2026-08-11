@@ -59,6 +59,19 @@ export interface TargetPlan {
      * od systemu operacyjnego. Emitery rozgałęziają się na tym polu.
      */
     isNative: boolean;
+    /**
+     * Cel przeglądarkowy. Osobno od `isNative`, bo mimo wspólnej drogi budowy
+     * (CMake, backend hostowy, okno) różni się dwiema rzeczami, które widać
+     * dopiero na końcu: toolchainem (emscripten) i tym, że wynik jest
+     * przenośny — jeden `.wasm` zamiast programu per system.
+     */
+    isWasm: boolean;
+    /**
+     * Czy cel idzie przez CMake zamiast przez PlatformIO. Prawdziwe dla
+     * `native` i `wasm` — oba wypadają z `platformio.ini`, bo `platform =
+     * native` nie zbuduje programu okienkowego ani modułu WebAssembly.
+     */
+    usesCMake: boolean;
     /** Okno — tylko dla celu natywnego. */
     native: NativeWindow | undefined;
     /** Płytka PlatformIO — z pliku albo z profilu układu. */
@@ -168,8 +181,9 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
     applyLogLevel(asRecord(root['modules']), flags);
 
     const isNative = profile.kind === 'native';
+    const isWasm   = profile.kind === 'wasm';
     let native: NativeWindow | undefined;
-    if (isNative) {
+    if (isNative || isWasm) {
         // Backend hostowy wybiera się flagą, a nie gałęzią w pliku budowy.
         // Ta sama flaga włącza atrapy HAL w Makefile testów, więc cel `native`
         // i testy jednostkowe kompilują dokładnie ten sam kod.
@@ -181,6 +195,8 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
     return {
         name, mcu, profile, board,
         isNative,
+        isWasm,
+        usesCMake: isNative || isWasm,
         native,
         boardHeader: boardHeader ? headerInclude(boardHeader) : undefined,
         modules,

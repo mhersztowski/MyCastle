@@ -11,6 +11,17 @@ const BACKEND_PORT = parseInt(process.env.MONACO_BACKEND_PORT ?? '1994', 10);
 const WEB_PORT = parseInt(process.env.MONACO_WEB_PORT ?? '1995', 10);
 
 export default defineConfig({
+  /*
+   * Workery jako moduły ES, a nie domyślne IIFE.
+   *
+   * Worker kompilatora AssemblyScriptu (`hydra-studio/src/wasm/ascWorker.ts`)
+   * wciąga `asc` — 14,8 MB, które rollup dzieli na kilka paczek. Formatu IIFE
+   * nie da się podzielić, więc budowa kończy się „Invalid value 'iife' for
+   * option 'worker.format'" i wskazuje na paczkę wtyczki, nie na jej przyczynę.
+   * mycastle-web ma to ustawienie od dawna — tu brakowało, bo do tej pory
+   * żaden worker nie potrzebował podziału.
+   */
+  worker: { format: 'es' },
   plugins: [react()],
   resolve: {
     alias: {

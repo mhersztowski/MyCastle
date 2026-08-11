@@ -20,6 +20,7 @@ export function runHydra(
     args: string[],
     onLine: (line: string) => void,
     cwd?: string,
+    extraEnv?: Record<string, string>,
 ): HydraRunHandle {
     const child = spawn(script, args, {
         /*
@@ -30,7 +31,7 @@ export function runHydra(
          * i `DISPLAY` — bez nich WSLg nie ma gdzie pokazać okna i SDL kończy
          * się „No available video device".
          */
-        env: { ...process.env, TERM: 'dumb' },
+        env: { ...process.env, TERM: 'dumb', ...extraEnv },
         stdio: ['ignore', 'pipe', 'pipe'],
         ...(cwd ? { cwd } : {}),
     });

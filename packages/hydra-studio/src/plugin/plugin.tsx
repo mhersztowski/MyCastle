@@ -421,6 +421,24 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
         }
     }
 
+    /**
+     * Czy wskazany cel jest przeglądarkowy.
+     *
+     * Potrzebne wyłącznie do nazwania czynności: na tym celu „wgraj" znaczy
+     * „otwórz stronę", a nie „wgraj wsad" — i pasek postępu ma mówić to samo,
+     * co się dzieje.
+     */
+    function isWasmTarget(name: string | undefined): boolean {
+        if (!activeFile) return false;
+        try {
+            const plan = buildPlan(HydraDocument.parse(activeSource).toJS());
+            const wanted = name ?? plan.defaultTarget;
+            return plan.targets.some((target) => target.name === wanted && target.isWasm);
+        } catch {
+            return false;
+        }
+    }
+
     /** Sprowadza obie postacie wyniku budowy do jednej. */
     function normalizeOutcome(result: string | BuildOutcome | void,
                               streamed: readonly string[], what: string): BuildOutcome {
@@ -510,7 +528,7 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
         switch (action) {
             case 'project.build':
             case 'project.upload': {
-                const what = action === 'project.upload' ? 'Wgrywanie' : 'Budowanie';
+                const uploading = action === 'project.upload';
 
                 /*
                  * Brak zaplecza musi być widoczny.
@@ -522,7 +540,7 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                  */
                 if (!options.runBuild) {
                     buildOutput = [
-                        `${what} niedostępne: środowisko budowania nie jest podłączone.`,
+                        `${uploading ? 'Wgrywanie' : 'Budowanie'} niedostępne: środowisko budowania nie jest podłączone.`,
                         '',
                         'Studio nie buduje samo — potrzebuje gospodarza, który uruchomi',
                         'PlatformIO (libs/Hydra/docker/hydra.sh) i zwróci wynik.',
@@ -536,6 +554,12 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                 const chosenTarget = typeof argument === 'string' ? argument : selectedTarget;
                 const native = isNativeTarget(chosenTarget);
                 const machine = native ? hostPlatformId() : undefined;
+
+                // Na celu przeglądarkowym urządzeniem jest przeglądarka:
+                // „Wgrywanie" wprowadzałoby w błąd co do tego, co się stanie.
+                const what = uploading
+                    ? (isWasmTarget(chosenTarget) ? 'Otwieranie w przeglądarce' : 'Wgrywanie')
+                    : 'Budowanie';
 
                 buildOutput = native
                     ? `${what}: ${activeFile.split('/').pop()} → ${machine ?? 'nieznana maszyna'}…`

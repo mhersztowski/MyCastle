@@ -51,6 +51,10 @@ export function emitCMake(plan: BuildPlan, options: CMakeOptions = {}): string {
         lines.push('');
         lines.push(...nativeSupport());
     }
+    if (plan.targets.some((target) => target.isWasm)) {
+        lines.push('');
+        lines.push(...wasmSupport());
+    }
     lines.push('');
     lines.push(...linkage(plan, hydraPath));
 
@@ -68,6 +72,43 @@ export function emitCMake(plan: BuildPlan, options: CMakeOptions = {}): string {
  * Brak SDL nie zatrzymuje konfiguracji. Ta sama budowa musi przejść w CI bez
  * serwera X i na maszynie z monitorem — różnicą jest wtedy `HYDRA_WITH_SDL`
  * i to, czy `SdlDisplay::begin()` otworzy okno, czy zwróci NotSupported.
+ */
+/**
+ * Zależności celu przeglądarkowego.
+ *
+ * SDL nie jest tu szukany, tylko **zamawiany**: emscripten ma własny port
+ * (`-sUSE_SDL=2`), który przy pierwszej budowie pobiera źródła i kompiluje je
+ * pod WebAssembly. `find_package` znalazłby w tym miejscu SDL dla architektury
+ * hosta — bibliotekę, której nie da się zlinkować z modułem WebAssembly,
+ * i to jest gorsze niż jej brak, bo błąd wychodzi dopiero przy konsolidacji.
+ *
+ * Wątków nie ma świadomie: każdy byłby Web Workerem, a te wymagają
+ * SharedArrayBuffer, czyli nagłówków COOP/COEP na serwerze — te z kolei
+ * odcinają stronie zasoby cross-origin. Aplikacja z własną pętlą woła
+ * `App::housekeeping()` sama (`App::config().housekeepingMs(0)`).
+ *
+ * ASYNCIFY pozwala zostawić blokującą pętlę `while (...) { loop(); }` taką,
+ * jaka jest — bez przepisywania jej na `emscripten_set_main_loop`.
+ */
+function wasmSupport(): string[] {
+    return [
+        '# --- cel przeglądarkowy: SDL z portu emscriptena ---------------------------',
+        'if(HYDRA_TARGET_IS_WASM)',
+        '    if(NOT EMSCRIPTEN)',
+        '        message(FATAL_ERROR',
+        '            "Cel przeglądarkowy wymaga emscriptena. Konfiguruj przez emcmake:\\n"',
+        '            "  emcmake cmake -B build/wasm -D HYDRA_TARGET=<cel>")',
+        '    endif()',
+        '',
+        '    target_compile_definitions(hydra PUBLIC HYDRA_WITH_SDL=1 SDL_MAIN_HANDLED)',
+        '    target_compile_options(hydra PUBLIC "-sUSE_SDL=2")',
+        '    target_link_options(hydra PUBLIC "-sUSE_SDL=2")',
+        'endif()',
+    ];
+}
+
+/**
+ * Zależności celu natywnego: wątki i SDL.
  */
 function nativeSupport(): string[] {
     return [
@@ -191,6 +232,7 @@ function targetBody(target: TargetPlan): string[] {
 
     lines.push(`set(HYDRA_MCU "${target.mcu}")`);
     if (target.isNative) lines.push('set(HYDRA_TARGET_IS_NATIVE ON)');
+    if (target.isWasm)   lines.push('set(HYDRA_TARGET_IS_WASM ON)');
     if (target.boardHeader) {
         lines.push(`target_compile_definitions(hydra PUBLIC HYDRA_BOARD_HEADER="${target.boardHeader}")`);
     }
@@ -221,10 +263,10 @@ function targetBody(target: TargetPlan): string[] {
          * w miejscu niezwiązanym z przyczyną. Stąd filtr po nazwie katalogu,
          * a nie lista dozwolonych.
          */
-        const excluded = target.isNative ? ['arduino'] : ['mock', 'sdl'];
+        const excluded = target.usesCMake ? ['arduino'] : ['mock', 'sdl'];
 
         lines.push('');
-        lines.push(`# Moduły włączone dla tego celu; backend: ${target.isNative ? 'mock' : 'arduino'}.`);
+        lines.push(`# Moduły włączone dla tego celu; backend: ${target.usesCMake ? 'mock' : 'arduino'}.`);
         lines.push('file(GLOB HYDRA_MODULE_SOURCES');
         for (const module of target.modules) {
             lines.push(`    "\${HYDRA_ROOT}/src/${module}/*.cpp"`);
@@ -258,7 +300,7 @@ function targetBody(target: TargetPlan): string[] {
         lines.push('target_include_directories(hydra PUBLIC "${HYDRA_ROOT}/include/compat/arduboy")');
     }
 
-    if (target.isNative) {
+    if (target.usesCMake) {
         lines.push('');
         lines.push('# Backend hostowy: atrapy HAL zamiast Arduino, okno SDL zamiast panelu.');
         lines.push('# Katalogi */arduino/ nie trafiają tu w ogóle — na PC nie ma czego owijać.');
@@ -279,6 +321,7 @@ function targetBody(target: TargetPlan): string[] {
 }
 
 function linkage(plan: BuildPlan, hydraPath: string): string[] {
+    const hasWasm = plan.targets.some((target) => target.isWasm);
     return [
         '# --- aplikacja -------------------------------------------------------------',
         '# Backend zależy od tego, czym budujemy: pico-sdk i ESP-IDF dostarczają',
@@ -287,8 +330,16 @@ function linkage(plan: BuildPlan, hydraPath: string): string[] {
         `    file(GLOB HYDRA_MOCK_SOURCES "${hydraPath}/src/hal/mock/*.cpp")`,
         '    target_sources(hydra PRIVATE ${HYDRA_MOCK_SOURCES})',
         '    target_compile_definitions(hydra PUBLIC HYDRA_FORCE_HOST=1)',
-        '    find_package(Threads REQUIRED)',
-        '    target_link_libraries(hydra PUBLIC Threads::Threads)',
+        ...(hasWasm ? [
+            '    # Cel przeglądarkowy jest jednowątkowy — patrz wasmSupport().',
+            '    if(NOT HYDRA_TARGET_IS_WASM)',
+            '        find_package(Threads REQUIRED)',
+            '        target_link_libraries(hydra PUBLIC Threads::Threads)',
+            '    endif()',
+        ] : [
+            '    find_package(Threads REQUIRED)',
+            '    target_link_libraries(hydra PUBLIC Threads::Threads)',
+        ]),
         'endif()',
         '',
         'file(GLOB APP_SOURCES "src/*.cpp")',
@@ -305,6 +356,19 @@ function linkage(plan: BuildPlan, hydraPath: string): string[] {
         `                    $<TARGET_RUNTIME_DLLS:${plan.projectName}> $<TARGET_FILE_DIR:${plan.projectName}>`,
         '            COMMAND_EXPAND_LISTS)',
         '    endif()',
+        ...(hasWasm ? [
+            '',
+            '    # Strona z kanwą powstaje razem z modułem: `.html` obok `.js`',
+            '    # i `.wasm`. Wersja bez strony wymagałaby własnego gospodarza,',
+            '    # a ten i tak jest potrzebny dopiero przy osadzaniu podglądu.',
+            '    if(HYDRA_TARGET_IS_WASM)',
+            `        set_target_properties(${plan.projectName} PROPERTIES SUFFIX ".html")`,
+            '        # ASYNCIFY: blokująca pętla aplikacji zostaje taka, jaka jest.',
+            '        # Rosnąca pamięć: rozmiar sterty zależy od projektu, a nie od celu.',
+            `        target_link_options(${plan.projectName} PRIVATE`,
+            '            "-sASYNCIFY" "-sALLOW_MEMORY_GROWTH" "-sEXIT_RUNTIME=0")',
+            '    endif()',
+        ] : []),
         'endif()',
     ];
 }

@@ -132,3 +132,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # pygbag converts pygame projects to WebAssembly — headless, no display needed
 RUN pip3 install --break-system-packages --no-cache-dir pygbag pygame black
+
+
+# ─── Hydra → WebAssembly ─────────────────────────────────────────────────────
+#
+# Warstwa pochodna nad `arduino-wasm`, a nie osobna instalacja emsdk: emsdk waży
+# ~2 GB i jest dokładnie tym samym kompilatorem, którego używa budowanie szkiców
+# Arduino. Tu dochodzi wyłącznie CMake, bo Hydra buduje cel natywny właśnie nim
+# (`emit/cmake.ts`), a szkice Arduino idą prosto przez `emcc` i CMake im do
+# niczego nie był potrzebny.
+#
+# SDL2 nie jest dokładane świadomie: emscripten ma własny port (`-sUSE_SDL=2`),
+# który pobiera się przy pierwszym użyciu i jest budowany pod WebAssembly.
+# Pakiet `libsdl2-dev` z Ubuntu jest dla architektury hosta i tutaj byłby
+# nie tylko zbędny, ale mylący — CMake mógłby go znaleźć zamiast portu.
+FROM arduino-wasm AS hydra-wasm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    ninja-build \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Port SDL2 wbudowany w obraz, a cache zapisywalny dla dowolnego uid.
+#
+# Dwa powody, oba wychodzą dopiero przy pierwszej budowie projektu:
+#
+#  1. `hydra.sh` uruchamia kontener z `--user $(id -u):$(id -g)`, żeby pliki
+#     wyniku należały do użytkownika, a nie do root. Cache emsdk powstaje przy
+#     instalacji jako root, więc bez `chmod` kompilator przerywa na
+#     „cache directory is not writable" — i to przy każdym pliku z osobna,
+#     więc komunikat tonie w setce identycznych.
+#  2. Kompilacja portu SDL2 przy pierwszym użyciu to kilka sekund i kilkaset
+#     plików. Raz w obrazie zamiast raz na projekt.
+RUN embuilder build sdl2 \
+    && chmod -R a+rwX /emsdk/upstream/emscripten/cache
+
+CMD ["tail", "-f", "/dev/null"]

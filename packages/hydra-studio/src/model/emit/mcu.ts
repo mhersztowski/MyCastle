@@ -16,8 +16,11 @@ export interface McuProfile {
      * `native` — program na maszynę deweloperską, budowany CMake'em. Wyniku
      * nie da się przenieść między systemami, więc ta gałąź ma własny emiter
      * i własne presety (patrz emit/host.ts).
+     * `wasm` — ten sam program dla przeglądarki, budowany CMake'em przez
+     * emscripten. W odróżnieniu od `native` wynik **jest** przenośny: jeden
+     * `.wasm` chodzi na każdym systemie, więc nie ma tu presetów per maszyna.
      */
-    kind?: 'mcu' | 'native';
+    kind?: 'mcu' | 'native' | 'wasm';
     /** Platforma PlatformIO. */
     platform: string;
     /** Domyślna płytka PlatformIO, gdy `.hydra` jej nie podaje. */
@@ -58,6 +61,30 @@ export const MCU_PROFILES: Readonly<Record<string, McuProfile>> = {
         platform: 'native',
         defaultBoard: 'native',
         capabilities: ['i2c', 'spi', 'uart', 'pwm', 'adc', 'fpu', 'smp'],
+        hasFpu: true,
+    },
+
+    /**
+     * Przeglądarka — ten sam program, co na celu `native`, tylko rysowany
+     * do kanwy zamiast do okna.
+     *
+     * Wymienione są dokładnie te same backendy (HAL na atrapy, panel na SDL),
+     * bo emscripten ma własny port SDL2 i `SdlDisplay` kompiluje się pod niego
+     * bez zmian. Różnice są dwie i obie leżą poza profilem: budowanie idzie
+     * przez `emcmake`, a wynik nie jest programem systemu, tylko parą
+     * `.js` + `.wasm` do wczytania na stronie.
+     *
+     * Brak `smp` w możliwościach nie jest przeoczeniem. Wątek w emscriptenie
+     * to Web Worker, a ten wymaga SharedArrayBuffer, czyli nagłówków
+     * COOP/COEP na serwerze — a te odcinają stronie zasoby cross-origin.
+     * Cel przeglądarkowy jest jednowątkowy świadomie; aplikacja z własną
+     * pętlą woła `App::housekeeping()` sama (`housekeepingMs(0)`).
+     */
+    wasm: {
+        kind: 'wasm',
+        platform: 'native',
+        defaultBoard: 'wasm',
+        capabilities: ['i2c', 'spi', 'uart', 'pwm', 'adc', 'fpu'],
         hasFpu: true,
     },
     esp32: {

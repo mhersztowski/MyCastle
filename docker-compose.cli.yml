@@ -28,6 +28,14 @@ services:
       dockerfile: docker/Dockerfile.cli
       target: arduino-wasm
 
+  # Hydra → WebAssembly: emsdk z `arduino-wasm` plus CMake, którym Hydra buduje.
+  hydra-wasm:
+    image: mycastle-hydra-wasm:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cli
+      target: hydra-wasm
+
   pico:
     image: mycastle-pico:local
     build:

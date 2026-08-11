@@ -198,3 +198,54 @@ describe('planHydraBuild — cel natywny dla Windows', () => {
         expect(() => plan({ ...win, upload: true })).toThrow(HydraPlanError);
     });
 });
+
+describe('cel przeglądarkowy', () => {
+    const paths = { dataDir: '/data', hydraDir: '/hydra', wasmImage: 'obraz-z-emsdk:local' };
+
+    it('konfiguruje przez emcmake i buduje — dwa osobne uruchomienia', () => {
+        const plan = planHydraBuild(
+            { file: 'gra/gra.hydra', target: 'web', kind: 'wasm' }, paths,
+        );
+        expect(plan.steps).toHaveLength(2);
+        // `emcmake` przed `cmake` podstawia toolchain emscriptena; bez niego
+        // CMake budowałby dla architektury kontenera.
+        expect(plan.steps[0].args).toContain('emcmake');
+        expect(plan.steps[0].args).toContain('HYDRA_TARGET=web');
+        // Katalog Hydry podany wprost: `HYDRA_ROOT` jest zmienną cache, więc
+        // jedna nieudana konfiguracja ze złą ścieżką zostawałaby w katalogu
+        // budowy na zawsze.
+        expect(plan.steps[0].args).toContain('HYDRA_ROOT=/hydra/Hydra');
+        expect(plan.steps[1].args).toContain('--build');
+    });
+
+    it('każdy krok idzie obrazem z emscriptenem', () => {
+        const plan = planHydraBuild(
+            { file: 'gra/gra.hydra', target: 'web', kind: 'wasm' }, paths,
+        );
+        // Domyślny obraz Hydry niesie toolchainy PlatformIO, ale nie emsdk.
+        for (const step of plan.steps) {
+            expect(step.env).toEqual({ HYDRA_IMAGE: 'obraz-z-emsdk:local' });
+        }
+    });
+
+    it('„wgraj" buduje tak samo — otwarcie strony należy do klienta', () => {
+        const zwykly = planHydraBuild({ file: 'gra/gra.hydra', target: 'web', kind: 'wasm' }, paths);
+        const zWgraniem = planHydraBuild(
+            { file: 'gra/gra.hydra', target: 'web', kind: 'wasm', upload: true }, paths,
+        );
+        // Backend nie ma przeglądarki, więc `upload` nie dokłada mu kroku.
+        expect(zWgraniem.steps.map((s) => s.args)).toEqual(zwykly.steps.map((s) => s.args));
+    });
+
+    it('wymaga nazwy celu, bo CMakeLists niczego nie zgaduje', () => {
+        expect(() => planHydraBuild(
+            { file: 'gra/gra.hydra', kind: 'wasm' }, paths,
+        )).toThrow(HydraPlanError);
+    });
+
+    it('nie przyjmuje nazwy celu, która nie wygląda jak nazwa celu', () => {
+        expect(() => planHydraBuild(
+            { file: 'gra/gra.hydra', target: 'web; rm -rf /', kind: 'wasm' }, paths,
+        )).toThrow(HydraPlanError);
+    });
+});

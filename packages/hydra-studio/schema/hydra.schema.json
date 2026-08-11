@@ -62,6 +62,7 @@
             "type": "string",
             "enum": [
               "native",
+              "wasm",
               "esp32",
               "esp32s2",
               "esp32s3",
@@ -165,7 +166,7 @@
           },
           "native": {
             "type": "object",
-            "description": "Cel natywny: okno na maszynie deweloperskiej (tylko mcu: native)",
+            "description": "Okno programu — cel `native` (pulpit) albo `wasm` (kanwa w przeglądarce)",
             "properties": {
               "display": {
                 "type": "boolean",

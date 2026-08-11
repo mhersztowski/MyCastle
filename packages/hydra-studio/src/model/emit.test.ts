@@ -260,3 +260,46 @@ test('nagłówek płytki także daje się odtworzyć', () => {
     // Plik napisany ręcznie nadal nie.
     expectEqual(isGenerated('#pragma once\n#define HYDRA_BOARD_LED 2\n'), false);
 });
+
+test('cel wasm: CMake zamawia SDL z portu emscriptena, nie szuka go w systemie', () => {
+    const plan = buildPlan({
+        project: { name: 'gra', version: '1.0.0' },
+        targets: { web: { mcu: 'wasm', native: { window: { width: 128, height: 64, scale: 6 } } } },
+    });
+    const target = plan.targets[0]!;
+    expectEqual(target.isWasm, true);
+    expectEqual(target.isNative, false);
+    // Wypada z platformio.ini tak samo jak cel natywny: `platform = native`
+    // nie zbuduje modułu WebAssembly.
+    expectEqual(target.usesCMake, true);
+
+    const cmake = emitCMake(plan, '../..');
+    expectOk(cmake.includes('HYDRA_TARGET_IS_WASM'));
+    expectOk(cmake.includes('-sUSE_SDL=2'));
+    expectOk(cmake.includes('-sASYNCIFY'));
+    // find_package(SDL2) znalazłby bibliotekę dla architektury hosta —
+    // nie do zlinkowania z modułem WebAssembly.
+    expectOk(!cmake.includes('find_package(SDL2'));
+    // Jednowątkowo: wątek w emscriptenie wymusza COOP/COEP na serwerze.
+    expectOk(cmake.includes('if(NOT HYDRA_TARGET_IS_WASM)'));
+    // Backend hostowy ten sam co na celu natywnym — SdlDisplay bez zmian.
+    expectOk(cmake.includes('src/gfx/sdl/*.cpp'));
+});
+
+test('projekt bez celu wasm nie niesie martwego bloku emscriptena', () => {
+    const cmake = emitCMake(buildPlan({
+        project: { name: 'p', version: '1.0.0' },
+        targets: { s3: { mcu: 'esp32s3' }, okno: { mcu: 'native' } },
+    }), '../..');
+    expectOk(!cmake.includes('HYDRA_TARGET_IS_WASM'));
+    expectOk(cmake.includes('find_package(SDL2'));
+});
+
+test('cel wasm wypada z platformio.ini', () => {
+    const ini = emitPlatformio(buildPlan({
+        project: { name: 'p', version: '1.0.0' },
+        targets: { web: { mcu: 'wasm' }, s3: { mcu: 'esp32s3' } },
+    }));
+    expectOk(!ini.includes('[env:web]'));
+    expectOk(ini.includes('[env:s3]'));
+});

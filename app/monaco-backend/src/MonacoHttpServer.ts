@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import { NodeFS, VfsError } from '@mhersztowski/core';
 import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
 import { planHydraBuild, HydraPlanError } from './hydra/plan';
+import { resolvePreview, PreviewPathError } from './hydra/preview';
 import { runHydra } from './hydra/run';
 
 /** Kod błędu VFS → status HTTP. Ten sam zestaw, którym posługuje się `RemoteFS`. */
@@ -84,6 +86,33 @@ export class MonacoHttpServer extends HttpUploadServer {
    * bez wierszy na bieżąco panel stoi pusty i nie widać różnicy między
    * „kompiluje" a „zawisło".
    */
+  private async handleHydraPreview(res: ServerResponse, relative: string): Promise<void> {
+    let file;
+    try {
+      file = resolvePreview(relative, this.dataDir);
+    } catch (err) {
+      const status = err instanceof PreviewPathError ? 403 : 500;
+      this.sendJsonResponse(res, status, { error: String(err instanceof Error ? err.message : err) });
+      return;
+    }
+
+    try {
+      const body = await fsp.readFile(file.absolute);
+      res.writeHead(200, {
+        'Content-Type': file.contentType,
+        // Wynik budowy zmienia się przy każdym uruchomieniu, a przeglądarka
+        // trzymająca poprzedni `.wasm` pokazywałaby starą wersję gry bez
+        // żadnego śladu, że coś się przebudowało.
+        'Cache-Control': 'no-store',
+      });
+      res.end(body);
+    } catch {
+      this.sendJsonResponse(res, 404, {
+        error: `Nie ma takiego wyniku budowy: ${relative}. Zbuduj cel przeglądarkowy.`,
+      });
+    }
+  }
+
   private async handleHydra(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
     const route = pathname.replace(/^\/api\/hydra/, '');
 
@@ -97,6 +126,17 @@ export class MonacoHttpServer extends HttpUploadServer {
         // Edytor bywa otwarty na Windows, gdy backend siedzi w WSL na ARM.
         arch: process.arch === 'arm64' ? 'arm64' : 'x64',
       });
+      return;
+    }
+
+    // Podgląd wyniku budowy dla przeglądarki.
+    //
+    // Osobna trasa zamiast `/files/`, bo tamta serwuje wyłącznie `data/public`
+    // — i słusznie, jest publiczna. Granice tej są węższe i sprawdza je czysta
+    // funkcja `resolvePreview`: tylko katalog `build/wasm`, tylko rozszerzenia
+    // składające się na stronę z modułem.
+    if (req.method === 'GET' && route.startsWith('/preview/')) {
+      await this.handleHydraPreview(res, route.slice('/preview/'.length));
       return;
     }
 
@@ -121,12 +161,18 @@ export class MonacoHttpServer extends HttpUploadServer {
           file: String(body.file ?? ''),
           target: body.target as string | undefined,
           upload: Boolean(body.upload),
-          kind: body.kind === 'native' ? 'native' : 'pio',
+          kind: body.kind === 'native' ? 'native' : body.kind === 'wasm' ? 'wasm' : 'pio',
           preset: body.preset as string | undefined,
           os: body.os === 'windows' ? 'windows' : 'linux',
           executable: body.executable as string | undefined,
         },
-        { dataDir: this.dataDir, hydraDir: this.hydraDir },
+        {
+          dataDir: this.dataDir,
+          hydraDir: this.hydraDir,
+          // Emscripten leży w innym obrazie niż toolchainy PlatformIO —
+          // patrz docker/Dockerfile.cli, target `hydra-wasm`.
+          wasmImage: process.env.HYDRA_WASM_IMAGE ?? 'mycastle-hydra-wasm:local',
+        },
       );
     } catch (err) {
       const status = err instanceof HydraPlanError ? 400 : 500;
@@ -185,7 +231,7 @@ export class MonacoHttpServer extends HttpUploadServer {
       if (cancelled) break;
       if (plan.steps.length > 1) line(`\n── krok ${index + 1} z ${plan.steps.length} ──`);
 
-      running = runHydra(step.script, step.args, line, step.cwd);
+      running = runHydra(step.script, step.args, line, step.cwd, step.env);
       code = await running.done;
       if (code !== 0) break;
     }

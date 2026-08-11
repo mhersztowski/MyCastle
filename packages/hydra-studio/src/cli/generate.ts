@@ -90,7 +90,7 @@ export function generate(project: LoadedProject, options: GenerateOptions = {}):
             // Cel natywny wskazuje plik płytki dostarczony z biblioteką —
             // nie ma pinów do opisania, a wygenerowanie własnego przesłoniłoby
             // ten z Hydry i rozjechało nazwę płytki w logach.
-            if (target.isNative) continue;
+            if (target.usesCMake) continue;
 
             // Schemat jest źródłem prawdy dla wyprowadzeń: numer bierze się
             // z połączenia, a nie z ręcznego wpisu. Bez schematu zostaje to,

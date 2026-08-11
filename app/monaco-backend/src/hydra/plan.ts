@@ -9,7 +9,7 @@ import * as path from 'node:path';
  */
 
 /** Którą drogą idzie budowanie. */
-export type HydraBuildKind = 'pio' | 'native';
+export type HydraBuildKind = 'pio' | 'native' | 'wasm';
 
 /** Żądanie w postaci, w jakiej przychodzi z panelu Kompilacja Studia. */
 export interface HydraBuildRequest {
@@ -44,6 +44,11 @@ export interface HydraPaths {
     dataDir: string;
     /** Katalog biblioteki Hydra (ten z `docker/hydra.sh`). */
     hydraDir: string;
+    /**
+     * Obraz kontenera z emscriptenem — dla celu przeglądarkowego.
+     * Domyślny obraz Hydry niesie toolchainy PlatformIO, ale nie emsdk.
+     */
+    wasmImage?: string;
 }
 
 /** Jedno uruchomienie procesu — bez powłoki, więc program i argumenty osobno. */
@@ -52,6 +57,12 @@ export interface HydraStep {
     args: string[];
     /** Katalog roboczy; bez niego proces dziedziczy katalog backendu. */
     cwd?: string;
+    /**
+     * Zmienne dołożone do środowiska procesu. Potrzebne celowi
+     * przeglądarkowemu: emscripten leży w innym obrazie niż toolchainy
+     * PlatformIO, a `hydra.sh` wybiera obraz właśnie zmienną.
+     */
+    env?: Record<string, string>;
 }
 
 export interface HydraPlan {
@@ -102,6 +113,10 @@ export function planHydraBuild(request: HydraBuildRequest, paths: HydraPaths): H
         return { steps: nativeSteps(request, step, projectDir), projectDir };
     }
 
+    if (request.kind === 'wasm') {
+        return { steps: wasmSteps(request, step, paths.wasmImage), projectDir };
+    }
+
     /*
      * Cel wybiera środowisko PlatformIO (`-e`), a wgrywanie osobny cel
      * `upload`. Bez `-e` `pio run` buduje **wszystkie** środowiska z pliku.
@@ -114,6 +129,70 @@ export function planHydraBuild(request: HydraBuildRequest, paths: HydraPaths): H
         )],
         projectDir,
     };
+}
+
+/** Katalog budowy celu przeglądarkowego — jeden, bo wynik jest przenośny. */
+export const WASM_BUILD_DIR = 'build/wasm';
+
+/**
+ * Gdzie `hydra.sh project` montuje bibliotekę wewnątrz kontenera.
+ *
+ * Podajemy to wprost przy konfiguracji, mimo że wygenerowany CMakeLists ma tę
+ * ścieżkę wpisaną: `HYDRA_ROOT` jest zmienną **cache**, więc raz zapisana
+ * wartość przebija plik przy każdej kolejnej konfiguracji. Jedna nieudana
+ * próba ze złą ścieżką zostawiała katalog budowy, który mówił „nie znaleziono
+ * źródeł Hydry" już zawsze — i to niezależnie od tego, co potem wygenerował
+ * edytor.
+ */
+const HYDRA_ROOT_IN_CONTAINER = '/hydra/Hydra';
+
+/**
+ * Budowa dla przeglądarki.
+ *
+ * Dwa uruchomienia z tego samego powodu, co przy celu natywnym: błąd
+ * konfiguracji ma zatrzymać budowę, a nie puścić kompilację przeciw
+ * nieaktualnej pamięci podręcznej CMake.
+ *
+ * Bez presetu i bez maszyny — i to jest cała różnica wobec `native`. Program
+ * dla pulpitu jest inny na każdym systemie, więc tam preset opisuje maszynę;
+ * `.wasm` jest jeden i chodzi wszędzie, więc opisywać nie ma czego.
+ *
+ * `emcmake` przed `cmake` podstawia plik toolchaina emscriptena. Bez niego
+ * CMake skonfigurowałby budowę dla architektury kontenera, a wygenerowany
+ * CMakeLists przerywa wtedy komunikatem — świadomie, bo pomyłka wyszłaby
+ * inaczej dopiero przy konsolidacji.
+ */
+function wasmSteps(
+    request: HydraBuildRequest,
+    step: (...command: string[]) => HydraStep,
+    wasmImage?: string,
+): HydraStep[] {
+    if (!request.target) {
+        throw new HydraPlanError(
+            'Cel przeglądarkowy wymaga nazwy celu — wygenerowany CMakeLists.txt wybiera go zmienną HYDRA_TARGET.',
+        );
+    }
+    /*
+     * `upload` nie zmienia tu kroków i nie jest błędem.
+     *
+     * Dla celu sprzętowego „wgraj" znaczy wgranie wsadu, dla natywnego —
+     * uruchomienie okna na tej maszynie, a dla przeglądarkowego: otwarcie
+     * strony z modułem. To ostatnie robi klient, bo tylko on ma przeglądarkę;
+     * backend buduje tak samo w obu przypadkach.
+     */
+
+    const withImage = (...command: string[]): HydraStep => ({
+        ...step(...command),
+        ...(wasmImage ? { env: { HYDRA_IMAGE: wasmImage } } : {}),
+    });
+
+    return [
+        withImage('emcmake', 'cmake', '-B', WASM_BUILD_DIR,
+                  '-D', `HYDRA_TARGET=${request.target}`,
+                  '-D', `HYDRA_ROOT=${HYDRA_ROOT_IN_CONTAINER}`,
+                  '-D', 'CMAKE_BUILD_TYPE=Release'),
+        withImage('cmake', '--build', WASM_BUILD_DIR, '-j', '4'),
+    ];
 }
 
 /**
