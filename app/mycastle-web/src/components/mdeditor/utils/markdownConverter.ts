@@ -186,6 +186,46 @@ function escapeEventBlocksForHtml(content: string): { result: string; events: Ev
   return { result, events };
 }
 
+// ─── TaskCard fence ──────────────────────────────────────────────────────────
+// Karta zadania trzyma w pliku wyłącznie `taskId` i nazwę — reszta danych jest
+// czytana na żywo przy renderze (patrz TaskCardExtension). Dzięki temu notatka
+// sprzed miesiąca pokazuje dzisiejszy stan zadania, a nie zamrożony.
+
+interface TaskCardEscaped {
+  taskId: string;
+  taskName: string;
+}
+
+function escapeTaskCardsForHtml(content: string): { result: string; cards: TaskCardEscaped[] } {
+  const cards: TaskCardEscaped[] = [];
+  const result = content.replace(/```taskcard\s*\n([\s\S]*?)```/g, (_, json: string) => {
+    let parsed: Partial<TaskCardEscaped> = {};
+    try { parsed = JSON.parse(json.trim()) as Partial<TaskCardEscaped>; }
+    catch { /* uszkodzony JSON — pusta karta i tak przejdzie w obie strony,
+                 zamiast rozlać się po sąsiednim markdownie */ }
+    cards.push({
+      taskId: String(parsed.taskId ?? ''),
+      taskName: String(parsed.taskName ?? ''),
+    });
+    return `%%TASKCARD_${cards.length - 1}%%`;
+  });
+  return { result, cards };
+}
+
+function restoreTaskCardsFromHtml(html: string, cards: TaskCardEscaped[]): string {
+  let result = html;
+  cards.forEach((card, index) => {
+    const attrs: string[] = ['data-type="task-card"'];
+    if (card.taskId) attrs.push(`data-task-id="${encodeURIComponent(card.taskId)}"`);
+    if (card.taskName) attrs.push(`data-task-name="${encodeURIComponent(card.taskName)}"`);
+    const htmlTag = `<div ${attrs.join(' ')}></div>`;
+    const placeholder = `%%TASKCARD_${index}%%`;
+    result = result.replace(`<p>${placeholder}</p>`, htmlTag);
+    result = result.replace(placeholder, htmlTag);
+  });
+  return result;
+}
+
 function restoreEventBlocksFromHtml(html: string, events: EventBlockEscaped[]): string {
   let result = html;
   events.forEach((ev, index) => {
@@ -1287,6 +1327,32 @@ turndownService.addRule('eventBlock', {
   },
 });
 
+// Karta zadania — jak eventBlock: obsługuje formę gołą i opakowaną przez
+// NodeViewWrapper TipTapa.
+turndownService.addRule('taskCard', {
+  filter: (node) => {
+    const element = node as HTMLElement;
+    if (element.getAttribute && element.getAttribute('data-type') === 'task-card') return true;
+    if (element.getAttribute && element.getAttribute('data-node-view-wrapper') !== null) {
+      if (element.querySelector('[data-type="task-card"]')) return true;
+    }
+    return false;
+  },
+  replacement: (_content, node) => {
+    const element = node as HTMLElement;
+    const source: HTMLElement = element.getAttribute('data-type') === 'task-card'
+      ? element
+      : (element.querySelector('[data-type="task-card"]') as HTMLElement | null) ?? element;
+    const dec = (name: string) => {
+      const raw = source.getAttribute(name);
+      if (!raw) return '';
+      try { return decodeURIComponent(raw); } catch { return raw; }
+    };
+    const attrs = { taskId: dec('data-task-id'), taskName: dec('data-task-name') };
+    return `\n\`\`\`taskcard\n${JSON.stringify(attrs, null, 2)}\n\`\`\`\n`;
+  },
+});
+
 turndownService.addRule('automateScriptBlock', {
   filter: (node) => {
     const element = node as HTMLElement;
@@ -1604,8 +1670,12 @@ export function markdownToHtml(markdown: string): string {
   const { result: markdownWithoutEvents, events: eventBlocks } =
     escapeEventBlocksForHtml(markdownWithoutPluginScripts);
 
+  // Karty zadań — ta sama droga co bloki zdarzeń.
+  const { result: markdownWithoutTaskCards, cards: taskCards } =
+    escapeTaskCardsForHtml(markdownWithoutEvents);
+
   // Protect photo-map blocks (```photomap {…json…}``` fences) from showdown.
-  const { result: markdownWithoutPhotoMaps, photoMaps } = escapePhotoMapsForHtml(markdownWithoutEvents);
+  const { result: markdownWithoutPhotoMaps, photoMaps } = escapePhotoMapsForHtml(markdownWithoutTaskCards);
 
   // Protect automate script blocks (code fences) from showdown processing
   const automateScriptDataStr = escapeAutomateScriptsForHtml(markdownWithoutPhotoMaps);
@@ -1756,6 +1826,9 @@ export function markdownToHtml(markdown: string): string {
 
   // Restore event blocks (insert <div data-type="event-block" data-…>)
   html = restoreEventBlocksFromHtml(html, eventBlocks);
+
+  // Restore task cards (insert <div data-type="task-card" data-…>)
+  html = restoreTaskCardsFromHtml(html, taskCards);
 
   // Restore photo-map blocks (insert <div data-type="photo-map" data-config="…">)
   html = restorePhotoMapsFromHtml(html, photoMaps);
@@ -2136,6 +2209,23 @@ export function htmlToMarkdown(html: string): string {
     }
   );
 
+  // Pre-process: karty zadań. Pusty <div data-type="task-card"> turndown
+  // uznaje za blank i wyrzuca, zanim jakakolwiek reguła zdąży go zobaczyć —
+  // stąd znacznik, tak samo jak przy blokach zdarzeń.
+  const taskCards: TaskCardEscaped[] = [];
+  processedHtml = processedHtml.replace(
+    /<div[^>]*data-type="task-card"[^>]*>[\s\S]*?<\/div>/gi,
+    (match) => {
+      const dec = (name: string) => {
+        const m = match.match(new RegExp(`${name}="([^"]*)"`));
+        if (!m) return '';
+        try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+      };
+      taskCards.push({ taskId: dec('data-task-id'), taskName: dec('data-task-name') });
+      return `##TASKCARD${taskCards.length - 1}##`;
+    }
+  );
+
   // Pre-process: Replace photo-map blocks with placeholders before Turndown
   // (empty <div data-type="photo-map"> would otherwise be dropped as blank).
   const photoMaps: string[] = [];
@@ -2333,6 +2423,13 @@ export function htmlToMarkdown(html: string): string {
   eventBlocks.forEach((ev, index) => {
     const placeholder = `##EVENTBLOCK${index}##`;
     const replacement = `\n\`\`\`event\n${JSON.stringify(ev, null, 2)}\n\`\`\`\n`;
+    markdown = markdown.split(placeholder).join(replacement);
+  });
+
+  // Post-process: karty zadań z powrotem do ```taskcard.
+  taskCards.forEach((card, index) => {
+    const placeholder = `##TASKCARD${index}##`;
+    const replacement = `\n\`\`\`taskcard\n${JSON.stringify(card, null, 2)}\n\`\`\`\n`;
     markdown = markdown.split(placeholder).join(replacement);
   });
 

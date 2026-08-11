@@ -10,9 +10,12 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-    Autocomplete, Box, Divider, Drawer, IconButton, Stack, TextField, Tooltip, Typography,
+    Autocomplete, Box, Button, Divider, Drawer, IconButton, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import ArticleIcon from '@mui/icons-material/Article';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -24,6 +27,9 @@ import type {
 } from '@mhersztowski/core';
 import { TaskNode } from '@mhersztowski/core';
 import TaskComponentEditorDialog from '../../components/project/TaskComponentEditorDialog';
+import { useAuth } from '../../modules/auth';
+import { MdFilePickerDialog } from './MdFilePickerDialog';
+import { TaskDocDialog } from './TaskDocDialog';
 import { cu, formatMinutes, hoursToMinutes, parseHours } from './clickup';
 import {
     Assignees, DateField, PersonOption, PriorityFlag, StatusPill, TagList, useTicker,
@@ -185,6 +191,11 @@ const TaskPanelBody: React.FC<TaskPanelProps & { task: TaskModel }> = ({
                     onChange={e => onUpdate(task.id, { description: e.target.value || undefined })}
                     sx={{ '& textarea': { fontSize: 13 } }}
                 />
+
+                <Divider sx={{ my: 2 }} />
+
+                <SectionTitle>Notatka</SectionTitle>
+                <TaskDocSection task={task} onUpdate={onUpdate} />
 
                 <Divider sx={{ my: 2 }} />
 
@@ -398,6 +409,92 @@ const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
         {children}
     </Stack>
 );
+
+/**
+ * Powiązanie zadania z notatką na dysku.
+ *
+ * Notatka jest zwykłym plikiem `.md` użytkownika, a nie polem w `tasks.json`:
+ * dzięki temu da się ją otworzyć z Drive, wersjonować i linkować z innych
+ * dokumentów. Zadanie trzyma wyłącznie ścieżkę.
+ */
+const TaskDocSection: React.FC<{
+    task: TaskModel;
+    onUpdate: (id: string, patch: Partial<TaskModel>) => void;
+}> = ({ task, onUpdate }) => {
+    const { currentUser, token } = useAuth();
+    const userName = currentUser?.name ?? '';
+    const [picking, setPicking] = useState(false);
+    const [reading, setReading] = useState(false);
+
+    return (
+        <>
+            {task.docPath ? (
+                <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5 }}>
+                    <ArticleIcon sx={{ fontSize: 15, color: cu.textMuted }} />
+                    <Tooltip title={task.docPath}>
+                        <Typography
+                            sx={{
+                                fontSize: 13, flex: 1, minWidth: 0, cursor: 'pointer',
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                '&:hover': { textDecoration: 'underline' },
+                            }}
+                            onClick={() => setReading(true)}
+                        >
+                            {task.docPath}
+                        </Typography>
+                    </Tooltip>
+                    <Tooltip title="Otwórz na cały ekran">
+                        <IconButton size="small" onClick={() => setReading(true)}>
+                            <OpenInFullIcon sx={{ fontSize: 14, color: cu.textMuted }} />
+                        </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Zmień plik">
+                        <IconButton size="small" onClick={() => setPicking(true)}>
+                            <ArticleIcon sx={{ fontSize: 14, color: cu.textMuted }} />
+                        </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Odłącz notatkę">
+                        <IconButton
+                            size="small"
+                            onClick={() => onUpdate(task.id, { docPath: undefined })}
+                        >
+                            <LinkOffIcon sx={{ fontSize: 14, color: cu.textMuted }} />
+                        </IconButton>
+                    </Tooltip>
+                </Stack>
+            ) : (
+                <Button
+                    size="small"
+                    startIcon={<ArticleIcon sx={{ fontSize: 15 }} />}
+                    onClick={() => setPicking(true)}
+                    sx={{ fontSize: 12, color: cu.textMuted, textTransform: 'none' }}
+                >
+                    Powiąż plik Markdown…
+                </Button>
+            )}
+
+            <MdFilePickerDialog
+                open={picking}
+                userName={userName}
+                token={token ?? undefined}
+                initialPath={task.docPath}
+                onClose={() => setPicking(false)}
+                onPick={docPath => onUpdate(task.id, { docPath })}
+            />
+
+            {task.docPath && (
+                <TaskDocDialog
+                    open={reading}
+                    userName={userName}
+                    token={token ?? undefined}
+                    path={task.docPath}
+                    taskName={task.name}
+                    onClose={() => setReading(false)}
+                />
+            )}
+        </>
+    );
+};
 
 const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <Typography sx={{

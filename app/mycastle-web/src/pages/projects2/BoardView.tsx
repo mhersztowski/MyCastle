@@ -14,6 +14,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Box, Chip, IconButton, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import ArticleIcon from '@mui/icons-material/Article';
 import AddIcon from '@mui/icons-material/Add';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import LinkIcon from '@mui/icons-material/Link';
@@ -35,7 +36,7 @@ interface BoardViewProps extends TaskViewActions {
 
 export const BoardView: React.FC<BoardViewProps> = ({
     tasks, statuses, people, projectId, dateMode = 'normal',
-    onUpdate, onMutate, onAdd, onRemove, onOpen,
+    onUpdate, onMutate, onAdd, onRemove, onOpen, onOpenDoc,
 }) => {
     const [dragOver, setDragOver] = useState<string | null>(null);
 
@@ -99,6 +100,7 @@ export const BoardView: React.FC<BoardViewProps> = ({
                                         subtasks={subtaskCounts.get(task.id)}
                                         dateMode={dateMode}
                                         onOpen={() => onOpen(task.id)}
+                                        onOpenDoc={onOpenDoc ? () => onOpenDoc(task.id) : undefined}
                                         onRemove={() => onRemove(task.id)}
                                         onAssignees={assignees => onUpdate(task.id, { assignees })}
                                         onToggleTracking={() => onMutate(task.id, n => (n.isTracking()
@@ -122,10 +124,12 @@ const BoardCard: React.FC<{
     subtasks?: { done: number; total: number };
     dateMode: 'normal' | 'week';
     onOpen: () => void;
+    /** Otwarcie notatki. Ikona pojawia się tylko wtedy, gdy zadanie ją ma. */
+    onOpenDoc?: (() => void) | undefined;
     onRemove: () => void;
     onAssignees: (ids: string[]) => void;
     onToggleTracking: () => void;
-}> = ({ task, people, subtasks, dateMode, onOpen, onRemove, onAssignees, onToggleTracking }) => {
+}> = ({ task, people, subtasks, dateMode, onOpen, onOpenDoc, onRemove, onAssignees, onToggleTracking }) => {
     const node = useMemo(() => TaskNode.fromModel(task), [task]);
     useTicker(node.isTracking());
     const priority = priorityDef(task.priority);
@@ -154,6 +158,17 @@ const BoardCard: React.FC<{
                 <Typography sx={{ fontSize: 13, flex: 1, color: cu.text, lineHeight: 1.4 }}>
                     {task.name}
                 </Typography>
+                {task.docPath && (
+                    <Tooltip title={`Otwórz notatkę: ${task.docPath}`}>
+                        <IconButton
+                            size="small"
+                            onClick={e => { e.stopPropagation(); onOpenDoc?.(); }}
+                            sx={{ p: 0.25 }}
+                        >
+                            <ArticleIcon sx={{ fontSize: 14, color: cu.brand }} />
+                        </IconButton>
+                    </Tooltip>
+                )}
                 <Tooltip title="Usuń">
                     <IconButton
                         size="small"

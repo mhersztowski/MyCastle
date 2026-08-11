@@ -88,6 +88,17 @@ export interface TaskModel {
     /** Kolejność ręczna w obrębie grupy; brak = na końcu. */
     order?: number;
     /**
+     * Notatka zadania — ścieżka pliku Markdown **względem katalogu `drive/`**
+     * użytkownika, np. `notatki/projekt/spec.md`.
+     *
+     * Względem, a nie bezwzględnie: ścieżka pełna niesie nazwę użytkownika
+     * i miejsce montowania dysku, więc przeżyłaby dokładnie do pierwszej
+     * zmiany któregokolwiek z nich. Plik nie musi istnieć w chwili powiązania —
+     * notatkę wolno założyć później, a otwarcie nieistniejącej daje pusty
+     * dokument, nie błąd.
+     */
+    docPath?: string;
+    /**
      * Zadania, które muszą się skończyć przed tym — czyli poprzedniki.
      *
      * Trzymana jest **wyłącznie** ta strona relacji. „Zadania po tym" to jej

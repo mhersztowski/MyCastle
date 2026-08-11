@@ -43,6 +43,8 @@ export class TaskNode extends NodeBase<TaskModel> {
   parentTaskId?: string;
   order?: number;
   dependsOn?: string[];
+  /** Notatka na dysku — ścieżka względem `drive/` użytkownika. */
+  docPath?: string;
 
   // Additional UI states
   private _isCompleted: boolean = false;
@@ -75,6 +77,7 @@ export class TaskNode extends NodeBase<TaskModel> {
     this.parentTaskId = model.parentTaskId;
     this.order = model.order;
     this.dependsOn = model.dependsOn;
+    this.docPath = model.docPath;
   }
 
   static fromModel(model: TaskModel): TaskNode { return new TaskNode(model); }
@@ -255,6 +258,7 @@ export class TaskNode extends NodeBase<TaskModel> {
       parentTaskId: this.parentTaskId,
       order: this.order,
       dependsOn: keepList(this.dependsOn),
+      docPath: this.docPath,
     };
   }
 

@@ -64,6 +64,7 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import AddIcon from '@mui/icons-material/Add';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import PersonIcon from '@mui/icons-material/Person';
 import TaskIcon from '@mui/icons-material/Task';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -95,6 +96,8 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import SlashCommands from './extensions/SlashCommands';
 import EventDialog from './EventDialog';
 import { EventBlock } from './extensions/EventBlockExtension';
+import { TaskCard } from './extensions/TaskCardExtension';
+import TaskCardDialog from './TaskCardDialog';
 import TodayNowMarker from './TodayNowMarker';
 import { parseDateFromPath } from './eventTemplates';
 import { editorOverlay } from './editorOverlayState';
@@ -200,6 +203,8 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // here let us drop the resulting markdown exactly where the slash was.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [eventDialog, setEventDialog] = useState<{ editor: any; range: any } | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [taskCardDialog, setTaskCardDialog] = useState<{ editor: any } | null>(null);
   // InfoMark dialog — open=null when closed. When `editPos` is null we're
   // inserting at the current selection; when a number, updating the node at
   // that ProseMirror position (target of a double-click on an existing mark).
@@ -262,6 +267,10 @@ const MdEditor: React.FC<MdEditorProps> = ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const insertEventRef = useRef<((editor: any, range: any) => void) | undefined>(
     (editor, range) => setEventDialog({ editor, range }),
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insertTaskCardRef = useRef<((editor: any, range: any) => void) | undefined>(
+    (editor) => setTaskCardDialog({ editor }),
   );
 
   // Block action menu — one button per block
@@ -456,8 +465,9 @@ const MdEditor: React.FC<MdEditorProps> = ({
       TextAlign.configure({
         types: ['heading', 'paragraph', 'tableCell', 'tableHeader'],
       }),
-      SlashCommands.configure({ createPageRef: onCreatePageRef, insertEventRef }),
+      SlashCommands.configure({ createPageRef: onCreatePageRef, insertEventRef, insertTaskCardRef }),
       EventBlock,
+      TaskCard,
       InlineMath,
       MathBlock,
       ComponentEmbed,
@@ -1844,6 +1854,14 @@ const MdEditor: React.FC<MdEditorProps> = ({
               <AddIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {/* Karta zadania — obok wstawiania bloków, bo tym właśnie jest.
+              Na pasku wprost, a nie w panelu „Wstaw", bo notatka do zadania
+              odsyła zwykle kilka razy w jednym dokumencie. */}
+          <Tooltip title="Wstaw kartę zadania">
+            <IconButton size="small" onClick={() => setTaskCardDialog({ editor })}>
+              <TaskAltIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
           {/* Block-level direct actions — promoted out of MobileMdToolbar's
               row 2. The user wanted everything within reach without the
@@ -2383,6 +2401,21 @@ const MdEditor: React.FC<MdEditorProps> = ({
         <Button variant="contained" onClick={insertEnvValue} disabled={!envDialog.name.trim()}>Wstaw</Button>
       </DialogActions>
     </Dialog>
+
+    {/* Karta zadania — okno wyboru otwierane przez `/karta`. */}
+    {taskCardDialog && (
+      <TaskCardDialog
+        open
+        onClose={() => setTaskCardDialog(null)}
+        onPick={(attrs) => {
+          taskCardDialog.editor
+            .chain()
+            .focus()
+            .insertContent({ type: 'taskCard', attrs })
+            .run();
+        }}
+      />
+    )}
 
     {/* Event-from-task dialog — opened by the `/event` slash command.
         Inserts the resulting markdown blockquote at the captured range,

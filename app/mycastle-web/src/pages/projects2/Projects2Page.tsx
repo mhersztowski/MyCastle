@@ -7,7 +7,8 @@
  * najczęściej wpadają z innych miejsc systemu.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     Box, CircularProgress, IconButton, InputBase, Menu, MenuItem, Stack, Tooltip, Typography,
 } from '@mui/material';
@@ -26,6 +27,8 @@ import { flattenProjects, useProjectsStore } from './useProjectsStore';
 import { ListView } from './ListView';
 import { BoardView } from './BoardView';
 import { TaskPanel } from './TaskPanel';
+import { TaskDocDialog } from './TaskDocDialog';
+import { useAuth } from '../../modules/auth';
 
 type ViewMode = 'list' | 'board';
 /** Jak karty na tablicy pokazują termin: konkretną datą czy numerem tygodnia. */
@@ -41,6 +44,7 @@ const Projects2Page: React.FC = () => {
     const [query, setQuery] = useState('');
     const [openTaskId, setOpenTaskId] = useState<string | null>(null);
     const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const rows = useMemo(() => flattenProjects(store.projects), [store.projects]);
 
@@ -64,6 +68,39 @@ const Projects2Page: React.FC = () => {
 
     const openTask = store.tasks.find(t => t.id === openTaskId) ?? null;
 
+    /*
+     * `?task=<id>` otwiera panel na wskazanym zadaniu — tą drogą wchodzi się
+     * z karty zadania w notatce.
+     *
+     * Przełączamy też projekt, bo zadanie spoza aktywnego nie mieściłoby się
+     * w `visibleTasks` i panel otworzyłby się nad listą, na której go nie widać.
+     *
+     * Parametr zdejmujemy po zadziałaniu. Zostawiony wracałby przy każdym
+     * odświeżeniu i nie dałoby się zamknąć panelu na stałe — a to wygląda jak
+     * usterka, nie jak funkcja.
+     */
+    const requestedTaskId = searchParams.get('task');
+    useEffect(() => {
+        if (!requestedTaskId || !store.isDataLoaded) return;
+
+        const target = store.tasks.find(t => t.id === requestedTaskId);
+        if (target) {
+            setSelectedId(target.projectId ?? UNASSIGNED);
+            setOpenTaskId(target.id);
+        }
+
+        const next = new URLSearchParams(searchParams);
+        next.delete('task');
+        setSearchParams(next, { replace: true });
+    }, [requestedTaskId, store.isDataLoaded, store.tasks, searchParams, setSearchParams]);
+
+    // Haki muszą stać PRZED wczesnym `return` niżej. Postawione za nim znikają
+    // z renderu, dopóki dane się ładują, a po ich wczytaniu dochodzą — React
+    // widzi wtedy inną liczbę haków niż poprzednio i wywraca komponent.
+    // Objaw: strona „resetuje się" zamiast otworzyć.
+    const { currentUser, token } = useAuth();
+    const [docTaskId, setDocTaskId] = useState<string | null>(null);
+
     if (!store.isDataLoaded) {
         return (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 300 }}>
@@ -78,7 +115,13 @@ const Projects2Page: React.FC = () => {
         onAdd: store.addTask,
         onRemove: store.removeTask,
         onOpen: setOpenTaskId,
+        onOpenDoc: setDocTaskId,
     };
+
+    // Notatka otwiera się na cały ekran ponad wszystkim, więc jej stan siedzi
+    // tutaj, a nie w wierszu listy — inaczej zwinięcie wiersza zamykałoby
+    // dokument w trakcie pisania.
+    const docTask = docTaskId ? store.tasks.find(t => t.id === docTaskId) ?? null : null;
 
     return (
         // `height: 100%`, a nie `calc(100vh - 64px)`: trasa montuje stronę pod
@@ -299,6 +342,17 @@ const Projects2Page: React.FC = () => {
                     />
                 )}
             </Stack>
+
+            {docTask?.docPath && (
+                <TaskDocDialog
+                    open
+                    userName={currentUser?.name ?? ''}
+                    token={token ?? undefined}
+                    path={docTask.docPath}
+                    taskName={docTask.name}
+                    onClose={() => setDocTaskId(null)}
+                />
+            )}
 
             <TaskPanel
                 task={openTask}

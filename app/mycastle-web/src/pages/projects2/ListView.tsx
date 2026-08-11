@@ -10,6 +10,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Box, Collapse, IconButton, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import ArticleIcon from '@mui/icons-material/Article';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import AddIcon from '@mui/icons-material/Add';
@@ -31,6 +32,11 @@ export interface TaskViewActions {
     onAdd: (task: Partial<TaskModel> & { name: string }) => void;
     onRemove: (id: string) => void;
     onOpen: (id: string) => void;
+    /**
+     * Otwarcie notatki zadania na cały ekran. Opcjonalne — widok kanban
+     * i inni odbiorcy `TaskViewActions` nie muszą jej obsługiwać.
+     */
+    onOpenDoc?: (id: string) => void;
 }
 
 interface ListViewProps extends TaskViewActions {
@@ -162,7 +168,7 @@ interface TaskRowsProps extends TaskViewActions {
 
 const TaskRows: React.FC<TaskRowsProps> = props => {
     const { task, depth, byParent, expanded, onToggleExpand, statuses, knownTags, allTasks } = props;
-    const { onUpdate, onMutate, onAdd, onRemove, onOpen } = props;
+    const { onUpdate, onMutate, onAdd, onRemove, onOpen, onOpenDoc } = props;
 
     const children = byParent.get(task.id) ?? [];
     const isOpen = expanded[task.id] ?? true;
@@ -269,6 +275,13 @@ const TaskRows: React.FC<TaskRowsProps> = props => {
                 />
 
                 <Stack direction="row" className="row-actions" sx={{ opacity: 0, transition: 'opacity .15s' }}>
+                    {task.docPath && (
+                        <Tooltip title={`Otwórz notatkę: ${task.docPath}`}>
+                            <IconButton size="small" onClick={e => { e.stopPropagation(); onOpenDoc?.(task.id); }}>
+                                <ArticleIcon sx={{ fontSize: 14, color: cu.brand }} />
+                            </IconButton>
+                        </Tooltip>
+                    )}
                     <Tooltip title="Otwórz zadanie">
                         <IconButton size="small" onClick={e => { e.stopPropagation(); onOpen(task.id); }}>
                             <OpenInFullIcon sx={{ fontSize: 13, color: cu.textMuted }} />

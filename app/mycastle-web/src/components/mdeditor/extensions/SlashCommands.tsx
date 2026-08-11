@@ -47,6 +47,7 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import LinkIcon from '@mui/icons-material/Link';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import EventIcon from '@mui/icons-material/Event';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { CALLOUT_VARIANTS, type CalloutVariant } from '../utils/callout';
 import { pluginRegistry } from '../../../modules/web-plugins';
@@ -65,6 +66,9 @@ export interface SlashCommandsOptions {
    *  range so the resulting blockquote replaces the slash trigger text. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   insertEventRef?: { current: ((editor: any, range: any) => void) | undefined };
+  /** Wołane przez `/karta` — gospodarz otwiera okno wyboru zadania. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  insertTaskCardRef?: { current: ((editor: any, range: any) => void) | undefined };
 }
 
 const commands: CommandItem[] = [
@@ -874,6 +878,8 @@ function buildSuggestionConfig(
   createPageRef?: { current: ((path: string) => Promise<void>) | undefined },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   insertEventRef?: { current: ((editor: any, range: any) => void) | undefined },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  insertTaskCardRef?: { current: ((editor: any, range: any) => void) | undefined },
 ): Omit<SuggestionOptions, 'editor'> {
   const pageCommand: CommandItem = {
     title: 'Page',
@@ -926,7 +932,20 @@ function buildSuggestionConfig(
           insertEventRef?.current?.(editor, { from, to: from });
         },
       };
-      const all = [pageCommand, eventCommand, ...commands, ...buildPluginTemplateCommands()];
+      // Karta zadania — jak `/event`, gospodarz pokazuje okno wyboru. Trigger
+      // kasujemy przed otwarciem, żeby paleta zdążyła się zamknąć i nie
+      // została pod oknem.
+      const taskCardCommand: CommandItem = {
+        title: 'Karta zadania',
+        description: 'Wstaw kartę zadania z PIM/Zadania — status, termin, postęp',
+        icon: <TaskAltIcon color="primary" />,
+        command: ({ editor, range }) => {
+          const from = range.from;
+          editor.chain().focus().deleteRange(range).run();
+          insertTaskCardRef?.current?.(editor, { from, to: from });
+        },
+      };
+      const all = [pageCommand, eventCommand, taskCardCommand, ...commands, ...buildPluginTemplateCommands()];
       return all.filter((item) =>
         item.title.toLowerCase().startsWith(query.toLowerCase())
       );
@@ -1142,6 +1161,7 @@ const SlashCommands = Extension.create<SlashCommandsOptions>({
       suggestion: buildSuggestionConfig(),
       createPageRef: undefined,
       insertEventRef: undefined,
+      insertTaskCardRef: undefined,
     };
   },
 
@@ -1149,7 +1169,8 @@ const SlashCommands = Extension.create<SlashCommandsOptions>({
     return [
       Suggestion({
         editor: this.editor,
-        ...buildSuggestionConfig(this.options.createPageRef, this.options.insertEventRef),
+        ...buildSuggestionConfig(this.options.createPageRef, this.options.insertEventRef,
+                                 this.options.insertTaskCardRef),
       }),
     ];
   },
