@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import ViewListIcon from '@mui/icons-material/ViewList';
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban';
+import EventIcon from '@mui/icons-material/Event';
 import SearchIcon from '@mui/icons-material/Search';
 import AddIcon from '@mui/icons-material/Add';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
@@ -27,6 +28,8 @@ import { BoardView } from './BoardView';
 import { TaskPanel } from './TaskPanel';
 
 type ViewMode = 'list' | 'board';
+/** Jak karty na tablicy pokazują termin: konkretną datą czy numerem tygodnia. */
+type DateMode = 'normal' | 'week';
 /** Pozycja „bez projektu" nie ma id w danych — potrzebuje własnego znacznika. */
 const UNASSIGNED = '__unassigned__';
 
@@ -34,6 +37,7 @@ const Projects2Page: React.FC = () => {
     const store = useProjectsStore();
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [view, setView] = useState<ViewMode>('list');
+    const [dateMode, setDateMode] = useState<DateMode>('normal');
     const [query, setQuery] = useState('');
     const [openTaskId, setOpenTaskId] = useState<string | null>(null);
     const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
@@ -252,6 +256,28 @@ const Projects2Page: React.FC = () => {
                         label="Tablica"
                         onClick={() => setView('board')}
                     />
+
+                    {/*
+                      * Przełącznik dotyczy wyłącznie kart na tablicy, więc na
+                      * liście go nie ma — przycisk bez skutku myli bardziej,
+                      * niż pomaga.
+                      */}
+                    {view === 'board' && (
+                        <Stack
+                            direction="row"
+                            onClick={() => setDateMode(m => (m === 'normal' ? 'week' : 'normal'))}
+                            sx={{
+                                alignItems: 'center', gap: 0.5, ml: 'auto', px: 1.25, py: 0.5,
+                                cursor: 'pointer', color: cu.textMuted,
+                                '&:hover': { color: cu.text },
+                            }}
+                        >
+                            <EventIcon sx={{ fontSize: 15 }} />
+                            <Typography sx={{ fontSize: 13 }}>
+                                Daty: {dateMode === 'normal' ? 'Normalne' : 'Tygodniowe'}
+                            </Typography>
+                        </Stack>
+                    )}
                 </Stack>
 
                 {view === 'list' ? (
@@ -267,6 +293,7 @@ const Projects2Page: React.FC = () => {
                         tasks={visibleTasks}
                         statuses={statuses}
                         people={store.persons}
+                        dateMode={dateMode}
                         projectId={activeId === UNASSIGNED ? undefined : activeId}
                         {...actions}
                     />

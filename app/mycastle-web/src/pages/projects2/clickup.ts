@@ -114,6 +114,42 @@ export function formatDate(iso?: string): string {
     return date.toLocaleDateString('pl-PL', { day: 'numeric', month: 'short' });
 }
 
+const WEEK = 7 * DAY;
+
+/**
+ * Termin jako tydzień względem bieżącego: „Tydzień 0", „Tydzień +2".
+ *
+ * Przy planowaniu na tablicy konkretny dzień bywa mniej użyteczny niż to, czy
+ * coś wypada w tym tygodniu, czy za dwa — stąd przełącznik obok zakładek.
+ *
+ * Liczy się **tydzień kalendarzowy**, a nie „ile dni od dziś": zadanie na
+ * niedzielę i to na poniedziałek dzieli jeden dzień, ale należą do różnych
+ * tygodni i tak też są pokazywane.
+ *
+ * `now` jest parametrem, żeby dało się to sprawdzić testem — funkcja zależna
+ * wyłącznie od prawdziwego zegara przechodziłaby testy przez większość roku
+ * i wywracała się w losowy poniedziałek.
+ */
+export function formatWeek(iso?: string, now: Date = new Date()): string {
+    if (!iso) return '';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+
+    // Zaokrąglenie, bo przy zmianie czasu doba ma 23 albo 25 godzin i różnica
+    // w milisekundach nie dzieli się równo przez długość tygodnia.
+    const weeks = Math.round((startOfWeek(date) - startOfWeek(now)) / WEEK);
+    if (weeks === 0) return 'Tydzień 0';
+    return `Tydzień ${weeks > 0 ? '+' : '-'}${Math.abs(weeks)}`;
+}
+
+/** Poniedziałek danego tygodnia — tak liczy się tydzień w Polsce. */
+function startOfWeek(date: Date): number {
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    // getDay() daje 0 dla niedzieli; przesunięcie ustawia poniedziałek na 0.
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    return start.getTime();
+}
+
 /** Termin minął — kolumna świeci wtedy na czerwono, tak jak w ClickUpie. */
 export function isOverdue(iso?: string): boolean {
     if (!iso) return false;

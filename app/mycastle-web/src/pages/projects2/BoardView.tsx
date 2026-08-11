@@ -20,7 +20,7 @@ import LinkIcon from '@mui/icons-material/Link';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import type { TaskModel, TaskStatusDef } from '@mhersztowski/core';
 import { TaskNode } from '@mhersztowski/core';
-import { cu, formatDate, formatMinutes, isOverdue, priorityDef } from './clickup';
+import { cu, formatDate, formatMinutes, formatWeek, isOverdue, priorityDef } from './clickup';
 import { Assignees, PersonOption, useTicker } from './fields';
 import type { TaskViewActions } from './ListView';
 
@@ -29,10 +29,13 @@ interface BoardViewProps extends TaskViewActions {
     statuses: TaskStatusDef[];
     people: PersonOption[];
     projectId?: string;
+    /** Termin na karcie: konkretna data albo numer tygodnia względem bieżącego. */
+    dateMode?: 'normal' | 'week';
 }
 
 export const BoardView: React.FC<BoardViewProps> = ({
-    tasks, statuses, people, projectId, onUpdate, onMutate, onAdd, onRemove, onOpen,
+    tasks, statuses, people, projectId, dateMode = 'normal',
+    onUpdate, onMutate, onAdd, onRemove, onOpen,
 }) => {
     const [dragOver, setDragOver] = useState<string | null>(null);
 
@@ -94,6 +97,7 @@ export const BoardView: React.FC<BoardViewProps> = ({
                                         task={task}
                                         people={people}
                                         subtasks={subtaskCounts.get(task.id)}
+                                        dateMode={dateMode}
                                         onOpen={() => onOpen(task.id)}
                                         onRemove={() => onRemove(task.id)}
                                         onAssignees={assignees => onUpdate(task.id, { assignees })}
@@ -116,11 +120,12 @@ const BoardCard: React.FC<{
     task: TaskModel;
     people: PersonOption[];
     subtasks?: { done: number; total: number };
+    dateMode: 'normal' | 'week';
     onOpen: () => void;
     onRemove: () => void;
     onAssignees: (ids: string[]) => void;
     onToggleTracking: () => void;
-}> = ({ task, people, subtasks, onOpen, onRemove, onAssignees, onToggleTracking }) => {
+}> = ({ task, people, subtasks, dateMode, onOpen, onRemove, onAssignees, onToggleTracking }) => {
     const node = useMemo(() => TaskNode.fromModel(task), [task]);
     useTicker(node.isTracking());
     const priority = priorityDef(task.priority);
@@ -179,7 +184,7 @@ const BoardCard: React.FC<{
                         fontSize: 11,
                         color: isOverdue(task.dueDate) ? cu.danger : cu.textMuted,
                     }}>
-                        {formatDate(task.dueDate)}
+                        {dateMode === 'week' ? formatWeek(task.dueDate) : formatDate(task.dueDate)}
                     </Typography>
                 )}
 
