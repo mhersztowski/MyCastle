@@ -52,6 +52,15 @@ export interface UploadScriptOptions {
     variant?: 'wasm' | 'src';
     /** Nazwa w komunikatach o błędach skryptu, np. `=v7`. */
     name?: string;
+    /**
+     * Klucz podpisu. Urządzenie z ustawionym kluczem odrzuca obraz bez podpisu
+     * **przed** transferem — sam skrót mówi wyłącznie, że nic się nie uszkodziło
+     * w drodze, a policzy go równie dobrze napastnik.
+     *
+     * Podpis liczy serwer, bo obraz i tak przez niego przechodzi; klucz nie
+     * zostaje nigdzie zapisany.
+     */
+    hmacKey?: string;
 }
 
 /**
@@ -73,6 +82,7 @@ export async function uploadScriptModule(
                 data: toBase64(wasm),
                 variant: options.variant ?? 'wasm',
                 ...(options.name ? { name: options.name } : {}),
+                ...(options.hmacKey ? { hmacKey: options.hmacKey } : {}),
             }),
         },
     );
@@ -89,8 +99,11 @@ export async function uploadScriptModule(
 
 export interface DeviceScriptStatus {
     engine?: string;
+    /** Pojemność jednego slotu — największy obraz, jaki urządzenie przyjmie. */
     capacity?: number;
+    /** Trwa obserwacja świeżo wgranej wersji; kolejny transfer dostanie `busy`. */
     trial?: boolean;
+    /** Czy jest dokąd wrócić, gdyby nowa wersja nie wstała. */
     canRollback?: boolean;
     sha256?: string;
 }

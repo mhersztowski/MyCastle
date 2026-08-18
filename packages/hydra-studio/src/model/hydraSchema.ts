@@ -60,6 +60,13 @@ const target: ObjectNode = obj('Cel sprzętowy — jedno środowisko budowania',
         board: required(str('Identyfikator płytki w PlatformIO, np. esp32-s3-devkitc-1')),
         f_cpu: optional(num('Taktowanie rdzenia', { integer: true, min: 1_000_000, unit: 'Hz' })),
         platform: optional(str('Wersja platformy, np. espressif32@7.0.1')),
+        /**
+         * Które pliki z `src/` wchodzą do tego celu, w składni PlatformIO —
+         * np. `+<*> -<main_ntrip.cpp>`. Potrzebne, gdy projekt ma kilka
+         * wariantów aplikacji: dwa pliki z `setup()` w jednym środowisku nie
+         * zlinkują się, a wybór wariantu jest cechą celu, nie kodu.
+         */
+        build_src_filter: optional(str('Które pliki źródłowe wchodzą do celu')),
     })),
     capabilities: optional(list('Co ta płytka potrafi — patrz CAPABILITIES', oneOf('Możliwość', CAPABILITIES),
                                 { unique: true })),
@@ -282,6 +289,68 @@ const minisModule = obj('Platforma IoT MyCastle', {
     })),
 });
 
+/**
+ * Warstwa skryptowa.
+ *
+ * Osobno od `ota`, bo rozwiązuje inny problem. Aktualizacja wsadu wymienia
+ * **całe** urządzenie razem ze sterownikami i restartem; skrypt wymienia samą
+ * regułę działania, w locie i bez przerwy w telemetrii. Urządzenie pod sufitem
+ * potrzebuje jednego i drugiego, ale nie w tych samych sytuacjach.
+ *
+ * Silnik jest wyborem projektu, nie frameworka: `ScriptModule` dostaje
+ * `IScriptEngine*` i nie zna żadnego z nich. Tutaj decyduje się wyłącznie o tym,
+ * czyje źródła w ogóle wejdą do wsadu.
+ */
+const scriptModule = obj('Skrypty i moduły WebAssembly', {
+    /**
+     * Silnik wykonujący. `lua` to źródło i bajtkod Lua, `wasm3` i `wamr` to
+     * WebAssembly — a więc wszystko, co da się do niego skompilować, w tym C++.
+     * Reguła kciuka: poniżej 256 KB RAM `wasm3` (~64 KB), powyżej `wamr`,
+     * który jest szybszy i umie kod kompilowany z wyprzedzeniem.
+     */
+    engine: optional(oneOf('Silnik', ['lua', 'wasm3', 'wamr'])),
+    period_ms: optional(num('Co ile wołać loop() skryptu',
+                            { integer: true, min: 1, max: 60_000, unit: 'ms' })),
+    /**
+     * Ile instrukcji maszyny wirtualnej wolno wykonać w jednym przebiegu.
+     * Zero znosi limit — wtedy skrypt z pętlą bez końca zawiesza swój task,
+     * a nadzorca zrestartuje urządzenie.
+     */
+    budget: optional(num('Limit instrukcji na przebieg', { integer: true, min: 0 })),
+    /** Które grupy funkcji skrypt w ogóle widzi. */
+    bindings: optional(list('Udostępnione grupy funkcji',
+        oneOf('Grupa', ['core', 'log', 'gpio', 'adc', 'pwm', 'i2c', 'event']),
+        { unique: true })),
+
+    /**
+     * Wgrywanie przez łącze IoT. Bez tego skrypt wchodzi wyłącznie z wsadem
+     * albo z shella — czyli wymaga kabla.
+     */
+    delivery: optional(obj('Dostarczanie przez sieć', {
+        slot_bytes: optional(num('Pojemność jednego slotu magazynu; slotów są dwa',
+                                 { integer: true, min: 256, max: 1 << 20, unit: 'B' })),
+        /**
+         * Ścieżka obrazu w systemie plików. Bez niej urządzenie po zaniku
+         * zasilania wraca do skryptu wkompilowanego we wsad, a wszystko, co
+         * wgrano przez sieć, przepada.
+         */
+        persist: optional(str('Plik, w którym przetrwa wgrany obraz')),
+        /**
+         * Jak długo obserwować nową wersję, zanim zostanie uznana za dobrą.
+         * Skrót mówi tylko, że obraz nie uszkodził się w drodze — nie że
+         * skrypt wstaje i nie wywala się w `loop()`.
+         */
+        trial_ms: optional(num('Okres próbny nowej wersji',
+                               { integer: true, min: 0, max: 600_000, unit: 'ms' })),
+        /**
+         * Czy obraz musi być podpisany. Sam skrót policzy równie dobrze
+         * napastnik — bez podpisu urządzenie wystawione do Internetu przyjmie
+         * cudzy skrypt.
+         */
+        require_signature: optional(bool('Przyjmuj wyłącznie podpisane obrazy')),
+    })),
+});
+
 const otaModule = obj('Aktualizacja wsadu', {
     channel: optional(str('Adres kanału aktualizacji')),
     verify: optional(str('Sposób weryfikacji')),
@@ -320,6 +389,7 @@ export const HYDRA_SCHEMA: ObjectNode = obj('Plik projektu Hydra', {
         ui: optional(uiModule),
         motion: optional(motionModule),
         ota: optional(otaModule),
+    script: optional(scriptModule),
     minis: optional(minisModule),
     media: optional(mediaModule),
     arduboy: optional(arduboyModule),

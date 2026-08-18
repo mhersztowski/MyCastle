@@ -25,6 +25,7 @@
         "type": "string",
         "enum": [
           "sense.driver",
+          "sense.location",
           "ui.widget",
           "ui.display",
           "motion.motor",
@@ -126,6 +127,10 @@
           {
             "type": "string",
             "description": "Tekst"
+          },
+          {
+            "type": "number",
+            "description": "Liczba"
           },
           {
             "type": "boolean",

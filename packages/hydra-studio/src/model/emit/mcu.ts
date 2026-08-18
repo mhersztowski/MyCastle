@@ -79,12 +79,19 @@ export const MCU_PROFILES: Readonly<Record<string, McuProfile>> = {
      * COOP/COEP na serwerze — a te odcinają stronie zasoby cross-origin.
      * Cel przeglądarkowy jest jednowątkowy świadomie; aplikacja z własną
      * pętlą woła `App::housekeeping()` sama (`housekeepingMs(0)`).
+     *
+     * `ethernet` jest tu z rozmysłem, choć karta nie ma karty sieciowej.
+     * Gniazd TCP w przeglądarce nie ma, więc `browserTcpBridge()` pożycza je
+     * od gospodarza strony przez `/ws/tcp` — z punktu widzenia modułu `net`
+     * łącze jest zwykłe i przewodowe. Bez tego wpisu każdy cel przeglądarkowy
+     * z włączonym `net` dostawał ostrzeżenie o braku możliwości, mimo że
+     * budował się i łączył poprawnie.
      */
     wasm: {
         kind: 'wasm',
         platform: 'native',
         defaultBoard: 'wasm',
-        capabilities: ['i2c', 'spi', 'uart', 'pwm', 'adc', 'fpu'],
+        capabilities: ['i2c', 'spi', 'uart', 'pwm', 'adc', 'fpu', 'ethernet'],
         hasFpu: true,
     },
     esp32: {

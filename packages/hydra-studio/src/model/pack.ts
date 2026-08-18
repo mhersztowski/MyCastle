@@ -24,14 +24,22 @@ import { HydraDocument } from './document';
 import { validateAgainst } from './validate';
 import { CAPABILITIES } from './hydraSchema';
 import {
-    anyOf, bool, list, map, obj, oneOf, optional, required, str,
+    anyOf, bool, list, map, num, obj, oneOf, optional, required, str,
     type ObjectNode,
 } from './schema';
 
-/** Czym paczka może być dla frameworka. */
+/**
+ * Czym paczka może być dla frameworka.
+ *
+ * `sense.location` stoi obok `sense.driver`, a nie pod nim, bo odbiornik GNSS
+ * nie oddaje próbki: `Sample` trzyma wartości jako `float`, a przy szerokości
+ * 50° krok `float32` wynosi 0,42 m — dwadzieścia razy więcej niż dokładność
+ * rozwiązania RTK. Framework ma na to osobny interfejs (`ILocationSensor`),
+ * więc i paczka musi umieć powiedzieć, którego z nich dotyczy.
+ */
 export const PACK_PROVIDES = [
-    'sense.driver', 'ui.widget', 'ui.display', 'motion.motor', 'motion.encoder',
-    'net.transport', 'core.extension', 'board',
+    'sense.driver', 'sense.location', 'ui.widget', 'ui.display',
+    'motion.motor', 'motion.encoder', 'net.transport', 'core.extension', 'board',
 ] as const;
 
 export const PACK_SCHEMA: ObjectNode = obj('Manifest paczki Hydry', {
@@ -68,9 +76,16 @@ export const PACK_SCHEMA: ObjectNode = obj('Manifest paczki Hydry', {
     })),
     sim: optional(str('Model symulacji')),
 
-    /** Domyślne ustawienia wstawiane do .hydra przy dodaniu komponentu. */
+    /**
+     * Domyślne ustawienia wstawiane do .hydra przy dodaniu komponentu.
+     *
+     * Liczba jest tu osobną postacią, a nie tekstem do przepisania: schemat
+     * konfiguracji opisuje `baud` czy `rate_ms` jako `integer`, więc wstawienie
+     * `"115200"` w cudzysłowie dałoby wartość domyślną, która od razu nie
+     * przechodzi walidacji własnego formularza.
+     */
     defaults: optional(map('Wartości domyślne konfiguracji', anyOf('Wartość', [
-        str('Tekst'), bool('Wartość logiczna'),
+        str('Tekst'), num('Liczba'), bool('Wartość logiczna'),
     ]))),
 }, 'forbid');
 

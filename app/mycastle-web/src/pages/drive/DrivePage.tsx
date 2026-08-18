@@ -108,6 +108,8 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
 import { createHydraStudioPlugin } from '@mhersztowski/hydra-studio';
 import { runHydraBuild } from './hydraBuild';
+import { collectHydraFirmware } from './hydraFlash';
+import { FlashDialog, type FlashFileEntry } from '@modules/serial';
 import { loadWasmSources, useWasmUpload } from './wasmUpload';
 import type { AgentConfig, AgentPanelHandle } from '@mhersztowski/texteditor';
 import { RemoteFS, CompositeFS, isPublicDrivePath, publicDriveUrl, PUBLIC_DRIVE_DIRS } from '@mhersztowski/core';
@@ -864,6 +866,9 @@ export default function DrivePage(): React.JSX.Element {
     failed: number;
   } | null>(null);
   const [snack, setSnack] = useState<{ open: boolean; msg: string; severity: 'success'|'error'|'info' }>({ open: false, msg: '', severity: 'success' });
+  // Wsad zebrany po budowie — trzymamy do czasu zamknięcia okna programowania.
+  const [hydraFlashOpen, setHydraFlashOpen] = useState(false);
+  const [hydraFlashFiles, setHydraFlashFiles] = useState<FlashFileEntry[] | undefined>(undefined);
   const [menuFor, setMenuFor] = useState<{ anchor: HTMLElement | null; entry: VfsEntry; pos?: { top: number; left: number } } | null>(null);
   const [newFolderDialog, setNewFolderDialog] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -1050,7 +1055,29 @@ export default function DrivePage(): React.JSX.Element {
     loadWasmSources: (projectFile: string) => loadWasmSources(userName, projectFile),
     uploadWasm: (wasm: Uint8Array) => wasmUpload.uploadWasm(wasm),
     ...(wasmUpload.deviceLabel ? { wasmDeviceLabel: wasmUpload.deviceLabel } : {}),
-  }), [userName, wasmUpload]);
+
+    /*
+     * Wgranie wsadu z przeglądarki — przez Web Serial, nie przez serwer.
+     *
+     * `project.upload` woła `pio run -t upload` w kontenerze i trafia w port
+     * **serwera**. Płytka wisi zwykle w porcie osoby przed przeglądarką,
+     * więc bez tej drogi przycisk był użyteczny tylko dla tego, kto siedzi
+     * przy maszynie z backendem.
+     */
+    async flashFromBrowser({ file, target, mcu }) {
+      try {
+        const files = await collectHydraFirmware({ file, target, mcu, userName, token: token ?? undefined });
+        setHydraFlashFiles(files);
+        setHydraFlashOpen(true);
+      } catch (e) {
+        setSnack({
+          open: true,
+          msg: e instanceof Error ? e.message : String(e),
+          severity: 'error',
+        });
+      }
+    },
+  }), [userName, token, wasmUpload]);
 
   const driveExtraPlugins = useMemo(
     () => [
@@ -4782,6 +4809,16 @@ export default function DrivePage(): React.JSX.Element {
           Studia prosi o wgranie, a urządzeń z rozszerzeniem „script" jest
           więcej niż jedno. */}
       {wasmUpload.dialog}
+
+      {/* Programowanie płytki z przeglądarki — to samo okno, co w projektach
+          Arduino. esptool-js sam rozpoznaje układ, więc cała rodzina ESP32
+          działa bez osobnej obsługi każdego wariantu. */}
+      <FlashDialog
+        open={hydraFlashOpen}
+        onClose={() => { setHydraFlashOpen(false); setHydraFlashFiles(undefined); }}
+        initialFiles={hydraFlashFiles}
+        userName={userName}
+      />
 
       <Snackbar open={snack.open} autoHideDuration={3500} onClose={() => setSnack({ ...snack, open: false })}>
         <Alert severity={snack.severity}>{snack.msg}</Alert>

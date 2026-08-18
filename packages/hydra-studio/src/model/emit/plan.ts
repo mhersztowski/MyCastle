@@ -27,6 +27,9 @@ export const MODULE_FLAGS: Readonly<Record<string, string>> = {
     // `include/compat/arduboy`, skąd biorą się nazwy globalne wymagane przez
     // niezmienione źródła gier — patrz emiter CMake.
     arduboy: 'HYDRA_ENABLE_ARDUBOY',
+    // Warstwa skryptowa. Bez tej flagi nie powstaje ani ScriptModule, ani
+    // komendy shella, a nieużywane jednostki interpretera usuwa konsolidator.
+    script: 'HYDRA_ENABLE_SCRIPT',
 };
 
 /**
@@ -87,6 +90,15 @@ export interface TargetPlan {
     flags: readonly string[];
     libDeps: readonly string[];
     settings: Readonly<Record<string, string>>;
+    /**
+     * Silnik skryptowy tego celu: `lua`, `wasm3` albo `wamr`.
+     *
+     * Obecny tylko wtedy, gdy moduł `script` jest włączony. Emiter CMake
+     * potrzebuje go wprost, bo runtime silnika to źródła w językach C leżące
+     * poza katalogami modułów — PlatformIO wciąga je manifestem biblioteki,
+     * CMake musi dostać je wypisane.
+     */
+    scriptEngine?: string;
     /** Na platformach bez FPU regulatory pracują na Q16.16. */
     hasFpu: boolean;
 }
@@ -176,9 +188,22 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
         if (flag) flags.push(`-D ${flag}=1`);
     }
 
+    const srcFilter = asString(pio['build_src_filter']);
+    if (srcFilter) settings['build_src_filter'] = srcFilter;
+
     applyMemory(asRecord(target['memory']), flags, settings);
     applyClock(asRecord(target['platformio']), flags);
     applyLogLevel(asRecord(root['modules']), flags);
+    // Cel może nadpisać ustawienia modułu — i akurat przy skryptach to jest
+    // przypadek typowy, bo silnik musi znaleźć się we wsadzie, więc każdy
+    // wariant to osobny cel, a nie przełącznik w czasie działania.
+    let scriptEngine: string | undefined;
+    const scriptLibs = modules.includes('script')
+        ? applyScript({
+            ...asRecord(asRecord(root['modules'])?.['script']),
+            ...asRecord(asRecord(target['modules'])?.['script']),
+        }, flags, (engine) => { scriptEngine = engine; })
+        : [];
 
     const isNative = profile.kind === 'native';
     const isWasm   = profile.kind === 'wasm';
@@ -188,6 +213,11 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
         // Ta sama flaga włącza atrapy HAL w Makefile testów, więc cel `native`
         // i testy jednostkowe kompilują dokładnie ten sam kod.
         flags.push('-D HYDRA_FORCE_HOST=1');
+        // Karta przeglądarki jest hostem — ale hostem bez gniazd TCP, bez
+        // wątków i z pętlą zdarzeń, której nie wolno blokować. Kod, który musi
+        // o tym wiedzieć (gniazdo przez WebSocket, most bodźców), pyta o tę
+        // flagę; bez niej `src/wasm/` był kompilowany do pustego pliku.
+        if (isWasm) flags.push('-D HYDRA_PLAT_WASM=1');
         native = nativeWindow(asRecord(target['native']));
         applyNative(native, flags);
     }
@@ -203,7 +233,8 @@ function planTarget(name: string, raw: unknown, globalModules: Record<string, un
         capabilities,
         capabilitiesDeclared: declared !== undefined,
         flags,
-        libDeps: profile.libDeps ?? [],
+        libDeps: [...(profile.libDeps ?? []), ...scriptLibs],
+        ...(scriptEngine ? { scriptEngine } : {}),
         settings,
         hasFpu: profile.hasFpu,
     };
@@ -341,6 +372,36 @@ function applyLogLevel(modules: Record<string, unknown> | undefined, flags: stri
     if (!level) return;
     const value = LOG_LEVELS[level];
     if (value !== undefined) flags.push(`-D HYDRA_LOG_COMPILE_LEVEL=${value}`);
+}
+
+/**
+ * Silnik skryptowy: co wchodzi do wsadu.
+ *
+ * Flagi są rozłączne celowo. Budowa z samym WebAssembly nie ma powodu ciągnąć
+ * źródeł Lua — a domyślnie Lua jest włączona, więc wybór innego silnika musi
+ * ją jawnie wyłączyć, inaczej płaci się za oba runtime'y bez korzyści.
+ *
+ * Zwraca zależności, których silnik potrzebuje w `lib_deps`.
+ */
+function applyScript(script: Record<string, unknown> | undefined, flags: string[],
+                     report: (engine: string) => void): string[] {
+    const engine = asString(script?.['engine']) ?? 'lua';
+    report(engine);
+
+    if (engine === 'wasm3') {
+        flags.push('-D HYDRA_SCRIPT_ENGINE_WASM=1', '-D HYDRA_SCRIPT_ENGINE_LUA=0');
+    } else if (engine === 'wamr') {
+        flags.push('-D HYDRA_SCRIPT_ENGINE_WAMR=1', '-D HYDRA_SCRIPT_ENGINE_LUA=0');
+    } else {
+        flags.push('-D HYDRA_SCRIPT_ENGINE_LUA=1');
+    }
+
+    const slot = asRecord(script?.['delivery'])?.['slot_bytes'];
+    if (typeof slot === 'number') flags.push(`-D HYDRA_SCRIPT_SLOT_BYTES=${slot}`);
+
+    // Źródła WAMR świadomie nie leżą w Hydrze — to osobna biblioteka i osobne
+    // kilkaset kilobajtów, których projekt na Lua nie ma powodu pobierać.
+    return engine === 'wamr' ? ['HydraWamr'] : [];
 }
 
 function monitorSpeedOf(root: Record<string, unknown>): number {

@@ -240,6 +240,45 @@ export async function runHydraBuild(
     const nativeTarget = plan.targets.find((t) => t.name === chosen && t.isNative);
     const wasmTarget   = plan.targets.find((t) => t.name === chosen && t.isWasm);
 
+    /*
+     * Kartę na wynik otwieramy **teraz**, a nie po zakończeniu budowy.
+     *
+     * Przeglądarka przepuszcza `window.open` tylko wtedy, gdy wywołanie jest
+     * jeszcze w tym samym przebiegu pętli zdarzeń, co kliknięcie użytkownika.
+     * Budowa trwa minutę, więc otwarcie po niej jest zawsze traktowane jak
+     * wyskakujące okno i cicho blokowane — przycisk wygląda wtedy na zepsuty,
+     * bo kompilacja się udaje, a nic się nie pokazuje.
+     *
+     * Dlatego karta powstaje pusta od razu i dopiero potem dostaje adres.
+     * Ta linia musi zostać przed pierwszym `await` w tej funkcji.
+     */
+    let pendingTab: Window | null = null;
+    if (wasmTarget && request.upload) {
+        /*
+         * Bez `noopener` — i to nie jest niedopatrzenie.
+         *
+         * `window.open` z tą flagą **zawsze** zwraca `null`, bo zrywa związek
+         * z otwierającym. Nie da się wtedy ani odróżnić otwartej karty od
+         * zablokowanej, ani podać jej adresu później. Poprzednia wersja brała
+         * ten `null` za blokadę i meldowała ją nawet wtedy, gdy karta powstała.
+         *
+         * Więź zrywamy zaraz po zapisaniu treści, więc strona i tak nie sięgnie
+         * do otwierającego.
+         */
+        pendingTab = window.open('', '_blank');
+        if (pendingTab) {
+            pendingTab.document.write(
+                '<!doctype html><meta charset="utf-8">'
+                + '<title>Hydra — buduję…</title>'
+                + '<body style="font:14px system-ui;padding:2rem;color:#ddd;background:#1e1e1e">'
+                + 'Buduję cel przeglądarkowy. Ta karta odświeży się sama, gdy moduł będzie gotowy.'
+                + '</body>',
+            );
+            pendingTab.document.close();
+            pendingTab.opener = null;
+        }
+    }
+
     let payload: Record<string, unknown>;
     if (wasmTarget) {
         await writeWasmManifest(request.file, plan, provider, onLine);
@@ -313,13 +352,26 @@ export async function runHydraBuild(
          * przepuściła.
          */
         if (request.upload) {
-            const opened = window.open(url, '_blank', 'noopener');
-            onLine(opened
-                ? `Otwarto w nowej karcie: ${url}`
-                : `Przeglądarka zablokowała nowe okno. Otwórz ręcznie: ${url}`);
+            if (pendingTab) {
+                pendingTab.location.replace(url);
+                onLine(`Otwarto w nowej karcie: ${url}`);
+            } else {
+                // Karta nie powstała mimo otwarcia w chwili kliknięcia — została
+                // zablokowana twardo. Adres i tak podajemy, bo wtedy wystarczy
+                // jedno kliknięcie w link w panelu.
+                onLine(`Przeglądarka zablokowała nowe okno. Otwórz ręcznie: ${url}`);
+            }
         } else {
             onLine(`Gotowe. Otwórz w przeglądarce: ${url}`);
         }
+    } else if (pendingTab) {
+        /*
+         * Budowa się nie udała, a karta już wisi. Zamknięcie jej bez słowa
+         * wyglądałoby jak kolejna usterka — lepiej powiedzieć w niej, co się
+         * stało, i zostawić decyzję użytkownikowi.
+         */
+        pendingTab.document.body.textContent =
+            'Budowa celu przeglądarkowego nie powiodła się — szczegóły w panelu Kompilacja.';
     }
 
     // Wsad zostaje na urządzeniu, więc nie ma czego oddawać. Program natywny

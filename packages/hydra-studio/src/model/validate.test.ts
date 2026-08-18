@@ -150,6 +150,27 @@ modules:
     expectMatch(bad!.hint ?? '', /modules\.net: off/);
 });
 
+test('cel przeglądarkowy z modułem net nie budzi zastrzeżeń', () => {
+    // Karta nie ma karty sieciowej, ale ma most `/ws/tcp`: gniazdo TCP
+    // pożycza od gospodarza strony. Profil `wasm` deklaruje przez to
+    // `ethernet`, więc `net` jest tam legalny.
+    //
+    // Wcześniej ten sam plik dawał ostrzeżenie o braku możliwości, mimo że
+    // wsad budował się i łączył — a jedyną podpowiedzią było „wyłącz moduł",
+    // co odcięłoby `src/net/` i zabrało MqttClienta razem z mostem.
+    const diagnostics = check(`hydra: "0.4"
+project: { name: p, version: 1.0.0 }
+targets:
+  default: karta
+  karta: { mcu: wasm }
+modules:
+  net:
+    mqtt: { broker: "mqtt://localhost:1884" }
+`);
+    expectDeepEqual(diagnostics.filter((d) => d.severity === 'error'), []);
+    expectDeepEqual(diagnostics.filter((d) => d.path === 'targets.karta.capabilities'), []);
+});
+
 test('bez listy możliwości korzystamy z profilu układu, ale łagodniej', () => {
     // Profil opisuje sam układ, nie płytkę — ta mogła dołożyć układ sieciowy
     // na magistrali. Stąd ostrzeżenie zamiast błędu.

@@ -6,6 +6,7 @@ import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
 import { planHydraBuild, HydraPlanError } from './hydra/plan';
 import { resolvePreview, PreviewPathError } from './hydra/preview';
 import { runHydra } from './hydra/run';
+import { TcpBridge } from './TcpBridge';
 
 /** Kod błędu VFS → status HTTP. Ten sam zestaw, którym posługuje się `RemoteFS`. */
 const VFS_STATUS: Record<string, number> = {
@@ -49,6 +50,7 @@ export class MonacoHttpServer extends HttpUploadServer {
   private readonly vfs: NodeFS;
   private readonly dataDir: string;
   private readonly hydraDir?: string;
+  private readonly tcpBridge = new TcpBridge();
 
   constructor(port: number, dataDir: string, staticDir?: string, hydraDir?: string) {
     // FileSystem z core-backend obsługuje upload i `/files/` klasy bazowej;
@@ -57,6 +59,21 @@ export class MonacoHttpServer extends HttpUploadServer {
     this.vfs = new NodeFS({ rootDir: dataDir });
     this.dataDir = dataDir;
     this.hydraDir = hydraDir;
+
+    /*
+     * Most TCP dla aplikacji uruchomionych w karcie.
+     *
+     * Podpięcie jest tutaj, a nie w `handleRequest`, bo `upgrade` to osobne
+     * zdarzenie serwera HTTP — żądanie zmiany protokołu nigdy nie trafia do
+     * obsługi zwykłych żądań.
+     */
+    this.server.on('upgrade', (req, socket, head) => {
+      if (TcpBridge.handles(req.url)) {
+        this.tcpBridge.handleUpgrade(req, socket, head);
+        return;
+      }
+      socket.destroy();
+    });
   }
 
   protected override async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -169,9 +186,15 @@ export class MonacoHttpServer extends HttpUploadServer {
         {
           dataDir: this.dataDir,
           hydraDir: this.hydraDir,
-          // Emscripten leży w innym obrazie niż toolchainy PlatformIO —
-          // patrz docker/Dockerfile.cli, target `hydra-wasm`.
-          wasmImage: process.env.HYDRA_WASM_IMAGE ?? 'mycastle-hydra-wasm:local',
+          /*
+           * Emscripten leży w innym obrazie niż toolchainy PlatformIO, a sam
+           * emsdk nie wystarcza: wygenerowany `CMakeLists.txt` konfiguruje się
+           * przez `emcmake cmake`, więc obraz musi mieć też cmake i make.
+           * Buduje go `docker/Dockerfile.wasm` z repozytorium Hydry:
+           *
+           *     docker build -f docker/Dockerfile.wasm -t hydra-wasm:local docker
+           */
+          wasmImage: process.env.HYDRA_WASM_IMAGE ?? 'hydra-wasm:local',
         },
       );
     } catch (err) {

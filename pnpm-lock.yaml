@@ -251,7 +251,7 @@ importers:
         specifier: ^7.3.1
         version: 7.3.1(@types/node@24.12.2)(jiti@1.21.7)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
-  app/monaco-backend:
+  app/media-backend:
     dependencies:
       '@mhersztowski/core':
         specifier: workspace:*
@@ -266,6 +266,86 @@ importers:
       '@types/node':
         specifier: ^20.10.0
         version: 20.19.33
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
+      tsx:
+        specifier: ^4.0.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.0
+        version: 4.0.18(@types/node@20.19.33)(jiti@1.21.7)(jsdom@28.1.0)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  app/media-web:
+    dependencies:
+      '@emotion/react':
+        specifier: ^11.11.0
+        version: 11.14.0(@types/react@18.3.28)(react@18.3.1)
+      '@emotion/styled':
+        specifier: ^11.11.0
+        version: 11.14.1(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.3.1))(@types/react@18.3.28)(react@18.3.1)
+      '@mui/icons-material':
+        specifier: ^6.1.0
+        version: 6.5.0(@mui/material@6.5.0(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.3.1))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.3.1))(@types/react@18.3.28)(react@18.3.1))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@types/react@18.3.28)(react@18.3.1)
+      '@mui/material':
+        specifier: ^6.1.0
+        version: 6.5.0(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.3.1))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.3.28)(react@18.3.1))(@types/react@18.3.28)(react@18.3.1))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.3.1(react@18.3.1)
+      react-router-dom:
+        specifier: ^6.20.0
+        version: 6.30.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^20.10.0
+        version: 20.19.33
+      '@types/react':
+        specifier: ^18.3.0
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.28)
+      '@vitejs/plugin-react':
+        specifier: ^4.2.0
+        version: 4.7.0(vite@6.4.1(@types/node@20.19.33)(jiti@1.21.7)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+      dotenv:
+        specifier: ^16.3.1
+        version: 16.6.1
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(@types/node@20.19.33)(jiti@1.21.7)(lightningcss@1.27.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  app/monaco-backend:
+    dependencies:
+      '@mhersztowski/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@mhersztowski/core-backend':
+        specifier: workspace:*
+        version: link:../../packages/core-backend
+      dotenv:
+        specifier: ^16.3.1
+        version: 16.6.1
+      ws:
+        specifier: ^8.18.0
+        version: 8.19.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.10.0
+        version: 20.19.33
+      '@types/ws':
+        specifier: ^8.5.12
+        version: 8.18.1
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@1.21.7)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
@@ -21006,10 +21086,22 @@ snapshots:
       react-dom: 18.2.0(react@18.2.0)
       react-router: 6.30.3(react@18.2.0)
 
+  react-router-dom@6.30.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+    dependencies:
+      '@remix-run/router': 1.23.2
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
+      react-router: 6.30.3(react@18.3.1)
+
   react-router@6.30.3(react@18.2.0):
     dependencies:
       '@remix-run/router': 1.23.2
       react: 18.2.0
+
+  react-router@6.30.3(react@18.3.1):
+    dependencies:
+      '@remix-run/router': 1.23.2
+      react: 18.3.1
 
   react-simple-code-editor@0.14.1(react-dom@18.2.0(react@18.2.0))(react@18.2.0):
     dependencies:

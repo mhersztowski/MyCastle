@@ -5,7 +5,7 @@ import {
   Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
   Card, CardContent, IconButton, Divider,
 } from '@mui/material';
-import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse, Tv, Monitor } from '@mui/icons-material';
+import { Refresh, Send, FolderOpen, Close, Code, Keyboard, Mouse, Tv, Monitor, Terminal } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RemoteFS } from '@mhersztowski/core';
 import { VfsExplorer } from '@mhersztowski/web-client';
@@ -13,6 +13,7 @@ import { minisApi } from '../../../services/MinisApiService';
 import { useAuth } from '../../../modules/auth';
 import { useGlobalWindows } from '../../../components/GlobalWindowsContext';
 import { EntityWidget, Sparkline } from './EntityWidgets';
+import { ScriptUploadDialog } from './components/ScriptUploadDialog';
 import type { OnCommand } from './EntityWidgets';
 import type { TelemetryRecord, DeviceCommand, IotDeviceConfig, Alert as AlertModel, MinisDeviceModel, MinisDeviceDefModel, DeviceTwin } from '@mhersztowski/core';
 
@@ -36,6 +37,7 @@ function IotDevicePage() {
   const [vfsDialogOpen, setVfsDialogOpen] = useState(false);
   const [vkbdDialogOpen, setVkbdDialogOpen] = useState(false);
   const [vmouseDialogOpen, setVmouseDialogOpen] = useState(false);
+  const [scriptDialogOpen, setScriptDialogOpen] = useState(false);
   const [deviceStatuses, setDeviceStatuses] = useState<Array<{ deviceId: string; status: string; lastSeenAt: number }>>([]);
   const [devices, setDevices] = useState<MinisDeviceModel[]>([]);
   const [deviceDefs, setDeviceDefs] = useState<MinisDeviceDefModel[]>([]);
@@ -130,6 +132,9 @@ function IotDevicePage() {
   const hasVmouse = extensions.some((e) => e.type === 'vmouse');
   const hasSmartDisplay = extensions.some((e) => e.type === 'smart-display');
   const hasDisplay = extensions.some((e) => e.type === 'display');
+  // Aplikację wgrywa się przez to samo łącze, którym idzie telemetria —
+  // urządzenie zgłasza to rozszerzenie w `hello`, gdy ma silnik skryptowy.
+  const hasScript = extensions.some((e) => e.type === 'script');
 
   const vfsProvider = useMemo(() => {
     if (!userName || !deviceName) return null;
@@ -192,6 +197,11 @@ function IotDevicePage() {
           {hasVkbd && (
             <Button startIcon={<Keyboard />} variant="outlined" onClick={() => setVkbdDialogOpen(true)} disabled={isOffline}>
               Keyboard
+            </Button>
+          )}
+          {hasScript && (
+            <Button startIcon={<Terminal />} variant="outlined" onClick={() => setScriptDialogOpen(true)} disabled={isOffline}>
+              Aplikacja
             </Button>
           )}
           {hasVmouse && (
@@ -475,6 +485,16 @@ function IotDevicePage() {
         <VirtualMouseDialog
           open={vmouseDialogOpen}
           onClose={() => setVmouseDialogOpen(false)}
+          userName={userName}
+          deviceName={deviceName}
+        />
+      )}
+
+      {/* Wgranie aplikacji: skrypt Lua albo moduł WebAssembly */}
+      {hasScript && userName && deviceName && (
+        <ScriptUploadDialog
+          open={scriptDialogOpen}
+          onClose={() => setScriptDialogOpen(false)}
           userName={userName}
           deviceName={deviceName}
         />

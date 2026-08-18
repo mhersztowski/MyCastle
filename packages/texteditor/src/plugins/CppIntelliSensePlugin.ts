@@ -171,8 +171,17 @@ export function parseCppSource(source: string, origin?: string): CppSymbol[] {
 
     // ── function definition / declaration (outside class) ─────────────────
     // Matches: [qualifiers] returnType funcName(params) [qualifiers] [{ or ; or {…}]
+    //
+    // Każdy człon listy kwalifikatorów musi pochłonąć co najmniej jeden znak.
+    // Wcześniej stało tu `[[nodiscard\]]*` — klasa znaków z gwiazdką, a więc
+    // alternatywa pasująca do **pustego** napisu. Cała grupa redukowała się
+    // wtedy do `(?:\s+)*`, czyli do pytania „na ile sposobów da się podzielić
+    // ciąg spacji na niepuste kawałki". Odpowiedź rośnie wykładniczo: wiersz
+    // wcięty 28 spacjami bez dopasowania zajmował 3,7 s, a 47 spacji — tyle,
+    // że przeglądarka po prostu przestawała odpowiadać. Wcięcie takiej
+    // głębokości daje zwykłe zawijanie warunku albo listy argumentów.
     const funcMatch = line.match(
-      /^\s*(?:(?:inline|static|virtual|explicit|constexpr|const|[[nodiscard\]]*)\s+)*(\w[\w:<>*& ,]*?)\s+(\w+)\s*\(([^)]*)\)/
+      /^\s*(?:(?:inline|static|virtual|explicit|constexpr|const|\[\[nodiscard\]\])\s+)*(\w[\w:<>*& ,]*?)\s+(\w+)\s*\(([^)]*)\)/
     );
     if (funcMatch) {
       const ret = funcMatch[1].trim();

@@ -102,6 +102,22 @@ export interface BuildOutcome {
 }
 
 export interface StudioPluginOptions {
+    /**
+     * Wgranie wsadu **z przeglądarki** — przez Web Serial, a nie przez serwer.
+     *
+     * `project.upload` woła `pio run -t upload` po stronie serwera i działa
+     * tylko wtedy, gdy płytka wisi w porcie serwera. Zwykle wisi w porcie
+     * osoby przed przeglądarką, i do tego jest ta droga.
+     *
+     * Gospodarz dostaje cel i układ, bo od układu zależą adresy w pamięci.
+     * Brak opcji chowa przycisk — lepiej go nie pokazać niż pokazać martwy.
+     */
+    flashFromBrowser?(request: {
+        file: string;
+        target: string;
+        mcu: string;
+    }): Promise<void> | void;
+
     models: ModelAccess;
     /**
      * Paczki dostępne dla projektu. Wtyczka nie czyta ich z dysku sama —
@@ -408,6 +424,19 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
      * a decyzja ma zapadać w jednym miejscu — tym samym, z którego korzysta
      * wiersz poleceń. Drugie miejsce oznaczałoby, że kiedyś odpowiedzą różnie.
      */
+    /** Cel i jego układ — offsety wsadu zależą od układu, nie od nazwy celu. */
+    function targetMcu(name: string | undefined): { target: string; mcu: string } | undefined {
+        if (!activeFile) return undefined;
+        try {
+            const plan = buildPlan(HydraDocument.parse(activeSource).toJS());
+            const wanted = name ?? plan.defaultTarget;
+            const found = plan.targets.find((target) => target.name === wanted);
+            return found ? { target: found.name, mcu: found.mcu } : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     function isNativeTarget(name: string | undefined): boolean {
         if (!activeFile) return false;
         try {
@@ -428,6 +457,24 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
      * „otwórz stronę", a nie „wgraj wsad" — i pasek postępu ma mówić to samo,
      * co się dzieje.
      */
+    /**
+     * Pierwszy cel przeglądarkowy w projekcie, jeśli jakiś jest.
+     *
+     * Przycisk „Uruchom w karcie" nie może polegać na tym, który cel jest
+     * akurat wybrany: użytkownik buduje wsad na płytkę, a potem chce zobaczyć
+     * to samo urządzenie w przeglądarce. Zmuszanie go do przełączania celu
+     * w rozwijanej liście byłoby krokiem, którego nikt nie odgadnie.
+     */
+    function browserTargetName(): string | undefined {
+        if (!activeFile) return undefined;
+        try {
+            const plan = buildPlan(HydraDocument.parse(activeSource).toJS());
+            return plan.targets.find((target) => target.isWasm)?.name;
+        } catch {
+            return undefined;
+        }
+    }
+
     function isWasmTarget(name: string | undefined): boolean {
         if (!activeFile) return false;
         try {
@@ -526,6 +573,21 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
         debug('wykonuję:', action);
 
         switch (action) {
+            case 'project.flashWeb': {
+                if (!options.flashFromBrowser) {
+                    host?.logger.warn('wgrywanie z przeglądarki nie jest podłączone');
+                    return;
+                }
+                const chosen = targetMcu(typeof argument === 'string' ? argument : selectedTarget);
+                if (!chosen) {
+                    buildOutput = 'Nie udało się odczytać celu z pliku projektu.';
+                    republish();
+                    return;
+                }
+                await options.flashFromBrowser({ file: activeFile, ...chosen });
+                return;
+            }
+
             case 'project.build':
             case 'project.upload': {
                 const uploading = action === 'project.upload';
@@ -781,6 +843,23 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
         activate(api: HostApi) {
             host = api;
           try {
+            /*
+             * Pliki, dla których zakładka Studia już powstała.
+             *
+             * Bez tego przełączenie się na zakładkę ze źródłem było niemożliwe.
+             * `onDidOpenDocument` to w istocie „zmienił się aktywny model", więc
+             * kliknięcie w zakładkę tekstową budziło wtyczkę, ta otwierała Studio
+             * i natychmiast odbierała fokus. Zakładki były dwie, ale użytkownik
+             * widział tylko jedną — i nie dało się z niej wyjść.
+             *
+             * Zbiór jest świadomie bez sprzątania przy zamknięciu zakładki:
+             * hosta nie stać na zdarzenie „zamknięto zakładkę", a ponowne
+             * otwarcie Studia jest jedno kliknięcie w „Hydra" na pasku stanu.
+             * Cena pomyłki w tę stronę to jedno kliknięcie; w drugą — zablokowany
+             * dostęp do własnego pliku.
+             */
+            const studioOpened = new Set<string>();
+
             const openStudio = () => {
                 if (!activeFile) {
                     api.logger.warn('Hydra Studio: brak otwartego pliku .hydra');
@@ -852,9 +931,14 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                         api.logger.warn(`Hydra Studio: nie udało się wczytać paczek: ${String(error)}`);
                     });
 
-                    // Otwarcie pliku projektu od razu pokazuje interfejs —
-                    // po to jest to rozszerzenie.
-                    openStudio();
+                    // Otwarcie pliku projektu od razu pokazuje interfejs — ale
+                    // tylko za pierwszym razem. Każde kolejne przejście przez to
+                    // miejsce to zwykłe przełączenie zakładki, a wtedy fokus
+                    // należy do tego, kto go zażądał.
+                    if (!studioOpened.has(uri)) {
+                        studioOpened.add(uri);
+                        openStudio();
+                    }
                 }),
 
                 // Panel ma nadążać za pisaniem w zakładce tekstowej, inaczej
@@ -876,6 +960,27 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                         : formatDiagnostics(diagnostics, activeFile);
                     if (hasErrors(diagnostics)) api.logger.error(text);
                     else api.logger.info(text);
+                }),
+
+                /*
+                 * Uruchomienie w karcie przeglądarki.
+                 *
+                 * To nie jest wgrywanie i nie ma z nim nic wspólnego poza tym,
+                 * że jedno i drugie kończy budowę czymś działającym. Osobne
+                 * polecenie, bo „Wgraj przez serwer" na celu przeglądarkowym
+                 * jest nazwą, po której nikt się nie domyśli, że dostanie
+                 * kartę z aplikacją — a tak właśnie ta ścieżka działa.
+                 */
+                api.commands.register('runBrowser', () => {
+                    const target = browserTargetName();
+                    if (!target) {
+                        api.logger.warn(
+                            'Hydra: ten projekt nie ma celu przeglądarkowego. '
+                            + 'Dodaj cel z `mcu: wasm`, żeby uruchomić urządzenie w karcie.',
+                        );
+                        return;
+                    }
+                    void runAction('project.upload', target);
                 }),
 
             );
@@ -905,7 +1010,11 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
                 { id: 'check',           title: 'Sprawdź plik projektu',         category: 'Hydra · Projekt' },
                 { id: 'project.build',   title: 'Buduj',                         category: 'Hydra · Projekt' },
                 { id: 'project.buildAll',title: 'Buduj wszystkie środowiska',    category: 'Hydra · Projekt' },
-                { id: 'project.upload',  title: 'Wgraj na urządzenie',           category: 'Hydra · Projekt' },
+                { id: 'project.upload',  title: 'Wgraj na urządzenie (serwer)',  category: 'Hydra · Projekt' },
+                { id: 'runBrowser',      title: 'Uruchom w karcie przeglądarki',  category: 'Hydra · Projekt' },
+                ...(options.flashFromBrowser
+                    ? [{ id: 'project.flashWeb', title: 'Wgraj z przeglądarki (USB)', category: 'Hydra · Projekt' }]
+                    : []),
                 { id: 'sim.start',       title: 'Uruchom symulację',             category: 'Hydra · Symulacja' },
                 { id: 'sim.stop',        title: 'Zatrzymaj symulację',           category: 'Hydra · Symulacja' },
                 { id: 'sim.record',      title: 'Nagraj przebiegi (VCD)',        category: 'Hydra · Symulacja' },
@@ -945,7 +1054,11 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
             // Pasek narzędzi edytora: to, po co sięga się najczęściej.
             const TOOLBAR: { id: string; label: string; icon: string; order: number }[] = [
                 { id: 'project.build',  label: 'Buduj wsad',           icon: '⚙', order: 10 },
-                { id: 'project.upload', label: 'Wgraj na urządzenie',  icon: '↑', order: 20 },
+                { id: 'project.upload', label: 'Wgraj przez serwer',   icon: '↑', order: 20 },
+                { id: 'runBrowser',     label: 'Uruchom w karcie',     icon: '🌐', order: 22 },
+                ...(options.flashFromBrowser
+                    ? [{ id: 'project.flashWeb', label: 'Wgraj przez USB', icon: '⚡', order: 25 }]
+                    : []),
                 { id: 'sim.start',      label: 'Uruchom symulację',    icon: '▶', order: 30 },
                 { id: 'sim.stop',       label: 'Zatrzymaj symulację',  icon: '■', order: 40 },
                 { id: 'tools.monitor',  label: 'Monitor portu',        icon: '☰', order: 50 },

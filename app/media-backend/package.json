@@ -1,5 +1,5 @@
 {
-  "name": "monaco-backend",
+  "name": "media-backend",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -15,15 +15,13 @@
   "dependencies": {
     "@mhersztowski/core": "workspace:*",
     "@mhersztowski/core-backend": "workspace:*",
-    "dotenv": "^16.3.1",
-    "ws": "^8.18.0"
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "tsup": "^8.5.1",
     "tsx": "^4.0.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.0",
-    "@types/ws": "^8.5.12"
+    "vitest": "^4.0.0"
   }
 }

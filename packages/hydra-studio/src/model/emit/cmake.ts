@@ -103,7 +103,53 @@ function wasmSupport(): string[] {
         '    target_compile_definitions(hydra PUBLIC HYDRA_WITH_SDL=1 SDL_MAIN_HANDLED)',
         '    target_compile_options(hydra PUBLIC "-sUSE_SDL=2")',
         '    target_link_options(hydra PUBLIC "-sUSE_SDL=2")',
+        '',
+        '    # Kod, który istnieje wyłącznie dla karty przeglądarki: gniazdo',
+        '    # przez WebSocket i most bodźców. Nie jest modułem — to backend',
+        '    # platformy, tak jak `hal/arduino` dla układu.',
+        '    file(GLOB HYDRA_WASM_SOURCES "${HYDRA_ROOT}/src/wasm/*.cpp")',
+        '    target_sources(hydra PRIVATE ${HYDRA_WASM_SOURCES})',
+        '',
+        '    # Biblioteka JS emscriptena z API WebSocketu. Bez niej symbole',
+        '    # `emscripten_websocket_*` zostają nierozwiązane dopiero przy',
+        '    # konsolidacji, a komunikat nie wskazuje przyczyny.',
+        '    target_link_options(hydra PUBLIC "-lwebsocket.js")',
         'endif()',
+    ];
+}
+
+/**
+ * Źródła runtime'u silnika skryptowego dla celów budowanych CMakiem.
+ *
+ * WAMR jest tu świadomie odrzucany, a nie po cichu pomijany. Jego źródła leżą
+ * w osobnej bibliotece z własnym zestawem kilkudziesięciu definicji budowy,
+ * dobranych pod ESP-IDF — przepisanie ich tutaj dałoby drugą, rozjeżdżającą się
+ * konfigurację tego samego runtime'u. Na dodatek w przeglądarce interpreter
+ * WebAssembly wewnątrz WebAssembly nie ma sensu: silnik jest już pod spodem.
+ */
+function scriptRuntime(target: TargetPlan): string[] {
+    const engine = target.scriptEngine ?? 'lua';
+
+    if (engine === 'wamr') {
+        return [
+            '',
+            'message(FATAL_ERROR',
+            '    "Silnik `wamr` jest dostępny wyłącznie dla celów budowanych PlatformIO.\\n"',
+            '    "Dla celu natywnego i przeglądarkowego wybierz `lua` albo `wasm3`:\\n"',
+            `    "  targets.${target.name}.modules.script.engine: lua")`,
+        ];
+    }
+
+    const [dir, glob] = engine === 'wasm3'
+        ? ['wasm3', 'src/wasm3/*.c']
+        : ['lua', 'src/lua/*.c'];
+
+    return [
+        '',
+        `# Runtime silnika \`${engine}\` — źródła w C, poza katalogami modułów.`,
+        `file(GLOB HYDRA_SCRIPT_RUNTIME "\${HYDRA_ROOT}/${glob}")`,
+        'target_sources(hydra PRIVATE ${HYDRA_SCRIPT_RUNTIME})',
+        `target_include_directories(hydra PRIVATE "\${HYDRA_ROOT}/src/${dir}")`,
     ];
 }
 
@@ -280,6 +326,19 @@ function targetBody(target: TargetPlan): string[] {
         lines.push(')');
         lines.push(`list(FILTER HYDRA_MODULE_SOURCES EXCLUDE REGEX "/(${excluded.join('|')})/")`);
         lines.push('target_sources(hydra PRIVATE ${HYDRA_MODULE_SOURCES})');
+
+        /*
+         * Runtime silnika skryptowego.
+         *
+         * Nie jest modułem i nie leży w `src/<moduł>/`: to kilkadziesiąt plików
+         * w C, wciąganych na układzie manifestem biblioteki PlatformIO. CMake
+         * takiego manifestu nie czyta, więc bez tych kilku wierszy cel natywny
+         * albo przeglądarkowy kompilował `LuaEngine.cpp` i przerywał na
+         * `lua.h` — z komunikatem, który o silniku nie mówił nic.
+         */
+        if (target.modules.includes('script')) {
+            lines.push(...scriptRuntime(target));
+        }
     }
 
     if (target.modules.includes('arduboy')) {
