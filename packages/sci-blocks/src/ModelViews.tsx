@@ -7,7 +7,7 @@
  * z grafu wzorów, czy ze skryptu w dokumencie — to jest praktyczna korzyść
  * z tego, że obie ścieżki dają ten sam typ.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
   formatIn, spectrum, type ModelSource, type ParamSchema,
@@ -15,6 +15,7 @@ import {
 } from '@mhersztowski/sci-core';
 import { useModelRunner, type WorkerFactory } from './useModelRunner';
 import { QualityPanel } from './QualityPanel';
+import { downloadCanvasPng, downloadCsv, seriesToCsv } from './eksport';
 import { PlotCanvas, type PlotSeries } from './PlotCanvas';
 import { AngularStage } from './AngularStage';
 import { XYCanvas } from './XYCanvas';
@@ -43,6 +44,68 @@ function zakres(parameter: ParamSchema, start: number | undefined) {
   return { min, max, step: (max - min) / 200 };
 }
 
+/**
+ * Pasek pod wykresami: co udało się policzyć i jak to stąd wyjąć.
+ *
+ * Dwie rzeczy w jednym miejscu, bo obie odpowiadają na pytania zadawane po
+ * obejrzeniu wyniku: „ile to trwało" (przy dokumencie z ośmioma symulacjami
+ * „dlaczego ta strona muli" jest pytaniem powtarzalnym, a dane były zbierane
+ * i nigdzie nie pokazywane) oraz „jak to zabrać ze sobą".
+ */
+function WynikBar({
+  result, blockId, elapsedMs, offThread, plotnaRef,
+}: {
+  result: PhenomenonResult;
+  blockId?: string;
+  elapsedMs?: number;
+  offThread: boolean;
+  /** Kontener widoków — obraz bierzemy z pierwszego płótna, jakie w nim stoi. */
+  plotnaRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const maPrzebiegi = Object.keys(result.series ?? {}).length > 0;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      {elapsedMs !== undefined && (
+        <span style={{ ...label, fontVariantNumeric: 'tabular-nums' }} title={offThread
+          ? 'Liczone w osobnym wątku — suwak nadąża za palcem'
+          : 'Liczone w wątku interfejsu; przy dużym modelu suwak będzie się zacinał'}
+        >
+          {Math.round(elapsedMs)} ms{offThread ? '' : ' (w wątku interfejsu)'}
+        </span>
+      )}
+      <span style={{ flex: 1 }} />
+      {/*
+        * Obraz bierzemy z **pierwszego płótna w kontenerze widoków**, a nie
+        * z propa przekazanego przez każdy z czterech rendererów. Widoki
+        * powstają dynamicznie z `suggestViews`, więc przeciąganie uchwytu przez
+        * wszystkie znaczyłoby cztery zmiany przy każdym nowym rodzaju widoku.
+        */}
+      <button
+        type="button"
+        style={btn}
+        onClick={() => {
+          const canvas = plotnaRef.current?.querySelector('canvas');
+          if (canvas) downloadCanvasPng(canvas, blockId);
+        }}
+        title="Pobierz pierwszy wykres jako obraz PNG"
+      >
+        PNG
+      </button>
+      {maPrzebiegi && (
+        <button
+          type="button"
+          style={btn}
+          onClick={() => downloadCsv(seriesToCsv(result.series), blockId)}
+          title="Pobierz przebiegi jako CSV — pierwsza kolumna to czas"
+        >
+          CSV
+        </button>
+      )}
+    </div>
+  );
+}
+
 export interface ModelViewsProps {
   model: PhenomenonModel;
   views: ViewSpec[];
@@ -60,6 +123,8 @@ export interface ModelViewsProps {
   duration?: number;
   /** Wywoływane przy zmianie suwaka — host może zapisać nastawy. */
   onValues?: (values: Record<string, number>) => void;
+  /** Identyfikator bloku — trafia do nazwy pobieranego pliku. */
+  blockId?: string;
   /**
    * Opis modelu do policzenia w workerze.
    *
@@ -78,7 +143,7 @@ export interface ModelViewsProps {
  * a nie treści dokumentu. Zapis nastaw do bloku jest osobną decyzją hosta.
  */
 export function ModelViews({
-  model, views, exposed, duration = 10, onValues, source, workerFactory, initialValues,
+  model, views, exposed, duration = 10, onValues, source, workerFactory, initialValues, blockId,
 }: ModelViewsProps) {
   const startowe = useMemo(
     () => ({
@@ -172,10 +237,11 @@ export function ModelViews({
   });
 
   const shown = model.parameters.filter((p) => !exposed?.length || exposed.includes(p.name));
+  const plotnaRef = useRef<HTMLDivElement | null>(null);
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      <div ref={plotnaRef} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {views.map((view, index) => (
           <View
             key={index}
@@ -193,6 +259,14 @@ export function ModelViews({
       {/* Ocena jakości stoi tuż pod widokami, a nad suwakami: czyta się ją
           razem z wykresem, którego dotyczy, a nie jako przypis na dole. */}
       <QualityPanel invariants={result.invariants ?? []} />
+
+      <WynikBar
+        result={result}
+        blockId={blockId}
+        elapsedMs={runner.elapsedMs}
+        offThread={runner.offThread}
+        plotnaRef={plotnaRef}
+      />
 
       {runner.pending && !local && (
         <div style={{ ...label, fontStyle: 'italic' }}>liczę…</div>

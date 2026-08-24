@@ -39,6 +39,9 @@ export { CONSTANTS, constantValue } from './units/constants';
 export type { PhysicalConstant } from './units/constants';
 
 export { parseFormulaBlock, serializeFormulaBlock, symbolName, FORMULA_FENCE } from './formula/parseFormula';
+// Katalog dyrektyw — ściąga w edytorze i jedno źródło prawdy o składni bloków.
+export { FORMULA_DIRECTIVES, EXERCISE_DIRECTIVES, suggestDirectives } from './formula/directives';
+export type { DirectiveInfo, DirectiveScope } from './formula/directives';
 export type { FormulaBlock, FormulaKind, FormulaIssue, FormulaEvent } from './formula/parseFormula';
 export { compileExpression, compileCondition, compileComparison, evaluateOnce } from './formula/expression';
 export type { CompiledComparison } from './formula/expression';
@@ -49,6 +52,9 @@ export type { CompiledExpression, CompiledCondition } from './formula/expression
 export { buildGraph, topologicalOrder } from './graph/formulaGraph';
 export type { FormulaGraph, GraphNode, GraphIssue } from './graph/formulaGraph';
 export { compileGraph, defaultValues, applyOverrides } from './graph/compileGraph';
+// Porównanie przebiegów — „co się zmieni, gdy zmienię ten parametr".
+export { compareRuns } from './graph/porownanie';
+export type { ComparisonRun, ComparisonOptions, ComparisonResult } from './graph/porownanie';
 export { suggestViews } from './graph/visualization';
 export { walkthrough, knownAfter } from './graph/walkthrough';
 
@@ -117,7 +123,8 @@ export {
 } from './linalg/matrix3';
 export type { Matrix3, Vector3, EigenPair3, EigenResult3 } from './linalg/matrix3';
 export { alignment, pickVector, snapToEigen } from './linalg/interaction';
-export { gaussSteps, gramSchmidtSteps, isOrthonormal } from './linalg/procedures';
+export { gaussSteps, gaussStepsN, gramSchmidtSteps, isOrthonormal } from './linalg/procedures';
+export type { GaussStepN } from './linalg/procedures';
 export type { GaussStep, GramSchmidtStep } from './linalg/procedures';
 export { compileLinAlg } from './linalg/compileLinAlg';
 export { compileLinAlg3 } from './linalg/compileLinAlg3';
@@ -127,6 +134,9 @@ export type { LinAlgSpec } from './formula/parseFormula';
 export { latexToPython } from './validation/toPython';
 export type { PythonExpression } from './validation/toPython';
 export { exportScenario } from './validation/scenario';
+// Cross-walidacja pól: scenariusz dla metody linii w SciPy.
+export { exportPdeScenario } from './validation/pdeScenario';
+export type { PdeScenario, PdeScenarioOptions } from './validation/pdeScenario';
 export type { Scenario, ScenarioCheckpoint, ScenarioOptions } from './validation/scenario';
 export { editableExpressions, replaceExpression } from './formula/editFormula';
 export type { EditableExpression } from './formula/editFormula';
@@ -155,3 +165,32 @@ export type { Hint } from './exercise/hints';
 export type { WalkthroughStep } from './graph/walkthrough';
 export type { ViewSpec, ViewKind } from './graph/visualization';
 export type { PhenomenonModel, PhenomenonResult, ParamSchema, ObservableDef } from './graph/compileGraph';
+
+// --- wykres interaktywny (SciPlot) ---
+export { splitRelation } from './plot/relation';
+export type { RelationOp, RelationParts } from './plot/relation';
+export { parsePlotRow } from './plot/parseRow';
+// Powierzchnie `z = f(x, y)` — jedyny sposób pokazania siodła i ekstremów.
+export { sampleSurface } from './plot/surface';
+export type { SurfaceGrid, SurfaceRange } from './plot/surface';
+export type { PlotRowKind, ParsedPlotRow, PlotPoint } from './plot/parseRow';
+export {
+  createPlotDocument, parsePlotDocument, serializePlotDocument,
+  addRow, removeRow, updateRow,
+  DEFAULT_VIEWPORT, DEFAULT_SETTINGS, DEFAULT_SLIDER, ROW_COLORS, PLOT_FORMAT_VERSION,
+} from './plot/document';
+export type { PlotDocument, PlotRow, PlotSettings, Viewport, RowStyle, SliderSpec } from './plot/document';
+export {
+  worldToScreen, screenToWorld, unitsPerPixel, panByPixels, zoomAt, fitAspect,
+  niceStep, niceTicks, minorStep,
+} from './plot/viewport';
+export type { Size, Point } from './plot/viewport';
+export type { AngularUnit } from './formula/expression';
+export { sampleFunction } from './plot/sample';
+export type { Segment, SampleOptions } from './plot/sample';
+export { evaluateDocument } from './plot/evaluate';
+export type { EvaluatedRow, EvaluationResult } from './plot/evaluate';
+export { stepSlider } from './plot/animation';
+export type { SliderMode, SliderAnimation, SliderPlayback, SliderSpecLike } from './plot/animation';
+export { marchImplicit } from './plot/implicit';
+export type { ImplicitResult, ImplicitOptions, ImplicitWindow, FillCell } from './plot/implicit';

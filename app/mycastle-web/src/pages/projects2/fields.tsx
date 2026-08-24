@@ -348,12 +348,23 @@ export const InlineName: React.FC<{
     onChange: (value: string) => void;
     strike?: boolean;
     bold?: boolean;
-}> = ({ value, onChange, strike, bold }) => {
-    const [editing, setEditing] = useState(false);
+    /**
+     * Zgłasza wejście w edycję i wyjście z niej. Karta na tablicy jest
+     * `draggable`, a wtedy przeglądarka zamiast zaznaczania tekstu zaczyna
+     * przeciąganie — więc host musi wiedzieć, kiedy uchwyt wyłączyć.
+     */
+    onEditingChange?: (editing: boolean) => void;
+}> = ({ value, onChange, strike, bold, onEditingChange }) => {
+    const [editing, setEditingState] = useState(false);
     const [draft, setDraft] = useState(value);
     const ref = useRef<HTMLInputElement>(null);
 
     useEffect(() => { setDraft(value); }, [value]);
+
+    const setEditing = (next: boolean) => {
+        setEditingState(next);
+        onEditingChange?.(next);
+    };
 
     const commit = () => {
         setEditing(false);

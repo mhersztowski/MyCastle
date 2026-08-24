@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { MinisHttpServer } from '../MinisHttpServer.js';
-import { FileSystem } from '@mhersztowski/core-backend';
+import { MycastleHttpServer } from '../../MycastleHttpServer.js';
+import { ApiKeyService, FileSystem, JwtService } from '@mhersztowski/core-backend';
 import { IotService } from './IotService.js';
 import * as fs from 'fs/promises';
 import * as os from 'os';
@@ -9,8 +9,16 @@ import * as path from 'path';
 let tmpDir: string;
 let fileSystem: FileSystem;
 let iotService: IotService;
-let server: MinisHttpServer;
+let server: MycastleHttpServer;
 let baseUrl: string;
+/**
+ * Token dla `TestUser`.
+ *
+ * Endpointy `/api/users/{u}/…` doszły z czasem do uwierzytelniania, więc test
+ * musi się przedstawić. Podpisujemy tym samym `JwtService`, który dostaje
+ * serwer — to jedyne miejsce, w którym sekret ma znaczenie.
+ */
+let token: string;
 
 async function seedData() {
   const adminDir = path.join(tmpDir, 'Minis', 'Admin');
@@ -39,7 +47,10 @@ async function seedData() {
 async function request(method: string, apiPath: string, body?: unknown) {
   const res = await fetch(`${baseUrl}/api${apiPath}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => null);
@@ -55,7 +66,14 @@ beforeAll(async () => {
   iotService = new IotService(tmpDir);
   iotService.start(() => {});
 
-  server = new MinisHttpServer(0, fileSystem, iotService);
+  // Konstruktor dostał z czasem uwierzytelnianie: `jwtService` i `apiKeyService`
+  // stoją przed `iotService`. Test bez nich podstawiał usługę IoT jako JWT.
+  const jwtService = new JwtService('test-secret');
+  token = jwtService.sign({ userId: 'u1', userName: 'TestUser', isAdmin: true, roles: [] });
+
+  server = new MycastleHttpServer(
+    0, fileSystem, jwtService, new ApiKeyService(fileSystem), iotService,
+  );
   await server.start();
   const address = server.getHttpServer().address();
   const port = typeof address === 'object' && address ? address.port : 0;

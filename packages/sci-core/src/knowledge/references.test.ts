@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { parseReferences, resolveReference, splitByReferences } from './references';
+import { buildIndex } from './index';
 
 const INDEKS = {
   formulaHome: new Map([
@@ -108,5 +109,35 @@ describe('splitByReferences', () => {
 
   it('radzi sobie z odsyłaczem na początku i końcu', () => {
     expect(splitByReferences('((a)) środek ((b))')).toHaveLength(3);
+  });
+});
+
+describe('odsyłacz do zadania', () => {
+  it('trafia w blok exercise, a nie w próżnię', () => {
+    /*
+     * Podręcznik odsyła do zadań wprost („patrz zadanie 21, rozdział 2").
+     * Zanim zadania trafiły do indeksu, taki odsyłacz wyglądał na poprawny
+     * w tekście i milczał w aplikacji — indeks czytał bloki `exercise`
+     * wyłącznie po to, by wiedzieć, czego zadanie używa.
+     */
+    const index = buildIndex([
+      { path: 'zadania.md', markdown: '```exercise:zad-1\nTreść zadania.\n```' },
+      { path: 'tekst.md', markdown: 'Patrz ((zad-1|zadanie 1)).' },
+    ]);
+
+    const cel = resolveReference('zad-1', index, 'tekst.md');
+    expect(cel.found).toBe(true);
+    expect(cel.kind).toBe('exercise');
+    expect(cel.path).toBe('zadania.md');
+  });
+
+  it('zadanie o identyfikatorze zajętym przez wzór jest zgłaszane', () => {
+    // Odsyłacz zna tylko identyfikator, więc kolizja między rodzajami jest
+    // tak samo groźna jak w obrębie jednego rodzaju.
+    const index = buildIndex([
+      { path: 'a.md', markdown: '```formula:kolizja\n@relation\nx = 1\n```' },
+      { path: 'b.md', markdown: '```exercise:kolizja\nTreść.\n```' },
+    ]);
+    expect(index.issues.some((i) => i.formulaId === 'kolizja')).toBe(true);
   });
 });

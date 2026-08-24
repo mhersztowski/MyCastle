@@ -6,7 +6,9 @@
  * edytorze, który zaoferuje ten sam kontrakt.
  */
 import { createElement, type ComponentType, type ReactNode } from 'react';
-import { parseFormulaBlock } from '@mhersztowski/sci-core';
+import {
+  parseFormulaBlock, EXERCISE_DIRECTIVES, FORMULA_DIRECTIVES,
+} from '@mhersztowski/sci-core';
 import { BlockShell } from './BlockShell';
 import { ExerciseBlock } from './ExerciseBlock';
 import { FieldBlock } from './FieldBlock';
@@ -15,11 +17,14 @@ import { ProcedureBlock } from './ProcedureBlock';
 import { ScriptBlock } from './ScriptBlock';
 import { FormulaBlockView } from './FormulaBlockView';
 import { SimBlock } from './SimBlock';
+import { PlotBlock } from './PlotBlock';
 import { FigureBlock } from './FigureBlock';
 import { TableBlock } from './TableBlock';
 import { CalloutBlock } from './CalloutBlock';
+import { CompareBlock } from './CompareBlock';
 import { LawBlock } from './LawBlock';
 import type { InkRecognizer } from './InkCanvas';
+import { idyWzorow, opiszBrakWzoru, znajdzWzor, zZaleznosciami } from './wiazanie';
 
 /**
  * Rozpoznawanie pisma rysikiem, wstrzykiwane przez hosta.
@@ -33,6 +38,41 @@ let rozpoznawaniePisma: InkRecognizer | undefined;
 
 export function setInkRecognizer(recognizer: InkRecognizer | undefined): void {
   rozpoznawaniePisma = recognizer;
+}
+
+/**
+ * Edytor kodu wstrzykiwany przez hosta — z tego samego powodu co pióro.
+ *
+ * Blok `simscript` przyjmuje **TypeScript** i cała jego racja bytu to droga
+ * awansu: kod, który kiedyś trafi do biblioteki zjawisk, ma od pierwszej chwili
+ * typy. Edytowany był przy tym w gołym `<textarea>` — bez podpowiedzi i bez
+ * sprawdzania sygnatur, czyli TypeScript tylko z nazwy.
+ *
+ * Monaco waży kilka megabajtów i nie może być zależnością tego pakietu: bloki
+ * działają też w eksporcie statycznym i w podglądzie. Bez wstrzyknięcia zostaje
+ * pole tekstowe — uczciwy tryb zapasowy, a nie awaria.
+ */
+export interface CodeEditorProps {
+  value: string;
+  onChange: (next: string) => void;
+  /** Język do podświetlania; dla `simscript` zawsze `typescript`. */
+  language: string;
+  /** Deklaracje API rdzenia — bez nich edytor podpowiadałby `any`. */
+  extraTypes?: string;
+  height?: number;
+}
+
+export type CodeEditorPort = (props: CodeEditorProps) => ReactNode;
+
+let edytorKodu: CodeEditorPort | undefined;
+
+export function setCodeEditor(editor: CodeEditorPort | undefined): void {
+  edytorKodu = editor;
+}
+
+/** Port edytora kodu albo `undefined`, gdy host go nie dostarczył. */
+export function getCodeEditor(): CodeEditorPort | undefined {
+  return edytorKodu;
 }
 
 /** Kontrakt widoku bloku po stronie hosta — celowo opisany tu, nie importowany. */
@@ -74,6 +114,10 @@ export const CALLOUT_LANG = /^callout(:|$)/;
 export const LAW_LANG = /^law(:|$)/;
 /** Infostring `simscript` albo `simscript:etykieta` — model pisany w dokumencie. */
 export const SIMSCRIPT_LANG = /^simscript(?::([A-Za-z0-9_-]+))?$/;
+/** Infostring `sci-plot` albo `sci-plot:etykieta` — kalkulator wykresów. */
+export const PLOT_LANG = /^sci-plot(?::([A-Za-z0-9_-]+))?$/;
+/** Infostring `compare` albo `compare:wzór` — kilka przebiegów na jednym wykresie. */
+export const COMPARE_LANG = /^compare(?::([A-Za-z0-9_-]+))?$/;
 
 /**
  * Każdy blok dostaje ramkę z przełącznikiem Widok / Kod.
@@ -88,6 +132,7 @@ function FormulaRenderer({ code, language, children, onChange }: HostBlockRender
     accent: '#2563eb',
     id,
     children,
+    directives: FORMULA_DIRECTIVES,
     // Zapis włącza wizualną edycję matematyki. W trybie czytania (`ReaderView`,
     // eksport statyczny) nie ma go wcale i wzory pozostają nieklikalne.
     view: createElement(FormulaBlockView, {
@@ -113,6 +158,7 @@ function ExerciseRenderer({ code, language, documentBlocks, children }: HostBloc
     accent: '#7c3aed',
     id,
     children,
+    directives: EXERCISE_DIRECTIVES,
     view: createElement(ExerciseBlock, {
       id, code, formulas: formulasOf(documentBlocks), bare: true,
       recognizeInk: rozpoznawaniePisma,
@@ -131,8 +177,8 @@ function FieldRenderer({
   code, language, documentBlocks, children, onBlockChange,
 }: HostBlockRendererProps) {
   const id = language.split(':')[1] ?? 'pole';
-  const wzor = (documentBlocks?.() ?? [])
-    .find((b) => b.language === `formula:${id}` && /^\s*@pde\b/m.test(b.code));
+  const bloki = documentBlocks?.() ?? [];
+  const wzor = znajdzWzor(bloki, id, /^\s*@pde\b/m);
 
   return createElement(BlockShell, {
     kind: 'pole',
@@ -150,7 +196,7 @@ function FieldRenderer({
         onFormulaChange: onBlockChange && ((next: string) => onBlockChange(`formula:${id}`, next)),
       })
       : createElement('div', { style: { fontSize: 12, color: '#b91c1c' } },
-        `Nie ma wzoru pola „${id}" w tym dokumencie. Wzór to blok formula:${id} z dyrektywą @pde.`),
+        opiszBrakWzoru('pola', id, '@pde', idyWzorow(bloki))),
   });
 }
 
@@ -167,8 +213,8 @@ function parseFieldSetup(code: string) {
 /** Blok `linalg` — scena przekształcenia opisanego w bloku `formula` z `@linalg`. */
 function LinAlgRenderer({ code, language, documentBlocks, children }: HostBlockRendererProps) {
   const id = language.split(':')[1] ?? 'scena';
-  const wzor = (documentBlocks?.() ?? [])
-    .find((b) => b.language === `formula:${id}` && /^\s*@linalg\b/m.test(b.code));
+  const bloki = documentBlocks?.() ?? [];
+  const wzor = znajdzWzor(bloki, id, /^\s*@linalg\b/m);
 
   return createElement(BlockShell, {
     kind: 'algebra',
@@ -178,7 +224,7 @@ function LinAlgRenderer({ code, language, documentBlocks, children }: HostBlockR
     view: wzor
       ? createElement(LinAlgBlock, { id, code: wzor.code, setup: parseStageSetup(code), bare: true })
       : createElement('div', { style: { fontSize: 12, color: '#b91c1c' } },
-        `Nie ma sceny algebry „${id}" w tym dokumencie. Scena to blok formula:${id} z dyrektywą @linalg.`),
+        opiszBrakWzoru('algebry', id, '@linalg', idyWzorow(bloki))),
   });
 }
 
@@ -264,23 +310,39 @@ function ProcedureRenderer({ code, language, children }: HostBlockRendererProps)
   });
 }
 
-function ScriptRenderer({ code, onChange, children, workerFactory }: HostBlockRendererProps) {
+function ScriptRenderer({ code, language, onChange, children, workerFactory }: HostBlockRendererProps) {
+  const id = SIMSCRIPT_LANG.exec(language)?.[1];
   return createElement(BlockShell, {
     kind: 'model w skrypcie',
     accent: '#0ea5e9',
+    id,
     children,
-    view: createElement(ScriptBlock, { code, onChange, bare: true, workerFactory }),
+    view: createElement(ScriptBlock, { code, onChange, bare: true, workerFactory, blockId: id }),
   });
 }
 
-function SimRenderer({ code, onChange, documentBlocks, children, workerFactory }: HostBlockRendererProps) {
+function SimRenderer({ code, language, onChange, documentBlocks, children, workerFactory }: HostBlockRendererProps) {
+  /*
+   * `sim:okres` zawęża do wzoru o tej nazwie — ta sama konwencja, co w `field`
+   * i `linalg`. Samo `sim` widzi wszystkie wzory dokumentu, bo tak działało od
+   * początku i każdy istniejący dokument wymagałby inaczej poprawki.
+   */
+  const id = SIM_LANG.exec(language)?.[1];
   // Wzory bierzemy z bloków dokumentu dostarczonych przez hosta; parsujemy je
   // tutaj, bo to `sci-core` wie, co znaczy blok `formula`.
   return createElement(BlockShell, {
     kind: 'symulacja',
     accent: '#059669',
     children,
-    view: createElement(SimBlock, { code, formulas: formulasOf(documentBlocks), onChange, bare: true, workerFactory }),
+    view: createElement(SimBlock, {
+      code,
+      formulas: id
+        ? zZaleznosciami(formulasOf(documentBlocks), id)
+        : formulasOf(documentBlocks),
+      onChange,
+      bare: true,
+      workerFactory,
+    }),
   });
 }
 
@@ -290,6 +352,50 @@ function SimRenderer({ code, onChange, documentBlocks, children, workerFactory }
  * Zwraca funkcję wyrejestrowującą — przydatną w testach i przy przeładowaniu
  * modułu w trybie dev.
  */
+/**
+ * Blok `sci-plot` — kalkulator wykresów w dokumencie.
+ *
+ * W odróżnieniu od `sim` nie potrzebuje wzorów z innych bloków: wyrażenia,
+ * widok i suwaki mieszczą się w jego własnej treści. Dzięki temu wykres da się
+ * przenieść do innej notatki przez skopiowanie bloku.
+ */
+function PlotRenderer({ code, language, children, onChange }: HostBlockRendererProps) {
+  const id = PLOT_LANG.exec(language)?.[1];
+  return createElement(BlockShell, {
+    kind: 'wykres',
+    accent: '#0891b2',
+    id,
+    children,
+    // Brak `onChange` znaczy tryb czytania — kalkulator działa, ale niczego
+    // nie zapisuje. Tak samo zachowuje się blok wzoru w `ReaderView`.
+    view: createElement(PlotBlock, { code, onChange }),
+  });
+}
+
+/**
+ * Blok `compare` — kilka przebiegów tego samego modelu obok siebie.
+ *
+ * Wzory bierze tak samo jak `sim`: `compare:okres` zawęża do jednego wzoru
+ * razem z jego zależnościami, samo `compare` widzi wszystkie.
+ */
+function CompareRenderer({ code, language, documentBlocks, children }: HostBlockRendererProps) {
+  const id = COMPARE_LANG.exec(language)?.[1];
+  return createElement(BlockShell, {
+    kind: 'porównanie',
+    accent: '#b45309',
+    id,
+    children,
+    view: createElement(CompareBlock, {
+      code,
+      formulas: id
+        ? zZaleznosciami(formulasOf(documentBlocks), id)
+        : formulasOf(documentBlocks),
+      bare: true,
+      blockId: id,
+    }),
+  });
+}
+
 export function registerSciBlocks(
   register: (renderer: HostBlockRenderer) => () => void,
 ): () => void {
@@ -305,6 +411,8 @@ export function registerSciBlocks(
     register({ name: 'sci-table', matches: (l) => TABLE_LANG.test(l), Component: TableRenderer }),
     register({ name: 'sci-callout', matches: (l) => CALLOUT_LANG.test(l), Component: CalloutRenderer }),
     register({ name: 'sci-law', matches: (l) => LAW_LANG.test(l), Component: LawRenderer }),
+    register({ name: 'sci-plot', matches: (l) => PLOT_LANG.test(l), Component: PlotRenderer }),
+    register({ name: 'sci-compare', matches: (l) => COMPARE_LANG.test(l), Component: CompareRenderer }),
   ];
   return () => off.forEach((fn) => fn());
 }

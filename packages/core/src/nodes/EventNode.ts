@@ -46,18 +46,19 @@ export class EventNode extends NodeBase<EventModel> {
 
   // Parse date strings to Dayjs objects
   private parseDates(): void {
-    try {
-      this._startDate = this.parseTimeString(this.startTime);
-    } catch {
-      this._startDate = null;
-    }
+    // Nieczytelny zapis daty znaczy „brak daty". `dayjs('cokolwiek')` nie
+    // rzuca, tylko zwraca Invalid Date, a ten liczy się dalej po cichu: każde
+    // porównanie z nim daje NaN, więc sortowanie ustawia listę byle jak.
+    this._startDate = this.parseValidOrNull(this.startTime);
+    if (this.endTime) this._endDate = this.parseValidOrNull(this.endTime);
+  }
 
-    if (this.endTime) {
-      try {
-        this._endDate = this.parseTimeString(this.endTime);
-      } catch {
-        this._endDate = null;
-      }
+  private parseValidOrNull(timeStr: string): Dayjs | null {
+    try {
+      const parsed = this.parseTimeString(timeStr);
+      return parsed.isValid() ? parsed : null;
+    } catch {
+      return null;
     }
   }
 
@@ -423,8 +424,30 @@ export class EventNode extends NodeBase<EventModel> {
     return this._startDate.diff(other._startDate);
   }
 
+  /**
+   * Porównanie w kontekście konkretnego dnia.
+   *
+   * `compareTo` patrzy na datę absolutną, a wystąpienie eventu powtarzalnego
+   * niesie ją z dnia pierwszego wystąpienia — więc na liście dnia reguła
+   * sprzed miesięcy wyprzedzała wszystko, co dopisano dziś, bez względu na
+   * godzinę. Tu liczy się pora dnia, czyli to, co widać na liście.
+   */
+  compareToOn(other: EventNode, date: Dayjs | Date): number {
+    const mine = this.getStartOn(date);
+    const theirs = other.getStartOn(date);
+    if (!mine && !theirs) return 0;
+    if (!mine) return 1;
+    if (!theirs) return -1;
+    return mine.diff(theirs);
+  }
+
   // Static sort helper
   static sortByTime(events: EventNode[]): EventNode[] {
     return [...events].sort((a, b) => a.compareTo(b));
+  }
+
+  /** Sortowanie listy jednego dnia — patrz `compareToOn`. */
+  static sortByTimeOn(events: EventNode[], date: Dayjs | Date): EventNode[] {
+    return [...events].sort((a, b) => a.compareToOn(b, date));
   }
 }

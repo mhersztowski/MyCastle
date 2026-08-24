@@ -31,6 +31,7 @@ import { useAuth } from '../../modules/auth';
 import { MdFilePickerDialog } from './MdFilePickerDialog';
 import { TaskDocDialog } from './TaskDocDialog';
 import { cu, formatMinutes, hoursToMinutes, parseHours } from './clickup';
+import { SubtaskRow } from './SubtaskRow';
 import {
     Assignees, DateField, PersonOption, PriorityFlag, StatusPill, TagList, useTicker,
 } from './fields';
@@ -261,28 +262,14 @@ const TaskPanelBody: React.FC<TaskPanelProps & { task: TaskModel }> = ({
                 </SectionTitle>
 
                 {subtasks.map(subtask => (
-                    <Stack key={subtask.id} direction="row" sx={{
-                        alignItems: 'center', gap: 1, py: 0.5,
-                        borderBottom: `1px solid ${cu.border}`,
-                    }}>
-                        <StatusPill
-                            statuses={statuses}
-                            value={subtask.status}
-                            onChange={status => onUpdate(subtask.id, { status })}
-                            compact
-                        />
-                        <Typography
-                            onClick={() => onOpen(subtask.id)}
-                            sx={{ fontSize: 13, flex: 1, cursor: 'pointer', '&:hover': { color: cu.brand } }}
-                        >
-                            {subtask.name}
-                        </Typography>
-                        <Assignees
-                            people={people}
-                            value={subtask.assignees}
-                            onChange={assignees => onUpdate(subtask.id, { assignees })}
-                        />
-                    </Stack>
+                    <SubtaskRow
+                        key={subtask.id}
+                        subtask={subtask}
+                        statuses={statuses}
+                        people={people}
+                        onUpdate={onUpdate}
+                        onOpen={onOpen}
+                    />
                 ))}
 
                 <QuickAdd

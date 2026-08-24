@@ -10,14 +10,20 @@
  */
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { gaussSteps, gramSchmidtSteps, type Vector2 } from '@mhersztowski/sci-core';
+import { gaussStepsN, gramSchmidtSteps, type Vector2 } from '@mhersztowski/sci-core';
 import { LinAlgStage } from './LinAlgStage';
 
 export interface ProcedureSpec {
   kind: 'gauss' | 'gram-schmidt';
-  /** Gauss: macierz współczynników i prawa strona. */
-  matrix?: [[number, number], [number, number]];
-  rhs?: Vector2;
+  /**
+   * Gauss: macierz współczynników i prawa strona, dowolnego rozmiaru.
+   *
+   * Wersja 2×2 pokazywała pomysł, ale nie procedurę: przy dwóch równaniach jest
+   * jeden krok eliminacji, a wybór elementu głównego nie ma czego wybierać.
+   * Zapisy 2×2 z istniejących dokumentów działają dalej bez zmian.
+   */
+  matrix?: number[][];
+  rhs?: number[];
   /** Gram-Schmidt: dwa wektory wyjściowe. */
   a?: Vector2;
   b?: Vector2;
@@ -57,7 +63,7 @@ export function ProcedureBlock({ id, code, bare }: ProcedureBlockProps) {
 
   const kroki = useMemo(() => {
     if (spec?.kind === 'gauss' && spec.matrix && spec.rhs) {
-      return gaussSteps(spec.matrix, spec.rhs);
+      return gaussStepsN(spec.matrix, spec.rhs);
     }
     if (spec?.kind === 'gram-schmidt' && spec.a && spec.b) {
       return gramSchmidtSteps(spec.a, spec.b);
@@ -135,9 +141,9 @@ export function ProcedureBlock({ id, code, bare }: ProcedureBlockProps) {
 function UkladRownan({
   matrix, rhs, solution,
 }: {
-  matrix: [[number, number], [number, number]];
-  rhs: Vector2;
-  solution?: Vector2;
+  matrix: number[][];
+  rhs: number[];
+  solution?: number[];
 }) {
   const liczba = (x: number) => {
     const zaokraglona = Math.round(x * 1000) / 1000;
@@ -149,10 +155,11 @@ function UkladRownan({
     <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
       <table style={{ borderCollapse: 'collapse', fontVariantNumeric: 'tabular-nums', fontSize: 14 }}>
         <tbody>
-          {[0, 1].map((i) => (
+          {matrix.map((wiersz, i) => (
             <tr key={i}>
-              <td style={{ padding: '4px 10px', textAlign: 'right' }}>{liczba(matrix[i][0])}</td>
-              <td style={{ padding: '4px 10px', textAlign: 'right' }}>{liczba(matrix[i][1])}</td>
+              {wiersz.map((wartosc, j) => (
+                <td key={j} style={{ padding: '4px 10px', textAlign: 'right' }}>{liczba(wartosc)}</td>
+              ))}
               <td style={{
                 padding: '4px 10px', textAlign: 'right',
                 borderLeft: '2px solid #94a3b8', color: '#0d9488',
@@ -168,7 +175,14 @@ function UkladRownan({
         <div style={{ fontSize: 14 }}>
           <span style={label}>rozwiązanie: </span>
           <strong style={{ color: '#0d9488' }}>
-            x = {liczba(solution[0])}, y = {liczba(solution[1])}
+            {/* Przy dwóch i trzech niewiadomych nazwy `x, y, z` czyta się
+                lepiej niż indeksy; wyżej indeksy są jedyną sensowną opcją. */}
+            {solution.map((wartosc, i) => (
+              <span key={i}>
+                {i > 0 && ', '}
+                {solution.length <= 3 ? 'xyz'[i] : `x${i + 1}`} = {liczba(wartosc)}
+              </span>
+            ))}
           </strong>
         </div>
       )}

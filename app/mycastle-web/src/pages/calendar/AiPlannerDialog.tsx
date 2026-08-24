@@ -87,7 +87,7 @@ const AiPlannerDialog: React.FC<AiPlannerDialogProps> = ({
         if (dayEvents.length > 0) {
           recentDaysEvents.push({
             date: `${pastDate.format('dddd')} ${dateStr}`,
-            events: buildContextFromEvents(EventNode.sortByTime(dayEvents)),
+            events: buildContextFromEvents(EventNode.sortByTimeOn(dayEvents, pastDate)),
           });
         }
       }

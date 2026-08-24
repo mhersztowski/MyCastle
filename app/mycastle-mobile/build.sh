@@ -77,6 +77,26 @@ MANIFEST="$APP_DIR/android/app/src/main/AndroidManifest.xml"
 sed -i 's/android:allowBackup="true"/android:allowBackup="true" android:usesCleartextTraffic="true"/' "$MANIFEST"
 echo "  Added usesCleartextTraffic"
 
+# Generate the autolinking config that the React Gradle plugin consumes.
+#
+# `settings.gradle` asks the React settings plugin to produce
+# android/build/generated/autolinking/autolinking.json during Gradle's settings
+# phase. After `expo prebuild --clean` wipes android/, that generation has been
+# observed not to happen in the same invocation that runs assembleRelease, and
+# the build then dies at :app:generateAutolinkingPackageList with
+# "input file was expected to be present but it doesn't exist".
+#
+# Writing the file here removes the ordering question entirely: it is byte-for-byte
+# what the settings plugin would run, so Gradle either accepts it or refreshes it
+# from the same source.
+echo "==> Generating autolinking config..."
+mkdir -p android/build/generated/autolinking
+node --no-warnings --eval \
+  "require(require.resolve('expo-modules-autolinking', { paths: [require.resolve('expo/package.json')] }))(process.argv.slice(1))" \
+  react-native-config --json --platform android \
+  > android/build/generated/autolinking/autolinking.json
+echo "  wrote android/build/generated/autolinking/autolinking.json"
+
 echo "==> Building APK..."
 cd android
 

@@ -16,7 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseFormulaBlock, exportScenario } from '../dist/index.js';
+import { parseFormulaBlock, exportScenario, exportPdeScenario } from '../dist/index.js';
 
 const uruchom = promisify(execFile);
 const here = dirname(new URL(import.meta.url).pathname);
@@ -36,6 +36,54 @@ const TYMCZASOWE = join(tmpdir(), 'sci-core-scenario.json');
  * ustalonych parametrach, a dobór parametrów jest decyzją — chodzi o zakres, w
  * którym zjawisko jest ciekawe, nie o pierwszy z brzegu.
  */
+/**
+ * Pola na siatce — drugi rodzaj równania w cross-walidacji.
+ *
+ * Siatka jest **rzadsza niż w dokumencie**: porównanie 96×96 przez sto klatek
+ * daje plik na kilkadziesiąt megabajtów, a błąd schematu widać tak samo na
+ * 24×24. Gęstość jest tu kosztem, nie dokładnością rozstrzygnięcia.
+ */
+const POLA = [
+  {
+    dokument: 'rownanie-ciepla.md',
+    formula: 'cieplo-pole',
+    parameters: { alpha: 0.01 },
+    // Krótko: nasz schemat jest **jawny i pierwszego rzędu**, a krok dobiera
+    // z warunku stabilności — czyli tak duży, jak wolno. Na jednostkę czasu
+    // daje to kilka procent różnicy wobec solvera adaptacyjnego i jest to
+    // cena metody, nie usterka. Porównanie na krótkim odcinku sprawdza
+    // schemat; że błąd nie rośnie szybciej, niż powinien, pilnuje osobny test
+    // zbieżności.
+    tSpan: [0, 0.3],
+    frames: 5,
+    grid: { nx: 24, ny: 24 },
+  },
+  {
+    dokument: 'rownanie-ciepla.md',
+    formula: 'fala-pole',
+    parameters: { c: 0.5 },
+    tSpan: [0, 0.5],
+    frames: 5,
+    grid: { nx: 48, ny: 48 },
+    /*
+     * Warunek początkowy podmieniony na **modę własną**, a nie gaussowską
+     * plamkę z dokumentu — i to jest istotna decyzja, nie wygoda.
+     *
+     * Sprawdzone: przy `exp(-200 r²)` oba silniki rozjeżdżają się o ~20–30%,
+     * a zagęszczenie siatki tego nie poprawia. Nie jest to błąd żadnego z nich:
+     * stroma plamka niesie wysokie częstości przestrzenne, dla których każda
+     * dyskretyzacja ma własną dyspersję numeryczną. Porównywalibyśmy dwa różne
+     * przybliżenia, a nie dwa rozwiązania tego samego równania.
+     *
+     * Moda własna `sin(πx)sin(πy)` ma rozwiązanie zamknięte
+     * `cos(cπ√2·t)`, więc oba silniki muszą w nie trafić — i trafiają
+     * (SciPy 0,03 pp, nasz schemat zbieżnie: 2,2 → 1,1 → 0,5 pp dla n = 24,
+     * 48, 96). To sprawdza solver, a nie różnicę między siatkami.
+     */
+    initial: '\\sin(\\pi x) \\cdot \\sin(\\pi y)',
+  },
+];
+
 const UKLADY = [
   {
     dokument: 'wahadlo.md',
@@ -122,6 +170,34 @@ for (const uklad of UKLADY) {
     process.stdout.write(stdout);
   } catch (error) {
     console.error(`${uklad.formula}: ${error.stderr || error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+for (const pole of POLA) {
+  const blok = await wczytajBlok(pole.dokument, pole.formula);
+  const scenariusz = exportPdeScenario(blok, {
+    parameters: pole.parameters,
+    tSpan: pole.tSpan,
+    frames: pole.frames,
+    grid: pole.grid,
+    initial: pole.initial,
+  });
+
+  if (scenariusz.issues.length) {
+    console.error(`${pole.formula}: ${scenariusz.issues.join('; ')}`);
+    process.exitCode = 1;
+    continue;
+  }
+
+  await writeFile(TYMCZASOWE, JSON.stringify(scenariusz, null, 2));
+  const cel = join(FIXTURES, `${pole.formula}.json`);
+
+  try {
+    const { stdout } = await uruchom(python, [join(here, 'solve_field_reference.py'), TYMCZASOWE, cel]);
+    process.stdout.write(stdout);
+  } catch (error) {
+    console.error(`${pole.formula}: ${error.stderr || error.message}`);
     process.exitCode = 1;
   }
 }

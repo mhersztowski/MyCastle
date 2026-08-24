@@ -148,3 +148,101 @@ export function isOrthonormal(e1: Vector2, e2: Vector2, tolerance = 1e-9): boole
 
 /** Obraz wektora — skrót używany przez sceny procedur. */
 export { apply };
+
+// --- eliminacja Gaussa dla dowolnego rozmiaru --------------------------------
+
+/** Krok procedury dla układu `n × n`. */
+export interface GaussStepN {
+  matrix: number[][];
+  rhs: number[];
+  description: string;
+  /** Wypełnione tylko w kroku końcowym i tylko gdy rozwiązanie istnieje. */
+  solution?: number[];
+}
+
+/**
+ * Eliminacja Gaussa z wyborem elementu głównego, krok po kroku.
+ *
+ * Wersja 2×2 pokazuje pomysł, ale nie pokazuje **procedury**: przy dwóch
+ * równaniach jest jeden krok eliminacji, a wybór elementu głównego nie ma czego
+ * wybierać. Sens metody — powtarzalny przebieg kolumna po kolumnie — widać
+ * dopiero od 3×3.
+ *
+ * Element główny wybieramy **największy co do wartości bezwzględnej**, a nie
+ * pierwszy niezerowy, i mówimy o tym w opisie kroku. To nie jest szczegół
+ * numeryczny do przemilczenia: dzielenie przez małą liczbę powiększa błąd
+ * zaokrągleń, a układ „prawie osobliwy" jest właśnie tym miejscem, gdzie
+ * czytelnik ma zobaczyć różnicę między „metoda działa" a „metoda działa
+ * dokładnie".
+ */
+export function gaussStepsN(a: number[][], b: number[]): GaussStepN[] {
+  const n = a.length;
+  const kroki: GaussStepN[] = [];
+  const M = a.map((row) => [...row]);
+  const R = [...b];
+
+  const zapisz = (description: string, solution?: number[]) => {
+    kroki.push({ matrix: M.map((row) => [...row]), rhs: [...R], description, solution });
+  };
+
+  zapisz('Układ wyjściowy.');
+
+  for (let k = 0; k < n; k += 1) {
+    // Wybór elementu głównego.
+    let najlepszy = k;
+    for (let i = k + 1; i < n; i += 1) {
+      if (Math.abs(M[i][k]) > Math.abs(M[najlepszy][k])) najlepszy = i;
+    }
+
+    if (najlepszy !== k) {
+      [M[k], M[najlepszy]] = [M[najlepszy], M[k]];
+      [R[k], R[najlepszy]] = [R[najlepszy], R[k]];
+      zapisz(
+        `Zamieniamy wiersz ${k + 1} z ${najlepszy + 1}: na przekątnej ma stać `
+        + 'największy co do wartości bezwzględnej element kolumny. Dzielenie przez małą '
+        + 'liczbę powiększyłoby błąd zaokrągleń.',
+      );
+    }
+
+    if (Math.abs(M[k][k]) <= ZERO) continue; // Kolumna pusta — niewiadoma zostaje wolna.
+
+    for (let i = k + 1; i < n; i += 1) {
+      if (Math.abs(M[i][k]) <= ZERO) continue;
+      const mnoznik = M[i][k] / M[k][k];
+      for (let j = k; j < n; j += 1) M[i][j] -= mnoznik * M[k][j];
+      R[i] -= mnoznik * R[k];
+      zapisz(
+        `Od wiersza ${i + 1} odejmujemy wiersz ${k + 1} razy ${liczba(mnoznik)} — `
+        + `w kolumnie ${k + 1} zostaje zero.`,
+      );
+    }
+  }
+
+  // Po eliminacji: wiersz zerowy z niezerową prawą stroną znaczy sprzeczność,
+  // a z zerową — niewiadomą, której nic nie wyznacza.
+  for (let i = 0; i < n; i += 1) {
+    const pusty = M[i].every((x) => Math.abs(x) <= ZERO);
+    if (!pusty) continue;
+    if (Math.abs(R[i]) > ZERO) {
+      zapisz(`Wiersz ${i + 1} mówi „0 = ${liczba(R[i])}" — układ jest sprzeczny, rozwiązania nie ma.`);
+    } else {
+      zapisz(`Wiersz ${i + 1} zniknął w całości — układ jest nieoznaczony, rozwiązań jest nieskończenie wiele.`);
+    }
+    return kroki;
+  }
+
+  // Podstawienie wstecz.
+  const x = new Array<number>(n).fill(0);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    let suma = R[i];
+    for (let j = i + 1; j < n; j += 1) suma -= M[i][j] * x[j];
+    x[i] = suma / M[i][i];
+  }
+
+  zapisz(
+    'Podstawiamy wstecz: ostatnie równanie ma jedną niewiadomą, a każde wyżej '
+    + 'korzysta z już wyliczonych.',
+    x,
+  );
+  return kroki;
+}

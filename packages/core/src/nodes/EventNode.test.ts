@@ -148,6 +148,39 @@ describe('EventNode', () => {
       const sorted = EventNode.sortByTime([a, b]);
       expect(sorted.map((e) => e.name)).toEqual(['B', 'A']);
     });
+
+    /**
+     * Na liście dnia liczy się pora wystąpienia, a nie data pierwszego
+     * wystąpienia reguły: event powtarzalny sprzed miesięcy porównywany
+     * datą absolutną wygrywał z każdym świeżo dodanym, więc nowy wpis
+     * lądował na końcu listy niezależnie od godziny.
+     */
+    it('sortByTimeOn porządkuje wystąpienia danego dnia po porze dnia', () => {
+      const powtarzalny = new EventNode(make({
+        name: 'Powtarzalny 14:00',
+        startTime: '2024-01-15T14:00:00',
+        endTime: '2024-01-15T15:00:00',
+        recurrence: { freq: 'daily' },
+      }));
+      const nowy = new EventNode(make({
+        name: 'Nowy 08:00',
+        startTime: '2024-03-20T08:00:00',
+        endTime: '2024-03-20T09:00:00',
+      }));
+
+      const dzien = dayjs('2024-03-20T00:00:00');
+      expect(EventNode.sortByTime([powtarzalny, nowy]).map((e) => e.name))
+        .toEqual(['Powtarzalny 14:00', 'Nowy 08:00']);
+      expect(EventNode.sortByTimeOn([powtarzalny, nowy], dzien).map((e) => e.name))
+        .toEqual(['Nowy 08:00', 'Powtarzalny 14:00']);
+    });
+
+    it('sortByTimeOn zostawia na końcu wpisy bez czytelnej daty startu', () => {
+      const bezDaty = new EventNode(make({ name: 'Bez daty', startTime: 'nie-data' }));
+      const zDatą = new EventNode(make({ name: 'Z datą', startTime: '2024-03-20T23:00:00' }));
+      const sorted = EventNode.sortByTimeOn([bezDaty, zDatą], dayjs('2024-03-20T00:00:00'));
+      expect(sorted.map((e) => e.name)).toEqual(['Z datą', 'Bez daty']);
+    });
   });
 
   it('clone preserves task ref and base state', () => {

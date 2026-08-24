@@ -19,6 +19,17 @@ import { HandwritingRecognizer } from '../../../modules/ai/services/HandwritingR
 registerSciBlocks(registerBlockRenderer);
 
 /**
+ * Monaco dla bloku `simscript` — wpięcie przez port, jak rozpoznawanie pisma.
+ *
+ * Import leniwy, bo edytor waży kilka megabajtów, a czytelnik, który nigdy nie
+ * rozwinie kodu modelu, nie ma powodu go pobierać. Do czasu wczytania blok
+ * pokazuje pole tekstowe — dokładnie tak, jak poza aplikacją.
+ */
+void import('./sciCodeEditor').catch((error) => {
+  console.error('[mdeditor] nie udało się wczytać edytora kodu dla bloków sci', error);
+});
+
+/**
  * Rozpoznawacz powstaje **przy pierwszym użyciu**, nie przy imporcie.
  *
  * `App.instance` nie istnieje jeszcze w chwili ładowania modułu (`App.create()`

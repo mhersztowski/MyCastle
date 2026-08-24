@@ -6,7 +6,7 @@
  * **ciąg klatek**. Animacja przewija klatki, a nie próbkuje czas — próbkowanie
  * między klatkami sugerowałoby dokładność, której nie ma.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   compilePde, formatIn, parseFormulaBlock, parseStrokes, serializeStrokes,
@@ -14,6 +14,7 @@ import {
 } from '@mhersztowski/sci-core';
 import { StrokeCanvas } from './StrokeCanvas';
 import { HeatmapCanvas } from './HeatmapCanvas';
+import { downloadCanvasPng, downloadCsv, framesToCsv } from './eksport';
 
 export interface FieldBlockProps {
   /** Bez własnej ramki — daje ją `BlockShell` po stronie hosta. */
@@ -105,6 +106,8 @@ export function FieldBlock({ id, code, setup, bare, onFormulaChange }: FieldBloc
   }, [gra, wynik]);
 
   const biezaca = wynik.frames[Math.min(klatka, wynik.frames.length - 1)];
+  /** Płótno bieżącej klatki — potrzebne tylko przy pobieraniu obrazu. */
+  const plotnoRef = useRef<HTMLCanvasElement | null>(null);
 
   return (
     <div style={bare
@@ -131,6 +134,7 @@ export function FieldBlock({ id, code, setup, bare, onFormulaChange }: FieldBloc
           wypychało go na pasek przycisków. */}
       <div style={{ position: 'relative', width: 320 }}>
         <HeatmapCanvas
+          onCanvas={(el) => { plotnoRef.current = el; }}
           data={biezaca.data}
           nx={model.nx}
           ny={model.ny}
@@ -208,6 +212,26 @@ export function FieldBlock({ id, code, setup, bare, onFormulaChange }: FieldBloc
         {/* Liczba kroków mówi, ile naprawdę kosztowała symulacja — przy siatce
             bliskiej granicy to jedyny sygnał, że warto ją zmniejszyć. */}
         <span style={label}>{wynik.steps} kroków</span>
+
+        {/* Obraz bieżącej klatki i wszystkie klatki jako liczby. Rozdzielone,
+            bo odpowiadają na różne pytania: „wstawię to do sprawozdania"
+            i „policzę to sam, żeby sprawdzić". */}
+        <button
+          type="button"
+          style={btn}
+          onClick={() => { if (plotnoRef.current) downloadCanvasPng(plotnoRef.current, `${id}-t${biezaca.t.toFixed(2)}`); }}
+          title="Pobierz bieżącą klatkę jako obraz PNG"
+        >
+          PNG
+        </button>
+        <button
+          type="button"
+          style={btn}
+          onClick={() => downloadCsv(framesToCsv(wynik.frames, model.nx, model.ny), id)}
+          title="Pobierz wszystkie klatki jako CSV (t, ix, iy, wartość)"
+        >
+          CSV
+        </button>
       </div>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>

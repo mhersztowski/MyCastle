@@ -61,7 +61,7 @@ export interface KnowledgeIssue {
 
 /** Co może być celem odsyłacza `((id))`. */
 export type AnchorKind =
-  | 'formula' | 'term' | 'figure' | 'table' | 'section' | 'callout' | 'law';
+  | 'formula' | 'term' | 'figure' | 'table' | 'section' | 'callout' | 'law' | 'exercise';
 
 export interface Anchor {
   path: string;
@@ -259,6 +259,15 @@ export function buildIndex(files: Array<{ path: string; markdown: string }>): Kn
       }
       dodaj(law.id, 'law', document.path);
     }
+    /*
+     * Zadania są celem odsyłaczy, nie tylko ich źródłem.
+     *
+     * Podręcznik odsyła do nich wprost — „patrz zadanie 21, rozdział 2" —
+     * a bez rejestracji taki odsyłacz prowadził w próżnię: indeks czytał
+     * bloki `exercise` wyłącznie po to, by wiedzieć, czego zadanie **używa**.
+     */
+    for (const exercise of document.exercises) dodaj(exercise.id, 'exercise', document.path);
+
     if (document.anchorId) dodaj(document.anchorId, 'section', document.path);
   }
 

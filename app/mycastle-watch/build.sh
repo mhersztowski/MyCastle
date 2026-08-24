@@ -27,7 +27,10 @@ echo "==> Installing npm dependencies..."
 npm install --yes
 
 echo "==> Installing Expo-compatible native packages..."
-npx expo install react-native-webview expo-asset expo-font
+# `react-native-webview` świadomie nieobecny: Wear OS nie zawiera silnika
+# przeglądarki, więc każda próba utworzenia WebView kończy się
+# `UnsupportedOperationException` przy starcie aplikacji.
+npx expo install expo-asset expo-font expo-constants
 
 echo "==> Generating placeholder assets..."
 mkdir -p assets
@@ -60,10 +63,26 @@ PYEOF
 echo "==> Running expo prebuild (generates native Android project)..."
 npx expo prebuild --platform android --clean
 
-echo "==> Patching AndroidManifest.xml for cleartext HTTP traffic..."
+echo "==> Sprawdzam manifest..."
 MANIFEST="$APP_DIR/android/app/src/main/AndroidManifest.xml"
-sed -i 's/android:allowBackup="true"/android:allowBackup="true" android:usesCleartextTraffic="true"/' "$MANIFEST"
-echo "  Added usesCleartextTraffic"
+
+# Ruch po HTTP: `usesCleartextTraffic` jest w konfiguracji, ale dokładamy je
+# także tutaj — starsze wersje prebuildu potrafiły je pominąć, a bez tego
+# WebView milczy zamiast zgłosić błąd.
+grep -q 'usesCleartextTraffic' "$MANIFEST" || \
+  sed -i 's/android:allowBackup="true"/android:allowBackup="true" android:usesCleartextTraffic="true"/' "$MANIFEST"
+
+# Deklaracja zegarka pochodzi z pluginu `plugins/withWearOs.js`. Sprawdzamy ją,
+# bo jej brak nie objawia się błędem budowania: APK powstaje, instaluje się na
+# zegarku i po prostu nie pojawia się w menu.
+if grep -q 'android.hardware.type.watch' "$MANIFEST"; then
+  echo "  Deklaracja zegarka obecna"
+else
+  echo "  BŁĄD: w manifeście nie ma android.hardware.type.watch."
+  echo "        APK zbuduje się, ale Wear OS nie pokaże aplikacji w menu."
+  echo "        Sprawdź, czy plugin ./plugins/withWearOs jest w app.config.js."
+  exit 1
+fi
 
 echo "==> Building APK..."
 cd android
@@ -83,6 +102,30 @@ gradle.projectsEvaluated {
     }
 }
 GRADLE_EOF
+
+# Architektury: 32- i 64-bitowe ARM, bez x86.
+#
+# **Wear OS na Galaxy Watch 6 uruchamia aplikacje w trybie 32-bitowym.**
+# Sprawdzone na sprzęcie (SM_L310): SoLoader ładuje biblioteki z
+# `base.apk!/lib/armeabi-v7a`, mimo że procesor Exynos W930 jest 64-bitowy.
+# Zbudowanie samego `arm64-v8a` daje APK, który instaluje się bez błędu
+# i wywraca się dopiero przy starcie:
+#
+#     couldn't find DSO to load: libexpo-modules-core.so
+#     ❌ Cannot install JSI interop
+#
+# Objaw jest mylący, bo gotowe biblioteki React Native wchodzą do APK we
+# wszystkich wersjach — brakuje wyłącznie tych, które kompilują się ze źródeł
+# (`expo-modules-core`). Aplikacja startuje, pokazuje splash i znika bez
+# wyjątku w logu aplikacji.
+#
+# `x86` i `x86_64` pomijamy: to architektury emulatorów Androida na PC, na
+# zegarku bezużyteczne. Każda oznacza osobną kompilację C++ przez toolchain
+# NDK zbudowany pod x86_64 — czyli pod emulacją QEMU, bo kontener działa na
+# ARM64. To właśnie tam pierwsza budowa przewróciła się na
+# `expo-modules-core:buildCMakeRelWithDebInfo[x86_64]`.
+echo "reactNativeArchitectures=armeabi-v7a,arm64-v8a" >> gradle.properties
+echo "  Architektury: armeabi-v7a (Wear OS działa w trybie 32-bit) + arm64-v8a"
 
 AAPT2_PATH=$(find /opt/android-sdk/build-tools -name "aapt2" -type f | sort -rV | head -1)
 if [ -n "$AAPT2_PATH" ]; then

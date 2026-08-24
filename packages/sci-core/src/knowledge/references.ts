@@ -56,7 +56,7 @@ export interface ReferenceIndex {
  * przypisaniu mapy kotwic.
  */
 export type ReferenceKind =
-  | 'formula' | 'term' | 'figure' | 'table' | 'section' | 'callout' | 'law';
+  | 'formula' | 'term' | 'figure' | 'table' | 'section' | 'callout' | 'law' | 'exercise';
 
 export interface ResolvedReference {
   found: boolean;

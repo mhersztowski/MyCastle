@@ -335,6 +335,41 @@ beforeAll(() => {
   mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });
 });
 
+describe('układ zapisany we front matterze', () => {
+  /**
+   * Blok `---` z pozycjami jest naszym dodatkiem do składni. Mermaid musi go
+   * przyjąć, bo inaczej ułożenie diagramu w edytorze psułoby jego render
+   * wszędzie indziej — na GitHubie, w Obsidianie, w podglądzie.
+   */
+  it('diagram z pozycjami nadal parsuje się Mermaidem', async () => {
+    const doc = mermaidFormat.parse(SOURCE).document;
+    doc.nodes.forEach((node, i) => { node.position = { x: 100 * (i % 4), y: 80 * Math.floor(i / 4) }; });
+
+    await expect(mermaid.parse(mermaidFormat.serialize(doc))).resolves.toBeTruthy();
+  });
+
+  it('diagram stanów z ramkami grup nadal parsuje się Mermaidem', async () => {
+    const doc = mermaidFormat.parse(STATE).document;
+    doc.nodes.forEach((node, i) => { node.position = { x: 40 * i, y: 60 * i }; });
+    doc.groups.forEach((group) => {
+      group.position = { x: 10, y: 10 };
+      group.size = { width: 320, height: 240 };
+    });
+
+    await expect(mermaid.parse(mermaidFormat.serialize(doc))).resolves.toBeTruthy();
+  });
+
+  it('pozycje nie kolidują z tytułem we front matterze', async () => {
+    const zTytulem = ['---', 'title: Algorytm', '---', SOURCE].join('\n');
+    const doc = mermaidFormat.parse(zTytulem).document;
+    doc.nodes[0].position = { x: 5, y: 5 };
+
+    const zapis = mermaidFormat.serialize(doc);
+    expect(zapis).toContain('title: Algorytm');
+    await expect(mermaid.parse(zapis)).resolves.toBeTruthy();
+  });
+});
+
 describe('zapis przechodzi przez parser Mermaida', () => {
   it('źródło wejściowe jest poprawne (kontrola testu)', async () => {
     await expect(mermaid.parse(SOURCE)).resolves.toBeTruthy();

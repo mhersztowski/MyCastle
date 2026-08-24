@@ -9,6 +9,7 @@ import CodeFilePickerDialog, { langFromPath } from './CodeFilePickerDialog';
 import { blockBeforeCursor } from './selectBlockBefore';
 import type { Editor as TiptapEditor } from '@tiptap/core';
 import { blockRenderersVersion, rendererFor, subscribeBlockRenderers } from './blockRenderers';
+import { replaceBlockText } from './blockText';
 import { createModelWorker } from '../../../workers';
 
 /** Zdarzenie wysyłane przez MdEditor przy autosave — bloki z pliku zapisują wtedy swój plik. */
@@ -34,6 +35,9 @@ const LANGS: { label: string; value: string }[] = [
   { label: 'SQL', value: 'sql' },
   { label: 'Makefile', value: 'makefile' },
   { label: 'Mermaid (diagram)', value: 'mermaid' },
+  { label: 'Projekt UML (.umlproj.json)', value: 'umlproj' },
+  { label: 'DOT / Graphviz', value: 'dot' },
+  { label: 'PlantUML (diagram klas)', value: 'plantuml' },
 ];
 
 /**
@@ -236,14 +240,8 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor
    * czystym tekstem i musi nim zostać — `insertContent` rozbiłby wielolinijkowy
    * diagram na osobne akapity.
    */
-  const replaceBlockText = useCallback((next: string) => {
-    const pos = typeof getPos === 'function' ? getPos() : null;
-    if (pos == null) return;
-    const from = pos + 1;
-    const to = pos + node.nodeSize - 1;
-    const tr = editor.state.tr;
-    tr.replaceWith(from, to, next ? editor.schema.text(next) : []);
-    editor.view.dispatch(tr);
+  const zapiszTresc = useCallback((next: string) => {
+    replaceBlockText(editor, typeof getPos === 'function' ? getPos() : null, node, next);
   }, [editor, getPos, node]);
 
   const isExternal = !!externalSrc;
@@ -332,10 +330,11 @@ const CodeBlockView: React.FC<NodeViewProps> = ({ node, updateAttributes, editor
           language={language}
           documentBlocks={collectCodeBlocks}
           onBlockChange={replaceOtherBlock}
+          onLanguageChange={(next) => updateAttributes({ language: next })}
           workerFactory={createModelWorker}
           onChange={isExternal
             ? (next) => { setExtCode(next); dirtyRef.current = true; }
-            : (next) => replaceBlockText(next)}
+            : (next) => zapiszTresc(next)}
         >
           {() => (
             isExternal ? (

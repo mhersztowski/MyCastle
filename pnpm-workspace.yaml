@@ -1,6 +1,16 @@
 packages:
   - packages/*
   - app/*
+
+# Wersje deklarowane raz dla całego repozytorium.
+#
+# `mermaid` jest jednocześnie rendererem w aplikacji i parserem, którym
+# `web-devtools` sprawdza w testach, czy nasz zapis jest poprawny. Dwie osobne
+# deklaracje trzeba było trzymać zgodne ręcznie, a rozjazd objawiłby się
+# najgorzej, jak można: testy round-tripu przechodzą, a użytkownik widzi błąd
+# składni.
+catalog:
+  mermaid: ^11.4.1
 onlyBuiltDependencies:
   - esbuild
   - sharp

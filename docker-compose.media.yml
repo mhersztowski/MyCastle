@@ -1,0 +1,49 @@
+# Media — podcasty z notatkami. Jeden serwis, jeden port.
+#
+# Osobny plik compose, a nie kolejny serwis w `docker-compose.yml`: w Coolify
+# każdy plik jest osobnym zasobem z własną domeną, własnym cyklem wdrożeń
+# i własnym „Redeploy". Wrzucenie Media do compose'a MyCastle znaczyłoby, że
+# poprawka w odtwarzaczu restartuje backend PIM-u.
+#
+# Obraz **buduje się na serwerze**, inaczej niż mycastle-backend. Tam build
+# wchodził w swap i kończył się OOM-em, bo `vite build` w mycastle-web żąda 8 GB
+# heapu. Tutaj cały frontend to ~1200 linii i buduje się w pięć sekund.
+#
+# W Coolify:
+#   1. New Resource → Docker Compose, źródło = to repozytorium
+#   2. Compose file → `docker-compose.media.yml`
+#   3. Domenę przypisz serwisowi `media` (port 1996)
+#   4. Zmienne `PODCASTINDEX_*` w Environment Variables, oznaczone jako secret
+
+services:
+  media:
+    build:
+      context: .
+      dockerfile: app/media-backend/Dockerfile
+    environment:
+      - MEDIA_BACKEND_PORT=1996
+      # Wolumen zamontowany niżej; ścieżka bezwzględna, więc `path.resolve`
+      # w `index.ts` wskaże wprost jego, a nie katalog aplikacji.
+      - MEDIA_DATA_DIR=/data
+      # Klucze Podcast Index — wpisz je w panelu Coolify (oznacz jako secret).
+      #
+      # Bez nich aplikacja **działa**: wyszukiwanie idzie wtedy przez katalog
+      # iTunes, który nie wymaga rejestracji. Podcast Index dokłada wyniki spoza
+      # ekosystemu Apple i pełniejsze opisy kanałów.
+      #
+      # Sekret nigdy nie opuszcza backendu — podpisem żądania jest SHA-1 ze
+      # sklejenia klucza, sekretu i czasu uniksowego.
+      - PODCASTINDEX_KEY=${PODCASTINDEX_KEY:-}
+      - PODCASTINDEX_SECRET=${PODCASTINDEX_SECRET:-}
+    ports:
+      - "1996:1996"
+    volumes:
+      # Lista odtwarzania (`queue.json`) i notatki (`notes.json`). Nazwany
+      # wolumen, a nie podpięcie katalogu z hosta: dane należą do tej aplikacji
+      # i nikt inny ich nie czyta, więc nie ma powodu wystawiać ich w systemie
+      # plików serwera.
+      - media-data:/data
+    restart: unless-stopped
+
+volumes:
+  media-data:

@@ -44,17 +44,22 @@ describe('Zadania rozdziału 4 w czytniku', () => {
   });
 
   /**
-   * Blok `exercise` ma identyfikator od rozdziału 3, ale `buildIndex` go **nie
-   * rejestruje** jako kotwicy — zbiera je z formula/term/figure/table/callout/law
-   * i nagłówka dokumentu. Odsyłacz „patrz zadanie 7" nie miałby więc celu i musi
-   * zostać zwykłym tekstem. Ten test pilnuje, żeby nikt go nie podpiął, dopóki
-   * indeks (i oba dymki) nie będą tego umiały.
+   * Zadania są już kotwicą — `buildIndex` rejestruje bloki `exercise` obok
+   * wzorów, haseł i rysunków. Wcześniej ich nie znał, więc odsyłacz „patrz
+   * zadanie 7" musiał zostawać zwykłym tekstem; ten test utrwalał tamten stan.
+   *
+   * Sam tekst rozdziału 4 zostaje bez zmian: podpinanie odsyłaczy w już
+   * przeniesionym rozdziale to osobna praca, a nie skutek uboczny zmiany
+   * w indeksie. Test pilnuje teraz dwóch rzeczy naraz — że cel istnieje
+   * i że tekst nadal go nie używa.
    */
-  it('odsyłacz do zadania zostaje tekstem, bo indeks nie zna tych kotwic', () => {
-    expect(cel('rh1-zad-4-7').found).toBe(false);
+  it('zadanie jest kotwicą, choć tekst rozdziału jeszcze jej nie używa', () => {
+    expect(cel('rh1-zad-4-7').found).toBe(true);
+    expect(cel('rh1-zad-4-7').kind).toBe('exercise');
     expect(tresc()).toContain('(patrz zadanie 7)');
     expect(tresc()).not.toContain('((rh1-zad-4-7');
-    // To samo z pytaniem — jego pozycje w ogóle nie są blokami.
+    // Pytania to co innego: ich pozycje w ogóle nie są blokami, więc odsyłacz
+    // do pytania nadal nie ma czego znaleźć.
     expect(tekst()).toContain('(Patrz pytanie 10.)');
     expect(tresc()).not.toContain('rh1-pyt-4-10');
   });

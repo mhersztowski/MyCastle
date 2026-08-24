@@ -79,7 +79,7 @@ const MAX_KROKOW = 400_000;
 const LAPLASJAN_LATEX = '\\Lambda';
 const LAPLASJAN = 'Lambda';
 
-function podstawLaplasjan(expression: string, field: string): string {
+export function podstawLaplasjan(expression: string, field: string): string {
   const pole = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return expression
     .replace(new RegExp(`\\\\Delta\\s*${pole}`, 'g'), LAPLASJAN_LATEX)

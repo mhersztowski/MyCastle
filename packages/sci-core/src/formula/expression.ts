@@ -24,6 +24,33 @@ import { reservedSymbol } from './reservedSymbols';
 /** Jedna instancja na proces — tworzenie silnika jest kosztowne. */
 const engine = new ComputeEngine();
 
+/**
+ * Druga instancja, licząca kąty w stopniach.
+ *
+ * Osobna, a nie przełączana: instancja jest współdzielona przez cały proces,
+ * więc chwilowa zmiana jednostki w jednym wywołaniu zmieniałaby znaczenie
+ * wzorów liczonych równolegle gdzie indziej — w wykładach fizyki kąt jest
+ * zawsze w radianach i ma taki zostać.
+ *
+ * Tworzona leniwie, bo większość dokumentów nigdy jej nie potrzebuje.
+ * Compute Engine wstawia przelicznik do samej funkcji trygonometrycznej
+ * (`Math.sin(0.01745 * _.x)`), więc zmienna nie jest skalowana globalnie —
+ * `2x` znaczy `2x` niezależnie od trybu.
+ */
+let degreeEngine: ComputeEngine | undefined;
+
+function engineFor(angularUnit: AngularUnit): ComputeEngine {
+  if (angularUnit !== 'degrees') return engine;
+  if (!degreeEngine) {
+    degreeEngine = new ComputeEngine();
+    (degreeEngine as unknown as { angularUnit: string }).angularUnit = 'deg';
+  }
+  return degreeEngine;
+}
+
+/** Jednostka, w której czytane są argumenty funkcji trygonometrycznych. */
+export type AngularUnit = 'radians' | 'degrees';
+
 export interface CompiledExpression {
   /** Wywołanie z mapą wartości symboli; `NaN`, gdy kompilacja się nie powiodła. */
   evaluate: (scope: Record<string, number>) => number;
@@ -41,14 +68,19 @@ export interface CompiledExpression {
  * występuje w zapisie, musi trafić do `freeSymbols` — inaczej zgłaszamy, że
  * silnik zrozumiał ją jako coś innego.
  */
-export function compileExpression(latex: string, declared: string[] = []): CompiledExpression {
+export function compileExpression(
+  latex: string,
+  declared: string[] = [],
+  angularUnit: AngularUnit = 'radians',
+): CompiledExpression {
   const issues: string[] = [];
 
   let result: ReturnType<typeof compile>;
   try {
     // `realOnly` zawęża wynik do liczb rzeczywistych: w fizyce pierwiastek z
     // liczby ujemnej znaczy błąd modelu, a nie liczbę zespoloną do narysowania.
-    result = compile(engine.parse(latex), { to: 'javascript', realOnly: true });
+    const ce = engineFor(angularUnit);
+    result = compile(ce.parse(latex), { to: 'javascript', realOnly: true });
   } catch (error) {
     return {
       evaluate: () => Number.NaN,

@@ -13,6 +13,13 @@
 import { useEffect, useRef } from 'react';
 
 export interface HeatmapCanvasProps {
+  /**
+   * Uchwyt do płótna dla hosta — po to, żeby dało się pobrać obraz.
+   *
+   * Callback, a nie `forwardRef`: blok pola potrzebuje płótna tylko przy
+   * kliknięciu „PNG", a nie w każdym renderze.
+   */
+  onCanvas?: (canvas: HTMLCanvasElement | null) => void;
   data: Float32Array;
   nx: number;
   ny: number;
@@ -46,9 +53,9 @@ function kolor(wartosc: number, out: Uint8ClampedArray, offset: number): void {
 }
 
 export function HeatmapCanvas({
-  data, nx, ny, min, max, width = 320, height = 320, label,
+  data, nx, ny, min, max, width = 320, height = 320, label, onCanvas,
 }: HeatmapCanvasProps) {
-  const ref = useRef<HTMLCanvasElement>(null);
+  const ref = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -83,7 +90,7 @@ export function HeatmapCanvas({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <canvas
-        ref={ref}
+        ref={(el) => { ref.current = el; onCanvas?.(el); }}
         width={width}
         height={height}
         style={{ width, height, borderRadius: 4, border: '1px solid #e2e8f0', display: 'block' }}

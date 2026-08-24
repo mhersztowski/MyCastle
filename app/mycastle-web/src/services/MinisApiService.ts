@@ -516,6 +516,21 @@ class MinisApiService {
     return this.request('POST', `/users/${encodeURIComponent(userName)}/uml/sync`, { dir, name, project, files });
   }
 
+  /**
+   * Szkielet kodu z diagramu UML.
+   *
+   * Nic nie zapisuje — zwraca pliki do obejrzenia i pobrania. Wygenerowany kod
+   * jest punktem wyjścia, a nie torem synchronizacji: źródłem prawdy zostaje
+   * repozytorium, a diagram jego widokiem.
+   */
+  async generateCodeFromUml<D = unknown>(
+    userName: string,
+    diagram: D,
+    language: 'typescript' | 'javascript' | 'python' | 'c' | 'cpp' = 'typescript',
+  ): Promise<{ files: Array<{ file: string; content: string }> }> {
+    return this.request('POST', `/users/${encodeURIComponent(userName)}/uml/codegen`, { diagram, language });
+  }
+
   // API Keys
   async getApiKeys(userName: string): Promise<ApiKeyPublic[]> {
     const data = await this.request<{ items: ApiKeyPublic[] }>('GET', `/users/${encodeURIComponent(userName)}/api-keys`);

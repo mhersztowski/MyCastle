@@ -559,7 +559,20 @@ export function applyOverrides(
     try {
       values[name] = toSI(raw, schema.unit === '1' ? undefined : schema.unit);
     } catch (error) {
-      issues.push((error as Error).message);
+      /*
+       * Goła liczba znaczy wartość **w jednostce zadeklarowanej we wzorze**.
+       *
+       * Rygor `parseQuantity` jest w rdzeniu słuszny: „15" tam, gdzie ma być
+       * kąt, znaczy co innego niż „15 deg". Ale tutaj autor zadeklarował
+       * jednostkę wyżej, w `@vars`, i powtarzanie jej przy każdej wartości
+       * jest przepisywaniem tego samego dwa razy. Zła jednostka nadal jest
+       * błędem — cicha konwersja znaczyłaby zgodę na bezsens.
+       */
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        values[name] = toSI(`${raw} ${schema.unit}`, schema.unit);
+      } else {
+        issues.push((error as Error).message);
+      }
     }
   }
 

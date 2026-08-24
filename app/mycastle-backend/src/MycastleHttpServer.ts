@@ -1,6 +1,7 @@
 import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi, ArduinoWasmBuilder } from '@mhersztowski/core-backend';
 import { checkEmbeddable } from './modules/embed/embedCheck.js';
 import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, PicoSdkService, IotProvider, IotDeviceInfo } from '@mhersztowski/core-backend';
+import { formatWatchPress, parseWatchPress } from './watchPress.js';
 import sharp from 'sharp';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AuthTokenPayload, WriteFileOptions, DeleteOptions, RenameOptions, CopyOptions } from '@mhersztowski/core';
@@ -23,7 +24,10 @@ import type { SecretsService } from './modules/secrets/SecretsService.js';
 import type { DriveScriptScheduler } from './modules/scheduler/DriveScriptScheduler.js';
 import { prepareRunnableScript, RUNNABLE_RE, findMonorepoRoot } from './modules/scheduler/prepareRunnableScript.js';
 import type { GitService } from './modules/git/GitService.js';
-import { UmlSyncService, type UmlProject } from '@mhersztowski/devtools';
+import {
+  UmlSyncService, diagramToModel, generateCode,
+  type UmlProject, type UmlDiagram,
+} from '@mhersztowski/devtools';
 import { compile as miniscCompile } from '@mhersztowski/minisc';
 
 interface CrudConfig {
@@ -1220,6 +1224,40 @@ export class MycastleHttpServer extends HttpUploadServer {
       } catch (err: any) {
         this.sendJsonResponse(res, 400, { error: err?.message ?? String(err) });
       }
+      return;
+    }
+
+    /*
+     * POST /api/watch/press — naciśnięcie przycisku na zegarku.
+     *
+     * **Bez uwierzytelnienia, świadomie.** Zegarek nie ma sesji, klawiatury ani
+     * miejsca na wpisanie hasła, a zgłoszenie nie niesie żadnych danych poza
+     * faktem, że ktoś nacisnął — nie ma tu czego chronić. Gdyby kiedyś miało
+     * uruchamiać coś nieodwracalnego, trzeba dołożyć klucz w nagłówku.
+     *
+     * Zdarzenie idzie w dwa miejsca: na MQTT (topik `watch`, tak jak robiła to
+     * dotąd strona `/watch`) i **do konsoli backendu**. Ten drugi kanał jest
+     * ważniejszy, niż wygląda: przy sprawdzaniu, czy przycisk na zegarku w ogóle
+     * działa, konsola jest jedynym miejscem, w które można spojrzeć — MQTT bez
+     * podłączonego odbiorcy milczy tak samo jak zepsuty przycisk.
+     */
+    if (apiPath === '/watch/press' && method === 'POST') {
+      /*
+       * Surowe ciało, nie `parseRequestBody`.
+       *
+       * Tamto rzuca przy niepoprawnym JSON-ie, a tutaj zniekształcona treść ma
+       * trafić do logu jako ostrzeżenie, nie zamienić naciśnięcia w błąd 400.
+       */
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const press = parseWatchPress(Buffer.concat(chunks).toString('utf8'));
+      const from = req.socket.remoteAddress ?? 'nieznany';
+
+      console.log(formatWatchPress(press, from));
+
+      this.iotService?.publish('watch', JSON.stringify({ pressed: true, at: press.at, device: press.device }));
+
+      this.sendJsonResponse(res, 200, { ok: true, at: press.at });
       return;
     }
 
@@ -2483,6 +2521,18 @@ export class MycastleHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Szkielet kodu z diagramu UML: POST /api/users/{userName}/uml/codegen
+    const umlCodegenMatch = apiPath.match(/^\/users\/([^/]+)\/uml\/codegen$/);
+    if (umlCodegenMatch && method === 'POST') {
+      const umlUser = decodeURIComponent(umlCodegenMatch[1]);
+      if (user.userName !== umlUser && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleUmlCodegen(req, res);
+      return;
+    }
+
     this.sendJsonResponse(res, 404, { error: 'API endpoint not found' });
   }
 
@@ -2553,6 +2603,34 @@ export class MycastleHttpServer extends HttpUploadServer {
       }
     } catch (err) {
       this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'UML sync failed' });
+    }
+  }
+
+  /**
+   * Szkielet kodu z diagramu UML.
+   *
+   * Czysta zamiana kształtu — bez dotykania dysku, bez zapisu gdziekolwiek.
+   * To celowe: wygenerowany kod jest **punktem wyjścia**, a nie torem
+   * synchronizacji. Zapisanie go za użytkownika sugerowałoby, że diagram jest
+   * źródłem prawdy dla repozytorium, a jest odwrotnie — kod jest źródłem, a
+   * diagram jego widokiem.
+   */
+  private async handleUmlCodegen(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.parseRequestBody(req) as {
+      diagram?: UmlDiagram;
+      language?: 'typescript' | 'javascript' | 'python' | 'c' | 'cpp';
+    };
+    if (!body.diagram || !Array.isArray(body.diagram.nodes)) {
+      this.sendJsonResponse(res, 400, { error: 'diagram is required' });
+      return;
+    }
+
+    const language = body.language ?? 'typescript';
+    try {
+      const model = diagramToModel(body.diagram, language);
+      this.sendJsonResponse(res, 200, { files: generateCode(model, language) });
+    } catch (err) {
+      this.sendJsonResponse(res, 500, { error: err instanceof Error ? err.message : 'Codegen failed' });
     }
   }
 

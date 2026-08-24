@@ -22,7 +22,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import type { TaskModel, TaskStatusDef } from '@mhersztowski/core';
 import { TaskNode } from '@mhersztowski/core';
 import { cu, formatDate, formatMinutes, formatWeek, isOverdue, priorityDef } from './clickup';
-import { Assignees, PersonOption, useTicker } from './fields';
+import { Assignees, InlineName, PersonOption, useTicker } from './fields';
 import type { TaskViewActions } from './ListView';
 
 interface BoardViewProps extends TaskViewActions {
@@ -102,6 +102,7 @@ export const BoardView: React.FC<BoardViewProps> = ({
                                         onOpen={() => onOpen(task.id)}
                                         onOpenDoc={onOpenDoc ? () => onOpenDoc(task.id) : undefined}
                                         onRemove={() => onRemove(task.id)}
+                                        onRename={name => onUpdate(task.id, { name })}
                                         onAssignees={assignees => onUpdate(task.id, { assignees })}
                                         onToggleTracking={() => onMutate(task.id, n => (n.isTracking()
                                             ? n.stopTracking()
@@ -127,17 +128,19 @@ const BoardCard: React.FC<{
     /** Otwarcie notatki. Ikona pojawia się tylko wtedy, gdy zadanie ją ma. */
     onOpenDoc?: (() => void) | undefined;
     onRemove: () => void;
+    onRename: (name: string) => void;
     onAssignees: (ids: string[]) => void;
     onToggleTracking: () => void;
-}> = ({ task, people, subtasks, dateMode, onOpen, onOpenDoc, onRemove, onAssignees, onToggleTracking }) => {
+}> = ({ task, people, subtasks, dateMode, onOpen, onOpenDoc, onRemove, onRename, onAssignees, onToggleTracking }) => {
     const node = useMemo(() => TaskNode.fromModel(task), [task]);
     useTicker(node.isTracking());
     const priority = priorityDef(task.priority);
     const tracked = node.trackedMinutes();
+    const [renaming, setRenaming] = useState(false);
 
     return (
         <Box
-            draggable
+            draggable={!renaming}
             onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
             onClick={onOpen}
             sx={{
@@ -155,9 +158,11 @@ const BoardCard: React.FC<{
                         bgcolor: priority.color, flexShrink: 0,
                     }} />
                 )}
-                <Typography sx={{ fontSize: 13, flex: 1, color: cu.text, lineHeight: 1.4 }}>
-                    {task.name}
-                </Typography>
+                <InlineName
+                    value={task.name}
+                    onChange={onRename}
+                    onEditingChange={setRenaming}
+                />
                 {task.docPath && (
                     <Tooltip title={`Otwórz notatkę: ${task.docPath}`}>
                         <IconButton

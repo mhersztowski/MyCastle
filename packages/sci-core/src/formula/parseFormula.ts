@@ -480,8 +480,37 @@ export function parseFormulaBlock(id: string, body: string): FormulaBlock {
           return;
         }
         case 'relation':
-        block.kind = 'relation';
-        return;
+          /*
+           * Dyrektywa działa **niezależnie od miejsca w bloku**.
+           *
+           * Parser czyta liniowo, więc pierwotnie liczyła się tylko wtedy, gdy
+           * stała przed wzorem. Autor stawia ją jednak tam, gdzie stoją
+           * wszystkie pozostałe dyrektywy — pod spodem — i wtedy wzór trafiał
+           * do nierozpoznanych linii, a blok zgłaszał „równanie nie ma treści".
+           * Komunikat był podwójnie mylący: treść była, a przyczyną była
+           * kolejność, o której nigdzie nie napisano.
+           *
+           * Dlatego przy przejściu na `relation` zbieramy z powrotem to, co
+           * zdążyło się rozejść: rozbiór na przypisanie (`E = mc^2`) i linie
+           * uznane za nierozpoznane.
+           */
+          block.kind = 'relation';
+          if (!block.latex) {
+            const zPrzypisania = block.target !== undefined
+              ? [`${block.targetLatex ?? block.target} = ${(block.chain ?? [block.expression ?? '']).join(' = ')}`]
+              : [];
+            const zNieznanych = block.unknown.filter((line) => !line.startsWith('@'));
+            const odzyskane = [...zPrzypisania, ...zNieznanych].filter(Boolean);
+            if (odzyskane.length) {
+              block.latex = odzyskane.join(' ');
+              block.unknown = block.unknown.filter((line) => line.startsWith('@'));
+              delete block.target;
+              delete block.targetLatex;
+              delete block.expression;
+              delete block.chain;
+            }
+          }
+          return;
       case 'solver':
           block.solver = rest.trim();
           return;

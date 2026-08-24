@@ -84,7 +84,10 @@ const CalendarPage: React.FC = () => {
   const filteredEvents = useMemo(() => {
     // Uwzględnia eventy powtarzalne (occursOn) obok jednorazowych z danego dnia.
     const dayEvents = dataSource.events.filter(e => e.occursOn(selectedDate));
-    return EventNode.sortByTime(dayEvents);
+    // Porządek dnia liczony po porze wystąpienia — event powtarzalny niesie
+    // datę pierwszego wystąpienia, więc sortowany absolutnie stałby zawsze
+    // przed każdym wpisem dodanym później, choćby zaczynał się wieczorem.
+    return EventNode.sortByTimeOn(dayEvents, selectedDate);
   }, [dataSource.events, selectedDate]);
 
   const isToday = selectedDate.isSame(dayjs(), 'day');

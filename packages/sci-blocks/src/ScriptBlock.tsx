@@ -12,10 +12,13 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { runScript, suggestViews, SCRIPT_API_TYPES } from '@mhersztowski/sci-core';
+import { getCodeEditor } from './register';
 import { ModelViews } from './ModelViews';
 import type { WorkerFactory } from './useModelRunner';
 
 export interface ScriptBlockProps {
+  /** Identyfikator bloku z infostringu — trafia do nazwy pobieranego pliku. */
+  blockId?: string;
   /**
    * Bez własnej ramki i nagłówka — daje je `BlockShell` po stronie hosta.
    *
@@ -46,12 +49,13 @@ const btn: CSSProperties = {
   border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', color: '#334155',
 };
 
-export function ScriptBlock({ code, onChange, bare, workerFactory }: ScriptBlockProps) {
+export function ScriptBlock({ code, onChange, bare, workerFactory, blockId }: ScriptBlockProps) {
   const [draft, setDraft] = useState(code);
   const [editing, setEditing] = useState(false);
   // Uruchamiamy zapisany kod, nie bufor edycji: model ma się przeliczać po
   // zatwierdzeniu, a nie przy każdym naciśnięciu klawisza w środku wyrażenia.
   const [running, setRunning] = useState(code);
+  const edytorHosta = getCodeEditor();
 
   const result = useMemo(() => runScript(running), [running]);
   const views = useMemo(
@@ -115,21 +119,39 @@ export function ScriptBlock({ code, onChange, bare, workerFactory }: ScriptBlock
         </details>
       )}
 
-      {editing && (
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          style={{
-            fontFamily: 'ui-monospace, monospace', fontSize: 11, lineHeight: 1.45,
-            minHeight: 260, padding: 8, borderRadius: 4, border: '1px solid #cbd5e1',
-            background: '#f8fafc', color: '#0f172a', resize: 'vertical',
-          }}
-        />
+      {/*
+        * Edytor hosta, gdy jest; inaczej pole tekstowe.
+        *
+        * To nie jest wybór estetyczny: Monaco zna deklaracje API rdzenia
+        * (`SCRIPT_API_TYPES`), więc podpowiada sygnatury i pokazuje błędy typów
+        * w miejscu pisania — a to jedyny powód, dla którego ten blok przyjmuje
+        * TypeScript, a nie JavaScript.
+        */}
+      {editing && (edytorHosta
+        ? edytorHosta({
+          value: draft,
+          onChange: setDraft,
+          language: 'typescript',
+          extraTypes: SCRIPT_API_TYPES,
+          height: 320,
+        })
+        : (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            spellCheck={false}
+            style={{
+              fontFamily: 'ui-monospace, monospace', fontSize: 11, lineHeight: 1.45,
+              minHeight: 260, padding: 8, borderRadius: 4, border: '1px solid #cbd5e1',
+              background: '#f8fafc', color: '#0f172a', resize: 'vertical',
+            }}
+          />
+        )
       )}
 
       {result.model && (
         <ModelViews
+          blockId={blockId}
           model={result.model}
           views={views}
           source={{ kind: 'script', code: running }}

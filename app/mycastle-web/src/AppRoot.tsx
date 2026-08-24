@@ -87,6 +87,7 @@ const MiniscPage = lazy(() => import('./pages/programming/MiniscPage'));
 const LitComponentsPage = lazy(() => import('./pages/programming/ComponentsPage'));
 const ServerLogicPage = lazy(() => import('./pages/programming/ServerLogicPage'));
 const LayoutLabPage = lazy(() => import('./pages/programming/layoutlab/LayoutLabPage'));
+const SciPlotPage = lazy(() => import('./pages/nauka/SciPlotPage'));
 
 // Layout pages — Pim
 import CalendarPage from './pages/calendar/CalendarPage';
@@ -305,6 +306,24 @@ function AppRoot() {
               <Box sx={{ display: 'flex', minHeight: '100vh' }}>
                 <Layout fullBleed>
                   <Projects2Page />
+                </Layout>
+              </Box>
+            </RequireAuth>
+          }
+        />
+
+        {/* SciPlot — kalkulator wykresów. `fullBleed` z tego samego powodu co
+            Projects2: strona liczy własną wysokość jako `height: 100%`, więc
+            `Container maxWidth="lg"` obciąłby płótno, a `calc(100vh - 64px)`
+            przestrzeliłby viewport. Górny pasek i nawigacja zostają — to nie
+            jest edytor pełnoekranowy, tylko narzędzie obok reszty PIM-u. */}
+        <Route
+          path="/user/:userName/nauka/sci-plot"
+          element={
+            <RequireAuth>
+              <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+                <Layout fullBleed>
+                  <Suspense fallback={null}><SciPlotPage /></Suspense>
                 </Layout>
               </Box>
             </RequireAuth>

@@ -66,6 +66,7 @@ import {
   Memory as MemoryIcon,
   Dns as DnsIcon,
   Widgets as WidgetsIcon,
+  ShowChart as ShowChartIcon,
 } from '@mui/icons-material';
 import { useAuth } from '@modules/auth';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -135,7 +136,12 @@ function Layout({ children, fullBleed, hideChrome }: LayoutProps) {
         { text: 'Pulpit', icon: <DashboardIcon />, path: `/user/${userName}/pim/pulpit` },
         // Baza wiedzy czyta katalog `knowledge/` z Drive — adres jest wspólny
         // dla wszystkich użytkowników, bo strona bierze pliki z ich własnego VFS.
-        { text: 'Baza wiedzy', icon: <ScienceIcon />, path: '/knowledge' },
+        {
+          text: 'Nauka', icon: <ScienceIcon />, children: [
+            { text: 'Baza wiedzy', icon: <ScienceIcon />, path: '/knowledge' },
+            { text: 'SciPlot', icon: <ShowChartIcon />, path: `/user/${userName}/nauka/sci-plot` },
+          ],
+        },
         {
           text: 'Electronics', icon: <DeveloperBoardIcon />, children: [
             { text: 'Welcome', icon: <StorefrontIcon />, path: `/user/${userName}/electronics/welcome` },

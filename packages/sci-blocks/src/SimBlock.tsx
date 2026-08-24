@@ -51,6 +51,16 @@ const btn: CSSProperties = {
   border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', color: '#334155',
 };
 
+/**
+ * Nazwa do pliku eksportu: model z biblioteki albo pierwszy użyty wzór.
+ *
+ * Blok `sim` nie ma własnego identyfikatora — wskazuje na fizykę stojącą wyżej
+ * w tekście, więc nazwa pliku bierze się stamtąd.
+ */
+function usedId(setup: { usedFormulas: Array<{ id: string }> }): string | undefined {
+  return setup.usedFormulas[0]?.id;
+}
+
 export function SimBlock({ code, formulas, onChange, bare, workerFactory }: SimBlockProps) {
   const setup = useMemo(() => buildSimSetup(formulas, code), [formulas, code]);
   const allViews = useMemo(() => suggestViews(setup.model, setup.spec.view), [setup.model, setup.spec.view]);
@@ -113,6 +123,7 @@ export function SimBlock({ code, formulas, onChange, bare, workerFactory }: SimB
       )}
 
       <ModelViews
+        blockId={setup.spec.model ?? usedId(setup)}
         model={setup.model}
         views={views}
         exposed={setup.exposed}

@@ -31,6 +31,15 @@ export interface BlockRendererProps {
    */
   onChange?: (next: string) => void;
   /**
+   * Zapis **infostringu** bloku; brak znaczy, że nie da się go zmienić.
+   *
+   * Osobno od `onChange`, bo to inna rzecz niż treść: blok diagramu trzyma tu
+   * swój tryb (` ```mermaid:view `), a bloki `automate` i `pscript` — swoje
+   * ustawienia. Bez tego kanału ustawienie bloku żyłoby wyłącznie w stanie
+   * komponentu i ginęło przy każdym otwarciu dokumentu.
+   */
+  onLanguageChange?: (next: string) => void;
+  /**
    * Pozostałe bloki kodu tego dokumentu.
    *
    * Pierwszy zewnętrzny klient rejestru wymusił to rozszerzenie kontraktu:
