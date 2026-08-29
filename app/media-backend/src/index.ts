@@ -23,17 +23,35 @@ fs.mkdirSync(dataDir, { recursive: true });
 const server = new MediaHttpServer(port, dataDir, staticDir, {
   key: process.env.PODCASTINDEX_KEY ?? '',
   secret: process.env.PODCASTINDEX_SECRET ?? '',
+}, process.env.ANTHROPIC_API_KEY, {
+  // Broker MyCastle — stamtąd Kasia bierze projekty, zadania i kalendarz.
+  // Nie REST: `/files/` w MyCastle udostępnia wyłącznie `data/public`, a dane
+  // PIM leżą poza nim i chodzą przez VFS po MQTT.
+  broker: process.env.MYCASTLE_MQTT ?? '',
+  uzytkownik: process.env.MYCASTLE_USER ?? '',
+  haslo: process.env.MYCASTLE_PASSWORD ?? '',
 });
 
 server.init()
   .then(() => server.start())
   .then(() => {
+    // Pętla dopiero po starcie serwera — inaczej pierwszy przebieg mógłby
+    // zapisać stan, zanim trasy zaczną odpowiadać, i panel pokazałby zmianę,
+    // której źródła nie da się jeszcze podejrzeć.
+    server.startKasia();
+
     console.log(`Media Backend   →  http://localhost:${port}`);
     console.log(`Data dir        →  ${dataDir}`);
     console.log(`Static dir      →  ${staticDir ?? '(brak — uruchom pnpm build:media-web)'}`);
     console.log(`Podcast Index   →  ${server.hasPodcastIndexCredentials()
       ? 'klucze wczytane'
       : '(brak kluczy — szukamy tylko w iTunes)'}`);
+    console.log(`Kasia           →  ${process.env.ANTHROPIC_API_KEY
+      ? 'model gotowy, pętla co minutę'
+      : '(brak ANTHROPIC_API_KEY — panel działa, Kasia milczy)'}`);
+    console.log(`Dane MyCastle   →  ${server.hasMycastleAccess()
+      ? `${process.env.MYCASTLE_MQTT} jako ${process.env.MYCASTLE_USER}`
+      : '(brak MYCASTLE_MQTT — Kasia nie zna projektów ani kalendarza)'}`);
   })
   .catch((err: Error) => {
     console.error('Nie udało się wystartować serwera:', err.message);

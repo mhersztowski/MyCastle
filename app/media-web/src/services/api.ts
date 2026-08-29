@@ -77,6 +77,71 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+// ── Kasia ────────────────────────────────────────────────────────────────────
+
+export type RodzajSpotkania = 'HersztuMorning' | 'HersztuEvening' | 'HersztuWeekly';
+export type TrybDostepnosci = 'dostepny' | 'nie-przeszkadzac' | 'spie';
+
+export interface Dostepnosc {
+  tryb: TrybDostepnosci;
+  od: number;
+  do?: number;
+}
+
+export interface Spotkanie {
+  rodzaj: RodzajSpotkania;
+  godzina: string;
+  dzienTygodnia?: number;
+  wlaczone: boolean;
+  uzgodnione: boolean;
+}
+
+export interface FragmentPromptu {
+  id: string;
+  kind: 'init' | 'update';
+  zrodlo: string;
+  tekst: string;
+  dodanoO: number;
+  wygasaO?: number;
+}
+
+export interface WiadomoscKasi {
+  id: string;
+  rola: 'user' | 'assistant' | 'system';
+  tresc: string;
+  o: number;
+  zInicjatywy?: boolean;
+}
+
+export type DostawcaModelu = 'anthropic' | 'openai' | 'ollama';
+
+export interface UstawieniaKasi {
+  promptInit: string;
+  promptUpdate: string;
+  inicjatywaCoMin: number;
+  /** Nazwa modelu, np. `claude-sonnet-5`. */
+  model: string;
+  dostawca: DostawcaModelu;
+  adresModelu: string;
+  strefaCzasowa: string;
+  /*
+   * Klucza API tu nie ma i nie będzie — zostaje po stronie serwera.
+   * Panel dowiaduje się o jego obecności z odpowiedzi `kasiaModel`.
+   */
+}
+
+export interface StanKasi {
+  ustawienia: UstawieniaKasi;
+  dostepnosc: Dostepnosc;
+  spotkania: Spotkanie[];
+  przypomnienia: Array<{
+    id: string; rodzaj: RodzajSpotkania; ustalonaNa: number;
+    nastepnaProba: number; prob: number; stan: string;
+  }>;
+  fragmenty: FragmentPromptu[];
+  rozmowa: WiadomoscKasi[];
+}
+
 export const api = {
   searchPodcasts: (term: string) =>
     request<SearchResponse>(`/api/podcasts/search?q=${encodeURIComponent(term)}`),
@@ -112,6 +177,47 @@ export const api = {
 
   updateNote: (id: string, text: string) =>
     request<Note>(`/api/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ text }) }),
+
+  // — Kasia —
+
+  kasiaStan: () => request<StanKasi>('/api/kasia/stan'),
+
+  kasiaPowiedz: (tekst: string) =>
+    request<{ odpowiedz: string }>('/api/kasia/powiedz', {
+      method: 'POST', body: JSON.stringify({ tekst }),
+    }),
+
+  /** `minut` ogranicza tryb w czasie; bez niego obowiązuje do odwołania. */
+  kasiaDostepnosc: (tryb: TrybDostepnosci, minut?: number) =>
+    request<StanKasi>('/api/kasia/dostepnosc', {
+      method: 'POST', body: JSON.stringify({ tryb, minut }),
+    }),
+
+  kasiaSpotkanie: (rodzaj: RodzajSpotkania, zmiany: Partial<Pick<Spotkanie, 'godzina' | 'dzienTygodnia' | 'wlaczone'>>) =>
+    request<StanKasi>('/api/kasia/spotkanie', {
+      method: 'POST', body: JSON.stringify({ rodzaj, ...zmiany }),
+    }),
+
+  kasiaUstawienia: (zmiany: Partial<UstawieniaKasi>) =>
+    request<StanKasi>('/api/kasia/ustawienia', {
+      method: 'POST', body: JSON.stringify(zmiany),
+    }),
+
+  kasiaDodajFragment: (f: { id?: string; kind: 'init' | 'update'; zrodlo: string; tekst: string; wygasaZa?: number }) =>
+    request<StanKasi>('/api/kasia/fragment', { method: 'POST', body: JSON.stringify(f) }),
+
+  /** Podgląd danych z MyCastle — dokładnie ten tekst, który dostaje model. */
+  kasiaDane: () => request<{ opis: string }>('/api/kasia/dane'),
+
+  /** Zmiana dostawcy modelu. Pusty `klucz` znaczy „nie zmieniaj". */
+  kasiaModel: (zmiany: { dostawca?: DostawcaModelu; model?: string; adres?: string; klucz?: string }) =>
+    request<{ ok: true; gotowy: boolean; brakuje: string | null }>('/api/kasia/model', {
+      method: 'POST', body: JSON.stringify(zmiany),
+    }),
+
+  kasiaUsunFragment: (id: string, zrodlo: string) =>
+    request<StanKasi>(`/api/kasia/fragment/${encodeURIComponent(id)}?zrodlo=${encodeURIComponent(zrodlo)}`,
+      { method: 'DELETE' }),
 };
 
 /**

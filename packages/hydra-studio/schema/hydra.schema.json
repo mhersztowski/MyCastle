@@ -943,6 +943,41 @@
           },
           "additionalProperties": false
         },
+        "modbus": {
+          "type": "object",
+          "description": "Magistrala Modbus RTU po RS-485",
+          "properties": {
+            "uart": {
+              "type": "integer",
+              "description": "Numer portu szeregowego",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "baud": {
+              "type": "integer",
+              "description": "Prędkość magistrali; poniżej 19200 odstęp t3.5 liczy się z niej [bps]",
+              "minimum": 1200,
+              "maximum": 115200
+            },
+            "de_pin": {
+              "type": "string",
+              "description": "Pin sterujący nadajnikiem RS-485, np. Pin.Rs485De"
+            },
+            "response_timeout_ms": {
+              "type": "integer",
+              "description": "Ile czekać na pierwszy bajt odpowiedzi; czujniki glebowe mierzą dopiero na zapytanie [ms]",
+              "minimum": 10,
+              "maximum": 5000
+            },
+            "retries": {
+              "type": "integer",
+              "description": "Ile razy powtórzyć po ciszy albo złej ramce; odmowa urządzenia nie jest ponawiana",
+              "minimum": 0,
+              "maximum": 5
+            }
+          },
+          "additionalProperties": false
+        },
         "media": {
           "type": "object",
           "description": "Potok multimedialny: audio i obraz",

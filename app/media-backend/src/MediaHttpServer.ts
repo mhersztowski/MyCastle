@@ -23,6 +23,11 @@ import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
 import { searchPodcasts, type PodcastIndexCredentials } from './podcastIndex';
 import { fetchFeed } from './rss';
 import { MediaStore } from './store';
+import { KasiaStore } from './kasia/KasiaStore';
+import { KasiaService } from './kasia/KasiaService';
+import { ADRESY_DOMYSLNE, MODELE_DOMYSLNE, utworzModel } from './kasia/llm';
+import { obsluzKasie } from './kasia/trasy';
+import { MycastleClient } from './kasia/MycastleClient';
 
 /** Ile czasu trzymamy odpowiedzi katalogu i kanałów, zanim spytamy ponownie. */
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -37,20 +42,89 @@ export class MediaHttpServer extends HttpUploadServer {
   private readonly credentials?: PodcastIndexCredentials;
   private readonly cache = new Map<string, CacheEntry>();
 
+  private readonly kasiaStore: KasiaStore;
+  private readonly kluczZeSrodowiska: string;
+  private readonly mycastleClient?: MycastleClient;
+  readonly kasia: KasiaService;
+  private pulsKasi?: ReturnType<typeof setInterval>;
+
   constructor(
     port: number,
     dataDir: string,
     staticDir?: string,
     credentials?: PodcastIndexCredentials,
+    kluczModelu?: string,
+    mycastle?: { broker: string; uzytkownik: string; haslo: string },
   ) {
     super(port, new FileSystem(dataDir), undefined, undefined, undefined, staticDir);
     this.store = new MediaStore(dataDir);
     this.credentials = credentials?.key && credentials?.secret ? credentials : undefined;
+
+    this.kasiaStore = new KasiaStore(dataDir);
+    this.kluczZeSrodowiska = kluczModelu ?? '';
+    this.mycastleClient = mycastle?.broker
+      ? new MycastleClient({ broker: mycastle.broker, uzytkownik: mycastle.uzytkownik, haslo: mycastle.haslo })
+      : undefined;
+    // Model dostaje właściwą konfigurację w `init()`, po wczytaniu stanu z dysku.
+    this.kasia = new KasiaService(this.kasiaStore, utworzModel({
+      dostawca: 'anthropic', klucz: '', adres: ADRESY_DOMYSLNE.anthropic, model: MODELE_DOMYSLNE.anthropic,
+    }), this.mycastleClient);
   }
 
-  /** Wczytuje listę odtwarzania i notatki; wołane przed `start()`. */
+  /** Wczytuje listę odtwarzania, notatki i stan Kasi; wołane przed `start()`. */
   async init(): Promise<void> {
     await this.store.load();
+    await this.kasiaStore.wczytaj();
+
+    /*
+     * Klucz ze środowiska jest **wartością zapasową**, nie nadrzędną: gdy
+     * użytkownik wpisał klucz w panelu, ten wygrywa. Odwrotna kolejność
+     * sprawiłaby, że zmiana w panelu nie działa, dopóki ktoś nie znajdzie
+     * i nie usunie wpisu w `.env` — a nic w interfejsie by o tym nie mówiło.
+     */
+    const zapisany = this.kasiaStore.pobierzSekrety().kluczModelu;
+    const klucz = zapisany || this.kluczZeSrodowiska;
+    const u = this.kasiaStore.pobierz().ustawienia;
+
+    this.kasia.podmienModel(utworzModel({
+      dostawca: u.dostawca,
+      klucz,
+      adres: u.adresModelu,
+      model: u.model,
+    }));
+  }
+
+  /**
+   * Uruchamia pętlę Kasi.
+   *
+   * Puls co minutę, niezależnie od ustawionego odstępu inicjatywy: przebieg
+   * musi być częstszy niż najkrótsze zdarzenie, które ma wychwycić, a spotkania
+   * zaczynają się o pełnej minucie. To `KasiaService` decyduje, czy z danego
+   * przebiegu coś wyniknie — tutaj tylko odmierzamy czas.
+   *
+   * Błędy są łapane na miejscu: nieobsłużone odrzucenie obietnicy w `setInterval`
+   * kładzie proces Node'a, a awaria API modelu nie jest powodem, żeby przestał
+   * działać odtwarzacz podkastów.
+   */
+  startKasia(): void {
+    if (this.pulsKasi) return;
+    this.pulsKasi = setInterval(() => {
+      void this.kasia.tick().then((w) => {
+        for (const blad of w.bledy) console.error('[kasia]', blad);
+        for (const tekst of w.wypowiedzi) console.log('[kasia]', tekst.slice(0, 120));
+      }).catch((err: Error) => console.error('[kasia] pętla:', err.message));
+    }, 60_000);
+  }
+
+  stopKasia(): void {
+    if (this.pulsKasi) clearInterval(this.pulsKasi);
+    this.pulsKasi = undefined;
+    this.mycastleClient?.rozlacz();
+  }
+
+  /** Czy Kasia ma skąd brać dane o dniu. Panel pokazuje to wprost. */
+  hasMycastleAccess(): boolean {
+    return this.mycastleClient?.skonfigurowany ?? false;
   }
 
   /** Czy backend ma czym podpisać zapytania do Podcast Index. */
@@ -63,7 +137,8 @@ export class MediaHttpServer extends HttpUploadServer {
     const pathname = url.pathname;
 
     if (!pathname.startsWith('/api/podcasts') && !pathname.startsWith('/api/queue')
-      && !pathname.startsWith('/api/notes') && !pathname.startsWith('/api/media')) {
+      && !pathname.startsWith('/api/notes') && !pathname.startsWith('/api/media')
+      && !pathname.startsWith('/api/kasia')) {
       await super.handleRequest(req, res);
       return;
     }
@@ -76,6 +151,11 @@ export class MediaHttpServer extends HttpUploadServer {
     }
 
     try {
+      if (pathname.startsWith('/api/kasia')) {
+        await obsluzKasie(req, res, pathname, this.kasia,
+          (r, status, dane) => this.sendJsonResponse(r, status, dane as Record<string, unknown>));
+        return;
+      }
       if (pathname === '/api/podcasts/search') return await this.handleSearch(url, res);
       if (pathname === '/api/podcasts/feed') return await this.handleFeed(url, res);
       if (pathname === '/api/media') return await this.handleMedia(req, url, res);

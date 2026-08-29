@@ -1101,7 +1101,18 @@ export function createHydraStudioPlugin(options: StudioPluginOptions): HostPlugi
             // Pozycje z projektu interfejsu trafiają do slotów gospodarza:
             // pasek narzędzi, pasek stanu i paleta poleceń. Studio nie rysuje
             // drugiego kompletu obok tego, który edytor już ma.
+            /*
+             * Ta lista musi obejmować **każdy** identyfikator z MENU i TOOLBAR.
+             *
+             * Pozycja w palecie i przycisk na pasku rejestrują samą nazwę
+             * polecenia; bez wpisu tutaj wskazują na handler, którego nie ma —
+             * a wtedy kliknięcie nie robi dosłownie nic i niczego nie zgłasza.
+             * Tak zniknęło `project.flashWeb`: przycisk „Wgraj przez USB" był
+             * widoczny, `runAction` miał dla niego gałąź, a między jednym
+             * a drugim nie było połączenia.
+             */
             for (const id of ['project.build', 'project.buildAll', 'project.upload',
+                              'project.flashWeb',
                               'sim.start', 'sim.stop', 'sim.record', 'sim.inject',
                               'tools.monitor', 'tools.i2c', 'tools.hil'] as const) {
                 disposables.push(api.commands.register(id, (argument?: unknown) => {

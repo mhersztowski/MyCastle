@@ -18,6 +18,7 @@ import { HydraDocument } from './document.js';
 import { buildPlan } from './emit/plan.js';
 import { emitPlatformio, isGenerated } from './emit/platformio.js';
 import { emitCMake } from './emit/cmake.js';
+import { validate } from './validate.js';
 import { boardSourceFrom, emitBoardHeader } from './emit/board.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -302,4 +303,30 @@ test('cel wasm wypada z platformio.ini', () => {
     }));
     expectOk(!ini.includes('[env:web]'));
     expectOk(ini.includes('[env:s3]'));
+});
+
+test('modbus wchodzi do budowy jako moduł z własną flagą', () => {
+    // Bez wpisu w MODULE_FLAGS `.hydra` może włączyć moduł, a emiter po cichu
+    // go pominie: `src/modbus/` skompiluje się do niczego, bo cała zawartość
+    // stoi pod `#if HYDRA_ENABLE_MODBUS`. Objawem byłby konsolidator
+    // narzekający na brak symboli, których źródła są na dysku.
+    const doc = HydraDocument.parse(`hydra: "0.4"
+project: { name: agro, version: 1.0.0 }
+targets:
+  default: s3
+  s3: { mcu: esp32s3 }
+modules:
+  modbus:
+    uart: 1
+    baud: 9600
+    de_pin: Pin.Rs485De
+  sense: {}
+`);
+    expectDeepEqual(validate(doc).filter((d) => d.severity === 'error'), []);
+
+    const plan = buildPlan(doc.toJS());
+    const target = plan.targets[0];
+    expectOk(target, 'plan ma cel');
+    expectMatch(target!.flags.join(" "), /HYDRA_ENABLE_MODBUS=1/);
+    expectOk(target!.modules.includes('modbus'), 'modbus jest wśród modułów celu');
 });

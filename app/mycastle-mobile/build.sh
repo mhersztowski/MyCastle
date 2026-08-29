@@ -132,6 +132,21 @@ sed -i '/^org\.gradle\.jvmargs/d' gradle.properties
 echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError" >> gradle.properties
 echo "  Set org.gradle.jvmargs=-Xmx4g"
 
+# Blokady po kontenerze ubitym w połowie budowy.
+#
+# Katalog `.gradle` leży w podmontowanym drzewie, więc przeżywa kontener.
+# Gradle nie odróżnia blokady trzymanej przez żywy proces od porzuconej i po
+# prostu na nią czeka — bez tego kroku następne uruchomienie stoi kilkanaście
+# minut i kończy się „Timeout waiting to lock", co wygląda na awarię budowy,
+# a nie na ślad po poprzedniej.
+#
+# Kasowanie jest bezpieczne, bo w kontenerze idzie jedna budowa naraz
+# i z `--no-daemon`: żaden proces nie może w tym momencie trzymać blokady.
+if find .gradle -name '*.lock' -type f 2>/dev/null | grep -q .; then
+  echo "  Usuwam blokady Gradle po poprzednim uruchomieniu"
+  find .gradle -name '*.lock' -type f -delete
+fi
+
 chmod +x gradlew
 ./gradlew assembleRelease --no-daemon --quiet
 

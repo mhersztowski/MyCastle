@@ -22,6 +22,7 @@ import {
   Podcasts as PodcastsIcon,
   LibraryMusic as LibraryMusicIcon,
   StickyNote2 as StickyNote2Icon,
+  SmartToy as SmartToyIcon,
 } from '@mui/icons-material';
 import { PlayerBar } from './PlayerBar';
 
@@ -37,6 +38,7 @@ const menuItems: NavItem[] = [
   { text: 'Podcasts', icon: <PodcastsIcon />, path: '/podcasts' },
   { text: 'Kolejka', icon: <LibraryMusicIcon />, path: '/queue' },
   { text: 'Notatki', icon: <StickyNote2Icon />, path: '/notes' },
+  { text: 'Kasia', icon: <SmartToyIcon />, path: '/kasia' },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

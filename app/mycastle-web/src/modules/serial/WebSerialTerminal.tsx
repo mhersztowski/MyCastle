@@ -14,7 +14,7 @@ import { Close, UsbOff, Usb, DeleteOutline, DragIndicator } from '@mui/icons-mat
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { WebSerialService } from './WebSerialService';
+import { WebSerialService } from '@mhersztowski/web-serial';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 const PANEL_HEIGHT = 220;

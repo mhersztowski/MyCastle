@@ -1,0 +1,432 @@
+/**
+ * KasiaService.ts — mózg asystentki.
+ *
+ * Spina magazyn, model językowy i harmonogram. Ma dwa wejścia:
+ *
+ *   • `powiedz(tekst)` — użytkownik coś napisał, Kasia odpowiada,
+ *   • `tick(teraz)`    — upłynęła chwila; sprawdź, czy jest powód się odezwać.
+ *
+ * ## Czas wchodzi parametrem, nie przez `Date.now()`
+ *
+ * Każda metoda przyjmuje bieżącą chwilę z zewnątrz. Dzięki temu cała logika
+ * spotkań i ponowień — rzeczy, które w naturalny sposób dzieją się przez wiele
+ * godzin — daje się przetestować w kilkanaście milisekund i bez czekania. To
+ * jedyny powód tego zabiegu, ale wystarczający: bez niego testu „ponawia po
+ * dziesięciu minutach" nie dałoby się napisać uczciwie.
+ *
+ * ## Dwie różne rozmowy z modelem
+ *
+ * Odpowiadanie i inicjatywa używają **innych promptów systemowych**. Przy
+ * odpowiadaniu model dostaje `promptInit` (kim jest i jak ma się zachowywać),
+ * przy inicjatywie `promptUpdate` (o czym ma teraz pomyśleć) wraz z umową, że
+ * brak powodu do odezwania się zgłasza słowem `MILCZ`. Bez tej umowy asystentka
+ * podejmująca inicjatywę co pięć minut odzywałaby się co pięć minut — bo model
+ * poproszony o wypowiedź zawsze coś powie.
+ */
+
+import type { KasiaStore } from './KasiaStore';
+import {
+  ADRESY_DOMYSLNE, MODELE_DOMYSLNE, utworzModel,
+  type DostawcaModelu, type KonfiguracjaModelu, type Model,
+} from './llm';
+
+const DOSTAWCY: readonly DostawcaModelu[] = ['anthropic', 'openai', 'ollama'];
+import {
+  BladZadania,
+  MILCZENIE, type FragmentPromptu, type RodzajSpotkania, type Spotkanie,
+  type StanKasi, type TrybDostepnosci, type UstawieniaKasi, type WiadomoscKasi,
+} from './model';
+import { czyMoznaZaczepic, ustawDostepnosc as nowaDostepnosc } from './dostepnosc';
+import { doZaczepienia, ponow, zaplanujPrzypomnienia } from './harmonogram';
+import { dodajFragment, opisKontekstu, usunWygasle, zbudujPrompt } from './prompt';
+import { opisDanych } from './dane';
+import type { MycastleClient } from './MycastleClient';
+
+/** Ile ostatnich wiadomości trafia do modelu. */
+const OKNO_ROZMOWY = 30;
+
+export interface WynikTicku {
+  /** Co Kasia powiedziała w tym przebiegu. */
+  wypowiedzi: string[];
+  /** Które spotkania zostały w tym przebiegu zaczepione. */
+  spotkania: RodzajSpotkania[];
+  bledy: string[];
+}
+
+function id(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+const GODZINA_POPRAWNA = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+export class KasiaService {
+  /** Kiedy ostatnio myślała sama — pilnuje odstępu z ustawień. */
+  private ostatniaInicjatywa = 0;
+
+  /**
+   * Ostatnio pobrane dane z MyCastle wraz z chwilą pobrania.
+   *
+   * Bufor jest tu konieczny, nie wygodny: bez niego każdy namysł (domyślnie co
+   * pięć minut) i każda wiadomość ciągnęłyby kilkanaście plików przez brokera.
+   * Zadania i kalendarz zmieniają się w skali godzin, więc minuta nieświeżości
+   * nic nie kosztuje, a odczytów jest kilkadziesiąt razy mniej.
+   */
+  private buforDanych: { o: number; opis: string } | null = null;
+
+  constructor(
+    private readonly store: KasiaStore,
+    /*
+     * Model jest podmienialny, bo dostawcę i klucz wybiera się w panelu.
+     * Alternatywą byłaby fabryka wołana przy każdym zapytaniu, ale wtedy każda
+     * rozmowa tworzyłaby nowego klienta HTTP — a konfiguracja zmienia się
+     * kilka razy w życiu instalacji, nie kilka razy na minutę.
+     */
+    private model: Model,
+    /** Dostęp do danych MyCastle; bez niego Kasia działa, tylko nie zna dnia. */
+    private readonly mycastle?: MycastleClient,
+  ) {}
+
+  /** Podmienia model po zmianie konfiguracji w panelu. */
+  podmienModel(model: Model): void {
+    this.model = model;
+  }
+
+  // ── Kontekst dla modelu ────────────────────────────────────────────────────
+
+  private kontekst(stan: StanKasi, teraz: number): string {
+    return opisKontekstu({
+      teraz,
+      strefa: stan.ustawienia.strefaCzasowa,
+      dostepnosc: stan.dostepnosc,
+      spotkania: stan.spotkania,
+      dane: this.buforDanych?.opis,
+    });
+  }
+
+  /**
+   * Odświeża dane z MyCastle, jeśli bufor się zestarzał.
+   *
+   * Błąd pobierania **nie przerywa** działania: Kasia potrafi rozmawiać bez
+   * znajomości zadań, tylko gorzej. Zamiast rzucać wyjątek, dopisujemy do
+   * kontekstu zdanie o tym, że danych nie ma — inaczej model mówiłby o pustym
+   * dniu, podczas gdy naprawdę nie wiadomo, jaki ten dzień jest.
+   */
+  private async odswiezDane(teraz: number, strefa: string, maxWiek = 60_000): Promise<void> {
+    if (!this.mycastle?.skonfigurowany) return;
+    if (this.buforDanych && teraz - this.buforDanych.o < maxWiek) return;
+
+    try {
+      const d = await this.mycastle.pobierz(teraz, strefa);
+      // Błędy idą do `opisDanych`, a nie doklejane po fakcie: od nich zależy,
+      // czy wolno powiedzieć „dzień jest pusty".
+      this.buforDanych = {
+        o: teraz,
+        opis: opisDanych({
+          projekty: d.projekty, zadania: d.zadania, wydarzenia: d.wydarzenia,
+          teraz, strefa, bledy: d.bledy,
+        }),
+      };
+    } catch (err) {
+      this.buforDanych = {
+        o: teraz,
+        opis: `Dane z MyCastle są w tej chwili niedostępne (${(err as Error).message}). `
+          + 'Nie wnioskuj z tego, że dzień jest pusty — po prostu nie wiadomo.',
+      };
+    }
+  }
+
+  private system(stan: StanKasi, kind: 'init' | 'update', teraz: number, dodatek?: string): string {
+    const baza = kind === 'init' ? stan.ustawienia.promptInit : stan.ustawienia.promptUpdate;
+    const kontekst = [this.kontekst(stan, teraz), dodatek?.trim()].filter(Boolean).join('\n\n');
+    return zbudujPrompt({ baza, fragmenty: stan.fragmenty, kind, teraz, kontekst });
+  }
+
+  // ── Rozmowa ────────────────────────────────────────────────────────────────
+
+  /**
+   * Odpowiedź na wiadomość użytkownika.
+   *
+   * Działa **niezależnie od dostępności**: „nie przeszkadzać" ogranicza to, czy
+   * Kasia zaczepia sama, a nie czy odpowiada zagadnięta. Blokowanie odpowiedzi
+   * dawałoby asystentkę, która milczy w reakcji na własne imię.
+   */
+  async powiedz(tekst: string, teraz: number = Date.now()): Promise<string> {
+    const wiadomosc: WiadomoscKasi = { id: id(), rola: 'user', tresc: tekst, o: teraz };
+    await this.store.zmien((s) => {
+      s.rozmowa.push(wiadomosc);
+      // Wygasłe fragmenty znikają przy każdej okazji, nie tylko w pętli:
+      // `zbudujPrompt` i tak by je pominął, ale zostawałyby widoczne w panelu.
+      s.fragmenty = usunWygasle(s.fragmenty, teraz);
+    });
+
+    const stan = this.store.pobierz();
+    await this.odswiezDane(teraz, stan.ustawienia.strefaCzasowa);
+    const odpowiedz = await this.model.odpowiedz({
+      system: this.system(stan, 'init', teraz),
+      rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
+      model: stan.ustawienia.model,
+    });
+
+    await this.store.zmien((s) => {
+      s.rozmowa.push({ id: id(), rola: 'assistant', tresc: odpowiedz, o: teraz });
+      /*
+       * Odezwanie się użytkownika zamyka oczekujące przypomnienia.
+       *
+       * Cel przypomnienia jest osiągnięty w chwili, gdy człowiek odpowiada —
+       * niezależnie od tego, czy odpowiedział na jego treść. Ponawianie po
+       * nawiązanej rozmowie byłoby dopytywaniem o coś, o czym właśnie mówimy.
+       */
+      for (const p of s.przypomnienia) if (p.stan === 'oczekuje') p.stan = 'odbyte';
+    });
+
+    return odpowiedz;
+  }
+
+  // ── Pętla ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Jeden przebieg pętli: spotkania najpierw, inicjatywa dopiero potem.
+   *
+   * Kolejność nie jest obojętna. Gdyby inicjatywa szła pierwsza, Kasia mogłaby
+   * zagadnąć o drobiazgu minutę przed porannym spotkaniem — a wtedy odpowiedź
+   * użytkownika zamknęłaby przypomnienie o spotkaniu, które nigdy się nie odbyło.
+   */
+  async tick(teraz: number = Date.now()): Promise<WynikTicku> {
+    const wynik: WynikTicku = { wypowiedzi: [], spotkania: [], bledy: [] };
+
+    await this.store.zmien((s) => {
+      s.fragmenty = usunWygasle(s.fragmenty, teraz);
+      s.przypomnienia = zaplanujPrzypomnienia(
+        s.spotkania, s.przypomnienia, teraz, s.ustawienia.strefaCzasowa,
+      );
+      // Odbyte i porzucone trzymamy tylko do końca doby — inaczej lista rośnie.
+      s.przypomnienia = s.przypomnienia.filter(
+        (p) => p.stan === 'oczekuje' || teraz - p.ustalonaNa < 24 * 3600_000,
+      );
+    });
+
+    if (!this.model.gotowy()) return wynik;
+
+    await this.odswiezDane(teraz, this.store.pobierz().ustawienia.strefaCzasowa);
+    await this.obsluzSpotkania(teraz, wynik);
+
+    /*
+     * Po zaczepieniu o spotkaniu inicjatywa czeka do następnego przebiegu.
+     *
+     * Inaczej Kasia wysyłałaby dwie wiadomości pod rząd — „zaczynamy poranne
+     * spotkanie" i zaraz potem luźną myśl — a użytkownik odpowiadałby na drugą,
+     * bo tę widzi. Przesuwamy też licznik, żeby namysł wypadł dopiero po
+     * zwykłym odstępie od spotkania, a nie natychmiast po nim.
+     */
+    if (wynik.spotkania.length > 0) {
+      this.ostatniaInicjatywa = teraz;
+      return wynik;
+    }
+
+    await this.obsluzInicjatywe(teraz, wynik);
+    return wynik;
+  }
+
+  private async obsluzSpotkania(teraz: number, wynik: WynikTicku): Promise<void> {
+    const stan = this.store.pobierz();
+    const czekajace = doZaczepienia(stan.przypomnienia, stan.dostepnosc, teraz);
+
+    for (const p of czekajace) {
+      const ponowienie = p.prob > 0
+        ? `\n\nTo już ${p.prob + 1}. próba — poprzednie pozostały bez odpowiedzi. Bądź krótsza.`
+        : '';
+
+      const polecenie = `Zaczyna się spotkanie ${p.rodzaj}. Poprowadź je: `
+        + `odezwij się pierwsza, krótko i konkretnie.${ponowienie}`;
+
+      try {
+        const tresc = await this.model.odpowiedz({
+          system: this.system(stan, 'init', teraz, polecenie),
+          rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
+          model: stan.ustawienia.model,
+        });
+
+        if (tresc) {
+          wynik.wypowiedzi.push(tresc);
+          wynik.spotkania.push(p.rodzaj);
+          await this.store.zmien((s) => {
+            s.rozmowa.push({
+              id: id(), rola: 'assistant', tresc, o: teraz, zInicjatywy: true,
+            });
+            const cel = s.przypomnienia.find((x) => x.id === p.id);
+            if (cel) Object.assign(cel, ponow(cel));
+          });
+        }
+      } catch (err) {
+        wynik.bledy.push(`Spotkanie ${p.rodzaj}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private async obsluzInicjatywe(teraz: number, wynik: WynikTicku): Promise<void> {
+    const stan = this.store.pobierz();
+    const coMin = stan.ustawienia.inicjatywaCoMin;
+
+    if (coMin <= 0) return;
+    if (teraz - this.ostatniaInicjatywa < coMin * 60_000) return;
+    // Zapytanie kosztuje, więc przy wyciszeniu nawet go nie wysyłamy.
+    if (!czyMoznaZaczepic(stan.dostepnosc, teraz)) return;
+
+    this.ostatniaInicjatywa = teraz;
+
+    try {
+      const tresc = await this.model.odpowiedz({
+        system: this.system(stan, 'update', teraz),
+        rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
+        model: stan.ustawienia.model,
+      });
+
+      /*
+       * `MILCZ` bywa opakowane w kropkę albo cudzysłów — model rzadko odpowiada
+       * dokładnie jednym słowem. Porównanie na sztywno dawałoby wypowiedź
+       * o treści „MILCZ." wysłaną użytkownikowi.
+       */
+      const milczy = tresc.replace(/[."'\s]/g, '').toUpperCase() === MILCZENIE;
+      if (milczy || !tresc) return;
+
+      wynik.wypowiedzi.push(tresc);
+      await this.store.zmien((s) => {
+        s.rozmowa.push({ id: id(), rola: 'assistant', tresc, o: teraz, zInicjatywy: true });
+      });
+    } catch (err) {
+      wynik.bledy.push(`Inicjatywa: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Ustawienia ─────────────────────────────────────────────────────────────
+
+  async ustawDostepnosc(
+    tryb: TrybDostepnosci, teraz: number = Date.now(), minut?: number,
+  ): Promise<StanKasi> {
+    return this.store.zmien((s) => { s.dostepnosc = nowaDostepnosc(tryb, teraz, minut); });
+  }
+
+  async ustawSpotkanie(
+    rodzaj: RodzajSpotkania, zmiany: Partial<Pick<Spotkanie, 'godzina' | 'dzienTygodnia' | 'wlaczone'>>,
+  ): Promise<StanKasi> {
+    if (zmiany.godzina != null && !GODZINA_POPRAWNA.test(zmiany.godzina)) {
+      throw new BladZadania(`Niepoprawna godzina „${zmiany.godzina}" — oczekiwano zapisu HH:MM.`);
+    }
+
+    return this.store.zmien((s) => {
+      const cel = s.spotkania.find((x) => x.rodzaj === rodzaj);
+      if (!cel) throw new BladZadania(`Nie znam spotkania ${rodzaj}.`);
+      Object.assign(cel, zmiany);
+      /*
+       * Zmiana godziny znaczy, że ktoś ją świadomie wybrał — a to jest różnica,
+       * którą Kasia widzi w prompcie: o godzinę domyślną wypada dopytać,
+       * uzgodnionej się nie podważa.
+       */
+      if (zmiany.godzina != null) cel.uzgodnione = true;
+
+      // Czekające przypomnienie musi pójść za nową godziną (patrz harmonogram).
+      s.przypomnienia = s.przypomnienia.filter(
+        (p) => !(p.rodzaj === rodzaj && p.stan === 'oczekuje' && p.prob === 0),
+      );
+    });
+  }
+
+  async zapiszUstawienia(zmiany: Partial<UstawieniaKasi>): Promise<StanKasi> {
+    return this.store.zmien((s) => { s.ustawienia = { ...s.ustawienia, ...zmiany }; });
+  }
+
+  /** Konfiguracja TTS/STT — backend ją tylko przechowuje, używa jej przeglądarka. */
+  async zapiszGlos(glos: unknown): Promise<{ ok: true }> {
+    await this.store.zmien((s) => { s.glos = glos; });
+    return { ok: true };
+  }
+
+  /**
+   * Zmiana dostawcy modelu.
+   *
+   * Klucz idzie do sekretów (osobny plik, nigdy nie wraca do klienta), reszta
+   * do zwykłych ustawień. Po zapisie model jest tworzony od nowa, żeby zmiana
+   * działała od razu, a nie dopiero po restarcie backendu.
+   */
+  async ustawModel(
+    zmiany: { dostawca?: string; model?: string; adres?: string; klucz?: string },
+    utworz: (cfg: KonfiguracjaModelu) => Model = utworzModel,
+  ): Promise<{ ok: true; gotowy: boolean; brakuje: string | null }> {
+    if (zmiany.dostawca != null && !DOSTAWCY.includes(zmiany.dostawca as DostawcaModelu)) {
+      throw new BladZadania(`Nieznany dostawca „${zmiany.dostawca}". Dozwolone: ${DOSTAWCY.join(', ')}.`);
+    }
+
+    if (zmiany.klucz != null) await this.store.zapiszSekrety({ kluczModelu: zmiany.klucz });
+
+    const stan = await this.store.zmien((s) => {
+      if (zmiany.dostawca != null) {
+        const d = zmiany.dostawca as DostawcaModelu;
+        s.ustawienia.dostawca = d;
+        /*
+         * Zmiana dostawcy przestawia adres i model na domyślne dla niego —
+         * chyba że przyszły w tym samym żądaniu. Bez tego wybór „Ollama"
+         * zostawiałby adres Anthropica i kończył się błędem połączenia,
+         * z którego nie wynika, że trzeba jeszcze poprawić dwa inne pola.
+         */
+        if (zmiany.adres == null) s.ustawienia.adresModelu = ADRESY_DOMYSLNE[d];
+        if (zmiany.model == null) s.ustawienia.model = MODELE_DOMYSLNE[d];
+      }
+      if (zmiany.adres != null) s.ustawienia.adresModelu = zmiany.adres;
+      if (zmiany.model != null) s.ustawienia.model = zmiany.model;
+    });
+
+    this.model = utworz({
+      dostawca: stan.ustawienia.dostawca,
+      klucz: this.store.pobierzSekrety().kluczModelu,
+      adres: stan.ustawienia.adresModelu,
+      model: stan.ustawienia.model,
+    });
+
+    return { ok: true, gotowy: this.model.gotowy(), brakuje: this.model.czegoBrakuje() };
+  }
+
+  // ── API dla skryptów ───────────────────────────────────────────────────────
+
+  async dodajFragment(
+    f: Omit<FragmentPromptu, 'dodanoO'> & { dodanoO?: number },
+    teraz: number = Date.now(),
+  ): Promise<StanKasi> {
+    return this.store.zmien((s) => {
+      s.fragmenty = dodajFragment(s.fragmenty, { ...f, dodanoO: f.dodanoO ?? teraz });
+    });
+  }
+
+  async usunFragment(idFragmentu: string, zrodlo: string): Promise<StanKasi> {
+    return this.store.zmien((s) => {
+      s.fragmenty = s.fragmenty.filter((f) => !(f.id === idFragmentu && f.zrodlo === zrodlo));
+    });
+  }
+
+  stan(): StanKasi {
+    return this.store.pobierz();
+  }
+
+  /** Czy model jest skonfigurowany — panel pokazuje to, zanim ktoś napisze. */
+  modelGotowy(): boolean {
+    return this.model.gotowy();
+  }
+
+  /**
+   * Co Kasia wie w tej chwili o dniu — dokładnie ten tekst, który dostaje model.
+   *
+   * Podgląd jest tu po to, żeby dało się rozstrzygnąć, czy Kasia mówi bzdury,
+   * bo źle rozumuje, czy dlatego, że dostała złe dane. Bez tego jedyną drogą
+   * byłoby zgadywanie z jej wypowiedzi.
+   */
+  async podgladDanych(teraz: number = Date.now()): Promise<string> {
+    const strefa = this.store.pobierz().ustawienia.strefaCzasowa;
+    // Wymuszamy świeżość: podgląd ma pokazywać stan teraz, a nie sprzed minuty.
+    await this.odswiezDane(teraz, strefa, 0);
+    return this.buforDanych?.opis ?? 'Dostęp do MyCastle nie jest skonfigurowany.';
+  }
+
+  /** Czego brakuje do działania modelu; `null`, gdy wszystko jest. */
+  czegoBrakujeModelowi(): string | null {
+    return this.model.czegoBrakuje?.() ?? null;
+  }
+}

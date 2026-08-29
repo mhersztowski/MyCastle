@@ -6,6 +6,8 @@ import { HttpUploadServer, FileSystem } from '@mhersztowski/core-backend';
 import { planHydraBuild, HydraPlanError } from './hydra/plan';
 import { resolvePreview, PreviewPathError } from './hydra/preview';
 import { runHydra } from './hydra/run';
+import { archiveFirmware, readIndex, type ArchiveEntry } from './hydra/elfArchive';
+import { planSymbolize, parseAddr2Line, anyResolved, normalizeAddress, Addr2LineError } from './hydra/addr2line';
 import { TcpBridge } from './TcpBridge';
 
 /** Kod błędu VFS → status HTTP. Ten sam zestaw, którym posługuje się `RemoteFS`. */
@@ -50,15 +52,21 @@ export class MonacoHttpServer extends HttpUploadServer {
   private readonly vfs: NodeFS;
   private readonly dataDir: string;
   private readonly hydraDir?: string;
+  /**
+   * Archiwum plików `.elf` — poza katalogiem danych, bo wsad z ESP32 waży
+   * ~9 MB i nie ma czego szukać w drzewie plików edytora.
+   */
+  private readonly symbolsDir: string;
   private readonly tcpBridge = new TcpBridge();
 
-  constructor(port: number, dataDir: string, staticDir?: string, hydraDir?: string) {
+  constructor(port: number, dataDir: string, staticDir?: string, hydraDir?: string, symbolsDir?: string) {
     // FileSystem z core-backend obsługuje upload i `/files/` klasy bazowej;
     // NodeFS jest źródłem prawdy dla VFS edytora. Oba wskazują ten sam katalog.
     super(port, new FileSystem(dataDir), undefined, undefined, undefined, staticDir);
     this.vfs = new NodeFS({ rootDir: dataDir });
     this.dataDir = dataDir;
     this.hydraDir = hydraDir;
+    this.symbolsDir = symbolsDir ?? `${dataDir}-symbols`;
 
     /*
      * Most TCP dla aplikacji uruchomionych w karcie.
@@ -157,6 +165,18 @@ export class MonacoHttpServer extends HttpUploadServer {
       return;
     }
 
+    // Co leży w archiwum symboli — panel potrzebuje tego, żeby dać wybór wsadu
+    // wtedy, gdy układ nie potrafi podać identyfikatora sam.
+    if (req.method === 'GET' && route === '/firmware') {
+      this.sendJsonResponse(res, 200, { entries: await readIndex(this.symbolsDir) });
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/symbolize') {
+      await this.handleSymbolize(req, res);
+      return;
+    }
+
     if (req.method !== 'POST' || route !== '/build') {
       this.sendJsonResponse(res, 404, { error: `Unknown route: ${route}` });
       return;
@@ -171,14 +191,17 @@ export class MonacoHttpServer extends HttpUploadServer {
       return;
     }
 
+    const kind = body.kind === 'native' ? 'native' : body.kind === 'wasm' ? 'wasm' : 'pio';
+    const target = body.target as string | undefined;
+
     let plan;
     try {
       plan = planHydraBuild(
         {
           file: String(body.file ?? ''),
-          target: body.target as string | undefined,
+          target,
           upload: Boolean(body.upload),
-          kind: body.kind === 'native' ? 'native' : body.kind === 'wasm' ? 'wasm' : 'pio',
+          kind,
           preset: body.preset as string | undefined,
           os: body.os === 'windows' ? 'windows' : 'linux',
           executable: body.executable as string | undefined,
@@ -259,9 +282,137 @@ export class MonacoHttpServer extends HttpUploadServer {
       if (code !== 0) break;
     }
 
+    if (code === 0 && !cancelled && kind === 'pio' && target) {
+      await this.archiveBuild(plan.projectDir, target, line);
+    }
+
     clearInterval(heartbeat);
     send({ type: 'done', code });
     res.end();
+  }
+
+  /**
+   * `POST /api/hydra/symbolize` — adresy ze śladu stosu na nazwy funkcji.
+   *
+   * Wsad wskazuje się identyfikatorem albo parą projekt+środowisko. Trzeciej
+   * drogi — „weź najnowszy" — świadomie nie ma: rozwinięcie adresów przeciw
+   * niewłaściwej budowie nie kończy się błędem, tylko listą prawdziwie
+   * wyglądających, a nieprawdziwych nazw funkcji. Godziny szukania błędu
+   * w kodzie, który nigdy nie był wykonywany, kosztują więcej niż odmowa.
+   */
+  private async handleSymbolize(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.hydraDir) {
+      this.sendJsonResponse(res, 503, {
+        error: 'Nie wskazano katalogu biblioteki Hydra — bez niego nie ma jak uruchomić addr2line.',
+      });
+      return;
+    }
+
+    const body = await readJsonBody(req);
+    const entries = await readIndex(this.symbolsDir);
+
+    let entry: ArchiveEntry | undefined;
+    if (typeof body.id === 'string' && body.id !== '') {
+      entry = entries.find((e) => e.id === body.id);
+      if (!entry) {
+        this.sendJsonResponse(res, 404, {
+          error: `Tego wsadu nie ma w archiwum: ${body.id}. Zbuduj projekt ponownie albo wskaż inny.`,
+        });
+        return;
+      }
+    } else if (typeof body.project === 'string' && typeof body.env === 'string') {
+      entry = entries
+        .filter((e) => e.project === body.project && e.env === body.env)
+        .sort((a, b) => b.storedAt.localeCompare(a.storedAt))[0];
+      if (!entry) {
+        this.sendJsonResponse(res, 404, {
+          error: `Archiwum nie ma wsadu dla ${body.project}/${body.env}.`,
+        });
+        return;
+      }
+    } else {
+      this.sendJsonResponse(res, 400, {
+        error: 'Podaj identyfikator wsadu (`id`) albo parę `project` i `env`.',
+      });
+      return;
+    }
+
+    const requested = Array.isArray(body.addresses) ? (body.addresses as unknown[]) : [];
+
+    let step;
+    let addresses: string[];
+    try {
+      step = planSymbolize(
+        { id: entry.id, machine: entry.machine, addresses: requested },
+        { hydraDir: this.hydraDir, symbolsDir: this.symbolsDir },
+      );
+      addresses = requested.map(normalizeAddress);
+    } catch (err) {
+      const status = err instanceof Addr2LineError ? 400 : 500;
+      this.sendJsonResponse(res, status, { error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    const output: string[] = [];
+    const code = await runHydra(step.script, step.args, (l) => output.push(l)).done;
+
+    if (code !== 0) {
+      this.sendJsonResponse(res, 500, {
+        error: 'Nie udało się uruchomić addr2line.',
+        output: output.join('\n'),
+      });
+      return;
+    }
+
+    const frames = parseAddr2Line(output.join('\n'), addresses);
+    this.sendJsonResponse(res, 200, {
+      firmware: entry,
+      frames,
+      /*
+       * Żaden adres nierozwinięty znaczy zwykle, że ślad pochodzi z innego
+       * wsadu niż wskazany — pojedyncze `??` to normalna rzecz, bo ślad
+       * przechodzi przez ROM. Rozróżnienie należy do tego, kto patrzy, więc
+       * podajemy je wprost zamiast zgadywać za niego.
+       */
+      resolved: anyResolved(frames),
+    });
+  }
+
+  /**
+   * Odkłada `.elf` zaraz po udanej budowie.
+   *
+   * Teraz, a nie na żądanie, bo `pio` nadpisuje `firmware.elf` przy każdym
+   * uruchomieniu — w chwili, gdy przychodzi raport o awarii sprzed tygodnia,
+   * plik potrzebny do jego odczytania dawno nie istnieje.
+   *
+   * Niepowodzenie melduje się w panelu i na tym się kończy. Budowa się udała
+   * i wsad jest gotowy do wgrania; brak kopii do rozwijania adresów to strata,
+   * ale nie powód, żeby ogłaszać nieudaną kompilację.
+   */
+  private async archiveBuild(projectDir: string, env: string, line: (text: string) => void): Promise<void> {
+    try {
+      const result = await archiveFirmware({ projectDir, env, symbolsDir: this.symbolsDir });
+      if (result === null) return;
+
+      const { entry, stored, removed } = result;
+      line(stored
+        ? `\nWsad odłożony do archiwum symboli: ${entry.id.slice(0, 16)}… (${Math.round(entry.bytes / 1024)} KB)`
+        : `\nWsad już był w archiwum symboli: ${entry.id.slice(0, 16)}…`);
+
+      if (!entry.confirmedByImage) {
+        // Bez deskryptora układ nie poda tego identyfikatora sam, więc przy
+        // raporcie trzeba będzie wskazać wsad ręcznie. Lepiej powiedzieć to
+        // teraz niż zostawić do odkrycia przy awarii.
+        line('  (obraz nie niesie identyfikatora — wsad trzeba będzie wskazać ręcznie)');
+      }
+      // Ciche kasowanie pliku, którego ktoś zaraz poszuka, jest gorsze od
+      // braku miejsca na dysku.
+      for (const gone of removed) {
+        line(`  usunięto z archiwum starszy wsad: ${gone.project}/${gone.env} ${gone.id.slice(0, 16)}…`);
+      }
+    } catch (err) {
+      line(`\nNie udało się odłożyć wsadu do archiwum symboli: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** `RemoteFS` woła trasy bez prefiksu — `/stat`, `/readdir`, `/writeFile`, … */

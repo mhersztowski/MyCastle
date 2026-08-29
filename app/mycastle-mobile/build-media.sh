@@ -5,7 +5,12 @@
 #
 # Bez wtyczki compose (Colima + docker z Homebrew) to samo bez niej:
 #   docker run --rm --privileged -v "$PWD":/workspace -w /workspace \
+#     -v gradle-cache:/root/.gradle \
 #     mycastle-android:local /workspace/app/mycastle-mobile/build-media.sh
+#
+# `-v gradle-cache:/root/.gradle` to ten sam wolumen, który dokłada
+# docker-compose.cli.yml. Bez niego kontener leci z `--rm` i ściąga wtyczki
+# oraz zależności od nowa przy każdym uruchomieniu.
 #
 # `--privileged` jest wymagane: build.sh rejestruje emulację QEMU x86_64,
 # bez której aapt2 nie ruszy na ARM-ie.

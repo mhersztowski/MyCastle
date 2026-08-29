@@ -27,7 +27,7 @@ import {
   type FlashProgress,
   type FlashSettings,
   type FlashState,
-} from './EspFlashService';
+} from '@mhersztowski/web-serial';
 import { minisApi } from '../../services/MinisApiService';
 
 interface FileRow {

@@ -50,6 +50,9 @@ services:
       dockerfile: docker/Dockerfile.cli
       target: pygame
 
+  # `gradle-cache` na /root/.gradle — bez niego każde uruchomienie ściąga
+  # wtyczki i zależności od nowa, bo kontener leci z `--rm`. Pierwsza budowa
+  # trwa tyle samo, każda następna kilka razy krócej.
   android:
     image: mycastle-android:local
     build:
@@ -57,13 +60,16 @@ services:
       dockerfile: docker/Dockerfile.android
     volumes:
       - .:/workspace
+      - gradle-cache:/root/.gradle
     privileged: true
 
   watch:
     image: mycastle-android:local
     volumes:
       - .:/workspace
+      - gradle-cache:/root/.gradle
     privileged: true
 
 volumes:
   android-sdk-cache:
+  gradle-cache:

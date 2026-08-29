@@ -2,3 +2,8 @@ dist/
 public/
 data/*
 !data/README.md
+
+# Archiwum .elf do rozwijania śladów stosu. Pojedynczy wsad dla ESP32 waży
+# ~9 MB, a odkłada się kopia po każdej budowie — to są dane robocze maszyny,
+# nie repozytorium.
+symbols/

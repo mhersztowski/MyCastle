@@ -46,13 +46,30 @@ function resolveHydraDir(): string | undefined {
 
 const hydraDir = resolveHydraDir();
 
-const server = new MonacoHttpServer(port, dataDir, staticDir, hydraDir);
+/**
+ * Archiwum plików `.elf` — kopie wsadów odkładane po budowie, żeby ślad stosu
+ * z urządzenia dało się przełożyć na nazwy funkcji.
+ *
+ * Celowo **obok** katalogu danych, a nie w nim. Wsad dla ESP32 waży ~9 MB,
+ * a katalog danych jest korzeniem VFS edytora: położony w środku pokazywałby
+ * się w drzewie plików i jechał razem z projektami przy każdej synchronizacji.
+ *
+ * Ustawiając `MONACO_SYMBOLS_DIR` trzeba zostać w katalogu udostępnionym
+ * maszynie Dockera — `addr2line` mieszka w kontenerze i dostaje archiwum przez
+ * montowanie. Na macOS z colimą jest to domyślnie katalog domowy, więc np.
+ * `/tmp` **nie** zadziała: budowanie i odkładanie pójdą normalnie, a dopiero
+ * rozwijanie adresów odmówi.
+ */
+const symbolsDir = path.resolve(appDir, process.env.MONACO_SYMBOLS_DIR ?? './symbols');
+
+const server = new MonacoHttpServer(port, dataDir, staticDir, hydraDir, symbolsDir);
 
 server.start().then(() => {
   console.log(`Monaco Backend  →  http://localhost:${port}`);
   console.log(`Data dir        →  ${dataDir}`);
   console.log(`Static dir      →  ${staticDir ?? '(brak — uruchom pnpm build:monaco-web)'}`);
   console.log(`Hydra dir       →  ${hydraDir ?? '(brak — ustaw HYDRA_DIR, żeby budować projekty .hydra)'}`);
+  console.log(`Symbole (.elf)  →  ${symbolsDir}`);
 }).catch((err: Error) => {
   console.error('Nie udało się wystartować serwera:', err.message);
   process.exit(1);

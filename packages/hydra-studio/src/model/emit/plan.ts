@@ -20,6 +20,10 @@ export const MODULE_FLAGS: Readonly<Record<string, string>> = {
     // Moduł IoT MyCastle. Niezależny od `net`, choć zwykle chodzą razem:
     // węzeł na końcu RS-485 nie ma stosu TCP/IP i nie ma powodu go kompilować.
     minis: 'HYDRA_ENABLE_MINIS',
+    // Modbus RTU. Niezależny od `minis`, choć oba jeżdżą tym samym kablem:
+    // protokół MyCastle rozmawia z węzłami własnymi, Modbus z cudzymi
+    // czujnikami, które przyszły z fabryki i swojego protokołu nie zmienią.
+    modbus: 'HYDRA_ENABLE_MODBUS',
     // Potok multimedialny. Kosztuje tyle, ile pule buforów zadeklarowane
     // przez aplikację — framework nie ma tu pamięci własnej.
     media: 'HYDRA_ENABLE_MEDIA',

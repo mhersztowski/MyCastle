@@ -1,0 +1,71 @@
+% Preambuła wspólna dla fragmentów testowych — parametry z gen_book.md §7.
+\usepackage{lmodern}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usepackage{booktabs}
+
+% Wcięcie akapitu zamiast odstępu — §3.1 pkt 1.
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0pt}
+
+% Bez żywej paginy: numer strony na dole, tytuł rozdziału nigdzie.
+%
+% Klasa `book` domyślnie stawia nad tekstem pasek z tytułem rozdziału i numerem
+% strony. Przy marginesie górnym 18 pt pasek **nie mieści się nad kolumną
+% i ląduje poza papierem** — w PDF-ie siedzi na współrzędnej y = -8 pt, ucięty.
+% Nie widać tego w tekście wyciągniętym z pliku ani w logu kompilacji; widać
+% dopiero, gdy ktoś zauważy, że dokument nie ma numerów stron.
+%
+% Można to naprawić opcją `includehead` geometry, ale na ekranie Kindle'a
+% mieszczącym 24 wiersze żywa pagina zjada wiersz, nie wnosząc nic: tytuł
+% rozdziału czytelnik ma w spisie treści, a pozycję pokazuje czytnik.
+\pagestyle{plain}
+
+% Wąska kolumna wymaga tolerancyjnego łamania: przy 53 znakach w wierszu
+% domyślne ustawienia TeX-a zostawiają rzeki białych plam.
+\tolerance=1500
+\emergencystretch=1em
+
+% Strona może kończyć się wyżej, zamiast rozciągać odstępy.
+%
+% Domyślne `\flushbottom` wyrównuje dolne krawędzie wszystkich stron, rozciągając
+% w tym celu odstępy pionowe — przede wszystkim ten po nagłówku sekcji, bo jest
+% najbardziej rozciągliwy. W kolumnie Kindle'a mieszczącej 24 wiersze brakujące
+% dwa wiersze robią pod nagłówkiem **dziurę na jedną trzecią strony**. W logu jest
+% to `Underfull \vbox while \output is active` — ostrzeżenie, nie błąd.
+%
+% Wyrównana dolna krawędź ma sens w książce oglądanej jako rozkładówka. Na
+% czytniku widać jedną stronę naraz, więc nierówny dół jest niewidoczny, a dziura
+% po nagłówku — bardzo.
+\raggedbottom
+
+% Pływaki w wąskiej kolumnie.
+%
+% Domyślne progi LaTeX-a zakładają stronę A4: rysunek zajmujący 70% wysokości nie
+% ma prawa dzielić strony z tekstem, więc ląduje na osobnej stronie, a po sobie
+% zostawia dziurę. Na ekranie Kindle'a 70% wysokości to zwykły wykres.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.9}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.75}
+
+% Listingi: łamanie długich wierszy kodu.
+%
+% Kod nie ma spacji tam, gdzie TeX chce łamać, więc w kolumnie szerokości
+% Kindle'a wiersz po prostu **wychodzi poza stronę i zostaje ucięty** — bez
+% błędu, tylko z ostrzeżeniem „Overfull hbox" w logu. Objaw jest podstępny,
+% bo PDF wygląda poprawnie do chwili, gdy ktoś spróbuje przepisać kod.
+%
+% `breakanywhere` łamie także w środku identyfikatora — brzydkie, ale
+% uczciwsze niż zgubiona połowa wiersza. `\small` w monospace daje ~62 znaki
+% w wierszu zamiast 53, co dla większości kodu wystarcza bez łamania.
+\usepackage{fvextra}
+\fvset{breaklines=true, breakanywhere=true, fontsize=\small}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}%
+  {breaklines,breakanywhere,commandchars=\\\{\},fontsize=\small}
+\DefineVerbatimEnvironment{verbatim}{Verbatim}%
+  {breaklines,breakanywhere,fontsize=\small}
+
+% Znak kontynuacji złamanego wiersza — bez niego nie widać, że wiersz kodu
+% jest jednym wierszem, a nie dwoma.
+\fvset{breaksymbolleft=\raisebox{0.6ex}{\tiny\ensuremath{\hookrightarrow}}}

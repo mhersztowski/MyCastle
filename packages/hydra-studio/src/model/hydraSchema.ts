@@ -42,7 +42,7 @@ export const CAPABILITIES = [
     'fpu', 'smp', 'can', 'rtc',
 ] as const;
 
-const MODULE_NAMES = ['core', 'sense', 'net', 'ui', 'motion', 'ota', 'minis', 'media', 'arduboy'] as const;
+const MODULE_NAMES = ['core', 'sense', 'net', 'ui', 'motion', 'ota', 'minis', 'modbus', 'media', 'arduboy'] as const;
 
 /** Nadpisania modułów per cel: `off`, `on` albo zagnieżdżona konfiguracja. */
 const moduleOverride = anyOf('Włączenie, wyłączenie albo nadpisanie ustawień modułu', [
@@ -264,6 +264,27 @@ const arduboyModule = obj('Zgodność z Arduboy2 — gry na Arduboya bez zmian w
                         { integer: true, min: 1, max: 16 })),
 });
 
+/*
+ * Modbus RTU opisuje tu wyłącznie łącze — prędkość, port, kierunek RS-485.
+ *
+ * Mapy rejestrów czujników świadomie zostają w kodzie: przeniesienie ich tutaj
+ * wymaga generatora, który zamieni YAML na `ModbusSoil::Map`, a takiego jeszcze
+ * nie ma. Zadeklarowanie ich w schemacie bez emitera obiecywałoby coś, czego
+ * łańcuch narzędzi nie dowozi — gorzej, niż gdyby ich tu nie było.
+ */
+const modbusModule = obj('Magistrala Modbus RTU po RS-485', {
+    uart: optional(num('Numer portu szeregowego', { integer: true, min: 0, max: 2 })),
+    baud: optional(num('Prędkość magistrali; poniżej 19200 odstęp t3.5 liczy się z niej',
+                       { integer: true, min: 1200, max: 115200, unit: 'bps' })),
+    de_pin: optional(str('Pin sterujący nadajnikiem RS-485, np. Pin.Rs485De')),
+    response_timeout_ms: optional(num('Ile czekać na pierwszy bajt odpowiedzi; czujniki '
+                                      + 'glebowe mierzą dopiero na zapytanie',
+                                      { integer: true, min: 10, max: 5000, unit: 'ms' })),
+    retries: optional(num('Ile razy powtórzyć po ciszy albo złej ramce; odmowa '
+                          + 'urządzenia nie jest ponawiana',
+                          { integer: true, min: 0, max: 5 })),
+});
+
 const minisModule = obj('Platforma IoT MyCastle', {
     user: optional(str('Nazwa użytkownika w MyCastle')),
     heartbeat_s: optional(num('Co ile wysyłać puls; 0 = tylko telemetria',
@@ -391,6 +412,7 @@ export const HYDRA_SCHEMA: ObjectNode = obj('Plik projektu Hydra', {
         ota: optional(otaModule),
     script: optional(scriptModule),
     minis: optional(minisModule),
+    modbus: optional(modbusModule),
     media: optional(mediaModule),
     arduboy: optional(arduboyModule),
     })),

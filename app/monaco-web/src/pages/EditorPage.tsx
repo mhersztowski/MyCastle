@@ -5,6 +5,9 @@ import type { FileSystemProvider } from '@mhersztowski/core';
 import { TextEditorWorkspace } from '@mhersztowski/texteditor';
 import { createHydraStudioPlugin } from '@mhersztowski/hydra-studio';
 import { runHydraBuild } from './hydraBuild';
+import { collectHydraFirmware } from './hydraFlash';
+import { FlashPanel, supportsWebSerial } from './FlashPanel';
+import type { FlashFileEntry } from '@mhersztowski/web-serial';
 import '../editor/monacoWorkers';
 
 /**
@@ -25,6 +28,18 @@ import '../editor/monacoWorkers';
  */
 export function EditorPage() {
   const [provider] = useState<FileSystemProvider>(() => new RemoteFS({ baseUrl: '/api/vfs' }));
+
+  /*
+   * Stan okna wgrywania.
+   *
+   * Okno otwiera się **zanim** wsad zostanie zebrany, a nie po. Zbieranie
+   * czyta trzy pliki z katalogu budowy i przy megabajtowym wsadzie potrafi
+   * potrwać — bez okna od razu przycisk wygląda przez ten czas na martwy.
+   */
+  const [flashOpen, setFlashOpen]   = useState(false);
+  const [flashFiles, setFlashFiles] = useState<FlashFileEntry[] | undefined>(undefined);
+  const [flashLabel, setFlashLabel] = useState<string | undefined>(undefined);
+  const [flashError, setFlashError] = useState<string | null>(null);
 
   // Na świeżym backendzie katalog danych bywa pusty — `mkdir('/')` sprawia, że
   // eksplorator listuje korzeń zamiast pokazać błąd 404.
@@ -57,9 +72,45 @@ export function EditorPage() {
       const model = monaco.editor.getModels().find((m) => m.uri.path === request.file);
       return runHydraBuild(request, model?.getValue() ?? '', provider, onLine);
     },
+
+    /*
+     * Wgranie wsadu z przeglądarki — jedyna droga, która tutaj może zadziałać.
+     *
+     * `project.upload` woła `pio run -t upload` w kontenerze, a `hydra.sh` nie
+     * przekazuje mu żadnego `--device`: PlatformIO nie widzi tam portu
+     * szeregowego w ogóle. Nawet gdyby widział, byłby to port serwera, a nie
+     * osoby siedzącej przed przeglądarką.
+     *
+     * Opcja jest warunkowa, bo jej obecność decyduje o widoczności polecenia
+     * w palecie. Bez Web Serial lepiej go nie pokazać niż pokazać martwy —
+     * Firefox i Safari tego API nie mają.
+     */
+    ...(supportsWebSerial() ? {
+      async flashFromBrowser(request) {
+        setFlashLabel(`${request.target} · ${request.mcu}`);
+        setFlashFiles(undefined);
+        setFlashOpen(true);
+        try {
+          setFlashFiles(await collectHydraFirmware(request, provider));
+        } catch (e) {
+          setFlashError(e instanceof Error ? e.message : String(e));
+        }
+      },
+    } : {}),
   }), [provider]);
 
   const extraPlugins = useMemo(() => [hydraStudioPlugin], [hydraStudioPlugin]);
 
-  return <TextEditorWorkspace provider={provider} height="100%" extraPlugins={extraPlugins} />;
+  return (
+    <>
+      <TextEditorWorkspace provider={provider} height="100%" extraPlugins={extraPlugins} />
+      <FlashPanel
+        open={flashOpen}
+        onClose={() => { setFlashOpen(false); setFlashFiles(undefined); setFlashError(null); }}
+        files={flashFiles}
+        label={flashLabel}
+        error={flashError}
+      />
+    </>
+  );
 }
