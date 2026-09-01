@@ -206,6 +206,12 @@ export const api = {
   kasiaDodajFragment: (f: { id?: string; kind: 'init' | 'update'; zrodlo: string; tekst: string; wygasaZa?: number }) =>
     request<StanKasi>('/api/kasia/fragment', { method: 'POST', body: JSON.stringify(f) }),
 
+  /** Zapisuje pomiar wagi w VFS MyCastle. Bez daty — dzisiejsza, liczona na serwerze. */
+  kasiaWaga: (kg: number, uwaga?: string) =>
+    request<{ ok: true; pomiarow: number }>('/api/kasia/waga', {
+      method: 'POST', body: JSON.stringify({ kg, uwaga }),
+    }),
+
   /** Podgląd danych z MyCastle — dokładnie ten tekst, który dostaje model. */
   kasiaDane: () => request<{ opis: string }>('/api/kasia/dane'),
 

@@ -1335,12 +1335,24 @@ export default function DrivePage(): React.JSX.Element {
       // modułu, co w skryptach w notatkach — skrypt przeniesiony stamtąd tutaj
       // ma działać bez przepisywania.
       const sceneNs = await import('../../modules/scene-script');
+      /*
+       * API asystentki Kasi. Kasia mieszka w `media-backend`, więc rozmawiamy
+       * z nią przez brokera — transport wstrzykujemy tym samym klientem MQTT,
+       * którego dostaje skrypt jako `client`. Dzięki temu skrypt pisze tylko
+       * `import { Kasia } from 'mycastle/packages/core/browser/kasia/kasia'`
+       * i woła metody, nie wiedząc nic o tematach ani o adresie backendu.
+       */
+      const kasiaNs = await import('../../../../../packages/core/browser/kasia/kasia');
+      kasiaNs.Kasia.setTransport(client, name);
+      session.subs.push(() => kasiaNs.Kasia.clearTransport());
+
       const resolveNs = (spec: string): unknown | null =>
         spec === 'lit' ? lit
           : (spec === '@mhersztowski/minislib' || /minislib/.test(spec)) ? minislib
             : /core\/browser\/server\/api$/.test(spec) ? serverApi
               : spec === 'mycastle/scene' ? sceneNs
-                : null;
+                : /core\/browser\/kasia\/kasia$/.test(spec) || spec === 'mycastle/kasia' ? kasiaNs
+                  : null;
       const nsMap: Record<string, unknown> = {};
       const bindings: string[] = [];
       let nsIdx = 0;

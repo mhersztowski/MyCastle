@@ -39,6 +39,7 @@ server.init()
     // zapisać stan, zanim trasy zaczną odpowiadać, i panel pokazałby zmianę,
     // której źródła nie da się jeszcze podejrzeć.
     server.startKasia();
+    void server.startNasluchPolecen();
 
     console.log(`Media Backend   →  http://localhost:${port}`);
     console.log(`Data dir        →  ${dataDir}`);

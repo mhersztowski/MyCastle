@@ -332,6 +332,62 @@ export function KasiaPage() {
 }
 
 /**
+ * Wpisanie wagi.
+ *
+ * Osobne pole, choć wagę można też podać Kasi w rozmowie: przy niedzielnym
+ * spotkaniu wygodniej wpisać liczbę niż formułować zdanie, a pomiar zapisany
+ * tą drogą trafia dokładnie tam, gdzie trzeba, bez pośrednictwa modelu — który
+ * mógłby odczytać „84,6" jako „84" albo pominąć wpis.
+ */
+function Waga({ onBlad }: { onBlad: (b: string) => void }) {
+  const [kg, setKg] = useState('');
+  const [zapisano, setZapisano] = useState<number | null>(null);
+  const [zapisuje, setZapisuje] = useState(false);
+
+  const zapisz = async () => {
+    // Przecinek dziesiętny jest tym, co Polak wpisze z klawiatury.
+    const wartosc = Number(kg.replace(',', '.'));
+    if (!Number.isFinite(wartosc)) { onBlad('To nie jest liczba.'); return; }
+
+    setZapisuje(true);
+    try {
+      const w = await api.kasiaWaga(wartosc);
+      setZapisano(w.pomiarow);
+      setKg('');
+    } catch (err) {
+      onBlad((err as Error).message);
+    } finally {
+      setZapisuje(false);
+    }
+  };
+
+  return (
+    <>
+      <Typography variant="subtitle2">Waga</Typography>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <TextField
+          size="small" label="kg" value={kg} sx={{ width: 120 }}
+          onChange={(e) => setKg(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void zapisz(); }}
+        />
+        <Button size="small" onClick={() => void zapisz()} disabled={zapisuje || !kg.trim()}>
+          {zapisuje ? 'Zapisuję…' : 'Zapisz pomiar'}
+        </Button>
+        {zapisano != null && (
+          <Typography variant="caption" color="text.secondary">
+            zapisano — pomiarów: {zapisano}
+          </Typography>
+        )}
+      </Stack>
+      <Typography variant="caption" color="text.secondary">
+        Trafia do MyCastle (`data/waga.json`), więc widać go też na telefonie.
+        Kasia omawia trend w niedzielę, ze średnich tygodniowych — nie z ostatniego pomiaru.
+      </Typography>
+    </>
+  );
+}
+
+/**
  * Podgląd danych z MyCastle.
  *
  * Ładowany **na żądanie**, nie przy otwarciu zakładki: pobranie kilkunastu
@@ -461,6 +517,10 @@ function Ustawienia({ stan, onZmiana, onBlad, onSpotkanie }: UstawieniaProps) {
             )}
           </Stack>
         ))}
+
+        <Divider />
+
+        <Waga onBlad={onBlad} />
 
         <Divider />
 

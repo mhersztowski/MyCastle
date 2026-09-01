@@ -48,7 +48,7 @@ module.exports = {
     web: {
       bundler: 'metro',
     },
-    plugins: ['expo-asset', 'expo-font'],
+    plugins: ['expo-asset', 'expo-font', './plugins/withBooxPen'],
     extra: {
       serverUrl,
       appName,

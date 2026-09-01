@@ -55,6 +55,8 @@ import FormatSizeIcon from '@mui/icons-material/FormatSize';
 import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft';
 import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
 import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
+import CloseIcon from '@mui/icons-material/Close';
+import BoltIcon from '@mui/icons-material/Bolt';
 import Button from '@mui/material/Button';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -81,6 +83,10 @@ import { exportCanvasPng, exportCanvasSvg, exportCanvasPdf } from '../io/exportG
 import { renderMarkdown } from '../map/markdown';
 
 import { syncOpenUrl } from '../vfs/openTarget';
+import { defaultInkFor, needsInkSwitch } from './notesInk';
+import { useBooxPen } from '../native/useBooxPen';
+import type { CanvasPenPoint } from '../native/booxPen';
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface NotePoint { x: number; y: number; p: number; }
@@ -530,15 +536,6 @@ const TOOLBAR_LAYOUT: (NoteTool | 'sep' | 'image')[] = [
 const uid = () => Math.random().toString(36).slice(2, 10);
 const newPage = (): NotePage => ({ id: uid(), elements: [] });
 
-function isLightColor(hex: string): boolean {
-  const h = hex.replace('#', '');
-  if (h.length !== 6) return false;
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return (r * 299 + g * 587 + b * 114) / 1000 > 140;
-}
-
 // ── Color utilities (odcienie, hex, alpha) ───────────────────────────────────
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const h = hex.replace('#', '');
@@ -914,14 +911,26 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
   return lines;
 }
 
-/** Rysuje osadzoną etykietę (tekst w środku obiektu) z tłem-pigułką dla czytelności. */
+/**
+ * Rysuje osadzoną etykietę — tekst w środku obiektu.
+ *
+ * **Bez własnego tła.** Wcześniej pod napisem leżała półprzezroczysta ciemna
+ * pigułka „dla czytelności" i to ona była tłem etykiety zamiast wypełnienia
+ * kształtu: prostokąt wypełniony na żółto miał w środku szarą plamę, a przy
+ * kilku figurach obok siebie rysunek wyglądał na posklejany z wycinków. Tłem
+ * napisu jest teraz to, co i tak jest pod nim — wypełnienie kształtu — a za
+ * czytelność odpowiada kolor pisma, ustawiany w lewym menu (Kolor obrysu).
+ */
 function renderLabel(ctx: CanvasRenderingContext2D, el: NoteShape | NoteStroke, sx: number, sy: number) {
   const label = el.label;
   if (!label || !label.trim()) return;
   const b = el.kind === 'shape' ? shapeBBox(el) : elementBBox(el);
   const fs = (el.labelFontSize ?? 20) * sx;
   const align: TextAlign = el.labelAlign ?? 'center';
-  const col = el.labelColor ?? '#ffffff';
+  // Etykiety zapisane przed zmianą nie mają własnego koloru. Awaryjnie bierzemy
+  // kolor obrysu obiektu, a nie biel: odkąd pod napisem nie ma ciemnej pigułki,
+  // sztywna biel znikała na każdym jasnym wypełnieniu.
+  const col = el.labelColor ?? el.color ?? '#ffffff';
   ctx.save();
   ctx.font = `${fs}px sans-serif`;
   ctx.textBaseline = 'middle';
@@ -934,14 +943,11 @@ function renderLabel(ctx: CanvasRenderingContext2D, el: NoteShape | NoteStroke, 
   const maxW = Math.max(1, ...widths);
   const totalH = lines.length * lh;
   const cx = (b.x + b.w / 2) * sx, cy = (b.y + b.h / 2) * sy;
-  // Tło-pigułka (półprzezroczyste) — czytelność nad kreskowaniem/rysunkiem.
-  const boxW = maxW + pad * 2, boxH = totalH + pad * 1.2;
-  const bx0 = cx - boxW / 2, by0 = cy - boxH / 2, rr = Math.min(boxH / 2, 8 * sx);
-  ctx.beginPath();
-  if (typeof ctx.roundRect === 'function') ctx.roundRect(bx0, by0, boxW, boxH, rr);
-  else ctx.rect(bx0, by0, boxW, boxH);
-  ctx.fillStyle = 'rgba(20,20,20,0.55)';
-  ctx.fill();
+  // Szerokość bloku zostaje — wyznacza punkty odniesienia dla wyrównania
+  // do lewej i do prawej. Wysokość nie jest już do niczego potrzebna, odkąd
+  // pod napisem nic się nie rysuje.
+  const boxW = maxW + pad * 2;
+  const bx0 = cx - boxW / 2;
   // Tekst.
   ctx.textAlign = align;
   ctx.fillStyle = col;
@@ -1198,7 +1204,11 @@ export function SpenNotesView() {
   const [pages, setPages] = useState<NotePage[]>(_init.pages);
   const [currentPageId, setCurrentPageId] = useState<string>(_init.currentId);
   const [tool, setTool] = useState<NoteTool>('pencil');
-  const [color, setColor] = useState('#ffffff');
+  // Kolor pisaka dobrany do tła strony, którą właśnie przywróciliśmy. Sztywna
+  // biel oznaczała, że po uruchomieniu z zapisaną białą stroną pierwsza kreska
+  // była niewidoczna — objaw nie do odróżnienia od zepsutego rysowania.
+  const [color, setColor] = useState(() =>
+    defaultInkFor(_init.pages.find(p => p.id === _init.currentId)?.bgColor ?? DEFAULT_BG));
   const [brushSize, setBrushSize] = useState(3);
   // ── Styl rysowania (nowy lewy toolbar) ──────────────────────────────────────
   const [fillPattern, setFillPattern] = useState<FillPattern>('none');
@@ -1268,10 +1278,18 @@ export function SpenNotesView() {
     syncOpenUrl(`${dir}/${name}${NOTES_EXT}`);
     const data = JSON.parse(text) as { pages?: NotePage[]; currentId?: string };
     const loaded = Array.isArray(data.pages) && data.pages.length ? data.pages : [newPage()];
+    const openId = data.currentId && loaded.some(p => p.id === data.currentId) ? data.currentId : loaded[0].id;
     setPages(loaded);
-    setCurrentPageId(data.currentId && loaded.some(p => p.id === data.currentId) ? data.currentId : loaded[0].id);
+    setCurrentPageId(openId);
     setSelectedIds(new Set());
     setNotesFile({ dir, name });
+    // Wczytany plik może mieć inne tło niż to, pod które dobrany był pisak.
+    const openedBg = loaded.find(p => p.id === openId)?.bgColor ?? DEFAULT_BG;
+    if (needsInkSwitch(colorRef.current, openedBg)) {
+      const ink = defaultInkFor(openedBg);
+      colorRef.current = ink;
+      setColor(ink);
+    }
   };
 
   // Eksport bieżącej strony do PNG/SVG/PDF (rasteryzacja kanwy notatki).
@@ -1634,6 +1652,101 @@ export function SpenNotesView() {
     setHistoryVer(v => v + 1);
   }, []);
 
+  // ── Pióro sterownika Onyx Boox ───────────────────────────────────────────
+  //
+  // Na ekranie E Ink kreska rysowana w kanwie HTML pojawia się z opóźnieniem
+  // rzędu 150–300 ms — zdarzenie wskaźnika, obsługa w JS, złożenie WebView,
+  // dopiero potem panel. Sterownik Onyksa maluje wprost na panelu (~30 ms),
+  // ale w zamian **zabiera pióro WebView**: dopóki tryb surowy działa, ta
+  // kanwa nie zobaczy ani jednego `pointerdown` ze stylusa i dostaje zamiast
+  // tego gotowe pociągnięcie po jego oderwaniu.
+  //
+  // Poza czytnikami Onyksa `useBooxPen` nie robi nic i obowiązuje zwykła
+  // ścieżka `onDown/extendStroke/onUp` niżej.
+
+  /** Piksele CSS względem kanwy → współrzędne logiczne rysunku (z uwzględnieniem skali i przesunięcia). */
+  const canvasToLogical = useCallback((cssX: number, cssY: number) => {
+    const c = canvasRef.current;
+    if (!c) return { x: 0, y: 0 };
+    const r = c.getBoundingClientRect();
+    if (!r.width || !r.height) return { x: 0, y: 0 };
+    // Ta sama droga, którą idzie `toLogical` dla zdarzeń wskaźnika: najpierw na
+    // piksele bufora kanwy, potem przez powiększenie i przesunięcie widoku.
+    const bx = cssX / r.width * c.width;
+    const by = cssY / r.height * c.height;
+    const z = zoomRef.current;
+    const { x: px, y: py } = panPxRef.current;
+    return {
+      x: (bx - px) / z / (c.width / CANVAS_W),
+      y: (by - py) / z / (c.height / CANVAS_H),
+    };
+  }, []);
+
+  const handleNativeStroke = useCallback((points: CanvasPenPoint[], erase: boolean) => {
+    if (!points.length) return;
+    const local = points.map(p => {
+      const l = canvasToLogical(p.x, p.y);
+      return { x: l.x, y: l.y, p: p.pressure };
+    });
+
+    if (erase) {
+      // Gumka używa `strokeHitTest`, czyli dokładnie tego, czym wymazuje palec
+      // i mysz. Osobna miara „dotknięcia" dawałaby dwie różne gumki w jednym
+      // narzędziu, zależnie od tego, czym się ją trzyma.
+      const r = Math.max(brushRef.current * 3, 6);
+      const next = elementsRef.current.filter(el =>
+        el.kind !== 'stroke' || !local.some(pt => strokeHitTest(el, pt.x, pt.y, r)));
+      if (next.length === elementsRef.current.length) return;
+      pushUndo(currentIdRef.current, elementsRef.current);
+      commitElements(next);
+      redraw();
+      return;
+    }
+
+    // Pojedynczy punkt to zwykle przypadkowe muśnięcie ekranu, a nie kreska.
+    if (local.length < 2) return;
+    const tool = toolRef.current === 'marker' ? 'marker' : 'pencil';
+    const intensity = Math.max(0, Math.min(1, intensityRef.current / 100));
+    const base = tool === 'marker' ? 0.4 : 1;
+    const stroke: NoteStroke = {
+      id: uid(), kind: 'stroke', tool,
+      color: colorRef.current,
+      width: brushRef.current,
+      points: local,
+      opacity: base * intensity,
+      pressure: pressureRef.current,
+      fill: fillRef.current,
+    };
+    pushUndo(currentIdRef.current, elementsRef.current);
+    commitElements([...elementsRef.current, stroke]);
+    redraw();
+  }, [canvasToLogical, commitElements, pushUndo, redraw]);
+
+  /**
+   * Grubość kreski, jaką ma rysować sterownik — w pikselach CSS.
+   *
+   * Sterownik nic nie wie o powiększeniu ani o logicznym układzie kanwy, więc
+   * dostaje szerokość mierzoną na ekranie. Jedna jednostka logiczna zajmuje
+   * `szerokość_kanwy / CANVAS_W * zoom` pikseli CSS.
+   */
+  const nativeStrokeWidth = (() => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    const scale = r && r.width > 0 ? r.width / CANVAS_W : 1;
+    return Math.max(1, brushSize * scale * zoomPct / 100);
+  })();
+
+  const pen = useBooxPen({
+    target: canvasRef,
+    // Tryb surowy tylko przy rysowaniu odręcznym. Przy zaznaczaniu, kształtach
+    // czy przesuwaniu widoku sterownik musi oddać pióro stronie, bo inaczej
+    // kreśliłby zamiast wykonywać narzędzie. Wysunięte podmenu też je oddaje —
+    // leży nad kanwą własna warstwa przechwytująca kliknięcia.
+    active: (tool === 'pencil' || tool === 'marker') && !textInput && !sidePanel,
+    strokeWidth: nativeStrokeWidth,
+    color,
+    onStroke: handleNativeStroke,
+  });
+
   const handleCut = useCallback(() => {
     if (!selectedIds.size) return;
     noteClipboard = elementsRef.current.filter(el => selectedIds.has(el.id));
@@ -1710,14 +1823,25 @@ export function SpenNotesView() {
     redraw();
   }, [commitElements, redraw]);
 
-  /** Kolor OBRYSU/pisaka: domyślny dla nowych + zastosuj do zaznaczonych obiektów. */
+  /**
+   * Kolor OBRYSU/pisaka: domyślny dla nowych + zastosuj do zaznaczonych obiektów.
+   *
+   * Obejmuje też **kolor pisma osadzonej etykiety**. Odkąd napis nie ma
+   * własnego tła, jest jedyną rzeczą, która odpowiada za jego czytelność —
+   * a użytkownik szuka jej tam, gdzie ustawia każdy inny kolor kreski.
+   */
   const applyStrokeColor = useCallback((col: string) => {
     setColor(col);
     const ids = selectedRef.current;
     if (!ids.size) return;
     commitElements(elementsRef.current.map(el => {
       if (!ids.has(el.id)) return el;
-      if (el.kind === 'stroke' || el.kind === 'shape' || el.kind === 'text') return { ...el, color: col } as NoteElement;
+      if (el.kind === 'stroke' || el.kind === 'shape') {
+        // `labelColor` tylko tam, gdzie etykieta w ogóle jest — inaczej
+        // dopisywalibyśmy pole do każdego kształtu bez tekstu.
+        return (el.label ? { ...el, color: col, labelColor: col } : { ...el, color: col }) as NoteElement;
+      }
+      if (el.kind === 'text') return { ...el, color: col } as NoteElement;
       return el;
     }));
     redraw();
@@ -2757,17 +2881,12 @@ export function SpenNotesView() {
 
   const setPageBgColor = useCallback((bgColor: string) => {
     bgColorRef.current = bgColor;
-    // Auto-switch ink to ensure contrast with new background
-    const lightBg  = isLightColor(bgColor);
-    const lightInk = isLightColor(colorRef.current);
-    if (lightBg && lightInk) {
-      const dark = '#1a1a1a';
-      colorRef.current = dark;
-      setColor(dark);
-    } else if (!lightBg && !lightInk) {
-      const light = '#ffffff';
-      colorRef.current = light;
-      setColor(light);
+    // Pisak zmieniamy tylko wtedy, gdy zniknąłby na nowym tle — czerwony na
+    // białym zostaje czerwony (patrz `needsInkSwitch`).
+    if (needsInkSwitch(colorRef.current, bgColor)) {
+      const ink = defaultInkFor(bgColor);
+      colorRef.current = ink;
+      setColor(ink);
     }
     const pageId = currentIdRef.current;
     setPages(prev => prev.map(p => p.id === pageId ? { ...p, bgColor } : p));
@@ -2893,15 +3012,30 @@ export function SpenNotesView() {
   void historyVer; // used to trigger re-render on undo/redo
   const currentBgColor = pages.find(p => p.id === currentPageId)?.bgColor ?? DEFAULT_BG;
 
+  /**
+   * Stopień pisma pola tekstowego w pikselach ekranu.
+   *
+   * Kanwa ma stały układ `CANVAS_W × CANVAS_H` rozciągany na dostępne miejsce,
+   * więc rozmiar zapisany w elemencie (`textSize`) trzeba przeliczyć tą samą
+   * skalą, którą rysowany jest rysunek. Sztywne 18 px znaczyło, że napis
+   * podczas pisania i po zatwierdzeniu miał różną wielkość.
+   */
+  const textInputFontPx = (() => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    const scale = r && r.width > 0 ? r.width / CANVAS_W : 1;
+    return Math.max(10, textSize * scale);
+  })();
+
   // Text input screen position
   const getTextInputPos = () => {
     if (!textInput || !canvasRef.current) return { left: 0, top: 0 };
     const r = canvasRef.current.getBoundingClientRect();
     return {
       left: textInput.x / CANVAS_W * r.width + r.left,
-      top: textInput.y / CANVAS_H * r.height + r.top - 14,
+      top: textInput.y / CANVAS_H * r.height + r.top - textInputFontPx * 0.75,
     };
   };
+
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -3042,6 +3176,11 @@ export function SpenNotesView() {
         {/* Toolbar */}
         <Box sx={{
           display: 'flex', alignItems: 'center', gap: 0.25, px: 1, py: 0.5, flexShrink: 0,
+          // Zawijanie zamiast obcinania. Pasek nie mieści się w węższym oknie
+          // — zwłaszcza po otwarciu panelu Scene, który zabiera 240 px — a przy
+          // `overflow: hidden` rodzica znikały bez śladu przyciski z końca:
+          // usuwanie zaznaczenia, przełącznik sceny i DBG.
+          flexWrap: 'wrap', rowGap: 0.25,
           bgcolor: 'background.paper', borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}>
           {/* Narzędzia / tryby — kolejność wg TOOLBAR_LAYOUT */}
@@ -3140,10 +3279,21 @@ export function SpenNotesView() {
             </>
           )}
 
+          {/*
+            Stan pióra sterownika. Bez tego jedynym sygnałem, że rysowanie idzie
+            z pominięciem przeglądarki, jest brak opóźnienia — czyli coś, czego
+            nie widać, dopóki nie ma się porównania.
+          */}
+          {pen.available && (
+            <Tooltip title={`Rysowanie sterownikiem Boox${pen.info ? ` — ${pen.info}` : ''}`}>
+              <BoltIcon sx={{ fontSize: 18, ml: 'auto', color: pen.engaged ? 'success.main' : 'text.disabled' }} />
+            </Tooltip>
+          )}
+
           {/* Scene panel toggle — file ops now live in the top-bar File menu */}
           <Tooltip title="Scene (object tree + properties)">
             <IconButton size="small" onClick={() => setScenePanelOpen(v => !v)}
-              sx={{ ml: 'auto', borderRadius: 1, bgcolor: scenePanelOpen ? 'primary.main' : undefined,
+              sx={{ ml: pen.available ? 0.5 : 'auto', borderRadius: 1, bgcolor: scenePanelOpen ? 'primary.main' : undefined,
                 color: scenePanelOpen ? '#fff' : 'text.secondary' }}>
               <AccountTreeOutlinedIcon sx={{ fontSize: 18 }} />
             </IconButton>
@@ -3346,6 +3496,28 @@ export function SpenNotesView() {
               <ListItemIcon><FlipToBackIcon fontSize="small" /></ListItemIcon>Przenieś na spód
             </MenuItem>
           </Menu>
+
+          {/*
+            Warstwa przechwytująca kliknięcie poza wysuniętym podmenu.
+            
+            Bez niej kliknięcie „gdzieś obok" trafiało w kanwę i **zaczynało
+            rysować** — użytkownik chciał tylko schować panel, a zostawał
+            z kreską albo nowym kształtem. Osobny element zamiast nasłuchu na
+            kanwie, bo tylko element w DOM-ie na wierzchu sprawia, że kanwa
+            tego zdarzenia w ogóle nie zobaczy; obsługa „zamknij i zignoruj"
+            wewnątrz kanwy wymagałaby przeplatania warunku przez wszystkie
+            ścieżki narzędzi.
+            
+            `zIndex: 29` — pod paskiem narzędzi (30) i pod samym panelem (31),
+            więc przełączenie na inną zakładkę podmenu dalej działa jednym
+            kliknięciem, a nie dwoma.
+          */}
+          {sidePanel && (
+            <Box
+              onPointerDown={(e) => { e.stopPropagation(); setSidePanel(null); }}
+              sx={{ position: 'absolute', inset: 0, zIndex: 29 }}
+            />
+          )}
 
           {/* ── Flyout panelu lewego toolbaru ─────────────────────────────────── */}
           {sidePanel && (
@@ -3963,10 +4135,21 @@ export function SpenNotesView() {
             const pos = getTextInputPos();
             return (
               <Box sx={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 1400 }}>
+                {/*
+                  Pole bez ramki, bez tła i bez podpowiedzi — na ekranie zostaje
+                  sam migający kursor i wpisywany tekst.
+
+                  Powód jest taki, że to pole **udaje** tekst, który za chwilę
+                  wyląduje na kanwie. Ciemna plama z obwódką nad rysunkiem
+                  zasłaniała to, obok czego się pisze, a po zatwierdzeniu tekst
+                  przeskakiwał: inny krój tła, inny rozmiar, inne położenie.
+                  Stąd też stopień pisma liczony z `textSize` i skali kanwy —
+                  to, co widać w trakcie pisania, ma być tym, co zostanie.
+                */}
                 <TextField
                   autoFocus
+                  variant="standard"
                   size="small"
-                  placeholder="Type, then Enter…"
                   value={textInput.val}
                   onChange={e => setTextInput(prev => prev ? { ...prev, val: e.target.value } : null)}
                   onKeyDown={e => {
@@ -3974,11 +4157,25 @@ export function SpenNotesView() {
                     if (e.key === 'Escape') setTextInput(null);
                   }}
                   onBlur={() => commitText(textInput.val, textInput.x, textInput.y, textInput.targetId)}
+                  InputProps={{ disableUnderline: true }}
                   sx={{
                     minWidth: 180,
-                    '& .MuiInputBase-input': { color, fontSize: 18, py: 0.4, px: 0.75 },
-                    '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.3)' },
-                    '& .MuiInputBase-root': { bgcolor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' },
+                    '& .MuiInputBase-input': {
+                      color,
+                      // Kursor bierze kolor pisaka — na jasnym tle domyślny
+                      // biały byłby niewidoczny, czyli znikałby jedyny ślad,
+                      // że pole w ogóle czeka na tekst.
+                      caretColor: color,
+                      fontSize: textInputFontPx,
+                      lineHeight: 1.25,
+                      p: 0,
+                      // Bez `textAlign` pola: kursor ma stać dokładnie tam,
+                      // gdzie użytkownik kliknął. Wyrównanie do środka
+                      // odsunęłoby go o połowę szerokości pola, a pole jest
+                      // przezroczyste — nie byłoby po czym poznać, dlaczego.
+                    },
+                    '& .MuiInputBase-root': { bgcolor: 'transparent' },
+                    '& .MuiInput-root:before, & .MuiInput-root:after': { display: 'none' },
                   }}
                 />
               </Box>
@@ -4183,6 +4380,20 @@ export function SpenNotesView() {
             <Box sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', gap: 0.5,
               borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
               <Typography variant="caption" sx={{ fontWeight: 600, flex: 1 }}>Scene</Typography>
+              {/*
+                Zamknięcie z samego panelu.
+                
+                Jedynym przełącznikiem był dotąd przycisk w górnym pasku — ten
+                sam, który panel otwiera. Otwarty panel zabiera 240 px
+                szerokości środkowej kolumny, a pasek nie zawija się ani nie
+                przewija, więc przy węższym oknie przycisk wypadał poza obszar
+                widoczny i panelu **nie dało się już zamknąć**.
+              */}
+              <Tooltip title="Zamknij panel">
+                <IconButton size="small" onClick={() => setScenePanelOpen(false)} sx={{ p: 0.25 }}>
+                  <CloseIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Tooltip>
               <Tooltip title="Grupuj zaznaczone"><span>
                 <IconButton size="small" disabled={!selectedIds.size} onClick={handleGroupSelected}
                   sx={{ p: 0.25 }}><CreateNewFolderOutlinedIcon sx={{ fontSize: 16 }} /></IconButton>

@@ -77,6 +77,40 @@ MANIFEST="$APP_DIR/android/app/src/main/AndroidManifest.xml"
 sed -i 's/android:allowBackup="true"/android:allowBackup="true" android:usesCleartextTraffic="true"/' "$MANIFEST"
 echo "  Added usesCleartextTraffic"
 
+# Trwały klucz podpisujący.
+#
+# `expo prebuild --clean` kasuje cały katalog `android/`, a razem z nim
+# `app/debug.keystore` — i generuje **nowy** przy następnym uruchomieniu.
+# Wygenerowany projekt podpisuje wydanie tym samym kluczem co wersję
+# deweloperską (`release { signingConfig signingConfigs.debug }`), więc każda
+# budowa dawała APK z innym podpisem.
+#
+# Android odmawia nadpisania zainstalowanej aplikacji pakietem podpisanym
+# innym kluczem. Objaw jest bezużyteczny — instalator pokazuje samo
+# „Aplikacja nie została zainstalowana", bez słowa o podpisie — a wygląda
+# jak uszkodzony plik, więc szuka się błędu w pobieraniu i w budowaniu.
+#
+# Klucz leży poza `android/`, w katalogu wykluczonym z gita: to poświadczenie,
+# nie kod. Trzeba go **zachować** — po jego utracie kolejny APK znów nie wejdzie
+# na wierzch zainstalowanej aplikacji i będzie ją trzeba raz odinstalować.
+# Inną ścieżkę wskazuje `MYCASTLE_KEYSTORE`.
+#
+# Nazwa i hasła są celowo takie, jakich oczekuje wygenerowany `build.gradle`
+# (`androiddebugkey`/`android`) — dzięki temu podmiana pliku wystarcza i nie
+# trzeba łatać konfiguracji Gradle'a, która i tak powstaje od nowa.
+KEYSTORE="${MYCASTLE_KEYSTORE:-$APP_DIR/.keystore/mycastle.keystore}"
+if [ ! -f "$KEYSTORE" ]; then
+  echo "==> Tworzę trwały klucz podpisujący: $KEYSTORE"
+  mkdir -p "$(dirname "$KEYSTORE")"
+  keytool -genkeypair -v -keystore "$KEYSTORE" \
+    -storepass android -keypass android -alias androiddebugkey \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -dname "CN=MyCastle, OU=Mobile, O=MyCastle, L=Unknown, ST=Unknown, C=PL" >/dev/null
+else
+  echo "==> Używam istniejącego klucza podpisującego: $KEYSTORE"
+fi
+cp "$KEYSTORE" "$APP_DIR/android/app/debug.keystore"
+
 # Generate the autolinking config that the React Gradle plugin consumes.
 #
 # `settings.gradle` asks the React settings plugin to produce
@@ -154,6 +188,12 @@ APK_PATH="app/build/outputs/apk/release/app-release.apk"
 if [ -f "$APK_PATH" ]; then
   echo ""
   echo "==> Done! APK: $APP_DIR/android/$APK_PATH"
+  # Odcisk certyfikatu — po nim poznaje się, czy APK wejdzie na wierzch tego,
+  # co już jest zainstalowane. Inny odcisk = instalacja odmówi.
+  APKSIGNER=$(find "${ANDROID_HOME:-/opt/android-sdk}/build-tools" -name apksigner 2>/dev/null | sort -rV | head -1)
+  if [ -n "$APKSIGNER" ]; then
+    echo "    podpis: $("$APKSIGNER" verify --print-certs "$APK_PATH" 2>/dev/null | grep -m1 'SHA-256 digest')"
+  fi
 else
   echo "==> Build failed — APK not found at $APK_PATH"
   exit 1

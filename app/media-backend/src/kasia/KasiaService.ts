@@ -41,6 +41,8 @@ import { doZaczepienia, ponow, zaplanujPrzypomnienia } from './harmonogram';
 import { dodajFragment, opisKontekstu, usunWygasle, zbudujPrompt } from './prompt';
 import { opisDanych } from './dane';
 import type { MycastleClient } from './MycastleClient';
+import { czegoPotrzebuje, poleceniSpotkania } from './scenariusze';
+import { analizujWage, dodajPomiar, opisWagi, PLIK_WAGI, type Pomiar, type PlikWagi } from './waga';
 
 /** Ile ostatnich wiadomości trafia do modelu. */
 const OKNO_ROZMOWY = 30;
@@ -71,7 +73,7 @@ export class KasiaService {
    * Zadania i kalendarz zmieniają się w skali godzin, więc minuta nieświeżości
    * nic nie kosztuje, a odczytów jest kilkadziesiąt razy mniej.
    */
-  private buforDanych: { o: number; opis: string } | null = null;
+  private buforDanych: { o: number; opis: string; klucz: string } | null = null;
 
   constructor(
     private readonly store: KasiaStore,
@@ -111,24 +113,44 @@ export class KasiaService {
    * kontekstu zdanie o tym, że danych nie ma — inaczej model mówiłby o pustym
    * dniu, podczas gdy naprawdę nie wiadomo, jaki ten dzień jest.
    */
-  private async odswiezDane(teraz: number, strefa: string, maxWiek = 60_000): Promise<void> {
+  private async odswiezDane(
+    teraz: number,
+    strefa: string,
+    rodzaj: RodzajSpotkania | null = null,
+    maxWiek = 60_000,
+  ): Promise<void> {
     if (!this.mycastle?.skonfigurowany) return;
-    if (this.buforDanych && teraz - this.buforDanych.o < maxWiek) return;
+
+    /*
+     * Bufor jest kluczowany zakresem, nie samym czasem.
+     *
+     * Niedzielne spotkanie potrzebuje tygodnia danych i wagi, poranne — dwóch
+     * dni. Bez klucza świeży bufor z porannej rozmowy zostałby użyty
+     * w niedzielnym podsumowaniu i Kasia planowałaby tydzień, widząc dwa dni.
+     */
+    const zakres = czegoPotrzebuje(rodzaj);
+    const klucz = `${zakres.wstecz}/${zakres.naprzod}/${zakres.waga}`;
+
+    if (this.buforDanych?.klucz === klucz && teraz - this.buforDanych.o < maxWiek) return;
 
     try {
-      const d = await this.mycastle.pobierz(teraz, strefa);
+      const d = await this.mycastle.pobierz(teraz, strefa, zakres);
       // Błędy idą do `opisDanych`, a nie doklejane po fakcie: od nich zależy,
       // czy wolno powiedzieć „dzień jest pusty".
-      this.buforDanych = {
-        o: teraz,
-        opis: opisDanych({
-          projekty: d.projekty, zadania: d.zadania, wydarzenia: d.wydarzenia,
-          teraz, strefa, bledy: d.bledy,
-        }),
-      };
+      const czesci = [opisDanych({
+        projekty: d.projekty, zadania: d.zadania, wydarzenia: d.wydarzenia,
+        teraz, strefa, bledy: d.bledy,
+      })];
+
+      if (zakres.waga) {
+        czesci.push(opisWagi(analizujWage(d.waga?.pomiary ?? [], teraz, d.waga?.cel)));
+      }
+
+      this.buforDanych = { o: teraz, klucz, opis: czesci.join('\n\n') };
     } catch (err) {
       this.buforDanych = {
         o: teraz,
+        klucz,
         opis: `Dane z MyCastle są w tej chwili niedostępne (${(err as Error).message}). `
           + 'Nie wnioskuj z tego, że dzień jest pusty — po prostu nie wiadomo.',
       };
@@ -207,7 +229,6 @@ export class KasiaService {
 
     if (!this.model.gotowy()) return wynik;
 
-    await this.odswiezDane(teraz, this.store.pobierz().ustawienia.strefaCzasowa);
     await this.obsluzSpotkania(teraz, wynik);
 
     /*
@@ -232,14 +253,11 @@ export class KasiaService {
     const czekajace = doZaczepienia(stan.przypomnienia, stan.dostepnosc, teraz);
 
     for (const p of czekajace) {
-      const ponowienie = p.prob > 0
-        ? `\n\nTo już ${p.prob + 1}. próba — poprzednie pozostały bez odpowiedzi. Bądź krótsza.`
-        : '';
-
-      const polecenie = `Zaczyna się spotkanie ${p.rodzaj}. Poprowadź je: `
-        + `odezwij się pierwsza, krótko i konkretnie.${ponowienie}`;
+      const polecenie = poleceniSpotkania(p.rodzaj, { proba: p.prob });
 
       try {
+        // Każde spotkanie widzi inny wycinek danych — niedzielne tydzień i wagę.
+        await this.odswiezDane(teraz, stan.ustawienia.strefaCzasowa, p.rodzaj, 0);
         const tresc = await this.model.odpowiedz({
           system: this.system(stan, 'init', teraz, polecenie),
           rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
@@ -273,6 +291,7 @@ export class KasiaService {
     if (!czyMoznaZaczepic(stan.dostepnosc, teraz)) return;
 
     this.ostatniaInicjatywa = teraz;
+    await this.odswiezDane(teraz, stan.ustawienia.strefaCzasowa);
 
     try {
       const tresc = await this.model.odpowiedz({
@@ -333,6 +352,53 @@ export class KasiaService {
 
   async zapiszUstawienia(zmiany: Partial<UstawieniaKasi>): Promise<StanKasi> {
     return this.store.zmien((s) => { s.ustawienia = { ...s.ustawienia, ...zmiany }; });
+  }
+
+  /**
+   * Zapisuje pomiar wagi w VFS MyCastle.
+   *
+   * Odczyt–zmiana–zapis, a nie dopisanie na końcu: plik może być w międzyczasie
+   * zmieniony z telefonu albo z MyCastle, a nadpisanie go listą sprzed minuty
+   * skasowałoby tamten wpis. Przy jednym użytkowniku ważącym się raz dziennie
+   * wyścig jest mało prawdopodobny, ale koszt ostrożności to jeden odczyt.
+   */
+  async zapiszWage(pomiar: Pomiar): Promise<{ ok: true; pomiarow: number }> {
+    if (!this.mycastle?.skonfigurowany) {
+      throw new BladZadania('Brak dostępu do MyCastle — nie ma gdzie zapisać wagi.', 503);
+    }
+
+    const plik = (await this.mycastle.czytajJson<PlikWagi>(PLIK_WAGI))
+      ?? { type: 'waga' as const, pomiary: [] };
+
+    /*
+     * `waga.ts` nie zna warstwy HTTP i rzuca zwykły `Error`, więc zamieniamy go
+     * tutaj na błąd żądania. Bez tego literówka w liczbie wraca jako 500 —
+     * czyli „awaria serwera" zamiast „popraw dane".
+     */
+    let pomiary: Pomiar[];
+    try {
+      pomiary = dodajPomiar(plik.pomiary ?? [], pomiar);
+    } catch (err) {
+      throw new BladZadania((err as Error).message);
+    }
+    await this.mycastle.zapiszJson(PLIK_WAGI, { ...plik, type: 'waga', pomiary });
+
+    // Bufor stracił aktualność — następne pytanie ma zobaczyć nowy pomiar.
+    this.buforDanych = null;
+    return { ok: true, pomiarow: pomiary.length };
+  }
+
+  /**
+   * Dopisuje wypowiedź Kasi zleconą z zewnątrz (przez skrypt).
+   *
+   * Nie pyta modelu — treść przychodzi gotowa. Oznaczamy ją jako pochodzącą
+   * z inicjatywy, bo z punktu widzenia użytkownika tym właśnie jest: Kasia
+   * odzywa się, choć nikt jej o nic nie pytał.
+   */
+  async wypowiedzZInicjatywy(tresc: string, teraz: number = Date.now()): Promise<void> {
+    await this.store.zmien((s) => {
+      s.rozmowa.push({ id: id(), rola: 'assistant', tresc, o: teraz, zInicjatywy: true });
+    });
   }
 
   /** Konfiguracja TTS/STT — backend ją tylko przechowuje, używa jej przeglądarka. */
@@ -418,10 +484,13 @@ export class KasiaService {
    * bo źle rozumuje, czy dlatego, że dostała złe dane. Bez tego jedyną drogą
    * byłoby zgadywanie z jej wypowiedzi.
    */
-  async podgladDanych(teraz: number = Date.now()): Promise<string> {
+  async podgladDanych(
+    rodzaj: RodzajSpotkania | null = null,
+    teraz: number = Date.now(),
+  ): Promise<string> {
     const strefa = this.store.pobierz().ustawienia.strefaCzasowa;
     // Wymuszamy świeżość: podgląd ma pokazywać stan teraz, a nie sprzed minuty.
-    await this.odswiezDane(teraz, strefa, 0);
+    await this.odswiezDane(teraz, strefa, rodzaj, 0);
     return this.buforDanych?.opis ?? 'Dostęp do MyCastle nie jest skonfigurowany.';
   }
 

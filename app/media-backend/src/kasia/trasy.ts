@@ -18,6 +18,7 @@
  *   POST /api/kasia/glos              zapis konfiguracji TTS/STT
  *   POST /api/kasia/model             { dostawca, model, adres?, klucz? }
  *   GET  /api/kasia/dane              podgląd danych z MyCastle (co widzi model)
+ *   POST /api/kasia/waga              { kg, data?, uwaga? } — pomiar do VFS MyCastle
  *   POST /api/kasia/tick              wymusza przebieg pętli (do prób)
  */
 
@@ -212,7 +213,34 @@ async function trasy(
   }
 
   if (metoda === 'GET' && pathname === '/api/kasia/dane') {
-    odpowiedz(res, 200, { opis: await kasia.podgladDanych() });
+    // `?spotkanie=HersztuWeekly` pokazuje to, co Kasia zobaczy w niedzielę —
+    // z tygodniem kalendarza i wagą, a nie widok zwykłej rozmowy.
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const zadany = url.searchParams.get('spotkanie') as RodzajSpotkania | null;
+    const rodzaj = zadany && RODZAJE_SPOTKAN.includes(zadany) ? zadany : null;
+    odpowiedz(res, 200, { opis: await kasia.podgladDanych(rodzaj) });
+    return true;
+  }
+
+  if (metoda === 'POST' && pathname === '/api/kasia/waga') {
+    const b = await ciało(req);
+    const kg = Number(b.kg);
+    if (!Number.isFinite(kg)) {
+      odpowiedz(res, 400, { error: 'Brak liczby w polu „kg".' });
+      return true;
+    }
+    /*
+     * Data domyślnie dzisiejsza, liczona **po stronie serwera**.
+     * Przeglądarka bywa w innej strefie niż dane użytkownika, a pomiar
+     * przypisany do złego dnia psuje średnią tygodniową po cichu.
+     */
+    const data = typeof b.data === 'string' && b.data
+      ? b.data
+      : new Date().toISOString().slice(0, 10);
+
+    odpowiedz(res, 200, await kasia.zapiszWage({
+      data, kg, uwaga: typeof b.uwaga === 'string' ? b.uwaga : undefined,
+    }));
     return true;
   }
 

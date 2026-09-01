@@ -1,0 +1,55 @@
+apply plugin: 'com.android.library'
+
+group = 'com.mycastle.booxpen'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace "com.mycastle.booxpen"
+}
+
+// Repozytorium Onyksa **nie jest** deklarowane tutaj, choć to najbardziej
+// oczywiste miejsce. Gradle rozwiązuje zewnętrzne zależności modułu
+// projektowego repozytoriami konsumenta — rozwiązywana konfiguracja to
+// `:app:releaseRuntimeClasspath`, więc liczą się repozytoria `:app`, a wpis
+// zrobiony tu jest po prostu ignorowany. Dokłada je wtyczka konfiguracyjna
+// `plugins/withBooxPen.js`, która ma o tym osobny komentarz.
+
+// Jedno miejsce na wersję — gdyby konkretne wydanie okazało się niezgodne
+// z firmware'em czytnika, podmienia się tutaj i nic więcej.
+ext.onyxPenVersion = "1.5.4.3"
+
+dependencies {
+  // `implementation`, nie `compileOnly`: pakiet niesie biblioteki natywne
+  // (arm64-v8a i reszta), którymi sterownik rysuje na panelu. Czytnik nie ma
+  // ich w systemie — muszą wejść do APK.
+  implementation("com.onyx.android.sdk:onyxsdk-pen:${onyxPenVersion}") {
+    /*
+     * Stara biblioteka wsparcia Androida wylatuje z drzewa zależności.
+     *
+     * `onyxsdk-pen` ciągnie `onyxsdk-base`, a ten `pub.devrel:easypermissions:0.2.1`
+     * i `com.tencent:mmkv:1.0.19` — obie sprzed AndroidX, obie zależne od
+     * `com.android.support:*:24.2.1`. AndroidX zawiera te same klasy pod tymi
+     * samymi nazwami (`android.support.v4.app.INotificationSideChannel`
+     * i kilkaset innych), więc budowanie kończy się na:
+     *
+     *     Execution failed for task ':app:checkReleaseDuplicateClasses'
+     *     Duplicate class android.support.v4.app.INotificationSideChannel …
+     *
+     * Wykluczenie zamiast `android.enableJetifier`: jetifier przepisałby te
+     * pakiety na AndroidX, ale przetwarza **wszystkie** zależności projektu,
+     * a budowanie idzie tu przez emulację QEMU i trwa dwadzieścia minut.
+     *
+     * Ryzyko jest znane i wąskie: `TouchHelper` nie sięga po żadną z tych
+     * bibliotek. Gdyby jednak `onyxsdk-base` wywołało `easypermissions`
+     * (pytanie o uprawnienia — czego nigdy nie robimy), skończyłoby się to
+     * `NoClassDefFoundError` zamiast błędu budowania.
+     */
+    exclude group: 'com.android.support'
+  }
+}

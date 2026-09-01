@@ -30,6 +30,7 @@ import {
   scalWydarzenia, sciezkiKalendarza, zakresDni,
   type Projekt, type Wydarzenie, type Zadanie,
 } from './dane';
+import { PLIK_WAGI, type PlikWagi } from './waga';
 
 export interface KonfiguracjaMycastle {
   /** Adres brokera, np. `ws://localhost:1894/mqtt`. */
@@ -53,6 +54,8 @@ export interface DaneMycastle {
   projekty: Projekt[];
   zadania: Zadanie[];
   wydarzenia: Wydarzenie[];
+  /** Pomiary wagi — obecne tylko wtedy, gdy rozmowa ich dotyczy. */
+  waga?: PlikWagi;
   /** Czego nie udało się pobrać — panel i log pokazują to wprost. */
   bledy: string[];
 }
@@ -61,6 +64,8 @@ export class MycastleClient {
   private klient: Klient | null = null;
   private oczekujace = new Map<string, Oczekujace>();
   private laczenie: Promise<void> | null = null;
+  /** Tematy, na których czekamy na cudze wiadomości (polecenia do Kasi). */
+  private nasluchy = new Map<string, (payload: unknown) => void>();
 
   constructor(private readonly cfg: KonfiguracjaMycastle) {}
 
@@ -110,13 +115,24 @@ export class MycastleClient {
         klient.subscribe(TEMAT_ODPOWIEDZI, (err) => {
           if (err) { reject(err); return; }
           this.klient = klient;
+          // Po ponownym połączeniu subskrypcje trzeba założyć od nowa —
+          // broker ich nie pamięta, a skrypt milczałby bez śladu w logu.
+          for (const temat of this.nasluchy.keys()) klient.subscribe(temat);
           resolve();
         });
       };
 
       klient.on('connect', gotowe);
       klient.on('message', (temat, tresc) => {
-        if (temat === TEMAT_ODPOWIEDZI) this.odbierz(tresc.toString());
+        if (temat === TEMAT_ODPOWIEDZI) { this.odbierz(tresc.toString()); return; }
+
+        const nasluch = this.nasluchy.get(temat);
+        if (!nasluch) return;
+        try {
+          nasluch(JSON.parse(tresc.toString()));
+        } catch {
+          // Wiadomość nie-JSON na naszym temacie: nie nasza sprawa.
+        }
       });
       klient.on('error', (err) => {
         // Błąd po nawiązaniu połączenia nie może odrzucać obietnicy, która
@@ -130,6 +146,30 @@ export class MycastleClient {
     });
 
     return this.laczenie;
+  }
+
+  /**
+   * Nasłuch dodatkowego tematu — tak wchodzi `kasia/{user}/inbox`.
+   *
+   * Osobno od odpowiedzi VFS, bo to inny kierunek: tam my pytamy, tu ktoś pyta
+   * nas. Jedno połączenie obsługuje oba, więc skrypt i odczyt plików nie walczą
+   * o brokera.
+   */
+  async nasluchuj(temat: string, cb: (payload: unknown) => void): Promise<void> {
+    await this.polacz();
+    const klient = this.klient;
+    if (!klient) throw new Error('Brak połączenia z brokerem MyCastle.');
+
+    this.nasluchy.set(temat, cb);
+    await new Promise<void>((resolve, reject) => {
+      klient.subscribe(temat, (err) => (err ? reject(err) : resolve()));
+    });
+  }
+
+  /** Publikuje na dowolnym temacie — Kasia odpowiada tędy skryptom. */
+  async publikuj(temat: string, payload: unknown): Promise<void> {
+    await this.polacz();
+    this.klient?.publish(temat, JSON.stringify(payload));
   }
 
   private odbierz(wiadomosc: string): void {
@@ -202,6 +242,14 @@ export class MycastleClient {
     }
   }
 
+  /** Zapisuje plik JSON w katalogu użytkownika. */
+  async zapiszJson(wzgledna: string, dane: unknown): Promise<void> {
+    await this.zapytaj('file_write', {
+      path: this.sciezka(wzgledna),
+      content: JSON.stringify(dane, null, 2),
+    });
+  }
+
   /**
    * Pobiera wszystko, czego Kasia potrzebuje do rozmowy o dniu.
    *
@@ -212,7 +260,11 @@ export class MycastleClient {
    * Błąd pojedynczego pliku nie przerywa całości: lepiej dać Kasi zadania bez
    * kalendarza niż nic, byle powiedzieć, czego brakuje.
    */
-  async pobierz(teraz: number, strefa: string): Promise<DaneMycastle> {
+  async pobierz(
+    teraz: number,
+    strefa: string,
+    zakres: { wstecz: number; naprzod: number; waga: boolean } = { wstecz: 1, naprzod: 3, waga: false },
+  ): Promise<DaneMycastle> {
     const bledy: string[] = [];
 
     const bezpiecznie = async <T>(opis: string, fn: () => Promise<T>, zapas: T): Promise<T> => {
@@ -227,20 +279,25 @@ export class MycastleClient {
       }
     };
 
-    // Wstecz jeden dzień (wieczorne podsumowanie), naprzód trzy (planowanie).
-    const dni = zakresDni(teraz, 1, 3, strefa);
+    // Zakres zależy od rodzaju rozmowy — patrz `scenariusze.czegoPotrzebuje`.
+    const dni = zakresDni(teraz, zakres.wstecz, zakres.naprzod, strefa);
 
-    const [projektyPlik, zadaniaPlik, dniKalendarza] = await Promise.all([
+    const [projektyPlik, zadaniaPlik, dniKalendarza, wagaPlik] = await Promise.all([
       bezpiecznie('projekty', () => this.czytajJson<{ projects?: Projekt[] }>('data/projects.json'), null),
       bezpiecznie('zadania', () => this.czytajJson<{ tasks?: Zadanie[] }>('data/tasks.json'), null),
       Promise.all(sciezkiKalendarza(dni).map((s) =>
         bezpiecznie(`kalendarz ${s}`, () => this.czytajJson<{ tasks?: Wydarzenie[] }>(s), null))),
+      // Wagi nie ciągniemy przy każdej rozmowie — tylko wtedy, gdy jest o niej mowa.
+      zakres.waga
+        ? bezpiecznie('waga', () => this.czytajJson<PlikWagi>(PLIK_WAGI), null)
+        : Promise.resolve(null),
     ]);
 
     return {
       projekty: projektyPlik?.projects ?? [],
       zadania: zadaniaPlik?.tasks ?? [],
       wydarzenia: scalWydarzenia(dniKalendarza.map((d) => d?.tasks ?? [])),
+      waga: wagaPlik ?? undefined,
       bledy,
     };
   }

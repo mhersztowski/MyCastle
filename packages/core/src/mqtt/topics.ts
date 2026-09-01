@@ -274,6 +274,54 @@ export const registerRequest = defineMqttTopic({
 
 // --- Registry ---
 
+// --- Kasia (asystentka w aplikacji Media) ---
+
+/**
+ * Polecenia do Kasi ze skryptów Drive i automatyzacji Markdown.
+ *
+ * Kasia mieszka w `media-backend`, a nie w MyCastle — ale dzieli z nim brokera,
+ * bo to jedyny kanał, którym przeglądarkowy skrypt może się z nią dogadać bez
+ * wystawiania jej API na świat. Stąd prefiks `minis/{userName}/`, mimo że to
+ * inna aplikacja: broker jest wspólny, a wzorzec tematu jest tu adresem
+ * użytkownika, nie nazwą właściciela kodu.
+ *
+ * Konwencja `inbox`/`outbox` jak w server-logic: inbox jest **do** encji,
+ * outbox **od** niej.
+ *
+ * `payload` zostaje luźny (`z.unknown()`), bo kształt zależy od `type`, a lista
+ * poleceń rośnie po stronie Media. Walidacja właściwa dzieje się tam, gdzie
+ * polecenie jest wykonywane — tu chodzi o to, żeby temat był w jednym rejestrze
+ * i pokazywał się w MqttExplorerze.
+ */
+export const kasiaInbox = defineMqttTopic({
+  pattern: 'minis/{userName}/kasia/inbox',
+  description: 'Polecenie do asystentki Kasi (skrypty Drive, automatyzacje Markdown)',
+  direction: 'server→shared',
+  tags: ['Kasia'],
+  payloadSchema: z.object({
+    /** Identyfikator żądania — po nim wraca odpowiedź na `outbox`. */
+    id: z.string(),
+    type: z.string(),
+    payload: z.unknown().optional(),
+  }),
+});
+
+export const kasiaOutbox = defineMqttTopic({
+  pattern: 'minis/{userName}/kasia/outbox',
+  description: 'Odpowiedź Kasi na polecenie oraz jej wypowiedzi z inicjatywy',
+  direction: 'server→shared',
+  tags: ['Kasia'],
+  payloadSchema: z.object({
+    /** Obecne w odpowiedzi na polecenie; brak przy wypowiedzi z inicjatywy. */
+    requestId: z.string().optional(),
+    ok: z.boolean().optional(),
+    data: z.unknown().optional(),
+    error: z.string().optional(),
+    /** Wypowiedź Kasi — gdy odzywa się sama, a nie w odpowiedzi na polecenie. */
+    wypowiedz: z.string().optional(),
+  }),
+});
+
 export const mqttTopics = {
   telemetry,
   heartbeat,
@@ -290,6 +338,8 @@ export const mqttTopics = {
   extRes,
   twinDesired,
   twinReported,
+  kasiaInbox,
+  kasiaOutbox,
 } as const;
 
 export type MqttTopicRegistry = typeof mqttTopics;

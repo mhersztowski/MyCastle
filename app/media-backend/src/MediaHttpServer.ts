@@ -28,6 +28,7 @@ import { KasiaService } from './kasia/KasiaService';
 import { ADRESY_DOMYSLNE, MODELE_DOMYSLNE, utworzModel } from './kasia/llm';
 import { obsluzKasie } from './kasia/trasy';
 import { MycastleClient } from './kasia/MycastleClient';
+import { obsluzPolecenie } from './kasia/polecenia';
 
 /** Ile czasu trzymamy odpowiedzi katalogu i kanałów, zanim spytamy ponownie. */
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -45,6 +46,7 @@ export class MediaHttpServer extends HttpUploadServer {
   private readonly kasiaStore: KasiaStore;
   private readonly kluczZeSrodowiska: string;
   private readonly mycastleClient?: MycastleClient;
+  private readonly mycastleUser: string;
   readonly kasia: KasiaService;
   private pulsKasi?: ReturnType<typeof setInterval>;
 
@@ -62,6 +64,7 @@ export class MediaHttpServer extends HttpUploadServer {
 
     this.kasiaStore = new KasiaStore(dataDir);
     this.kluczZeSrodowiska = kluczModelu ?? '';
+    this.mycastleUser = mycastle?.uzytkownik ?? '';
     this.mycastleClient = mycastle?.broker
       ? new MycastleClient({ broker: mycastle.broker, uzytkownik: mycastle.uzytkownik, haslo: mycastle.haslo })
       : undefined;
@@ -120,6 +123,43 @@ export class MediaHttpServer extends HttpUploadServer {
     if (this.pulsKasi) clearInterval(this.pulsKasi);
     this.pulsKasi = undefined;
     this.mycastleClient?.rozlacz();
+  }
+
+  /**
+   * Nasłuch poleceń ze skryptów Drive i automatyzacji Markdown.
+   *
+   * Ten sam broker i to samo połączenie, którym Kasia czyta pliki — skrypt
+   * publikuje na `kasia/{user}/inbox`, odpowiedź wraca na `outbox`.
+   *
+   * Bez skonfigurowanego MyCastle nasłuchu nie ma: broker jest tam, a nie tutaj.
+   * Wtedy API dla skryptów po prostu nie działa i mówi to wprost po stronie
+   * skryptu („Kasia nie odpowiedziała"), zamiast wywracać backend.
+   */
+  async startNasluchPolecen(): Promise<void> {
+    const klient = this.mycastleClient;
+    if (!klient?.skonfigurowany) return;
+
+    const user = this.mycastleUser;
+    const inbox = `minis/${user}/kasia/inbox`;
+    const outbox = `minis/${user}/kasia/outbox`;
+
+    try {
+      await klient.nasluchuj(inbox, (payload) => {
+        void (async () => {
+          const p = payload as { id?: string; type?: string; payload?: unknown };
+          if (!p?.id || !p?.type) return;
+
+          const wynik = await obsluzPolecenie(this.kasia, p.type, p.payload);
+          // Odpowiedź niesie `requestId`, po którym skrypt ją rozpozna —
+          // na jednym temacie odpowiadamy wszystkim naraz.
+          await klient.publikuj(outbox, { requestId: p.id, ...wynik });
+        })();
+      });
+      console.log(`Kasia API       →  nasłuch na ${inbox}`);
+    } catch (err) {
+      // Brak nasłuchu nie może zatrzymać serwera — reszta Kasi działa dalej.
+      console.error('[kasia] nie udało się założyć nasłuchu poleceń:', (err as Error).message);
+    }
   }
 
   /** Czy Kasia ma skąd brać dane o dniu. Panel pokazuje to wprost. */

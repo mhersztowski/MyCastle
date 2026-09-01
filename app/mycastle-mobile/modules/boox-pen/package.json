@@ -1,0 +1,7 @@
+{
+  "name": "boox-pen",
+  "version": "0.1.0",
+  "description": "Niskoopóźnieniowe rysowanie piórem na czytnikach Onyx Boox",
+  "main": "index.ts",
+  "private": true
+}
