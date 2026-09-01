@@ -53,7 +53,23 @@ RUN pnpm --filter @mhersztowski/ui-components-scene3d build --silent
 RUN pnpm --filter @mhersztowski/texteditor build --silent
 RUN pnpm --filter @mhersztowski/web-client build --silent
 # Build frontend → outputs to app/cad-backend/public/
-RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm --filter cad-app build
+#
+# Dwie rzeczy, przez które ten krok padał na serwerze produkcyjnym (3,4 GB RAM)
+# urwanym logiem i `exit code 255` bez słowa błędu:
+#
+# 1. Limit sterty WYŻSZY niż pamięć maszyny działa przeciwko budowie. Z 4096 MB
+#    V8 miał pozwolenie rosnąć ponad fizyczny RAM, więc odkładał GC aż jądro
+#    ubiło proces (SIGKILL nie zostawia komunikatu). Limit poniżej dostępnej
+#    pamięci wymusza wcześniejsze zbieranie śmieci, a gdyby i tak nie starczyło
+#    — dostajemy czytelne "JavaScript heap out of memory" zamiast cichego zgonu.
+# 2. `pnpm build` to `tsc && vite build`, czyli dwa ciężkie procesy pod rząd.
+#    W obrazie produkcyjnym potrzebny jest tylko artefakt, a `tsc` trzyma w
+#    pamięci cały graf typów łącznie z d.ts three.js. Kontrola typów zostaje
+#    tam, gdzie ma sens: `pnpm --filter cad-app typecheck` i `pnpm build:cad`.
+#
+# `prebuild` (gen-three-types) wołamy wprost, bo pomijamy skrypt `build`.
+RUN pnpm --filter cad-app exec node scripts/gen-three-types.mjs \
+ && NODE_OPTIONS="--max-old-space-size=2048" pnpm --filter cad-app exec vite build
 RUN pnpm --filter cad-backend build --silent
 
 # ── production image ──────────────────────────────────────────────────────────
