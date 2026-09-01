@@ -49,6 +49,7 @@ function Harness({ active, onStroke }: HarnessProps) {
       <canvas ref={ref} data-testid="canvas" />
       <span data-testid="engaged">{String(status.engaged)}</span>
       <span data-testid="available">{String(status.available)}</span>
+      <span data-testid="error">{status.error ?? ''}</span>
     </>
   );
 }
@@ -60,6 +61,7 @@ function installBridge(available = true): { bridge: BooxPenBridge; sent: BooxPen
     info: available ? 'Boox Go 10.3' : 'to nie jest urządzenie Onyx',
     send: (m) => { sent.push(m); },
     onStroke: null,
+    onStatus: null,
   };
   (window as Window & { __booxPen?: BooxPenBridge }).__booxPen = bridge;
   return { bridge, sent };
@@ -104,11 +106,32 @@ describe('useBooxPen', () => {
 
   it('wyłączenie oddaje pióro z powrotem stronie', () => {
     const { sent } = installBridge();
-    const { rerender, getByTestId } = render(<Harness active onStroke={vi.fn()} />);
+    const { rerender } = render(<Harness active onStroke={vi.fn()} />);
     sent.length = 0;
     rerender(<Harness active={false} onStroke={vi.fn()} />);
     expect(sent).toContainEqual({ type: 'boox:enabled', enabled: false });
+  });
+
+  it('„przejęte" znaczy meldunek sterownika, nie wysłaną prośbę', () => {
+    // To jest sedno: wszystkie drogi niepowodzenia po stronie natywnej biegną
+    // wewnątrz `runOnUiThread`, już po spełnieniu obietnicy. Gdyby `engaged`
+    // brało się z samego wysłania komunikatu, interfejs pokazywałby „działa"
+    // także wtedy, gdy `TouchHelper` w ogóle się nie utworzył.
+    const { bridge, sent } = installBridge();
+    const { getByTestId } = render(<Harness active onStroke={vi.fn()} />);
+    expect(sent).toContainEqual({ type: 'boox:enabled', enabled: true });
     expect(getByTestId('engaged').textContent).toBe('false');
+
+    act(() => { bridge.onStatus?.({ engaged: true, error: null }); });
+    expect(getByTestId('engaged').textContent).toBe('true');
+  });
+
+  it('odmowa sterownika dociera do strony razem z powodem', () => {
+    const { bridge } = installBridge();
+    const { getByTestId } = render(<Harness active onStroke={vi.fn()} />);
+    act(() => { bridge.onStatus?.({ engaged: false, error: 'brak obszaru rysowania' }); });
+    expect(getByTestId('engaged').textContent).toBe('false');
+    expect(getByTestId('error').textContent).toBe('brak obszaru rysowania');
   });
 
   it('odmontowanie zwalnia sterownik, nawet gdy nikt nie wyłączył rysowania', () => {
@@ -118,6 +141,7 @@ describe('useBooxPen', () => {
     unmount();
     expect(sent.map((m) => m.type)).toContain('boox:release');
     expect(bridge.onStroke).toBeNull();
+    expect(bridge.onStatus).toBeNull();
   });
 
   it('gotowe pociągnięcie trafia do strony we współrzędnych kanwy', () => {

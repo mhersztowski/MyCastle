@@ -94,12 +94,26 @@ export type BooxPenMessage = AreaMessage | EnableMessage | ReleaseMessage;
  * i opisem powodu, żeby strona mogła powiedzieć użytkownikowi, czemu nic
  * się nie zmieniło, zamiast milczeć.
  */
+/**
+ * Faktyczny stan sterownika, meldowany przez warstwę natywną.
+ *
+ * `engaged` znaczy „sterownik **wziął** pióro", a nie „poprosiliśmy o to".
+ * Różnica jest istotna, bo wszystkie drogi niepowodzenia po stronie natywnej
+ * biegną wewnątrz `runOnUiThread`, już po spełnieniu obietnicy — bez tego
+ * kanału awaria wygląda dokładnie jak powodzenie.
+ */
+export interface NativeStatus {
+  engaged: boolean;
+  error: string | null;
+}
+
 export interface BooxPenBridge {
   available: boolean;
   /** Krótki opis stanu — nazwa urządzenia albo powód niedostępności. */
   info?: string;
   send(message: BooxPenMessage): void;
   onStroke: ((stroke: NativeStroke) => void) | null;
+  onStatus?: ((status: NativeStatus) => void) | null;
 }
 
 type MaybeHost = (Window & { __booxPen?: BooxPenBridge }) | undefined;

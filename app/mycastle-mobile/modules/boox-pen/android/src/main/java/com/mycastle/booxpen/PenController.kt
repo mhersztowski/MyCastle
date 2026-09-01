@@ -33,6 +33,17 @@ import org.json.JSONObject
 class PenController(
     private val activityProvider: () -> Activity?,
     private val emitStroke: (String) -> Unit,
+    /**
+     * Meldunek o **faktycznym** stanie sterownika.
+     *
+     * Bez niego strona wie tylko tyle, że wysłała prośbę o przejęcie pióra —
+     * a nie, czy została spełniona. Wszystkie drogi niepowodzenia w tej klasie
+     * kończą się cichym `return` wewnątrz `runOnUiThread`, więc obietnica po
+     * stronie JavaScriptu i tak spełnia się pomyślnie. Efekt: interfejs pokazuje
+     * „sterownik rysuje", a sterownik nie robi nic, i nie ma po czym poznać
+     * różnicy poza tym, że pióro dalej zwleka.
+     */
+    private val emitStatus: (engaged: Boolean, error: String?) -> Unit = { _, _ -> },
 ) {
     private var touchHelper: TouchHelper? = null
     private var hostView: View? = null
@@ -70,16 +81,38 @@ class PenController(
             // pióro przestaje działać wszędzie. Za taką awarię warto zapłacić
             // sprawdzeniem w dwóch miejscach.
             if (area == null) {
-                lastError = "brak obszaru rysowania"
+                fail("brak obszaru rysowania")
                 return
             }
-            val helper = ensureHelper() ?: return
-            helper.setRawDrawingEnabled(true)
-            enabled = true
+            val helper = ensureHelper() ?: run {
+                fail(lastError ?: "nie udało się utworzyć TouchHelpera")
+                return
+            }
+            try {
+                helper.setRawDrawingEnabled(true)
+                enabled = true
+                lastError = null
+                emitStatus(true, null)
+            } catch (t: Throwable) {
+                Log.w(TAG, "setRawDrawingEnabled(true) nie powiodło się", t)
+                fail(t.message ?: t.javaClass.simpleName)
+            }
         } else {
             enabled = false
-            touchHelper?.setRawDrawingEnabled(false)
+            try {
+                touchHelper?.setRawDrawingEnabled(false)
+            } catch (t: Throwable) {
+                Log.w(TAG, "setRawDrawingEnabled(false) nie powiodło się", t)
+            }
+            emitStatus(false, null)
         }
+    }
+
+    /** Zapisuje powód i melduje stronie, że pióra jednak nie przejęliśmy. */
+    private fun fail(reason: String) {
+        enabled = false
+        lastError = reason
+        emitStatus(false, reason)
     }
 
     /**
@@ -98,6 +131,7 @@ class PenController(
         }
         touchHelper = null
         hostView = null
+        emitStatus(false, null)
     }
 
     // ── Środek ──────────────────────────────────────────────────────────────

@@ -28,6 +28,19 @@ export interface BooxPenStrokeEvent {
   stroke: string;
 }
 
+/**
+ * Faktyczny stan sterownika po każdej próbie.
+ *
+ * Bez tego strona wie tylko, że **poprosiła** o przejęcie pióra. Wszystkie
+ * drogi niepowodzenia po stronie natywnej kończą się wewnątrz `runOnUiThread`,
+ * więc obietnica i tak spełnia się pomyślnie — a interfejs pokazuje „działa",
+ * gdy nie działa nic.
+ */
+export interface BooxPenStatusEvent {
+  engaged: boolean;
+  error: string | null;
+}
+
 export interface BooxPenSubscription {
   remove(): void;
 }
@@ -48,6 +61,10 @@ interface BooxPenNativeModule {
   addListener(
     event: 'onStroke',
     listener: (event: BooxPenStrokeEvent) => void,
+  ): BooxPenSubscription;
+  addListener(
+    event: 'onStatus',
+    listener: (event: BooxPenStatusEvent) => void,
   ): BooxPenSubscription;
 }
 

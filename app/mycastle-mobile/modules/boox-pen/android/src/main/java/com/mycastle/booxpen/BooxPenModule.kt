@@ -30,16 +30,41 @@ class BooxPenModule : Module() {
         controller ?: PenController(
             activityProvider = { appContext.activityProvider?.currentActivity },
             emitStroke = { json -> sendEvent(EVENT_STROKE, Bundle().apply { putString("stroke", json) }) },
+            emitStatus = { engaged, error -> sendStatus(engaged, error) },
         ).also { controller = it }
 
+    private fun sendStatus(engaged: Boolean, error: String?) {
+        sendEvent(EVENT_STATUS, Bundle().apply {
+            putBoolean("engaged", engaged)
+            putString("error", error)
+        })
+    }
+
+    /**
+     * Wykonuje pracę na wątku interfejsu — `TouchHelper` nie znosi innego.
+     *
+     * Brak aktywności i wyjątek w środku bloku **melduje się stronie**. Cichy
+     * `return` w tym miejscu był najgorszym z możliwych zachowań: obietnica po
+     * stronie JavaScriptu spełniała się pomyślnie, interfejs pokazywał
+     * „sterownik gotowy", a nie działo się nic.
+     */
     private fun onUi(block: () -> Unit) {
-        val activity = appContext.activityProvider?.currentActivity ?: return
-        activity.runOnUiThread(block)
+        val activity = appContext.activityProvider?.currentActivity ?: run {
+            sendStatus(false, "brak aktywności — okno aplikacji nie jest na wierzchu")
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                block()
+            } catch (t: Throwable) {
+                sendStatus(false, t.message ?: t.javaClass.simpleName)
+            }
+        }
     }
 
     override fun definition() = ModuleDefinition {
         Name("BooxPen")
-        Events(EVENT_STROKE)
+        Events(EVENT_STROKE, EVENT_STATUS)
 
         Function("isAvailable") { PenSupport.isAvailable(appContext.reactContext) }
 
@@ -84,5 +109,6 @@ class BooxPenModule : Module() {
 
     companion object {
         const val EVENT_STROKE = "onStroke"
+        const val EVENT_STATUS = "onStatus"
     }
 }

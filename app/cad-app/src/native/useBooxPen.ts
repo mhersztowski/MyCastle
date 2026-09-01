@@ -34,6 +34,7 @@ import {
   type CanvasPenPoint,
   type DeviceRect,
   type NativeStroke,
+  type NativeStatus,
 } from './booxPen';
 
 export interface UseBooxPenOptions {
@@ -51,8 +52,16 @@ export interface BooxPenStatus {
   available: boolean;
   /** Nazwa urządzenia albo powód niedostępności — do pokazania użytkownikowi. */
   info?: string;
-  /** Czy sterownik trzyma teraz pióro. */
+  /**
+   * Czy sterownik **naprawdę** trzyma pióro.
+   *
+   * Wartość pochodzi z meldunku warstwy natywnej, a nie z faktu wysłania
+   * prośby. Wcześniej było odwrotnie i interfejs pokazywał „działa" także
+   * wtedy, gdy `TouchHelper` w ogóle się nie utworzył.
+   */
   engaged: boolean;
+  /** Powód, dla którego sterownik odmówił — `null`, dopóki nie odmówił. */
+  error: string | null;
 }
 
 /** Udział punktów poza obszarem, powyżej którego uznajemy układ za rozjechany. */
@@ -64,7 +73,9 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
   const bridge = getBooxPen();
   const available = bridge?.available === true;
 
-  const [engaged, setEngaged] = useState(false);
+  // Stan meldowany przez warstwę natywną. Osobno od „poprosiliśmy", bo to
+  // właśnie rozjazd między jednym a drugim był niewidoczny.
+  const [native, setNative] = useState<NativeStatus>({ engaged: false, error: null });
   // Czy sterownik dostał już sensowny obszar. Osobno od `active`, bo kanwa
   // bywa gotowa dopiero kilka klatek po tym, jak strona chce zacząć rysować.
   const [areaReady, setAreaReady] = useState(false);
@@ -75,7 +86,7 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
   const areaRef = useRef<DeviceRect | null>(null);
   const onStrokeRef = useRef(onStroke);
   onStrokeRef.current = onStroke;
-  const engagedRef = useRef(false);
+  const requestedRef = useRef(false);
   const warnedRef = useRef(false);
 
   const publishArea = useCallback((): boolean => {
@@ -98,7 +109,7 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
   useEffect(() => {
     if (!bridge?.available) return;
     const handler = (stroke: NativeStroke) => {
-      if (!engagedRef.current) return;
+      if (!requestedRef.current) return;
       const area = areaRef.current;
       if (!area) return;
       if (!warnedRef.current && fractionOutside(stroke.points, area) > OFFSET_ALARM) {
@@ -115,7 +126,10 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
       onStrokeRef.current(toCanvasPoints(stroke, area, dpr), stroke.erase);
     };
     bridge.onStroke = handler;
+    const status = (s: NativeStatus) => setNative(s);
+    bridge.onStatus = status;
     return () => {
+      if (bridge.onStatus === status) bridge.onStatus = null;
       // Tylko własne wywołanie zwrotne — mostek ma jedno gniazdo, a bezwarunkowe
       // wyzerowanie zabrałoby je komuś, kto podpiął się później.
       if (bridge.onStroke === handler) bridge.onStroke = null;
@@ -161,12 +175,10 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
     if (!active || !areaReady) return;
 
     bridge.send({ type: 'boox:enabled', enabled: true });
-    engagedRef.current = true;
-    setEngaged(true);
+    requestedRef.current = true;
 
     return () => {
-      engagedRef.current = false;
-      setEngaged(false);
+      requestedRef.current = false;
       bridge.send({ type: 'boox:enabled', enabled: false });
     };
   }, [bridge, active, areaReady]);
@@ -179,5 +191,5 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
     };
   }, [bridge]);
 
-  return { available, info: bridge?.info, engaged };
+  return { available, info: bridge?.info, engaged: native.engaged, error: native.error };
 }

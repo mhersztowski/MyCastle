@@ -67,6 +67,7 @@ function penBridgeScript(support: { available: boolean; info: string }): string 
       available: ${support.available ? 'true' : 'false'},
       info: ${JSON.stringify(support.info)},
       onStroke: null,
+      onStatus: null,
       send: function (message) {
         window.ReactNativeWebView.postMessage(JSON.stringify(message));
       }
@@ -159,6 +160,23 @@ export default function App() {
     const sub = BooxPen.addListener('onStroke', ({ stroke }) => {
       webViewRef.current?.injectJavaScript(
         `window.__booxPen && window.__booxPen.onStroke && window.__booxPen.onStroke(${stroke});
+        true;`,
+      );
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Faktyczny stan sterownika — nie to, o co strona poprosiła, tylko co z tego
+  // wyszło. Bez tego kanału każda awaria po stronie natywnej jest niewidoczna,
+  // bo dzieje się wewnątrz `runOnUiThread`, już po spełnieniu obietnicy.
+  useEffect(() => {
+    if (!BooxPen) return;
+    const sub = BooxPen.addListener('onStatus', ({ engaged, error }) => {
+      webViewRef.current?.injectJavaScript(
+        `window.__booxPen && window.__booxPen.onStatus && window.__booxPen.onStatus({
+          engaged: ${engaged ? 'true' : 'false'},
+          error: ${error ? JSON.stringify(error) : 'null'}
+        });
         true;`,
       );
     });

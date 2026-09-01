@@ -57,6 +57,10 @@ import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter';
 import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight';
 import CloseIcon from '@mui/icons-material/Close';
 import BoltIcon from '@mui/icons-material/Bolt';
+import BlockIcon from '@mui/icons-material/Block';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 import Button from '@mui/material/Button';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -1242,6 +1246,9 @@ export function SpenNotesView() {
   const [debugTick, setDebugTick] = useState(0);
   const [imgDragVer, setImgDragVer] = useState(0);
   const [scenePanelOpen, setScenePanelOpen] = useState(false);
+  // Kotwica okienka ze szczegółami stanu pióra (dotknięcie, nie najechanie —
+  // podpowiedź na rysiku bywa nie do wywołania).
+  const [penInfoAnchor, setPenInfoAnchor] = useState<HTMLElement | null>(null);
   // Drag-and-drop drzewa sceny: id przeciąganego elementu + cel podświetlenia.
   const [treeDragId, setTreeDragId] = useState<string | null>(null);
   const [treeDropTarget, setTreeDropTarget] = useState<string | null>(null); // gid grupy lub '__root__'
@@ -3041,6 +3048,38 @@ export function SpenNotesView() {
   };
 
 
+  /** Odznaka stanu pióra — kształt i słowo, bo ekran czytnika jest czarno-biały. */
+  const penBadge =
+    penHost.kind === 'shell-old'
+      ? {
+          Icon: SystemUpdateAltIcon,
+          label: 'stary APK',
+          detail: 'Aplikacja nie zawiera modułu pióra. Wgraj nowszy pakiet MyCastleCAD.',
+        }
+      : penHost.kind === 'unsupported'
+        ? {
+            Icon: BlockIcon,
+            label: 'brak',
+            detail: `Sterownik pióra niedostępny na tym urządzeniu.\n${penHost.info ?? 'Bez podanego powodu.'}`,
+          }
+        : pen.error
+          ? {
+              Icon: ErrorOutlineIcon,
+              label: 'odmowa',
+              detail: `Urządzenie rozpoznane, ale sterownik odmówił przejęcia pióra.\nPowód: ${pen.error}`,
+            }
+          : pen.engaged
+            ? {
+                Icon: BoltIcon,
+                label: 'sterownik',
+                detail: `Pióro obsługuje sterownik Boox — rysowanie z pominięciem przeglądarki.\n${pen.info ?? ''}`,
+              }
+            : {
+                Icon: HourglassEmptyIcon,
+                label: 'czeka',
+                detail: `Sterownik nie przejął jeszcze pióra.\nWybrane narzędzie: ${tool} (przejmuje tylko przy Piórze i Markerze).\nUrządzenie: ${pen.info ?? ''}`,
+              };
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -3284,31 +3323,56 @@ export function SpenNotesView() {
           )}
 
           {/*
-            Stan pióra sterownika — cztery przypadki, jeden wskaźnik.
+            Stan pióra sterownika — pięć przypadków, jeden wskaźnik.
 
-            Bez tego „nie działa" ma cztery różne przyczyny wyglądające
-            identycznie: pióro po prostu rysuje z opóźnieniem. Milczenie
-            interfejsu jest tu najgorszą odpowiedzią, bo każe zgadywać, czy
-            zawiodła strona, pakiet, czy rozpoznanie urządzenia.
+            **Rozróżniany kształtem i słowem, nie kolorem.** Ekran czytnika jest
+            czarno-biały, więc zielony, żółty i czerwony to trzy podobne
+            szarości — wskaźnik oparty na barwie nie niesie tu żadnej
+            informacji. Każdy stan ma więc własną ikonę i własne słowo.
+
+            Szczegóły są pod dotknięciem, a nie pod najechaniem: podpowiedź
+            wymaga przytrzymania palcem i na rysiku bywa nie do wywołania,
+            a to właśnie ona niesie powód odmowy.
 
             W zwykłej przeglądarce wskaźnika nie ma — na biurku nie ma czego
             diagnozować.
           */}
           {penHost.kind !== 'browser' && (() => {
-            const state =
-              penHost.kind === 'shell-old'
-                ? { color: 'warning.main', title: 'Aplikacja bez modułu pióra — wgraj nowszy APK (MyCastleCAD)' }
-                : penHost.kind === 'unsupported'
-                  ? { color: 'error.main', title: `Sterownik pióra niedostępny — ${penHost.info ?? 'bez podanego powodu'}` }
-                  : pen.engaged
-                    ? { color: 'success.main', title: `Rysuje sterownik Boox — ${pen.info ?? ''}` }
-                    : { color: 'text.disabled', title: `Sterownik gotowy, czeka na narzędzie Pióro lub Marker — ${pen.info ?? ''}` };
+            const { Icon } = penBadge;
             return (
-              <Tooltip title={state.title}>
-                <BoltIcon sx={{ fontSize: 18, ml: 'auto', color: state.color }} />
-              </Tooltip>
+              <Box
+                onClick={e => setPenInfoAnchor(e.currentTarget)}
+                sx={{
+                  ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.25,
+                  px: 0.5, py: 0.125, cursor: 'pointer', borderRadius: 1,
+                  border: '1px solid', borderColor: 'divider',
+                }}
+              >
+                <Icon sx={{ fontSize: 15 }} />
+                <Typography variant="caption" sx={{ lineHeight: 1 }}>{penBadge.label}</Typography>
+              </Box>
             );
           })()}
+
+          <Menu
+            anchorEl={penInfoAnchor}
+            open={Boolean(penInfoAnchor)}
+            onClose={() => setPenInfoAnchor(null)}
+          >
+            <Box sx={{ px: 1.5, py: 1, maxWidth: 320 }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                Pióro sterownika
+              </Typography>
+              <Typography
+                variant="caption"
+                // Treść jest do przepisania w zgłoszeniu błędu, więc musi dać
+                // się zaznaczyć — domyślnie w menu zaznaczanie jest wyłączone.
+                sx={{ whiteSpace: 'pre-line', userSelect: 'text' }}
+              >
+                {penBadge.detail}
+              </Typography>
+            </Box>
+          </Menu>
 
           {/* Scene panel toggle — file ops now live in the top-bar File menu */}
           <Tooltip title="Scene (object tree + properties)">
