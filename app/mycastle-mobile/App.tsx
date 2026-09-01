@@ -171,11 +171,12 @@ export default function App() {
   // bo dzieje się wewnątrz `runOnUiThread`, już po spełnieniu obietnicy.
   useEffect(() => {
     if (!BooxPen) return;
-    const sub = BooxPen.addListener('onStatus', ({ engaged, error }) => {
+    const sub = BooxPen.addListener('onStatus', ({ engaged, error, debug }) => {
       webViewRef.current?.injectJavaScript(
         `window.__booxPen && window.__booxPen.onStatus && window.__booxPen.onStatus({
           engaged: ${engaged ? 'true' : 'false'},
-          error: ${error ? JSON.stringify(error) : 'null'}
+          error: ${error ? JSON.stringify(error) : 'null'},
+          debug: ${debug ? JSON.stringify(debug) : 'null'}
         });
         true;`,
       );

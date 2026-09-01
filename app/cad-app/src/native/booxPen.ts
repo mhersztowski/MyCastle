@@ -105,6 +105,15 @@ export type BooxPenMessage = AreaMessage | EnableMessage | ReleaseMessage;
 export interface NativeStatus {
   engaged: boolean;
   error: string | null;
+  /**
+   * Geometria i liczniki wywołań sterownika, jednym wierszem.
+   *
+   * Na czytniku nie ma jak zajrzeć do logów, a bez tych liczb „nie działa"
+   * znaczy pięć różnych rzeczy naraz. `begin=0` mówi, że sterownik nie widzi
+   * pióra w podanym prostokącie; `begin>0 list=0`, że widzi je, ale nie oddaje
+   * punktów.
+   */
+  debug?: string | null;
 }
 
 export interface BooxPenBridge {

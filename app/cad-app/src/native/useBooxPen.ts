@@ -62,6 +62,8 @@ export interface BooxPenStatus {
   engaged: boolean;
   /** Powód, dla którego sterownik odmówił — `null`, dopóki nie odmówił. */
   error: string | null;
+  /** Surowy opis geometrii i liczników z warstwy natywnej. */
+  debug: string | null;
   /**
    * Ile pociągnięć przyszło od sterownika, odkąd otwarto stronę.
    *
@@ -219,6 +221,7 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
     info: bridge?.info,
     engaged: native.engaged,
     error: native.error,
+    debug: native.debug ?? null,
     strokes: received.strokes,
     lastOutside: received.lastOutside,
   };

@@ -3093,6 +3093,7 @@ export function SpenNotesView() {
     pen.lastOutside === null
       ? null
       : `Ostatnie pociągnięcie poza obszarem kanwy: ${Math.round(pen.lastOutside * 100)}%`,
+    pen.debug,
   ].filter(Boolean).join('\n');
 
   // ── Render ────────────────────────────────────────────────────────────────────

@@ -14,21 +14,36 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Cykl życia `TouchHelper`-a nad widokiem WebView.
+ * Cykl życia `TouchHelper`-a nad oknem aplikacji.
  *
  * Warstwa jest celowo głupia: nie wie nic o kanwie ani o dokumencie. Dostaje
  * prostokąt w pikselach urządzenia **względem lewego górnego rogu WebView**
  * i oddaje pociągnięcia w tym samym układzie. Cała arytmetyka powiększenia,
  * przesunięcia i nacisku siedzi po stronie JavaScriptu, gdzie da się ją
  * sprawdzić testem — tutaj zostaje jedno przeliczenie, którego strona wykonać
- * nie może: położenie samego WebView na ekranie.
+ * nie może: położenie WebView na ekranie.
  *
- * ## Dlaczego akurat WebView jest widokiem gospodarza
+ * ## Dlaczego gospodarzem jest przezroczysta nakładka, a nie WebView
  *
- * `TouchHelper` potrzebuje widoku, żeby śledzić przewijanie i zmiany układu.
- * Widok gospodarza **nie jest** powierzchnią rysowania — sterownik maluje
- * wprost na panelu, w obszarze podanym przez `setLimitRect`. WebView jest
- * naturalnym wyborem, bo to jego układ współrzędnych opisuje strona.
+ * Pierwsza wersja podawała `TouchHelper`-owi wprost widok WebView. Efekt był
+ * najgorszy z możliwych do zdiagnozowania: sterownik **melduje, że przejął
+ * pióro**, a nie oddaje ani jednego pociągnięcia, więc rysowanie zachowuje się
+ * dokładnie tak, jakby całej tej warstwy nie było.
+ *
+ * `TouchHelper.create` zakłada widok, którym może swobodnie rozporządzać —
+ * podpina do niego nasłuch dotyku i obserwatora układu. WebView jednego i
+ * drugiego używa do własnych celów (przewijanie, zaznaczanie, powiększanie
+ * gestem), a wszystkie znane działające przykłady użycia tego SDK podają widok
+ * dodany wyłącznie w tym celu.
+ *
+ * Nakładka to zwykły `View` bez tła, rozciągnięty na całe okno i **nieklikalny**
+ * — domyślny `onTouchEvent` zwraca `false`, więc dotyk przechodzi do WebView
+ * pod spodem i palec dalej przewija stronę. Sterownik nie rysuje po niej ani po
+ * niczym innym w Androidzie: maluje wprost na panelu, a widok jest mu potrzebny
+ * tylko jako punkt zaczepienia.
+ *
+ * Współrzędne dalej liczymy względem **WebView**, bo to jego układ opisuje
+ * strona — nakładka i WebView mogą leżeć w innych miejscach.
  */
 class PenController(
     private val activityProvider: () -> Activity?,
@@ -39,19 +54,32 @@ class PenController(
      * Bez niego strona wie tylko tyle, że wysłała prośbę o przejęcie pióra —
      * a nie, czy została spełniona. Wszystkie drogi niepowodzenia w tej klasie
      * kończą się cichym `return` wewnątrz `runOnUiThread`, więc obietnica po
-     * stronie JavaScriptu i tak spełnia się pomyślnie. Efekt: interfejs pokazuje
-     * „sterownik rysuje", a sterownik nie robi nic, i nie ma po czym poznać
-     * różnicy poza tym, że pióro dalej zwleka.
+     * stronie JavaScriptu i tak spełnia się pomyślnie.
      */
-    private val emitStatus: (engaged: Boolean, error: String?) -> Unit = { _, _ -> },
+    private val emitStatus: (engaged: Boolean, error: String?, debug: String) -> Unit = { _, _, _ -> },
 ) {
     private var touchHelper: TouchHelper? = null
+
+    /** Przezroczysta nakładka, którą dostaje `TouchHelper` — patrz nagłówek klasy. */
     private var hostView: View? = null
+
+    /** WebView — wyłącznie po to, by wiedzieć, gdzie na ekranie zaczyna się strona. */
+    private var webView: View? = null
 
     /** Obszar rysowania względem WebView; `null` dopóki strona go nie poda. */
     private var area: Rect? = null
     private var strokeWidth = 3f
     private var enabled = false
+    private var limitRect: Rect? = null
+
+    // Liczniki wywołań zwrotnych sterownika.
+    //
+    // Rozróżniają trzy przypadki, które z zewnątrz wyglądają identycznie:
+    // sterownik nie widzi pióra (`begin` zostaje na zerze), widzi je, ale nie
+    // oddaje punktów (`begin` rośnie, `list` nie), albo wszystko działa.
+    private var beginCount = 0
+    private var listCount = 0
+    private var eraseCount = 0
 
     /** Ostatni powód niepowodzenia — czytany przez moduł do diagnostyki. */
     var lastError: String? = null
@@ -78,8 +106,7 @@ class PenController(
             // Drugi bezpiecznik obok tego w `useBooxPen`. Tryb surowy bez
             // ograniczenia obszaru przejmuje pióro na **całym ekranie**, więc
             // skutkiem pomyłki nie jest brak rysowania, tylko czytnik, w którym
-            // pióro przestaje działać wszędzie. Za taką awarię warto zapłacić
-            // sprawdzeniem w dwóch miejscach.
+            // pióro przestaje działać wszędzie.
             if (area == null) {
                 fail("brak obszaru rysowania")
                 return
@@ -92,7 +119,7 @@ class PenController(
                 helper.setRawDrawingEnabled(true)
                 enabled = true
                 lastError = null
-                emitStatus(true, null)
+                emitStatus(true, null, debugInfo())
             } catch (t: Throwable) {
                 Log.w(TAG, "setRawDrawingEnabled(true) nie powiodło się", t)
                 fail(t.message ?: t.javaClass.simpleName)
@@ -104,7 +131,7 @@ class PenController(
             } catch (t: Throwable) {
                 Log.w(TAG, "setRawDrawingEnabled(false) nie powiodło się", t)
             }
-            emitStatus(false, null)
+            emitStatus(false, null, debugInfo())
         }
     }
 
@@ -112,7 +139,7 @@ class PenController(
     private fun fail(reason: String) {
         enabled = false
         lastError = reason
-        emitStatus(false, reason)
+        emitStatus(false, reason, debugInfo())
     }
 
     /**
@@ -130,8 +157,10 @@ class PenController(
             Log.w(TAG, "zwalnianie sterownika nie powiodło się", t)
         }
         touchHelper = null
+        (hostView?.parent as? ViewGroup)?.removeView(hostView)
         hostView = null
-        emitStatus(false, null)
+        webView = null
+        emitStatus(false, null, debugInfo())
     }
 
     // ── Środek ──────────────────────────────────────────────────────────────
@@ -146,13 +175,18 @@ class PenController(
             lastError = "nie znaleziono WebView w drzewie widoków"
             return null
         }
+        val host = createHost(activity) ?: run {
+            lastError = "nie udało się dodać nakładki do okna"
+            return null
+        }
         return try {
-            val helper = TouchHelper.create(web, callback)
+            webView = web
+            hostView = host
+            val helper = TouchHelper.create(host, callback)
             helper.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
             helper.setStrokeWidth(strokeWidth)
             // Palec ma dalej przewijać stronę i naciskać przyciski — przejmujemy
-            // wyłącznie pióro. Bez tego cały interfejs przestaje reagować na dotyk
-            // w obszarze rysowania.
+            // wyłącznie pióro.
             helper.enableFingerTouch(false)
             // Boczny przycisk pióra jako gumka; ślad wraca osobnym zdarzeniem.
             helper.enableSideBtnErase(true)
@@ -163,8 +197,6 @@ class PenController(
             // przez moment pustą kanwę i kreska „mruga".
             helper.setPenUpRefreshEnabled(true)
             helper.setPenUpRefreshTimeMs(PEN_UP_REFRESH_MS)
-            // Przed `applyLimitRect`, bo ta funkcja czyta `hostView`.
-            hostView = web
             applyLimitRect(helper)
             helper.openRawDrawing()
             touchHelper = helper
@@ -175,12 +207,32 @@ class PenController(
             // czytnik Onyksa albo firmware nie zna tej wersji pakietu.
             lastError = t.message ?: t.javaClass.simpleName
             Log.w(TAG, "nie udało się uruchomić rysowania sterownikiem", t)
+            (host.parent as? ViewGroup)?.removeView(host)
+            hostView = null
             null
         }
     }
 
+    /** Dodaje do okna przezroczystą, nieklikalną nakładkę — patrz nagłówek klasy. */
+    private fun createHost(activity: Activity): View? {
+        hostView?.let { return it }
+        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return null
+        val view = View(activity).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            // Bez tego nakładka połykałaby dotyk i przestałby działać cały
+            // interfejs strony — a wyglądałoby to na zawieszenie aplikacji.
+            isClickable = false
+            isFocusable = false
+        }
+        content.addView(view)
+        return view
+    }
+
     private fun applyLimitRect(helper: TouchHelper) {
-        val web = hostView ?: findWebView(activityProvider()?.window?.decorView ?: return) ?: return
+        val web = webView ?: return
         val rect = area ?: return
         val origin = locationOnScreen(web)
         // `setLimitRect` przyjmuje współrzędne **ekranu**, a strona liczy je
@@ -191,15 +243,24 @@ class PenController(
             origin[0] + rect.right,
             origin[1] + rect.bottom,
         )
+        limitRect = limit
         helper.setLimitRect(limit, ArrayList<Rect>())
     }
 
     private val callback = object : RawInputCallback() {
-        override fun onBeginRawDrawing(shortcut: Boolean, point: TouchPoint?) = Unit
+        override fun onBeginRawDrawing(shortcut: Boolean, point: TouchPoint?) {
+            beginCount++
+            // Meldunek tylko przy pierwszym dotknięciu: dzięki niemu widać, czy
+            // sterownik w ogóle **widzi** pióro, nawet gdy gotowe pociągnięcia
+            // nigdy nie przychodzą.
+            if (beginCount == 1) emitStatus(enabled, lastError, debugInfo())
+        }
+
         override fun onEndRawDrawing(shortcut: Boolean, point: TouchPoint?) = Unit
         override fun onRawDrawingTouchPointMoveReceived(point: TouchPoint?) = Unit
 
         override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {
+            listCount++
             emit(list, erase = false)
         }
 
@@ -208,6 +269,7 @@ class PenController(
         override fun onRawErasingTouchPointMoveReceived(point: TouchPoint?) = Unit
 
         override fun onRawErasingTouchPointListReceived(list: TouchPointList?) {
+            eraseCount++
             emit(list, erase = true)
         }
     }
@@ -222,7 +284,7 @@ class PenController(
     private fun emit(list: TouchPointList?, erase: Boolean) {
         val points = list?.getPoints() ?: return
         if (points.isEmpty()) return
-        val web = hostView ?: return
+        val web = webView ?: return
         // Położenie odczytywane przy każdym pociągnięciu, a nie zapamiętane:
         // WebView przesuwa się przy wyjściu klawiatury i przy obrocie ekranu.
         val origin = locationOnScreen(web)
@@ -238,6 +300,31 @@ class PenController(
             )
         }
         emitStroke(JSONObject().put("erase", erase).put("points", array).toString())
+    }
+
+    /**
+     * Jednowierszowy opis geometrii i liczników.
+     *
+     * Trafia do okienka diagnostycznego w interfejsie, bo na czytniku nie ma
+     * jak zajrzeć do logów, a bez tych liczb „nie działa" znaczy pięć różnych
+     * rzeczy naraz.
+     */
+    private fun debugInfo(): String {
+        val web = webView
+        val host = hostView
+        val webLoc = web?.let { locationOnScreen(it) }
+        return buildString {
+            append("web=")
+            if (web == null) append("brak") else
+                append("${web.width}x${web.height}@${webLoc?.get(0)},${webLoc?.get(1)}")
+            append(" host=")
+            if (host == null) append("brak") else append("${host.width}x${host.height}")
+            append(" area=").append(area?.toShortString() ?: "brak")
+            append(" limit=").append(limitRect?.toShortString() ?: "brak")
+            append(" begin=").append(beginCount)
+            append(" list=").append(listCount)
+            append(" erase=").append(eraseCount)
+        }
     }
 
     private fun locationOnScreen(view: View): IntArray {
@@ -264,8 +351,7 @@ class PenController(
          *
          * Krócej — panel zdąży pokazać kanwę, zanim strona narysuje na niej
          * kreskę, więc ślad na moment znika. Dłużej — surowy ślad i kreska
-         * strony współistnieją zauważalnie długo. Pół sekundy mieści przebieg
-         * mostka z zapasem.
+         * strony współistnieją zauważalnie długo.
          */
         private const val PEN_UP_REFRESH_MS = 500
     }

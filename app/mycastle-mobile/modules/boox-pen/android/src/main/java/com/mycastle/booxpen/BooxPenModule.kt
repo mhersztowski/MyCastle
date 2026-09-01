@@ -30,13 +30,14 @@ class BooxPenModule : Module() {
         controller ?: PenController(
             activityProvider = { appContext.activityProvider?.currentActivity },
             emitStroke = { json -> sendEvent(EVENT_STROKE, Bundle().apply { putString("stroke", json) }) },
-            emitStatus = { engaged, error -> sendStatus(engaged, error) },
+            emitStatus = { engaged, error, debug -> sendStatus(engaged, error, debug) },
         ).also { controller = it }
 
-    private fun sendStatus(engaged: Boolean, error: String?) {
+    private fun sendStatus(engaged: Boolean, error: String?, debug: String? = null) {
         sendEvent(EVENT_STATUS, Bundle().apply {
             putBoolean("engaged", engaged)
             putString("error", error)
+            putString("debug", debug)
         })
     }
 

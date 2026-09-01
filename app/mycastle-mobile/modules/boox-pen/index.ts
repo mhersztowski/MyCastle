@@ -39,6 +39,8 @@ export interface BooxPenStrokeEvent {
 export interface BooxPenStatusEvent {
   engaged: boolean;
   error: string | null;
+  /** Geometria i liczniki wywołań sterownika — do okienka diagnostycznego. */
+  debug: string | null;
 }
 
 export interface BooxPenSubscription {
