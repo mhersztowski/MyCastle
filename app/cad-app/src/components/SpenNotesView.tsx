@@ -3080,6 +3080,21 @@ export function SpenNotesView() {
                 detail: `Sterownik nie przejął jeszcze pióra.\nWybrane narzędzie: ${tool} (przejmuje tylko przy Piórze i Markerze).\nUrządzenie: ${pen.info ?? ''}`,
               };
 
+  /**
+   * Liczby, które rozstrzygają przypadek „melduje, że działa, a nie działa".
+   *
+   * Zero pociągnięć mimo rysowania znaczy, że tryb surowy obowiązuje dla złego
+   * prostokąta — kreślenie idzie gdzie indziej na ekranie, a kanwa dostaje
+   * zwykłe, wolne zdarzenia wskaźnika. Bez tej liczby oba przypadki wyglądają
+   * tak samo: pióro po prostu zwleka.
+   */
+  const penCounters = [
+    `Pociągnięcia od sterownika: ${pen.strokes}`,
+    pen.lastOutside === null
+      ? null
+      : `Ostatnie pociągnięcie poza obszarem kanwy: ${Math.round(pen.lastOutside * 100)}%`,
+  ].filter(Boolean).join('\n');
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -3369,7 +3384,7 @@ export function SpenNotesView() {
                 // się zaznaczyć — domyślnie w menu zaznaczanie jest wyłączone.
                 sx={{ whiteSpace: 'pre-line', userSelect: 'text' }}
               >
-                {penBadge.detail}
+                {`${penBadge.detail}\n\n${penCounters}`}
               </Typography>
             </Box>
           </Menu>

@@ -62,6 +62,23 @@ export interface BooxPenStatus {
   engaged: boolean;
   /** Powód, dla którego sterownik odmówił — `null`, dopóki nie odmówił. */
   error: string | null;
+  /**
+   * Ile pociągnięć przyszło od sterownika, odkąd otwarto stronę.
+   *
+   * Rozstrzyga przypadek, którego nie widać inaczej: sterownik melduje, że
+   * przejął pióro, a mimo to nic nie przyspiesza. Znaczy to wtedy, że tryb
+   * surowy działa dla **złego prostokąta** — kreślenie odbywa się gdzie indziej
+   * na ekranie, a kanwa dostaje zwykłe, wolne zdarzenia wskaźnika. Licznik
+   * stojący na zerze mimo rysowania nazywa to wprost.
+   */
+  strokes: number;
+  /**
+   * Jaka część punktów ostatniego pociągnięcia wypadła poza obszarem kanwy.
+   *
+   * Wartość bliska jedności to podpis pomyłki w układzie współrzędnych —
+   * kreski lądują konsekwentnie obok, zwykle o wysokość paska stanu.
+   */
+  lastOutside: number | null;
 }
 
 /** Udział punktów poza obszarem, powyżej którego uznajemy układ za rozjechany. */
@@ -88,6 +105,10 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
   onStrokeRef.current = onStroke;
   const requestedRef = useRef(false);
   const warnedRef = useRef(false);
+  const [received, setReceived] = useState<{ strokes: number; lastOutside: number | null }>({
+    strokes: 0,
+    lastOutside: null,
+  });
 
   const publishArea = useCallback((): boolean => {
     if (!bridge?.available) return false;
@@ -112,7 +133,9 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
       if (!requestedRef.current) return;
       const area = areaRef.current;
       if (!area) return;
-      if (!warnedRef.current && fractionOutside(stroke.points, area) > OFFSET_ALARM) {
+      const outside = fractionOutside(stroke.points, area);
+      setReceived(prev => ({ strokes: prev.strokes + 1, lastOutside: outside }));
+      if (!warnedRef.current && outside > OFFSET_ALARM) {
         warnedRef.current = true;
         // Konsekwentne trafianie obok kanwy znaczy jedno: warstwa natywna
         // liczy współrzędne w innym układzie niż tutaj przyjmujemy.
@@ -191,5 +214,12 @@ export function useBooxPen(opts: UseBooxPenOptions): BooxPenStatus {
     };
   }, [bridge]);
 
-  return { available, info: bridge?.info, engaged: native.engaged, error: native.error };
+  return {
+    available,
+    info: bridge?.info,
+    engaged: native.engaged,
+    error: native.error,
+    strokes: received.strokes,
+    lastOutside: received.lastOutside,
+  };
 }

@@ -50,6 +50,8 @@ function Harness({ active, onStroke }: HarnessProps) {
       <span data-testid="engaged">{String(status.engaged)}</span>
       <span data-testid="available">{String(status.available)}</span>
       <span data-testid="error">{status.error ?? ''}</span>
+      <span data-testid="strokes">{String(status.strokes)}</span>
+      <span data-testid="outside">{status.lastOutside === null ? '-' : String(status.lastOutside)}</span>
     </>
   );
 }
@@ -208,6 +210,30 @@ describe('useBooxPen', () => {
     currentRect = { ...AREA_CSS };
     act(() => { FakeResizeObserver.last?.callback(); });
     expect(sent.map((m) => m.type)).toEqual(['boox:area', 'boox:enabled']);
+  });
+
+  it('liczy pociągnięcia i udział punktów poza obszarem', () => {
+    // Zero pociągnięć mimo meldunku „przejąłem pióro" znaczy, że tryb surowy
+    // obowiązuje dla złego prostokąta — a to wygląda dokładnie tak samo jak
+    // brak jakiegokolwiek działania. Licznik jest jedyną rzeczą, która te dwa
+    // przypadki rozróżnia bez podłączania czytnika do komputera.
+    const { bridge } = installBridge();
+    const { getByTestId } = render(<Harness active onStroke={vi.fn()} />);
+    expect(getByTestId('strokes').textContent).toBe('0');
+    expect(getByTestId('outside').textContent).toBe('-');
+
+    act(() => {
+      bridge.onStroke?.({ erase: false, points: [{ x: 20, y: 40, pressure: 1, ts: 1 }] });
+    });
+    expect(getByTestId('strokes').textContent).toBe('1');
+    expect(getByTestId('outside').textContent).toBe('0');
+
+    act(() => {
+      // Punkt daleko nad kanwą — podpis pomyłki o wysokość paska stanu.
+      bridge.onStroke?.({ erase: false, points: [{ x: 20, y: 0, pressure: 1, ts: 2 }] });
+    });
+    expect(getByTestId('strokes').textContent).toBe('2');
+    expect(getByTestId('outside').textContent).toBe('1');
   });
 
   it('zmiana rozmiaru kanwy odświeża obszar u sterownika', () => {
