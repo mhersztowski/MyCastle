@@ -115,6 +115,39 @@ export function isBooxPenAvailable(win?: MaybeHost): boolean {
 }
 
 /**
+ * W którym z czterech stanów jesteśmy.
+ *
+ * Powód istnienia jest praktyczny: „nie działa" ma tu cztery różne przyczyny,
+ * a wszystkie wyglądają tak samo — pióro po prostu rysuje z opóźnieniem.
+ * Rozróżnienie ich po objawie jest niemożliwe, więc strona musi je nazwać
+ * sama. Najkosztowniejsze jest odróżnienie **przeglądarki** od **nieaktualnej
+ * aplikacji**: w obu `window.__booxPen` nie istnieje, a znaczy to co innego —
+ * w pierwszym przypadku wszystko jest w porządku, w drugim trzeba wgrać nowy
+ * pakiet. Sygnaturę powłoki niesie jej własny fragment `user agent`
+ * (`applicationNameForUserAgent` w `App.tsx`).
+ */
+export type PenHostState =
+  | { kind: 'browser' }
+  | { kind: 'shell-old' }
+  | { kind: 'unsupported'; info?: string }
+  | { kind: 'ready'; info?: string };
+
+/** Fragment `user agent`, którym powłoka React Native oznacza się na stronie. */
+const SHELL_UA_MARKER = 'MyCastleMobile';
+
+export function describeHost(win?: MaybeHost): PenHostState {
+  const w = win ?? (typeof window === 'undefined' ? undefined : window);
+  const bridge = getBooxPen(w);
+  if (bridge) {
+    return bridge.available
+      ? { kind: 'ready', info: bridge.info }
+      : { kind: 'unsupported', info: bridge.info };
+  }
+  const ua = w?.navigator?.userAgent ?? '';
+  return ua.includes(SHELL_UA_MARKER) ? { kind: 'shell-old' } : { kind: 'browser' };
+}
+
+/**
  * Prostokąt kanwy przeliczony na piksele urządzenia.
  *
  * Zaokrąglenie do pełnych pikseli nie jest kosmetyką: `setLimitRect` przyjmuje

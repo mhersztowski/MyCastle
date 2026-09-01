@@ -1,2 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    Android 11 ukrywa listę zainstalowanych aplikacji. Bez tej deklaracji
+    `getPackageInfo` na aplikacjach Onyksa zawsze zgłasza „nie ma", więc
+    pomocnicze rozpoznanie po systemowej aplikacji notatek nigdy by nie
+    zadziałało — a milczałoby tak samo jak prawdziwy brak.
+  -->
+  <queries>
+    <package android:name="com.onyx.android.note" />
+    <package android:name="com.onyx" />
+    <package android:name="com.onyx.kreader" />
+    <package android:name="com.onyx.android.launcher" />
+  </queries>
 </manifest>

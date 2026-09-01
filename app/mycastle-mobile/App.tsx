@@ -206,7 +206,14 @@ export default function App() {
         cacheEnabled={false}
         // Trigger resize events after page load so Blockly can re-measure blocks
         // once native layout has settled. Spread across 3 s to cover variable init timing.
-        injectedJavaScript={`
+        //
+        // Most pióra wstrzykiwany jest **drugi raz**, po załadowaniu strony.
+        // `injectedJavaScriptBeforeContentLoaded` na Androidzie nie ma gwarancji
+        // uruchomienia przed treścią, a jego pominięcie wygląda dokładnie tak
+        // jak brak modułu natywnego: strona nie zastaje `window.__booxPen`
+        // i milcząco wraca do wolnego rysowania. Skrypt jest idempotentny
+        // (`if (window.__booxPen) return;`), więc drugie wykonanie nic nie psuje.
+        injectedJavaScript={penBridgeScript(penSupport) + `
           (function() {
             function triggerResize() { window.dispatchEvent(new Event('resize')); }
             [100, 500, 900, 1400, 2000, 3000].forEach(function(ms) {

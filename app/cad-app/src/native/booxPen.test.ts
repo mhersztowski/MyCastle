@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   getBooxPen,
   isBooxPenAvailable,
+  describeHost,
   areaMessage,
   normalizeStrokePressure,
   toCanvasPoints,
@@ -153,5 +154,45 @@ describe('fractionOutside — wykrycie przesunięcia układu współrzędnych', 
 
   it('brak punktów to brak podstaw do wnioskowania', () => {
     expect(fractionOutside([], AREA)).toBe(0);
+  });
+});
+
+describe('describeHost — w którym z czterech stanów jesteśmy', () => {
+  const win = (ua: string, pen?: BooxPenBridge) =>
+    ({ navigator: { userAgent: ua }, __booxPen: pen } as unknown as Window & { __booxPen?: BooxPenBridge });
+
+  const APP_UA = 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 MyCastleMobile/1.0';
+  const BROWSER_UA = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/120';
+
+  it('zwykła przeglądarka', () => {
+    expect(describeHost(win(BROWSER_UA))).toEqual({ kind: 'browser' });
+  });
+
+  it('powłoka bez modułu pióra — czyli stary APK', () => {
+    // Rozróżnienie, które kosztowało najwięcej czasu: „brak mostka" wygląda
+    // identycznie w przeglądarce i w nieaktualnej aplikacji, a znaczy co innego.
+    // Sygnaturę powłoki niesie własny fragment `user agent`.
+    expect(describeHost(win(APP_UA))).toEqual({ kind: 'shell-old' });
+  });
+
+  it('powłoka na urządzeniu, którego sterownik nie obsługuje', () => {
+    const b = bridge({ available: false, info: 'nie rozpoznano czytnika Onyx — manufacturer=samsung' });
+    expect(describeHost(win(APP_UA, b))).toEqual({
+      kind: 'unsupported',
+      info: 'nie rozpoznano czytnika Onyx — manufacturer=samsung',
+    });
+  });
+
+  it('wszystko na miejscu', () => {
+    expect(describeHost(win(APP_UA, bridge({ info: 'ONYX Go 10.3' })))).toEqual({
+      kind: 'ready',
+      info: 'ONYX Go 10.3',
+    });
+  });
+
+  it('mostek jest ważniejszy niż user agent', () => {
+    // Gdyby powłoka kiedyś przestała dopisywać się do `user agent`, obecność
+    // samego mostka nadal rozstrzyga — i to ona jest tym, co się liczy.
+    expect(describeHost(win(BROWSER_UA, bridge()))).toMatchObject({ kind: 'ready' });
   });
 });

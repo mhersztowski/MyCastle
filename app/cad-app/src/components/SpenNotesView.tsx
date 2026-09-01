@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
@@ -85,7 +85,7 @@ import { renderMarkdown } from '../map/markdown';
 import { syncOpenUrl } from '../vfs/openTarget';
 import { defaultInkFor, needsInkSwitch } from './notesInk';
 import { useBooxPen } from '../native/useBooxPen';
-import type { CanvasPenPoint } from '../native/booxPen';
+import { describeHost, type CanvasPenPoint } from '../native/booxPen';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1735,6 +1735,10 @@ export function SpenNotesView() {
     return Math.max(1, brushSize * scale * zoomPct / 100);
   })();
 
+  // Stan powłoki liczony raz — urządzenie i wersja aplikacji nie zmieniają się
+  // w trakcie działania strony.
+  const penHost = useMemo(() => describeHost(), []);
+
   const pen = useBooxPen({
     target: canvasRef,
     // Tryb surowy tylko przy rysowaniu odręcznym. Przy zaznaczaniu, kształtach
@@ -3280,20 +3284,36 @@ export function SpenNotesView() {
           )}
 
           {/*
-            Stan pióra sterownika. Bez tego jedynym sygnałem, że rysowanie idzie
-            z pominięciem przeglądarki, jest brak opóźnienia — czyli coś, czego
-            nie widać, dopóki nie ma się porównania.
+            Stan pióra sterownika — cztery przypadki, jeden wskaźnik.
+
+            Bez tego „nie działa" ma cztery różne przyczyny wyglądające
+            identycznie: pióro po prostu rysuje z opóźnieniem. Milczenie
+            interfejsu jest tu najgorszą odpowiedzią, bo każe zgadywać, czy
+            zawiodła strona, pakiet, czy rozpoznanie urządzenia.
+
+            W zwykłej przeglądarce wskaźnika nie ma — na biurku nie ma czego
+            diagnozować.
           */}
-          {pen.available && (
-            <Tooltip title={`Rysowanie sterownikiem Boox${pen.info ? ` — ${pen.info}` : ''}`}>
-              <BoltIcon sx={{ fontSize: 18, ml: 'auto', color: pen.engaged ? 'success.main' : 'text.disabled' }} />
-            </Tooltip>
-          )}
+          {penHost.kind !== 'browser' && (() => {
+            const state =
+              penHost.kind === 'shell-old'
+                ? { color: 'warning.main', title: 'Aplikacja bez modułu pióra — wgraj nowszy APK (MyCastleCAD)' }
+                : penHost.kind === 'unsupported'
+                  ? { color: 'error.main', title: `Sterownik pióra niedostępny — ${penHost.info ?? 'bez podanego powodu'}` }
+                  : pen.engaged
+                    ? { color: 'success.main', title: `Rysuje sterownik Boox — ${pen.info ?? ''}` }
+                    : { color: 'text.disabled', title: `Sterownik gotowy, czeka na narzędzie Pióro lub Marker — ${pen.info ?? ''}` };
+            return (
+              <Tooltip title={state.title}>
+                <BoltIcon sx={{ fontSize: 18, ml: 'auto', color: state.color }} />
+              </Tooltip>
+            );
+          })()}
 
           {/* Scene panel toggle — file ops now live in the top-bar File menu */}
           <Tooltip title="Scene (object tree + properties)">
             <IconButton size="small" onClick={() => setScenePanelOpen(v => !v)}
-              sx={{ ml: pen.available ? 0.5 : 'auto', borderRadius: 1, bgcolor: scenePanelOpen ? 'primary.main' : undefined,
+              sx={{ ml: penHost.kind !== 'browser' ? 0.5 : 'auto', borderRadius: 1, bgcolor: scenePanelOpen ? 'primary.main' : undefined,
                 color: scenePanelOpen ? '#fff' : 'text.secondary' }}>
               <AccountTreeOutlinedIcon sx={{ fontSize: 18 }} />
             </IconButton>
