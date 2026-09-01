@@ -1,0 +1,28 @@
+[Unit]
+Description=Archiwizacja homelaba do Google Drive (restic + rclone)
+Documentation=file:/opt/homelab-backup/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# systemd nie ustawia $HOME. restic i rclone szukają w nim swoich katalogów,
+# a bez niego kończą błędem, zanim w ogóle sięgną po repozytorium.
+Environment=HOME=/root
+ExecStart=/opt/homelab-backup/backup.sh
+TimeoutStartSec=6h
+
+# Maszyna ma 3,4 GB RAM i połowę zajmują kontenery. MemoryHigh dławi restica
+# zamiast go zabijać — przy MemoryMax jako jedynym limicie przebieg kończyłby
+# się nie błędem, tylko cichym OOM-killem w środku wysyłki.
+MemoryHigh=900M
+MemoryMax=1500M
+
+# Archiwizacja jest zadaniem tła: nie może odbierać czasu procesora ani
+# przepustowości dysku usługom, które akurat obsługują ruch.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+[Install]
+WantedBy=multi-user.target

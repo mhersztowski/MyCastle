@@ -1,0 +1,16 @@
+[Unit]
+Description=Weryfikacja spójności repozytorium restic
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# systemd nie ustawia $HOME. restic i rclone szukają w nim swoich katalogów,
+# a bez niego kończą błędem, zanim w ogóle sięgną po repozytorium.
+Environment=HOME=/root
+ExecStart=/opt/homelab-backup/check.sh
+TimeoutStartSec=4h
+MemoryHigh=900M
+MemoryMax=1500M
+Nice=15
+IOSchedulingClass=idle

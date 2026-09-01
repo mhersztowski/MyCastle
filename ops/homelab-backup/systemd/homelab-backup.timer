@@ -1,0 +1,13 @@
+[Unit]
+Description=Nocna archiwizacja homelaba do Google Drive
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# Rozrzut startu: gdyby kiedyś doszła druga maszyna, nie zaczną wysyłać
+# jednocześnie i nie zapchają łącza w tej samej minucie.
+RandomizedDelaySec=15m
+# Maszyna bywa wyłączona — po starcie nadrabiamy pominięty przebieg.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

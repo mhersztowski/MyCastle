@@ -13,6 +13,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY scripts/ scripts/
 COPY packages/core/package.json             packages/core/
 COPY packages/core-backend/package.json     packages/core-backend/
+COPY packages/layout/package.json           packages/layout/
 COPY packages/core-cad/package.json         packages/core-cad/
 COPY packages/core-scene3d/package.json     packages/core-scene3d/
 COPY packages/core-cad-viewer/package.json  packages/core-cad-viewer/
@@ -29,6 +30,8 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # ── build all packages + apps ─────────────────────────────────────────────────
 COPY packages/core/             packages/core/
 COPY packages/core-backend/     packages/core-backend/
+# layout — zależność core-scene3d (uiLayout.ts); bez niej dts pada na TS2307
+COPY packages/layout/           packages/layout/
 COPY packages/core-cad/         packages/core-cad/
 COPY packages/core-scene3d/     packages/core-scene3d/
 COPY packages/core-cad-viewer/  packages/core-cad-viewer/
@@ -43,6 +46,7 @@ RUN pnpm --filter @mhersztowski/core build --silent
 RUN pnpm --filter @mhersztowski/core-backend build --silent
 RUN pnpm --filter @mhersztowski/core-cad build --silent
 RUN pnpm --filter @mhersztowski/ui-core build --silent
+RUN pnpm --filter @mhersztowski/layout build --silent
 RUN pnpm --filter @mhersztowski/core-scene3d build --silent
 RUN pnpm --filter @mhersztowski/core-cad-viewer build --silent
 RUN pnpm --filter @mhersztowski/ui-components-scene3d build --silent
@@ -65,6 +69,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY scripts/ scripts/
 COPY packages/core/package.json             packages/core/
 COPY packages/core-backend/package.json     packages/core-backend/
+COPY packages/layout/package.json           packages/layout/
 COPY packages/core-cad/package.json         packages/core-cad/
 COPY packages/core-scene3d/package.json     packages/core-scene3d/
 COPY packages/core-cad-viewer/package.json  packages/core-cad-viewer/

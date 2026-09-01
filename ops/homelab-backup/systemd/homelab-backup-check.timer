@@ -1,0 +1,11 @@
+[Unit]
+Description=Cotygodniowa weryfikacja repozytorium restic
+
+[Timer]
+# Poniedziałek rano, po nocnym przebiegu archiwizacji.
+OnCalendar=Mon *-*-* 05:30:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

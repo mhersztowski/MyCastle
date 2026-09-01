@@ -1,0 +1,42 @@
+# Wykluczenia restica. Reguła: nie archiwizujemy tego, co odtwarza się jedną
+# komendą (modele, cache, transkodowania) ani tego, co mamy w lepszej postaci
+# (katalogi PGDATA — od nich są logicznie spójne dumpy).
+
+# ── Modele i cache AI: dziesiątki GB, pobierane ponownie na żądanie ────────
+/var/lib/docker/volumes/*ollama-data
+/var/lib/docker/volumes/*whisper-data
+/var/lib/docker/volumes/*immich-model-cache
+
+# ── Katalogi danych Postgresa ─────────────────────────────────────────────
+# Kopia plików działającego serwera jest niespójna (dane w WAL i buforach),
+# a przy okazji zabija deduplikację, bo pliki stron zmieniają się w całości.
+/var/lib/docker/volumes/*postgres-data
+/var/lib/docker/volumes/*postgresql-data
+/var/lib/docker/volumes/*authentik-db
+/var/lib/docker/volumes/**/_data/pgdata
+
+# Okładki i opisy pobierane z TMDB/TVDB — 1,4 GB, które Jellyfin odtworzy sam
+# przy skanowaniu biblioteki. Stan użytkownika (obejrzane, playlisty, konta)
+# siedzi w _data/data/data i zostaje.
+/var/lib/docker/volumes/*jellyfin-config/_data/data/metadata
+
+# Modele embeddingów Open WebUI (~1,1 GB) — pobierane ponownie na starcie.
+# Baza czatów (webui.db) i vector_db zostają.
+/var/lib/docker/volumes/*open-webui-data/_data/cache
+
+# ── Cache aplikacji ───────────────────────────────────────────────────────
+/var/lib/docker/volumes/**/_data/cache
+/var/lib/docker/volumes/**/_data/transcodes
+/var/lib/docker/volumes/**/_data/log
+/var/lib/docker/volumes/**/_data/data/appdata_*/preview
+/var/lib/docker/volumes/backingFsBlockDev
+
+# ── Śmieci systemowe ──────────────────────────────────────────────────────
+**/lost+found
+**/.Trash-*
+**/*.sock
+**/node_modules
+/root/.cache
+/home/*/.cache
+/home/*/.local/share/Trash
+/etc/ssl/certs
