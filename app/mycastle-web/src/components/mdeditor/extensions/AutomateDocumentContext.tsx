@@ -11,10 +11,12 @@ import { createAutomateApi, createDisplay, type AutomateApi } from '../../../../
 import { createAuraPreviewHost } from '../../../modules/voiceactions/auraPreviewHost';
 import { prepareAutomateScript } from '../../../modules/voiceactions/auraScriptRuntime';
 import { Scene, isNode3D, isLayer, setSceneHost, utworzHostaSceny } from '../../../modules/scene-script';
+import { Kasia, kasia as kasiaAlias } from '../../../../../../packages/core/browser/kasia/kasia';
 import { preloadLibrariesForCode } from './automateLibraries';
 import { useFilesystem } from '../../../modules/filesystem/FilesystemContext';
 import { useNotification } from '../../../modules/notification';
 import { useAuth } from '../../../modules/auth';
+import { useMqtt } from '../../../modules/mqttclient';
 import { useMdEnv } from './MdEnvContext';
 import { setAutomateEnvProvider } from '../../../modules/automate/designer/automateMonacoSetup';
 
@@ -161,6 +163,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
   const { dataSource } = useFilesystem();
   const { notify } = useNotification();
   const { currentUser, token } = useAuth();
+  const { rawPublish, rawSubscribe } = useMqtt();
   // userName i token w refach — api jest tworzone raz, a closure czyta zawsze aktualną wartość.
   const userNameRef = useRef<string | null>(currentUser?.name ?? null);
   const tokenRef = useRef<string | null>(token ?? null);
@@ -401,6 +404,21 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         present: (_scena, opis) => api.log.info(`Wczytano scenę „${opis.path}" (${opis.kind}).`),
       }));
 
+      /*
+       * Transport dla Kasi — ten sam broker, co reszta MyCastle.
+       *
+       * Kasia mieszka w `media-backend`, więc rozmowa z nią idzie po MQTT.
+       * Podłączamy transport tuż przed uruchomieniem skryptu, bo dopiero tutaj
+       * znamy nazwę użytkownika i mamy pewność, że połączenie żyje.
+       */
+      Kasia.setTransport({
+        userName: currentUser?.name ?? '',
+        publish: (topic, payload) => rawPublish(topic, JSON.stringify(payload)),
+        subscribe: (topic, cb) => rawSubscribe(topic, (raw) => {
+          try { cb(JSON.parse(raw), topic); } catch { /* nie nasza wiadomość */ }
+        }),
+      }, 'automatyzacja');
+
       // Importy modułów środowiska usuwamy — symbole wchodzą przez hostScope.
       const wrappedScript = `const display = input.__display;\n${prepareAutomateScript(code).code}`;
       const result = await AutomateSandbox.execute(
@@ -411,7 +429,7 @@ export const AutomateDocumentProvider: React.FC<AutomateDocumentProviderProps> =
         { __display: displayApi },
         variablesRef.current,
         undefined,
-        { ...host, Aura, aura, Scene, isNode3D, isLayer },
+        { ...host, Aura, aura, Scene, isNode3D, isLayer, Kasia, kasia: kasiaAlias },
       );
       // eslint-disable-next-line no-console
       console.log(`Result (${(performance.now() - tStart).toFixed(1)}ms):`, result);

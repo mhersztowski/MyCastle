@@ -44,6 +44,23 @@ module.exports = {
       // bez żadnej zmiany wymiarów, więc pasek kursora nie miałby się po czym
       // zorientować. Expo używa `resize` domyślnie; zapisujemy to jawnie.
       softwareKeyboardLayoutMode: 'resize',
+      /*
+       * Mikrofon dla asystentek głosowych — Aury w MyCastle i Kasi w Media.
+       *
+       * `react-native-webview` umie poprosić o uprawnienie w imieniu strony
+       * (obsługuje `PermissionRequest`), ale Android odrzuci prośbę bez
+       * pokazania okna, jeśli uprawnienia nie ma w manifeście. Objaw jest
+       * mylący: `getUserMedia` odpowiada odmową natychmiast, tak samo jak przy
+       * świadomym odrzuceniu przez użytkownika — więc wygląda to na decyzję,
+       * której nikt nie podjął.
+       *
+       * `MODIFY_AUDIO_SETTINGS` jest potrzebne, żeby przełączyć tor audio na
+       * czas nagrywania; bez niego mikrofon bywa wyciszany przez odtwarzanie.
+       */
+      permissions: [
+        'android.permission.RECORD_AUDIO',
+        'android.permission.MODIFY_AUDIO_SETTINGS',
+      ],
     },
     web: {
       bundler: 'metro',

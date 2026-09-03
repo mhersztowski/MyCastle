@@ -28,7 +28,7 @@ import type { KasiaStore } from './KasiaStore';
 import {
   ADRESY_DOMYSLNE, MODELE_DOMYSLNE, utworzModel,
   type DostawcaModelu, type KonfiguracjaModelu, type KrokRozmowy,
-  type Model, type ZapytanieDoModelu,
+  type Model, type NasluchStrumienia, type ZapytanieDoModelu,
 } from './llm';
 
 const DOSTAWCY: readonly DostawcaModelu[] = ['anthropic', 'openai', 'ollama'];
@@ -211,12 +211,19 @@ export class KasiaService {
     zapytanie: Omit<ZapytanieDoModelu, 'kroki' | 'narzedzia'>,
     teraz: number,
     strefa: string,
+    /** Nasłuch fragmentów — gdy podany, odpowiedź idzie strumieniem. */
+    nasluch?: NasluchStrumienia,
   ): Promise<{ tekst: string; wykonano: string[] }> {
     const wykonawca = this.narzedzia;
     const zNarzedziami = this.model.odpowiedzZNarzedziami?.bind(this.model);
+    const strumieniem = this.model.odpowiedzStrumieniem?.bind(this.model);
 
     // Bez wykonawcy albo bez wsparcia w modelu — zwykła rozmowa, jak dotąd.
     if (!wykonawca || !zNarzedziami) {
+      if (nasluch && strumieniem) {
+        const odp = await strumieniem(zapytanie, nasluch);
+        return { tekst: odp.tekst, wykonano: [] };
+      }
       return { tekst: await this.model.odpowiedz(zapytanie), wykonano: [] };
     }
 
@@ -224,7 +231,22 @@ export class KasiaService {
     const wykonano: string[] = [];
 
     for (let runda = 0; runda < LIMIT_RUND_NARZEDZI; runda += 1) {
-      const odp = await zNarzedziami({ ...zapytanie, narzedzia: schematyDlaModelu(), kroki });
+      const pytanie = { ...zapytanie, narzedzia: schematyDlaModelu(), kroki };
+
+      /*
+       * Fragmenty puszczamy **od razu**, także w rundzie narzędziowej.
+       *
+       * Pierwsze podejście buforowało je do końca rundy, żeby nie wypowiadać
+       * urwańców przed wywołaniem narzędzia — i tym samym kasowało cały zysk ze
+       * strumienia: całość i tak przychodziła jednym kawałkiem.
+       *
+       * Zdanie w rodzaju „Zaraz sprawdzę wagę" wypowiedziane przed zapisem
+       * i „Zapisałam 84 kilogramy" po nim to nie usterka, tylko naturalna
+       * rozmowa — tak samo robi Aura.
+       */
+      const odp = nasluch && strumieniem
+        ? await strumieniem(pytanie, nasluch)
+        : await zNarzedziami(pytanie);
 
       if (odp.narzedzia.length === 0) return { tekst: odp.tekst, wykonano };
 
@@ -292,6 +314,42 @@ export class KasiaService {
     });
 
     return odpowiedz;
+  }
+
+  /**
+   * Odpowiedź strumieniem — dla trasy SSE.
+   *
+   * Ta sama ścieżka co `powiedz`, tylko fragmenty lecą na bieżąco. Zapis do
+   * rozmowy następuje **po zakończeniu**, całą wypowiedzią: rozmowa ma nieść
+   * zdania, a nie kilkaset kawałków, z których każdy wywołałby zapis pliku.
+   */
+  async powiedzStrumieniem(
+    tekstUzytkownika: string,
+    nasluch: NasluchStrumienia,
+    teraz: number = Date.now(),
+  ): Promise<string> {
+    await this.store.zmien((s) => {
+      s.rozmowa.push({ id: id(), rola: 'user', tresc: tekstUzytkownika, o: teraz });
+      s.fragmenty = usunWygasle(s.fragmenty, teraz);
+    });
+
+    const stan = this.store.pobierz();
+    await this.odswiezDane(teraz, stan.ustawienia.strefaCzasowa);
+
+    const { tekst, wykonano } = await this.zapytajModel({
+      system: this.system(stan, 'init', teraz),
+      rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
+      model: stan.ustawienia.model,
+    }, teraz, stan.ustawienia.strefaCzasowa, nasluch);
+
+    if (wykonano.length > 0) this.buforDanych = null;
+
+    await this.store.zmien((s) => {
+      s.rozmowa.push({ id: id(), rola: 'assistant', tresc: tekst, o: teraz });
+      for (const p of s.przypomnienia) if (p.stan === 'oczekuje') p.stan = 'odbyte';
+    });
+
+    return tekst;
   }
 
   // ── Pętla ──────────────────────────────────────────────────────────────────

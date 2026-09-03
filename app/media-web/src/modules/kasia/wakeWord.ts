@@ -130,6 +130,21 @@ export interface UchwytNasluchu {
 export interface OpcjeNasluchu {
   fraza: string;
   cfg: SpeechConfigModel;
+  /**
+   * Tryb ciągły: każda wypowiedź jest pytaniem, bez wołania po imieniu.
+   *
+   * Wygodny przy dłuższej rozmowie, ale mikrofon jest wtedy otwarty stale
+   * i **wszystko**, co słychać w pokoju, idzie do rozpoznawania. Dlatego to
+   * osobny tryb, a nie domyślne zachowanie.
+   */
+  bezFrazy?: boolean;
+  /**
+   * Ile znaków musi mieć wypowiedź w trybie ciągłym, żeby uznać ją za pytanie.
+   *
+   * Rozpoznawanie zwraca też pojedyncze „mhm", „no" i szumy — bez progu Kasia
+   * odpowiadałaby na każde chrząknięcie.
+   */
+  minZnakow?: number;
   /** Wywołane po usłyszeniu frazy; `komenda` to reszta zdania, jeśli padła. */
   onZawolanie(komenda: string): void;
   /** Ostatnia wypowiedź Kasi — do odsiewania własnego echa. */
@@ -146,7 +161,11 @@ export interface OpcjeNasluchu {
  */
 export function zacznijNasluch(opcje: OpcjeNasluchu): UchwytNasluchu | null {
   const { fraza, cfg, onZawolanie, ostatniaWypowiedz, onBlad, onStan } = opcje;
-  if (!fraza.trim()) return null;
+  const bezFrazy = opcje.bezFrazy ?? false;
+  const minZnakow = opcje.minZnakow ?? 4;
+
+  // W trybie ciągłym fraza nie jest potrzebna; w zwykłym bez niej nie ma czego szukać.
+  if (!bezFrazy && !fraza.trim()) return null;
 
   const sciezka = wybierzSciezke(cfg, czyAndroid());
 
@@ -167,6 +186,20 @@ export function zacznijNasluch(opcje: OpcjeNasluchu): UchwytNasluchu | null {
         if (!zywy) return;
         // Własny głos z głośnika nie może wołać Kasi.
         if (czyWlasneEcho(tekst, ostatniaWypowiedz())) return;
+
+        if (bezFrazy) {
+          /*
+           * Tryb ciągły: pytaniem jest każda wypowiedź dość długa, żeby nią być.
+           *
+           * Strumienia **nie zatrzymujemy** — inaczej po każdym zdaniu trzeba by
+           * go otwierać od nowa, a przy ElevenLabs to znaczy nowy WebSocket
+           * i sekundę ciszy w środku rozmowy.
+           */
+          const t = tekst.trim();
+          if (t.length < minZnakow) return;
+          onZawolanie(t);
+          return;
+        }
 
         const { trafienie, komenda } = dopasujFraze(tekst, fraza);
         if (!trafienie) return;   // słuchamy dalej tym samym strumieniem — bez beepa

@@ -26,6 +26,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MicIcon from '@mui/icons-material/Mic';
 import HearingIcon from '@mui/icons-material/Hearing';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import HearingDisabledIcon from '@mui/icons-material/HearingDisabled';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import VolumeOffIcon from '@mui/icons-material/VolumeOff';
@@ -62,13 +63,24 @@ export function KasiaPage() {
   const [blad, setBlad] = useState<string | null>(null);
   const [tekst, setTekst] = useState('');
   const [wysylanie, setWysylanie] = useState(false);
+  /** Odpowiedź w trakcie pisania — znika, gdy trafi do zapisanej rozmowy. */
+  const [odpowiedzNaZywo, setOdpowiedzNaZywo] = useState('');
   const [zakladka, setZakladka] = useState(0);
 
   const dolRozmowy = useRef<HTMLDivElement>(null);
 
-  // Po zawołaniu hak sam zaczyna nagrywać pytanie; tutaj tylko czyścimy pole,
-  // żeby dyktowanie nie doklejało się do niedokończonego zdania.
-  const mowa = useMowa(() => setTekst(''));
+  /*
+   * Gotowa wypowiedź z głosu — wysyłamy ją od razu.
+   *
+   * Wcześniej ten callback tylko czyścił pole i **wyrzucał treść**: po
+   * zawołaniu nic się nie działo, bo rozpoznany tekst nie miał gdzie trafić.
+   * Teraz wędruje tą samą drogą co wpisany ręcznie, więc obieg głosowy zamyka
+   * się bez dotykania ekranu: zawołanie → pytanie → odpowiedź.
+   *
+   * Ref na funkcję wysyłki, bo `wyslij` powstaje niżej i zależy od stanu.
+   */
+  const wyslijRef = useRef<(tresc: string) => Promise<void>>();
+  const mowa = useMowa((rozpoznane) => { void wyslijRef.current?.(rozpoznane); });
 
   /*
    * Ostatnia przeczytana wypowiedź — bez tego odpytywanie co pięć sekund
@@ -100,7 +112,7 @@ export function KasiaPage() {
   const liczbaWiadomosci = stan?.rozmowa.length ?? 0;
   useEffect(() => {
     dolRozmowy.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [liczbaWiadomosci]);
+  }, [liczbaWiadomosci, odpowiedzNaZywo]);
 
   // Czytanie na głos nowych wypowiedzi Kasi — także tych z jej inicjatywy.
   const ostatnia = stan?.rozmowa.at(-1);
@@ -111,21 +123,42 @@ export function KasiaPage() {
     void mowa.powiedz(ostatnia.tresc);
   }, [ostatnia, mowa]);
 
-  const wyslij = async () => {
-    const tresc = tekst.trim();
+  const wyslij = useCallback(async (trescZGlosu?: string) => {
+    const tresc = (trescZGlosu ?? tekst).trim();
     if (!tresc || wysylanie) return;
     setWysylanie(true);
     setTekst('');
+
+    /*
+     * Odpowiedź czytana na głos, gdy pytanie padło głosem **albo** gdy
+     * czytanie jest włączone przełącznikiem. Kto zawołał Kasię przez pokój,
+     * nie podejdzie do ekranu, żeby przeczytać odpowiedź.
+     */
+    const mowic = Boolean(trescZGlosu) || mowa.czytaj;
+
     try {
-      await api.kasiaPowiedz(tresc);
+      setOdpowiedzNaZywo('');
+      await api.kasiaPowiedzStrumieniem(tresc, {
+        // Tekst pojawia się na ekranie w miarę pisania.
+        fragment: (f) => setOdpowiedzNaZywo((p) => p + f),
+        // Zdania idą do kolejki mowy — pierwsze słychać, nim reszta powstanie.
+        zdanie: (z) => { if (mowic) mowa.dopiszDoWypowiedzi(z); },
+      });
+
+      setOdpowiedzNaZywo('');
       await odswiez();
+      // Nasłuch wraca dopiero po ostatnim zdaniu — inaczej usłyszy sam siebie.
+      if (mowic) await mowa.poczekajNaKoniecMowy();
     } catch (err) {
+      setOdpowiedzNaZywo('');
       setBlad((err as Error).message);
-      setTekst(tresc);   // nie gubimy tego, co użytkownik napisał
+      if (!trescZGlosu) setTekst(tresc);   // nie gubimy tego, co wpisano ręcznie
     } finally {
       setWysylanie(false);
     }
-  };
+  }, [tekst, wysylanie, odswiez, mowa]);
+
+  wyslijRef.current = wyslij;
 
   /** Dyktowanie: naciśnięcie zaczyna nagrywanie, kolejne kończy i wstawia tekst. */
   const przelaczMikrofon = async () => {
@@ -276,6 +309,21 @@ export function KasiaPage() {
             ))}
           </Stack>
         )}
+        {/* Odpowiedź w trakcie powstawania — ten sam wygląd co gotowe wypowiedzi,
+            żeby nie „przeskakiwała" po zapisaniu w rozmowie. */}
+        {odpowiedzNaZywo && (
+          <Box
+            sx={{
+              alignSelf: 'flex-start', maxWidth: '85%', mt: 1.5,
+              bgcolor: 'action.hover', px: 1.5, py: 1, borderRadius: 2,
+            }}
+          >
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+              {odpowiedzNaZywo}
+            </Typography>
+          </Box>
+        )}
+
         <div ref={dolRozmowy} />
       </Paper>
       )}
@@ -322,6 +370,27 @@ export function KasiaPage() {
               color={mowa.nagrywa ? 'error' : 'default'}
             >
               <MicIcon />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        {/*
+          Tryb ciągły — bez wołania po imieniu.
+          Widoczny zawsze, bo nie zależy od ustawienia słowa aktywującego;
+          przy braku ElevenLabs sam odmówi i wyjaśni dlaczego.
+        */}
+        <Tooltip title={
+          mowa.trybCiagly
+            ? 'Rozmowa ciągła — mówisz bez wołania. Dotknij, by wyłączyć'
+            : 'Rozmowa ciągła: mikrofon otwarty stale, każda wypowiedź to pytanie'
+        }>
+          <span>
+            <IconButton
+              onClick={() => mowa.przelaczTrybCiagly()}
+              disabled={!mowa.gotowa || !mowa.mikrofonMozliwy}
+              color={mowa.trybCiagly ? 'success' : 'default'}
+            >
+              <RecordVoiceOverIcon />
             </IconButton>
           </span>
         </Tooltip>

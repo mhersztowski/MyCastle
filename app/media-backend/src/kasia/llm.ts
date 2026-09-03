@@ -25,6 +25,7 @@
 
 import type { WiadomoscKasi } from './model';
 import type { SchematNarzedzia } from './narzedzia';
+import { ParserSse, deltyAnthropic, deltyOpenAi, type Delta } from './strumien';
 
 export type DostawcaModelu = 'anthropic' | 'openai' | 'ollama';
 
@@ -87,10 +88,23 @@ export interface OdpowiedzModelu {
   narzedzia: WywolanieNarzedzia[];
 }
 
+/** Co dzieje się w trakcie strumienia. */
+export interface NasluchStrumienia {
+  /** Kolejny fragment tekstu — front dokłada go do wypowiedzi. */
+  tekst(fragment: string): void;
+}
+
 export interface Model {
   odpowiedz(zapytanie: ZapytanieDoModelu): Promise<string>;
   /** Wariant z narzędziami. Domyślnie opakowuje `odpowiedz`. */
   odpowiedzZNarzedziami?(zapytanie: ZapytanieDoModelu): Promise<OdpowiedzModelu>;
+  /**
+   * Wariant strumieniowy: fragmenty lecą na bieżąco, wynik wraca po zakończeniu.
+   *
+   * Zwracany obiekt jest ten sam co przy `odpowiedzZNarzedziami`, więc pętla
+   * narzędziowa nie musi wiedzieć, którą drogą przyszła odpowiedź.
+   */
+  odpowiedzStrumieniem?(z: ZapytanieDoModelu, n: NasluchStrumienia): Promise<OdpowiedzModelu>;
   /** Czy model jest skonfigurowany (jest klucz). Panel pokazuje to wprost. */
   gotowy(): boolean;
   /** Co dokładnie brakuje — komunikat dla panelu, nie kod błędu. */
@@ -131,6 +145,63 @@ function naWiadomosci(rozmowa: WiadomoscKasi[]): Array<{ role: 'user' | 'assista
     scalone.unshift({ role: 'user', content: '(kontynuacja rozmowy)' });
   }
   return scalone;
+}
+
+/**
+ * Czyta odpowiedź SSE i składa z niej tekst oraz wywołania narzędzi.
+ *
+ * Wspólne dla obu dostawców — różnią się wyłącznie tym, jak wygląda pojedyncze
+ * zdarzenie, a to rozstrzyga przekazany `parsuj`. Parametry narzędzi zbieramy
+ * jako **tekst**, bo przychodzą fragmentami niebędącymi poprawnym JSON-em
+ * do samego końca; parsujemy je dopiero po zamknięciu strumienia.
+ */
+async function czytajStrumien(
+  odpowiedz: Response,
+  parsuj: (dane: string) => Delta,
+  nasluch: NasluchStrumienia,
+): Promise<OdpowiedzModelu> {
+  const czytnik = odpowiedz.body?.getReader();
+  if (!czytnik) throw new Error('Odpowiedź nie ma treści do odczytania.');
+
+  const dekoder = new TextDecoder();
+  const parser = new ParserSse();
+  let tekst = '';
+  const budowane = new Map<number, { id: string; nazwa: string; parametry: string }>();
+
+  for (;;) {
+    const { done, value } = await czytnik.read();
+    if (done) break;
+
+    for (const zdarzenie of parser.dodaj(dekoder.decode(value, { stream: true }))) {
+      const d = parsuj(zdarzenie);
+
+      if (d.tekst) { tekst += d.tekst; nasluch.tekst(d.tekst); }
+
+      if (d.narzedzieStart) {
+        budowane.set(d.narzedzieStart.indeks, {
+          id: d.narzedzieStart.id, nazwa: d.narzedzieStart.nazwa, parametry: '',
+        });
+      }
+
+      if (d.narzedzieParametry) {
+        const cel = budowane.get(d.narzedzieParametry.indeks);
+        if (cel) cel.parametry += d.narzedzieParametry.fragment;
+      }
+    }
+  }
+
+  return {
+    tekst: tekst.trim(),
+    narzedzia: [...budowane.values()].map((b) => ({
+      id: b.id,
+      nazwa: b.nazwa,
+      // Puste parametry to poprawny przypadek (narzędzie bez argumentów);
+      // niepoprawny JSON traktujemy jak brak — walidacja narzędzia to wychwyci.
+      parametry: (() => {
+        try { return b.parametry ? JSON.parse(b.parametry) : {}; } catch { return {}; }
+      })(),
+    })),
+  };
 }
 
 /**
@@ -192,6 +263,34 @@ export class ModelAnthropic implements Model {
       }
       return { role: k.rola, content: k.tresc };
     });
+  }
+
+  async odpowiedzStrumieniem(
+    z: ZapytanieDoModelu, nasluch: NasluchStrumienia,
+  ): Promise<OdpowiedzModelu> {
+    if (!this.gotowy()) throw new Error('Brak klucza API Anthropic.');
+
+    const res = await fetch(`${this.cfg.adres}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.cfg.klucz,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: z.model || this.cfg.model,
+        max_tokens: z.maxTokens ?? 1024,
+        system: z.system,
+        messages: [...naWiadomosci(z.rozmowa), ...ModelAnthropic.kroki(z.kroki ?? [])],
+        ...(z.narzedzia?.length ? { tools: z.narzedzia } : {}),
+        stream: true,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Anthropic (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    }
+    return czytajStrumien(res, deltyAnthropic, nasluch);
   }
 
   async odpowiedzZNarzedziami(
@@ -281,6 +380,43 @@ export class ModelOpenAiZgodny implements Model {
       }
       return { role: k.rola, content: k.tresc };
     });
+  }
+
+  async odpowiedzStrumieniem(
+    z: ZapytanieDoModelu, nasluch: NasluchStrumienia,
+  ): Promise<OdpowiedzModelu> {
+    if (!this.gotowy()) throw new Error(`Brak klucza API dla ${this.cfg.dostawca}.`);
+
+    const naglowki: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.cfg.klucz) naglowki.Authorization = `Bearer ${this.cfg.klucz}`;
+
+    const res = await fetch(`${this.cfg.adres}/chat/completions`, {
+      method: 'POST',
+      headers: naglowki,
+      body: JSON.stringify({
+        model: z.model || this.cfg.model,
+        max_tokens: z.maxTokens ?? 1024,
+        messages: [
+          { role: 'system', content: z.system },
+          ...naWiadomosci(z.rozmowa),
+          ...ModelOpenAiZgodny.kroki(z.kroki ?? []),
+        ],
+        ...(z.narzedzia?.length
+          ? {
+            tools: z.narzedzia.map((n) => ({
+              type: 'function',
+              function: { name: n.name, description: n.description, parameters: n.input_schema },
+            })),
+          }
+          : {}),
+        stream: true,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`${this.cfg.dostawca} (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    }
+    return czytajStrumien(res, deltyOpenAi, nasluch);
   }
 
   async odpowiedzZNarzedziami(

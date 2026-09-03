@@ -206,6 +206,63 @@ export const api = {
   kasiaDodajFragment: (f: { id?: string; kind: 'init' | 'update'; zrodlo: string; tekst: string; wygasaZa?: number }) =>
     request<StanKasi>('/api/kasia/fragment', { method: 'POST', body: JSON.stringify(f) }),
 
+  /**
+   * Rozmowa strumieniem: fragmenty do pokazania, zdania do wypowiedzenia.
+   *
+   * `fetch` + czytnik zamiast `EventSource`, bo ten drugi umie wyłącznie GET,
+   * a pytanie jedzie w ciele żądania.
+   */
+  kasiaPowiedzStrumieniem: async (
+    tekst: string,
+    na: { fragment(t: string): void; zdanie(z: string): void },
+  ): Promise<string> => {
+    const res = await fetch('/api/kasia/powiedz/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tekst }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
+
+    const czytnik = res.body?.getReader();
+    if (!czytnik) throw new Error('Odpowiedź bez treści.');
+
+    const dekoder = new TextDecoder();
+    let bufor = '';
+    let pelna = '';
+
+    for (;;) {
+      const { done, value } = await czytnik.read();
+      if (done) break;
+      bufor += dekoder.decode(value, { stream: true });
+
+      // Zdarzenia rozdziela pusta linia; ostatni, niedokończony kawałek zostaje.
+      const czesci = bufor.split('\n\n');
+      bufor = czesci.pop() ?? '';
+
+      for (const czesc of czesci) {
+        const linia = czesc.split('\n').find((l) => l.startsWith('data:'));
+        if (!linia) continue;
+        try {
+          const z = JSON.parse(linia.slice(5).trim()) as
+            { t?: string; z?: string; koniec?: boolean; tekst?: string; blad?: string };
+          if (z.blad) throw new Error(z.blad);
+          if (z.t) na.fragment(z.t);
+          if (z.z) na.zdanie(z.z);
+          if (z.koniec) pelna = z.tekst ?? pelna;
+        } catch (err) {
+          if (err instanceof Error && err.message && !err.message.startsWith('Unexpected')) throw err;
+          // Uszkodzone zdarzenie pomijamy — lepiej zgubić fragment niż całość.
+        }
+      }
+    }
+
+    return pelna;
+  },
+
   /** Zapisuje pomiar wagi w VFS MyCastle. Bez daty — dzisiejsza, liczona na serwerze. */
   kasiaWaga: (kg: number, uwaga?: string) =>
     request<{ ok: true; pomiarow: number }>('/api/kasia/waga', {

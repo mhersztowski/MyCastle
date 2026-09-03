@@ -1253,6 +1253,68 @@ function registerEnvCompletions(monaco: Monaco): void {
   });
 }
 
+/**
+ * Deklaracje API Kasi dla podpowiedzi.
+ *
+ * Ręcznie pisany `.d.ts`, a nie generowany z `kasia.ts`: opisujemy tylko to, co
+ * skrypt naprawdę wywołuje, i opatrujemy komentarzami, które mają znaczenie przy
+ * pisaniu — zwłaszcza różnicę między `init` a `update` oraz to, że `powiedz`
+ * podlega wyciszeniu.
+ */
+const KASIA_DTS = `
+declare module 'mycastle/kasia' {
+  /** Asystentka Kasia z aplikacji Media. Rozmowa idzie przez MQTT. */
+  export class Kasia {
+    /**
+     * Dokłada fragment do promptu Kasi.
+     *
+     * \`init\` — wiedza stała, widoczna w każdej rozmowie („kot ma na imię Filemon").
+     * \`update\` — co rozważyć przy samodzielnym namyśle („sprawdź, czy paczka odebrana").
+     *
+     * Ten sam \`id\` nadpisuje poprzednią treść, zamiast dokładać kolejną.
+     */
+    static dodajDoPromptu(f: {
+      id?: string;
+      kind: 'init' | 'update';
+      tekst: string;
+      zrodlo?: string;
+      /** Po ilu minutach zniknie. Bez tego zostaje na stałe. */
+      wygasaZa?: number;
+    }): Promise<void>;
+
+    static usunZPromptu(id: string, zrodlo?: string): Promise<void>;
+
+    /**
+     * Każe Kasi powiedzieć coś użytkownikowi.
+     *
+     * Podlega dostępności: przy „nie przeszkadzać" albo „śpię" wypowiedź nie
+     * zostanie wysłana, a w wyniku wróci \`wyslano: false\` i powód.
+     */
+    static powiedz(tekst: string): Promise<{ wyslano: boolean; powod?: string }>;
+
+    /** Pytanie do Kasi; działa mimo wyciszenia. */
+    static zapytaj(tekst: string): Promise<string>;
+
+    /** Dostępność, spotkania, dołożone fragmenty, liczba wiadomości. */
+    static stan(): Promise<{
+      dostepnosc: { tryb: string; do?: number };
+      spotkania: Array<{ rodzaj: string; godzina: string; wlaczone: boolean }>;
+      fragmenty: Array<{ id: string; kind: string; zrodlo: string; tekst: string }>;
+      wiadomosci: number;
+    }>;
+
+    /** Skrót — sprawdź przed wysłaniem powiadomienia. */
+    static czyMoznaZaczepic(): Promise<boolean>;
+
+    /** Pomiar wagi trafia do \`data/waga.json\` w MyCastle. */
+    static zapiszWage(kg: number, uwaga?: string): Promise<void>;
+  }
+
+  /** Alias dla piszących małą literą. */
+  export const kasia: typeof Kasia;
+}
+`;
+
 export function setupAutomateMonaco(monaco: Monaco): void {
   applyScriptDefaults(monaco);
   registerEnvCompletions(monaco);
@@ -1265,6 +1327,8 @@ export function setupAutomateMonaco(monaco: Monaco): void {
     // Sceny CAD/3D — deklaracja modułu, więc podpowiedzi pojawiają się dopiero
     // po `import { Scene } from 'mycastle/scene'`, tak jak w Drive.
     ['file:///mycastle-scene.d.ts', SCENE_SCRIPT_DTS],
+    // Asystentka Kasia — tak samo: podpowiedzi po imporcie.
+    ['file:///mycastle-kasia.d.ts', KASIA_DTS],
   ]));
 }
 

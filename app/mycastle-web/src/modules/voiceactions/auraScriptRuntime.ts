@@ -16,13 +16,15 @@
  */
 
 /**
- * Moduły środowiska: logika Aury, kontrakt `api`/`display`, API backendu (`Server`)
- * oraz sceny CAD/3D (`mycastle/scene`).
+ * Moduły środowiska: logika Aury, kontrakt `api`/`display`, API backendu (`Server`),
+ * sceny CAD/3D (`mycastle/scene`) oraz asystentka Kasia (`kasia/kasia`).
  *
- * Ten ostatni jest **nazwą, nie ścieżką** — moduł nie leży w `packages/`, tylko
- * jest składany przez hosta, więc dopisujemy go osobnym członem.
+ * `mycastle/scene` i `mycastle/kasia` są **nazwami, nie ścieżkami** — moduły nie
+ * leżą w `packages/` albo są składane przez hosta, więc dopisujemy je osobnymi
+ * członami.
  */
-const ENV_MODULE_RE = /(^|\/)(aura\/aura|api\/api|server\/api)(\.ts|\.js)?$|^mycastle\/scene$/;
+const ENV_MODULE_RE =
+  /(^|\/)(aura\/aura|api\/api|server\/api|kasia\/kasia)(\.ts|\.js)?$|^mycastle\/(scene|kasia)$/;
 
 const IMPORT_RE = /^[ \t]*import\s+(?:type\s+)?([^;'"]*?)\s+from\s+['"]([^'"]+)['"][ \t]*;?[ \t]*$/gm;
 const SIDE_EFFECT_IMPORT_RE = /^[ \t]*import\s+['"]([^'"]+)['"][ \t]*;?[ \t]*$/gm;

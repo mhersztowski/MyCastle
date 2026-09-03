@@ -33,6 +33,7 @@ import {
   czytajSrodowisko, scalGlosZeSrodowiskiem, type KonfiguracjaSrodowiska,
 } from './kasia/srodowisko';
 import { naglowekWyzwania, sprawdzHaslo } from './kasia/dostep';
+import { tnijNaZdania } from './kasia/strumien';
 import { obsluzPolecenie } from './kasia/polecenia';
 
 /** Ile czasu trzymamy odpowiedzi katalogu i kanałów, zanim spytamy ponownie. */
@@ -228,6 +229,80 @@ export class MediaHttpServer extends HttpUploadServer {
     return this.mycastleClient?.skonfigurowany ?? false;
   }
 
+  /**
+   * Odpowiedź Kasi wysyłana fragmentami (SSE).
+   *
+   * Format zdarzeń jest własny i możliwie prosty:
+   *   `{"t":"…"}`      — kolejny fragment tekstu, do pokazania na bieżąco
+   *   `{"z":"…"}`      — **kompletne zdanie**, do wypowiedzenia
+   *   `{"koniec":true, "tekst":"…"}` — całość, do zapisania w widoku
+   *   `{"blad":"…"}`   — coś poszło nie tak
+   *
+   * Zdania wycinamy tutaj, a nie na froncie: `tnijNaZdania` ma testy na skróty
+   * („o godz. 18") i liczby dziesiętne („84.2"), a powtórzona w przeglądarce
+   * kopia tej logiki rozjechałaby się z nimi przy pierwszej poprawce.
+   *
+   * `X-Accel-Buffering: no` jest konieczne: pośrednik (nginx w Coolify)
+   * domyślnie buforuje odpowiedź i wypuszcza ją jednym kawałkiem na końcu —
+   * czyli dokładnie niweczy to, po co jest strumień.
+   */
+  private async strumienRozmowy(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const kawalki: Buffer[] = [];
+    for await (const k of req) kawalki.push(Buffer.from(k));
+
+    let tekst = '';
+    try {
+      const body = JSON.parse(Buffer.concat(kawalki).toString('utf8') || '{}') as { tekst?: string };
+      tekst = (body.tekst ?? '').trim();
+    } catch {
+      this.sendJsonResponse(res, 400, { error: 'Ciało żądania nie jest poprawnym JSON-em.' });
+      return;
+    }
+
+    if (!tekst) { this.sendJsonResponse(res, 400, { error: 'Pusta wiadomość.' }); return; }
+    if (!this.kasia.modelGotowy()) {
+      this.sendJsonResponse(res, 503, {
+        error: `Kasia nie ma skonfigurowanego modelu: ${this.kasia.czegoBrakujeModelowi()}`,
+      });
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const wyslij = (dane: unknown): void => { res.write(`data: ${JSON.stringify(dane)}\n\n`); };
+
+    // Bufor zdania — fragmenty przychodzą po kilka znaków, zdania po kilkanaście.
+    let bufor = '';
+
+    try {
+      const pelna = await this.kasia.powiedzStrumieniem(tekst, {
+        tekst: (fragment) => {
+          wyslij({ t: fragment });
+          bufor += fragment;
+          const { zdania, reszta } = tnijNaZdania(bufor, false);
+          bufor = reszta;
+          for (const z of zdania) wyslij({ z });
+        },
+      });
+
+      // Ostatnie zdanie zwykle nie ma po sobie nowej linii — domykamy je tutaj.
+      const { zdania } = tnijNaZdania(bufor, true);
+      for (const z of zdania) wyslij({ z });
+
+      wyslij({ koniec: true, tekst: pelna });
+    } catch (err) {
+      // Błąd po nagłówkach nie może być kodem HTTP — idzie zdarzeniem.
+      wyslij({ blad: (err as Error).message });
+    } finally {
+      res.end();
+    }
+  }
+
   /** Konfiguracja mowy: zapisana w panelu, uzupełniona kluczami ze środowiska. */
   glosDlaPrzegladarki(): unknown {
     return scalGlosZeSrodowiskiem(this.kasia.stan().glos, this.srodowisko);
@@ -297,6 +372,21 @@ export class MediaHttpServer extends HttpUploadServer {
          * scalanie z kluczami ze środowiska jest sprawą serwera, bo to on je
          * czyta. `KasiaService` nie zna `.env` i nie powinien zacząć znać.
          */
+        /*
+         * Rozmowa strumieniem.
+         *
+         * Obsługiwana tutaj, a nie w `trasy.ts`, bo wymaga uchwytu na odpowiedź
+         * HTTP — a `trasy.ts` operuje na gotowej funkcji `odpowiedz(res, …)`,
+         * która zamyka połączenie jednym zapisem.
+         *
+         * Stara trasa `/powiedz` zostaje bez zmian: używa jej MyCastleMobile,
+         * API dla skryptów i każdy klient, który nie umie czytać SSE.
+         */
+        if (req.method === 'POST' && pathname === '/api/kasia/powiedz/stream') {
+          await this.strumienRozmowy(req, res);
+          return;
+        }
+
         if (req.method === 'GET' && pathname === '/api/kasia/glos') {
           this.sendJsonResponse(res, 200, this.glosDlaPrzegladarki() as Record<string, unknown>);
           return;
