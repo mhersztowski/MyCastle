@@ -138,6 +138,33 @@ describe('wykonajNarzedzie — dopisz_wydarzenie', () => {
     expect(arg.startTime).toContain('2026-09-03');
   });
 
+  it('odmawia dopisania stałej rozmowy jako wydarzenia', async () => {
+    /*
+     * HersztuMorning i spółka to nazwy rozmów z Kasią, nie wpisy w kalendarzu.
+     * Prompt to mówi, ale przy jawnym „dodaj do kalendarza" model i tak próbuje —
+     * sprawdzone na żywym modelu. Prośba zmniejsza częstość, kod wyklucza.
+     */
+    const w = wykonawca();
+    const r = await wykonajNarzedzie('dopisz_wydarzenie',
+      { nazwa: 'HersztuWeekly', dzien: 'dzisiaj', od: '18:00' }, w, T);
+    expect(r.ok).toBe(false);
+    expect(r.tresc).toMatch(/rozmow/i);
+    expect(w.wywolania).toHaveLength(0);
+  });
+
+  it('rozpoznaje nazwę rozmowy także w dłuższym tytule', async () => {
+    const r = await wykonajNarzedzie('dopisz_wydarzenie',
+      { nazwa: 'Spotkanie HersztuMorning z Kasią', dzien: 'jutro', od: '07:30' }, wykonawca(), T);
+    expect(r.ok).toBe(false);
+  });
+
+  it('nie blokuje zwykłego wydarzenia o podobnej nazwie', async () => {
+    const w = wykonawca();
+    const r = await wykonajNarzedzie('dopisz_wydarzenie',
+      { nazwa: 'Poranne bieganie', dzien: 'jutro', od: '07:00' }, w, T);
+    expect(r.ok).toBe(true);
+  });
+
   it('koniec przed początkiem to błąd, nie wydarzenie ujemnej długości', async () => {
     const r = await wykonajNarzedzie('dopisz_wydarzenie',
       { nazwa: 'X', dzien: 'dzisiaj', od: '15:00', do: '14:00' }, wykonawca(), T);

@@ -91,8 +91,12 @@ describe('pętla narzędziowa', () => {
     expect(JSON.stringify(wynik)).toContain('84');
   });
 
-  it('do trwałej rozmowy trafia tylko zdanie dla człowieka, nie protokół', async () => {
-    // Panel ma pokazywać rozmowę, a nie zapis wykonania narzędzi.
+  it('do rozmowy trafia zdanie i podsumowanie działań, nie protokół wykonania', async () => {
+    /*
+     * Rozmowa niesie wypowiedź oraz **opis** tego, co Kasia zrobiła — po to,
+     * żeby dało się to wyróżnić w panelu. Nie niesie kroków narzędziowych:
+     * identyfikatorów wywołań ani surowych parametrów.
+     */
     model.ustaw(
       { tekst: '', narzedzia: [{ id: 'n1', nazwa: 'zapisz_wage', parametry: { kg: 84 } }] },
       { tekst: 'Zapisane.', narzedzia: [] },
@@ -102,7 +106,12 @@ describe('pętla narzędziowa', () => {
     const rozmowa = kasia.stan().rozmowa;
     expect(rozmowa).toHaveLength(2);              // pytanie + odpowiedź
     expect(rozmowa[1].tresc).toBe('Zapisane.');
-    expect(JSON.stringify(rozmowa)).not.toContain('zapisz_wage');
+
+    expect(rozmowa[1].dzialania?.[0].rodzaj).toBe('zapisz_wage');
+    expect(rozmowa[1].dzialania?.[0].opis).toMatch(/84/);
+
+    expect(JSON.stringify(rozmowa)).not.toContain('"n1"');
+    expect(JSON.stringify(rozmowa)).not.toContain('parametry');
   });
 
   it('obsługuje kilka narzędzi w jednym kroku', async () => {

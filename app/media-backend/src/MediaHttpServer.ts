@@ -97,6 +97,7 @@ export class MediaHttpServer extends HttpUploadServer {
           klientMyCastle.dopiszWydarzenie(w),
         zapiszWage: (kg: number, uwaga?: string) =>
           this.kasia.zapiszWage({ data: new Date().toISOString().slice(0, 10), kg, uwaga }),
+        przygotujSpotkanie: (rodzaj: RodzajSpotkania) => this.kasia.przygotujSpotkanie(rodzaj),
         projekty: async () => {
           const p = await klientMyCastle.czytajJson<{ projects?: Array<{ id: string; name: string }> }>(
             'data/projects.json',

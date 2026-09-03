@@ -633,6 +633,26 @@ export class KasiaService {
     return this.store.pobierz();
   }
 
+  /**
+   * Przygotowuje rozmowę na życzenie: dane w jej zakresie i to, o czym ma być.
+   *
+   * Wołane przez narzędzie `rozpocznij_spotkanie`, gdy Marcin prosi o poranne
+   * czy niedzielne poza porą. Bez tego model prowadziłby podsumowanie tygodnia,
+   * widząc dwa dni kalendarza i nie znając wagi — bo zakres danych zależy od
+   * rodzaju rozmowy (patrz `scenariusze.czegoPotrzebuje`).
+   *
+   * Zwracamy **dane razem ze scenariuszem**, w jednym tekście: to wraca do
+   * modelu jako wynik narzędzia, a on ma na tej podstawie poprowadzić rozmowę
+   * w tej samej odpowiedzi.
+   */
+  async przygotujSpotkanie(rodzaj: RodzajSpotkania, teraz: number = Date.now()): Promise<string> {
+    const strefa = this.store.pobierz().ustawienia.strefaCzasowa;
+    await this.odswiezDane(teraz, strefa, rodzaj, 0);
+
+    const dane = this.buforDanych?.opis ?? 'Brak dostępu do danych MyCastle.';
+    return `${poleceniSpotkania(rodzaj, { proba: 0 })}\n\n${dane}`;
+  }
+
   /** Czy model jest skonfigurowany — panel pokazuje to, zanim ktoś napisze. */
   modelGotowy(): boolean {
     return this.model.gotowy();

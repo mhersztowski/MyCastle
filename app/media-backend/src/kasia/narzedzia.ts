@@ -45,6 +45,12 @@ export interface WykonawcaNarzedzi {
   dopiszWydarzenie(w: { name: string; startTime: string; endTime: string; description?: string }): Promise<string>;
   zapiszWage(kg: number, uwaga?: string): Promise<unknown>;
   projekty(): Promise<Array<{ id: string; name: string }>>;
+  /**
+   * Przygotowuje rozmowę: zwraca dane w zakresie właściwym dla niej i to,
+   * o czym ma być. Bez tego model prowadziłby niedzielne podsumowanie,
+   * widząc dwa dni kalendarza i nie znając wagi.
+   */
+  przygotujSpotkanie(rodzaj: RodzajSpotkania): Promise<string>;
 }
 
 export interface WynikNarzedzia {
@@ -107,8 +113,11 @@ export const NARZEDZIA: SchematNarzedzia[] = [
   {
     name: 'dopisz_wydarzenie',
     description:
-      'Dopisuje wydarzenie do kalendarza. Używaj, gdy ustalicie coś o konkretnej porze '
-      + '— wizytę, spotkanie, blok pracy. Do rzeczy bez godziny użyj zamiast tego zadania.',
+      'Dopisuje wydarzenie do kalendarza Marcina. Używaj, gdy ustalicie coś o konkretnej '
+      + 'porze — wizytę, spotkanie z kimś, blok pracy. Do rzeczy bez godziny użyj zamiast '
+      + 'tego zadania. NIE używaj do HersztuMorning, HersztuEvening ani HersztuWeekly: '
+      + 'to nazwy waszych rozmów, a nie wydarzenia. Godzinę tych rozmów zmienia '
+      + '`ustaw_godzine_spotkania`, a rozpoczyna je `rozpocznij_spotkanie`.',
     input_schema: {
       type: 'object',
       properties: {
@@ -118,6 +127,26 @@ export const NARZEDZIA: SchematNarzedzia[] = [
         do: { type: 'string', description: 'Godzina zakończenia HH:MM. Pomiń, gdy ma trwać godzinę.' },
       },
       required: ['nazwa', 'dzien', 'od'],
+    },
+  },
+  {
+    name: 'rozpocznij_spotkanie',
+    description:
+      'Rozpoczyna jedną z waszych stałych rozmów tu i teraz. Użyj, gdy Marcin o nią '
+      + 'poprosi („zróbmy poranne", „HersztuWeekly") albo gdy sam uznasz, że pora. '
+      + 'Zwraca dane właściwe dla tej rozmowy '
+      + '— zadania, kalendarz, a przy tygodniowej także wagę — oraz to, o czym w niej '
+      + 'mówić. Po wywołaniu poprowadź rozmowę od razu, w tej samej odpowiedzi.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        rodzaj: {
+          type: 'string',
+          description: 'Która rozmowa.',
+          enum: [...RODZAJE_SPOTKAN],
+        },
+      },
+      required: ['rodzaj'],
     },
   },
   {
@@ -278,6 +307,26 @@ export async function wykonajNarzedzie(
         const name = tekst(p, 'nazwa');
         if (!name) return { ok: false, tresc: 'Wydarzenie musi mieć nazwę.' };
 
+        /*
+         * Stałe rozmowy nie są wydarzeniami — twarda odmowa, nie prośba.
+         *
+         * Prompt mówi o tym wprost, ale przy jawnym „dodaj HersztuWeekly do
+         * kalendarza" model i tak sięga po to narzędzie (sprawdzone na żywym
+         * modelu). Skutkiem byłby wpis w kalendarzu dublujący rozmowę, którą
+         * Kasia i tak zacznie sama o ustalonej godzinie.
+         */
+        const rozmowa = RODZAJE_SPOTKAN.find(
+          (r) => name.toLowerCase().includes(r.toLowerCase()),
+        );
+        if (rozmowa) {
+          return {
+            ok: false,
+            tresc: `${rozmowa} to nasza rozmowa, nie wydarzenie w kalendarzu — nie dopisuję go. `
+              + 'Godzinę zmienisz przez ustaw_godzine_spotkania, a rozmowę zaczniesz '
+              + 'przez rozpocznij_spotkanie.',
+          };
+        }
+
         const dzien = naDzien(tekst(p, 'dzien'), teraz, strefa);
         if (!dzien) {
           return { ok: false, tresc: 'Nie rozumiem dnia. Podaj „dzisiaj", „jutro" albo datę RRRR-MM-DD.' };
@@ -310,6 +359,14 @@ export async function wykonajNarzedzie(
         });
 
         return { ok: true, tresc: `Dopisano wydarzenie „${name}" (${dzien}, ${od}).` };
+      }
+
+      case 'rozpocznij_spotkanie': {
+        const rodzaj = tekst(p, 'rodzaj') as RodzajSpotkania;
+        if (!RODZAJE_SPOTKAN.includes(rodzaj)) {
+          return { ok: false, tresc: `Nie znam rozmowy „${rodzaj}". Dozwolone: ${RODZAJE_SPOTKAN.join(', ')}.` };
+        }
+        return { ok: true, tresc: await wykonawca.przygotujSpotkanie(rodzaj) };
       }
 
       case 'zapisz_wage': {
