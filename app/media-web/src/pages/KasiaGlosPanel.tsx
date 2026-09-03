@@ -479,8 +479,21 @@ export const KasiaGlosPanel: React.FC = () => {
       {/* Słowo aktywujące Section */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
-          Słowo aktywujące Detection
+          Słowo aktywujące
         </Typography>
+
+        {/*
+          Ostrzeżenie, którego brak kosztował godzinę szukania: nasłuch idzie
+          przez rozpoznawanie **przeglądarki**, niezależnie od tego, co wybrano
+          wyżej jako dostawcę STT. Ustawienie ElevenLabs i mówienie po polsku
+          przy języku „en-US" dawało ciszę bez żadnego komunikatu.
+        */}
+        <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>
+          Nasłuch działa przez rozpoznawanie <b>wbudowane w przeglądarkę</b> —
+          nie przez dostawcę wybranego wyżej. Dlatego język ustawia się tu
+          osobno i musi zgadzać się z tym, w jakim wymawiasz frazę.
+          Wymaga też HTTPS: pod adresem <code>http://…</code> mikrofon nie ruszy.
+        </Alert>
 
         <FormControlLabel
           control={
@@ -507,6 +520,7 @@ export const KasiaGlosPanel: React.FC = () => {
 
         <TextField
           label="Język"
+          helperText="Język, w którym wymawiasz frazę — np. pl-PL. Nie musi być ten sam co dostawcy STT."
           value={config.wakeWord.lang}
           onChange={e => updateWakeWord('lang', e.target.value)}
           fullWidth

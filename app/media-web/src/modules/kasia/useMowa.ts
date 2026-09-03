@@ -9,8 +9,13 @@
  *
  * ## Słowo aktywujące
  *
- * Włączane w panelu Głos i wtedy naprawdę działa — mikrofon nasłuchuje ciągle
- * i po usłyszeniu frazy zaczyna nagrywać właściwe pytanie.
+ * Włączane w panelu Głos; nasłuch rusza sam, bez drugiego przycisku. Po
+ * usłyszeniu frazy Kasia zaczyna nagrywać właściwe pytanie — a jeśli komenda
+ * padła w tym samym zdaniu („Kasiu, co mam dziś"), bierze ją od razu.
+ *
+ * Sam nasłuch siedzi w `wakeWord.ts` i ma **trzy drogi** (ElevenLabs realtime,
+ * chmura, Web Speech), przeniesione z Aury. Powód jest praktyczny: Web Speech
+ * na Androidzie beepie przy każdym restarcie rozpoznawania.
  *
  * Trzeba wiedzieć, co to znaczy: **mikrofon jest włączony tak długo, jak długo
  * karta jest otwarta**, także gdy tablet leży ekranem w dół. Na urządzeniu
@@ -29,8 +34,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { speechService, wakeWordService, AudioRecorder, DEFAULT_SPEECH_CONFIG } from '../speech';
+import { speechService, AudioRecorder, DEFAULT_SPEECH_CONFIG } from '../speech';
 import type { SpeechConfigModel } from '../speech';
+import {
+  czyAndroid, opisSciezki, wybierzSciezke, zacznijNasluch,
+  type SciezkaNasluchu, type UchwytNasluchu,
+} from './wakeWord';
 
 /**
  * Czy przeglądarka w ogóle wpuści nas do mikrofonu.
@@ -67,6 +76,9 @@ export interface StanMowy {
   powodBrakuMikrofonu?: string;
   /** Czy słowo aktywujące jest włączone i nasłuchuje. */
   nasluchuje: boolean;
+  /** Którą drogą idzie nasłuch — panel to pokazuje. */
+  sciezkaNasluchu: SciezkaNasluchu;
+  opisSciezkiNasluchu: string;
 }
 
 export interface Mowa extends StanMowy {
@@ -87,6 +99,7 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
   const [stan, setStan] = useState<StanMowy>({
     gotowa: false, nagrywa: false, mowi: false, czytaj: false, blad: null,
     mikrofonMozliwy: dostep.ok, powodBrakuMikrofonu: dostep.powod, nasluchuje: false,
+    sciezkaNasluchu: 'przegladarka', opisSciezkiNasluchu: '',
   });
 
   const recorder = useRef<AudioRecorder | null>(null);
@@ -107,6 +120,12 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
    * do haka, którego jeszcze nie ma — a tak wyglądało pierwsze podejście.
    */
   const nagrywajRef = useRef<() => Promise<string>>();
+  /** Ta sama sztuczka z kolejnością co przy nagrywaniu — patrz wyżej. */
+  const wlaczNasluchRef = useRef<(cfg: SpeechConfigModel) => void>();
+  /** Uchwyt bieżącego nasłuchu — trzeba go zamknąć przed każdym innym użyciem mikrofonu. */
+  const uchwyt = useRef<UchwytNasluchu | null>(null);
+  /** Ostatnia wypowiedź Kasi — do odsiewania własnego echa z mikrofonu. */
+  const ostatniaWypowiedz = useRef('');
   /** Czy nasłuch ma wrócić po tym, jak Kasia skończy mówić. */
   const wznowNasluch = useRef(false);
 
@@ -122,7 +141,24 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
 
   // Zatrzymanie nasłuchu przy opuszczeniu strony — inaczej mikrofon zostaje
   // włączony po przejściu do Podcastów, bez niczego, co by to pokazywało.
-  useEffect(() => () => { wakeWordService.stop(); }, []);
+  useEffect(() => () => { uchwyt.current?.stop(); uchwyt.current = null; }, []);
+
+  /*
+   * Nasłuch rusza sam, gdy jest włączony w ustawieniach.
+   *
+   * Pierwsze podejście wymagało jeszcze dotknięcia ikony w czacie — i to była
+   * pomyłka: kto włączył słowo aktywujące w panelu, powiedział już, czego chce.
+   * Drugi włącznik w innym miejscu wyglądał jak awaria pierwszego.
+   *
+   * Nadal zostawiamy ikonę, żeby dało się wyciszyć mikrofon bez wchodzenia
+   * w ustawienia — ale ona teraz **wyłącza**, a nie włącza.
+   */
+  useEffect(() => {
+    if (!stan.gotowa || !dostep.ok) return;
+    if (!konfiguracja.wakeWord?.enabled) { uchwyt.current?.stop(); uchwyt.current = null; return; }
+    if (uchwyt.current) return;
+    wlaczNasluchRef.current?.(konfiguracja);
+  }, [stan.gotowa, dostep.ok, konfiguracja]);
 
   const przerwij = useCallback(() => {
     speechService.stopSpeaking();
@@ -138,30 +174,25 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
    * dalszy ciąg zdania jako kolejne zawołania.
    */
   const wlaczNasluch = useCallback((cfg: SpeechConfigModel) => {
-    wakeWordService.configure({
-      phrase: cfg.wakeWord.phrase,
-      sensitivity: cfg.wakeWord.sensitivity,
-      lang: cfg.wakeWord.lang || cfg.stt.browser.lang,
-      onWake: (tekst) => {
-        wakeWordService.stop();
-        setStan((s) => ({ ...s, nasluchuje: false }));
-        zawolanie.current?.(tekst);
-        // Po zawołaniu od razu nagrywamy pytanie — inaczej trzeba by jeszcze
-        // sięgnąć po przycisk, czyli zawołanie nie oszczędzałoby niczego.
-        void nagrywajRef.current?.();
+    uchwyt.current?.stop();
+    uchwyt.current = zacznijNasluch({
+      fraza: cfg.wakeWord.phrase,
+      cfg,
+      ostatniaWypowiedz: () => ostatniaWypowiedz.current,
+      onZawolanie: (komenda) => {
+        // Komenda w tym samym zdaniu idzie od razu; bez niej nagrywamy pytanie.
+        if (komenda.length >= 2) zawolanie.current?.(komenda);
+        else { zawolanie.current?.(''); void nagrywajRef.current?.(); }
       },
-      onStatusChange: (sluchа) => setStan((s) => ({ ...s, nasluchuje: sluchа })),
+      onStan: (sluchа) => setStan((s) => ({ ...s, nasluchuje: sluchа })),
+      onBlad: (powod) => setStan((s) => ({ ...s, nasluchuje: false, blad: powod })),
     });
 
-    const ruszyl = wakeWordService.start();
-    if (!ruszyl) {
-      setStan((s) => ({
-        ...s,
-        nasluchuje: false,
-        blad: 'Nie udało się uruchomić nasłuchu — ta przeglądarka może nie mieć rozpoznawania mowy.',
-      }));
-    }
+    const sciezka = wybierzSciezke(cfg, czyAndroid());
+    setStan((s) => ({ ...s, sciezkaNasluchu: sciezka, opisSciezkiNasluchu: opisSciezki(sciezka) }));
   }, []);
+
+  wlaczNasluchRef.current = wlaczNasluch;
 
   const przelaczNasluch = useCallback(() => {
     if (!dostep.ok) {
@@ -169,10 +200,10 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
       return;
     }
     setStan((s) => {
-      if (s.nasluchuje) { wakeWordService.stop(); return { ...s, nasluchuje: false, blad: null }; }
+      if (s.nasluchuje) { uchwyt.current?.stop(); uchwyt.current = null; return { ...s, nasluchuje: false, blad: null }; }
       return { ...s, blad: null };
     });
-    if (!wakeWordService.isListening) wlaczNasluch(konfiguracja);
+    if (!uchwyt.current) wlaczNasluch(konfiguracja);
   }, [dostep.ok, dostep.powod, konfiguracja, wlaczNasluch]);
 
   const powiedz = useCallback(async (tekst: string) => {
@@ -192,8 +223,11 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
      * Inaczej usłyszałby jej głos z głośnika i — gdyby padło w nim słowo
      * aktywujące — sam siebie zawołał. Wracamy do nasłuchu dopiero po końcu.
      */
-    wznowNasluch.current = wakeWordService.isListening;
-    if (wznowNasluch.current) { wakeWordService.stop(); }
+    wznowNasluch.current = Boolean(uchwyt.current);
+    if (wznowNasluch.current) { uchwyt.current?.stop(); uchwyt.current = null; }
+    // Zapamiętujemy, co Kasia mówi — mikrofon usłyszy to z głośnika i musi
+    // umieć odsiać własne echo, zamiast uznać je za zawołanie.
+    ostatniaWypowiedz.current = tekst;
 
     setStan((s) => ({ ...s, mowi: true, blad: null }));
     try {
@@ -210,9 +244,10 @@ export function useMowa(onZawolanie?: (tekst: string) => void): Mowa {
     // Mikrofon nie może słuchać, gdy Kasia mówi — nagrałby jej własny głos.
     speechService.stopSpeaking();
     // Nasłuch i nagrywanie to ten sam mikrofon — nie mogą działać naraz.
-    if (wakeWordService.isListening) {
+    if (uchwyt.current) {
       wznowNasluch.current = true;
-      wakeWordService.stop();
+      uchwyt.current.stop();
+      uchwyt.current = null;
       setStan((s) => ({ ...s, nasluchuje: false }));
     }
 

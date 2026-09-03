@@ -158,6 +158,9 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfigModel = {
     enabled: false,
     phrase: 'hey castle',
     sensitivity: 0.7,
-    lang: 'en-US',
+    // Reszta konfiguracji jest po polsku; angielski domyślny (z oryginału
+    // MyCastle) sprawiał, że rozpoznawanie nasłuchiwało w złym języku i polska
+    // fraza nigdy nie padała — bez żadnego komunikatu.
+    lang: 'pl-PL',
   },
 };

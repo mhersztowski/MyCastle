@@ -331,7 +331,7 @@ export function KasiaPage() {
           <Tooltip title={
             !mowa.mikrofonMozliwy ? (mowa.powodBrakuMikrofonu ?? 'Mikrofon niedostępny')
               : mowa.nasluchuje
-                ? `Nasłuchuję „${mowa.konfiguracja.wakeWord.phrase}" — dotknij, by wyłączyć`
+                ? `Nasłuchuję „${mowa.konfiguracja.wakeWord.phrase}" (${mowa.opisSciezkiNasluchu}) — dotknij, by wyciszyć`
                 : `Włącz nasłuch „${mowa.konfiguracja.wakeWord.phrase}"`
           }>
             <span>
