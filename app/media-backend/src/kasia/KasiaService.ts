@@ -27,7 +27,8 @@
 import type { KasiaStore } from './KasiaStore';
 import {
   ADRESY_DOMYSLNE, MODELE_DOMYSLNE, utworzModel,
-  type DostawcaModelu, type KonfiguracjaModelu, type Model,
+  type DostawcaModelu, type KonfiguracjaModelu, type KrokRozmowy,
+  type Model, type ZapytanieDoModelu,
 } from './llm';
 
 const DOSTAWCY: readonly DostawcaModelu[] = ['anthropic', 'openai', 'ollama'];
@@ -42,10 +43,21 @@ import { dodajFragment, opisKontekstu, usunWygasle, zbudujPrompt } from './promp
 import { opisDanych } from './dane';
 import type { MycastleClient } from './MycastleClient';
 import { czegoPotrzebuje, poleceniSpotkania } from './scenariusze';
+import { schematyDlaModelu, wykonajNarzedzie, type WykonawcaNarzedzi } from './narzedzia';
 import { analizujWage, dodajPomiar, opisWagi, PLIK_WAGI, type Pomiar, type PlikWagi } from './waga';
 
 /** Ile ostatnich wiadomości trafia do modelu. */
 const OKNO_ROZMOWY = 30;
+
+/**
+ * Ile razy najwyżej model może poprosić o narzędzia w jednej odpowiedzi.
+ *
+ * Bez granicy model, który uparcie prosi o to samo (a zdarza się to przy
+ * niejasnym wyniku), kręciłby się w kółko, wydając tokeny i nie odpowiadając.
+ * Pięć rund wystarcza na każdy sensowny ciąg — „zapisz wagę, dopisz zadanie,
+ * przesuń spotkanie" to trzy — a szósta jest już sygnałem, że coś poszło nie tak.
+ */
+const LIMIT_RUND_NARZEDZI = 5;
 
 export interface WynikTicku {
   /** Co Kasia powiedziała w tym przebiegu. */
@@ -86,6 +98,11 @@ export class KasiaService {
     private model: Model,
     /** Dostęp do danych MyCastle; bez niego Kasia działa, tylko nie zna dnia. */
     private readonly mycastle?: MycastleClient,
+    /**
+     * Wykonawca narzędzi. Bez niego Kasia **nie dostaje narzędzi w ogóle** —
+     * zamiast obiecywać działanie, którego nie wykona, po prostu go nie oferuje.
+     */
+    private readonly narzedzia?: WykonawcaNarzedzi,
   ) {}
 
   /** Podmienia model po zmianie konfiguracji w panelu. */
@@ -159,8 +176,77 @@ export class KasiaService {
 
   private system(stan: StanKasi, kind: 'init' | 'update', teraz: number, dodatek?: string): string {
     const baza = kind === 'init' ? stan.ustawienia.promptInit : stan.ustawienia.promptUpdate;
-    const kontekst = [this.kontekst(stan, teraz), dodatek?.trim()].filter(Boolean).join('\n\n');
+    const kontekst = [this.kontekst(stan, teraz), dodatek?.trim(), this.oNarzedziach()]
+      .filter(Boolean).join('\n\n');
     return zbudujPrompt({ baza, fragmenty: stan.fragmenty, kind, teraz, kontekst });
+  }
+
+  /**
+   * Przypomnienie o narzędziach — doklejane do promptu systemowego, nie do
+   * edytowalnego.
+   *
+   * Dwa powody, dla których nie wystarczy opis przy samych narzędziach.
+   * Po pierwsze, modele notorycznie **obiecują zamiast działać**: mówią
+   * „ustawiłam", nie wywołując niczego, i użytkownik dowiaduje się o tym
+   * nazajutrz, gdy budzik nie zadzwoni. Po drugie, prompt bazowy użytkownik
+   * może zmienić albo skasować — a to zdanie ma obowiązywać niezależnie.
+   */
+  private oNarzedziach(): string {
+    if (!this.narzedzia) return '';
+    return 'Masz narzędzia do zmiany godzin spotkań, dopisywania zadań i wydarzeń '
+      + 'oraz zapisywania wagi. Gdy w rozmowie coś ustalicie — **użyj narzędzia**. '
+      + 'Nie mów, że coś zrobiłaś, jeśli nie wywołałaś narzędzia: bez tego zmiana '
+      + 'nie zostanie zapisana i przepadnie po zakończeniu rozmowy.';
+  }
+
+  /**
+   * Rozmowa z modelem z obsługą narzędzi.
+   *
+   * Model może poprosić o wykonanie narzędzi; wykonujemy je i oddajemy wyniki,
+   * aż odpowie samym tekstem albo skończą się rundy. Kroki pośrednie zostają
+   * **tutaj** — do trwałej rozmowy trafia tylko końcowe zdanie, bo panel ma
+   * pokazywać rozmowę, a nie protokół wykonania.
+   */
+  private async zapytajModel(
+    zapytanie: Omit<ZapytanieDoModelu, 'kroki' | 'narzedzia'>,
+    teraz: number,
+    strefa: string,
+  ): Promise<{ tekst: string; wykonano: string[] }> {
+    const wykonawca = this.narzedzia;
+    const zNarzedziami = this.model.odpowiedzZNarzedziami?.bind(this.model);
+
+    // Bez wykonawcy albo bez wsparcia w modelu — zwykła rozmowa, jak dotąd.
+    if (!wykonawca || !zNarzedziami) {
+      return { tekst: await this.model.odpowiedz(zapytanie), wykonano: [] };
+    }
+
+    const kroki: KrokRozmowy[] = [];
+    const wykonano: string[] = [];
+
+    for (let runda = 0; runda < LIMIT_RUND_NARZEDZI; runda += 1) {
+      const odp = await zNarzedziami({ ...zapytanie, narzedzia: schematyDlaModelu(), kroki });
+
+      if (odp.narzedzia.length === 0) return { tekst: odp.tekst, wykonano };
+
+      kroki.push({ rola: 'assistant', tresc: odp.tekst, narzedzia: odp.narzedzia });
+
+      for (const w of odp.narzedzia) {
+        const wynik = await wykonajNarzedzie(w.nazwa, w.parametry, wykonawca, teraz, strefa);
+        if (wynik.ok) wykonano.push(wynik.tresc);
+        kroki.push({ rola: 'narzedzie', id: w.id, nazwa: w.nazwa, wynik: wynik.tresc });
+      }
+    }
+
+    /*
+     * Rundy się wyczerpały. Zamiast oddać pustkę, mówimy użytkownikowi, co się
+     * udało wykonać — działania są prawdziwe, brakuje tylko podsumowania modelu.
+     */
+    return {
+      tekst: wykonano.length > 0
+        ? wykonano.join(' ')
+        : 'Nie udało mi się dokończyć tej odpowiedzi — spróbuj jeszcze raz.',
+      wykonano,
+    };
   }
 
   // ── Rozmowa ────────────────────────────────────────────────────────────────
@@ -183,11 +269,15 @@ export class KasiaService {
 
     const stan = this.store.pobierz();
     await this.odswiezDane(teraz, stan.ustawienia.strefaCzasowa);
-    const odpowiedz = await this.model.odpowiedz({
+
+    const { tekst: odpowiedz, wykonano } = await this.zapytajModel({
       system: this.system(stan, 'init', teraz),
       rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
       model: stan.ustawienia.model,
-    });
+    }, teraz, stan.ustawienia.strefaCzasowa);
+
+    // Dane mogły się zmienić pod wpływem narzędzi — bufor stracił aktualność.
+    if (wykonano.length > 0) this.buforDanych = null;
 
     await this.store.zmien((s) => {
       s.rozmowa.push({ id: id(), rola: 'assistant', tresc: odpowiedz, o: teraz });
@@ -258,11 +348,11 @@ export class KasiaService {
       try {
         // Każde spotkanie widzi inny wycinek danych — niedzielne tydzień i wagę.
         await this.odswiezDane(teraz, stan.ustawienia.strefaCzasowa, p.rodzaj, 0);
-        const tresc = await this.model.odpowiedz({
+        const { tekst: tresc } = await this.zapytajModel({
           system: this.system(stan, 'init', teraz, polecenie),
           rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
           model: stan.ustawienia.model,
-        });
+        }, teraz, stan.ustawienia.strefaCzasowa);
 
         if (tresc) {
           wynik.wypowiedzi.push(tresc);

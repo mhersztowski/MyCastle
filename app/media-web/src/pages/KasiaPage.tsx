@@ -25,6 +25,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MicIcon from '@mui/icons-material/Mic';
+import HearingIcon from '@mui/icons-material/Hearing';
+import HearingDisabledIcon from '@mui/icons-material/HearingDisabled';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import VolumeOffIcon from '@mui/icons-material/VolumeOff';
 import {
@@ -63,7 +65,10 @@ export function KasiaPage() {
   const [zakladka, setZakladka] = useState(0);
 
   const dolRozmowy = useRef<HTMLDivElement>(null);
-  const mowa = useMowa();
+
+  // Po zawołaniu hak sam zaczyna nagrywać pytanie; tutaj tylko czyścimy pole,
+  // żeby dyktowanie nie doklejało się do niedokończonego zdania.
+  const mowa = useMowa(() => setTekst(''));
 
   /*
    * Ostatnia przeczytana wypowiedź — bez tego odpytywanie co pięć sekund
@@ -275,6 +280,16 @@ export function KasiaPage() {
       </Paper>
       )}
 
+      {/*
+        Brak HTTPS wyjaśniamy raz, na widoku rozmowy: bez tego przyciski mowy
+        są po prostu szare i nic nie mówią, co wygląda na awarię.
+      */}
+      {zakladka === 0 && !mowa.mikrofonMozliwy && mowa.gotowa && (
+        <Alert severity="info" variant="outlined">
+          {mowa.powodBrakuMikrofonu}
+        </Alert>
+      )}
+
       {mowa.blad && zakladka === 0 && (
         <Alert severity="warning" onClose={() => { /* znika przy następnej próbie */ }}>
           {mowa.blad}
@@ -296,17 +311,40 @@ export function KasiaPage() {
           </span>
         </Tooltip>
 
-        <Tooltip title={mowa.nagrywa ? 'Zakończ i rozpoznaj' : 'Dyktuj'}>
+        <Tooltip title={
+          !mowa.mikrofonMozliwy ? (mowa.powodBrakuMikrofonu ?? 'Mikrofon niedostępny')
+            : mowa.nagrywa ? 'Zakończ i rozpoznaj' : 'Dyktuj'
+        }>
           <span>
             <IconButton
               onClick={() => void przelaczMikrofon()}
-              disabled={!mowa.gotowa}
+              disabled={!mowa.gotowa || !mowa.mikrofonMozliwy}
               color={mowa.nagrywa ? 'error' : 'default'}
             >
               <MicIcon />
             </IconButton>
           </span>
         </Tooltip>
+
+        {/* Nasłuch słowa aktywującego — widoczny tylko, gdy włączony w panelu Głos. */}
+        {mowa.konfiguracja.wakeWord?.enabled && (
+          <Tooltip title={
+            !mowa.mikrofonMozliwy ? (mowa.powodBrakuMikrofonu ?? 'Mikrofon niedostępny')
+              : mowa.nasluchuje
+                ? `Nasłuchuję „${mowa.konfiguracja.wakeWord.phrase}" — dotknij, by wyłączyć`
+                : `Włącz nasłuch „${mowa.konfiguracja.wakeWord.phrase}"`
+          }>
+            <span>
+              <IconButton
+                onClick={() => mowa.przelaczNasluch()}
+                disabled={!mowa.gotowa || !mowa.mikrofonMozliwy}
+                color={mowa.nasluchuje ? 'success' : 'default'}
+              >
+                {mowa.nasluchuje ? <HearingIcon /> : <HearingDisabledIcon />}
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
 
         <TextField
           fullWidth size="small" multiline maxRows={4}

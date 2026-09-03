@@ -35,6 +35,48 @@ services:
       # sklejenia klucza, sekretu i czasu uniksowego.
       - PODCASTINDEX_KEY=${PODCASTINDEX_KEY:-}
       - PODCASTINDEX_SECRET=${PODCASTINDEX_SECRET:-}
+
+      # ── Asystentka Kasia ─────────────────────────────────────────────────
+      #
+      # Wszystkie wpisz w panelu Coolify (klucze oznacz jako secret).
+      # Bez nich Media działa jak dotąd: odtwarzacz podkastów, panel Kasi
+      # otwiera się i mówi wprost, czego jej brakuje.
+
+      # Model językowy. Klucz wybiera też dostawcę — sam ANTHROPIC_API_KEY
+      # wystarcza, KASIA_DOSTAWCA jest potrzebne tylko przy Ollamie.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - KASIA_DOSTAWCA=${KASIA_DOSTAWCA:-}
+      - KASIA_MODEL=${KASIA_MODEL:-}
+
+      # Mowa: jeden klucz na czytanie odpowiedzi i dyktowanie. Bez niego mowa
+      # idzie przez przeglądarkę — działa, brzmi gorzej.
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+
+      # Dane z MyCastle: projekty, zadania, kalendarz, waga. Idą przez brokera
+      # MQTT, bo `/files/` w MyCastle udostępnia wyłącznie `data/public`.
+      #
+      # UWAGA na adres: z kontenera `localhost` to sam kontener, nie serwer.
+      # Wpisz adres osiągalny z wewnątrz sieci Dockera — nazwę usługi MyCastle
+      # w tej samej sieci albo adres hosta.
+      - MYCASTLE_MQTT=${MYCASTLE_MQTT:-}
+      - MYCASTLE_USER=${MYCASTLE_USER:-}
+      - MYCASTLE_PASSWORD=${MYCASTLE_PASSWORD:-}
+
+      # Zachowanie. Wchodzą przy pierwszym uruchomieniu; potem rozstrzyga panel,
+      # żeby zmiana w interfejsie przetrwała restart.
+      - KASIA_INICJATYWA_MIN=${KASIA_INICJATYWA_MIN:-}
+      - KASIA_STREFA=${KASIA_STREFA:-Europe/Warsaw}
+
+      # ── Dostęp ───────────────────────────────────────────────────────────
+      #
+      # Hasło do panelu Kasi. **Ustaw je**, jeśli domena jest publiczna: pod
+      # `/api/kasia/*` są Twoje zadania, kalendarz, waga i klucze API do mowy,
+      # a backend sam z siebie nie ma żadnego uwierzytelniania.
+      #
+      # Puste = otwarte dla każdego, kto zna adres. Dopuszczalne wyłącznie
+      # w sieci domowej.
+      - KASIA_HASLO=${KASIA_HASLO:-}
     ports:
       - "1996:1996"
     volumes:

@@ -251,6 +251,72 @@ export class MycastleClient {
   }
 
   /**
+   * Dopisuje zadanie do `data/tasks.json`.
+   *
+   * Odczyt–zmiana–zapis, bo plik jest wspólny z MyCastle i telefonem: nadpisanie
+   * go listą sprzed chwili skasowałoby zadanie dodane w międzyczasie z innego
+   * miejsca. Identyfikator nadajemy sami — `crypto.randomUUID`, tak jak reszta
+   * systemu.
+   */
+  async dopiszZadanie(z: {
+    name: string; dueDate?: string; projectId?: string; description?: string;
+  }): Promise<string> {
+    const plik = (await this.czytajJson<{ type?: string; tasks?: unknown[] }>('data/tasks.json'))
+      ?? { type: 'tasks', tasks: [] };
+
+    const id = randomUUID();
+    const zadanie = {
+      type: 'task',
+      id,
+      projectId: z.projectId ?? '',
+      name: z.name,
+      description: z.description ?? '',
+      duration: 0,
+      components: [],
+      ...(z.dueDate ? { dueDate: z.dueDate } : {}),
+    };
+
+    await this.zapiszJson('data/tasks.json', {
+      ...plik, type: 'tasks', tasks: [...(plik.tasks ?? []), zadanie],
+    });
+    return id;
+  }
+
+  /**
+   * Dopisuje wydarzenie do kalendarza.
+   *
+   * Kalendarz trzyma jeden plik na dzień (`data/calendar/RRRR/MM/DD.json`),
+   * więc dzień wyliczamy z godziny rozpoczęcia. Plik dla dnia bez wydarzeń nie
+   * istnieje — brak jest tu normalnym stanem, nie awarią.
+   */
+  async dopiszWydarzenie(w: {
+    name: string; startTime: string; endTime: string; description?: string;
+  }): Promise<string> {
+    const d = new Date(w.startTime);
+    const sciezka = `data/calendar/${d.getUTCFullYear()}/`
+      + `${String(d.getUTCMonth() + 1).padStart(2, '0')}/`
+      + `${String(d.getUTCDate()).padStart(2, '0')}.json`;
+
+    const plik = (await this.czytajJson<{ type?: string; tasks?: unknown[] }>(sciezka))
+      ?? { type: 'events', tasks: [] };
+
+    const taskId = randomUUID();
+    await this.zapiszJson(sciezka, {
+      ...plik,
+      type: 'events',
+      tasks: [...(plik.tasks ?? []), {
+        type: 'event',
+        taskId,
+        name: w.name,
+        description: w.description ?? '',
+        startTime: w.startTime,
+        endTime: w.endTime,
+      }],
+    });
+    return taskId;
+  }
+
+  /**
    * Pobiera wszystko, czego Kasia potrzebuje do rozmowy o dniu.
    *
    * Odczyty idą **równolegle**, bo są niezależne, a każdy kosztuje obieg przez

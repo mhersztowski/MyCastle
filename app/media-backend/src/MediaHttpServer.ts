@@ -28,6 +28,11 @@ import { KasiaService } from './kasia/KasiaService';
 import { ADRESY_DOMYSLNE, MODELE_DOMYSLNE, utworzModel } from './kasia/llm';
 import { obsluzKasie } from './kasia/trasy';
 import { MycastleClient } from './kasia/MycastleClient';
+import type { RodzajSpotkania } from './kasia/model';
+import {
+  czytajSrodowisko, scalGlosZeSrodowiskiem, type KonfiguracjaSrodowiska,
+} from './kasia/srodowisko';
+import { naglowekWyzwania, sprawdzHaslo } from './kasia/dostep';
 import { obsluzPolecenie } from './kasia/polecenia';
 
 /** Ile czasu trzymamy odpowiedzi katalogu i kanałów, zanim spytamy ponownie. */
@@ -44,7 +49,9 @@ export class MediaHttpServer extends HttpUploadServer {
   private readonly cache = new Map<string, CacheEntry>();
 
   private readonly kasiaStore: KasiaStore;
-  private readonly kluczZeSrodowiska: string;
+  private readonly srodowisko: KonfiguracjaSrodowiska;
+  /** Puste = panel otwarty. Patrz `dostep.ts` — to świadomy tryb, nie luka. */
+  private readonly hasloKasi: string;
   private readonly mycastleClient?: MycastleClient;
   private readonly mycastleUser: string;
   readonly kasia: KasiaService;
@@ -55,7 +62,8 @@ export class MediaHttpServer extends HttpUploadServer {
     dataDir: string,
     staticDir?: string,
     credentials?: PodcastIndexCredentials,
-    kluczModelu?: string,
+    /** Zmienne środowiskowe — jedno wejście dla wszystkich kluczy Kasi. */
+    env: Record<string, string | undefined> = {},
     mycastle?: { broker: string; uzytkownik: string; haslo: string },
   ) {
     super(port, new FileSystem(dataDir), undefined, undefined, undefined, staticDir);
@@ -63,15 +71,43 @@ export class MediaHttpServer extends HttpUploadServer {
     this.credentials = credentials?.key && credentials?.secret ? credentials : undefined;
 
     this.kasiaStore = new KasiaStore(dataDir);
-    this.kluczZeSrodowiska = kluczModelu ?? '';
+    this.srodowisko = czytajSrodowisko(env);
+    this.hasloKasi = (env.KASIA_HASLO ?? '').trim();
     this.mycastleUser = mycastle?.uzytkownik ?? '';
     this.mycastleClient = mycastle?.broker
       ? new MycastleClient({ broker: mycastle.broker, uzytkownik: mycastle.uzytkownik, haslo: mycastle.haslo })
       : undefined;
     // Model dostaje właściwą konfigurację w `init()`, po wczytaniu stanu z dysku.
+    /*
+     * Wykonawca narzędzi powstaje tylko wtedy, gdy jest dostęp do MyCastle.
+     *
+     * Bez niego Kasia nie miałaby gdzie zapisać zadania ani wydarzenia —
+     * a narzędzie, które zawsze odmawia, jest gorsze niż jego brak: model
+     * próbowałby go użyć i tłumaczył użytkownikowi niepowodzenia.
+     */
+    const klientMyCastle = this.mycastleClient;
+    const wykonawca = klientMyCastle
+      ? {
+        ustawSpotkanie: (rodzaj: RodzajSpotkania, zmiany: { godzina?: string; wlaczone?: boolean }) =>
+          this.kasia.ustawSpotkanie(rodzaj, zmiany),
+        dopiszZadanie: (z: Parameters<MycastleClient['dopiszZadanie']>[0]) =>
+          klientMyCastle.dopiszZadanie(z),
+        dopiszWydarzenie: (w: Parameters<MycastleClient['dopiszWydarzenie']>[0]) =>
+          klientMyCastle.dopiszWydarzenie(w),
+        zapiszWage: (kg: number, uwaga?: string) =>
+          this.kasia.zapiszWage({ data: new Date().toISOString().slice(0, 10), kg, uwaga }),
+        projekty: async () => {
+          const p = await klientMyCastle.czytajJson<{ projects?: Array<{ id: string; name: string }> }>(
+            'data/projects.json',
+          );
+          return p?.projects ?? [];
+        },
+      }
+      : undefined;
+
     this.kasia = new KasiaService(this.kasiaStore, utworzModel({
       dostawca: 'anthropic', klucz: '', adres: ADRESY_DOMYSLNE.anthropic, model: MODELE_DOMYSLNE.anthropic,
-    }), this.mycastleClient);
+    }), this.mycastleClient, wykonawca);
   }
 
   /** Wczytuje listę odtwarzania, notatki i stan Kasi; wołane przed `start()`. */
@@ -86,7 +122,32 @@ export class MediaHttpServer extends HttpUploadServer {
      * i nie usunie wpisu w `.env` — a nic w interfejsie by o tym nie mówiło.
      */
     const zapisany = this.kasiaStore.pobierzSekrety().kluczModelu;
-    const klucz = zapisany || this.kluczZeSrodowiska;
+    const klucz = zapisany || this.srodowisko.kluczModelu;
+
+    /*
+     * Dostawca, model, interwał i strefa ze środowiska wchodzą **tylko przy
+     * pierwszym uruchomieniu**, gdy panel jeszcze niczego nie zapisał.
+     * Później są wartościami domyślnymi, nie nadrzędnymi: zmiana w panelu ma
+     * przetrwać restart, a wpis w `.env` nie może jej cofać po każdym starcie.
+     */
+    const stan = this.kasiaStore.pobierz();
+    const swiezyStan = stan.rozmowa.length === 0 && !zapisany;
+    if (swiezyStan) {
+      const zmiany: Record<string, unknown> = {};
+      if (this.srodowisko.dostawca) {
+        zmiany.dostawca = this.srodowisko.dostawca;
+        zmiany.adresModelu = ADRESY_DOMYSLNE[this.srodowisko.dostawca];
+        zmiany.model = this.srodowisko.model ?? MODELE_DOMYSLNE[this.srodowisko.dostawca];
+      } else if (this.srodowisko.model) {
+        zmiany.model = this.srodowisko.model;
+      }
+      if (this.srodowisko.inicjatywaCoMin !== undefined) {
+        zmiany.inicjatywaCoMin = this.srodowisko.inicjatywaCoMin;
+      }
+      if (this.srodowisko.strefaCzasowa) zmiany.strefaCzasowa = this.srodowisko.strefaCzasowa;
+      if (Object.keys(zmiany).length > 0) await this.kasia.zapiszUstawienia(zmiany);
+    }
+
     const u = this.kasiaStore.pobierz().ustawienia;
 
     this.kasia.podmienModel(utworzModel({
@@ -167,6 +228,26 @@ export class MediaHttpServer extends HttpUploadServer {
     return this.mycastleClient?.skonfigurowany ?? false;
   }
 
+  /** Konfiguracja mowy: zapisana w panelu, uzupełniona kluczami ze środowiska. */
+  glosDlaPrzegladarki(): unknown {
+    return scalGlosZeSrodowiskiem(this.kasia.stan().glos, this.srodowisko);
+  }
+
+  /** Czy panel Kasi jest chroniony hasłem. */
+  hasKasiaPassword(): boolean {
+    return this.hasloKasi.length > 0;
+  }
+
+  /** Co Kasia wzięła ze środowiska — do wypisu przy starcie. */
+  opisSrodowiska(): { model: string; elevenlabs: boolean } {
+    return {
+      model: this.srodowisko.dostawca
+        ? `${this.srodowisko.dostawca} (${this.srodowisko.model ?? 'model domyślny'})`
+        : '(brak klucza — panel działa, Kasia milczy)',
+      elevenlabs: Boolean(this.srodowisko.kluczElevenLabs),
+    };
+  }
+
   /** Czy backend ma czym podpisać zapytania do Podcast Index. */
   hasPodcastIndexCredentials(): boolean {
     return Boolean(this.credentials);
@@ -192,6 +273,34 @@ export class MediaHttpServer extends HttpUploadServer {
 
     try {
       if (pathname.startsWith('/api/kasia')) {
+        /*
+         * Hasło chroni **wyłącznie** trasy Kasi.
+         *
+         * Reszta Media (podkasty, kolejka, notatki) zostaje otwarta: nie ma tam
+         * niczego prywatnego, a dokładanie logowania do odtwarzacza byłoby
+         * uciążliwością bez zysku. Pod `/api/kasia/*` jest odwrotnie — zadania,
+         * kalendarz, waga i klucze API do mowy.
+         */
+        const dostep = sprawdzHaslo(this.hasloKasi, req.headers.authorization);
+        if (!dostep.ok) {
+          res.writeHead(401, {
+            'Content-Type': 'application/json; charset=utf-8',
+            // Bez tego nagłówka przeglądarka pokaże surowe 401 zamiast okna hasła.
+            'WWW-Authenticate': naglowekWyzwania(),
+          });
+          res.end(JSON.stringify({ error: 'Panel Kasi wymaga hasła (KASIA_HASLO).' }));
+          return;
+        }
+
+        /*
+         * Odczyt konfiguracji mowy obsługujemy tutaj, a nie w `trasy.ts`:
+         * scalanie z kluczami ze środowiska jest sprawą serwera, bo to on je
+         * czyta. `KasiaService` nie zna `.env` i nie powinien zacząć znać.
+         */
+        if (req.method === 'GET' && pathname === '/api/kasia/glos') {
+          this.sendJsonResponse(res, 200, this.glosDlaPrzegladarki() as Record<string, unknown>);
+          return;
+        }
         await obsluzKasie(req, res, pathname, this.kasia,
           (r, status, dane) => this.sendJsonResponse(r, status, dane as Record<string, unknown>));
         return;

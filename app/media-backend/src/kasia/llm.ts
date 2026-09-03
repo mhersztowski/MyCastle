@@ -24,6 +24,7 @@
  */
 
 import type { WiadomoscKasi } from './model';
+import type { SchematNarzedzia } from './narzedzia';
 
 export type DostawcaModelu = 'anthropic' | 'openai' | 'ollama';
 
@@ -48,16 +49,48 @@ export const MODELE_DOMYSLNE: Record<DostawcaModelu, string> = {
   ollama: 'llama3.2',
 };
 
+/** Prośba modelu o wykonanie narzędzia. */
+export interface WywolanieNarzedzia {
+  /** Identyfikator nadany przez model — po nim wraca wynik. */
+  id: string;
+  nazwa: string;
+  parametry: unknown;
+}
+
+/**
+ * Krok rozmowy widziany przez model.
+ *
+ * Rozszerzenie ponad `WiadomoscKasi`, bo pętla narzędziowa musi przekazać
+ * modelowi jego własne wywołania i ich wyniki. Te kroki **nie trafiają do
+ * trwałej rozmowy** — panel ma pokazywać rozmowę, nie protokół wykonania.
+ */
+export type KrokRozmowy =
+  | { rola: 'user' | 'assistant'; tresc: string }
+  | { rola: 'assistant'; tresc: string; narzedzia: WywolanieNarzedzia[] }
+  | { rola: 'narzedzie'; id: string; nazwa: string; wynik: string };
+
 export interface ZapytanieDoModelu {
   system: string;
   rozmowa: WiadomoscKasi[];
   model: string;
   /** Ile najwyżej tokenów w odpowiedzi. */
   maxTokens?: number;
+  /** Narzędzia udostępnione modelowi; brak = rozmowa bez działania. */
+  narzedzia?: SchematNarzedzia[];
+  /** Kroki dołożone przez pętlę narzędziową — wywołania i ich wyniki. */
+  kroki?: KrokRozmowy[];
+}
+
+export interface OdpowiedzModelu {
+  tekst: string;
+  /** Gdy niepuste, model prosi o wykonanie narzędzi i czeka na wyniki. */
+  narzedzia: WywolanieNarzedzia[];
 }
 
 export interface Model {
   odpowiedz(zapytanie: ZapytanieDoModelu): Promise<string>;
+  /** Wariant z narzędziami. Domyślnie opakowuje `odpowiedz`. */
+  odpowiedzZNarzedziami?(zapytanie: ZapytanieDoModelu): Promise<OdpowiedzModelu>;
   /** Czy model jest skonfigurowany (jest klucz). Panel pokazuje to wprost. */
   gotowy(): boolean;
   /** Co dokładnie brakuje — komunikat dla panelu, nie kod błędu. */
@@ -126,7 +159,44 @@ export class ModelAnthropic implements Model {
   gotowy(): boolean { return this.cfg.klucz.length > 0; }
   czegoBrakuje(): string | null { return this.gotowy() ? null : 'brak klucza API Anthropic'; }
 
-  async odpowiedz({ system, rozmowa, model, maxTokens }: ZapytanieDoModelu): Promise<string> {
+  async odpowiedz(z: ZapytanieDoModelu): Promise<string> {
+    return (await this.odpowiedzZNarzedziami(z)).tekst;
+  }
+
+  /**
+   * Kroki pętli narzędziowej w formacie Anthropic.
+   *
+   * Wywołanie narzędzia jest tu blokiem `tool_use` **wewnątrz** wiadomości
+   * asystenta, a wynik blokiem `tool_result` w wiadomości **użytkownika** —
+   * nie osobną rolą, jak w OpenAI. Stąd dwie różne funkcje mapujące zamiast
+   * jednej wspólnej: podobieństwo obu API kończy się na nazwie pola `tools`.
+   */
+  private static kroki(kroki: KrokRozmowy[]): unknown[] {
+    return kroki.map((k) => {
+      if (k.rola === 'narzedzie') {
+        return {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: k.id, content: k.wynik }],
+        };
+      }
+      if ('narzedzia' in k && k.narzedzia.length > 0) {
+        return {
+          role: 'assistant',
+          content: [
+            ...(k.tresc ? [{ type: 'text', text: k.tresc }] : []),
+            ...k.narzedzia.map((n) => ({
+              type: 'tool_use', id: n.id, name: n.nazwa, input: n.parametry ?? {},
+            })),
+          ],
+        };
+      }
+      return { role: k.rola, content: k.tresc };
+    });
+  }
+
+  async odpowiedzZNarzedziami(
+    { system, rozmowa, model, maxTokens, narzedzia, kroki = [] }: ZapytanieDoModelu,
+  ): Promise<OdpowiedzModelu> {
     if (!this.gotowy()) throw new Error('Brak klucza API Anthropic.');
 
     const res = await fetch(`${this.cfg.adres}/v1/messages`, {
@@ -140,7 +210,8 @@ export class ModelAnthropic implements Model {
         model: model || this.cfg.model,
         max_tokens: maxTokens ?? 1024,
         system,
-        messages: naWiadomosci(rozmowa),
+        messages: [...naWiadomosci(rozmowa), ...ModelAnthropic.kroki(kroki)],
+        ...(narzedzia?.length ? { tools: narzedzia } : {}),
       }),
     });
 
@@ -148,12 +219,17 @@ export class ModelAnthropic implements Model {
       throw new Error(`Anthropic (${res.status}): ${(await res.text()).slice(0, 300)}`);
     }
 
-    const dane = await res.json() as { content?: Array<{ type: string; text?: string }> };
-    return (dane.content ?? [])
-      .filter((c) => c.type === 'text')
-      .map((c) => c.text ?? '')
-      .join('')
-      .trim();
+    const dane = await res.json() as {
+      content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
+    };
+    const bloki = dane.content ?? [];
+
+    return {
+      tekst: bloki.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('').trim(),
+      narzedzia: bloki
+        .filter((c) => c.type === 'tool_use')
+        .map((c) => ({ id: c.id ?? '', nazwa: c.name ?? '', parametry: c.input })),
+    };
   }
 }
 
@@ -176,7 +252,40 @@ export class ModelOpenAiZgodny implements Model {
     return this.gotowy() ? null : `brak klucza API (${this.cfg.dostawca})`;
   }
 
-  async odpowiedz({ system, rozmowa, model, maxTokens }: ZapytanieDoModelu): Promise<string> {
+  async odpowiedz(z: ZapytanieDoModelu): Promise<string> {
+    return (await this.odpowiedzZNarzedziami(z)).tekst;
+  }
+
+  /**
+   * Kroki pętli narzędziowej w formacie OpenAI.
+   *
+   * Tu wynik narzędzia ma **własną rolę** (`tool`), a wywołania siedzą w polu
+   * `tool_calls` wiadomości asystenta, z parametrami jako **napis JSON**, nie
+   * obiekt. Anthropic robi jedno i drugie inaczej — patrz komentarz tam.
+   */
+  private static kroki(kroki: KrokRozmowy[]): unknown[] {
+    return kroki.map((k) => {
+      if (k.rola === 'narzedzie') {
+        return { role: 'tool', tool_call_id: k.id, content: k.wynik };
+      }
+      if ('narzedzia' in k && k.narzedzia.length > 0) {
+        return {
+          role: 'assistant',
+          content: k.tresc || null,
+          tool_calls: k.narzedzia.map((n) => ({
+            id: n.id,
+            type: 'function',
+            function: { name: n.nazwa, arguments: JSON.stringify(n.parametry ?? {}) },
+          })),
+        };
+      }
+      return { role: k.rola, content: k.tresc };
+    });
+  }
+
+  async odpowiedzZNarzedziami(
+    { system, rozmowa, model, maxTokens, narzedzia, kroki = [] }: ZapytanieDoModelu,
+  ): Promise<OdpowiedzModelu> {
     if (!this.gotowy()) throw new Error(`Brak klucza API dla ${this.cfg.dostawca}.`);
 
     const naglowki: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -189,7 +298,19 @@ export class ModelOpenAiZgodny implements Model {
         model: model || this.cfg.model,
         max_tokens: maxTokens ?? 1024,
         // Tutaj prompt systemowy jest zwykłą wiadomością, w odróżnieniu od Anthropic.
-        messages: [{ role: 'system', content: system }, ...naWiadomosci(rozmowa)],
+        messages: [
+          { role: 'system', content: system },
+          ...naWiadomosci(rozmowa),
+          ...ModelOpenAiZgodny.kroki(kroki),
+        ],
+        ...(narzedzia?.length
+          ? {
+            tools: narzedzia.map((n) => ({
+              type: 'function',
+              function: { name: n.name, description: n.description, parameters: n.input_schema },
+            })),
+          }
+          : {}),
       }),
     });
 
@@ -197,8 +318,28 @@ export class ModelOpenAiZgodny implements Model {
       throw new Error(`${this.cfg.dostawca} (${res.status}): ${(await res.text()).slice(0, 300)}`);
     }
 
-    const dane = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-    return (dane.choices?.[0]?.message?.content ?? '').trim();
+    const dane = await res.json() as {
+      choices?: Array<{
+        message?: {
+          content?: string;
+          tool_calls?: Array<{ id: string; function?: { name?: string; arguments?: string } }>;
+        };
+      }>;
+    };
+    const wiadomosc = dane.choices?.[0]?.message;
+
+    return {
+      tekst: (wiadomosc?.content ?? '').trim(),
+      narzedzia: (wiadomosc?.tool_calls ?? []).map((c) => ({
+        id: c.id,
+        nazwa: c.function?.name ?? '',
+        // Parametry przychodzą jako napis; zepsuty JSON traktujemy jak brak
+        // argumentów — walidacja narzędzia i tak odrzuci wywołanie z powodem.
+        parametry: (() => {
+          try { return JSON.parse(c.function?.arguments ?? '{}'); } catch { return {}; }
+        })(),
+      })),
+    };
   }
 }
 

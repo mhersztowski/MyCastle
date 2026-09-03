@@ -23,7 +23,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 const server = new MediaHttpServer(port, dataDir, staticDir, {
   key: process.env.PODCASTINDEX_KEY ?? '',
   secret: process.env.PODCASTINDEX_SECRET ?? '',
-}, process.env.ANTHROPIC_API_KEY, {
+}, process.env, {
   // Broker MyCastle — stamtąd Kasia bierze projekty, zadania i kalendarz.
   // Nie REST: `/files/` w MyCastle udostępnia wyłącznie `data/public`, a dane
   // PIM leżą poza nim i chodzą przez VFS po MQTT.
@@ -47,9 +47,14 @@ server.init()
     console.log(`Podcast Index   →  ${server.hasPodcastIndexCredentials()
       ? 'klucze wczytane'
       : '(brak kluczy — szukamy tylko w iTunes)'}`);
-    console.log(`Kasia           →  ${process.env.ANTHROPIC_API_KEY
-      ? 'model gotowy, pętla co minutę'
-      : '(brak ANTHROPIC_API_KEY — panel działa, Kasia milczy)'}`);
+    const s = server.opisSrodowiska();
+    console.log(`Kasia — model   →  ${s.model}`);
+    console.log(`Kasia — głos    →  ${s.elevenlabs
+      ? 'ElevenLabs (klucz z .env, domyślny dla TTS i STT)'
+      : '(brak ELEVENLABS_API_KEY — mowa przez przeglądarkę)'}`);
+    console.log(`Kasia — dostęp  →  ${server.hasKasiaPassword()
+      ? 'chroniony hasłem (KASIA_HASLO)'
+      : '⚠ OTWARTY — ustaw KASIA_HASLO, jeśli adres jest publiczny'}`);
     console.log(`Dane MyCastle   →  ${server.hasMycastleAccess()
       ? `${process.env.MYCASTLE_MQTT} jako ${process.env.MYCASTLE_USER}`
       : '(brak MYCASTLE_MQTT — Kasia nie zna projektów ani kalendarza)'}`);
