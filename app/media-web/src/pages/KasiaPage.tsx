@@ -27,11 +27,16 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import MicIcon from '@mui/icons-material/Mic';
 import HearingIcon from '@mui/icons-material/Hearing';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import EventIcon from '@mui/icons-material/Event';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
+import MonitorWeightIcon from '@mui/icons-material/MonitorWeight';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import BoltIcon from '@mui/icons-material/Bolt';
 import HearingDisabledIcon from '@mui/icons-material/HearingDisabled';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import VolumeOffIcon from '@mui/icons-material/VolumeOff';
 import {
-  api, type RodzajSpotkania, type StanKasi, type TrybDostepnosci,
+  api, type Dzialanie, type RodzajSpotkania, type StanKasi, type TrybDostepnosci,
 } from '../services/api';
 import { KasiaGlosPanel } from './KasiaGlosPanel';
 import { KasiaModelPanel } from './KasiaModelPanel';
@@ -65,6 +70,7 @@ export function KasiaPage() {
   const [wysylanie, setWysylanie] = useState(false);
   /** Odpowiedź w trakcie pisania — znika, gdy trafi do zapisanej rozmowy. */
   const [odpowiedzNaZywo, setOdpowiedzNaZywo] = useState('');
+  const [dzialaniaNaZywo, setDzialaniaNaZywo] = useState<Dzialanie[]>([]);
   const [zakladka, setZakladka] = useState(0);
 
   const dolRozmowy = useRef<HTMLDivElement>(null);
@@ -138,19 +144,23 @@ export function KasiaPage() {
 
     try {
       setOdpowiedzNaZywo('');
+      setDzialaniaNaZywo([]);
       await api.kasiaPowiedzStrumieniem(tresc, {
         // Tekst pojawia się na ekranie w miarę pisania.
         fragment: (f) => setOdpowiedzNaZywo((p) => p + f),
         // Zdania idą do kolejki mowy — pierwsze słychać, nim reszta powstanie.
         zdanie: (z) => { if (mowic) mowa.dopiszDoWypowiedzi(z); },
+        dzialanie: (d) => setDzialaniaNaZywo((p) => [...p, d]),
       });
 
       setOdpowiedzNaZywo('');
+      setDzialaniaNaZywo([]);
       await odswiez();
       // Nasłuch wraca dopiero po ostatnim zdaniu — inaczej usłyszy sam siebie.
       if (mowic) await mowa.poczekajNaKoniecMowy();
     } catch (err) {
       setOdpowiedzNaZywo('');
+      setDzialaniaNaZywo([]);
       setBlad((err as Error).message);
       if (!trescZGlosu) setTekst(tresc);   // nie gubimy tego, co wpisano ręcznie
     } finally {
@@ -302,6 +312,7 @@ export function KasiaPage() {
                   />
                 )}
                 <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{w.tresc}</Typography>
+                {w.dzialania && w.dzialania.length > 0 && <Dzialania dzialania={w.dzialania} />}
                 <Typography variant="caption" sx={{ opacity: 0.6 }}>
                   {godzinaZnacznika(w.o)}
                 </Typography>
@@ -311,7 +322,7 @@ export function KasiaPage() {
         )}
         {/* Odpowiedź w trakcie powstawania — ten sam wygląd co gotowe wypowiedzi,
             żeby nie „przeskakiwała" po zapisaniu w rozmowie. */}
-        {odpowiedzNaZywo && (
+        {(odpowiedzNaZywo || dzialaniaNaZywo.length > 0) && (
           <Box
             sx={{
               alignSelf: 'flex-start', maxWidth: '85%', mt: 1.5,
@@ -321,6 +332,9 @@ export function KasiaPage() {
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
               {odpowiedzNaZywo}
             </Typography>
+            {/* Działania pokazujemy natychmiast — zmiana w kalendarzu ma być
+                widoczna w chwili, gdy zachodzi, nie po skończeniu wypowiedzi. */}
+            <Dzialania dzialania={dzialaniaNaZywo} />
           </Box>
         )}
 
@@ -435,6 +449,52 @@ export function KasiaPage() {
       </Stack>
       )}
     </Box>
+  );
+}
+
+/**
+ * Ślad po tym, co Kasia **zrobiła**.
+ *
+ * Wyróżnione, bo to jedyna różnica, która naprawdę się liczy: zdanie
+ * „ustawiłam na 8:15" wygląda tak samo, gdy Kasia coś zmieniła, i gdy tylko tak
+ * napisała. Przez długi czas to drugie zdarzało się naprawdę — model obiecywał,
+ * nie wywołując narzędzia. Teraz zmiana ma widoczny dowód.
+ *
+ * Ikona zależy od rodzaju działania, żeby dało się je rozpoznać, nie czytając:
+ * kalendarz, zadanie, waga i godzina spotkania to cztery różne rzeczy, których
+ * szuka się w rozmowie osobno.
+ */
+const IKONA_DZIALANIA: Record<string, JSX.Element> = {
+  dopisz_wydarzenie: <EventIcon fontSize="small" />,
+  dopisz_zadanie: <TaskAltIcon fontSize="small" />,
+  zapisz_wage: <MonitorWeightIcon fontSize="small" />,
+  ustaw_godzine_spotkania: <ScheduleIcon fontSize="small" />,
+};
+
+function Dzialania({ dzialania }: { dzialania: Dzialanie[] }) {
+  if (dzialania.length === 0) return null;
+
+  return (
+    <Stack spacing={0.5} sx={{ mt: 1 }}>
+      {dzialania.map((d, i) => (
+        <Stack
+          key={`${d.o}-${i}`}
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
+          sx={{
+            // Zielona krawędź od strony tekstu — czytelna także dla kogoś, kto
+            // nie odróżnia odcieni; sam kolor tła by nie wystarczył.
+            borderLeft: 3, borderColor: 'success.main',
+            bgcolor: 'success.main', color: 'success.contrastText',
+            opacity: 0.92, px: 1, py: 0.5, borderRadius: 1,
+          }}
+        >
+          {IKONA_DZIALANIA[d.rodzaj] ?? <BoltIcon fontSize="small" />}
+          <Typography variant="caption" sx={{ fontWeight: 500 }}>{d.opis}</Typography>
+        </Stack>
+      ))}
+    </Stack>
   );
 }
 

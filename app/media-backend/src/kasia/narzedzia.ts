@@ -53,6 +53,11 @@ export interface WynikNarzedzia {
   tresc: string;
 }
 
+/** Rodzaje działań, które front rozpoznaje po ikonie. */
+export const RODZAJE_DZIALAN = [
+  'ustaw_godzine_spotkania', 'dopisz_zadanie', 'dopisz_wydarzenie', 'zapisz_wage',
+] as const;
+
 const GODZINA = /^([01]?\d|2[0-3]):[0-5]\d$/;
 const DATA = /^\d{4}-\d{2}-\d{2}$/;
 const DOBA = 24 * 3600_000;

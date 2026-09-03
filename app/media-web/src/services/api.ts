@@ -105,12 +105,21 @@ export interface FragmentPromptu {
   wygasaO?: number;
 }
 
+/** Coś, co Kasia wykonała — a nie tylko powiedziała, że wykona. */
+export interface Dzialanie {
+  /** Nazwa narzędzia; front dobiera po niej ikonę. */
+  rodzaj: string;
+  opis: string;
+  o: number;
+}
+
 export interface WiadomoscKasi {
   id: string;
   rola: 'user' | 'assistant' | 'system';
   tresc: string;
   o: number;
   zInicjatywy?: boolean;
+  dzialania?: Dzialanie[];
 }
 
 export type DostawcaModelu = 'anthropic' | 'openai' | 'ollama';
@@ -214,7 +223,12 @@ export const api = {
    */
   kasiaPowiedzStrumieniem: async (
     tekst: string,
-    na: { fragment(t: string): void; zdanie(z: string): void },
+    na: {
+      fragment(t: string): void;
+      zdanie(z: string): void;
+      /** Kasia coś wykonała — pokazujemy to od razu, nie po zakończeniu. */
+      dzialanie?(d: Dzialanie): void;
+    },
   ): Promise<string> => {
     const res = await fetch('/api/kasia/powiedz/stream', {
       method: 'POST',
@@ -247,11 +261,14 @@ export const api = {
         const linia = czesc.split('\n').find((l) => l.startsWith('data:'));
         if (!linia) continue;
         try {
-          const z = JSON.parse(linia.slice(5).trim()) as
-            { t?: string; z?: string; koniec?: boolean; tekst?: string; blad?: string };
+          const z = JSON.parse(linia.slice(5).trim()) as {
+            t?: string; z?: string; a?: Dzialanie;
+            koniec?: boolean; tekst?: string; blad?: string;
+          };
           if (z.blad) throw new Error(z.blad);
           if (z.t) na.fragment(z.t);
           if (z.z) na.zdanie(z.z);
+          if (z.a) na.dzialanie?.(z.a);
           if (z.koniec) pelna = z.tekst ?? pelna;
         } catch (err) {
           if (err instanceof Error && err.message && !err.message.startsWith('Unexpected')) throw err;

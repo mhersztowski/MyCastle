@@ -235,6 +235,7 @@ export class MediaHttpServer extends HttpUploadServer {
    * Format zdarzeń jest własny i możliwie prosty:
    *   `{"t":"…"}`      — kolejny fragment tekstu, do pokazania na bieżąco
    *   `{"z":"…"}`      — **kompletne zdanie**, do wypowiedzenia
+   *   `{"a":{…}}`      — Kasia coś **wykonała** (zmiana kalendarza, zadanie, waga)
    *   `{"koniec":true, "tekst":"…"}` — całość, do zapisania w widoku
    *   `{"blad":"…"}`   — coś poszło nie tak
    *
@@ -288,7 +289,7 @@ export class MediaHttpServer extends HttpUploadServer {
           bufor = reszta;
           for (const z of zdania) wyslij({ z });
         },
-      });
+      }, Date.now(), (d) => wyslij({ a: d }));
 
       // Ostatnie zdanie zwykle nie ma po sobie nowej linii — domykamy je tutaj.
       const { zdania } = tnijNaZdania(bufor, true);

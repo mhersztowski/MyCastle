@@ -125,6 +125,22 @@ export interface FragmentPromptu {
   wygasaO?: number;
 }
 
+/**
+ * Coś, co Kasia **zrobiła**, a nie tylko powiedziała.
+ *
+ * Do tej pory wykonanie narzędzia znikało bez śladu: w rozmowie zostawało samo
+ * zdanie („ustawiłam na 8:15"), nie do odróżnienia od zdania, które model
+ * napisał, nie wywoławszy niczego. A to jest różnica, na której zależy
+ * najbardziej — bo tylko w pierwszym przypadku coś naprawdę się zmieniło.
+ */
+export interface Dzialanie {
+  /** Nazwa narzędzia — front dobiera po niej ikonę. */
+  rodzaj: string;
+  /** Zdanie do pokazania, np. „Dopisano zadanie „Umyć okna" na jutro". */
+  opis: string;
+  o: number;
+}
+
 export interface WiadomoscKasi {
   id: string;
   rola: 'user' | 'assistant' | 'system';
@@ -136,6 +152,8 @@ export interface WiadomoscKasi {
    * zadał pytanie, którego nie zadał.
    */
   zInicjatywy?: boolean;
+  /** Co Kasia wykonała, formułując tę wypowiedź. */
+  dzialania?: Dzialanie[];
 }
 
 export interface UstawieniaKasi {

@@ -34,7 +34,7 @@ import {
 const DOSTAWCY: readonly DostawcaModelu[] = ['anthropic', 'openai', 'ollama'];
 import {
   BladZadania,
-  MILCZENIE, type FragmentPromptu, type RodzajSpotkania, type Spotkanie,
+  MILCZENIE, type Dzialanie, type FragmentPromptu, type RodzajSpotkania, type Spotkanie,
   type StanKasi, type TrybDostepnosci, type UstawieniaKasi, type WiadomoscKasi,
 } from './model';
 import { czyMoznaZaczepic, ustawDostepnosc as nowaDostepnosc } from './dostepnosc';
@@ -213,7 +213,9 @@ export class KasiaService {
     strefa: string,
     /** Nasłuch fragmentów — gdy podany, odpowiedź idzie strumieniem. */
     nasluch?: NasluchStrumienia,
-  ): Promise<{ tekst: string; wykonano: string[] }> {
+    /** Wołane zaraz po każdym udanym działaniu — strumień pokazuje je od razu. */
+    naDzialanie?: (d: Dzialanie) => void,
+  ): Promise<{ tekst: string; wykonano: Dzialanie[] }> {
     const wykonawca = this.narzedzia;
     const zNarzedziami = this.model.odpowiedzZNarzedziami?.bind(this.model);
     const strumieniem = this.model.odpowiedzStrumieniem?.bind(this.model);
@@ -228,7 +230,7 @@ export class KasiaService {
     }
 
     const kroki: KrokRozmowy[] = [];
-    const wykonano: string[] = [];
+    const wykonano: Dzialanie[] = [];
 
     for (let runda = 0; runda < LIMIT_RUND_NARZEDZI; runda += 1) {
       const pytanie = { ...zapytanie, narzedzia: schematyDlaModelu(), kroki };
@@ -254,7 +256,11 @@ export class KasiaService {
 
       for (const w of odp.narzedzia) {
         const wynik = await wykonajNarzedzie(w.nazwa, w.parametry, wykonawca, teraz, strefa);
-        if (wynik.ok) wykonano.push(wynik.tresc);
+        if (wynik.ok) {
+          const dzialanie: Dzialanie = { rodzaj: w.nazwa, opis: wynik.tresc, o: teraz };
+          wykonano.push(dzialanie);
+          naDzialanie?.(dzialanie);
+        }
         kroki.push({ rola: 'narzedzie', id: w.id, nazwa: w.nazwa, wynik: wynik.tresc });
       }
     }
@@ -265,7 +271,7 @@ export class KasiaService {
      */
     return {
       tekst: wykonano.length > 0
-        ? wykonano.join(' ')
+        ? wykonano.map((d) => d.opis).join(' ')
         : 'Nie udało mi się dokończyć tej odpowiedzi — spróbuj jeszcze raz.',
       wykonano,
     };
@@ -302,7 +308,10 @@ export class KasiaService {
     if (wykonano.length > 0) this.buforDanych = null;
 
     await this.store.zmien((s) => {
-      s.rozmowa.push({ id: id(), rola: 'assistant', tresc: odpowiedz, o: teraz });
+      s.rozmowa.push({
+        id: id(), rola: 'assistant', tresc: odpowiedz, o: teraz,
+        ...(wykonano.length > 0 ? { dzialania: wykonano } : {}),
+      });
       /*
        * Odezwanie się użytkownika zamyka oczekujące przypomnienia.
        *
@@ -327,6 +336,7 @@ export class KasiaService {
     tekstUzytkownika: string,
     nasluch: NasluchStrumienia,
     teraz: number = Date.now(),
+    naDzialanie?: (d: Dzialanie) => void,
   ): Promise<string> {
     await this.store.zmien((s) => {
       s.rozmowa.push({ id: id(), rola: 'user', tresc: tekstUzytkownika, o: teraz });
@@ -340,12 +350,15 @@ export class KasiaService {
       system: this.system(stan, 'init', teraz),
       rozmowa: stan.rozmowa.slice(-OKNO_ROZMOWY),
       model: stan.ustawienia.model,
-    }, teraz, stan.ustawienia.strefaCzasowa, nasluch);
+    }, teraz, stan.ustawienia.strefaCzasowa, nasluch, naDzialanie);
 
     if (wykonano.length > 0) this.buforDanych = null;
 
     await this.store.zmien((s) => {
-      s.rozmowa.push({ id: id(), rola: 'assistant', tresc: tekst, o: teraz });
+      s.rozmowa.push({
+        id: id(), rola: 'assistant', tresc: tekst, o: teraz,
+        ...(wykonano.length > 0 ? { dzialania: wykonano } : {}),
+      });
       for (const p of s.przypomnienia) if (p.stan === 'oczekuje') p.stan = 'odbyte';
     });
 
