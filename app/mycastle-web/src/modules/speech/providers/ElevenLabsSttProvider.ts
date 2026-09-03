@@ -27,7 +27,12 @@ export class ElevenLabsSttProvider implements SttProvider {
     const language = request.language || config.language as string;
 
     const formData = new FormData();
-    formData.append('file', request.audio, 'audio.webm');
+    // Rozszerzenie zgodne z faktycznym typem — część usług ufa nazwie
+    // bardziej niż zawartości.
+    const typ = request.audio.type || 'audio/webm';
+    const rozszerzenie = typ.includes('mp4') ? 'mp4'
+      : typ.includes('ogg') ? 'ogg' : typ.includes('wav') ? 'wav' : 'webm';
+    formData.append('file', request.audio, `audio.${rozszerzenie}`);
     formData.append('model_id', modelId);
     if (language) {
       formData.append('language_code', language);

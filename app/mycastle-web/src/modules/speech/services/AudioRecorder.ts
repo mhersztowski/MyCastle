@@ -43,14 +43,27 @@ export class AudioRecorder {
   async start(silenceOptions?: SilenceDetectionOptions, deviceId?: string, inputGain = 1): Promise<void> {
     if (this._isRecording) return;
 
-    const audioConstraints: MediaTrackConstraints | boolean = deviceId
-      ? { deviceId: { exact: deviceId } }
-      : true;
+    /*
+     * Przetwarzanie mikrofonu włączamy jawnie — `audio: true` zostawia je
+     * ustawieniom sterownika, które na Androidzie bywają wyłączone. Skutkiem
+     * jest ciche nagranie z echem z głośnika i szumem pokoju, na którym
+     * rozpoznawanie zaczyna zgadywać.
+     */
+    const audioConstraints: MediaTrackConstraints = {
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+      sampleRate: 16000,
+    };
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm';
+    // WebView i starsze Androidy potrafią wspierać wyłącznie `audio/mp4`;
+    // `MediaRecorder` z nieobsługiwanym typem rzuca przy tworzeniu.
+    const mimeType = [
+      'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus',
+    ].find((typ) => MediaRecorder.isTypeSupported(typ)) ?? '';
 
     // Wzmocnienie sygnału: routujemy mikrofon przez GainNode i nagrywamy wzmocniony strumień.
     // Detekcja ciszy działa dalej na surowym `this.stream`.
@@ -68,7 +81,9 @@ export class AudioRecorder {
       } catch { recordStream = this.stream; }
     }
 
-    this.mediaRecorder = new MediaRecorder(recordStream, { mimeType });
+    this.mediaRecorder = mimeType
+      ? new MediaRecorder(recordStream, { mimeType })
+      : new MediaRecorder(recordStream);
     this.chunks = [];
 
     this.mediaRecorder.ondataavailable = (e) => {

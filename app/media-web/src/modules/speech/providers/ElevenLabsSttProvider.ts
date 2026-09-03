@@ -31,8 +31,21 @@ export class ElevenLabsSttProvider implements SttProvider {
     const modelId = zadany.replace(/_realtime$/, '');
     const language = request.language || config.language as string;
 
+    /*
+     * Rozszerzenie pliku dobieramy do faktycznego typu nagrania.
+     *
+     * Wysyłaliśmy zawsze `audio.webm`, także gdy `MediaRecorder` nagrał w mp4
+     * albo ogg — a wtedy API dostaje plik, którego nazwa kłóci się z treścią.
+     * Część usług ufa nazwie bardziej niż zawartości.
+     */
+    const typ = request.audio.type || 'audio/webm';
+    const rozszerzenie = typ.includes('mp4') ? 'mp4'
+      : typ.includes('ogg') ? 'ogg'
+        : typ.includes('wav') ? 'wav'
+          : 'webm';
+
     const formData = new FormData();
-    formData.append('file', request.audio, 'audio.webm');
+    formData.append('file', request.audio, `audio.${rozszerzenie}`);
     formData.append('model_id', modelId);
     if (language) {
       formData.append('language_code', language);

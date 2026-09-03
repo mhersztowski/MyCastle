@@ -346,9 +346,19 @@ export function useMowa(onWypowiedz?: (tekst: string) => void): Mowa {
              */
           })();
         },
+        /*
+         * Półtorej sekundy ciszy kończy nagranie, ale najpierw musi minąć
+         * sekunda mówienia. Krótszy próg ucinał zdania w chwili namysłu —
+         * a przy dyktowaniu z drugiego końca pokoju pauzy są dłuższe niż przy
+         * mikrofonie pod brodą.
+         */
         duration: 1500,
-        minRecordingTime: 800,
-      });
+        minRecordingTime: 1000,
+      },
+      // Urządzenie i wzmocnienie z ustawień panelu — dotąd nie były
+      // przekazywane wcale, więc suwak „wzmocnienie mikrofonu" nic nie robił.
+      undefined,
+      konfiguracja.stt.inputGain ?? 1);
 
       setStan((s) => ({ ...s, nagrywa: true, mowi: false, blad: null }));
     } catch (err) {
@@ -380,7 +390,7 @@ export function useMowa(onWypowiedz?: (tekst: string) => void): Mowa {
 
     try {
       recorder.current = new AudioRecorder();
-      await recorder.current.start();
+      await recorder.current.start(undefined, undefined, konfiguracja.stt.inputGain ?? 1);
       setStan((s) => ({ ...s, nagrywa: true, mowi: false, blad: null }));
       return '';
     } catch (err) {
@@ -394,7 +404,9 @@ export function useMowa(onWypowiedz?: (tekst: string) => void): Mowa {
       }));
       return '';
     }
-  }, []);
+    // `konfiguracja` w zależnościach: bez niej hak trzymałby wartość sprzed
+    // wczytania ustawień i suwak wzmocnienia nie działałby przy dyktowaniu.
+  }, [dostep.ok, dostep.powod, konfiguracja]);
 
   const zakonczNagrywanie = useCallback(async (): Promise<string> => {
     if (!recorder.current) return '';
