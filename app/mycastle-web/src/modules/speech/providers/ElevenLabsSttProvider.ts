@@ -1,7 +1,15 @@
 /**
  * ElevenLabs STT Provider - Speech-to-Text via ElevenLabs Scribe API
  * POST /v1/speech-to-text z FormData -> { text }
- * Domyślny model: scribe_v2_realtime
+ * Domyślny model: scribe_v2
+ *
+ * **Nie `scribe_v2_realtime`** — ta nazwa istnieje wyłącznie po stronie
+ * strumienia (`/v1/single-use-token/realtime_scribe`), a REST odpowiada na nią
+ * błędem 400: „'scribe_v2_realtime' is not a valid model_id. Available models:
+ * 'scribe_v1', 'scribe_v1_experimental', 'scribe_v2'".
+ *
+ * Konfiguracja trzyma jedną nazwę dla obu dróg, więc odmianę strumieniową
+ * sprowadzamy tu do zwykłej.
  */
 
 import { SttProvider } from './SttProvider';
@@ -13,7 +21,9 @@ export class ElevenLabsSttProvider implements SttProvider {
     if (!apiKey) {
       throw new Error('ElevenLabs STT: brak klucza API');
     }
-    const modelId = request.model || config.model as string || 'scribe_v2_realtime';
+    const zadany = request.model || (config.model as string) || 'scribe_v2';
+    // `…_realtime` to nazwa dla strumienia; REST zna tylko wersję bez sufiksu.
+    const modelId = zadany.replace(/_realtime$/, '');
     const language = request.language || config.language as string;
 
     const formData = new FormData();
