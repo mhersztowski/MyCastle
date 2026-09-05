@@ -33,6 +33,8 @@ import TuneIcon from '@mui/icons-material/Tune';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderZipIcon from '@mui/icons-material/FolderZip';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import ArticleIcon from '@mui/icons-material/Article';
 import { useLayoutChrome } from '../../components/Layout';
 import { AccountMenu } from '../../components/AccountMenu';
@@ -105,7 +107,7 @@ import type { SearchMatch, SearchFileResult, SearchProgress } from './driveSearc
 // MJD editor — lazy-loaded so the (sizeable) editor bundle isn't pulled in
 // until the user actually opens a .mjd / .data.json file. RemoteFS is the
 // VFS adapter MjdVfsLoader expects.
-import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin } from '@mhersztowski/texteditor';
+import { MjdVfsLoader, GlobalJsonLoader, AgentPanel, SubpathFS, TextEditorWorkspace, DEFAULT_AGENT_CONFIG, createCommentToolsPlugin, createVfsUmlProjectSource } from '@mhersztowski/texteditor';
 import { createHydraStudioPlugin } from '@mhersztowski/hydra-studio';
 import { runHydraBuild } from './hydraBuild';
 import { collectHydraFirmware } from './hydraFlash';
@@ -126,6 +128,202 @@ import { minisApi } from '../../services/MinisApiService';
 interface VfsEntry { name: string; type: 1 | 2; size?: number; mtime?: number }
 const FILE_TYPE = 1;
 const DIR_TYPE = 2;
+
+/**
+ * Skrypty, które zwykle nasłuchują i mają żyć dalej.
+ *
+ * Rozstrzygamy nazwą, bo to jedyna wskazówka dostępna **przed** uruchomieniem.
+ * Pomyłka w tę stronę kosztuje jedno kliknięcie (zatrzymanie), a w drugą —
+ * serwer deweloperski umierający razem z zamknięciem panelu konsoli.
+ */
+const LONG_RUNNING_SCRIPTS = /^(dev|start|serve|watch|preview)(:|$)|:(dev|watch)$/i;
+
+/** Odpowiedź `GET /nodejs/scripts` — wszystko, co serwer wie o projekcie npm. */
+interface NpmProjectInfo {
+  hasPackageJson: boolean;
+  name?: string;
+  scripts?: Record<string, string>;
+  hasNodeModules?: boolean;
+  packageManager?: { id: string; detected: boolean; lockfile: string | null };
+  install?: { command: string; args: string[]; note?: string };
+  envKeys?: string[];
+  /** Ostrzeżenie o wersji Node — `null`, gdy wszystko się zgadza. */
+  nodeWarning?: string | null;
+  processes?: NpmProcess[];
+  error?: string;
+}
+
+/** Skrypt npm działający w tle. */
+interface NpmProcess {
+  key: string;
+  script: string;
+  running: boolean;
+  /** Adres serwera wyłuskany z logu; `null`, dopóki się nie pojawi. */
+  url: string | null;
+  startedAt: number;
+  exitCode: number | null;
+}
+
+/**
+ * Pozycje menu dla projektu npm — instalacja, skrypty, adres serwera, ostrzeżenia.
+ *
+ * Jedna definicja dla dwóch miejsc: menu kontekstowego pliku `package.json`
+ * i przycisku w pasku panelu podglądu. Dwie kopie tego samego menu rozjechałyby
+ * się przy pierwszej zmianie, a użytkownik zobaczyłby inny zestaw akcji
+ * zależnie od tego, skąd je otworzył.
+ *
+ * Zwraca **tablicę** elementów, a nie komponent: `Menu` z MUI przegląda swoje
+ * dzieci przy obsłudze klawiatury i ostrzega, gdy dostanie fragment. Tablica
+ * jest dla niego tym samym co elementy wypisane wprost.
+ */
+function npmMenuItems(opts: {
+  project: NpmProjectInfo | null;
+  scripts: Record<string, string>;
+  hasNodeModules: boolean;
+  expanded: boolean;
+  onToggleExpand(): void;
+  onInstall(): void;
+  onRun(script: string): void;
+  onStartBackground(script: string): void;
+  onStop(key: string): void;
+}): React.ReactNode[] {
+  const items: React.ReactNode[] = [];
+  const running = opts.project?.processes?.filter((p) => p.running) ?? [];
+
+  items.push(
+    <MenuItem key="npm-install" onClick={opts.onInstall}>
+      <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
+      <ListItemText
+        primary="npm install"
+        secondary={opts.hasNodeModules
+          ? 'Odśwież zależności (node_modules już są)'
+          : 'Zależności dla tego katalogu (node_modules)'}
+      />
+    </MenuItem>,
+  );
+
+  const names = Object.keys(opts.scripts);
+  if (names.length > 0) {
+    /*
+     * Skrypty jako podmenu rozwijane **w miejscu**, a nie w osobnym oknie
+     * `Menu`: zagnieżdżone menu MUI zamyka się razem z rodzicem przy pierwszym
+     * ruchu myszy poza pozycję, więc trafienie w skrypt bywa loterią.
+     */
+    items.push(
+      <MenuItem key="npm-run" onClick={opts.onToggleExpand}>
+        <ListItemIcon><PlayArrowIcon fontSize="small" sx={{ color: 'success.main' }} /></ListItemIcon>
+        <ListItemText primary="npm run" secondary={`${names.length} skryptów w package.json`} />
+        {opts.expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+      </MenuItem>,
+    );
+  }
+
+  if (opts.expanded) {
+    for (const [name, cmd] of Object.entries(opts.scripts)) {
+      const active = running.find((p) => p.script === name);
+      items.push(
+        <MenuItem
+          key={`npm-script-${name}`}
+          sx={{ pl: 4 }}
+          onClick={() => {
+            // Skrypt już działający — kliknięcie go zatrzymuje. Drugie
+            // uruchomienie tego samego serwera i tak walczyłoby o port.
+            if (active) { opts.onStop(active.key); return; }
+            // Skrypty nasłuchujące idą w tło, jednorazowe do konsoli.
+            // Rozstrzyga nazwa, bo to jedyna wskazówka przed uruchomieniem.
+            if (LONG_RUNNING_SCRIPTS.test(name)) opts.onStartBackground(name);
+            else opts.onRun(name);
+          }}
+        >
+          <ListItemIcon>
+            {active
+              ? <StopIcon fontSize="small" sx={{ color: 'error.main' }} />
+              : <PlayArrowIcon fontSize="small" sx={{ opacity: 0.5 }} />}
+          </ListItemIcon>
+          <ListItemText
+            primary={active ? `${name} — zatrzymaj` : name}
+            // Treść skryptu obok nazwy: `build` znaczy co innego w każdym
+            // projekcie, a to ona mówi, co się zaraz uruchomi.
+            secondary={active?.url ? `${active.url} · ${cmd}` : cmd}
+            secondaryTypographyProps={{
+              sx: { fontFamily: 'monospace', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' },
+            }}
+          />
+        </MenuItem>,
+      );
+    }
+
+    /*
+     * Ponowne otwarcie strony działającego serwera.
+     *
+     * Zakładkę z podglądem zamyka się odruchowo, a serwer działa dalej — bez
+     * tej pozycji jedynym powrotem było przepisanie adresu z logu do paska
+     * przeglądarki. Kliknięcie **nie zamyka menu**: po zamknięciu karty wraca
+     * się tu od razu.
+     */
+    for (const proc of running.filter((p) => p.url)) {
+      items.push(
+        <MenuItem
+          key={`npm-open-${proc.key}`}
+          sx={{ pl: 4 }}
+          onClick={() => { window.open(proc.url!, '_blank', 'noopener'); }}
+        >
+          <ListItemIcon><OpenInNewIcon fontSize="small" sx={{ color: 'success.main' }} /></ListItemIcon>
+          <ListItemText
+            primary={`Otwórz stronę — ${proc.script}`}
+            secondary={proc.url}
+            secondaryTypographyProps={{
+              sx: { fontFamily: 'monospace', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' },
+            }}
+          />
+        </MenuItem>,
+      );
+    }
+
+    // Serwer wstał, ale adresu jeszcze nie podał — stan trwający zwykle
+    // sekundę. Bez nazwania go brak pozycji „Otwórz stronę" wygląda na jej
+    // brak w ogóle.
+    if (running.some((p) => !p.url)) {
+      items.push(
+        <MenuItem key="npm-waiting" disabled sx={{ pl: 4 }}>
+          <ListItemIcon><HourglassEmptyIcon fontSize="small" /></ListItemIcon>
+          <ListItemText
+            primary="Czekam na adres serwera…"
+            secondary="skrypt działa, ale nie wypisał jeszcze adresu"
+          />
+        </MenuItem>,
+      );
+    }
+  }
+
+  // Ostrzeżenia projektu: zgadywany menedżer i niezgodna wersja Node. Oba
+  // objawiają się błędem w cudzej bibliotece, więc bez nazwania przyczyny
+  // diagnozuje się je jako usterkę tej biblioteki.
+  const project = opts.project;
+  if (project?.nodeWarning || project?.packageManager) {
+    items.push(
+      <Box key="npm-info" sx={{ px: 2, py: 0.5, maxWidth: 420 }}>
+        {project.packageManager && (
+          <Typography variant="caption" color="text.secondary" display="block">
+            Menedżer: {project.packageManager.id}
+            {project.packageManager.detected
+              ? ` (${project.packageManager.lockfile ?? 'z package.json'})`
+              : ' — zgadywany, brak pliku blokady'}
+            {project.envKeys?.length ? ` · .env: ${project.envKeys.length} zmiennych` : ''}
+          </Typography>
+        )}
+        {project.nodeWarning && (
+          <Typography variant="caption" color="warning.main" display="block">
+            {project.nodeWarning}
+          </Typography>
+        )}
+      </Box>,
+    );
+  }
+
+  return items;
+}
+
 
 // navigator.clipboard is undefined outside a secure context (HTTP on a LAN IP,
 // which is how the app is reached on mobile) — so we fall back to the legacy
@@ -1078,6 +1276,19 @@ export default function DrivePage(): React.JSX.Element {
       }
     },
   }), [userName, token, wasmUpload]);
+
+  /**
+   * Diagramy UML dla edytora bloczkowego.
+   *
+   * Ta sama konfiguracja źródła, której używa MinisLib Graph (tryb „ten serwer"
+   * albo wskazany zdalny) — dzięki temu obie wtyczki widzą te same projekty
+   * i adres serwera podaje się raz.
+   *
+   * `useMemo` bez zależności nie jest ozdobnikiem: nowy obiekt przy każdym
+   * renderze oznaczałby nową wtyczkę Blockly, a więc przeładowanie zestawu
+   * wtyczek edytora przy każdym odświeżeniu strony.
+   */
+  const blocklyUmlSource = useMemo(() => createVfsUmlProjectSource(), []);
 
   const driveExtraPlugins = useMemo(
     () => [
@@ -2691,6 +2902,147 @@ export default function DrivePage(): React.JSX.Element {
     }
   }, [userName, openLogs, resetPanels]);
 
+  /*
+   * Skrypty npm bieżącego katalogu.
+   *
+   * Wczytywane przy wejściu do katalogu, a nie przy otwarciu menu: menu
+   * kontekstowe ma się pojawić od razu z gotową listą. Zapytanie idzie do
+   * serwera, a nie do VFS-a, bo to serwer rozstrzyga, co da się uruchomić —
+   * ta sama funkcja odsiewa nazwy przy listowaniu i przy odpalaniu, więc menu
+   * nie pokazuje pozycji, które zostałyby odrzucone.
+   */
+  const [npmScripts, setNpmScripts] = useState<Record<string, string>>({});
+  // Rozwinięcie podmenu; zerowane przy zamknięciu menu, żeby następne otwarcie
+  // zaczynało się od stanu zwiniętego, a nie od pozostałości po poprzednim.
+  const [npmMenuOpen, setNpmMenuOpen] = useState(false);
+  const [npmHasNodeModules, setNpmHasNodeModules] = useState(false);
+  /** Co serwer wie o projekcie: menedżer, `.env`, wersja Node, procesy w tle. */
+  const [npmProject, setNpmProject] = useState<NpmProjectInfo | null>(null);
+  /** Licznik wymuszający odświeżenie listy procesów po starcie/zatrzymaniu. */
+  const [npmProcVersion, setNpmProcVersion] = useState(0);
+  /**
+   * Kotwica menu npm w pasku panelu podglądu.
+   *
+   * Osobno od `npmMenuOpen` (rozwinięcia podmenu), bo to dwa różne stany:
+   * jeden mówi, czy menu jest otwarte, drugi — czy w nim rozwinięto listę
+   * skryptów.
+   */
+  const [npmBarAnchor, setNpmBarAnchor] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hasPackageJson = entries.some((e) => e.type === FILE_TYPE && e.name === 'package.json');
+    if (!hasPackageJson) { setNpmScripts({}); setNpmHasNodeModules(false); return; }
+    const subpath = cwd ? `drive/${cwd}` : 'drive';
+    fetch(
+      `/api/users/${encodeURIComponent(userName)}/nodejs/scripts?subpath=${encodeURIComponent(subpath)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: NpmProjectInfo | null) => {
+        if (cancelled || !data) return;
+        setNpmScripts(data.scripts ?? {});
+        setNpmHasNodeModules(data.hasNodeModules === true);
+        setNpmProject(data);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNpmScripts({}); setNpmHasNodeModules(false); setNpmProject(null);
+      });
+    return () => { cancelled = true; };
+  }, [entries, cwd, userName, token, npmProcVersion]);
+
+  /**
+   * Procesy npm użytkownika prosto z serwera.
+   *
+   * Osobno od `/nodejs/scripts`, bo to zapytanie idzie w pętli po starcie
+   * i nie ma powodu przy każdej próbie czytać na nowo `package.json`,
+   * pliku blokady i wersji Node.
+   */
+  const fetchNpmProcesses = useCallback(async (): Promise<NpmProcess[] | null> => {
+    try {
+      const res = await fetch(
+        `/api/users/${encodeURIComponent(userName)}/nodejs/processes`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) return null;
+      const data = await res.json() as { processes?: NpmProcess[] };
+      return data.processes ?? null;
+    } catch {
+      return null;
+    }
+  }, [userName, token]);
+
+  /**
+   * Uruchamia skrypt **w tle**.
+   *
+   * Osobno od `runNpmScript`, bo to inny rodzaj zadania: `build` kończy się sam
+   * i wynik chce się przeczytać w konsoli, a `dev` ma żyć dalej i ma dać się
+   * zatrzymać. Zlanie obu w jedno znaczyłoby, że serwer deweloperski umiera
+   * razem z zamknięciem panelu konsoli.
+   */
+  const startNpmBackground = useCallback(async (dirRel: string, script: string) => {
+    const subpath = dirRel ? `drive/${dirRel}` : 'drive';
+    try {
+      const res = await fetch(
+        `/api/users/${encodeURIComponent(userName)}/nodejs/start`
+        + `?subpath=${encodeURIComponent(subpath)}&script=${encodeURIComponent(script)}`,
+        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      const data = await res.json() as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setSnack({ open: true, msg: `Uruchomiono w tle: ${script}`, severity: 'success' });
+    } catch (e) {
+      setSnack({ open: true, msg: (e as Error).message, severity: 'error' });
+      setNpmProcVersion((v) => v + 1);
+      return;
+    }
+
+    /*
+     * Adres serwera pojawia się w logu **po** starcie, nie razem z nim.
+     *
+     * Vite wypisuje „Local: http://…" mniej więcej sekundę po uruchomieniu.
+     * Jednorazowe odświeżenie zaraz po żądaniu trafiało w moment, gdy `url`
+     * był jeszcze pusty — pozycja z odsyłaczem nie pojawiała się nigdy, mimo
+     * że serwer działał. Stąd kilka prób w odstępach, a nie jedna.
+     *
+     * Ograniczone do dziesięciu sekund: skrypt, który przez ten czas nie podał
+     * adresu, najpewniej go nie ma (`build`, `lint`) i dalsze pytanie serwera
+     * niczego by nie zmieniło.
+     */
+    // Pierwsze odświeżenie od razu: proces ma się pokazać jako działający,
+    // nawet jeśli adresu jeszcze nie ma.
+    setNpmProcVersion((v) => v + 1);
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, i === 0 ? 400 : 1200));
+      const found = await fetchNpmProcesses();
+      if (found?.some((proc) => proc.script === script && proc.url)) break;
+    }
+    // Drugie i ostatnie: po znalezieniu adresu albo po wyczerpaniu prób.
+    // Odświeżanie w każdym obrocie pętli oznaczałoby osiem pełnych odczytów
+    // `package.json`, pliku blokady i wersji Node — po nic.
+    setNpmProcVersion((v) => v + 1);
+  }, [userName, token, fetchNpmProcesses]);
+
+  const stopNpmBackground = useCallback(async (key: string) => {
+    try {
+      await fetch(
+        `/api/users/${encodeURIComponent(userName)}/nodejs/stop?key=${encodeURIComponent(key)}`,
+        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      setSnack({ open: true, msg: 'Zatrzymano', severity: 'success' });
+    } catch (e) {
+      setSnack({ open: true, msg: (e as Error).message, severity: 'error' });
+    }
+    setNpmProcVersion((v) => v + 1);
+  }, [userName, token]);
+
+  // Uruchomienie skryptu z package.json bieżącego katalogu.
+  const runNpmScript = useCallback((dirRel: string, script: string) => streamConsole(
+    `/api/users/${encodeURIComponent(userName)}/nodejs/run?subpath=${encodeURIComponent(dirRel ? `drive/${dirRel}` : 'drive')}&script=${encodeURIComponent(script)}`,
+    { rel: `npm run ${script} · ${dirRel || '(drive)'}`, kind: 'install', target: dirRel },
+  ), [streamConsole, userName]);
+
   // Run `npm install` for a drive directory (the one holding package.json).
   // dirRel is relative to the drive root ('' = drive root). Reuses the existing
   // nodejs/run endpoint (subpath relative to the user home → `drive/{dirRel}`).
@@ -3115,6 +3467,7 @@ export default function DrivePage(): React.JSX.Element {
         projectDeps={driveWorkspaceProjectDeps}
         extraPlugins={driveExtraPlugins}
         tsPreloadDts={driveTsPreloadDts}
+        blocklyUmlSource={blocklyUmlSource}
       />
     ) : isImageMime(viewing.mime) ? (
       <Box sx={{ textAlign: 'center', p: 2, height: '100%', overflow: 'auto' }}>
@@ -3633,6 +3986,27 @@ export default function DrivePage(): React.JSX.Element {
                 </IconButton>
               </Tooltip>
             )}
+            {/*
+              Akcje projektu npm dla katalogu, w którym leży otwarty plik.
+
+              Te same, co w menu kontekstowym `package.json`, bo to ten sam
+              projekt. Bez tego przy otwartym edytorze trzeba było zamknąć
+              panel, znaleźć `package.json` na liście i kliknąć go prawym —
+              czyli wyjść z pracy, żeby uruchomić to, nad czym się pracuje.
+            */}
+            {viewing && npmProject?.hasPackageJson && (
+              <Tooltip title={`Projekt npm${npmProject.name ? `: ${npmProject.name}` : ''}`}>
+                <IconButton
+                  size="small"
+                  onClick={(e) => setNpmBarAnchor(e.currentTarget)}
+                  // Zielona kropka, gdy coś działa w tle: inaczej jedynym
+                  // śladem uruchomionego serwera jest pamięć użytkownika.
+                  color={npmProject.processes?.some((p) => p.running) ? 'success' : 'default'}
+                >
+                  <Inventory2OutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             {/* Run the open .js/.ts file in the browser (live editor buffer) +
                 console panel toggle. */}
             {viewing && viewing.textContent !== undefined && isBrowserRunnable(viewing.entry.name) && (
@@ -4072,12 +4446,34 @@ export default function DrivePage(): React.JSX.Element {
       </Box>
 
       {/* Per-entry menu */}
+      {/*
+        Menu npm z paska panelu podglądu — te same pozycje co w menu
+        kontekstowym `package.json`, złożone tą samą funkcją.
+      */}
+      <Menu
+        anchorEl={npmBarAnchor}
+        open={Boolean(npmBarAnchor)}
+        onClose={() => { setNpmBarAnchor(null); setNpmMenuOpen(false); }}
+      >
+        {npmMenuItems({
+          project: npmProject,
+          scripts: npmScripts,
+          hasNodeModules: npmHasNodeModules,
+          expanded: npmMenuOpen,
+          onToggleExpand: () => setNpmMenuOpen((v) => !v),
+          onInstall: () => { void runNpmInstall(cwd); setNpmBarAnchor(null); },
+          onRun: (script) => { void runNpmScript(cwd, script); setNpmBarAnchor(null); },
+          onStartBackground: (script) => { void startNpmBackground(cwd, script); setNpmBarAnchor(null); },
+          onStop: (key) => { void stopNpmBackground(key); setNpmBarAnchor(null); },
+        })}
+      </Menu>
+
       <Menu
         anchorEl={menuFor?.anchor}
         anchorReference={menuFor?.pos ? 'anchorPosition' : 'anchorEl'}
         anchorPosition={menuFor?.pos}
         open={menuFor !== null}
-        onClose={() => setMenuFor(null)}
+        onClose={() => { setMenuFor(null); setNpmMenuOpen(false); }}
       >
         {menuFor && menuFor.entry.type === DIR_TYPE && (
           <MenuItem onClick={() => { const entry = menuFor.entry; setMenuFor(null); onOpen(entry); }}>
@@ -4122,12 +4518,18 @@ export default function DrivePage(): React.JSX.Element {
             <ListItemText primary="Logs" secondary="Wyjście skryptu (Run + cron)" />
           </MenuItem>
         )}
-        {menuFor && menuFor.entry.type === FILE_TYPE && menuFor.entry.name === 'package.json' && (
-          <MenuItem onClick={() => { void runNpmInstall(cwd); setMenuFor(null); }}>
-            <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
-            <ListItemText primary="npm install" secondary="Zależności dla tego katalogu (node_modules)" />
-          </MenuItem>
-        )}
+        {menuFor && menuFor.entry.type === FILE_TYPE && menuFor.entry.name === 'package.json'
+          && npmMenuItems({
+            project: npmProject,
+            scripts: npmScripts,
+            hasNodeModules: npmHasNodeModules,
+            expanded: npmMenuOpen,
+            onToggleExpand: () => setNpmMenuOpen((v) => !v),
+            onInstall: () => { void runNpmInstall(cwd); setMenuFor(null); },
+            onRun: (script) => { void runNpmScript(cwd, script); setMenuFor(null); },
+            onStartBackground: (script) => { void startNpmBackground(cwd, script); setMenuFor(null); },
+            onStop: (key) => { void stopNpmBackground(key); setMenuFor(null); },
+          })}
         {menuFor && (() => {
           const rel = cwd ? `${cwd}/${menuFor.entry.name}` : menuFor.entry.name;
           const isFav = isFavorite(rel);

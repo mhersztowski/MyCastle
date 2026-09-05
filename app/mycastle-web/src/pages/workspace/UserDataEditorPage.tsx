@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CompositeFS, RemoteFS } from '@mhersztowski/core';
 import type { FileSystemProvider } from '@mhersztowski/core';
 import {
-  TextEditorWorkspace, SubpathFS, DEFAULT_AGENT_CONFIG,
+  TextEditorWorkspace, SubpathFS, DEFAULT_AGENT_CONFIG, createVfsUmlProjectSource,
   remoteFsProvider, defaultProviderRegistry,
 } from '@mhersztowski/texteditor';
 import type { VfsProviderDef, VfsMountPreset, AgentConfig } from '@mhersztowski/texteditor';
@@ -212,6 +212,19 @@ export default function UserDataEditorPage() {
     [currentUser, token],
   );
 
+  /**
+   * Diagramy UML dla edytora bloczkowego.
+   *
+   * Ta sama konfiguracja źródła, której używa MinisLib Graph (tryb „ten serwer"
+   * albo wskazany zdalny) — dzięki temu obie wtyczki widzą te same projekty
+   * i adres serwera podaje się raz.
+   *
+   * `useMemo` bez zależności nie jest ozdobnikiem: nowy obiekt przy każdym
+   * renderze oznaczałby nową wtyczkę Blockly, a więc przeładowanie zestawu
+   * wtyczek edytora przy każdym odświeżeniu strony.
+   */
+  const umlProjectSource = useMemo(() => createVfsUmlProjectSource(), []);
+
   return (
     <TextEditorWorkspace
       provider={cfs as FileSystemProvider}
@@ -227,6 +240,7 @@ export default function UserDataEditorPage() {
       terminalApiKeysUrl="https://mycastle.hersztowski.org/user/marcin/tools/api-keys"
       terminalTokenStorageKey={REMOTE_TERMINAL_TOKEN_KEY}
       projectDeps={projectDeps}
+      blocklyUmlSource={umlProjectSource}
     />
   );
 }

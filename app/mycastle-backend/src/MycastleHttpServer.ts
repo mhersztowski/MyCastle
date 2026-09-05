@@ -1,5 +1,10 @@
 import { HttpUploadServer, FileSystem, JwtService, PasswordService, ApiKeyService, checkAuth, ServerApi, ArduinoWasmBuilder } from '@mhersztowski/core-backend';
 import { checkEmbeddable } from './modules/embed/embedCheck.js';
+import { readPackageScripts, resolveNpmRun } from './modules/nodejs/npmScripts';
+import { detectPackageManager, installPlan, runPlan } from './modules/nodejs/packageManager';
+import { mergeProjectEnv, parseDotEnv } from './modules/nodejs/projectEnv';
+import { readRequirement, versionWarning } from './modules/nodejs/nodeVersion';
+import { NpmProcessRegistry } from './modules/nodejs/NpmProcessRegistry';
 import type { ArduinoService, MinisConfig, MicroPythonService, PygameService, PicoSdkService, IotProvider, IotDeviceInfo } from '@mhersztowski/core-backend';
 import { formatWatchPress, parseWatchPress } from './watchPress.js';
 import sharp from 'sharp';
@@ -73,6 +78,12 @@ const DRIVE_MIME: Record<string, string> = {
   '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.json': 'application/json', '.xml': 'application/xml', '.csv': 'text/csv',
   '.txt': 'text/plain', '.md': 'text/markdown',
+  // `WebAssembly.instantiateStreaming` **wymaga** dokładnie tego typu i przy
+  // `application/octet-stream` odmawia. Ładowarka emscriptena wraca wtedy do
+  // wolniejszej drogi przez `ArrayBuffer`, więc moduł zbudowany w Drive działa,
+  // ale startuje dłużej i pisze o tym w konsoli — bez wskazania, że winny jest
+  // nagłówek serwera, a nie sam moduł.
+  '.wasm': 'application/wasm',
   // Common code/text files → text/plain so a download keeps its extension
   // (octet-stream would make Android's downloader append `.bin`).
   '.ts': 'text/plain', '.tsx': 'text/plain', '.jsx': 'text/plain',
@@ -114,6 +125,9 @@ export class MycastleHttpServer extends HttpUploadServer {
   private pluginService: PluginService | null = null;
   private backendPluginService: BackendPluginService | null = null;
   private secretsService: SecretsService | null = null;
+  /** Skrypty npm działające w tle (`npm run dev` i podobne). */
+  private npmProcesses = new NpmProcessRegistry();
+
   private driveScriptScheduler: DriveScriptScheduler | null = null;
   private gitService: GitService | null = null;
   private rootDir: string | null;
@@ -2249,7 +2263,38 @@ export class MycastleHttpServer extends HttpUploadServer {
     const nodejsRunMatch = apiPath.match(/^\/users\/([^/]+)\/nodejs\/run$/);
     if (nodejsRunMatch && method === 'GET') {
       const userName = decodeURIComponent(nodejsRunMatch[1]);
+      // Uruchomienie procesu w cudzym katalogu domowym — ten sam warunek co
+      // przy `drive/run-script` obok. Jego brak oznaczał, że dowolny zalogowany
+      // użytkownik odpalał skrypty w drzewie kogoś innego.
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
       await this.handleNodejsRun(req, res, userName);
+      return;
+    }
+
+    // Node.js: skrypty w tle — start / stop / lista / logi.
+    const nodejsProcMatch = apiPath.match(/^\/users\/([^/]+)\/nodejs\/(start|stop|processes|logs)$/);
+    if (nodejsProcMatch) {
+      const userName = decodeURIComponent(nodejsProcMatch[1]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleNodejsProcess(req, res, userName, nodejsProcMatch[2] as 'start' | 'stop' | 'processes' | 'logs');
+      return;
+    }
+
+    // Node.js: skrypty z package.json (GET /api/users/{userName}/nodejs/scripts?subpath=...)
+    const nodejsScriptsMatch = apiPath.match(/^\/users\/([^/]+)\/nodejs\/scripts$/);
+    if (nodejsScriptsMatch && method === 'GET') {
+      const userName = decodeURIComponent(nodejsScriptsMatch[1]);
+      if (user.userName !== userName && !user.isAdmin) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      await this.handleNodejsScripts(req, res, userName);
       return;
     }
 
@@ -4950,6 +4995,185 @@ const { password, ...safeBody } = body;
 
   // --- Node.js ---
 
+  /**
+   * Skrypty z `package.json` katalogu — do zbudowania podmenu „npm run".
+   *
+   * Osobny punkt zamiast czytania pliku po stronie przeglądarki, bo to serwer
+   * rozstrzyga, co da się uruchomić: ta sama funkcja odsiewa nazwy tutaj
+   * i przy samym uruchomieniu, więc menu nie pokazuje pozycji, które i tak
+   * zostałyby odrzucone.
+   */
+  /**
+   * Wszystko, co serwer wie o katalogu projektu npm.
+   *
+   * Jedno miejsce, bo te same odpowiedzi są potrzebne przy listowaniu skryptów
+   * i przy ich uruchamianiu — a rozjazd między nimi znaczyłby menu pokazujące
+   * co innego, niż się wykona.
+   */
+  private async inspectNodeProject(userName: string, subpath: string): Promise<{
+    dir: string;
+    files: string[];
+    scripts: Record<string, string> | null;
+    packageJson: Record<string, unknown> | null;
+    env: Record<string, string>;
+  } | null> {
+    if (!this.rootDir) return null;
+    const dir = path.resolve(this.rootDir, 'Minis', 'Users', userName, subpath);
+    if (!dir.startsWith(path.resolve(this.rootDir))) return null;
+
+    const fsp = await import('fs/promises');
+    let files: string[] = [];
+    try { files = await fsp.readdir(dir); } catch { return null; }
+
+    let scripts: Record<string, string> | null = null;
+    let packageJson: Record<string, unknown> | null = null;
+    if (files.includes('package.json')) {
+      try {
+        const text = await fsp.readFile(path.join(dir, 'package.json'), 'utf8');
+        scripts = readPackageScripts(text);
+        try { packageJson = JSON.parse(text) as Record<string, unknown>; } catch { packageJson = null; }
+      } catch { scripts = null; }
+    }
+
+    let env: Record<string, string> = {};
+    if (files.includes('.env')) {
+      try { env = parseDotEnv(await fsp.readFile(path.join(dir, '.env'), 'utf8')); } catch { env = {}; }
+    }
+    return { dir, files, scripts, packageJson, env };
+  }
+
+  /** Uruchomienie / zatrzymanie / lista / logi skryptów działających w tle. */
+  /**
+   * Ubija skrypty npm działające w tle.
+   *
+   * Wołane przy zamykaniu backendu. Bez tego `npm run dev` przeżywa restart
+   * serwera i trzyma port — następne uruchomienie kończy się „address already
+   * in use", bez widocznego związku z tym, co użytkownik zrobił.
+   */
+  shutdownNpmProcesses(): void {
+    this.npmProcesses.shutdownAll();
+  }
+
+  private async handleNodejsProcess(
+    req: IncomingMessage, res: ServerResponse, userName: string,
+    action: 'start' | 'stop' | 'processes' | 'logs',
+  ): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+
+    if (action === 'processes') {
+      this.sendJsonResponse(res, 200, { processes: this.npmProcesses.list(userName) });
+      return;
+    }
+
+    if (action === 'logs' || action === 'stop') {
+      const key = url.searchParams.get('key') ?? '';
+      // Klucz niesie nazwę użytkownika — bez sprawdzenia dałoby się zajrzeć
+      // w cudze logi, mimo że sama trasa pilnuje właściciela.
+      if (!key.startsWith(`${userName}:`)) {
+        this.sendJsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (action === 'logs') {
+        const lines = this.npmProcesses.logs(key);
+        if (lines === null) { this.sendJsonResponse(res, 404, { error: 'Nie ma takiego procesu' }); return; }
+        this.sendJsonResponse(res, 200, { info: this.npmProcesses.info(key), lines });
+        return;
+      }
+      const stopped = this.npmProcesses.stop(key);
+      this.sendJsonResponse(res, 200, { stopped });
+      return;
+    }
+
+    // start
+    const subpath = url.searchParams.get('subpath') ?? '';
+    const script = url.searchParams.get('script') ?? '';
+    const project = await this.inspectNodeProject(userName, subpath);
+    if (!project) { this.sendJsonResponse(res, 404, { error: 'Nie ma takiego katalogu' }); return; }
+
+    const plan = resolveNpmRun(script, project.scripts);
+    if (!plan.ok) { this.sendJsonResponse(res, 400, { error: plan.reason }); return; }
+
+    const manager = detectPackageManager(
+      project.files,
+      typeof project.packageJson?.['packageManager'] === 'string'
+        ? project.packageJson['packageManager'] as string : undefined,
+    );
+    const command = script === 'install'
+      ? installPlan(manager.id, manager.hasLockfile)
+      : runPlan(manager.id, script);
+
+    const dirRel = subpath.replace(/^drive\/?/, '');
+    const info = this.npmProcesses.start({
+      user: userName,
+      dir: dirRel,
+      script,
+      cwd: project.dir,
+      command: command.command,
+      args: command.args,
+      env: mergeProjectEnv(process.env, project.env),
+    });
+    this.sendJsonResponse(res, 200, { info, note: command.note ?? null });
+  }
+
+  private async handleNodejsScripts(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const subpath = url.searchParams.get('subpath') ?? '';
+    const project = await this.inspectNodeProject(userName, subpath);
+    if (!project) { this.sendJsonResponse(res, 404, { error: 'Nie ma takiego katalogu' }); return; }
+
+    if (project.scripts === null && !project.files.includes('package.json')) {
+      // Brak pliku to normalny przypadek — katalog po prostu nie jest projektem
+      // npm. Odpowiedź mówi to wprost, zamiast udawać błąd.
+      this.sendJsonResponse(res, 200, { hasPackageJson: false, scripts: {} });
+      return;
+    }
+    if (project.scripts === null) {
+      this.sendJsonResponse(res, 200, {
+        hasPackageJson: true, scripts: {},
+        error: 'package.json nie jest poprawnym JSON-em',
+      });
+      return;
+    }
+
+    const manager = detectPackageManager(
+      project.files,
+      typeof project.packageJson?.['packageManager'] === 'string'
+        ? project.packageJson['packageManager'] as string : undefined,
+    );
+
+    // Ostrzeżenie o wersji Node — nie blokada. Deklaracja `engines` bywa
+    // przesadnie ciasna, a projekt i tak działa.
+    let nvmrc: string | null = null;
+    if (project.files.includes('.nvmrc')) {
+      try {
+        nvmrc = await import('fs/promises').then((m) => m.readFile(path.join(project.dir, '.nvmrc'), 'utf8'));
+      } catch { nvmrc = null; }
+    }
+    const engines = project.packageJson?.['engines'] as Record<string, unknown> | undefined;
+    const nodeWarning = versionWarning(
+      readRequirement(nvmrc, typeof engines?.['node'] === 'string' ? engines['node'] as string : undefined),
+      process.version,
+    );
+
+    // Nazwy odsiane tą samą funkcją co przy uruchamianiu — menu nie pokazuje
+    // pozycji, które serwer i tak by odrzucił.
+    const runnable = Object.fromEntries(
+      Object.entries(project.scripts).filter(([key]) => resolveNpmRun(key, project.scripts).ok),
+    );
+
+    this.sendJsonResponse(res, 200, {
+      hasPackageJson: true,
+      name: typeof project.packageJson?.['name'] === 'string' ? project.packageJson['name'] : undefined,
+      scripts: runnable,
+      hasNodeModules: project.files.includes('node_modules'),
+      packageManager: { id: manager.id, detected: manager.detected, lockfile: manager.hasLockfile ? manager.lockfile : null },
+      install: installPlan(manager.id, manager.hasLockfile),
+      envKeys: Object.keys(project.env).sort(),
+      nodeWarning,
+      processes: this.npmProcesses.list(userName).filter((p) => p.dir === subpath.replace(/^drive\/?/, '')),
+    });
+  }
+
   private async handleNodejsRun(req: IncomingMessage, res: ServerResponse, userName: string): Promise<void> {
     if (!this.rootDir) {
       this.sendJsonResponse(res, 503, { error: 'rootDir not configured' });
@@ -4987,7 +5211,26 @@ const { password, ...safeBody } = body;
       return;
     }
 
-    const args = script === 'install' ? ['install', '--include=dev'] : ['run', script];
+    // Co wolno uruchomić — patrz `modules/nodejs/npmScripts.ts`.
+    const project = await this.inspectNodeProject(userName, subpath);
+    const plan = resolveNpmRun(script, project?.scripts ?? null);
+    if (!plan.ok) {
+      this.sendJsonResponse(res, 400, { error: plan.reason });
+      return;
+    }
+
+    // Menedżer z pliku blokady, a nie npm z założenia: `npm install`
+    // w projekcie pnpm-owym stawia **inne** drzewo zależności niż lockfile,
+    // a objawem bywa błąd w cudzej bibliotece wyglądający na jej usterkę.
+    const manager = detectPackageManager(
+      project?.files ?? [],
+      typeof project?.packageJson?.['packageManager'] === 'string'
+        ? project.packageJson['packageManager'] as string : undefined,
+    );
+    const command = script === 'install'
+      ? installPlan(manager.id, manager.hasLockfile)
+      : runPlan(manager.id, script);
+    const args = command.args;
 
     // Write a temporary .npmrc so npm resolves @mhersztowski/* from GitHub Packages.
     // Environment variable names cannot contain '@' or ':', so npm_config_* injection
@@ -5004,7 +5247,9 @@ const { password, ...safeBody } = body;
       ].join('\n') + '\n');
     }
 
-    const npmArgs = tmpNpmrc ? [...args, `--userconfig=${tmpNpmrc}`] : args;
+    // `--userconfig` rozumie tylko npm; pnpm i yarn mają własne mechanizmy
+    // i dostałyby nieznaną flagę.
+    const npmArgs = tmpNpmrc && manager.id === 'npm' ? [...args, `--userconfig=${tmpNpmrc}`] : args;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -5016,7 +5261,17 @@ const { password, ...safeBody } = body;
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
-    const proc = spawn('npm', npmArgs, { cwd: projectDir, shell: true });
+    if (command.note) sendEvent('output', { chunk: `${command.note}\n` });
+    sendEvent('output', { chunk: `> ${command.command} ${npmArgs.join(' ')}\n` });
+
+    // `shell: false`: argumenty idą do procesu tablicą, więc nazwa skryptu nie
+    // ma jak zostać wykonana jako polecenie powłoki. Przy `shell: true`
+    // `?script=build;%20id` uruchamiało się na serwerze.
+    const proc = spawn(command.command, npmArgs, {
+      cwd: projectDir,
+      shell: false,
+      env: mergeProjectEnv(process.env, project?.env ?? {}),
+    });
 
     proc.stdout.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));
     proc.stderr.on('data', (chunk: Buffer) => sendEvent('output', { chunk: chunk.toString() }));

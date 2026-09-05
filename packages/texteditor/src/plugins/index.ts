@@ -1,4 +1,5 @@
 // Built-in editor plugins for the Monaco multi-editor.
+export * from './blockly';
 export * from './CommentToolsPlugin';
 export * from './CppIntelliSensePlugin';
 export * from './FoldingPlugin';

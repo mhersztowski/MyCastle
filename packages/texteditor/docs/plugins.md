@@ -152,6 +152,25 @@ Punkty, które są: `toolbar`, `statusbar`, `contextmenu`, `commandpalette`,
 
 ---
 
+## 7a. `when` nie jest sprawdzane
+
+Pole `when` jest w typach każdej kontrybucji i **nikt go nie czyta**. Pozycje
+menu kontekstowego host rejestruje jako akcje Monaco bezwarunkowo:
+
+```ts
+editor.getMonacoEditor().addAction({ id: `plugin.cm.${item.id}`, label: item.label, run: … });
+```
+
+**Dlaczego to boli:** wtyczka dla plików `.cpp` pokazuje swoją pozycję także nad
+`README.md`. Jeśli uchwyt polecenia sprawdza typ pliku i po cichu wychodzi,
+użytkownik widzi menu, klika i nie dzieje się nic — a pozycja wygląda na
+zepsutą, nie na niedotyczącą tego pliku.
+
+**Lekarstwo:** odmowa musi **nazywać powód** (patrz §10) i wymieniać, co jest
+obsługiwane. Warunek trzyma się w uchwycie polecenia, nie w `when`.
+
+---
+
 ## 8. Pasek narzędzi: drobiazgi
 
 - `icon` to **napis**: SVG (`<svg…`), znak Unicode albo zwykły tekst.

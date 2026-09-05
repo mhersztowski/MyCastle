@@ -13,13 +13,26 @@
  * a „nie wiem, czy nie zawisło".
  */
 
-import { HydraDocument, buildPlan, emitPlatformio } from '@mhersztowski/hydra-studio/model';
+import { HydraDocument, buildPlan, emitCMake, emitPlatformio } from '@mhersztowski/hydra-studio/model';
+
+import { hydraBuildCommand, type HydraBuildKind } from './hydraBuildCommand';
 
 import { minisApi } from '../../services/MinisApiService';
 import { writeUserFileText } from '../../services/userJson';
 
 /** Katalog Hydry w Drive — z niego bierzemy `docker/hydra.sh`. */
 const HYDRA_ROOT = 'git/MinisProjects/libs/Hydra';
+
+/** Gdzie `hydra.sh project` montuje bibliotekę wewnątrz kontenera. */
+const HYDRA_PATH_IN_CONTAINER = '/hydra/Hydra';
+
+/**
+ * Obraz z emscriptenem.
+ *
+ * Osobny od obrazu z toolchainami PlatformIO — emscripten waży swoje i projekt
+ * na ESP32 nie ma powodu go pobierać. `hydra.sh` wybiera obraz zmienną.
+ */
+const WASM_IMAGE = 'mycastle-hydra-wasm:local';
 
 export interface HydraBuildRequest {
     /** Ścieżka pliku `.hydra` w przestrzeni Drive. */
@@ -78,7 +91,41 @@ async function writeGeneratedManifest(
     // Ścieżka względna do VFS: bez wiodącego `/user/`.
     const relative = driveFile.replace(/^\/user\//, '').replace(/[^/]+$/, 'platformio.ini');
     await writeUserFileText(userName, relative, ini);
-    onLine(`Wygenerowano platformio.ini (${plan.targets.length} środowisk).`);
+    // Liczymy środowiska, a nie cele: cele budowane CMake'em świadomie nie mają
+    // wpisu w tym pliku i podanie ich liczby sugerowałoby, że coś zginęło.
+    const environments = plan.targets.filter((target) => !target.usesCMake).length;
+    onLine(`Wygenerowano platformio.ini (${environments} środowisk).`);
+}
+
+/**
+ * Plik budowy celu przeglądarkowego.
+ *
+ * Presetów nie ma czego opisywać — preset mówi, dla której maszyny budujemy,
+ * a `.wasm` jest jeden i chodzi wszędzie.
+ */
+async function writeWasmManifest(
+    driveFile: string,
+    plan: ReturnType<typeof buildPlan>,
+    userName: string,
+    onLine: (line: string) => void,
+): Promise<void> {
+    const relative = driveFile.replace(/^\/user\//, '').replace(/[^/]+$/, 'CMakeLists.txt');
+    await writeUserFileText(userName, relative, emitCMake(plan, { hydraPath: HYDRA_PATH_IN_CONTAINER }));
+    onLine('Wygenerowano CMakeLists.txt.');
+}
+
+/**
+ * Którą drogą idzie ten cel.
+ *
+ * Rozstrzyga **plik projektu**, a nie osobny przycisk: `mcu` celu decyduje,
+ * czy buduje go PlatformIO, czy CMake. Użytkownik wybiera cel, nie narzędzie.
+ */
+function buildKindFor(plan: ReturnType<typeof buildPlan>, target: string | undefined): HydraBuildKind {
+    const chosen = target ?? plan.defaultTarget;
+    const found = plan.targets.find((t) => t.name === chosen);
+    if (found?.isWasm) return 'wasm';
+    if (found?.isNative) return 'native';
+    return 'pio';
 }
 
 export async function runHydraBuild(
@@ -87,34 +134,37 @@ export async function runHydraBuild(
     source: string,
     onLine: (line: string) => void,
 ): Promise<string> {
-    await writeGeneratedManifest(request.file, source, userName, onLine);
+    const plan = buildPlan(HydraDocument.parse(source).toJS());
+    const kind = buildKindFor(plan, request.target);
+
+    // Każda droga potrzebuje innego pliku budowy — generowanie obu byłoby
+    // zapisywaniem do katalogu projektu rzeczy, których nikt nie użyje.
+    if (kind === 'wasm') await writeWasmManifest(request.file, plan, userName, onLine);
+    else await writeGeneratedManifest(request.file, source, userName, onLine);
 
     // Katalog danych zna tylko serwer: ścieżki widoczne w Drive są wirtualne.
     const { dataRoot } = await minisApi.getDataRoot();
-    const { ticket } = await minisApi.getTerminalTicket();
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const socket = new WebSocket(`${proto}://${window.location.host}/ws/terminal`);
-
     const projectDir = toServerPath(request.file, userName, dataRoot).replace(/\/[^/]+$/, '');
     const hydraDir = `${dataRoot}/Minis/Users/${userName}/drive/${HYDRA_ROOT}`;
 
-    /*
-     * `hydra.sh project <katalog> <polecenie…>` — argumenty po katalogu to
-     * polecenie uruchamiane **wewnątrz kontenera**, a nie flagi skryptu.
-     * Wcześniej szło tam `--target esp32s3`, czyli kontener próbował uruchomić
-     * program o takiej nazwie. Cel wybiera się przez środowisko PlatformIO
-     * (`-e`), a wgrywanie przez cel `upload`.
-     *
-     * Cudzysłowy wokół ścieżek, bo katalogi użytkowników potrafią mieć spacje.
-     */
-    const command = [
-        `"${hydraDir}/docker/hydra.sh"`,
-        'project',
-        `"${projectDir}"`,
-        'pio', 'run',
-        ...(request.target ? ['-e', `"${request.target}"`] : []),
-        ...(request.upload ? ['-t', 'upload'] : []),
-    ].join(' ') + `; echo "${DONE_MARKER}$?"`;
+    // Samo polecenie powstaje w `hydraBuildCommand` — osobno, bo tam da się je
+    // sprawdzić testem bez uruchamiania Dockera i czekania kilku minut.
+    //
+    // Przed otwarciem gniazda, bo ta funkcja **odmawia** dla celów, których
+    // Drive nie umie zbudować. Odmowa po nawiązaniu połączenia zostawiałaby
+    // wiszącą sesję terminala na serwerze.
+    const command = hydraBuildCommand({
+        kind,
+        hydraDir,
+        projectDir,
+        ...(request.target !== undefined ? { target: request.target } : {}),
+        ...(request.upload !== undefined ? { upload: request.upload } : {}),
+        wasmImage: WASM_IMAGE,
+    }) + `; echo "${DONE_MARKER}$?"`;
+
+    const { ticket } = await minisApi.getTerminalTicket();
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const socket = new WebSocket(`${proto}://${window.location.host}/ws/terminal`);
 
     return new Promise<string>((resolve, reject) => {
         const collected: string[] = [];

@@ -10,6 +10,7 @@ import type { ProjectDeps } from '../vfs/project/types';
 import {
   FoldingPlugin, MarkdownPreviewPlugin, createMjdEditorPlugin, createTypeScriptPlugin,
   createPythonPlugin, createCppPlugin, VisualMinisLibPlugin, createSnippetsPlugin,
+  createBlocklyPlugin, type UmlProjectSource,
   createMarkdownLspPlugin, createMarkdownLspServerPlugin,
 } from '../plugins';
 import { ArduinoBoardConfigDialog } from './ArduinoBoardConfigDialog';
@@ -28,6 +29,18 @@ export interface TextEditorWorkspaceProps {
   defaultMountPresets?: VfsMountPreset[];
   /** Extra plugins activated on top of the built-in set (e.g. app-specific editors). */
   extraPlugins?: IPlugin[];
+  /**
+   * Skąd wtyczka Blockly ma brać diagramy UML (strona Programming/UML).
+   *
+   * Pomijalne, i to jest sedno: ten sam edytor osadzają aplikacje, z których
+   * tylko część ma backend MyCastle i katalog `drive/uml`. Bez tej właściwości
+   * edytor bloczkowy działa na bloczkach standardowych, a okno „Opcje pliku"
+   * mówi wprost, że źródła nie podłączono — zamiast pokazywać pustą listę
+   * nieodróżnialną od awarii wczytywania.
+   *
+   * Gotową implementację dla hostów MyCastle daje `createVfsUmlProjectSource()`.
+   */
+  blocklyUmlSource?: UmlProjectSource;
   /**
    * Dodatkowe deklaracje `.d.ts` dla IntelliSense TypeScriptu — mapa
    * `ścieżka → treść`, wstrzykiwana raz przy starcie (np. pełne `@types/three`
@@ -80,6 +93,7 @@ export function TextEditorWorkspace({
   providerRegistry,
   defaultMountPresets,
   extraPlugins,
+  blocklyUmlSource,
   tsPreloadDts,
   enableAgent = false,
   defaultAgentConfig,
@@ -100,6 +114,13 @@ export function TextEditorWorkspace({
   const mjdPlugin = useMemo(() => createMjdEditorPlugin(provider), [provider]);
   const snippetsPlugin = useMemo(() => createSnippetsPlugin(provider), [provider]);
   const mdLspPlugin = useMemo(() => createMarkdownLspPlugin(provider), [provider]);
+  const blocklyPlugin = useMemo(
+    () => createBlocklyPlugin({
+      fileSystem: provider,
+      ...(blocklyUmlSource ? { umlSource: blocklyUmlSource } : {}),
+    }),
+    [provider, blocklyUmlSource],
+  );
   const mdLspServerPlugin = useMemo(
     () => (agentAuthToken ? createMarkdownLspServerPlugin(agentAuthToken) : null),
     // recreate only when the token presence flips, not on every value change
@@ -110,10 +131,11 @@ export function TextEditorWorkspace({
   const plugins = useMemo<IPlugin[]>(() => [
     WordCountPluginV2, GenerateUuidPlugin, FoldingPlugin, MarkdownPreviewPlugin,
     mjdPlugin, tsPlugin, pyPlugin, cppPlugin, VisualMinisLibPlugin, snippetsPlugin,
-    mdLspPlugin,
+    mdLspPlugin, blocklyPlugin,
     ...(mdLspServerPlugin ? [mdLspServerPlugin] : []),
     ...(extraPlugins ?? []),
-  ], [mjdPlugin, tsPlugin, pyPlugin, cppPlugin, snippetsPlugin, mdLspPlugin, mdLspServerPlugin, extraPlugins]);
+  ], [mjdPlugin, tsPlugin, pyPlugin, cppPlugin, snippetsPlugin, mdLspPlugin, blocklyPlugin,
+      mdLspServerPlugin, extraPlugins]);
 
   // ── Board-config dialog (project action `board-config`) ──────────────────
   const [boardConfigContext, setBoardConfigContext] = useState<VfsProjectContext | null>(null);

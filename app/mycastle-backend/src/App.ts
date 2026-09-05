@@ -538,6 +538,9 @@ export class App {
 
     this.schedulerService.shutdown();
     this.driveScriptScheduler.shutdownAll();
+    // Skrypty npm w tle — bez tego `npm run dev` przeżywa restart backendu
+    // i trzyma port.
+    this.httpServer?.shutdownNpmProcesses();
 
     try {
       this.terminalService?.shutdown();
